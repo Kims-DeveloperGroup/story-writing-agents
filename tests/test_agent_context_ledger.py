@@ -141,8 +141,7 @@ def _entry(
         _digest(body_utf8),
         ContextProvenance(authority, f"source-{ordinal}"),
         len(body_utf8),
-        searchable=searchable,
-    )
+        searchable=searchable,)
     return entry, ContextMaterial(entry, body_utf8)
 
 
@@ -163,8 +162,7 @@ def _projection(
         provider_id,
         definition_fingerprint or _digest(b"definition"),
         selected_policy.fingerprint,
-        schema_version,
-    )
+        schema_version,)
     current, current_material = _entry(
         "request:current",
         _PRIVATE_BODY_CANARIES[0],
@@ -173,8 +171,7 @@ def _projection(
         channel=ContextSemanticChannel.CURRENT_INPUT,
         priority=ContextPriority.P0_REQUIRED,
         authority=ContextAuthorityKind.REQUEST,
-        searchable=False,
-    )
+        searchable=False,)
     definition, definition_material = _entry(
         "definition:lead",
         _PRIVATE_BODY_CANARIES[1],
@@ -183,8 +180,7 @@ def _projection(
         channel=ContextSemanticChannel.STABLE_BEHAVIOR,
         priority=ContextPriority.P1_STABLE,
         authority=ContextAuthorityKind.AGENT_DEFINITION,
-        searchable=False,
-    )
+        searchable=False,)
     artifact, artifact_material = _entry(
         "artifact:outline",
         _PRIVATE_BODY_CANARIES[2],
@@ -203,13 +199,10 @@ def _projection(
             "revision-1",
             ContextProvenance(
                 ContextAuthorityKind.REFERENCE_AUTHORIZATION,
-                f"reference-{ordinal}",
-            ),
+                f"reference-{ordinal}",),
             _digest(f"reference-{ordinal}".encode("ascii")),
-            9 + ordinal,
-        )
-        for ordinal in range(1, mandatory_reference_count + 1)
-    )
+            9 + ordinal,)
+        for ordinal in range(1, mandatory_reference_count + 1))
     return plan_context_projection(
         ContextManifest(scope, (current, definition, artifact)),
         (current_material, definition_material, artifact_material),
@@ -217,8 +210,7 @@ def _projection(
         conditions=conditions,
         checkpoint=checkpoint or ContextCheckpointView(ContextCheckpointState.MISSING),
         active_provider_thread_id=active_provider_thread_id,
-        mandatory_references=references,
-    )
+        mandatory_references=references,)
 
 
 def _plan(
@@ -246,8 +238,7 @@ def _plan(
         reference_count,
         planned_provider_thread_id,
         reference_operation_id,
-        projection.accounting,
-    )
+        projection.accounting,)
 
 
 def _accounting(
@@ -263,18 +254,15 @@ def _accounting(
             5,
             (
                 ContextComponentBytes(ContextComponentKind.OUTPUT_SCHEMA, 2),
-                ContextComponentBytes(ContextComponentKind.CONTROL, 5),
-            ),
+                ContextComponentBytes(ContextComponentKind.CONTROL, 5),),
         ),
         binding_components=(
-            ContextComponentBytes(ContextComponentKind.ROLE_SYSTEM_PROMPT, 3),
-        ),
+            ContextComponentBytes(ContextComponentKind.ROLE_SYSTEM_PROMPT, 3),),
         state=state,
         actual_transport_utf8_bytes=11
         if state is ProviderCallState.SUBMITTED
         else None,
-        usage=usage,
-    )
+        usage=usage,)
 
 
 def _provider_call(
@@ -288,8 +276,7 @@ def _provider_call(
     return ContextLedgerProviderCall(
         ordinal,
         call_id or f"call-{ordinal}",
-        _accounting(call_kind=call_kind, state=state, usage=usage),
-    )
+        _accounting(call_kind=call_kind, state=state, usage=usage),)
 
 
 def _authorization(
@@ -309,8 +296,7 @@ def _authorization(
         terminal_call_id,
         final_provider_thread_id,
         plan.reference_operation_id,
-        output_action_authorization_id,
-    )
+        output_action_authorization_id,)
 
 
 class _Clock:
@@ -336,8 +322,7 @@ class LedgerTestCase(unittest.TestCase):
         selected = key or self.key
         return self.workspace.root.joinpath(
             "agent_states/orchestrator_state/context_ledger/v2",
-            f"{context_ledger_scope_key(selected)[len('sha256:') :]}.json",
-        )
+            f"{context_ledger_scope_key(selected)[len('sha256:') :]}.json",)
 
     def lock_path(self, key: ContextLedgerKey | None = None) -> Path:
         selected = key or self.key
@@ -372,8 +357,7 @@ class LedgerTestCase(unittest.TestCase):
         inspection = self.ledger.reserve_attempt(
             selected_key,
             expected_generation=expected_generation,
-            plan=selected_plan,
-        )
+            plan=selected_plan,)
         return selected_projection, selected_plan, inspection
 
     def ready(
@@ -388,15 +372,13 @@ class LedgerTestCase(unittest.TestCase):
         selected_projection, selected_plan, reserved = self.reserve(
             key=selected_key,
             projection=projection,
-            plan=plan,
-        )
+            plan=plan,)
         call = _provider_call(1, usage=usage)
         appended = self.ledger.append_provider_call(
             selected_key,
             expected_generation=reserved.generation,
             attempt_id=selected_plan.attempt_id,
-            provider_call=call,
-        )
+            provider_call=call,)
         return self.ledger.commit_attempt(
             selected_key,
             expected_generation=appended.generation,
@@ -404,10 +386,8 @@ class LedgerTestCase(unittest.TestCase):
                 selected_plan,
                 selected_projection,
                 final_provider_thread_id=(
-                    selected_plan.planned_provider_thread_id or "thread-final"
-                ),
-            ),
-        )
+                    selected_plan.planned_provider_thread_id or "thread-final"),
+            ),)
 
 
 class LedgerSurfaceTests(LedgerTestCase):
@@ -434,8 +414,7 @@ class LedgerSurfaceTests(LedgerTestCase):
                 "ContextLedgerError",
                 "ContextLedgerErrorCode",
                 "context_checkpoint_proposal_digest",
-                "context_ledger_scope_key",
-            ),
+                "context_ledger_scope_key",),
         )
         self.assertEqual(
             (
@@ -443,14 +422,11 @@ class LedgerSurfaceTests(LedgerTestCase):
                 MAX_CONTEXT_LEDGER_RECORD_UTF8_BYTES,
                 MAX_CONTEXT_LEDGER_SOURCES,
                 MAX_CONTEXT_LEDGER_PROVIDER_CALLS,
-                CONTEXT_LEDGER_LOCK_TIMEOUT_SECONDS,
-            ),
-            (2, 8 * 1024 * 1024, 4096, 32, 5.0),
-        )
+                CONTEXT_LEDGER_LOCK_TIMEOUT_SECONDS,),
+            (2, 8 * 1024 * 1024, 4096, 32, 5.0),)
         self.assertEqual(
             tuple(item.value for item in ContextLedgerRecordState),
-            ("incomplete", "ready", "tainted", "stale"),
-        )
+            ("incomplete", "ready", "tainted", "stale"),)
         self.assertEqual(
             tuple(item.value for item in ContextLedgerAttemptOutcome),
             (
@@ -464,8 +440,7 @@ class LedgerSurfaceTests(LedgerTestCase):
                 "source_invalid",
                 "output_invalid",
                 "incomplete",
-                "ambiguous",
-            ),
+                "ambiguous",),
         )
         self.assertEqual(
             tuple(item.value for item in ContextLedgerErrorCode),
@@ -478,17 +453,14 @@ class LedgerSurfaceTests(LedgerTestCase):
                 "lock_timeout",
                 "storage_unsupported",
                 "storage_unsafe",
-                "storage_failure",
-            ),
+                "storage_failure",),
         )
         self.assertEqual(
             tuple(inspect.signature(ContextLedger).parameters),
-            ("workspace", "clock"),
-        )
+            ("workspace", "clock"),)
         self.assertEqual(
             tuple(inspect.signature(ContextLedger.reserve_attempt).parameters),
-            ("self", "key", "expected_generation", "plan"),
-        )
+            ("self", "key", "expected_generation", "plan"),)
         for code in ContextLedgerErrorCode:
             with self.subTest(code=code):
                 error = ContextLedgerError(code)
@@ -508,8 +480,7 @@ class LedgerSurfaceTests(LedgerTestCase):
                 (),
                 ContextLedgerAttemptOutcome.IN_PROGRESS,
                 "2026-08-28T00:00:00.000000Z",
-                "2026-08-28T00:00:00.000000Z",
-            ),
+                "2026-08-28T00:00:00.000000Z",),
             ContextLedgerCommitAuthorization(
                 self.plan.attempt_id,
                 self.plan.operation_id,
@@ -519,8 +490,7 @@ class LedgerSurfaceTests(LedgerTestCase):
                 "call-1",
                 "thread",
                 self.plan.reference_operation_id,
-                "output-authorization",
-            ),
+                "output-authorization",),
         )
         for value in values:
             with self.subTest(value=type(value).__name__):
@@ -544,18 +514,15 @@ class LedgerSurfaceTests(LedgerTestCase):
                 "call",
                 "thread",
                 self.plan.reference_operation_id,
-                "output",
-            ),
+                "output",),
             lambda: replace(
                 _authorization(self.plan, self.projection),
-                output_action_authorization_id="",
-            ),
+                output_action_authorization_id="",),
         )
         for operation in invalid:
             with self.subTest(operation=operation):
                 self.assert_ledger_error(
-                    operation, ContextLedgerErrorCode.INVALID_VALUE
-                )
+                    operation, ContextLedgerErrorCode.INVALID_VALUE)
 
     def test_scope_and_proposal_digests_are_domain_separated_and_canonical(
         self,
@@ -567,21 +534,16 @@ class LedgerSurfaceTests(LedgerTestCase):
                         agent_id="lead",
                         workspace_id="workspace",
                         session_id="session",
-                        subject_id="subject",
-                    ),
-                    "provider",
-                )
+                        subject_id="subject",),
+                    "provider",)
             ),
-            "sha256:cc2e59110562cb936b078ada7a6195136046631ddbe6f92b35a8fe4aa196d99d",
-        )
+            "sha256:cc2e59110562cb936b078ada7a6195136046631ddbe6f92b35a8fe4aa196d99d",)
         hostile = ContextLedgerKey(
             _scope(
                 workspace_id="../workspace/한🙂",
                 session_id="../../session",
-                agent_id="../agent",
-            ),
-            "provider/../../other",
-        )
+                agent_id="../agent",),
+            "provider/../../other",)
         scope_key = context_ledger_scope_key(hostile)
         self.assertRegex(scope_key, r"\Asha256:[0-9a-f]{64}\Z")
         for private in ("workspace", "session", "agent", "provider", "/", "한"):
@@ -589,60 +551,49 @@ class LedgerSurfaceTests(LedgerTestCase):
         proposal = self.projection.checkpoint_proposal
         reversed_proposal = replace(
             proposal,
-            sources=tuple(reversed(proposal.sources)),
-        )
+            sources=tuple(reversed(proposal.sources)),)
         self.assertEqual(
             context_checkpoint_proposal_digest(proposal),
-            context_checkpoint_proposal_digest(reversed_proposal),
-        )
+            context_checkpoint_proposal_digest(reversed_proposal),)
         self.assertEqual(
             context_checkpoint_proposal_digest(proposal),
-            "sha256:365231f25892819500b6bc4507ccd03a83bf0bc4ef2320034bb4006c117a133c",
-        )
+            "sha256:365231f25892819500b6bc4507ccd03a83bf0bc4ef2320034bb4006c117a133c",)
         self.assertRegex(
             context_checkpoint_proposal_digest(proposal),
-            r"\Asha256:[0-9a-f]{64}\Z",
-        )
+            r"\Asha256:[0-9a-f]{64}\Z",)
 
     def test_import_construction_and_missing_inspection_are_mutation_free(self) -> None:
         state_root = (
-            self.workspace.root / "agent_states/orchestrator_state/context_ledger"
-        )
+            self.workspace.root / "agent_states/orchestrator_state/context_ledger")
         self.assertFalse(state_root.exists())
         constructed = ContextLedger(self.workspace, clock=_Clock())
         self.assertFalse(state_root.exists())
         before = {
             path.relative_to(self.workspace.root).as_posix()
-            for path in self.workspace.root.rglob("*")
-        }
+            for path in self.workspace.root.rglob("*")}
         inspection = constructed.inspect(self.key)
         after = {
             path.relative_to(self.workspace.root).as_posix()
-            for path in self.workspace.root.rglob("*")
-        }
+            for path in self.workspace.root.rglob("*")}
         self.assertEqual(before, after)
         self.assertEqual(
             (
                 inspection.generation,
                 inspection.record,
-                inspection.checkpoint_view.state,
-            ),
-            (0, None, ContextCheckpointState.MISSING),
-        )
+                inspection.checkpoint_view.state,),
+            (0, None, ContextCheckpointState.MISSING),)
         with tempfile.TemporaryDirectory() as cwd:
             environment = dict(
                 os.environ,
                 PYTHONPATH=str(_SOURCE_ROOT),
                 PYTHONDONTWRITEBYTECODE="1",
-                PYTHONWARNINGS="error",
-            )
+                PYTHONWARNINGS="error",)
             result = subprocess.run(
                 [
                     sys.executable,
                     "-B",
                     "-c",
-                    "import story_writing_agents.agent_context.ledger",
-                ],
+                    "import story_writing_agents.agent_context.ledger",],
                 cwd=cwd,
                 env=environment,
                 capture_output=True,
@@ -654,8 +605,7 @@ class LedgerSurfaceTests(LedgerTestCase):
 
     def test_unpublished_v1_directory_is_never_read_rewritten_or_migrated(self) -> None:
         old_root = self.workspace.root / (
-            "agent_states/orchestrator_state/context_ledger/v1"
-        )
+            "agent_states/orchestrator_state/context_ledger/v1")
         old_root.mkdir(parents=True)
         os.chmod(old_root.parent, 0o700)
         os.chmod(old_root, 0o700)
@@ -666,31 +616,26 @@ class LedgerSurfaceTests(LedgerTestCase):
         before = {
             path.relative_to(self.workspace.root).as_posix(): path.read_bytes()
             for path in old_root.rglob("*")
-            if path.is_file()
-        }
+            if path.is_file()}
         self.assertEqual(
             ledger_module._LEDGER_PATH,
-            ("agent_states", "orchestrator_state", "context_ledger", "v2"),
-        )
+            ("agent_states", "orchestrator_state", "context_ledger", "v2"),)
         self.assertNotIn("v1", ledger_module._LEDGER_PATH)
         inspection = self.ledger.inspect(self.key)
 
         self.assertIs(
             inspection.checkpoint_view.state,
-            ContextCheckpointState.MISSING,
-        )
+            ContextCheckpointState.MISSING,)
         self.assertEqual(inspection.generation, 0)
         self.assertIsNone(inspection.record)
         self.assertFalse(
             self.workspace.root.joinpath(
                 "agent_states/orchestrator_state/context_ledger/v2"
-            ).exists()
-        )
+            ).exists())
         after = {
             path.relative_to(self.workspace.root).as_posix(): path.read_bytes()
             for path in old_root.rglob("*")
-            if path.is_file()
-        }
+            if path.is_file()}
         self.assertEqual(after, before)
         self.assertEqual(old_record.read_bytes(), old_bytes)
 
@@ -717,8 +662,7 @@ class LedgerLifecycleTests(LedgerTestCase):
                 "mandatory_reference_count",
                 "planned_provider_thread_id",
                 "reference_operation_id",
-                "projection_accounting",
-            ),
+                "projection_accounting",),
             ContextLedgerAttempt: (
                 "plan",
                 "provider_calls",
@@ -726,8 +670,7 @@ class LedgerLifecycleTests(LedgerTestCase):
                 "started_at",
                 "updated_at",
                 "completed_at",
-                "commit_authorization_digest",
-            ),
+                "commit_authorization_digest",),
             ContextLedgerReadyCheckpoint: (
                 "conditions",
                 "provider_thread_id",
@@ -737,8 +680,7 @@ class LedgerLifecycleTests(LedgerTestCase):
                 "committed_at",
                 "catalog_sources",
                 "source_alias_high_watermark",
-                "session_history_coverage",
-            ),
+                "session_history_coverage",),
             ContextLedgerRecord: (
                 "key",
                 "generation",
@@ -747,14 +689,12 @@ class LedgerLifecycleTests(LedgerTestCase):
                 "updated_at",
                 "attempt",
                 "ready_checkpoint",
-                "schema_version",
-            ),
+                "schema_version",),
             ContextLedgerInspection: (
                 "key",
                 "generation",
                 "checkpoint_view",
-                "record",
-            ),
+                "record",),
             ContextLedgerCommitAuthorization: (
                 "attempt_id",
                 "operation_id",
@@ -764,8 +704,7 @@ class LedgerLifecycleTests(LedgerTestCase):
                 "terminal_call_id",
                 "final_provider_thread_id",
                 "completed_reference_operation_id",
-                "output_action_authorization_id",
-            ),
+                "output_action_authorization_id",),
         }
         for value in (
             ready.record.key,
@@ -780,99 +719,79 @@ class LedgerLifecycleTests(LedgerTestCase):
             with self.subTest(value=type(value).__name__):
                 self.assertEqual(
                     tuple(field.name for field in fields(type(value))),
-                    exact_fields[type(value)],
-                )
+                    exact_fields[type(value)],)
                 self.assertFalse(hasattr(value, "__dict__"))
                 with self.assertRaises((FrozenInstanceError, TypeError)):
                     value.unexpected = 1  # type: ignore[attr-defined]
         self.assert_ledger_error(
             lambda: replace(
                 ready.record.ready_checkpoint,
-                proposal_digest=_digest(b"mismatch"),
-            ),
-            ContextLedgerErrorCode.INVALID_VALUE,
-        )
+                proposal_digest=_digest(b"mismatch"),),
+            ContextLedgerErrorCode.INVALID_VALUE,)
         self.assert_ledger_error(
             lambda: replace(
                 ready.record,
-                state=ContextLedgerRecordState.STALE,
-            ),
-            ContextLedgerErrorCode.INVALID_VALUE,
-        )
+                state=ContextLedgerRecordState.STALE,),
+            ContextLedgerErrorCode.INVALID_VALUE,)
         self.assert_ledger_error(
             lambda: replace(ready, generation=ready.generation + 1),
-            ContextLedgerErrorCode.INVALID_VALUE,
-        )
+            ContextLedgerErrorCode.INVALID_VALUE,)
 
     def test_complete_lifecycle_restart_idempotency_invalidation_and_modes(
         self,
     ) -> None:
         self.assertIs(
             self.ledger.inspect(self.key).checkpoint_view.state,
-            ContextCheckpointState.MISSING,
-        )
+            ContextCheckpointState.MISSING,)
         reserved = self.ledger.reserve_attempt(
             self.key,
             expected_generation=0,
-            plan=self.plan,
-        )
+            plan=self.plan,)
         self.assertEqual(
             (
                 reserved.generation,
                 reserved.record.state if reserved.record else None,
-                reserved.checkpoint_view.state,
-            ),
-            (1, ContextLedgerRecordState.INCOMPLETE, ContextCheckpointState.TAINTED),
-        )
+                reserved.checkpoint_view.state,),
+            (1, ContextLedgerRecordState.INCOMPLETE, ContextCheckpointState.TAINTED),)
         self.assertIsNone(reserved.record.ready_checkpoint if reserved.record else None)
         self.assertEqual(
             self.ledger.reserve_attempt(
                 self.key,
                 expected_generation=0,
-                plan=self.plan,
-            ),
-            reserved,
-        )
+                plan=self.plan,),
+            reserved,)
         reference_call = _provider_call(
             1,
-            call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
-        )
+            call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,)
         first = self.ledger.append_provider_call(
             self.key,
             expected_generation=1,
             attempt_id=self.plan.attempt_id,
-            provider_call=reference_call,
-        )
+            provider_call=reference_call,)
         self.assertEqual(first.generation, 2)
         self.assertEqual(
             self.ledger.append_provider_call(
                 self.key,
                 expected_generation=1,
                 attempt_id=self.plan.attempt_id,
-                provider_call=reference_call,
-            ),
-            first,
-        )
+                provider_call=reference_call,),
+            first,)
         substantive = _provider_call(
             2,
-            usage=ProviderUsage(input_tokens=17, output_tokens=5),
-        )
+            usage=ProviderUsage(input_tokens=17, output_tokens=5),)
         second = self.ledger.append_provider_call(
             self.key,
             expected_generation=2,
             attempt_id=self.plan.attempt_id,
-            provider_call=substantive,
-        )
+            provider_call=substantive,)
         authorization = _authorization(
             self.plan,
             self.projection,
-            terminal_call_id="call-2",
-        )
+            terminal_call_id="call-2",)
         ready = self.ledger.commit_attempt(
             self.key,
             expected_generation=second.generation,
-            authorization=authorization,
-        )
+            authorization=authorization,)
         self.assertEqual(ready.generation, 4)
         self.assertIs(ready.record.state, ContextLedgerRecordState.READY)
         self.assertIs(ready.checkpoint_view.state, ContextCheckpointState.READY)
@@ -881,35 +800,29 @@ class LedgerLifecycleTests(LedgerTestCase):
                 ready.checkpoint_view.conditions,
                 ready.checkpoint_view.provider_thread_id,
                 ready.checkpoint_view.sources,
-                ready.checkpoint_view.delta_depth,
-            ),
+                ready.checkpoint_view.delta_depth,),
             (
                 self.projection.checkpoint_proposal.conditions,
                 "thread-final",
                 self.projection.checkpoint_proposal.sources,
-                0,
-            ),
+                0,),
         )
         self.assertEqual(
             self.ledger.commit_attempt(
                 self.key,
                 expected_generation=0,
-                authorization=authorization,
-            ),
-            ready,
-        )
+                authorization=authorization,),
+            ready,)
         restarted = ContextLedger(self.workspace, clock=_Clock()).inspect(self.key)
         self.assertEqual(restarted, ready)
         stale = self.ledger.invalidate(self.key, expected_generation=ready.generation)
         self.assertEqual(
             (stale.generation, stale.record.state, stale.checkpoint_view.state),
-            (5, ContextLedgerRecordState.STALE, ContextCheckpointState.STALE),
-        )
+            (5, ContextLedgerRecordState.STALE, ContextCheckpointState.STALE),)
         self.assertIsNone(stale.record.ready_checkpoint)
         self.assertEqual(
             self.ledger.invalidate(self.key, expected_generation=0),
-            stale,
-        )
+            stale,)
         directory = self.record_path().parent
         self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE(directory.parent.stat().st_mode), 0o700)
@@ -917,56 +830,45 @@ class LedgerLifecycleTests(LedgerTestCase):
         self.assertEqual(stat.S_IMODE(self.lock_path().stat().st_mode), 0o600)
         self.assertEqual(
             {path.name for path in directory.iterdir()},
-            {self.record_path().name, self.lock_path().name},
-        )
+            {self.record_path().name, self.lock_path().name},)
 
     def test_optimistic_generations_ordered_calls_and_conflicting_replays(self) -> None:
         self.assert_ledger_error(
             lambda: self.ledger.reserve_attempt(
                 self.key,
                 expected_generation=1,
-                plan=self.plan,
-            ),
-            ContextLedgerErrorCode.CONFLICT,
-        )
+                plan=self.plan,),
+            ContextLedgerErrorCode.CONFLICT,)
         reserved = self.ledger.reserve_attempt(
             self.key,
             expected_generation=0,
-            plan=self.plan,
-        )
+            plan=self.plan,)
         self.assert_ledger_error(
             lambda: self.ledger.reserve_attempt(
                 self.key,
                 expected_generation=reserved.generation,
-                plan=replace(self.plan, attempt_id="attempt-2"),
-            ),
-            ContextLedgerErrorCode.INVALID_TRANSITION,
-        )
+                plan=replace(self.plan, attempt_id="attempt-2"),),
+            ContextLedgerErrorCode.INVALID_TRANSITION,)
         self.assert_ledger_error(
             lambda: self.ledger.append_provider_call(
                 self.key,
                 expected_generation=reserved.generation,
                 attempt_id="other-attempt",
-                provider_call=_provider_call(1),
-            ),
-            ContextLedgerErrorCode.INVALID_TRANSITION,
-        )
+                provider_call=_provider_call(1),),
+            ContextLedgerErrorCode.INVALID_TRANSITION,)
         self.assert_ledger_error(
             lambda: self.ledger.append_provider_call(
                 self.key,
                 expected_generation=reserved.generation,
                 attempt_id=self.plan.attempt_id,
-                provider_call=_provider_call(2),
-            ),
-            ContextLedgerErrorCode.INVALID_TRANSITION,
-        )
+                provider_call=_provider_call(2),),
+            ContextLedgerErrorCode.INVALID_TRANSITION,)
         call = _provider_call(1)
         appended = self.ledger.append_provider_call(
             self.key,
             expected_generation=reserved.generation,
             attempt_id=self.plan.attempt_id,
-            provider_call=call,
-        )
+            provider_call=call,)
         self.assert_ledger_error(
             lambda: self.ledger.append_provider_call(
                 self.key,
@@ -974,20 +876,16 @@ class LedgerLifecycleTests(LedgerTestCase):
                 attempt_id=self.plan.attempt_id,
                 provider_call=replace(
                     call,
-                    accounting=_accounting(usage=ProviderUsage(input_tokens=1)),
-                ),
+                    accounting=_accounting(usage=ProviderUsage(input_tokens=1)),),
             ),
-            ContextLedgerErrorCode.CONFLICT,
-        )
+            ContextLedgerErrorCode.CONFLICT,)
         self.assert_ledger_error(
             lambda: self.ledger.append_provider_call(
                 self.key,
                 expected_generation=1,
                 attempt_id=self.plan.attempt_id,
-                provider_call=_provider_call(2),
-            ),
-            ContextLedgerErrorCode.CONFLICT,
-        )
+                provider_call=_provider_call(2),),
+            ContextLedgerErrorCode.CONFLICT,)
 
     def test_old_ready_is_removed_before_new_provider_work_and_delta_thread_is_exact(
         self,
@@ -996,21 +894,18 @@ class LedgerLifecycleTests(LedgerTestCase):
         delta_projection = _projection(
             self.scope,
             checkpoint=first_ready.checkpoint_view,
-            active_provider_thread_id="thread-final",
-        )
+            active_provider_thread_id="thread-final",)
         self.assertIs(delta_projection.mode, ContextDeliveryMode.DELTA)
         delta_plan = _plan(
             delta_projection,
             attempt_id="attempt-delta",
             operation_id="operation-delta",
             result_correlation_id="result-delta",
-            planned_provider_thread_id="thread-final",
-        )
+            planned_provider_thread_id="thread-final",)
         reserved = self.ledger.reserve_attempt(
             self.key,
             expected_generation=first_ready.generation,
-            plan=delta_plan,
-        )
+            plan=delta_plan,)
         self.assertIs(reserved.record.state, ContextLedgerRecordState.INCOMPLETE)
         self.assertIsNone(reserved.record.ready_checkpoint)
         self.assertIs(reserved.checkpoint_view.state, ContextCheckpointState.TAINTED)
@@ -1018,29 +913,24 @@ class LedgerLifecycleTests(LedgerTestCase):
             self.key,
             expected_generation=reserved.generation,
             attempt_id=delta_plan.attempt_id,
-            provider_call=_provider_call(1),
-        )
+            provider_call=_provider_call(1),)
         wrong_thread = _authorization(
             delta_plan,
             delta_projection,
-            final_provider_thread_id="other-thread",
-        )
+            final_provider_thread_id="other-thread",)
         self.assert_ledger_error(
             lambda: self.ledger.commit_attempt(
                 self.key,
                 expected_generation=appended.generation,
-                authorization=wrong_thread,
-            ),
-            ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,
-        )
+                authorization=wrong_thread,),
+            ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,)
         ready = self.ledger.commit_attempt(
             self.key,
             expected_generation=appended.generation,
             authorization=_authorization(
                 delta_plan,
                 delta_projection,
-                final_provider_thread_id="thread-final",
-            ),
+                final_provider_thread_id="thread-final",),
         )
         self.assertEqual(ready.checkpoint_view.delta_depth, 1)
 
@@ -1051,94 +941,74 @@ class LedgerAuthorizationTests(LedgerTestCase):
         reserved = self.ledger.reserve_attempt(
             self.key,
             expected_generation=0,
-            plan=self.plan,
-        )
+            plan=self.plan,)
         first = self.ledger.append_provider_call(
             self.key,
             expected_generation=reserved.generation,
             attempt_id=self.plan.attempt_id,
             provider_call=_provider_call(
                 1,
-                call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
-            ),
+                call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,),
         )
         self.appended = self.ledger.append_provider_call(
             self.key,
             expected_generation=first.generation,
             attempt_id=self.plan.attempt_id,
-            provider_call=_provider_call(2),
-        )
+            provider_call=_provider_call(2),)
         self.authorization = _authorization(
             self.plan,
             self.projection,
-            terminal_call_id="call-2",
-        )
+            terminal_call_id="call-2",)
 
     def test_commit_rejects_every_uncorrelated_or_unverified_dimension(self) -> None:
         changed_conditions = replace(
             self.projection.checkpoint_proposal.conditions,
-            definition_fingerprint=_digest(b"changed-definition"),
-        )
+            definition_fingerprint=_digest(b"changed-definition"),)
         changed_proposal = replace(
             self.projection.checkpoint_proposal,
-            conditions=changed_conditions,
-        )
+            conditions=changed_conditions,)
         changed_scope_conditions = replace(
             self.projection.checkpoint_proposal.conditions,
-            scope=_scope(session_id="other-session"),
-        )
+            scope=_scope(session_id="other-session"),)
         changed_scope_proposal = replace(
             self.projection.checkpoint_proposal,
-            conditions=changed_scope_conditions,
-        )
+            conditions=changed_scope_conditions,)
         changed_provider_conditions = replace(
             self.projection.checkpoint_proposal.conditions,
-            provider_id="other-provider",
-        )
+            provider_id="other-provider",)
         changed_provider_proposal = replace(
             self.projection.checkpoint_proposal,
-            conditions=changed_provider_conditions,
-        )
+            conditions=changed_provider_conditions,)
         cases = (
             (
                 replace(self.authorization, attempt_id="wrong-attempt"),
-                ContextLedgerErrorCode.INVALID_TRANSITION,
-            ),
+                ContextLedgerErrorCode.INVALID_TRANSITION,),
             (
                 replace(self.authorization, operation_id="wrong-operation"),
-                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,
-            ),
+                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,),
             (
                 replace(self.authorization, result_correlation_id="wrong-result"),
-                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,
-            ),
+                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,),
             (
                 replace(self.authorization, proposal=changed_proposal),
-                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,
-            ),
+                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,),
             (
                 replace(self.authorization, proposal=changed_scope_proposal),
-                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,
-            ),
+                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,),
             (
                 replace(self.authorization, proposal=changed_provider_proposal),
-                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,
-            ),
+                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,),
             (
                 replace(
                     self.authorization,
-                    revalidated_proposal_digest=_digest(b"wrong-proposal"),
-                ),
-                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,
-            ),
+                    revalidated_proposal_digest=_digest(b"wrong-proposal"),),
+                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,),
             (
                 replace(self.authorization, terminal_call_id="call-1"),
-                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,
-            ),
+                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,),
             (
                 replace(self.authorization, completed_reference_operation_id=None),
-                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,
-            ),
+                ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,),
         )
         for authorization, code in cases:
             with self.subTest(field=authorization):
@@ -1147,10 +1017,8 @@ class LedgerAuthorizationTests(LedgerTestCase):
                     lambda authorization=authorization: self.ledger.commit_attempt(
                         self.key,
                         expected_generation=self.appended.generation,
-                        authorization=authorization,
-                    ),
-                    code,
-                )
+                        authorization=authorization,),
+                    code,)
                 self.assertEqual(self.record_path().read_bytes(), before)
 
     def test_only_submitted_substantive_terminal_call_can_commit(self) -> None:
@@ -1158,11 +1026,9 @@ class LedgerAuthorizationTests(LedgerTestCase):
             (
                 (
                     ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
-                    ProviderCallState.SUBMITTED,
-                ),
+                    ProviderCallState.SUBMITTED,),
                 (ProviderCallKind.UNCLASSIFIED, ProviderCallState.SUBMITTED),
-                (ProviderCallKind.CONVERSATION, ProviderCallState.PREPARED),
-            ),
+                (ProviderCallKind.CONVERSATION, ProviderCallState.PREPARED),),
             start=1,
         ):
             with self.subTest(kind=kind, state=state):
@@ -1173,27 +1039,22 @@ class LedgerAuthorizationTests(LedgerTestCase):
                     projection,
                     attempt_id=f"attempt-terminal-{index}",
                     operation_id=f"operation-terminal-{index}",
-                    result_correlation_id=f"result-terminal-{index}",
-                )
+                    result_correlation_id=f"result-terminal-{index}",)
                 reserved = self.ledger.reserve_attempt(
                     key,
                     expected_generation=0,
-                    plan=plan,
-                )
+                    plan=plan,)
                 appended = self.ledger.append_provider_call(
                     key,
                     expected_generation=reserved.generation,
                     attempt_id=plan.attempt_id,
-                    provider_call=_provider_call(1, call_kind=kind, state=state),
-                )
+                    provider_call=_provider_call(1, call_kind=kind, state=state),)
                 self.assert_ledger_error(
                     lambda: self.ledger.commit_attempt(
                         key,
                         expected_generation=appended.generation,
-                        authorization=_authorization(plan, projection),
-                    ),
-                    ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,
-                )
+                        authorization=_authorization(plan, projection),),
+                    ContextLedgerErrorCode.COMMIT_NOT_AUTHORIZED,)
 
 
 class LedgerUnsafeOutcomeAndUsageTests(LedgerTestCase):
@@ -1204,8 +1065,7 @@ class LedgerUnsafeOutcomeAndUsageTests(LedgerTestCase):
             if outcome
             not in {
                 ContextLedgerAttemptOutcome.IN_PROGRESS,
-                ContextLedgerAttemptOutcome.COMMITTED,
-            }
+                ContextLedgerAttemptOutcome.COMMITTED,}
         )
         self.assertEqual(len(unsafe), 9)
         for index, outcome in enumerate(unsafe, start=1):
@@ -1217,30 +1077,25 @@ class LedgerUnsafeOutcomeAndUsageTests(LedgerTestCase):
                     projection,
                     attempt_id=f"attempt-unsafe-{index}",
                     operation_id=f"operation-unsafe-{index}",
-                    result_correlation_id=f"result-unsafe-{index}",
-                )
+                    result_correlation_id=f"result-unsafe-{index}",)
                 reserved = self.ledger.reserve_attempt(
                     key,
                     expected_generation=0,
-                    plan=plan,
-                )
+                    plan=plan,)
                 tainted = self.ledger.taint_attempt(
                     key,
                     expected_generation=reserved.generation,
                     attempt_id=plan.attempt_id,
-                    outcome=outcome,
-                )
+                    outcome=outcome,)
                 self.assertEqual(
                     (
                         tainted.record.state,
                         tainted.record.attempt.outcome,
-                        tainted.checkpoint_view.state,
-                    ),
+                        tainted.checkpoint_view.state,),
                     (
                         ContextLedgerRecordState.TAINTED,
                         outcome,
-                        ContextCheckpointState.TAINTED,
-                    ),
+                        ContextCheckpointState.TAINTED,),
                 )
                 restarted = ContextLedger(self.workspace, clock=_Clock()).inspect(key)
                 self.assertEqual(restarted, tainted)
@@ -1249,10 +1104,8 @@ class LedgerUnsafeOutcomeAndUsageTests(LedgerTestCase):
                         key,
                         expected_generation=0,
                         attempt_id=plan.attempt_id,
-                        outcome=outcome,
-                    ),
-                    tainted,
-                )
+                        outcome=outcome,),
+                    tainted,)
 
     def test_incomplete_restart_maps_to_tainted_and_never_authorizes_delta(
         self,
@@ -1260,21 +1113,18 @@ class LedgerUnsafeOutcomeAndUsageTests(LedgerTestCase):
         reserved = self.ledger.reserve_attempt(
             self.key,
             expected_generation=0,
-            plan=self.plan,
-        )
+            plan=self.plan,)
         restarted = ContextLedger(self.workspace, clock=_Clock()).inspect(self.key)
         self.assertEqual(restarted, reserved)
         self.assertIs(restarted.checkpoint_view.state, ContextCheckpointState.TAINTED)
         fresh_projection = _projection(
             self.scope,
             checkpoint=restarted.checkpoint_view,
-            active_provider_thread_id="thread",
-        )
+            active_provider_thread_id="thread",)
         self.assertIs(fresh_projection.mode, ContextDeliveryMode.BOOTSTRAP)
         self.assertIs(
             fresh_projection.bootstrap_reason,
-            ContextBootstrapReason.CHECKPOINT_TAINTED,
-        )
+            ContextBootstrapReason.CHECKPOINT_TAINTED,)
 
     def test_usage_unavailable_zero_partial_and_full_remains_exact_per_call(
         self,
@@ -1283,8 +1133,7 @@ class LedgerUnsafeOutcomeAndUsageTests(LedgerTestCase):
             None,
             ProviderUsage(input_tokens=0),
             ProviderUsage(output_tokens=7),
-            ProviderUsage(input_tokens=11, output_tokens=5, cached_input_tokens=3),
-        )
+            ProviderUsage(input_tokens=11, output_tokens=5, cached_input_tokens=3),)
         for index, usage in enumerate(usages, start=1):
             with self.subTest(usage=usage):
                 scope = _scope(subject_id=f"usage-{index}")
@@ -1294,14 +1143,12 @@ class LedgerUnsafeOutcomeAndUsageTests(LedgerTestCase):
                     projection,
                     attempt_id=f"attempt-usage-{index}",
                     operation_id=f"operation-usage-{index}",
-                    result_correlation_id=f"result-usage-{index}",
-                )
+                    result_correlation_id=f"result-usage-{index}",)
                 ready = self.ready(
                     usage=usage,
                     key=key,
                     projection=projection,
-                    plan=plan,
-                )
+                    plan=plan,)
                 persisted = ready.record.attempt.provider_calls[0].accounting.usage
                 self.assertEqual(persisted, usage)
                 raw = json.loads(self.record_path(key).read_bytes())
@@ -1314,8 +1161,7 @@ class LedgerUnsafeOutcomeAndUsageTests(LedgerTestCase):
                         {
                             "cached_input_tokens": usage.cached_input_tokens,
                             "input_tokens": usage.input_tokens,
-                            "output_tokens": usage.output_tokens,
-                        },
+                            "output_tokens": usage.output_tokens,},
                     )
         scope = _scope(subject_id="usage-multiple")
         key = ContextLedgerKey(scope, "provider")
@@ -1324,28 +1170,23 @@ class LedgerUnsafeOutcomeAndUsageTests(LedgerTestCase):
             projection,
             attempt_id="attempt-usage-multiple",
             operation_id="operation-usage-multiple",
-            result_correlation_id="result-usage-multiple",
-        )
+            result_correlation_id="result-usage-multiple",)
         reserved = self.ledger.reserve_attempt(key, expected_generation=0, plan=plan)
         first = self.ledger.append_provider_call(
             key,
             expected_generation=reserved.generation,
             attempt_id=plan.attempt_id,
-            provider_call=_provider_call(1, usage=ProviderUsage(input_tokens=5)),
-        )
+            provider_call=_provider_call(1, usage=ProviderUsage(input_tokens=5)),)
         second = self.ledger.append_provider_call(
             key,
             expected_generation=first.generation,
             attempt_id=plan.attempt_id,
-            provider_call=_provider_call(2, usage=ProviderUsage(input_tokens=7)),
-        )
+            provider_call=_provider_call(2, usage=ProviderUsage(input_tokens=7)),)
         self.assertEqual(
             tuple(
                 call.accounting.usage.input_tokens
-                for call in second.record.attempt.provider_calls
-            ),
-            (5, 7),
-        )
+                for call in second.record.attempt.provider_calls),
+            (5, 7),)
 
 
 class LedgerScopeAndBootstrapTests(LedgerTestCase):
@@ -1358,12 +1199,10 @@ class LedgerScopeAndBootstrapTests(LedgerTestCase):
             ContextLedgerKey(_scope(session_id="other-session"), "provider"),
             ContextLedgerKey(
                 _scope(subject_kind=ContextSubjectKind.DEBATE),
-                "provider",
-            ),
+                "provider",),
             ContextLedgerKey(_scope(subject_id="other-subject"), "provider"),
             ContextLedgerKey(_scope(agent_id="plot_architect"), "provider"),
-            ContextLedgerKey(self.scope, "other-provider"),
-        )
+            ContextLedgerKey(self.scope, "other-provider"),)
         self.assertIs(ready.checkpoint_view.state, ContextCheckpointState.READY)
         observed_keys = {context_ledger_scope_key(self.key)}
         for key in cases:
@@ -1375,10 +1214,8 @@ class LedgerScopeAndBootstrapTests(LedgerTestCase):
                     (
                         inspection.generation,
                         inspection.record,
-                        inspection.checkpoint_view.state,
-                    ),
-                    (0, None, ContextCheckpointState.MISSING),
-                )
+                        inspection.checkpoint_view.state,),
+                    (0, None, ContextCheckpointState.MISSING),)
                 self.assertFalse(self.record_path(key).exists())
 
     def test_persisted_ready_checkpoint_requests_exact_bootstrap_reasons(self) -> None:
@@ -1389,62 +1226,48 @@ class LedgerScopeAndBootstrapTests(LedgerTestCase):
                 _projection(
                     _scope(workspace_id="other-workspace"),
                     checkpoint=checkpoint,
-                    active_provider_thread_id="thread-final",
-                ),
-                ContextBootstrapReason.SCOPE_MISMATCH,
-            ),
+                    active_provider_thread_id="thread-final",),
+                ContextBootstrapReason.SCOPE_MISMATCH,),
             (
                 _projection(
                     self.scope,
                     "other-provider",
                     checkpoint=checkpoint,
-                    active_provider_thread_id="thread-final",
-                ),
-                ContextBootstrapReason.PROVIDER_MISMATCH,
-            ),
+                    active_provider_thread_id="thread-final",),
+                ContextBootstrapReason.PROVIDER_MISMATCH,),
             (
                 _projection(
                     self.scope,
                     checkpoint=checkpoint,
-                    active_provider_thread_id=None,
-                ),
-                ContextBootstrapReason.PROVIDER_THREAD_MISMATCH,
-            ),
+                    active_provider_thread_id=None,),
+                ContextBootstrapReason.PROVIDER_THREAD_MISMATCH,),
             (
                 _projection(
                     self.scope,
                     checkpoint=checkpoint,
-                    active_provider_thread_id="other-thread",
-                ),
-                ContextBootstrapReason.PROVIDER_THREAD_MISMATCH,
-            ),
+                    active_provider_thread_id="other-thread",),
+                ContextBootstrapReason.PROVIDER_THREAD_MISMATCH,),
             (
                 _projection(
                     self.scope,
                     checkpoint=checkpoint,
                     active_provider_thread_id="thread-final",
-                    definition_fingerprint=_digest(b"other-definition"),
-                ),
-                ContextBootstrapReason.DEFINITION_FINGERPRINT_MISMATCH,
-            ),
+                    definition_fingerprint=_digest(b"other-definition"),),
+                ContextBootstrapReason.DEFINITION_FINGERPRINT_MISMATCH,),
             (
                 _projection(
                     self.scope,
                     checkpoint=checkpoint,
                     active_provider_thread_id="thread-final",
-                    policy=ContextPlanningPolicy(max_delta_depth=17),
-                ),
-                ContextBootstrapReason.POLICY_FINGERPRINT_MISMATCH,
-            ),
+                    policy=ContextPlanningPolicy(max_delta_depth=17),),
+                ContextBootstrapReason.POLICY_FINGERPRINT_MISMATCH,),
             (
                 _projection(
                     self.scope,
                     checkpoint=checkpoint,
                     active_provider_thread_id="thread-final",
-                    schema_version=2,
-                ),
-                ContextBootstrapReason.SCHEMA_MISMATCH,
-            ),
+                    schema_version=2,),
+                ContextBootstrapReason.SCHEMA_MISMATCH,),
         )
         for projection, expected in cases:
             with self.subTest(expected=expected):
@@ -1460,33 +1283,28 @@ class LedgerScopeAndBootstrapTests(LedgerTestCase):
             self.projection.checkpoint_proposal.sources,
             15,
             self.projection.checkpoint_proposal.catalog_sources,
-            self.projection.checkpoint_proposal.source_alias_high_watermark,
-        )
+            self.projection.checkpoint_proposal.source_alias_high_watermark,)
         delta = _projection(
             self.scope,
             checkpoint=depth_fifteen,
-            active_provider_thread_id="thread-depth",
-        )
+            active_provider_thread_id="thread-depth",)
         self.assertEqual(delta.checkpoint_proposal.delta_depth, 16)
         plan = _plan(
             delta,
             attempt_id="attempt-depth",
             operation_id="operation-depth",
             result_correlation_id="result-depth",
-            planned_provider_thread_id="thread-depth",
-        )
+            planned_provider_thread_id="thread-depth",)
         ready = self.ready(projection=delta, plan=plan)
         self.assertEqual(ready.checkpoint_view.delta_depth, 16)
         restarted = ContextLedger(self.workspace, clock=_Clock()).inspect(self.key)
         projected = _projection(
             self.scope,
             checkpoint=restarted.checkpoint_view,
-            active_provider_thread_id="thread-depth",
-        )
+            active_provider_thread_id="thread-depth",)
         self.assertIs(projected.mode, ContextDeliveryMode.BOOTSTRAP)
         self.assertIs(
-            projected.bootstrap_reason, ContextBootstrapReason.MAX_DELTA_DEPTH
-        )
+            projected.bootstrap_reason, ContextBootstrapReason.MAX_DELTA_DEPTH)
 
 
 class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
@@ -1506,16 +1324,14 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
         reserved = self.ledger.reserve_attempt(
             self.key,
             expected_generation=0,
-            plan=self.plan,
-        )
+            plan=self.plan,)
         reference = self.ledger.append_provider_call(
             self.key,
             expected_generation=reserved.generation,
             attempt_id=self.plan.attempt_id,
             provider_call=_provider_call(
                 1,
-                call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
-            ),
+                call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,),
         )
         substantive = self.ledger.append_provider_call(
             self.key,
@@ -1526,18 +1342,15 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
                 usage=ProviderUsage(
                     input_tokens=19,
                     output_tokens=6,
-                    cached_input_tokens=4,
-                ),
-            ),
-        )
+                    cached_input_tokens=4,),
+            ),)
         ready = self.ledger.commit_attempt(
             self.key,
             expected_generation=substantive.generation,
             authorization=_authorization(
                 self.plan,
                 self.projection,
-                terminal_call_id="call-2",
-            ),
+                terminal_call_id="call-2",),
         )
         raw = self.record_path().read_bytes()
         decoded = json.loads(raw)
@@ -1552,8 +1365,7 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
                 "ready_checkpoint",
                 "schema_version",
                 "state",
-                "updated_at",
-            },
+                "updated_at",},
         )
         self.assertEqual(decoded["schema_version"], 2)
         persisted_accounting = decoded["attempt"]["plan"]["projection_accounting"]
@@ -1563,33 +1375,28 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
                 persisted_accounting["logical_source_utf8_bytes"],
                 persisted_accounting["projected_unique_utf8_bytes"],
                 persisted_accounting["mandatory_reference_count"],
-                persisted_accounting["mandatory_reference_utf8_bytes"],
-            ),
+                persisted_accounting["mandatory_reference_utf8_bytes"],),
             (
                 self.projection.accounting.logical_source_count,
                 self.projection.accounting.logical_source_utf8_bytes,
                 self.projection.accounting.projected_unique_utf8_bytes,
                 self.projection.accounting.mandatory_reference_count,
-                self.projection.accounting.mandatory_reference_utf8_bytes,
-            ),
+                self.projection.accounting.mandatory_reference_utf8_bytes,),
         )
         self.assertEqual(
             decoded["attempt"]["provider_calls"][1]["accounting"]["usage"],
             {
                 "cached_input_tokens": 4,
                 "input_tokens": 19,
-                "output_tokens": 6,
-            },
+                "output_tokens": 6,},
         )
         self.assertEqual(
             tuple(
                 item["entry"]["source_id"]
-                for item in decoded["ready_checkpoint"]["sources"]
-            ),
+                for item in decoded["ready_checkpoint"]["sources"]),
             tuple(
                 source.entry.source_id
-                for source in self.projection.checkpoint_proposal.sources
-            ),
+                for source in self.projection.checkpoint_proposal.sources),
         )
         prohibited_keys = {
             "body",
@@ -1602,8 +1409,7 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
             "projected_units",
             "reference_path",
             "line_range",
-            "exception",
-        }
+            "exception",}
 
         def visit(value: object) -> None:
             if isinstance(value, dict):
@@ -1622,25 +1428,20 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
         self.assertNotIn("PRIVATE_REFERENCE_BODY", text)
         self.assertEqual(
             decoded["attempt"]["plan"]["mandatory_reference_count"],
-            1,
-        )
+            1,)
         self.assertGreater(
             decoded["attempt"]["plan"]["projection_accounting"][
-                "mandatory_reference_utf8_bytes"
-            ],
-            0,
-        )
+                "mandatory_reference_utf8_bytes"],
+            0,)
         self.assertEqual(
             set(
                 decoded["attempt"]["plan"]["projection_accounting"]["budgets"][
-                    "mandatory_references"
-                ]
+                    "mandatory_references"]
             ),
             {
                 "configured_utf8_bytes",
                 "remaining_utf8_bytes",
-                "used_utf8_bytes",
-            },
+                "used_utf8_bytes",},
         )
 
     def test_strict_corruption_matrix_is_nonmutating_and_maps_to_corrupt(self) -> None:
@@ -1665,69 +1466,54 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
                 baseline.replace(
                     b'"generation":3',
                     b'"generation":3,"generation":3',
-                    1,
-                ),
+                    1,),
             ),
             (
                 "unknown_top_level",
-                changed(lambda item: item.__setitem__("unknown", 1)),
-            ),
+                changed(lambda item: item.__setitem__("unknown", 1)),),
             (
                 "missing_top_level",
-                changed(lambda item: item.pop("updated_at")),
-            ),
+                changed(lambda item: item.pop("updated_at")),),
             (
                 "unknown_nested",
-                changed(lambda item: item["attempt"]["plan"].__setitem__("unknown", 1)),
-            ),
+                changed(lambda item: item["attempt"]["plan"].__setitem__("unknown", 1)),),
             (
                 "missing_nested",
-                changed(lambda item: item["attempt"]["plan"].pop("operation_id")),
-            ),
+                changed(lambda item: item["attempt"]["plan"].pop("operation_id")),),
             (
                 "unknown_schema",
-                changed(lambda item: item.__setitem__("schema_version", 3)),
-            ),
+                changed(lambda item: item.__setitem__("schema_version", 3)),),
             (
                 "bool_integer",
-                changed(lambda item: item.__setitem__("generation", True)),
-            ),
+                changed(lambda item: item.__setitem__("generation", True)),),
             (
                 "invalid_state",
-                changed(lambda item: item.__setitem__("state", "retired_ready")),
-            ),
+                changed(lambda item: item.__setitem__("state", "retired_ready")),),
             (
                 "bad_scope_digest",
                 changed(
                     lambda item: item["key"].__setitem__(
-                        "scope_key", _digest(b"wrong-scope")
-                    )
-                ),
-            ),
+                        "scope_key", _digest(b"wrong-scope"))
+                ),),
             (
                 "bad_proposal_digest",
                 changed(
                     lambda item: item["attempt"]["plan"].__setitem__(
-                        "proposal_digest", _digest(b"wrong-proposal")
-                    )
-                ),
-            ),
+                        "proposal_digest", _digest(b"wrong-proposal"))
+                ),),
             (
                 "noncanonical_sources",
                 changed(
                     lambda item: item["ready_checkpoint"].__setitem__(
                         "sources",
-                        list(reversed(item["ready_checkpoint"]["sources"])),
-                    )
-                ),
-            ),
+                        list(reversed(item["ready_checkpoint"]["sources"])),)
+                ),),
             (
                 "invalid_accounting",
                 changed(
                     lambda item: item["attempt"]["plan"][
                         "projection_accounting"
-                    ].__setitem__("logical_source_count", True)
-                ),
+                    ].__setitem__("logical_source_count", True)),
             ),
             (
                 "invalid_usage",
@@ -1739,36 +1525,30 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
                         {
                             "cached_input_tokens": None,
                             "input_tokens": None,
-                            "output_tokens": None,
-                        },
-                    )
-                ),
+                            "output_tokens": None,},
+                    )),
             ),
             (
                 "negative_usage",
                 changed(
                     lambda item: item["attempt"]["provider_calls"][0]["accounting"][
                         "usage"
-                    ].__setitem__("input_tokens", -1)
-                ),
+                    ].__setitem__("input_tokens", -1)),
             ),
             (
                 "boolean_usage",
                 changed(
                     lambda item: item["attempt"]["provider_calls"][0]["accounting"][
                         "usage"
-                    ].__setitem__("input_tokens", True)
-                ),
+                    ].__setitem__("input_tokens", True)),
             ),
             (
                 "unknown_usage_field",
                 changed(
                     lambda item: item["attempt"]["provider_calls"][0]["accounting"][
                         "usage"
-                    ].__setitem__("estimated", 1)
-                ),
-            ),
-        )
+                    ].__setitem__("estimated", 1)),
+            ),)
         for label, payload in cases:
             with self.subTest(label=label):
                 path.write_bytes(payload)
@@ -1779,33 +1559,27 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
                     (
                         inspection.generation,
                         inspection.record,
-                        inspection.checkpoint_view.state,
-                    ),
-                    (0, None, ContextCheckpointState.CORRUPT),
-                )
+                        inspection.checkpoint_view.state,),
+                    (0, None, ContextCheckpointState.CORRUPT),)
                 self.assertEqual(path.read_bytes(), before)
         path.write_bytes(baseline)
         os.chmod(path, 0o600)
         self.assertIs(
             self.ledger.inspect(self.key).checkpoint_view.state,
-            ContextCheckpointState.READY,
-        )
+            ContextCheckpointState.READY,)
 
     def test_record_source_call_generation_and_size_limits_fail_closed(self) -> None:
         calls = tuple(
             _provider_call(ordinal)
-            for ordinal in range(1, MAX_CONTEXT_LEDGER_PROVIDER_CALLS + 2)
-        )
+            for ordinal in range(1, MAX_CONTEXT_LEDGER_PROVIDER_CALLS + 2))
         self.assert_ledger_error(
             lambda: ContextLedgerAttempt(
                 self.plan,
                 calls,
                 ContextLedgerAttemptOutcome.IN_PROGRESS,
                 "2026-08-28T00:00:00.000000Z",
-                "2026-08-28T00:00:00.000000Z",
-            ),
-            ContextLedgerErrorCode.LIMIT_EXCEEDED,
-        )
+                "2026-08-28T00:00:00.000000Z",),
+            ContextLedgerErrorCode.LIMIT_EXCEEDED,)
         sources = []
         for ordinal in range(MAX_CONTEXT_LEDGER_SOURCES + 1):
             entry, _material = _entry(
@@ -1816,18 +1590,15 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
                 channel=ContextSemanticChannel.STABLE_BEHAVIOR,
                 priority=ContextPriority.P1_STABLE,
                 authority=ContextAuthorityKind.AGENT_DEFINITION,
-                searchable=False,
-            )
+                searchable=False,)
             sources.append(ContextCheckpointSource(entry))
         oversized_proposal = ContextCheckpointProposal(
             self.projection.checkpoint_proposal.conditions,
             tuple(sources),
-            0,
-        )
+            0,)
         self.assert_ledger_error(
             lambda: context_checkpoint_proposal_digest(oversized_proposal),
-            ContextLedgerErrorCode.LIMIT_EXCEEDED,
-        )
+            ContextLedgerErrorCode.LIMIT_EXCEEDED,)
         ready = self.ready()
         path = self.record_path()
         with path.open("r+b") as handle:
@@ -1846,33 +1617,28 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
         reserved = self.ledger.reserve_attempt(
             self.key,
             expected_generation=0,
-            plan=plan,
-        )
+            plan=plan,)
         current = reserved
         for ordinal in range(1, MAX_CONTEXT_LEDGER_PROVIDER_CALLS + 1):
             current = self.ledger.append_provider_call(
                 self.key,
                 expected_generation=current.generation,
                 attempt_id=plan.attempt_id,
-                provider_call=_provider_call(ordinal),
-            )
+                provider_call=_provider_call(ordinal),)
         before = self.record_path().read_bytes()
         self.assert_ledger_error(
             lambda: self.ledger.append_provider_call(
                 self.key,
                 expected_generation=current.generation,
                 attempt_id=plan.attempt_id,
-                provider_call=_provider_call(MAX_CONTEXT_LEDGER_PROVIDER_CALLS + 1),
-            ),
-            ContextLedgerErrorCode.LIMIT_EXCEEDED,
-        )
+                provider_call=_provider_call(MAX_CONTEXT_LEDGER_PROVIDER_CALLS + 1),),
+            ContextLedgerErrorCode.LIMIT_EXCEEDED,)
         self.assertEqual(self.record_path().read_bytes(), before)
         self.ledger.taint_attempt(
             self.key,
             expected_generation=current.generation,
             attempt_id=plan.attempt_id,
-            outcome=ContextLedgerAttemptOutcome.INCOMPLETE,
-        )
+            outcome=ContextLedgerAttemptOutcome.INCOMPLETE,)
         self.ledger.inspect(self.key)
         maximum_generation = (1 << 63) - 1
         maximum_value = json.loads(self.record_path().read_bytes())
@@ -1885,10 +1651,8 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
             lambda: self.ledger.reserve_attempt(
                 self.key,
                 expected_generation=maximum_generation,
-                plan=replace(plan, attempt_id="attempt-after-maximum"),
-            ),
-            ContextLedgerErrorCode.LIMIT_EXCEEDED,
-        )
+                plan=replace(plan, attempt_id="attempt-after-maximum"),),
+            ContextLedgerErrorCode.LIMIT_EXCEEDED,)
 
 
 class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
@@ -1922,8 +1686,7 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
                 ledger.invalidate(key, expected_generation=0)
                 digest = context_ledger_scope_key(key)[len("sha256:") :]
                 directory = (
-                    workspace.root / "agent_states/orchestrator_state/context_ledger/v2"
-                )
+                    workspace.root / "agent_states/orchestrator_state/context_ledger/v2")
                 record = directory / f"{digest}.json"
                 lock = directory / f"{digest}.lock"
                 outside = workspace.root.parent / "outside"
@@ -1949,14 +1712,12 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
                     def callable_operation():
                         return ledger.invalidate(
                             key,
-                            expected_generation=1,
-                        )
+                            expected_generation=1,)
 
                 with self.assertRaises(ContextLedgerError) as caught:
                     callable_operation()
                 self.assertIs(
-                    caught.exception.code, ContextLedgerErrorCode.STORAGE_UNSAFE
-                )
+                    caught.exception.code, ContextLedgerErrorCode.STORAGE_UNSAFE)
                 self.assertEqual(outside.read_bytes(), b"outside-safe")
 
     def test_workspace_root_identity_replacement_is_rejected_without_new_state(
@@ -1989,8 +1750,7 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
                     projection,
                     attempt_id=f"attempt-atomic-{index}",
                     operation_id=f"operation-atomic-{index}",
-                    result_correlation_id=f"result-atomic-{index}",
-                )
+                    result_correlation_id=f"result-atomic-{index}",)
                 stale = self.ledger.invalidate(key, expected_generation=0)
                 path = self.record_path(key)
                 before = path.read_bytes()
@@ -2003,36 +1763,29 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
 
                 patcher = (
                     mock.patch.object(
-                        ledger_module.os, "write", side_effect=partial_write
-                    )
+                        ledger_module.os, "write", side_effect=partial_write)
                     if injection == "partial_write"
                     else mock.patch.object(
                         ledger_module.os,
                         injection,
-                        side_effect=OSError(f"PRIVATE {injection}"),
-                    )
+                        side_effect=OSError(f"PRIVATE {injection}"),)
                 )
                 with patcher:
                     self.assert_ledger_error(
                         lambda: self.ledger.reserve_attempt(
                             key,
                             expected_generation=stale.generation,
-                            plan=plan,
-                        ),
-                        ContextLedgerErrorCode.STORAGE_FAILURE,
-                    )
+                            plan=plan,),
+                        ContextLedgerErrorCode.STORAGE_FAILURE,)
                 self.assertEqual(path.read_bytes(), before)
                 self.assertFalse(
-                    any(item.name.startswith(".tmp-") for item in path.parent.iterdir())
-                )
+                    any(item.name.startswith(".tmp-") for item in path.parent.iterdir()))
                 recovered = self.ledger.reserve_attempt(
                     key,
                     expected_generation=stale.generation,
-                    plan=plan,
-                )
+                    plan=plan,)
                 self.assertIs(
-                    recovered.record.state, ContextLedgerRecordState.INCOMPLETE
-                )
+                    recovered.record.state, ContextLedgerRecordState.INCOMPLETE)
 
     def test_post_replace_durability_failure_leaves_complete_idempotent_record(
         self,
@@ -2057,23 +1810,18 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
                 lambda: self.ledger.reserve_attempt(
                     self.key,
                     expected_generation=stale.generation,
-                    plan=self.plan,
-                ),
-                ContextLedgerErrorCode.STORAGE_FAILURE,
-            )
+                    plan=self.plan,),
+                ContextLedgerErrorCode.STORAGE_FAILURE,)
         observed = self.ledger.inspect(self.key)
         self.assertEqual(
             (observed.generation, observed.record.state),
-            (2, ContextLedgerRecordState.INCOMPLETE),
-        )
+            (2, ContextLedgerRecordState.INCOMPLETE),)
         self.assertEqual(
             self.ledger.reserve_attempt(
                 self.key,
                 expected_generation=stale.generation,
-                plan=self.plan,
-            ),
-            observed,
-        )
+                plan=self.plan,),
+            observed,)
 
     def test_control_exceptions_cleanup_temporary_and_writer_lock_for_retry(
         self,
@@ -2089,8 +1837,7 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
                     projection,
                     attempt_id=f"attempt-control-{index}",
                     operation_id=f"operation-control-{index}",
-                    result_correlation_id=f"result-control-{index}",
-                )
+                    result_correlation_id=f"result-control-{index}",)
                 stale = self.ledger.invalidate(key, expected_generation=0)
                 before = self.record_path(key).read_bytes()
                 with (
@@ -2100,34 +1847,28 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
                     self.ledger.reserve_attempt(
                         key,
                         expected_generation=stale.generation,
-                        plan=plan,
-                    )
+                        plan=plan,)
                 self.assertIs(caught.exception, control)
                 self.assertEqual(self.record_path(key).read_bytes(), before)
                 self.assertFalse(
                     any(
                         item.name.startswith(".tmp-")
-                        for item in self.record_path(key).parent.iterdir()
-                    )
+                        for item in self.record_path(key).parent.iterdir())
                 )
                 recovered = self.ledger.reserve_attempt(
                     key,
                     expected_generation=stale.generation,
-                    plan=plan,
-                )
+                    plan=plan,)
                 self.assertIs(
-                    recovered.record.state, ContextLedgerRecordState.INCOMPLETE
-                )
+                    recovered.record.state, ContextLedgerRecordState.INCOMPLETE)
 
     def test_unsupported_storage_primitives_fail_before_mutation(self) -> None:
         state_root = (
-            self.workspace.root / "agent_states/orchestrator_state/context_ledger"
-        )
+            self.workspace.root / "agent_states/orchestrator_state/context_ledger")
         with mock.patch.object(ledger_module, "_fcntl", None):
             self.assert_ledger_error(
                 lambda: self.ledger.inspect(self.key),
-                ContextLedgerErrorCode.STORAGE_UNSUPPORTED,
-            )
+                ContextLedgerErrorCode.STORAGE_UNSUPPORTED,)
         self.assertFalse(state_root.exists())
 
 
@@ -2153,17 +1894,14 @@ class LedgerConcurrencyTests(LedgerTestCase):
                         ledger.reserve_attempt(
                             self.key,
                             expected_generation=0,
-                            plan=plan,
-                        ),
-                    )
-                )
+                            plan=plan,),
+                    ))
             except ContextLedgerError as error:
                 results.append((name, error.code))
 
         threads = (
             threading.Thread(target=reserve, args=("a", ledger_a, plan_a)),
-            threading.Thread(target=reserve, args=("b", ledger_b, plan_b)),
-        )
+            threading.Thread(target=reserve, args=("b", ledger_b, plan_b)),)
         for thread in threads:
             thread.start()
         ready.wait(timeout=5)
@@ -2173,13 +1911,11 @@ class LedgerConcurrencyTests(LedgerTestCase):
         successes = [
             value
             for _name, value in results
-            if isinstance(value, ContextLedgerInspection)
-        ]
+            if isinstance(value, ContextLedgerInspection)]
         failures = [
             value
             for _name, value in results
-            if isinstance(value, ContextLedgerErrorCode)
-        ]
+            if isinstance(value, ContextLedgerErrorCode)]
         self.assertEqual(len(successes), 1, results)
         self.assertEqual(failures, [ContextLedgerErrorCode.INVALID_TRANSITION])
         observed = self.ledger.inspect(self.key)
@@ -2219,8 +1955,7 @@ class LedgerConcurrencyTests(LedgerTestCase):
             successor = self.ledger.reserve_attempt(
                 self.key,
                 expected_generation=stale.generation,
-                plan=self.plan,
-            )
+                plan=self.plan,)
             release_read.set()
             reader.join(timeout=5)
             self.assertFalse(reader.is_alive())
@@ -2267,8 +2002,7 @@ class LedgerConcurrencyTests(LedgerTestCase):
         ):
             self.assert_ledger_error(
                 lambda: self.ledger.inspect(self.key),
-                ContextLedgerErrorCode.STORAGE_UNSAFE,
-            )
+                ContextLedgerErrorCode.STORAGE_UNSAFE,)
         self.assertTrue(mutated)
 
     @unittest.skipUnless(ledger_module._fcntl is not None, "requires POSIX flock")
@@ -2278,15 +2012,13 @@ class LedgerConcurrencyTests(LedgerTestCase):
             "import fcntl, os, sys; "
             "fd=os.open(sys.argv[1], os.O_RDWR); "
             "fcntl.flock(fd, fcntl.LOCK_EX); print('locked', flush=True); "
-            "sys.stdin.read(1); fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)"
-        )
+            "sys.stdin.read(1); fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)")
         process = subprocess.Popen(
             [sys.executable, "-B", "-W", "error", "-c", script, str(self.lock_path())],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-        )
+            text=True,)
 
         def cleanup() -> None:
             if process.poll() is None:
@@ -2308,10 +2040,8 @@ class LedgerConcurrencyTests(LedgerTestCase):
                 lambda: self.ledger.reserve_attempt(
                     self.key,
                     expected_generation=stale.generation,
-                    plan=self.plan,
-                ),
-                ContextLedgerErrorCode.LOCK_TIMEOUT,
-            )
+                    plan=self.plan,),
+                ContextLedgerErrorCode.LOCK_TIMEOUT,)
         assert process.stdin is not None
         process.stdin.write("x")
         process.stdin.flush()
@@ -2321,8 +2051,7 @@ class LedgerConcurrencyTests(LedgerTestCase):
         recovered = self.ledger.reserve_attempt(
             self.key,
             expected_generation=stale.generation,
-            plan=self.plan,
-        )
+            plan=self.plan,)
         self.assertIs(recovered.record.state, ContextLedgerRecordState.INCOMPLETE)
 
 
@@ -2334,8 +2063,7 @@ class LedgerBoundaryTests(LedgerTestCase):
         self.assertEqual(len(agent_context.__all__), 17)
         self.assertEqual(len(writing_artifacts.__all__), 80)
         self.assertTrue(
-            set(ledger_module.__all__).isdisjoint(story_writing_agents.__all__)
-        )
+            set(ledger_module.__all__).isdisjoint(story_writing_agents.__all__))
         self.assertTrue(set(ledger_module.__all__).isdisjoint(agent_context.__all__))
         source_path = _SOURCE_ROOT / "story_writing_agents/agent_context/ledger.py"
         source = source_path.read_text(encoding="utf-8")
@@ -2344,8 +2072,7 @@ class LedgerBoundaryTests(LedgerTestCase):
         relative_dependencies = {
             (node.level, node.module)
             for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.level
-        }
+            if isinstance(node, ast.ImportFrom) and node.level}
         self.assertEqual(
             relative_dependencies,
             {
@@ -2353,8 +2080,7 @@ class LedgerBoundaryTests(LedgerTestCase):
                 (1, "manifest"),
                 (1, "planning"),
                 (2, "runtime_state_paths"),
-                (2, "workspace"),
-            },
+                (2, "workspace"),},
         )
         self.assertFalse(
             [
@@ -2363,10 +2089,8 @@ class LedgerBoundaryTests(LedgerTestCase):
                 if isinstance(node, ast.Import)
                 and any(
                     alias.name.startswith(("requests", "httpx", "subprocess", "socket"))
-                    for alias in node.names
-                )
-            ]
-        )
+                    for alias in node.names)
+            ])
 
 
 if __name__ == "__main__":  # pragma: no cover

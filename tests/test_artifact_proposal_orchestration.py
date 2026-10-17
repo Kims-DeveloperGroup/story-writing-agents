@@ -134,9 +134,17 @@ def _artifact_outcome(
                                 for _path, query in read_queries]}, outer_schema_id=outer, inner_schema_id=inner)
             read_phase = 2
             hits = call.payload['context_observation']['search_results']
-            selected_handles = tuple(next(row['read_handle'] for row in hits
-                if row['provenance']['source_locator'] == path.removeprefix('manuscript/'))
-                for path, _query in read_queries)
+            try:
+                selected_handles = tuple(next(row['read_handle'] for row in hits
+                    if row['provenance']['source_locator'] == path.removeprefix('manuscript/'))
+                    for path, _query in read_queries)
+            except RuntimeError as failure:
+                if (type(failure) is RuntimeError
+                        and type(failure.__cause__) is StopIteration):
+                    from tests.recommendation_fixture import _selection_failure_note
+                    _selection_failure_note(
+                        failure, hits, read_queries, point='artifact137')
+                raise
             _provider.used_handles = selected_handles
             outer, inner = offered_fixture_bindings(call, action_type='read_context', response_type=None, family=0)
             return indexed_response({'action_type': 'read_context', 'read_handles': finite_fixture_read_selection(

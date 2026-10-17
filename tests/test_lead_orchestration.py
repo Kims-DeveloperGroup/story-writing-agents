@@ -1709,6 +1709,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             ("writing_task_scope", (12, 13)), ("authoring_assessment", (6, 8, 9, 11)),
             ("authoring_assessment.direction", (6, 8, 9, 11)),("authoring_assessment.creative_scope", (6, 8, 9, 11)),
             ("specialist_consultation_proposal.shared_premises.*.selected_premise", (8, 9, 10)),
+            ('specialist_consultation_proposal.assignments.plot_architect.review_basis', (8,)),
+            ('specialist_consultation_proposal.assignments.character_custodian.review_basis', (8,)),
+            ('specialist_consultation_proposal.assignments.narrative_guardian.review_basis', (8,)),
             ("core_document_assessment.document_judgments.*.document_read_source_id", (13,)), )}
         docs = tuple("core_documents/" + name + ".md" for name in
                      ("global_outline", "part_outlines", "character_sheets", "narrative_rules"))
@@ -1741,7 +1744,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 for value in node:
                     assert_strict(value, owner, path, refs)
             elif node == "null" and owner is not None:
-                self.assertIn(owner, null_slots.get(".".join(path), ()))
+                self.assertIn(owner, null_slots.get(".".join(path), ()),
+                              ("nullable_native_slot", owner, ".".join(path)))
         definitions = logical_schema.get("$defs", {})
         assert_strict(logical_schema)
         self.assertEqual(len(result_index.contracts), len(scope_profiles))
@@ -3841,8 +3845,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         "critique": "lead-response-v8:family:1"}[response_type])
                 self.assertIn((outer, inner), call.contract.outer_inner_schema_ids)
                 native = {'response_type': response_type, 'response_text': value['message']}
-                scope = (value['authoring_scope'] if 'authoring_scope' in value else
-                         _compact_scope(_live_scope(call, activity='workflow', domains=(), paths=())))
+                scope = _compact_scope(_live_scope(
+                    call, activity='workflow', domains=(), paths=()))
                 scope = wire_result(dict(authoring_scope=scope), None, native_types={})
                 native['task_scope'] = lead_fixture_bound_scope(call, scope['writing_task_scope'])
                 response = indexed_response(
@@ -3852,6 +3856,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 task_result = complete['agent_action']['task_result']
                 self.assertEqual(member.rule_graph.findings(task_result), ())
                 call.contract.decode_response(response)
+                if 'authoring_scope' in value:
+                    invalid_scope = wire_result(
+                        dict(authoring_scope=value['authoring_scope']), None, native_types={})
+                    task_result['response_details']['task_scope'] = lead_fixture_bound_scope(
+                        call, invalid_scope['writing_task_scope'])
+                    self.assertTrue(member.rule_graph.findings(task_result))
+                    response = json.dumps(complete, ensure_ascii=False, separators=(',', ':'))
+                    with self.assertRaises(ValueError):
+                        call.contract.decode_response(response)
                 if 'authoring_scope' not in value:
                     del task_result['response_details']['task_scope']
                     self.assertEqual(member.rule_graph.findings(task_result), (
@@ -4068,7 +4081,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     wire_assignments[row['agent_id']] = ( {'task_instructions': row['instruction'],
                         'assignment_type': 'review_content', 'input_anchor_id': supplied[0],'optional_inputs': selected}
                     )
-                for entry in projected.values():
+                for entry in wire_assignments.values():
                     entry['review_basis'] = copy.deepcopy(control_basis)
                     for required in offered['required_input_ids']:
                         if required in supplied:
@@ -4754,21 +4767,30 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         def semantic_rejection(call: ContextProviderCallRequest, _provider: object) -> str:
             native = {"response_type": "answer", "response_text": rejected_body,
                 "task_scope": lead_fixture_bound_scope(call, _live_scope(
-                    call, activity="review", domains=("plot_structure",)), record=True)}
+                    call, activity="workflow", domains=()), record=True)}
             response = _bound_rejection_envelope(call, lead_fixture_result(native))
-            task_result = json.loads(response)['agent_action']['task_result']
+            complete = json.loads(response)
+            task_result = complete['agent_action']['task_result']
             member = next(item for item in call.contract.semantic_index.contracts
                           if item.schema_id == task_result['schema_id'])
             self.assertEqual(member.owner.variant.branch_key.partition(":partition:")[0],
                 "lead-response-v8:family:0")
             self.assertEqual(member.rule_graph.findings(task_result), ())
             call.contract.decode_response(response)
+            task_result['response_details']['task_scope'] = lead_fixture_bound_scope(
+                call, _live_scope(call, activity="review", domains=("plot_structure",)),
+                record=True)
+            self.assertTrue(member.rule_graph.findings(task_result))
+            response = json.dumps(complete, ensure_ascii=False, separators=(',', ':'))
+            with self.assertRaises(ValueError):
+                call.contract.decode_response(response)
             return response
 
         cases = (
             ("malformed",(malformed,), ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,),
             ("correlation",(correlation_mismatch,), ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,),
-            ("semantic",(semantic_rejection,), ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED,),
+            ("semantic",(semantic_rejection,),
+                ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,),
         )
         for label, initial_script, rejection_code in cases:
             with self.subTest(label=label):

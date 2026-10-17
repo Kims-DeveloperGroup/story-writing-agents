@@ -451,7 +451,12 @@ class RuntimeReferenceOperation:
 
         self._require_process_affinity()
         with self._lock:
-            if self._finished or self._authorization is None:
+            if self._finished:
+                raise ReferenceAuthorizationError(ReferenceAuthorizationErrorCode.CLOSED)
+            if self._authorization is None:
+                if (self.operation_id is None and type(locators) is tuple
+                        and len(locators) == 0):
+                    return ()
                 raise ReferenceAuthorizationError(ReferenceAuthorizationErrorCode.CLOSED)
             return self._authorization.project_alias_proofs(_parse_reference_aliases(locators))
 
@@ -870,6 +875,8 @@ class RuntimeReferenceOperation:
         *,
         failure: BaseException | None = None,
     ) -> None:
+        if self.operation_id is None and self._authorization is None:
+            self._finished = True
         descriptor = self._physical_workspace_pin
         if descriptor is None:
             return

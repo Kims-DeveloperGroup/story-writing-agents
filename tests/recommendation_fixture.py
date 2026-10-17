@@ -14,6 +14,58 @@ from tests import test_artifact_proposal_orchestration as artifact
 from tests.test_artifact_objectives import DRAFT, OUTLINE, ObjectiveCase, digest, rewrite_history
 
 
+def _selection_failure_note(failure, hits, targets, *, point):
+    if type(failure) is not RuntimeError or type(failure.__cause__) is not StopIteration:
+        return
+    def mapping(value):
+        return (type(value) is dict and len(value) <= 16
+                and all(type(key) is str and len(key) <= 64 for key in value))
+    point = (point if type(point) is str and point in ('artifact137', 'recommendation356')
+             else 'unsupported')
+    note = {'point': point, 'status': 'unsupported'}
+    if (type(hits) is list and len(hits) <= 64
+            and type(targets) is tuple and len(targets) <= 8):
+        if point == 'artifact137':
+            valid = all(type(row) is tuple and len(row) == 2 and type(row[0]) is str
+                        and len(row[0]) <= 4096 for row in targets)
+            paths = tuple(row[0] for row in targets) if valid else ()
+        else:
+            valid = all(type(path) is str and len(path) <= 4096 for path in targets)
+            paths = (tuple(path for path in targets if path.startswith('core_documents/'))
+                     if valid else ())
+        kinds = {'story_document': 0, 'other': 0, 'unsupported': 0}
+        locators = []
+        for row in hits:
+            item = row if mapping(row) else {}
+            source, provenance = item.get('source'), item.get('provenance')
+            kind = source.get('source_type') if mapping(source) else None
+            locator = provenance.get('source_locator') if mapping(provenance) else None
+            known = type(kind) is str and len(kind) <= 64 and kind in (
+                'story_document', 'conversation_history', 'current_consensus_run',
+                'agent_work_history', 'current_task_input', 'agent_instructions')
+            kinds['story_document' if known and kind == 'story_document'
+                  else 'other' if known else 'unsupported'] += 1
+            locators.append(locator if type(locator) is str and len(locator) <= 4096 else None)
+        note.update(hit_count=len(hits), source_kinds=kinds)
+        if valid and point != 'unsupported' and None not in locators and not kinds['unsupported']:
+            matches = []
+            for path in paths:
+                projected = path.removeprefix('manuscript/') if point == 'artifact137' else path
+                canonical = sum(1 << i for i, locator in enumerate(locators) if locator == path)
+                current = sum(1 << i for i, locator in enumerate(locators) if locator == projected)
+                matches.append({
+                    'category': ('core' if path.startswith('core_documents/')
+                                 else 'manuscript' if path.startswith('manuscript/') else 'other'),
+                    'canonical_count': canonical.bit_count(),
+                    'projected_count': current.bit_count(),
+                    'canonical_mask': canonical, 'projected_mask': current})
+            note.update(status='supported', targets=matches)
+    encoded = json.dumps(note, ensure_ascii=True, separators=(',', ':'))
+    if len(encoded) > 4096:
+        encoded = json.dumps({'point': point, 'status': 'unsupported'}, separators=(',', ':'))
+    BaseException.add_note(failure, encoded)
+
+
 def action(*, kind="prepare_artifact", source_ids=("current_response",),
            objective_id=None, instruction="Prepare the exact offered synthetic outline.",
            purpose="Prepare the approved outline for separate review.",
@@ -353,9 +405,16 @@ class RecommendationCase(ObjectiveCase):
         def read(call, provider):
             retain_binding(call)
             hits = call.payload['context_observation']['search_results']
-            selected = tuple(next(row['read_handle'] for row in hits
-                if row['provenance']['source_locator'] == path) for path in request.target_paths
-                if path.startswith('core_documents/'))
+            try:
+                selected = tuple(next(row['read_handle'] for row in hits
+                    if row['provenance']['source_locator'] == path) for path in request.target_paths
+                    if path.startswith('core_documents/'))
+            except RuntimeError as failure:
+                if (type(failure) is RuntimeError
+                        and type(failure.__cause__) is StopIteration):
+                    _selection_failure_note(
+                        failure, hits, request.target_paths, point='recommendation356')
+                raise
             expected_delivery_paths.append(tuple(row['provenance']['source_locator']
                 for handle in call.contract.offers.issued_handle_aliases if handle in selected
                 for row in hits if row['read_handle'] == handle))

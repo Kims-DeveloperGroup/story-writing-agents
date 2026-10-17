@@ -570,12 +570,57 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
         self.assertEqual(
             authorization.project_alias_proofs(references), authorization.authorized_references,
         )
+        physical = self.root.stat()
+        identity = (physical.st_dev, physical.st_ino)
+        captured_batch = _reference_batch(*references)
+        pin = os.open(self.root, os.O_RDONLY)
+        captured_operation = None
+        try:
+            captured_operation = reference_runtime.RuntimeReferenceOperation(
+                self.repository, session_id='session', batch=captured_batch,
+                source_text=captured_batch.source_text, provider_text=captured_batch.provider_text,
+                operation_id=authorization.manifest.operation_id, authorization=authorization,
+                physical_workspace_identity=identity, physical_workspace_pin=pin)
+            with _expect_error(self, ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH):
+                captured_operation.project_alias_proofs(())
+            self.assertTrue(captured_operation.defer_if_workspace_replaced(
+                (identity[0], identity[1] + 1)))
+            self.assertFalse(captured_operation.finished)
+            self.assertTrue(captured_operation.cleanup_is_pending)
+            with _expect_error(self, ReferenceAuthorizationErrorCode.CLOSED):
+                captured_operation.project_alias_proofs(())
+        finally:
+            if captured_operation is None:
+                os.close(pin)
+            else:
+                captured_operation.failure(
+                    ReferenceAuthorizationError(ReferenceAuthorizationErrorCode.CANCELLED))
         authorization.close()
         with _expect_error(self, ReferenceAuthorizationErrorCode.CLOSED):
             authorization.project_alias_proofs(references)
         batch, indices = reference_values.coalesce_reference_aliases(())
         self.assertEqual((batch.references, indices), ((), ()))
         self.assertEqual(reference_runtime.reference_alias_source_text(()), "")
+        class _EmptyAliases(tuple):
+            pass
+        for terminal in ('finish', 'failure'):
+            empty_operation = reference_runtime.prepare_runtime_reference_operation(
+                self.repository, session_id='session', text='plain')
+            self.assertFalse(empty_operation.finished)
+            self.assertEqual(empty_operation.project_alias_proofs(()), ())
+            for aliases in (None, False, 0, '', [], {}, set(), _EmptyAliases(),
+                            (references[0].token,)):
+                with _expect_error(self, ReferenceAuthorizationErrorCode.CLOSED):
+                    empty_operation.project_alias_proofs(aliases)
+            self.assertFalse(empty_operation.finished)
+            self.assertEqual(empty_operation.project_alias_proofs(()), ())
+            if terminal == 'finish':
+                self.assertIsNone(empty_operation.finish())
+            else:
+                self.assertIsNone(empty_operation.failure(RuntimeError('fixture complete')))
+            self.assertTrue(empty_operation.finished)
+            with _expect_error(self, ReferenceAuthorizationErrorCode.CLOSED):
+                empty_operation.project_alias_proofs(())
         lines_by_path = {
             _MANUSCRIPT_PATH: ("頭🙂\n".encode(), "한\r\n".encode(), "β\r".encode(),
                                b"four\n", b"gap\n", b"last"),

@@ -400,14 +400,14 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
             from tests.provider_wire_fixture import (
                 lead_fixture_bound_scope, lead_fixture_response, lead_fixture_assessment)
             details = {"task_scope": lead_fixture_bound_scope(
-                call, value["authoring_scope"], record=True), "authoring_assessment": None}
+                call, value["authoring_scope"], record=True)}
             if "authoring_assessment" in value:
                 choices = dict(call.contract.semantic_index.policy.choices)
                 details["authoring_assessment"] = lead_fixture_assessment(
                     value["authoring_assessment"], source_choices=choices["input_ids"])
             return lead_fixture_response(call, {
                 "response_type": "clarification_question", "response_text": value["message"],
-                "response_details": details}, family=0)
+                "response_details": details}, family=1)
         if not native_proposal:
             return _provider_envelope(call, value)
         from tests.provider_wire_fixture import (
@@ -610,7 +610,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self.assertEqual(result.proposal.basis.evidence, result.evidence)
         basis = result.proposal.basis.authoring_admission
         expected_basis = (('reference_1', 'reference_2'), 'Assess the exact candidate references.')
-        self.assertEqual({row.agent_id: (row.review_basis.candidate_input_ids,
+        self.assertEqual({row.specialist_id: (row.review_basis.candidate_input_ids,
                                        row.review_basis.criteria)
                           for row in result.proposal.assignments},
                          {PLOT_ARCHITECT: expected_basis, 'execution_specialist': expected_basis})
@@ -760,7 +760,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     recommended_action={**value['recommended_action'],
                                         'source_ids': base_sources},
                     authoring_scope=value['authoring_scope'],
-                    authoring_assessment=value['authoring_assessment'])(call, _provider))
+                    authoring_assessment=assessment)(call, _provider))
                 source_path = ('agent_action', 'task_result', 'response_details',
                                'proposal_drafting_request', 'source_ids')
                 selector = packet

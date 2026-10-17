@@ -81,24 +81,19 @@ _DEFAULT_CLASSIFICATION = {
     ),
     ContextSourceKind.AGENT_DEFINITION: (
         ContextSemanticChannel.STABLE_BEHAVIOR,
-        ContextPriority.P1_STABLE,
-    ),
+        ContextPriority.P1_STABLE,),
     ContextSourceKind.WRITING_ARTIFACT: (
         ContextSemanticChannel.FOCUSED_EVIDENCE,
-        ContextPriority.P2_WORKING,
-    ),
+        ContextPriority.P2_WORKING,),
     ContextSourceKind.CONVERSATION: (
         ContextSemanticChannel.HISTORY,
-        ContextPriority.P2_WORKING,
-    ),
+        ContextPriority.P2_WORKING,),
     ContextSourceKind.ACTIVE_DEBATE: (
         ContextSemanticChannel.HARD_CONSTRAINT,
-        ContextPriority.P2_WORKING,
-    ),
+        ContextPriority.P2_WORKING,),
     ContextSourceKind.OWN_AGENT_STATE: (
         ContextSemanticChannel.OPTIONAL_BACKGROUND,
-        ContextPriority.P3_OPTIONAL,
-    ),
+        ContextPriority.P3_OPTIONAL,),
 }
 
 
@@ -149,15 +144,13 @@ def _entry(
         provenance
         or ContextProvenance(
             _AUTHORITY_BY_KIND[source_kind],
-            f"sources/{source_id}",
-        ),
+            f"sources/{source_id}",),
         len(body_utf8) if utf8_bytes is _UNSET else utf8_bytes,
         searchable=(
             selected_priority
             in {ContextPriority.P2_WORKING, ContextPriority.P3_OPTIONAL}
             if searchable is _UNSET
-            else searchable
-        ),
+            else searchable),
     )  # type: ignore[arg-type]
 
 
@@ -184,10 +177,8 @@ def _record(
             None,
             None,
             _digest(body_utf8),
-            len(body_utf8),
-        ),
-        body_utf8,
-    )
+            len(body_utf8),),
+        body_utf8,)
 
 
 def _checkpoint_from_projection(
@@ -203,8 +194,7 @@ def _checkpoint_from_projection(
         proposal.sources,
         proposal.delta_depth,
         proposal.catalog_sources,
-        proposal.source_alias_high_watermark,
-    )
+        proposal.source_alias_high_watermark,)
 
 
 def _policy(**overrides: int) -> ContextPlanningPolicy:
@@ -215,8 +205,7 @@ def _policy(**overrides: int) -> ContextPlanningPolicy:
         "p2_source_utf8_bytes": 24,
         "p3_source_utf8_bytes": 16,
         "mandatory_reference_utf8_bytes": 64,
-        "max_delta_depth": 16,
-    }
+        "max_delta_depth": 16,}
     values.update(overrides)
     return ContextPlanningPolicy(**values)
 
@@ -235,8 +224,7 @@ def _conditions(
         provider_id,
         definition_fingerprint or _digest(b"definition"),
         policy_fingerprint or policy.fingerprint,
-        schema_version,
-    )
+        schema_version,)
 
 
 def _ready_checkpoint(

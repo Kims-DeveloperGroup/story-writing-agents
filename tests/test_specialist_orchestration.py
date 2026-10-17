@@ -924,16 +924,47 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             assignments=[{**_assignments(PLOT_ARCHITECT)[0], "input_ids": ["user_input", "reference_1"]}], authoring_assessment=asdict(_review_assessment()))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("concern"))
         def continue_lineage(call, _provider):
+            from tests.provider_wire_fixture import (
+                indexed_response, lead_fixture_assignments, lead_fixture_result,
+                offered_fixture_bindings, result as wire_result)
             material = _workflow_material(call.payload)
             reply_ids = [item["reply_event_id"] for item in material["replies"]]
             known_ids = [item["input_id"] for item in material["inputs"]]
             self.assertIn("reference_1", known_ids)
+            choices = dict(call.contract.semantic_index.policy.choices)
+            self.assertTrue(call.contract.factory.constraints.continuation)
+            self.assertEqual(
+                call.contract.factory.constraints.scope, first.proposal.authoring_scope)
+            self.assertEqual(choices['review_candidate_binding'], ('bound',))
+            self.assertEqual(set(choices['review_candidate_ids']), set(known_ids))
+            self.assertTrue(set(reply_ids).isdisjoint(known_ids))
+            self.assertEqual(set(choices['required_input_ids']), set((*known_ids, *reply_ids)))
+            self.assertEqual(choices['allocation_input_ids'], tuple(
+                alias for alias in choices['input_ids'] if alias in (*known_ids, *reply_ids)))
+            self.assertTrue(set((*known_ids, *reply_ids)).issubset(choices['input_ids']))
             assignment = {"agent_id": PLOT_ARCHITECT, "instruction": "Reassess all sources and the first reply.",
                           "input_ids": [*known_ids, *reply_ids], "mode": "review"}
+            assignment['review_basis'] = {
+                'candidate_input_ids': list(known_ids),
+                'criteria': 'Reassess all sources and the first reply.'}
             body = {"message": "One issue needs a second review.", "next_intent": {
                 "purpose": "Resolve the remaining concern.", "assignments": [assignment]}}
-            encoded = wire_response(json.dumps({"action": {"kind": "answer", "result": body}}), wire_contract_id(call.payload))
+            native = wire_result(body, 'consultation-summary-v4')
+            follow_up = native['follow_up_consultation']
+            follow_up.update(lead_fixture_assignments(
+                follow_up['assignments'], input_choices=choices['allocation_input_ids'],
+                review_choices=choices['review_candidate_ids'],
+                anchors={PLOT_ARCHITECT: known_ids[0]},
+                recipients={alias: PLOT_ARCHITECT for alias in choices['required_input_ids']}))
+            grouped = lead_fixture_result(native)
+            outer_id, inner_id = offered_fixture_bindings(
+                call, action_type='submit_result', response_type='answer', family=0,
+                branch_key='consultation-summary-v4:family:1', value=grouped)
+            encoded = indexed_response(
+                {'action_type': 'submit_result', 'task_result': grouped},
+                outer_schema_id=outer_id, inner_schema_id=inner_id)
             self.assertEqual(diagnose_json_text(encoded, call.schema), ())
+            self.assertEqual(json.loads(call.contract.decode_response(encoded).answer_json), body)
             facts = LeadProviderConstraints(input_ids=tuple(known_ids + reply_ids),
                 reviewer_inputs=((PLOT_ARCHITECT, "reference_1"),), scope=first.proposal.authoring_scope, continuation=True)
             self.assertEqual(facts.diagnose(json.dumps(body)), ())
@@ -941,7 +972,14 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 bad = {**body, "next_intent": {**body["next_intent"], "assignments": [{**assignment, "input_ids": selected}]}}
                 self.assertIn(Rule.CONTINUATION_INPUT_COVERAGE, facts.diagnose(json.dumps(bad)))
             bad = {**body, "next_intent": {**body["next_intent"], "assignments": [{**assignment, "input_ids": ["foreign_reply"]}]}}
-            self.assertTrue(diagnose_json_text(wire_response(json.dumps({"action": {"kind": "answer", "result": bad}}), wire_contract_id(call.payload)), call.schema))
+            self.assertIn(Rule.INPUT_NOT_OFFERED, facts.diagnose(json.dumps(bad)))
+            rejected = json.loads(json.dumps(grouped))
+            rejected_rows = rejected['response_details']['follow_up_consultation']['assignments']
+            rejected_rows[PLOT_ARCHITECT]['input_anchor_id'] = (
+                bad['next_intent']['assignments'][0]['input_ids'][0])
+            self.assertTrue(diagnose_json_text(indexed_response(
+                {'action_type': 'submit_result', 'task_result': rejected},
+                outer_schema_id=outer_id, inner_schema_id=inner_id), call.schema))
             self.assertIn(Rule.PURPOSE_REQUIRED, facts.diagnose(json.dumps({**body, "next_intent": {**body["next_intent"], "purpose": ""}})))
             return encoded
         private = "PRIVATE_CONTINUATION_SYNTHESIS_VALUE"
