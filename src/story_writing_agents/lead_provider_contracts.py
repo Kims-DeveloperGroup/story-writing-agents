@@ -456,6 +456,7 @@ def _compile_closed_choices(
     original_fingerprints = schema_rule_fingerprints(original)
     working = deepcopy(original)
     fingerprints: dict[str, str] = {}
+    grouping_prefill: tuple[list, list[str]] | None = None
     trace: list[tuple[tuple[object, ...], str, tuple[tuple[int, ...], ...],
                       bool, dict[str, object], str]] = []
 
@@ -496,9 +497,15 @@ def _compile_closed_choices(
     fingerprints.update({key: batch_fingerprints[name] for key, name in probe_names.items()})
 
     def fingerprint(node: Mapping[str, object]) -> str:
+        nonlocal grouping_prefill
         key = encoded(node)
         if key not in fingerprints:
-            fingerprints[key] = schema_rule_fingerprints(original, selected=node)[0]
+            if grouping_prefill is not None:
+                choices, names = grouping_prefill
+                grouping_prefill = None
+                prefill_grouping_fingerprints(choices, names)
+            if key not in fingerprints:
+                fingerprints[key] = schema_rule_fingerprints(original, selected=node)[0]
         return fingerprints[key]
 
     def prefill_grouping_fingerprints(choices: list, names: list[str]) -> None:
@@ -649,7 +656,7 @@ def _compile_closed_choices(
             choices = before["anyOf"]
             names = sorted({name for choice in choices if closed(choice)
                             for name in choice["properties"]})
-            prefill_grouping_fingerprints(choices, names)
+            grouping_prefill = (choices, names)
             best = None
             best_size = size
             for name in names:
