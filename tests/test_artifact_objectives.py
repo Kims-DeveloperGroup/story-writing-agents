@@ -99,7 +99,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
 
     async def start(self, conversation_id=None, *, message=DRAFT, objective_id=None,
                     target_path=OUTLINE, specialist_ids=(PLOT_ARCHITECT,), authoring_paths=None,
-            native_continuation=False):
+            native_continuation=False, native_inputs=None, response_text=None):
         from tests.test_specialist_routing_runtime import scoped_proposal
         from tests.recommendation_fixture import task_assessment
 
@@ -115,22 +115,33 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
                       "next_step": "consult", "draft_source_event_ids": []}
         elif target_path is None:
             intent = None
-        self.backend.enqueue(scoped_proposal (* specialist_ids, native_inputs = {'input_choices': (
-            'user_input',), 'anchors': {PLOT_ARCHITECT: 'user_input'}, 'recipients': {'user_input':
-            PLOT_ARCHITECT}, 'source_choices': ('user_input',), 'family': 0} if
-            (native_first or native_continuation) else None, paths = authoring_paths if authoring_paths is not None else
-            paths, domains = ('plot_structure',) if (native_first or native_continuation) else
-                             () if target_path is not None and specialist_ids == (PLOT_ARCHITECT,)
-            else tuple (({'plot_architect': 'plot_structure', 'character_custodian':
-            'character_world', 'execution_specialist': 'tone_execution'} [agent] for agent in
-            specialist_ids)), selected = self.objective_tasks.get (objective_id), mutate = (
-                            lambda value, _: value["proposal"].update(
-                                objective_intent={"action": "start", "target_paths": list(paths),
-                                                  "next_step": "consult"})) if native_first else (
-                (lambda value, _material: value['proposal'].update(objective_intent=lead._compact_objective(intent)))
-                if native_continuation else lambda
-            value, _material: value.update (objective_intent = intent)), authoring_assessment =
-            task_assessment (foundation_ids = ('user_input',), actions = ('scene transitions', 'supporting dialogue'))))
+        def respond(call, provider):
+            native = (native_inputs(call) if native_inputs is not None else {
+                'input_choices': ('user_input',), 'anchors': {PLOT_ARCHITECT: 'user_input'},
+                'recipients': {'user_input': PLOT_ARCHITECT},
+                'source_choices': ('user_input',), 'family': 0}
+                if (native_first or native_continuation) else None)
+            def mutate(value, material):
+                if native_first:
+                    value['proposal'].update(objective_intent={
+                        'action': 'start', 'target_paths': list(paths), 'next_step': 'consult'})
+                elif native_continuation:
+                    value['proposal'].update(objective_intent=lead._compact_objective(intent))
+                else:
+                    value.update(objective_intent=intent)
+                if response_text is not None:
+                    value['message'] = response_text
+            return scoped_proposal(
+                *specialist_ids, native_inputs=native,
+                paths=authoring_paths if authoring_paths is not None else paths,
+                domains=(('plot_structure',) if (native_first or native_continuation) else ()
+                    if target_path is not None and specialist_ids == (PLOT_ARCHITECT,) else tuple(
+                    {'plot_architect': 'plot_structure', 'character_custodian': 'character_world',
+                     'execution_specialist': 'tone_execution'}[agent] for agent in specialist_ids)),
+                selected=self.objective_tasks.get(objective_id), mutate=mutate,
+                authoring_assessment=task_assessment(foundation_ids=('user_input',),
+                    actions=('scene transitions', 'supporting dialogue')))(call, provider)
+        self.backend.enqueue(respond)
         proposed = await self.runtime.lead_turn(self.session_id, conversation_id,
             ((f"Draft {target_path or 'a synthetic scene'} from this brief: a lantern vanishes, its keeper is found, and it returns." + " Invent scene transitions and supporting dialogue; preserve the supplied brief facts."
             + (" Explicit authoring paths: " + ", ".join(authoring_paths) if authoring_paths is not None else ""))))

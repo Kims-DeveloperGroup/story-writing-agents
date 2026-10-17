@@ -37,9 +37,19 @@ class LeadArtifactObjectiveTests(RecommendationCase):
                           scope=scopes.EditorialScope.whole(path))))
         await self.record_book_readiness(seed_before_capture=True)
         pristine = self.snapshots()
+        def source_inputs(call):
+            choices = dict(call.contract.semantic_index.policy.choices)
+            required = tuple(choices['required_input_ids'])
+            if required != ('user_input',):
+                raise ValueError(f"Unexpected source-start required aliases: {required!r}")
+            return {'input_choices': choices['input_ids'], 'source_choices': choices['input_ids'],
+                    'anchors': dict.fromkeys(ROSTER, 'user_input'),
+                    'recipients': {'user_input': PLOT_ARCHITECT}, 'family': 0}
         original_result = lead._live_result
         with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(call, {**value, "message": brief} if value.get("kind") == "proposal" else value)):
-            conversation_id, _ = await self.start(conversation_id, message=text, target_path=None, specialist_ids=ROSTER, authoring_paths=(path,))
+            conversation_id, _ = await self.start(
+                conversation_id, message=text, target_path=None, specialist_ids=ROSTER,
+                authoring_paths=(path,), native_inputs=source_inputs, response_text=brief)
         source = self.projection(conversation_id).offered_draft_sources[-1]
         scope = next(e.payload.authoring_scope for e in self.history(conversation_id) if e.event_id == source.event_id)
         self.assertEqual(scope.target_paths, (path,))
