@@ -473,6 +473,392 @@ jobs:
           from pathlib import Path
           from story_writing_agents.git import process, session_resources
           from tests import runner
+
+          """Private passive observation of one existing budget test's failed subTests.
+
+          Inert until Root supplies its already-imported runner result class to install().
+          No project imports, test/helper/owner calls, trace/profile hooks, or launch code.
+          """
+          from enum import Enum
+          from pathlib import Path
+          import hashlib
+          import json
+
+
+          CANONICAL_ID = (
+              'tests.test_lead_orchestration.LeadBudgetFinalizationTests.'
+              'test_budget_notice_preserves_maximum_utf8_synthesis'
+          )
+          EXPECTED_HEAD = '84184eec04de21b80dde26f0ab18d5c0eac7140e'
+          EXPECTED_MANIFEST = 'ecfd70cc36ddef51f00a97cc1675e74f1d0ff3ef843d79367c17eb2f4b7cbcfc'
+          SOURCE_PINS = {
+              'tests/runner.py': (
+                  '018a8534d83420ece7d3dea6f1368b4408445f59ae6fc248775ac43a3eda1e76'
+              ),
+              'tests/test_lead_orchestration.py': (
+                  '1fbe2f44423f6481cce77037a965710776d87eb76d5331e2cce054e099c4f98b'
+              ),
+              'src/story_writing_agents/conversations/context.py': (
+                  'c178f16d88700bd177ca0ef8cecb2a4e552f329c9f37cefc6c54596fbbae2882'
+              ),
+              'src/story_writing_agents/conversations/events.py': (
+                  'dd4d4f43560c9203af059db4eafcf14fa5dd5b067477426897943d7eebc79f71'
+              ),
+              'src/story_writing_agents/conversations/__init__.py': (
+                  'd4d7c3447a2e16a4ae1263cb656b07abb952da370272c109452f848b452a196a'
+              ),
+          }
+          FRAME_QUALNAME = 'LeadBudgetFinalizationTests._budget_consultation'
+          FRAME_FIRST_LINE = 5230
+          ASSERT_LINE = 5328
+          MAX_RECORDS = 3
+          MAX_HISTORY = 32
+          MAX_DETAILS = 16
+          MAX_DETAIL_CHARS = 4096
+          MAX_OUTPUT_BYTES = 65536
+          AGENTS = ('lead_orchestrator', 'plot_architect', 'character_custodian', 'execution_specialist')
+          CONVERSATIONS = 'story_writing_agents.conversations'
+
+
+          def _get(value, name):
+              return object.__getattribute__(value, name)
+
+
+          def _typed(value, name, module=CONVERSATIONS):
+              actual = type(value)
+              return actual.__module__ == module and actual.__qualname__ == name
+
+
+          def _token(value, maximum=128):
+              if type(value) is not str or not value or len(value) > maximum or not value.isascii():
+                  raise ValueError('metadata_type')
+              if not all(c.isalnum() or c in '_.:@/-' for c in value):
+                  raise ValueError('metadata_alphabet')
+              return value
+
+
+          def _enum(value):
+              if value is None:
+                  return None
+              if not isinstance(value, Enum):
+                  raise TypeError('metadata_enum')
+              return _token(value.value, 96)
+
+
+          def _integer(value, maximum=1000000):
+              if type(value) is not int or not 0 <= value <= maximum:
+                  raise TypeError('metadata_integer')
+              return value
+
+
+          def _optional_id(value):
+              return None if value is None else _token(value)
+
+
+          def _details(value):
+              if type(value) is not tuple or any(type(v) is not str for v in value):
+                  raise TypeError('validation_details_type')
+              kept, used = [], 0
+              for item in value[:MAX_DETAILS]:
+                  remaining = MAX_DETAIL_CHARS - used
+                  if remaining <= 0:
+                      break
+                  kept.append(item[:remaining])
+                  used += len(kept[-1])
+              return {'items': kept, 'count': len(value),
+                      'truncated': len(kept) != len(value) or sum(map(len, value)) != used}
+
+
+          def _unique_object(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError('duplicate_notice_member')
+                  result[key] = value
+              return result
+
+
+          def _reject_constant(_value):
+              raise ValueError('nonfinite_notice_value')
+
+
+          def _notice(message, origin):
+              """Copy only a strict, bounded, runtime-authored structured notice whitelist."""
+              if type(message) is not str:
+                  raise TypeError('message_type')
+              size = len(message.encode('utf-8'))
+              omitted = {'utf8_bytes': size, 'structured_notice': None}
+              if origin != 'runtime_fallback' or size > 4096:
+                  return omitted
+              try:
+                  value = json.loads(message, object_pairs_hook=_unique_object,
+                                     parse_constant=_reject_constant)
+                  allowed = {'code', 'language', 'state', 'paths', 'task_revisions'}
+                  if type(value) is not dict or not value.keys() <= allowed or 'code' not in value:
+                      return omitted
+                  result = {'code': _token(value['code'], 96)}
+                  for key in ('language', 'state'):
+                      if key in value:
+                          result[key] = None if value[key] is None else _token(value[key], 96)
+                  if 'paths' in value:
+                      paths = value['paths']
+                      if type(paths) is not list or len(paths) > 16:
+                          return omitted
+                      if any(type(v) is not str or not v.startswith('$') or len(v) > 256
+                             or not v.isascii() or any(ord(c) < 32 for c in v) for v in paths):
+                          return omitted
+                      result['paths'] = paths
+                  if 'task_revisions' in value:
+                      rows = value['task_revisions']
+                      if type(rows) is not list or len(rows) > 8:
+                          return omitted
+                      result['task_revisions'] = []
+                      for row in rows:
+                          if type(row) is not dict or set(row) != {'task_id', 'task_revision'}:
+                              return omitted
+                          result['task_revisions'].append({
+                              'task_id': _token(row['task_id']),
+                              'task_revision': _integer(row['task_revision'], 65535)})
+                  return {'utf8_bytes': size, 'structured_notice': result}
+              except (TypeError, ValueError, UnicodeError, RecursionError):
+                  return omitted
+
+
+          def _turn(value):
+              if not _typed(value, 'LeadTurnResult'):
+                  raise TypeError('turn_type')
+              trace = _get(value, 'trace')
+              if trace is not None and not _typed(trace, 'ReplyTrace', 'story_writing_agents.reply_trace'):
+                  raise TypeError('trace_type')
+              origin = None if trace is None else _enum(_get(trace, 'origin'))
+              result = {key: _optional_id(_get(value, key)) for key in (
+                  'session_id', 'conversation_id', 'turn_id', 'step_id', 'provider_invocation_id')}
+              result.update(kind=_enum(_get(value, 'kind')), state=_enum(_get(value, 'state')),
+                            next_action=_enum(_get(value, 'next_action')), trace_origin=origin,
+                            validation_details=_details(_get(value, 'validation_details')),
+                            runtime_notice=_notice(_get(value, 'message'), origin))
+              result['presence'] = {key: _get(value, key) is not None for key in (
+                  'proposal', 'confirmation_request_id', 'artifact_proposal',
+                  'artifact_application_request', 'story_commit_request', 'recommendation_request')}
+              return result
+
+
+          def _history(events):
+              if type(events) is not tuple:
+                  raise TypeError('history_type')
+              rows = []
+              for event in events[-MAX_HISTORY:]:
+                  if not _typed(event, 'CollaborationEvent'):
+                      raise TypeError('event_type')
+                  payload = _get(event, 'payload')
+                  row = {'kind': _enum(_get(event, 'kind'))}
+                  if _typed(payload, 'CollaborationProviderCallPayload'):
+                      row.update(category='provider_call',
+                                 invocation_id=_token(_get(payload, 'invocation_id')),
+                                 call_id=_token(_get(payload, 'call_id')),
+                                 ordinal=_integer(_get(payload, 'ordinal')),
+                                 role=_token(_get(payload, 'role')),
+                                 invocation_kind=_enum(_get(payload, 'invocation_kind')),
+                                 call_kind=_enum(_get(payload, 'call_kind')),
+                                 state=_enum(_get(payload, 'state')))
+                  elif _typed(payload, 'CollaborationStepStatePayload'):
+                      row.update(category='step_state', state=_enum(_get(payload, 'state')))
+                  elif _typed(payload, 'CollaborationExecutionResult'):
+                      outcomes = _get(payload, 'assignment_outcomes')
+                      if type(outcomes) is not tuple or len(outcomes) > 3:
+                          raise TypeError('outcome_type')
+                      safe = []
+                      for outcome in outcomes:
+                          if not _typed(outcome, 'CollaborationAssignmentOutcome'):
+                              raise TypeError('assignment_outcome_type')
+                          safe.append({'assignment_id': _token(_get(outcome, 'assignment_id')),
+                                       'outcome': _enum(_get(outcome, 'outcome')),
+                                       'submitted_physical_calls': _integer(
+                                           _get(outcome, 'submitted_physical_calls'))})
+                      row.update(category='execution_result', assignment_outcomes=safe,
+                                 synthesis_outcome=_enum(_get(payload, 'synthesis_outcome')),
+                                 synthesis_submitted_physical_calls=_integer(
+                                     _get(payload, 'synthesis_submitted_physical_calls')),
+                                 overall_outcome=_enum(_get(payload, 'overall_outcome')))
+                  rows.append(row)
+              return {'event_count': len(events), 'tail': rows, 'tail_truncated': len(events) > MAX_HISTORY}
+
+
+          def _queues(test):
+              backend = _get(test, 'backend')
+              if not _typed(backend, '_LeadBackend', 'tests.test_lead_orchestration'):
+                  raise TypeError('backend_type')
+              groups = _get(backend, 'scripts_by_agent')
+              if type(groups) is not dict:
+                  raise TypeError('queue_type')
+              sizes = {}
+              for agent in AGENTS:
+                  remaining = groups.get(agent, [])
+                  if type(remaining) is not list:
+                      raise TypeError('actor_queue_type')
+                  sizes[agent] = len(remaining)
+              calls, references = _get(backend, 'calls'), _get(backend, 'reference_calls')
+              if type(calls) is not list or type(references) is not list:
+                  raise TypeError('call_list_type')
+              return {'remaining_actor_group_counts': sizes, 'backend_call_count': len(calls),
+                      'reference_call_count': len(references)}
+
+
+          class BudgetSubtestObserver:
+              """Root-owned install/finalize lifecycle; no execution or hooks at import."""
+
+              def __init__(self, checkout_root, output_path, runner_argv):
+                  self.root = Path(checkout_root)
+                  self.output_path = Path(output_path)
+                  self.argv = tuple(runner_argv)
+                  self.valid = True
+                  self.errors = []
+                  self.records = []
+                  self.nonmatching_failed_subtests = 0
+                  self._result_class = None
+                  self._original = None
+                  self._wrapper = None
+                  self._helper_filename = None
+                  self._installed = False
+                  self._finalized = False
+                  self._runner_returned = False
+
+              def _invalidate(self, code):
+                  self.valid = False
+                  if code not in self.errors and len(self.errors) < 8:
+                      self.errors.append(code)
+
+              def _write(self):
+                  try:
+                      value = {'schema_version': 1, 'canonical_id': CANONICAL_ID,
+                               'pinned_source_base_head': EXPECTED_HEAD,
+                               'pinned_source_base_manifest_sha256': EXPECTED_MANIFEST,
+                               'valid': self.valid, 'errors': list(self.errors),
+                               'incomplete': not (self._finalized and self._runner_returned),
+                               'finalized': self._finalized, 'runner_returned': self._runner_returned,
+                               'completion_meaning': (
+                                   'observer lifecycle only; canonical report owns test outcome'),
+                               'nonmatching_failed_subtests': self.nonmatching_failed_subtests,
+                               'record_count': len(self.records), 'records': self.records}
+                      encoded = json.dumps(value, sort_keys=True, ensure_ascii=True).encode('utf-8')
+                      if len(encoded) > MAX_OUTPUT_BYTES:
+                          self._invalidate('output_size')
+                          value.update(valid=False, errors=list(self.errors), records=[],
+                                       records_omitted_for_size=True)
+                          encoded = json.dumps(value, sort_keys=True).encode('utf-8')
+                      temporary = self.output_path.with_suffix(self.output_path.suffix + '.tmp')
+                      temporary.write_bytes(encoded)
+                      temporary.replace(self.output_path)
+                  except BaseException:
+                      self._invalidate('output_io')
+
+              def install(self, result_class):
+                  try:
+                      self.root = self.root.resolve(strict=True)
+                      self.output_path = self.output_path.resolve()
+                      if self.root in self.output_path.parents or not self.output_path.parent.is_dir():
+                          raise ValueError('output_location')
+                      if (len(self.argv) != 5 or self.argv[:3] != ('run', '--id', CANONICAL_ID)
+                              or self.argv[3] != '--json'
+                              or Path(self.argv[4]).name != 'instrumented-run.json'):
+                          raise ValueError('argv')
+                      for relative, expected in SOURCE_PINS.items():
+                          if hashlib.sha256((self.root / relative).read_bytes()).hexdigest() != expected:
+                              raise ValueError('source_pin')
+                      original = result_class.__dict__['addSubTest']
+                      code = original.__code__
+                      if (result_class.__module__ != 'tests.runner'
+                              or result_class.__qualname__ != 'TimedTextTestResult'
+                              or code.co_qualname != 'TimedTextTestResult.addSubTest'
+                              or code.co_filename != str(self.root / 'tests/runner.py')
+                              or code.co_firstlineno != 308 or code.co_argcount != 4):
+                          raise ValueError('result_seam')
+                      self._helper_filename = str(self.root / 'tests/test_lead_orchestration.py')
+                      self._result_class, self._original = result_class, original
+
+                      def observed(result, test, subtest, err):
+                          returned = original(result, test, subtest, err)
+                          try:
+                              self._capture(test, err)
+                          except BaseException:
+                              try:
+                                  self._invalidate('capture_error')
+                                  self._write()
+                              except BaseException:
+                                  pass
+                          return returned
+
+                      self._wrapper = observed
+                      result_class.addSubTest = observed
+                      self._installed = True
+                  except BaseException:
+                      self._invalidate('install_guard')
+                  self._write()
+                  return self._installed
+
+              def _capture(self, test, err):
+                  if err is None:
+                      return
+                  test_type = type(test)
+                  identifier = (test_type.__module__ + '.' + test_type.__qualname__ + '.'
+                                + _get(test, '_testMethodName'))
+                  if identifier != CANONICAL_ID:
+                      return
+                  if type(err) is not tuple or len(err) != 3:
+                      raise TypeError('error_tuple')
+                  current, found, depth = err[2], None, 0
+                  while current is not None and depth < 64:
+                      code = current.tb_frame.f_code
+                      if (code.co_filename == self._helper_filename
+                              and code.co_qualname == FRAME_QUALNAME
+                              and code.co_firstlineno == FRAME_FIRST_LINE
+                              and current.tb_lineno == ASSERT_LINE):
+                          if found is not None:
+                              raise ValueError('ambiguous_target_frame')
+                          found = current.tb_frame
+                      current, depth = current.tb_next, depth + 1
+                  if current is not None:
+                      raise ValueError('traceback_bound')
+                  if found is None:
+                      self.nonmatching_failed_subtests += 1
+                      return
+                  if len(self.records) >= MAX_RECORDS:
+                      self._invalidate('record_limit')
+                      self._write()
+                      return
+                  values = found.f_locals
+                  if values.get('self') is not test:
+                      raise ValueError('test_frame_identity')
+                  decision = values['decision_result']
+                  if not _typed(decision, 'LeadDecisionResult'):
+                      raise TypeError('decision_type')
+                  record = {'assertion_line': ASSERT_LINE,
+                            'synthesis_utf8_bytes': len(values['message'].encode('utf-8')),
+                            'decision': _enum(_get(decision, 'decision')),
+                            'step_id': _token(_get(decision, 'step_id')),
+                            'turn': _turn(_get(decision, 'turn')),
+                            'history': _history(values['history']),
+                            'fixture_counts': _queues(test)}
+                  if len(json.dumps(record, ensure_ascii=True).encode('utf-8')) > 20000:
+                      raise ValueError('record_size')
+                  self.records.append(record)
+                  self._write()
+
+              def finalize(self, *, runner_returned):
+                  try:
+                      if self._installed:
+                          if self._result_class.__dict__.get('addSubTest') is self._wrapper:
+                              self._result_class.addSubTest = self._original
+                          else:
+                              self._invalidate('restore_conflict')
+                  except BaseException:
+                      self._invalidate('restore_error')
+                  finally:
+                      self._installed = False
+                      self._runner_returned = runner_returned is True
+                      self._finalized = True
+                      self._write()
+
           output = Path(os.environ["RUNNER_TEMP"]) / "timing-diagnostic"
           output.mkdir(mode=0o700)
           paths = subprocess.check_output(["git", "ls-files", "-z", "src", "tests", "config", "pyproject.toml", "uv.lock"]).decode().split("\0")
@@ -510,7 +896,25 @@ jobs:
           started = time.perf_counter()
           profile.enable()
           try:
-              code = runner.main(["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")])
+              run_argv = ["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")]
+              budget_observer = None
+              runner_returned = False
+              try:
+                  if os.environ["DIAGNOSTIC_TEST_ID"] == CANONICAL_ID:
+                      try:
+                          budget_observer = BudgetSubtestObserver(
+                              Path.cwd(), output / "budget-subtest-observation.private.json", run_argv)
+                          budget_observer.install(runner.TimedTextTestResult)
+                      except BaseException:
+                          pass
+                  code = runner.main(run_argv)
+                  runner_returned = True
+              finally:
+                  if budget_observer is not None:
+                      try:
+                          budget_observer.finalize(runner_returned=runner_returned)
+                      except BaseException:
+                          pass
           finally:
               profile.disable()
               profile.dump_stats(str(output / "profile.pstats"))
@@ -519,6 +923,10 @@ jobs:
               after = hashes()
               evidence = {"diagnostic_only": True, "source_valid": before == after, "source_before": before, "source_after": after, "instrumented_seconds": time.perf_counter() - started, "counts": dict(counts), "fixture_samples": samples, "platform": platform.platform(), "python": platform.python_version(), "cpu_count": os.cpu_count(), "git": subprocess.check_output(["git", "--version"], text=True).strip()}
               evidence.update(python_compiler=platform.python_compiler(), python_enable_optimizations_flag="--enable-optimizations" in (sysconfig.get_config_var("CONFIG_ARGS") or ""), temporary_filesystem=subprocess.check_output(["stat", "-f", "-c", "%T", tempfile.gettempdir()], text=True).strip())
+              evidence.update(capture_checkout_head=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(), github_event_sha=os.environ.get("GITHUB_SHA"), diagnostic_workflow_sha256=hashlib.sha256(Path(".github/workflows/pr-validation.yml").read_bytes()).hexdigest())
+              observation_path = output / "budget-subtest-observation.private.json"
+              if observation_path.is_file():
+                  evidence["budget_subtest_observation_sha256"] = hashlib.sha256(observation_path.read_bytes()).hexdigest()
               (output / "counters.json").write_text(json.dumps(evidence, indent=2))
           raise SystemExit(code if before == after else 2)
           PY
