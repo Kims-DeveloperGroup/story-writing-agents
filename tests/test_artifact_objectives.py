@@ -117,7 +117,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             intent = None
         self.backend.enqueue(scoped_proposal (* specialist_ids, native_inputs = {'input_choices': (
             'user_input',), 'anchors': {PLOT_ARCHITECT: 'user_input'}, 'recipients': {'user_input':
-            PLOT_ARCHITECT}, 'source_choices': ('current_response', 'user_input'), 'family': 0} if
+            PLOT_ARCHITECT}, 'source_choices': ('user_input',), 'family': 0} if
             (native_first or native_continuation) else None, paths = authoring_paths if authoring_paths is not None else
             paths, domains = ('plot_structure',) if (native_first or native_continuation) else
                              () if target_path is not None and specialist_ids == (PLOT_ARCHITECT,)
