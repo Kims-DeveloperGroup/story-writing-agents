@@ -18,6 +18,11 @@ on:
         options: [disk, memory]
         default: disk
 
+      profile_mode:
+        description: Optional cProfile instrumentation for the exact diagnostic
+        type: choice
+        options: [cprofile, none]
+        default: cprofile
       test_id:
         description: Diagnostic-only exact canonical test ID
         type: string
@@ -456,7 +461,7 @@ jobs:
           if [[ "$MEMORY" == "true" ]]; then
             sudo mount -t tmpfs -o "size=2G,mode=0700,uid=$(id -u),gid=$(id -g)" tmpfs "$scratch"
           fi
-      - name: Profile one existing canonical scenario
+      - name: Run one existing canonical scenario with optional profiling
         if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
         env:
           GIT_AUTHOR_NAME: Story Tests
@@ -466,6 +471,7 @@ jobs:
           PYTHONPATH: src
           PYTHONDONTWRITEBYTECODE: '1'
           DIAGNOSTIC_TEST_ID: ${{ inputs.test_id || 'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles' }}
+          DIAGNOSTIC_PROFILE_MODE: ${{ inputs.profile_mode || 'cprofile' }}
           TMPDIR: ${{ steps.scratch.outputs.directory || '/tmp' }}
         run: |
           .venv/bin/python - <<'PY'
@@ -490,7 +496,7 @@ jobs:
            'docs/guides/lead-agent.md': '5e408b728fae79f214d99d7f9057f26c9008975c2d631e61e74de5071debd4d3',
            'docs/reference/provider-wire.md': 'e6f2fc05a736c17011ac2878d19f2873f568d83de6d2a7f61bfe8e204f04ac9f',
            'src/story_writing_agents/agent_context/actions.py': '8f35ecf197acb7f2fa88c0bfff03eed053f98aa7cdf39850bd2db9fc3b7048de',
-           'src/story_writing_agents/agent_context/service.py': '3e31d162ee202710b363429d94bd8917fd476d78146d031806942f95d54db7b3',
+           'src/story_writing_agents/agent_context/service.py': '3f547b04df334d1e53761f596764d5debad5a76f423c8cd4f785686119f0476c',
            'src/story_writing_agents/antigravity_adapter.py': 'a2da00173befd84e522f30efac0576764863072ebf1b59e94e36ee0fcbddef16',
            'src/story_writing_agents/artifact_proposals.py': '06d3d50b1a2b714ed1fd4e520bef88585620bca5ff39dc8b5a46c2de0abc6524',
            'src/story_writing_agents/authoring_admission.py': 'd577e1a89dddd8d3611842185353ccbaae56da2423eac3397579f4293883cf9a',
@@ -500,11 +506,11 @@ jobs:
            'src/story_writing_agents/core_document_readiness.py': '695550df45bfc50dc3c20d7bf23b98b7fafcc939b9c08572c545f01ac64f3937',
            'src/story_writing_agents/lead_exploration.py': 'fd69642f02929b7248379cde206212777317eb3feced83cc15ba988f0947da91',
            'src/story_writing_agents/lead_premise_decisions.py': 'd52addce51b8d94d7678c604320d3dec5f2acd5ab1df0ad5ae4c70a0d0abd0a1',
-           'src/story_writing_agents/lead_provider_contracts.py': '329600f1fa03305b59b2c28c8184c6ad6b7e04f61e5df316965b7850b1a8f6ef',
+           'src/story_writing_agents/lead_provider_contracts.py': '617205bc66ec8c06d6ee3b40c0aa81c77314b88d315058b509a7c0e7ce40b9e4',
            'src/story_writing_agents/orchestrator.py': 'f345b9cd93143c6684e8765d9df8166438d1e5e0129ba16a260cd96a783bafc1',
            'src/story_writing_agents/provider_wire.py': 'c792deabda347c2e6fc87c10bd2c659ae77e75927e2ae5f834cf5f4fc4343918',
            'src/story_writing_agents/specialist_routing.py': 'ca9a9ab375983856aa00c2079630f0f7f0684f25522ef6e482028b40cabc9134',
-           'src/story_writing_agents/structured_output_validation.py': 'a100f40c8566b495a50c3ab5da9bf0165cead04ffda66f41e3709010c80d723b',
+           'src/story_writing_agents/structured_output_validation.py': '69d014d10985158d12e588b62eca3125aeac214bb818eeb89fa3e867be279777',
            'src/story_writing_agents/writing_artifacts/__init__.py': 'ea06cecd04e2225e2f2660828b927b6bba4452764389dbcc019554c05f34611c',
            'src/story_writing_agents/writing_artifacts/catalog.py': 'da092de280d9054952653ea961b3f1c9eab0aed657df286f059d28ab151d9329',
            'src/story_writing_agents/writing_artifacts/read_actions.py': 'd93b81e051d9ed6e9310d989e4f6598aa7b7767c889ae87451ec028aca1b80a5',
@@ -523,15 +529,15 @@ jobs:
            'tests/test_artifact_application_store_recovery.py': '0bc81fa1507544ef02e68589cf400a6bdd8498eb5975078835e6bfcfb80fa3c7',
            'tests/test_artifact_change_sets.py': '4e78daed261e311b9772b7f58b8c7278a369a1e07656d29849757ca445dd926e',
            'tests/test_artifact_objectives.py': '9409f67da64baf00579ece42506b0286e65b4d64a1fa5a3475ce3fac3f309d61',
-           'tests/test_artifact_proposal_orchestration.py': 'c7c13caaeeb478b574278a519ce5a2fedd6d17320189134b3af8287127c39226',
+           'tests/test_artifact_proposal_orchestration.py': '94b8fbb736ef7b564048c948e10e7d6b14c9fbe337c32ba0e9dad775e0bc8504',
            'tests/test_artifact_reference_authorization.py': '494c0b991b9c1fed5164bc5f48f8c8d6e509c15a2ea97d9b5f0325f713a3c1ab',
            'tests/test_artifact_reference_read_actions.py': '9117e9bfd4f97ce61e1cd370e8f8d80ee2cc9ab88368085b0b1829475ec317ac',
            'tests/test_artifact_relationship_policy.py': 'b90a606e2bcc921e1f0fb0370ab34e75756826435e2647f97d7ecf3c2e5d8d49',
-           'tests/test_codex_backend.py': '22269fbf8c4b51398a2920970ce5995ee118bb97ecdb36610999447a066003f5',
+           'tests/test_codex_backend.py': 'da43c532d16b12723a237a3bdcc0f8dd741c682dc47830b7f5680322bbe6ad68',
            'tests/test_git_external_operation_inspection.py': 'ef8c5dc39c1c4089470b6896abda049d8b09d5b8e06b9ddcbb3c8481481225d3',
            'tests/test_interactive_controller.py': 'b86bbdc3eb93725c601a033e0157cf0b06847d034ac33f9f6b9e086b01412add',
            'tests/test_lead_artifact_objectives.py': '93982e244ff7b99394eb2b3a3d6a19e54573e861ed149f642a0e296f5d3c2ae1',
-           'tests/test_lead_orchestration.py': '237d37667bdbd01015c7506443df8a94b96aa38dbb3583f95847c92dddc64e3a',
+           'tests/test_lead_orchestration.py': '014acfbdda3b559ad96a66431b52bb63cc44df349d8f276b952aefa33d4dd8ba',
            'tests/test_lead_recommendations.py': '8cf41e424faee9c3491d8ab983c8491ff5fa4aac1560ae8ff66987186727f3a2',
            'tests/test_lead_session_continuity.py': '4fc79147cd1a95e6ae0d094dfd9e97f590869506f8f63eb58bdd9d801efef0fb',
            'tests/test_provider_auth_recovery.py': '283f6f078fd182fb1d5f9ba2e8c601644bd54b45572a35789d9dd02d671e786f',
@@ -539,6 +545,254 @@ jobs:
            'tests/test_specialist_orchestration.py': '7f78e9b3b665fbe59a3e0e347f12dc56c4f4167a8b2cef4acf87d130af31fc2c',
            'tests/test_specialist_routing.py': '69f386922a8bdd456c68480fc6a9e8730864b3b859f2f9bafc4ac1d06814d6d4',
            'tests/test_specialist_routing_runtime.py': 'cc62f81ad3fa9e2b1e2646f8986e9eef9cc99cd0a696fa4354c2f2f7dd18da5b'}
+          ORIGINAL_FAILURE_TARGETS = {'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_empty_continuation_retains_selection_and_cancel_is_terminal': 'lead', 'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_question_and_synthesis_sources_preserve_exact_whole_message_digests': 'lead', 'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows': 'specialist'}
+
+          import sys
+          import types
+
+
+          class OriginalFailureObserver:
+              """One bounded, source-pinned exception observation around an existing run."""
+
+              ROOT_REQUIREMENTS = {
+                  689: "expected strict JSON schema rules",
+                  691: "schema byte limit exceeded",
+                  694: "invalid local definitions",
+              }
+
+              def __init__(self, root, path, selected_id, pins, seam):
+                  self.root, self.path, self.selected_id = root, path, selected_id
+                  self.pins, self.seam = dict(pins), seam
+                  self.errors, self.capture = [], None
+                  self.attempted = False
+                  self.trace_restored = self.profile_unchanged = False
+                  self.before = self.hashes()
+                  self.paths = {str((root / name).resolve()): name for name in pins if name.endswith('.py')}
+                  self.trace_hook = self.trace_calls
+                  self.prepare_readers()
+                  if self.before != self.pins:
+                      self.errors.append('source_before_mismatch')
+
+              def hashes(self):
+                  return {name: hashlib.sha256((self.root / name).read_bytes()).hexdigest() for name in self.pins}
+
+              @staticmethod
+              def descriptor(owner, name):
+                  value = type.__getattribute__(owner, '__dict__')[name]
+                  if type(value) not in (types.MemberDescriptorType, types.GetSetDescriptorType):
+                      raise TypeError('unsupported builtin reader')
+                  return value
+
+              @staticmethod
+              def read(descriptor, value, owner):
+                  return descriptor.__get__(value, owner)
+
+              def loaded(self, module_name, name):
+                  module = sys.modules.get(module_name)
+                  if type(module) is not types.ModuleType:
+                      raise TypeError('required normal import unavailable')
+                  values = self.read(self.module_dict, module, types.ModuleType)
+                  if type(values) is not dict:
+                      raise TypeError('unsupported module dictionary')
+                  return values[name]
+
+              def function_code(self, function):
+                  if type(function) is not types.FunctionType:
+                      raise TypeError('unsupported function identity')
+                  return self.read(self.function_code_reader, function, types.FunctionType)
+
+              def prepare_readers(self):
+                  self.module_dict = self.descriptor(types.ModuleType, '__dict__')
+                  self.function_code_reader = self.descriptor(types.FunctionType, '__code__')
+                  self.exception_readers = {name: self.descriptor(BaseException, name) for name in (
+                      '__dict__', '__traceback__', '__cause__', '__context__')}
+                  self.traceback_readers = {name: self.descriptor(types.TracebackType, name) for name in (
+                      'tb_frame', 'tb_lineno', 'tb_next')}
+                  self.finding_class = self.loaded(
+                      'story_writing_agents.structured_output_validation', 'ValidationFinding')
+                  if type(self.finding_class) is not type:
+                      raise TypeError('unsupported finding identity')
+                  self.finding_readers = {name: self.descriptor(self.finding_class, name) for name in (
+                      'path', 'requirement')}
+                  runtime_class = self.loaded('story_writing_agents.orchestrator', 'StoryRuntime')
+                  if type(runtime_class) is not type:
+                      raise TypeError('unsupported runtime identity')
+                  methods = type.__getattribute__(runtime_class, '__dict__')
+                  self.close_code = self.function_code(methods['_close_failed_lead_attempt'])
+                  self.guarded_code = self.function_code(methods['_run_collaboration_invocation_guarded'])
+                  self.facts_code = self.function_code(self.loaded(
+                      'story_writing_agents.orchestrator', 'context_provider_failure_facts'))
+                  self.canonical_code = self.function_code(self.loaded(
+                      'story_writing_agents.structured_output_validation', 'canonical_schema_rules'))
+                  expected = (
+                      (self.close_code, 'src/story_writing_agents/orchestrator.py', 14247),
+                      (self.guarded_code, 'src/story_writing_agents/orchestrator.py', 8529),
+                      (self.canonical_code, 'src/story_writing_agents/structured_output_validation.py', 677),
+                  )
+                  for code, name, line in expected:
+                      if self.paths.get(code.co_filename) != name or code.co_firstlineno != line:
+                          raise TypeError('unsupported pinned code location')
+                  if self.paths.get(self.facts_code.co_filename) != 'src/story_writing_agents/agent_context/service.py':
+                      raise TypeError('unsupported facts location')
+                  self.labels = {value: ('builtins', value.__name__) for value in (
+                      ValueError, TypeError, AttributeError, KeyError, IndexError, RuntimeError,
+                      UnicodeError, UnicodeEncodeError, UnicodeDecodeError, OverflowError,
+                  )}
+                  self.labels[json.JSONDecodeError] = ('json.decoder', 'JSONDecodeError')
+                  for module_name, name in (
+                      ('story_writing_agents.agent_context.service', 'ContextExecutionError'),
+                      ('story_writing_agents.writing_artifacts.references', 'ArtifactReferenceDirectiveError'),
+                      ('story_writing_agents.writing_artifacts.authorization', 'ReferenceAuthorizationError'),
+                      ('story_writing_agents.writing_artifacts.authorization', 'ReferenceOperationFailure'),
+                  ):
+                      value = self.loaded(module_name, name)
+                      if type(value) is not type or BaseException not in type.__getattribute__(value, '__mro__'):
+                          raise TypeError('unsupported exception identity')
+                      self.labels[value] = (module_name, name)
+
+              def trace_calls(self, frame, event, arg):
+                  if event != 'call' or self.attempted:
+                      return None
+                  code = frame.f_code
+                  if self.seam == 'lead':
+                      if code is not self.close_code:
+                          return None
+                  elif self.seam == 'specialist':
+                      if (code is not self.facts_code or frame.f_back is None
+                              or frame.f_back.f_code is not self.guarded_code
+                              or frame.f_back.f_lineno != 8913):
+                          return None
+                  else:
+                      return None
+                  try:
+                      values = frame.f_locals
+                      if type(values) is not dict or 'failure' not in values:
+                          self.attempted = True
+                          self.errors.append('failure_argument_unavailable')
+                      elif values['failure'] is not None:
+                          self.attempted = True
+                          self.capture = self.snapshot(values['failure'])
+                  except Exception:
+                      self.errors.append('capture_read_failed')
+                  return None
+
+              def snapshot(self, failure):
+                  chain, coordinates, roots = [], [], []
+                  held, nodes, current = [], 0, failure
+                  while current is not None:
+                      if len(held) == 4 or any(current is item for item in held):
+                          raise ValueError('unsupported exception chain')
+                      error_type = type(current)
+                      if error_type not in self.labels:
+                          raise TypeError('unsupported exception identity')
+                      held.append(current)
+                      module_name, name = self.labels[error_type]
+                      chain.append({'module': module_name, 'type': name})
+                      requirement = None
+                      if self.seam == 'lead':
+                          values = self.read(self.exception_readers['__dict__'], current, BaseException)
+                          if type(values) is not dict:
+                              raise TypeError('unsupported exception dictionary')
+                          if 'provider_validation_findings' in values:
+                              findings = values['provider_validation_findings']
+                              if (type(findings) is not tuple or len(findings) != 1
+                                      or type(findings[0]) is not self.finding_class):
+                                  raise TypeError('unsupported finding shape')
+                              path = self.read(self.finding_readers['path'], findings[0], self.finding_class)
+                              text = self.read(self.finding_readers['requirement'], findings[0], self.finding_class)
+                              if (type(path) is not str or path != '$' or type(text) is not str
+                                      or text not in self.ROOT_REQUIREMENTS.values()):
+                                  raise ValueError('unsupported trusted requirement')
+                              requirement = text
+                      traceback = self.read(self.exception_readers['__traceback__'], current, BaseException)
+                      while traceback is not None:
+                          if type(traceback) is not types.TracebackType or nodes == 16:
+                              raise ValueError('unsupported traceback bound')
+                          nodes += 1
+                          frame = self.read(self.traceback_readers['tb_frame'], traceback, types.TracebackType)
+                          line = self.read(self.traceback_readers['tb_lineno'], traceback, types.TracebackType)
+                          if type(frame) is not types.FrameType or type(line) is not int or not 0 < line < 2**31:
+                              raise TypeError('unsupported frame shape')
+                          code = frame.f_code
+                          relative = self.paths.get(code.co_filename)
+                          if relative is not None:
+                              function = code.co_qualname
+                              if type(function) is not str or len(function) > 256:
+                                  raise TypeError('unsupported function coordinate')
+                              coordinates.append({'path': relative, 'line': line, 'function': function})
+                          if self.seam == 'lead' and code is self.canonical_code and line in self.ROOT_REQUIREMENTS:
+                              if requirement != self.ROOT_REQUIREMENTS[line]:
+                                  raise ValueError('uncorrelated canonical requirement')
+                              values = frame.f_locals
+                              if type(values) is not dict:
+                                  raise TypeError('unsupported canonical locals')
+                              encoded, maximum = values.get('encoded'), values.get('maximum_bytes')
+                              if type(maximum) is not int or not 0 < maximum < 2**31:
+                                  raise TypeError('unsupported maximum count')
+                              if line == 691 and type(encoded) is not bytes:
+                                  raise TypeError('unavailable schema byte count')
+                              roots.append({'path': '$', 'requirement': requirement, 'raise_line': line,
+                                            'encoded_bytes': len(encoded) if type(encoded) is bytes else None,
+                                            'maximum_bytes': maximum})
+                          traceback = self.read(self.traceback_readers['tb_next'], traceback, types.TracebackType)
+                      cause = self.read(self.exception_readers['__cause__'], current, BaseException)
+                      current = cause if cause is not None else self.read(
+                          self.exception_readers['__context__'], current, BaseException)
+                  if self.seam == 'lead' and len(roots) != 1:
+                      raise ValueError('canonical rejection not uniquely observed')
+                  return {'exception_chain': chain, 'traceback_coordinates': coordinates,
+                          'canonical_schema_rejection': roots[0] if roots else None,
+                          'mode': 'canonical_schema_root' if self.seam == 'lead' else 'exception_coordinates'}
+
+              def run(self, run_original):
+                  prior_trace, prior_profile = sys.gettrace(), sys.getprofile()
+                  armed = False
+                  if prior_trace is not None:
+                      self.errors.append('preexisting_trace_hook')
+                  elif not self.errors:
+                      try:
+                          sys.settrace(self.trace_hook)
+                          armed = True
+                      except Exception:
+                          self.errors.append('trace_install_failed')
+                  try:
+                      return run_original()
+                  finally:
+                      if armed:
+                          try:
+                              if sys.gettrace() is not self.trace_hook:
+                                  self.errors.append('trace_hook_changed')
+                              sys.settrace(prior_trace)
+                          except Exception:
+                              self.errors.append('trace_restore_failed')
+                      self.trace_restored = sys.gettrace() is prior_trace
+                      self.profile_unchanged = sys.getprofile() is prior_profile
+                      if not self.trace_restored or not self.profile_unchanged:
+                          self.errors.append('runtime_hook_state_changed')
+
+              def finalize(self, *, runner_returned):
+                  after = self.hashes()
+                  source_matches = self.before == after == self.pins
+                  if not source_matches:
+                      self.errors.append('source_after_mismatch')
+                  record = {
+                      'schema_version': 1, 'diagnostic_only': True, 'canonical_id': self.selected_id,
+                      'source_pins': self.pins, 'source_before': self.before, 'source_after': after,
+                      'source_matches': source_matches, 'runner_returned': runner_returned,
+                      'finalized': True, 'incomplete': not runner_returned,
+                      'attempted': self.attempted, 'maximum_failures': 1,
+                      'observations': [self.capture] if self.capture is not None else [],
+                      'errors': self.errors[:16], 'trace_restored': self.trace_restored,
+                      'profile_unchanged': self.profile_unchanged,
+                      'qualification': 'Source-pinned call tracing adds unmeasured overhead. No extra original invocation or outcome change.',
+                  }
+                  record['valid'] = (runner_returned and source_matches and not self.errors
+                                     and self.trace_restored and self.profile_unchanged)
+                  encoded = json.dumps(record, sort_keys=True, indent=2).encode()
+                  if len(encoded) > 131072:
+                      raise ValueError('bounded observation overflow')
+                  self.path.write_bytes(encoded + b'\n')
+
           class FailureLocalObserver:
               """Private, failure-local metadata; never changes a test result."""
 
@@ -696,10 +950,15 @@ jobs:
                   samples.append({"fallback": value is None, "config_sha256": hashlib.sha256(config).hexdigest(), "format_lines": [line.decode("ascii").strip() for line in safe], "packed_refs": (self.common_git / "packed-refs").exists(), "reftable": (self.common_git / "reftable").exists()})
               return value
           session_resources._Repository._loose_ref_output = refs
+          profile_mode = os.environ["DIAGNOSTIC_PROFILE_MODE"]
+          if profile_mode not in {"cprofile", "none"}:
+              raise SystemExit("invalid diagnostic profile mode")
           profile = cProfile.Profile()
           started = time.perf_counter()
-          profile.enable()
+          if profile_mode == "cprofile":
+              profile.enable()
           failure_observer = None
+          original_failure_observer = None
           observer_errors = []
           runner_returned = False
           try:
@@ -712,7 +971,19 @@ jobs:
                       failure_observer.install(runner.TimedTextTestResult)
                   except BaseException as exc:
                       observer_errors.append("initialize:" + type(exc).__name__)
-              code = runner.main(["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")])
+              if os.environ["DIAGNOSTIC_TEST_ID"] in ORIGINAL_FAILURE_TARGETS:
+                  try:
+                      original_failure_observer = OriginalFailureObserver(
+                          Path.cwd(), output / "original-failure-observation.private.json",
+                          os.environ["DIAGNOSTIC_TEST_ID"], FAILURE_LOCAL_PINS,
+                          ORIGINAL_FAILURE_TARGETS[os.environ["DIAGNOSTIC_TEST_ID"]])
+                  except Exception as exc:
+                      observer_errors.append("original_initialize:" + type(exc).__name__)
+              selected_argv = ["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")]
+              if original_failure_observer is not None:
+                  code = original_failure_observer.run(lambda: runner.main(selected_argv))
+              else:
+                  code = runner.main(selected_argv)
               runner_returned = True
           finally:
               if failure_observer is not None:
@@ -720,17 +991,33 @@ jobs:
                       failure_observer.finalize(runner_returned=runner_returned)
                   except BaseException as exc:
                       observer_errors.append("finalize:" + type(exc).__name__)
-              profile.disable()
-              profile.dump_stats(str(output / "profile.pstats"))
-              with (output / "profile.txt").open("w") as stream:
-                  pstats.Stats(profile, stream=stream).strip_dirs().sort_stats("cumulative").print_stats(100)
+              if original_failure_observer is not None:
+                  try:
+                      original_failure_observer.finalize(runner_returned=runner_returned)
+                  except Exception as exc:
+                      observer_errors.append("original_finalize:" + type(exc).__name__)
+              if profile_mode == "cprofile":
+                  profile.disable()
+                  profile.dump_stats(str(output / "profile.pstats"))
+                  with (output / "profile.txt").open("w") as stream:
+                      pstats.Stats(profile, stream=stream).strip_dirs().sort_stats("cumulative").print_stats(100)
+              else:
+                  (output / "profile.txt").write_text("cProfile disabled by diagnostic input profile_mode=none.\n")
               after = hashes()
               evidence = {"diagnostic_only": True, "source_valid": before == after, "source_before": before, "source_after": after, "instrumented_seconds": time.perf_counter() - started, "counts": dict(counts), "fixture_samples": samples, "platform": platform.platform(), "python": platform.python_version(), "cpu_count": os.cpu_count(), "git": subprocess.check_output(["git", "--version"], text=True).strip()}
               evidence.update(python_compiler=platform.python_compiler(), python_enable_optimizations_flag="--enable-optimizations" in (sysconfig.get_config_var("CONFIG_ARGS") or ""), temporary_filesystem=subprocess.check_output(["stat", "-f", "-c", "%T", tempfile.gettempdir()], text=True).strip())
+              evidence["profiling_mode"] = profile_mode
               evidence["failure_observer_errors"] = observer_errors
               observation_path = output / "failure-local-observation.private.json"
               if observation_path.is_file():
                   evidence["failure_local_observation_sha256"] = hashlib.sha256(observation_path.read_bytes()).hexdigest()
+              evidence["capture_checkout_head"] = subprocess.check_output(
+                  ["git", "rev-parse", "HEAD"], text=True).strip()
+              evidence["diagnostic_workflow_sha256"] = hashlib.sha256(
+                  Path(".github/workflows/pr-validation.yml").read_bytes()).hexdigest()
+              original_path = output / "original-failure-observation.private.json"
+              if original_path.is_file():
+                  evidence["original_failure_observation_sha256"] = hashlib.sha256(original_path.read_bytes()).hexdigest()
               (output / "counters.json").write_text(json.dumps(evidence, indent=2))
           raise SystemExit(code if before == after else 2)
           PY

@@ -53,7 +53,7 @@ from .structured_output_validation import (
     ContractOwner, BoundContract, ContractIdentity, ContractRejection, NamedHostCheck, TypedDecoder,
     HostCheckContext, SelectedHostContext, ValidatedValue, SelectedContract,
     DomainValidationRule, ValidationFinding, validation_failure, SchemaRules, canonical_schema_rules,
-    strict_json_object, diagnose_value, failure_findings, nonempty_text_rule,
+    strict_json_object, diagnose_value, failure_findings, failure_issues, nonempty_text_rule,
     nonempty_text_value, visible_text_rule, finite_selection_rule, decode_finite_selection,
     schema_fragment_findings,
 )
@@ -1154,8 +1154,11 @@ class LeadContractIndex(Generic[_LeadValue]):
         self.require_provenance()
         try:
             value = strict_json_object(result, exact_numbers=True) if type(result) is str else result
-        except ValueError:
-            raise LeadContractRejection("LEAD_JSON_REJECTED", None, ("$: expected strict JSON object",)) from None
+        except ValueError as failure:
+            raise LeadContractRejection(
+                "LEAD_JSON_REJECTED", None,
+                failure_issues(failure) or ("$: expected strict JSON object",),
+            ) from None
         if type(value) is not dict or "schema_id" not in value:
             raise LeadContractRejection("LEAD_SCHEMA_ID_REJECTED", None,
                                         ("$.schema_id: required current offered identity",))

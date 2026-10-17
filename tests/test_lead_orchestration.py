@@ -1088,6 +1088,8 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                 governed(details[family], root + ('response_details', family))
         def text_neighbor(path, text):
             neighbor = copy.deepcopy(packet)
+            if path != root + ('response_text',):
+                neighbor['agent_action']['task_result']['response_text'] = 'a'
             node = neighbor
             for key in path[:-1]:
                 node = node[key]
@@ -2447,6 +2449,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         def recover(raw):
             return wire.recover_lead_public_response(raw, "lead-discussion-response-v1", maximum_utf8_bytes=limit,)
         public = _discussion_reply("Literal e\u0301\r\n")
+        for decode in (member.decode_selected, bound.semantic_index.decode_and_validate):
+            with self.assertRaises(orchestrator_module.LeadContractRejection) as rejected:
+                decode(public[:-1] + ', "duplicate":1, "duplicate":2}')
+            self.assertEqual(failure_issues(rejected.exception), ("$: duplicate object key",))
         exact = public + " " * (262144 - len(public.encode("utf-8")))
         self.assertEqual(recover(exact), "Literal e\u0301\r\n")
         self.assertIsNone(recover(exact + " "))
@@ -3696,7 +3702,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         assignment = {"agent_id": PLOT_ARCHITECT, "instruction": "Review the input.", "input_ids": ["user_input"]}
         rules = {"duplicate-specialist": ("$: duplicate object key",),
             "missing-reviewer": (
-                "$.agent_action.task_result.specialist_consultation_proposal.assignments: every mandatory core-document reviewer must receive its own source input (also applies to follow_up_consultation)",),
+                '$.agent_action.task_result.response_details.specialist_consultation_proposal.'
+                'assignments.plot_architect: required property is missing',),
         }
         cases = (('lead-specialist', 'Plain request.', [{**assignment,
             'agent_id': LEAD_ORCHESTRATOR}]), ('duplicate-specialist', 'Plain request.', [dict(
@@ -3859,7 +3866,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                                CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED})
                 self.assertTrue(result.validation_details)
                 if label == 'duplicate-input':
-                    self.assertEqual(result.validation_details, '$: duplicate object key')
+                    self.assertEqual(result.validation_details, tuple(
+                        prefix + "\n$: duplicate object key"
+                        for prefix in ("Original response", "Repair response")))
                 if label in rules:
                     self.assertEqual(result.validation_details, tuple(
                         prefix + "\n" + "\n".join(rules[label]) for prefix in ("Original response", "Repair response")))

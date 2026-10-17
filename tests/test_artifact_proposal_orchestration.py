@@ -65,6 +65,7 @@ from tests.test_lead_orchestration import (
     _live_scope,
     _provider_envelope,
     _read_history_hit,
+    _search_history,
     _specialist_outcome,
     _visible_outcome,
     _workflow_material,
@@ -1092,20 +1093,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
 
         def search_prior_answer(call, _provider):
             reference_ids[:] = _reference_ids(_workflow_material(call.payload))
-            return json.dumps(
-                {
-                    "action": {
-                        "kind": "search",
-                        "queries": [
-                            {
-                                "text": "prior visible answer",
-                                "source_kinds": ["conversation"],
-                            }
-                        ],
-                    },
-                },
-                separators=(",", ":"),
-            )
+            return _search_history(call, _provider, text="prior visible answer")
 
         self.backend.enqueue(
             search_prior_answer,

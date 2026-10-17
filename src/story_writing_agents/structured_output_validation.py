@@ -1093,29 +1093,32 @@ _WIRE_DISCRIMINATORS = (
 )
 
 
+def _diagnostic_schema_node(
+    node: object, root_schema: Mapping[str, object],
+) -> Mapping[str, object] | None:
+    seen: set[str] = set()
+    while isinstance(node, Mapping) and "$ref" in node:
+        reference = node["$ref"]
+        target = _local_rule(root_schema, reference)
+        if reference in seen:
+            raise validation_failure(
+                ValueError("schema rejected"), "$", "expected acyclic local definition reference",
+            )
+        seen.add(reference)
+        node = target
+    return node if isinstance(node, Mapping) else None
+
+
 def _discriminator_schema(
     variant: object, discriminator: str, root_schema: Mapping[str, object],
 ) -> Mapping[str, object] | None:
-    def resolve(node: object) -> Mapping[str, object] | None:
-        seen: set[str] = set()
-        while isinstance(node, Mapping) and "$ref" in node:
-            reference = node["$ref"]
-            target = _local_rule(root_schema, reference)
-            if reference in seen:
-                raise validation_failure(
-                    ValueError("schema rejected"), "$", "expected acyclic local definition reference",
-                )
-            seen.add(reference)
-            node = target
-        return node if isinstance(node, Mapping) else None
-
-    variant = resolve(variant)
+    variant = _diagnostic_schema_node(variant, root_schema)
     if variant is None:
         return None
     properties = variant.get("properties")
     if not isinstance(properties, Mapping):
         return None
-    return resolve(properties.get(discriminator))
+    return _diagnostic_schema_node(properties.get(discriminator), root_schema)
 
 
 def _diagnose(
@@ -1169,9 +1172,12 @@ def _diagnose(
                             item for candidate in candidates for item in candidate["enum"]
                         ))) + f"], got {json_type(supplied)}",
                     )
+                    resolved_variants = tuple(
+                        _diagnostic_schema_node(variant, root_schema) for variant in variants
+                    )
                     properties = [
                         variant.get("properties")
-                        for variant in variants
+                        for variant in resolved_variants
                         if isinstance(variant, Mapping)
                         and isinstance(variant.get("properties"), Mapping)
                     ]
@@ -1190,10 +1196,41 @@ def _diagnose(
                                 continue
                             child = properties[0][name]
                             if any(item[name] != child for item in properties[1:]):
+                                if name in value and all(
+                                    isinstance(item[name], Mapping) for item in properties
+                                ):
+                                    field_path = _path(path, name)
+                                    findings = tuple(islice(
+                                        _diagnose(value[name], child, field_path, root_schema),
+                                        _MAX_ISSUES + 1,
+                                    ))
+                                    overflow = (
+                                        len(findings) > _MAX_ISSUES
+                                        or _OMITTED_ISSUES_NOTICE in findings
+                                    )
+                                    for item in properties[1:]:
+                                        other = tuple(islice(
+                                            _diagnose(
+                                                value[name], item[name], field_path, root_schema,
+                                            ),
+                                            _MAX_ISSUES + 1,
+                                        ))
+                                        overflow |= (
+                                            len(other) > _MAX_ISSUES
+                                            or _OMITTED_ISSUES_NOTICE in other
+                                        )
+                                        common_findings = set(other)
+                                        findings = tuple(
+                                            finding for finding in findings
+                                            if finding in common_findings
+                                        )
+                                    yield from findings
+                                    if overflow and _OMITTED_ISSUES_NOTICE not in findings:
+                                        yield _OMITTED_ISSUES_NOTICE
                                 continue
                             required_everywhere = all(
                                 name in variant.get("required", ())
-                                for variant in variants
+                                for variant in resolved_variants
                             )
                             if name not in value and required_everywhere:
                                 yield _issue(
@@ -1865,8 +1902,11 @@ class BoundContract(Generic[_ContractValue]):
         self.require_owner_provenance()
         try:
             value = strict_json_object(raw, exact_numbers=True) if type(raw) is str else raw
-        except ValueError:
-            raise ContractRejection("LEAD_JSON_REJECTED", None, ("$: expected strict JSON object",)) from None
+        except ValueError as failure:
+            raise ContractRejection(
+                "LEAD_JSON_REJECTED", None,
+                failure_issues(failure) or ("$: expected strict JSON object",),
+            ) from None
         if type(value) is not dict or value.get("schema_id") != self.schema_id:
             raise ContractRejection("LEAD_SCHEMA_ID_REJECTED", None, ("$.schema_id: required offered string identity",))
         requirements = self.rule_graph.findings(value)

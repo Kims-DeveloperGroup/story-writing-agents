@@ -4394,6 +4394,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             nonlocal schema, payload, response
             authored = lead_fixture_result(json.loads(response)["agent_action"]["task_result"])
             inputs = tuple(item["input_id"] for item in payload.get("inputs", ()))
+            if family == "lead-exploration-response-v1":
+                authored["response_details"]["ideas"][0]["basis_input_ids"] = {}
             result_constraints = (LeadExplorationConstraints() if summary is None else
                 PremiseDecisionConstraints("native-question", input_ids=("user_input",),
                     reply_alternatives=(("native-reply", ("native-alternative",)),)))

@@ -685,8 +685,11 @@ class BoundCallContract:
         self.require_current_offer(self.offers)
         try:
             value = strict_json_object(response_text, exact_numbers=True)
-        except (TypeError, ValueError):
-            raise LeadContractRejection("LEAD_JSON_REJECTED", None, ("$: expected strict JSON object",)) from None
+        except (TypeError, ValueError) as failure:
+            raise LeadContractRejection(
+                "LEAD_JSON_REJECTED", None,
+                failure_issues(failure) or ("$: expected strict JSON object",),
+            ) from None
         if set(value) != {"agent_action"} or type(value["agent_action"]) is not dict:
             raise LeadContractRejection("LEAD_ACTION_ENVELOPE_REJECTED", None,
                                         ("$: required closed agent_action object envelope",))
