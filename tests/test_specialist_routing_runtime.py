@@ -113,8 +113,7 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
                         cells = record['source_ids']
                         choices = native_inputs['source_choices']
                         if (type(cells) in (list, tuple) and all(type(item) is str for item in cells)
-                                and len(set(cells)) == len(cells)
-                                and set(cells) <= set(choices)):
+                                and len(set(cells)) == len(cells) and set(cells) <= set(choices)):
                             record['source_ids'] = finite_fixture_selection(choices, tuple(cells))
         proposal = body.get('specialist_consultation_proposal')
         if type(proposal) is dict and 'assignments' in proposal:
@@ -404,7 +403,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         frames = [_workflow_material(call.payload) for agent, call in self.backend.call_records if wire_contract_id(call.payload) == "specialist-assignment-response-v5"]
         self.assertEqual([(frame["premise_selection"]["selected_text"], frame["shared_premises"][0]["selected_premise"]) for frame in frames], [(option.premise_text, option.premise_text)] * 2)
         response = _artifact_outcome(operations=[{"kind": "create", "suggested_path": path, "new_text": "The selected knowledge remains intentionally uncertain.\n"}], evidence_status="incomplete", evidence_ids=lambda call, material: [call.payload["core_document_statuses"][0]["evidence_id"]],
-            objective_intent={"action": "start", "target_paths": [path], "next_step": "prepare"},
+            objective_intent=dict(action="start", target_paths={path: True}, next_step="prepare"),
             authoring_scope=lambda _: c.authoring_scope_to_dict(drafted.proposal.authoring_scope),
             authoring_assessment=asdict(_fixture_assessment(foundation_ids=("selected_premise",))),)
         def integrate(call, provider):
@@ -597,11 +596,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         selected = original.proposal.authoring_scope.task_id
         def relabel(value, material):
             value["authoring_scope"].update(activity="workflow", target_paths=[], domains=[])
-        bad = await self.proposal_for(self.conversation(), scoped_proposal(
-            PLOT_ARCHITECT,
-            selected=selected,
-            kind="answer",
-            mutate=relabel,
+        bad = await self.proposal_for(self.conversation(), scoped_proposal(PLOT_ARCHITECT,
+            selected=selected, kind="answer", mutate=relabel,
             authoring_assessment=_fixture_assessment(),
         ))
         self._assert_continuation(bad, 'proposal')
@@ -623,16 +619,14 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         for focus, choice in (
             (foreign_focus, replace(selection, source_conversation_id="foreign-session-source")),
             (source, replace(selection, material_digest="0" * 64)),
-            (source, replace(selection, result_event_id="stale-current-result")),
-        ):
+            (source, replace(selection, result_event_id="stale-current-result")),):
             with self.assertRaises(ValueError):
                 await self.runtime.lead_turn(self.session_id, focus, "Adopt the selected whole idea.", adoption=choice)
         self.assertEqual((self.history(source), self.history(foreign_focus), len(self.backend.calls)), before)
 
         adopted = await self.proposal_for(foreign_focus, self._native_scoped(PLOT_ARCHITECT,
             domains=("plot_structure",), candidate_ids=("adopted_idea",),
-            authoring_assessment=_fixture_assessment(),
-        ), adoption=selection)
+            authoring_assessment=_fixture_assessment(),), adoption=selection)
         self.assertIsNotNone(adopted.proposal, adopted)
         capture = next(e.payload.capture for e in self.history(foreign_focus)
                        if type(e.payload) is c.CollaborationExplorationAdoptionPayload)
@@ -646,13 +640,21 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         pending = await self.proposal_for(conversation)
         task_id = pending.proposal.authoring_scope.task_id
         self.workspace.path(OUTLINE).unlink()
-        response = _artifact_outcome(operations=[{"kind":"create", "suggested_path":OUTLINE, "new_text":"Current synthetic candidate."}], evidence_status="missing", evidence_ids=lambda call,m:[next(x["evidence_id"] for x in call.payload["core_document_statuses"] if x["artifact_path"] == OUTLINE)])
+        def selected_review_scope(call):
+            material = _workflow_material(call.payload)
+            index = next(i for i,t in enumerate(material["authoring_tasks"])
+                if t["task_id"] == task_id)
+            return _live_scope(call, activity="review", domains=("plot_structure",),
+                paths=(OUTLINE,), task_index=index)
+        response = _artifact_outcome(
+            operations=[{"kind":"create", "suggested_path":OUTLINE,
+                "new_text":"Current synthetic candidate."}], evidence_status="missing",
+            evidence_ids=lambda call,m:[next(x["evidence_id"]
+                for x in call.payload["core_document_statuses"] if x["artifact_path"] == OUTLINE)],
+            authoring_scope=selected_review_scope)
         def selected_review(call, provider):
             value = json.loads(response(call, provider))
-            material = _workflow_material(call.payload)
-            index = next(i for i,t in enumerate(material["authoring_tasks"]) if t["task_id"] == task_id)
-            value["action"]["result"]["authoring_scope"] = _compact_scope(
-                _live_scope(call, activity="review", paths=(OUTLINE,), task_index=index) )
+            value["agent_action"]["task_result"]["response_details"]["authoring_assessment"] = None
             return json.dumps(value)
         self.backend.enqueue(selected_review)
         result = await self.runtime.lead_turn(self.session_id, self.conversation(), "Integrate that pending task into the supplied candidate.")
