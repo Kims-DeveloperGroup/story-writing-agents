@@ -18,6 +18,11 @@ on:
         options: [disk, memory]
         default: disk
 
+      test_id:
+        description: Diagnostic-only exact canonical test ID
+        type: string
+        default: tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles
+
 permissions:
   contents: read
   pull-requests: read
@@ -451,7 +456,7 @@ jobs:
           if [[ "$MEMORY" == "true" ]]; then
             sudo mount -t tmpfs -o "size=2G,mode=0700,uid=$(id -u),gid=$(id -g)" tmpfs "$scratch"
           fi
-      - name: Profile an existing objective scenario
+      - name: Profile one existing canonical scenario
         if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
         env:
           GIT_AUTHOR_NAME: Story Tests
@@ -460,6 +465,7 @@ jobs:
           GIT_COMMITTER_EMAIL: story-tests@example.invalid
           PYTHONPATH: src
           PYTHONDONTWRITEBYTECODE: '1'
+          DIAGNOSTIC_TEST_ID: ${{ inputs.test_id || 'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles' }}
           TMPDIR: ${{ steps.scratch.outputs.directory || '/tmp' }}
         run: |
           .venv/bin/python - <<'PY'
@@ -504,7 +510,7 @@ jobs:
           started = time.perf_counter()
           profile.enable()
           try:
-              code = runner.main(["run", "--id", "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles", "--json", str(output / "instrumented-run.json")])
+              code = runner.main(["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")])
           finally:
               profile.disable()
               profile.dump_stats(str(output / "profile.pstats"))
