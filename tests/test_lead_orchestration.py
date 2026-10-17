@@ -1073,7 +1073,8 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                          sum(total for (action, _), total in expected.items()
                              if action != 'submit_result'))
 
-    def _require_fixture_text_boundaries(self, bound, packet, *, authorization=None):
+    def _require_fixture_text_boundaries(
+        self, bound, packet, *, authorization=None, synthesis=False):
         from story_writing_agents.antigravity_adapter import AntigravityAdapter
         from story_writing_agents.structured_output_validation import diagnose_json_text
         declared = bound.schema_value()
@@ -1149,6 +1150,34 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                 if authorization is not None:
                     valid = bound.decode_response(json.dumps(packet, ensure_ascii=False))
                     bound.require_authorized_answer(valid, authorization)
+                    if synthesis:
+                        from story_writing_agents.lead_provider_contracts import (
+                            LeadContractRejection)
+                        self.assertIs(bound.factory.constraints.continuation, True)
+                        self.assertEqual(
+                            path[:4], root + ('response_details', 'follow_up_consultation'))
+                        assignment_issue = (
+                            '$.next_intent.assignments: each instruction must be '
+                            'nonempty bounded UTF-8 text and satisfy '
+                            'review-criteria requirements')
+                        expected = {
+                            ('consultation_purpose',): (
+                                '$.next_intent.purpose: expected nonempty bounded UTF-8 text'),
+                            ('assignments', PLOT_ARCHITECT, 'task_instructions'):
+                                assignment_issue,
+                            ('assignments', CHARACTER_CUSTODIAN, 'task_instructions'):
+                                assignment_issue,
+                            ('assignments', EXECUTION_SPECIALIST, 'task_instructions'):
+                                assignment_issue,
+                        }[path[4:]]
+                        with self.assertRaises(LeadContractRejection) as rejected:
+                            bound.require_authorized_answer(decoded_overage, authorization)
+                        self.assertIs(type(rejected.exception), LeadContractRejection)
+                        self.assertEqual(rejected.exception.code, 'LEAD_OWNER_RULE_REJECTED')
+                        findings = failure_issues(rejected.exception)
+                        self.assertTrue(findings, path)
+                        self.assertEqual(findings, (expected,), path)
+                        continue
                     with self.assertRaises(BackendProtocolError):
                         bound.require_authorized_answer(decoded_overage, authorization)
         ordinary = details.get('specialist_consultation_proposal')
@@ -1711,7 +1740,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             ("specialist_consultation_proposal.shared_premises.*.selected_premise", (8, 9, 10)),
             ('specialist_consultation_proposal.assignments.plot_architect.review_basis', (8,)),
             ('specialist_consultation_proposal.assignments.character_custodian.review_basis', (8,)),
-            ('specialist_consultation_proposal.assignments.narrative_guardian.review_basis', (8,)),
+            ('specialist_consultation_proposal.assignments.execution_specialist.review_basis', (8,)),
             ("core_document_assessment.document_judgments.*.document_read_source_id", (13,)), )}
         docs = tuple("core_documents/" + name + ".md" for name in
                      ("global_outline", "part_outlines", "character_sheets", "narrative_rules"))
@@ -4061,7 +4090,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         def value_control(label, assignments):
             def respond(call, provider):
                 from tests.provider_wire_fixture import (
-                    lead_fixture_response, lead_fixture_assessment)
+                    lead_fixture_response, lead_fixture_assessment, finite_fixture_selection)
                 task = _live_material(call)['authoring_tasks'][0]
                 domains = ( ('plot_structure', 'character_world') if label == 'missing-reviewer'
                     else ('plot_structure',))
@@ -4082,7 +4111,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         'assignment_type': 'review_content', 'input_anchor_id': supplied[0],'optional_inputs': selected}
                     )
                 for entry in wire_assignments.values():
-                    entry['review_basis'] = copy.deepcopy(control_basis)
+                    entry['review_basis'] = {
+                        'candidate_input_ids': finite_fixture_selection(
+                            offered['input_ids'], ('reference_1',) if label ==
+                            'omitted-user-input' else ('user_input',)),
+                        'criteria': control_basis['criteria']}
                     for required in offered['required_input_ids']:
                         if required in supplied:
                             recipients[required] = row['agent_id']
@@ -4125,8 +4158,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         'assignment_type': 'review_content',
                         'input_anchor_id': 'reference_1','optional_inputs': {source: source == 'reference_1'
                             for source in offered['input_ids']}}
-                    proposal['assignments'][PLOT_ARCHITECT]['review_basis'] = (
-                        copy.deepcopy(control_basis))
+                    proposal['assignments'][PLOT_ARCHITECT]['review_basis'] = {
+                        'candidate_input_ids': finite_fixture_selection(
+                            offered['input_ids'], ('reference_1',)),
+                        'criteria': control_basis['criteria']}
                     proposal['required_input_recipients']['reference_1'] = PLOT_ARCHITECT
                     self.assertEqual(proposal['assignments'][CHARACTER_CUSTODIAN], projected[CHARACTER_CUSTODIAN])
                     self.assertFalse(call.contract.rule_graph.findings(neighbor))
@@ -5250,8 +5285,24 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertLess(sum(len(chunk.encode("utf-8")) for chunk in details), 256_000)
         self.assertTrue(all(len(chunk.encode("utf-8")) < 32_768 for chunk in details))
         self.assertIn('$.agent_action.task_result.response_details.task_scope.paths[0]', report)
+        notice_note = "bounded report lacks the omitted-issues notice"
+        if '$.agent_action: additional validation issues omitted' not in report:
+            if (type(details) is tuple and len(details) <= 8 and type(report) is str
+                    and all(type(chunk) is str for chunk in details)):
+                sizes = tuple(len(chunk.encode('utf-8')) for chunk in details)
+                index_path = '$.agent_action.task_result.response_details.task_scope.paths'
+                notice_note = (
+                    notice_note, 'huge_array_report_v1', True, len(details),
+                    sum(sizes), max(sizes, default=0),
+                    '$.agent_action: additional validation issues omitted' in report,
+                    'omitted-issues' in report,
+                    '$: additional validation issues omitted' in report,
+                    index_path + '[0]' in report, index_path + '[11999]' in report,
+                    secret in report)
+            else:
+                notice_note = (notice_note, 'unsupported-shape')
         self.assertTrue('$.agent_action: additional validation issues omitted' in report,
-                        "bounded report lacks the omitted-issues notice")
+                        notice_note)
         self.assertFalse('$.agent_action.task_result.response_details.task_scope.paths[11999]' in report,
                          "bounded report includes an out-of-budget array index")
         self.assertFalse(secret in report, "bounded report contains provider text")
@@ -5630,7 +5681,8 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
                 checking.add(identity)
                 current, packet = native_synthesis[identity]
                 self.assertIs(current, binding)
-                self._require_fixture_text_boundaries(binding, packet, authorization=authorization)
+                self._require_fixture_text_boundaries(
+                    binding, packet, authorization=authorization, synthesis=True)
             return result
         with mock.patch.object(BoundCallContract, 'require_authorized_answer', retain_authorized_phase):
             if pause_before_finalization:

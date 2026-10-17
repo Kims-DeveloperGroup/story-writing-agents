@@ -477,7 +477,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                     paths=(_INDEX, _SECOND, _THIRD), contributions=[{'domain': domain, 'role': 'constraint_assessor'}
                         for domain in ('tone_execution',)]),
 
-            read_queries=((_INDEX, 'next'), (_SECOND, 'Second')), read_prefix='manuscript/part-02/',)
+            read_queries=((_INDEX, 'next'), (_SECOND, 'Second')), read_prefix='manuscript/part-01/',)
         )
         physical_before = len(self.backend.calls)
         manuscript = await self.runtime.lead_turn(
@@ -626,7 +626,31 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         before_revision_calls = len(self.backend.call_records)
 
         def fresh_recommendation(call, _provider):
-            return _provider_envelope(
+            def encode_current(call, value):
+                from tests.provider_wire_fixture import (
+                    result as native_result, lead_fixture_result, lead_fixture_scope_record,
+                    lead_fixture_assessment, finite_fixture_selection)
+                from tests.test_lead_orchestration import _compact_recommended
+                choices = dict(call.contract.semantic_index.policy.choices)
+                self.assertEqual(choices['source_binding'], ('bound',))
+                self.assertIn('current_response', choices['source_ids'])
+                compact = {key: value[key] for key in (
+                    'kind', 'message', 'authoring_scope', 'authoring_assessment')}
+                compact['recommended_action'] = _compact_recommended(value['recommended_action'])
+                native = native_result(compact, 'lead-response-v9')
+                native.pop('writing_task_scope')
+                native['task_scope'] = lead_fixture_scope_record(value['authoring_scope'])
+                drafting = native['proposal_drafting_request']
+                self.assertEqual(drafting['source_ids'], ['current_response'])
+                drafting['source_ids'] = finite_fixture_selection(
+                    choices['source_ids'], tuple(drafting['source_ids']))
+                if choices['preparation_targets'] and 'target_artifact_paths' in drafting:
+                    drafting['target_artifact_paths'] = finite_fixture_selection(
+                        choices['preparation_targets'], tuple(drafting['target_artifact_paths']))
+                native['authoring_assessment'] = lead_fixture_assessment(
+                    native['authoring_assessment'], source_choices=choices['input_ids'])
+                return lead_fixture_response(call, lead_fixture_result(native), family=0)
+            return encode_current(
                 call,
                 {
                     "recommended_action": {

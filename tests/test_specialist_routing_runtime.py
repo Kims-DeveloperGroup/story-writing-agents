@@ -259,10 +259,66 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
 
 
         prefix = self.history(conversation)
+        late_call_start = len(self.backend.calls)
         self.backend.enqueue(partial(_search_history, text="Nora must recover her brother's letter"), _read_history_hit, _visible_outcome("answer", "This third submission must not be invoked."))
         bounded = await self.runtime.lead_turn(self.session_id, conversation, "Inspect context before offering fresh work.")
         calls = _submitted_calls(self.history(conversation)[len(prefix):])
-        self.assertEqual(len(calls), 2)
+        note = None
+        if len(calls) != 2:
+            from types import MappingProxyType
+            from story_writing_agents.agent_context.service import (
+                BoundContextProviderCallRequest, ContextCallOffers)
+
+            def late_snapshot(row):
+                if (type(row) is not BoundContextProviderCallRequest
+                        or type(row.contract.offers) is not ContextCallOffers
+                        or type(row.payload) is not MappingProxyType):
+                    return ('unsupported',)
+                offer = row.contract.offers
+                observation = row.payload.get('o')
+                kind = 'missing' if observation is None else 'unsupported'
+                hits = -1
+                if type(observation) is dict:
+                    tag = observation.get('observation_type')
+                    if type(tag) is str:
+                        kind = 'other'
+                        if tag == 'context_search_results':
+                            kind = 'search'
+                            rows = observation.get('search_results')
+                            if type(rows) is list:
+                                hits = min(len(rows), 65)
+                        elif tag == 'context_read_results':
+                            kind = 'read'
+                phase = row.call_kind.name
+                if phase not in (
+                        'COLLABORATION_INITIAL', 'COLLABORATION_CONTINUATION',
+                        'CONVERSATION_RETRIEVAL_INITIAL',
+                        'CONVERSATION_RETRIEVAL_CONTINUATION'):
+                    phase = 'other'
+                remaining = -1
+                limits = offer.action_limits
+                if (type(limits) is tuple and len(limits) <= 8 and all(
+                        type(pair) is tuple and len(pair) == 2 and type(pair[0]) is str
+                        and type(pair[1]) is int and pair[1] >= 0 for pair in limits)
+                        and len({pair[0] for pair in limits}) == len(limits)):
+                    matches = tuple(value for name, value in limits
+                                    if name == 'nonterminal_actions')
+                    if len(matches) == 1:
+                        remaining = min(matches[0], 65)
+                return (
+                    phase, min(offer.action_index, 65),
+                    tuple(a in offer.allowed_actions for a in ('search', 'read', 'answer')),
+                    remaining, kind, hits,
+                    min(len(offer.issued_handle_aliases), 65),
+                    'context_observation' in row.payload)
+
+            late = self.backend.calls[late_call_start:]
+            from tests.recommendation_fixture import _stored_failure_snapshots
+            finalizer_counts = _stored_failure_snapshots(self.backend)[1]
+            note = ('late_history', min(len(calls), 65), min(len(late), 65),
+                    len(late) > 3, 'absolute_physical_limit_not_retained', finalizer_counts,
+                    tuple(late_snapshot(row) for row in late[-3:]))
+        self.assertEqual(len(calls), 2, note)
         self.assertIsNone(bounded.proposal)
         self.assertFalse(any(event.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for event in self.history(conversation)[len(prefix):]))
         self.assertEqual(self.history(conversation)[:len(prefix)], prefix)

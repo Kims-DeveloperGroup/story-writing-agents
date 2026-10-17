@@ -6163,8 +6163,15 @@ class ControllerConversationCommandTests(ControllerTestCase):
                         if type(e.payload) is collaboration.CollaborationExplorationAdoptionPayload)
         self.assertEqual(captured.selected_text, source_text[8:23])
         projected = case.runtime.inspect_lead_collaboration(case.session_id, owner)
-        self.assertEqual((captured.fresh_task_id, captured.task_revision),
-                         (projected.current_proposal.authoring_scope.task_id, 1))
+        try:
+            self.assertEqual((captured.fresh_task_id, captured.task_revision),
+                             (projected.current_proposal.authoring_scope.task_id, 1))
+        except AttributeError as failure:
+            if projected.current_proposal is None:
+                from tests.recommendation_fixture import _current_policy_failure_note
+                failure.add_note(_current_policy_failure_note(
+                    case.backend, projection=projected))
+            raise
         self.assertEqual(len(_submitted_calls(case.history(source))) + len(_submitted_calls(case.history(owner))), 2)
 
 

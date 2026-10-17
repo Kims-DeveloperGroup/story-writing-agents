@@ -455,7 +455,13 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     _ADMISSION_BRIEF + "\n" + "Check for absent evidence.",
                 )
                 self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
-                self.assertIsNotNone(result.evidence)
+                try:
+                    self.assertIsNotNone(result.evidence)
+                except AssertionError as failure:
+                    from tests.recommendation_fixture import _current_policy_failure_note
+                    failure.add_note(_current_policy_failure_note(
+                        self.backend, result))
+                    raise
                 assert result.evidence is not None
                 zero_hits = tuple(
                     receipt
@@ -499,7 +505,13 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         result = await self.runtime.lead_turn(self.session_id, conversation_id,
             _ADMISSION_BRIEF + "\n" + "Check canonical artifacts.",)
         self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
-        self.assertIsNotNone(result.recommendation_request)
+        try:
+            self.assertIsNotNone(result.recommendation_request)
+        except AssertionError as failure:
+            from tests.recommendation_fixture import _current_policy_failure_note
+            failure.add_note(_current_policy_failure_note(
+                self.backend, result))
+            raise
         self.assertIsNotNone(result.evidence)
         assert result.evidence is not None
         zero_hits = tuple(
@@ -669,7 +681,13 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             conversation_id,
             "Report whether ${manuscript/part-01/empty.md} is empty.",
         )
-        self.assertIs(result.kind, LeadOutcomeKind.QUESTION)
+        try:
+            self.assertIs(result.kind, LeadOutcomeKind.QUESTION)
+        except AssertionError as failure:
+            from tests.recommendation_fixture import _current_policy_failure_note
+            failure.add_note(_current_policy_failure_note(
+                self.backend, result))
+            raise
         self.assertIs(result.next_action, CollaborationNextAction.REPLY_TO_LEAD)
         self.assertIsNotNone(result.evidence)
         assert result.evidence is not None
@@ -819,7 +837,13 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 )
                 failure_payloads = tuple(event.payload for event in self.history(conversation_id)
                                          if type(event.payload) is CollaborationLeadOutcomeFailurePayload)
-                self.assertEqual(len(failure_payloads), 0 if index == 2 else 1)
+                try:
+                    self.assertEqual(len(failure_payloads), 0 if index == 2 else 1)
+                except AssertionError as failure:
+                    from tests.recommendation_fixture import _current_policy_failure_note
+                    failure.add_note(_current_policy_failure_note(
+                        self.backend, result, selection=ids))
+                    raise
                 self.assertEqual(len(_submitted_calls(self.history(conversation_id))), 1 if index == 2 else 2)
                 if index == 2:
                     self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
@@ -849,7 +873,13 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                         CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED)
                     source_rule = ("$: duplicate object key" if index == 1
                         else "select only frozen offered aliases or evidence IDs from completed authorized READs")
-                    self.assertIn(source_rule, "\n".join(result.validation_details))
+                    try:
+                        self.assertIn(source_rule, "\n".join(result.validation_details))
+                    except AssertionError as failure:
+                        from tests.recommendation_fixture import _current_policy_failure_note
+                        failure.add_note(_current_policy_failure_note(
+                            self.backend, result, selection=ids))
+                        raise
 
         prior_evidence_ids: list[str] = []
 
@@ -891,7 +921,13 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self.backend.enqueue(_search("Outline", ["w"]), read_prior_turn, answer_prior_turn)
         first = await self.runtime.lead_turn(self.session_id, conversation_id, "Read current evidence.")
         self.assertIs(first.kind, LeadOutcomeKind.ANSWER)
-        self.assertEqual(first.message, "The current READ supports this answer.")
+        try:
+            self.assertEqual(first.message, "The current READ supports this answer.")
+        except AssertionError as failure:
+            from tests.recommendation_fixture import _current_policy_failure_note
+            failure.add_note(_current_policy_failure_note(
+                self.backend, first))
+            raise
         self.assertEqual(len(prior_evidence_ids), 1)
 
         self.backend.enqueue(selected_sources(prior_evidence_ids,
@@ -1001,7 +1037,13 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             conversation_id,
             "Reject truncated search evidence.",
         )
-        self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD,)
+        try:
+            self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD,)
+        except AssertionError as failure:
+            from tests.recommendation_fixture import _current_policy_failure_note
+            failure.add_note(_current_policy_failure_note(
+                self.backend, result))
+            raise
 
     async def test_validation_failure_closes_once_and_restart_uses_fresh_turn(
         self,

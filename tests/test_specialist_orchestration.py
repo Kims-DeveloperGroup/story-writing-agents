@@ -589,7 +589,12 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                     tuple(p.validation_details for p in submitted if p.validation_details),
                     (expected,))
                 self.assertTrue(expected)
-                requirement = "expected at least 1 characters, got 0"
+                requirement = (
+                    r'expected pattern "[\\s\\S]"'
+                    if rejected_role == PLOT_ARCHITECT else
+                    r'expected pattern "^(?=[^\\ud800-\\udfff]*$(?![\\s\\S]))[\\s\\S]"'
+                    '\n$.agent_action.task_result.response_text: '
+                    'expected at least 1 characters, got 0')
                 self.assertEqual(expected[0],
                     "Original response\n$.agent_action.task_result.response_text: " + requirement)
 
@@ -639,7 +644,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         empty_message_details = tuple(
             detail for detail in expected
             if detail == "Original response\n"
-                         "$.agent_action.task_result.response_text: expected nonempty text" )
+                         "$.agent_action.task_result.response_text: "
+                         'expected pattern "[\\\\s\\\\S]"' )
         self.assertEqual(len(empty_message_details), 2)
         self.assertEqual(empty_message_details[0], empty_message_details[1])
         self.assertEqual(sum(('expected string, got integer' in detail for detail in expected)), 1)
@@ -697,7 +703,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(notices[0].validation_invocation_id, submitted[0].invocation_id)
         self.assertEqual(notices[0].validation_details[0], "Original response\n"
                          "$.agent_action.task_result.response_text: "
-                         "expected at least 1 characters, got 0")
+                         'expected pattern "[\\\\s\\\\S]"')
         self.assertNotIn(private, repr(known))
 
         restarted_backend = _LeadBackend()
@@ -794,7 +800,10 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(_payloads(self.history(conversation_id), CollaborationExecutionResult), ())
 
     async def test_synthesis_contract_is_semantic_and_runtime_derives_attribution(self) -> None:
+        synthesis_review_candidates = []
         def minimal_synthesis(call, _provider):
+            synthesis_review_candidates.append(
+                dict(call.contract.semantic_index.policy.choices)['review_candidate_ids'])
             self.assertNotIn("reply_event_ids", repr(call.schema))
             self.assertNotIn("unresolved_input_ids", repr(call.schema))
             for message in ("Visible.", " \t\0"):
@@ -833,7 +842,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             self.runtime._decode_lead_synthesis(json.dumps({"message": "Visible.", "next_intent": {
                 "purpose": "Continue the review.", "assignments": [duplicate, duplicate]}}),
                 proposal=proposed.proposal, attempt_id=synthesis.execution_attempt_id,
-                reply_event_ids=synthesis.reply_event_ids, replies=tuple(event.payload for event in reply_events))
+                reply_event_ids=synthesis.reply_event_ids,
+                review_candidate_ids=synthesis_review_candidates[0],
+                replies=tuple(event.payload for event in reply_events))
         self.assertEqual(failure_issues(caught.exception, path="$.action.result"),
                          ("$.action.result.next_intent.assignments: agent_id values must be unique before canonical ordering",))
 
@@ -987,7 +998,26 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, continue_lineage)
         first_decision = await self.runtime.decide_lead_step(_decision(first, CollaborationConfirmationDecision.CONFIRM))
         second = first_decision.turn
-        self.assertIsNotNone(second.proposal, second)
+        second_note = None
+        if second.proposal is None:
+            from story_writing_agents import conversations as c
+            from tests.recommendation_fixture import (
+                _bounded_failure_note, _stored_failure_snapshots)
+            result_note = ('res', 'unsupported')
+            if (type(second) is c.LeadTurnResult and type(second.kind) is c.LeadOutcomeKind
+                    and type(second.next_action) is c.CollaborationNextAction
+                    and (second.state is None or type(second.state) is c.CollaborationStepState)):
+                result_note = ('res', second.kind.name,
+                               'none' if second.state is None else second.state.name,
+                               second.next_action.name, min(len(second.validation_details), 65535),
+                               len(second.validation_details) > 65535,
+                               second.provider_invocation_id is not None,
+                               second.recommendation_request is not None,
+                               second.artifact_proposal is not None,
+                               second.artifact_application_request is not None)
+            second_note = _bounded_failure_note(
+                result_note, *_stored_failure_snapshots(self.backend))
+        self.assertIsNotNone(second.proposal, second_note)
         self.assertIs(second.state, CollaborationStepState.AWAITING_CONFIRMATION)
         self.assertEqual(second.proposal.step_id, first.step_id)
         self.assertEqual(second.proposal.proposal_revision, first.proposal.proposal_revision + 1)

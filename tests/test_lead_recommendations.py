@@ -187,7 +187,17 @@ class LeadRecommendationTests(RecommendationCase):
             return producer(call, provider)
         self.enqueue_preparation(turn, answer=held)
         first = asyncio.create_task(self.runtime.decide_lead_recommendation(choice))
-        await asyncio.wait_for(entered.wait(), 2)
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+        except TimeoutError as failure:
+            from tests.recommendation_fixture import (
+                _bounded_failure_note, _stored_failure_snapshots)
+            state = ('cancelled' if first.cancelled() else
+                     'done_unknown' if first.done() else 'pending')
+            failure.add_note(_bounded_failure_note(
+                ('task', calls, entered.is_set(), state),
+                *_stored_failure_snapshots(self.backend)))
+            raise
         second = asyncio.create_task(self.runtime.decide_lead_recommendation(choice))
         try:
             await asyncio.sleep(0)

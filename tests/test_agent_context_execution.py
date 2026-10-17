@@ -594,6 +594,9 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertTrue(all(set(member['properties']) == {'action_type', 'schema_id', 'task_result'}
                             for member in members))
         self.assertEqual(len(provider.calls), 3)
+        self.assertIs(type(provider.calls[1]), BoundContextProviderCallRequest)
+        self.assertEqual(provider.calls[1].contract.offers.action_limits[1:3],
+                         (('search_actions', 1), ('read_actions', 2)))
         self.assertEqual(result.answer, canonical_provider_json({'message':
             'Visible grounded lead answer.', 'authoring_scope': _LEAD_ANSWER_SCOPE}).decode())
         self.assertEqual(tuple((call.payload['response_contract']['workflow_phase'] for call in

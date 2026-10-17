@@ -242,13 +242,11 @@ def _ready_checkpoint(
             ContextSourceKind.WRITING_ARTIFACT,
             ContextSourceKind.CONVERSATION,
             ContextSourceKind.ACTIVE_DEBATE,
-            ContextSourceKind.OWN_AGENT_STATE,
-        }
+            ContextSourceKind.OWN_AGENT_STATE,}
     )
     catalog = tuple(
         ContextCatalogCursor(entry, f"s{ordinal}")
-        for ordinal, entry in enumerate(catalog_entries, start=1)
-    )
+        for ordinal, entry in enumerate(catalog_entries, start=1))
     return ContextCheckpointView(
         ContextCheckpointState.READY,
         conditions,
@@ -256,8 +254,7 @@ def _ready_checkpoint(
         tuple(ContextCheckpointSource(entry) for entry in entries),
         delta_depth,
         catalog,
-        len(catalog),
-    )
+        len(catalog),)
 
 
 def _project(
@@ -281,8 +278,7 @@ def _project(
         checkpoint=checkpoint or ContextCheckpointView(ContextCheckpointState.MISSING),
         active_provider_thread_id=active_provider_thread_id,
         mandatory_references=mandatory_references,
-        fresh=fresh,
-    )
+        fresh=fresh,)
 
 
 def _reference(
@@ -301,11 +297,9 @@ def _reference(
         "revision-1",
         ContextProvenance(
             ContextAuthorityKind.REFERENCE_AUTHORIZATION,
-            locator or f"references/item-{ordinal}.md",
-        ),
+            locator or f"references/item-{ordinal}.md",),
         content_digest or _digest(f"reference-{ordinal}".encode("ascii")),
-        utf8_bytes,
-    )
+        utf8_bytes,)
 
 
 def _decision_map(projection: ContextProjection) -> dict[str, ContextSourceDecision]:
@@ -322,15 +316,12 @@ def _decision_allowed(
             channel
             in {
                 ContextSemanticChannel.CURRENT_INPUT,
-                ContextSemanticChannel.CANDIDATE,
-            }
-            and decision is ContextDecisionKind.SELECTED
-        )
+                ContextSemanticChannel.CANDIDATE,}
+            and decision is ContextDecisionKind.SELECTED)
     if priority is ContextPriority.P1_STABLE:
         return channel is ContextSemanticChannel.STABLE_BEHAVIOR and decision in {
             ContextDecisionKind.SELECTED,
-            ContextDecisionKind.CHECKPOINT_SUPPRESSED,
-        }
+            ContextDecisionKind.CHECKPOINT_SUPPRESSED,}
     if priority is ContextPriority.P2_WORKING:
         if channel not in {
             ContextSemanticChannel.HARD_CONSTRAINT,
@@ -344,14 +335,12 @@ def _decision_allowed(
             and decision
             in {
                 ContextDecisionKind.OMITTED_CLASS_BUDGET,
-                ContextDecisionKind.OMITTED_MATERIAL,
-            }
+                ContextDecisionKind.OMITTED_MATERIAL,}
         )
     return priority is ContextPriority.P3_OPTIONAL and channel in {
         ContextSemanticChannel.OPTIONAL_BACKGROUND,
         ContextSemanticChannel.RETRIEVED_EVIDENCE,
-        ContextSemanticChannel.HISTORY,
-    }
+        ContextSemanticChannel.HISTORY,}
 
 
 class PlanningTestCase(unittest.TestCase):
@@ -410,8 +399,7 @@ class PlanningSurfaceTests(PlanningTestCase):
         self.assertEqual( tuple(item.value for item in ContextDeliveryMode), ("bootstrap", "delta"), )
         self.assertEqual(
             tuple(item.value for item in ContextCheckpointState),
-            ("ready", "missing", "corrupt", "stale", "tainted"),
-        )
+            ("ready", "missing", "corrupt", "stale", "tainted"),)
         self.assertEqual(
             tuple(item.value for item in ContextDecisionKind),
             (
@@ -447,48 +435,34 @@ class PlanningSurfaceTests(PlanningTestCase):
     def test_fixed_error_codes_messages_and_privacy(self) -> None:
         expected = {
             ContextPlanningErrorCode.INVALID_VALUE: (
-                "context planning contains an invalid value"
-            ),
+                "context planning contains an invalid value"),
             ContextPlanningErrorCode.INVALID_POLICY: (
-                "context planning policy is invalid"
-            ),
+                "context planning policy is invalid"),
             ContextPlanningErrorCode.INVALID_CHECKPOINT: (
-                "context checkpoint is invalid"
-            ),
+                "context checkpoint is invalid"),
             ContextPlanningErrorCode.INVALID_MATERIAL: "context material is invalid",
             ContextPlanningErrorCode.MATERIAL_LENGTH_MISMATCH: (
-                "context material length does not match its manifest entry"
-            ),
+                "context material length does not match its manifest entry"),
             ContextPlanningErrorCode.MATERIAL_DIGEST_MISMATCH: (
-                "context material digest does not match its manifest entry"
-            ),
+                "context material digest does not match its manifest entry"),
             ContextPlanningErrorCode.REVISION_CONTENT_MISMATCH: (
-                "a source revision conflicts with checkpoint content identity"
-            ),
+                "a source revision conflicts with checkpoint content identity"),
             ContextPlanningErrorCode.MANIFEST_SCOPE_MISMATCH: (
-                "context manifest and planning scope do not match"
-            ),
+                "context manifest and planning scope do not match"),
             ContextPlanningErrorCode.REQUIRED_MATERIAL_MISSING: (
-                "required context material is unavailable"
-            ),
+                "required context material is unavailable"),
             ContextPlanningErrorCode.STABLE_MATERIAL_MISSING: (
-                "stable context material is unavailable"
-            ),
+                "stable context material is unavailable"),
             ContextPlanningErrorCode.WORKING_CONSTRAINT_MATERIAL_MISSING: (
-                "working hard-constraint material is unavailable"
-            ),
+                "working hard-constraint material is unavailable"),
             ContextPlanningErrorCode.REQUIRED_BUDGET_EXCEEDED: (
-                "required context exceeds its planning budget"
-            ),
+                "required context exceeds its planning budget"),
             ContextPlanningErrorCode.STABLE_BUDGET_EXCEEDED: (
-                "stable context exceeds its planning budget"
-            ),
+                "stable context exceeds its planning budget"),
             ContextPlanningErrorCode.WORKING_CONSTRAINT_BUDGET_EXCEEDED: (
-                "working hard constraints exceed the configured budget"
-            ),
+                "working hard constraints exceed the configured budget"),
             ContextPlanningErrorCode.REFERENCE_BUDGET_EXCEEDED: (
-                "mandatory references exceed their reservation budget"
-            ),
+                "mandatory references exceed their reservation budget"),
         }
         self.assertEqual(set(expected), set(ContextPlanningErrorCode))
         for code, message in expected.items():
@@ -503,8 +477,7 @@ class PlanningSurfaceTests(PlanningTestCase):
     def test_exact_dataclass_fields_and_immutability(self) -> None:
         self.assertEqual(
             tuple(field.name for field in fields(ContextBudgetAccounting)),
-            ("total", "p0", "p1", "p2", "p3", "mandatory_references"),
-        )
+            ("total", "p0", "p1", "p2", "p3", "mandatory_references"),)
         self.assertEqual(
             tuple(field.name for field in fields(ContextProjection)),
             (
@@ -541,13 +514,10 @@ class PlanningPolicyTests(PlanningTestCase):
                 policy.p2_source_utf8_bytes,
                 policy.p3_source_utf8_bytes,
                 policy.mandatory_reference_utf8_bytes,
-                policy.max_delta_depth,
-            ),
-            (131_072, 73_728, 16_384, 32_768, 0, 262_144, 16),
-        )
+                policy.max_delta_depth,),
+            (131_072, 73_728, 16_384, 32_768, 0, 262_144, 16),)
         serialized = (
-            b"total=131072;p0=73728;p1=16384;p2=32768;p3=0;references=262144;depth=16"
-        )
+            b"total=131072;p0=73728;p1=16384;p2=32768;p3=0;references=262144;depth=16")
         self.assertEqual(policy.fingerprint, _digest(serialized))
         self.assertRegex(policy.fingerprint, r"\Asha256:[0-9a-f]{64}\Z")
 
@@ -563,8 +533,7 @@ class PlanningPolicyTests(PlanningTestCase):
                     values[field_name] = value
                     self.assert_planning_error(
                         lambda values=values: ContextPlanningPolicy(**values),
-                        ContextPlanningErrorCode.INVALID_POLICY,
-                    )
+                        ContextPlanningErrorCode.INVALID_POLICY,)
 
     def test_zero_class_aggregate_and_reference_boundaries(self) -> None:
         defaults = {
@@ -591,8 +560,7 @@ class PlanningPolicyTests(PlanningTestCase):
             + exact.p1_source_utf8_bytes
             + exact.p2_source_utf8_bytes
             + exact.p3_source_utf8_bytes,
-            exact.total_source_utf8_bytes,
-        )
+            exact.total_source_utf8_bytes,)
         self.assert_planning_error(
             lambda: ContextPlanningPolicy(10, 1, 1, 4, 5, 0, 1),
             ContextPlanningErrorCode.INVALID_POLICY,
@@ -607,8 +575,7 @@ class PlanningPolicyTests(PlanningTestCase):
             with self.subTest(class_values=class_values):
                 self.assert_planning_error(
                     lambda total=total, p0=p0, p1=p1, p2=p2, p3=p3: (
-                        ContextPlanningPolicy(total, p0, p1, p2, p3, 0, 1)
-                    ),
+                        ContextPlanningPolicy(total, p0, p1, p2, p3, 0, 1)),
                     ContextPlanningErrorCode.INVALID_POLICY,
                 )
         self.assert_planning_error(
@@ -633,26 +600,22 @@ class PlanningValueTests(PlanningTestCase):
         invalid_entry = _entry("invalid", invalid_body)
         error = self.assert_planning_error(
             lambda: ContextMaterial(invalid_entry, invalid_body),
-            ContextPlanningErrorCode.INVALID_MATERIAL,
-        )
+            ContextPlanningErrorCode.INVALID_MATERIAL,)
         self.assertNotIn("PRIVATE", str(error))
         self.assertNotIn("PRIVATE", repr(error))
 
         valid = _entry("valid", b"abc")
         self.assert_planning_error(
             lambda: ContextMaterial(replace(valid, utf8_bytes=4), b"abc"),
-            ContextPlanningErrorCode.MATERIAL_LENGTH_MISMATCH,
-        )
+            ContextPlanningErrorCode.MATERIAL_LENGTH_MISMATCH,)
         self.assert_planning_error(
             lambda: ContextMaterial( replace(valid, content_digest=_digest(b"xyz")), b"abc", ),
-            ContextPlanningErrorCode.MATERIAL_DIGEST_MISMATCH,
-        )
+            ContextPlanningErrorCode.MATERIAL_DIGEST_MISMATCH,)
         for wrong in ("abc", bytearray(b"abc"), memoryview(b"abc"), None):
             with self.subTest(wrong_type=type(wrong).__name__):
                 self.assert_planning_error(
                     lambda wrong=wrong: ContextMaterial(valid, wrong),  # type: ignore[arg-type]
-                    ContextPlanningErrorCode.INVALID_MATERIAL,
-                )
+                    ContextPlanningErrorCode.INVALID_MATERIAL,)
 
     def test_projected_unit_validates_exact_body_channel_and_priority(self) -> None:
         first = _entry("first", b"same")
@@ -698,8 +661,7 @@ class PlanningValueTests(PlanningTestCase):
                 with self.subTest(state=state, kwargs=kwargs):
                     self.assert_planning_error(
                         lambda state=state, kwargs=kwargs: ContextCheckpointView( state, **kwargs, ),
-                        ContextPlanningErrorCode.INVALID_CHECKPOINT,
-                    )
+                        ContextPlanningErrorCode.INVALID_CHECKPOINT,)
         self.assert_planning_error( lambda: ContextCheckpointSource(p0), ContextPlanningErrorCode.INVALID_CHECKPOINT, )
         malformed_ready = (
             lambda: ContextCheckpointView(ContextCheckpointState.READY),
@@ -791,8 +753,7 @@ class PlanningValueTests(PlanningTestCase):
                         (source,),
                         0,
                         (valid_catalog,),
-                        high_water,
-                    ),
+                        high_water,),
                     ContextPlanningErrorCode.INVALID_CHECKPOINT,
                 )
 
@@ -823,8 +784,7 @@ class PlanningValueTests(PlanningTestCase):
                 "candidate",
                 b"x",
                 source_kind=ContextSourceKind.RUNTIME_INPUT,
-                semantic_channel=ContextSemanticChannel.CANDIDATE,
-            ),
+                semantic_channel=ContextSemanticChannel.CANDIDATE,),
             _entry("stable", b"x", source_kind=ContextSourceKind.AGENT_DEFINITION),
             *(
                 _entry(f"p2-{channel.value}", b"x", semantic_channel=channel)
@@ -832,17 +792,14 @@ class PlanningValueTests(PlanningTestCase):
                     ContextSemanticChannel.HARD_CONSTRAINT,
                     ContextSemanticChannel.FOCUSED_EVIDENCE,
                     ContextSemanticChannel.RETRIEVED_EVIDENCE,
-                    ContextSemanticChannel.HISTORY,
-                )
+                    ContextSemanticChannel.HISTORY,)
             ),
-            _entry("optional", b"x", source_kind=ContextSourceKind.OWN_AGENT_STATE),
-        )
+            _entry("optional", b"x", source_kind=ContextSourceKind.OWN_AGENT_STATE),)
         for entry, decision in itertools.product(valid_entries, ContextDecisionKind):
             represented = (
                 "representative"
                 if decision is ContextDecisionKind.DEDUPLICATED
-                else None
-            )
+                else None)
             with self.subTest(entry=entry.source_id, decision=decision):
                 if _decision_allowed(entry.priority, entry.semantic_channel, decision):
                     value = ContextSourceDecision(entry, decision, represented)
@@ -852,8 +809,7 @@ class PlanningValueTests(PlanningTestCase):
                         lambda entry=entry,
                         decision=decision,
                         represented=represented: (
-                            ContextSourceDecision(entry, decision, represented)
-                        ),
+                            ContextSourceDecision(entry, decision, represented)),
                         ContextPlanningErrorCode.INVALID_VALUE,
                     )
         for priority, channel, decision in itertools.product(
@@ -867,8 +823,7 @@ class PlanningValueTests(PlanningTestCase):
                 else:
                     self.assert_planning_error(
                         lambda priority=priority, channel=channel, decision=decision: (
-                            ContextDecisionAccounting(priority, channel, decision, 1, 1)
-                        ),
+                            ContextDecisionAccounting(priority, channel, decision, 1, 1)),
                         ContextPlanningErrorCode.INVALID_VALUE,
                     )
         p2 = valid_entries[3]
@@ -905,8 +860,7 @@ class PlanningValueTests(PlanningTestCase):
                 one,
                 zero,
                 zero,
-                ContextReferenceBudgetUsage(262_145, 0, 262_145),
-            ),
+                ContextReferenceBudgetUsage(262_145, 0, 262_145),),
         ):
             with self.subTest(values=values):
                 self.assert_planning_error(
@@ -926,8 +880,7 @@ class PlanningValueTests(PlanningTestCase):
                 self.assert_planning_error(
                     lambda field_name=field_name: replace(
                         searchable,
-                        **{field_name: getattr(searchable, field_name) + 1},
-                    ),
+                        **{field_name: getattr(searchable, field_name) + 1},),
                     ContextPlanningErrorCode.INVALID_VALUE,
                 )
 
@@ -958,16 +911,14 @@ class BootstrapPlanningTests(PlanningTestCase):
             ContextCheckpointState.MISSING: ContextBootstrapReason.CHECKPOINT_MISSING,
             ContextCheckpointState.CORRUPT: ContextBootstrapReason.CHECKPOINT_CORRUPT,
             ContextCheckpointState.STALE: ContextBootstrapReason.CHECKPOINT_STALE,
-            ContextCheckpointState.TAINTED: ContextBootstrapReason.CHECKPOINT_TAINTED,
-        }
+            ContextCheckpointState.TAINTED: ContextBootstrapReason.CHECKPOINT_TAINTED,}
         for state, reason in state_reasons.items():
             projection = _project(
                 (stable,),
                 (material,),
                 policy=policy,
                 conditions=conditions,
-                checkpoint=ContextCheckpointView(state),
-            )
+                checkpoint=ContextCheckpointView(state),)
             self.assertIs(projection.mode, ContextDeliveryMode.BOOTSTRAP)
             self.assertIs(projection.bootstrap_reason, reason)
             self.assertEqual(projection.checkpoint_proposal.delta_depth, 0)
@@ -977,8 +928,7 @@ class BootstrapPlanningTests(PlanningTestCase):
             policy=policy,
             conditions=conditions,
             checkpoint=ContextCheckpointView(ContextCheckpointState.CORRUPT),
-            fresh=True,
-        )
+            fresh=True,)
         self.assertIs( fresh.bootstrap_reason, ContextBootstrapReason.EXPLICIT_FRESH, )
 
     def test_ready_mismatch_matrix_and_thread_none_semantics(self) -> None:
@@ -1025,8 +975,7 @@ class BootstrapPlanningTests(PlanningTestCase):
                 _ready_checkpoint(
                     _conditions(
                         policy,
-                        definition_fingerprint=_digest(b"old-definition"),
-                    ),
+                        definition_fingerprint=_digest(b"old-definition"),),
                     (stable,),
                 ),
                 "thread",
@@ -1036,8 +985,7 @@ class BootstrapPlanningTests(PlanningTestCase):
                 _ready_checkpoint(
                     _conditions(
                         policy,
-                        policy_fingerprint=_digest(b"old-policy"),
-                    ),
+                        policy_fingerprint=_digest(b"old-policy"),),
                     (stable,),
                 ),
                 "thread",
@@ -1087,8 +1035,7 @@ class BootstrapPlanningTests(PlanningTestCase):
         )
         self.assertEqual(
             tuple(source.entry for source in changed.checkpoint_proposal.sources),
-            (stable,),
-        )
+            (stable,),)
 
         definition_precedes = _project(
             (stable,),
@@ -1098,16 +1045,13 @@ class BootstrapPlanningTests(PlanningTestCase):
             checkpoint=_ready_checkpoint(
                 _conditions(
                     policy,
-                    definition_fingerprint=_digest(b"old-definition"),
-                ),
-                (old_stable,),
-            ),
+                    definition_fingerprint=_digest(b"old-definition"),),
+                (old_stable,),),
             active_provider_thread_id="thread",
         )
         self.assertIs(
             definition_precedes.bootstrap_reason,
-            ContextBootstrapReason.DEFINITION_FINGERPRINT_MISMATCH,
-        )
+            ContextBootstrapReason.DEFINITION_FINGERPRINT_MISMATCH,)
         stable_precedes_policy = _project(
             (stable,),
             (material,),
@@ -1116,8 +1060,7 @@ class BootstrapPlanningTests(PlanningTestCase):
             checkpoint=_ready_checkpoint(
                 _conditions( policy, policy_fingerprint=_digest(b"old-policy"), schema_version=2, ),
                 (old_stable,),
-                delta_depth=16,
-            ),
+                delta_depth=16,),
             active_provider_thread_id="thread",
         )
         self.assertIs(
@@ -1131,16 +1074,14 @@ class BootstrapPlanningTests(PlanningTestCase):
             "provider_id": "other-provider",
             "definition_fingerprint": _digest(b"old-definition"),
             "policy_fingerprint": _digest(b"old-policy"),
-            "schema_version": 2,
-        }
+            "schema_version": 2,}
         cases = (
             (
                 _ready_checkpoint(
                     _conditions(
                         policy,
                         scope=_scope(workspace_id="other"),
-                        **lower_mismatches,
-                    ),
+                        **lower_mismatches,),
                     (stable,),
                     provider_thread_id="old-thread",
                     delta_depth=16,

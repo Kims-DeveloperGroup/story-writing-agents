@@ -2740,7 +2740,7 @@ class ContextInvocationSession:
                 )))
             elif reference_prelude is not None or reference_request is not None:
                 raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-            names = ("nonterminal_actions", "provider_calls", "search_actions", "queries_per_search",
+            names = ("nonterminal_actions", "search_actions", "read_actions", "queries_per_search",
                      "cumulative_queries", "handles_per_read", "cumulative_handles", "query_characters")
             limits = tuple(zip(names, self.action_limits()))
             completed = reference_facts + tuple(ContextCallReadFact.from_evidence(evidence)

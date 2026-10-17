@@ -66,6 +66,263 @@ def _selection_failure_note(failure, hits, targets, *, point):
     BaseException.add_note(failure, encoded)
 
 
+
+def _bounded_failure_note(*snapshots):
+    note = json.dumps(snapshots, ensure_ascii=True, separators=(',', ':'))
+    return note if len(note) <= 1024 else '["unsupported-note-size"]'
+
+
+def _stored_failure_snapshots(backend):
+    from types import MappingProxyType
+    from story_writing_agents.agent_context.service import (
+        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers,
+        ContextProviderTerminalCode as Code)
+    unsupported = ('unsupported',)
+    if type(backend) is not lead._LeadBackend:
+        return unsupported, unsupported
+    calls, records, finalizers = backend.calls, backend.call_records, backend.finalizers
+    if any(type(rows) is not list for rows in (calls, records, finalizers)):
+        return unsupported, unsupported
+    if any(len(rows) > 32 for rows in (calls, records, finalizers)):
+        return ('req-overflow', min(len(calls), 65535)), ('fin-overflow', len(finalizers) > 32)
+    aligned = len(records) == len(calls) and all(
+        type(row) is tuple and len(row) == 2 and row[1] is call
+        for row, call in zip(records, calls))
+    request = ('req', len(calls), aligned, 'unsupported')
+    if calls and type(calls[-1]) is BoundContextProviderCallRequest:
+        call = calls[-1]
+        if (type(call.contract) is BoundCallContract
+                and type(call.contract.offers) is ContextCallOffers
+                and type(call.payload) is MappingProxyType):
+            offer, payload = call.contract.offers, call.payload
+            phase = call.contract.phase
+            phase = phase if type(phase) is str and phase in (
+                'ordinary', 'repair', 'replay', 'replay_repair') else 'unsupported'
+            projected = payload.get('response_contract')
+            tag = projected.get('workflow_phase') if type(projected) is dict else None
+            workflow = tag if type(tag) is str and tag in (
+                'lead_user_turn', 'consultation_summary', 'specialist_consultation') else 'other'
+            observation = payload.get('context_observation', payload.get('o'))
+            kind, hit_count, zero = 'none', -1, False
+            if type(observation) is dict:
+                tag = observation.get('observation_type')
+                kind = tag if type(tag) is str and tag in (
+                    'context_search_results', 'context_read_results') else 'other'
+                hits = observation.get('search_results')
+                if kind == 'context_search_results' and type(hits) is list:
+                    hit_count = min(len(hits), 65535)
+                zero = type(observation.get('zero_hit_receipt')) is dict
+            aliases = ('aliases', 'unsupported')
+            choices = call.contract.semantic_index.policy.choices
+            if (type(choices) is tuple and len(choices) <= 64 and all(
+                    type(row) is tuple and len(row) == 2 and type(row[0]) is str
+                    for row in choices) and len({row[0] for row in choices}) == len(choices)):
+                choices = dict(choices)
+                ids = tuple(choices.get(key) for key in (
+                    'input_ids', 'required_input_ids', 'allocation_input_ids',
+                    'review_candidate_ids', 'review_candidate_binding'))
+                if all(type(items) is tuple and len(items) <= 64 and all(
+                        type(item) is str for item in items) for items in ids):
+                    inputs, required, allocation, review, binding = ids
+                    aliases = ('aliases', len(inputs), len(required), len(allocation),
+                               len(review), binding == ('bound',),
+                               set(required) <= set(allocation), set(review) <= set(allocation),
+                               set(allocation) <= set(inputs))
+            overflow = offer.action_index > 65535 or len(offer.issued_handle_aliases) > 65535
+            request = ('req', len(calls), aligned, phase, workflow,
+                       min(offer.action_index, 65535), min(len(offer.issued_handle_aliases), 65535),
+                       kind, hit_count, zero, aliases, overflow)
+    tags = ('accepted', 'rejected', 'cancelled', 'post_response_runtime_failure')
+    codes = (Code.MALFORMED_STRUCTURED_RESPONSE, Code.RESPONSE_CORRELATION_MISMATCH,
+             Code.RESPONSE_SEMANTIC_REJECTED, Code.ACTION_EXHAUSTED,
+             Code.ANSWER_VALIDATION_FAILED, Code.REFERENCE_RUNTIME_FAILED,
+             Code.CONTEXT_RUNTIME_FAILED)
+    tag_counts, code_counts = [0] * 4, [0] * 7
+    for finalizer in finalizers:
+        if (type(finalizer) is not lead._Finalizer or type(finalizer.calls) is not list
+                or len(finalizer.calls) > 8):
+            return request, unsupported
+        for row in finalizer.calls:
+            if (type(row) is not tuple or len(row) != 2 or type(row[0]) is not str
+                    or row[0] not in tags):
+                return request, unsupported
+            tag, code = row
+            if code is not None and not any(code is item for item in codes):
+                return request, unsupported
+            if (tag in ('accepted', 'cancelled')) != (code is None):
+                return request, unsupported
+            tag_counts[tags.index(tag)] += 1
+            if code is not None:
+                code_counts[next(i for i, item in enumerate(codes) if code is item)] += 1
+    gap = len(calls) - len(finalizers)
+    final = ('fin-global-uncorrelated', len(finalizers), gap if gap >= 0 else -1,
+             tuple(tag_counts), tuple(code_counts))
+    return request, final
+
+
+def _zero_hit_failure_snapshots(call, targets):
+    from types import MappingProxyType
+    from story_writing_agents.agent_context.service import (
+        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers)
+    from story_writing_agents.agent_context.actions import (
+        ContextSourceStatusKind as Status, ContextSourceStatusReceipt)
+    from story_writing_agents.agent_context.manifest import ContextSourceKind
+    unsupported = (('offer', 'unsupported'), ('zero', 'unsupported'), ('target', 'unsupported'))
+    if (type(call) is not BoundContextProviderCallRequest
+            or type(call.contract) is not BoundCallContract
+            or type(call.contract.offers) is not ContextCallOffers
+            or type(call.payload) is not MappingProxyType
+            or type(targets) is not tuple or len(targets) > 8
+            or any(type(path) is not str for path in targets)):
+        return unsupported
+    offer, payload = call.contract.offers, call.payload
+    observation = payload.get('context_observation', payload.get('o'))
+    if type(observation) is not dict:
+        return unsupported
+    hits, receipt = observation.get('search_results'), observation.get('zero_hit_receipt')
+    counts = (offer.action_index, len(offer.issued_handle_aliases),
+              len(offer.completed_read_facts), len(offer.delivery_read_facts),
+              len(offer.core_status_facts))
+    offer_note = ('offer', tuple(min(value, 65535) for value in counts),
+                  any(value > 65535 for value in counts),
+                  ContextSourceKind.WRITING_ARTIFACT in offer.search_source_kinds)
+    if type(hits) is not list or type(receipt) is not dict:
+        return offer_note, ('zero', False), ('target', 'unsupported')
+    sources, kinds = receipt.get('authorized_source_ids'), receipt.get('authorized_source_types')
+    digest = receipt.get('manifest_digest')
+    prefix = receipt.get('artifact_directory_prefix')
+    query_count, truncated = receipt.get('query_count'), observation.get('truncated')
+    if (type(sources) is not list or len(sources) > 64
+            or any(type(item) is not str for item in sources)
+            or type(kinds) is not list or len(kinds) > 8
+            or any(type(item) is not str for item in kinds)
+            or type(digest) is not str or (prefix is not None and type(prefix) is not str)
+            or type(query_count) is not int
+            or not 0 <= query_count <= 65535 or type(truncated) is not bool):
+        return offer_note, ('zero', 'unsupported'), ('target', 'unsupported')
+    zero_note = ('zero', True, min(len(hits), 65535), truncated, len(sources),
+                 'story_document' in kinds, query_count,
+                 prefix == 'core_documents/')
+    core = tuple(path for path in targets if path.startswith('core_documents/'))
+    facts = offer.core_status_facts
+    if (type(facts) is not tuple or len(facts) > 64
+            or any(type(fact) is not ContextSourceStatusReceipt for fact in facts)):
+        return offer_note, zero_note, ('target', 'unsupported')
+    counts, joined, manifest_equal = [0, 0, 0, 0], 0, True
+    for path in core:
+        matches = tuple(fact for fact in facts if fact.locator == path)
+        if len(matches) != 1:
+            counts[3] += 1
+            continue
+        fact = matches[0]
+        slot = next((i for i, status in enumerate(
+            (Status.PRESENT, Status.EMPTY, Status.ABSENT)) if fact.status is status), 3)
+        counts[slot] += 1
+        manifest_equal = manifest_equal and fact.manifest_digest == digest
+        joined += fact.status is Status.PRESENT and fact.source_id in sources
+    return offer_note, zero_note, ('target', len(core), tuple(counts), joined, manifest_equal)
+
+
+
+def _current_policy_failure_note(backend, result=None, *, projection=None, selection=None):
+    from types import MappingProxyType
+    from story_writing_agents.agent_context.service import (
+        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers)
+    from story_writing_agents.agent_context.actions import ContextCallReadFact
+    from story_writing_agents.agent_context.manifest import ContextSourceKind
+    from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
+    from story_writing_agents.orchestrator import OrchestrationLeadCallFactory
+    from story_writing_agents.specialist_routing import (
+        AuthoringScope, AuthoringIntent, AuthoringActivity)
+    dto, policy = ('dto', 'not-retained'), ('policy', 'unsupported')
+    if type(result) is c.LeadTurnResult:
+        details = result.validation_details
+        paths = ('paths', 'unsupported')
+        if (type(details) is tuple and len(details) <= 8 and all(
+                type(chunk) is str and len(chunk) <= 32768 for chunk in details)):
+            paths = ('paths', len(details), tuple(any(marker in chunk for chunk in details)
+                     for marker in ('.source_ids', '.task', 'response_type')))
+        if (type(result.kind) is c.LeadOutcomeKind
+                and type(result.next_action) is c.CollaborationNextAction
+                and (result.state is None or type(result.state) is c.CollaborationStepState)):
+            dto = ('dto', result.kind.name,
+                   'none' if result.state is None else result.state.name,
+                   result.next_action.name, result.recommendation_request is not None,
+                   result.evidence is not None, result.proposal is not None,
+                   result.artifact_proposal is not None, paths)
+    elif type(projection) is c.CollaborationHistoryProjection:
+        if (type(projection.next_safe_action) is c.CollaborationNextAction
+                and (projection.current_state is None or
+                     type(projection.current_state) is c.CollaborationStepState)):
+            dto = ('projection', 'none' if projection.current_state is None else
+                   projection.current_state.name, projection.next_safe_action.name,
+                   projection.current_proposal is not None)
+    stored = _stored_failure_snapshots(backend)
+    entries = ('entries', 'unsupported')
+    if type(backend) is lead._LeadBackend:
+        containers = (backend.calls, backend.providers, backend.reference_calls)
+        if all(type(rows) is list for rows in containers):
+            entries = ('entries', tuple(min(len(rows), 65535) for rows in containers),
+                       any(len(rows) > 65535 for rows in containers))
+        if type(backend.calls) is list and 0 < len(backend.calls) <= 32:
+            call = backend.calls[-1]
+            if (type(call) is BoundContextProviderCallRequest
+                    and type(call.contract) is BoundCallContract
+                    and type(call.contract.offers) is ContextCallOffers
+                    and type(call.contract.factory) is OrchestrationLeadCallFactory
+                    and type(call.contract.factory.constraints) is LeadProviderConstraints
+                    and type(call.contract.factory.constraints.recommendation_only) is bool
+                    and type(call.payload) is MappingProxyType):
+                constraints, offer = call.contract.factory.constraints, call.contract.offers
+                scope = constraints.scope
+                scope_note = ('scope', 'none' if scope is None else 'unsupported')
+                if (type(scope) is AuthoringScope and type(scope.intent) is AuthoringIntent
+                        and type(scope.activity) is AuthoringActivity
+                        and type(scope.target_paths) is tuple and len(scope.target_paths) <= 64
+                        and all(type(path) is str for path in scope.target_paths)):
+                    categories = tuple(sum(path.startswith(prefix) for path in scope.target_paths)
+                                       for prefix in ('core_documents/', 'manuscript/'))
+                    categories += (len(scope.target_paths) - sum(categories),)
+                    scope_note = ('scope', scope.intent.name, scope.activity.name,
+                                  min(len(scope.target_paths), 65535),
+                                  tuple(min(count, 65535) for count in categories))
+                prep = constraints.preparation_kind
+                prep = ('none' if prep is None else prep if type(prep) is str and prep in
+                        ('prepare_artifact', 'specialist_consultation') else 'unsupported')
+                adoption = constraints.adoption_intent
+                adoption = ('none' if adoption is None else adoption.name if
+                            type(adoption) is AuthoringIntent else 'unsupported')
+                reads = ('reads', 'unsupported')
+                facts = (offer.completed_read_facts, offer.delivery_read_facts)
+                if all(type(rows) is tuple and len(rows) <= 64 and all(
+                        type(row) is ContextCallReadFact for row in rows) for rows in facts):
+                    reads = ('reads', tuple(sum(
+                        row.source_kind is ContextSourceKind.WRITING_ARTIFACT
+                        for row in rows) for rows in facts))
+                observation = call.payload.get('context_observation', call.payload.get('o'))
+                truncated = ('truncated', 'unsupported')
+                if type(observation) is dict and type(observation.get('truncated')) is bool:
+                    truncated = ('truncated', observation['truncated'])
+                vector = ('selection', 'not-retained')
+                choices = call.contract.semantic_index.policy.choices
+                if (type(selection) in (list, tuple) and len(selection) <= 64 and all(
+                        type(item) is str for item in selection) and type(choices) is tuple
+                        and len(choices) <= 64 and all(type(row) is tuple and len(row) == 2
+                        and type(row[0]) is str for row in choices)
+                        and len({row[0] for row in choices}) == len(choices)):
+                    sources = dict(choices).get('source_ids')
+                    if type(sources) is tuple and len(sources) <= 64 and all(
+                            type(item) is str for item in sources):
+                        vector = ('selection', len(selection),
+                                  len(set(selection)) != len(selection),
+                                  any(item not in sources for item in selection),
+                                  tuple(item for item in sources if item in selection) ==
+                                  tuple(selection))
+                policy = ('policy', constraints.recommendation_only, prep, scope_note, adoption,
+                          reads, truncated, vector, 'authored-task-slot-not-retained')
+    return _bounded_failure_note(dto, ('request_policy', stored[0], policy, entries), stored[1])
+
+
 def action(*, kind="prepare_artifact", source_ids=("current_response",),
            objective_id=None, instruction="Prepare the exact offered synthetic outline.",
            purpose="Prepare the approved outline for separate review.",
@@ -414,6 +671,8 @@ class RecommendationCase(ObjectiveCase):
                         and type(failure.__cause__) is StopIteration):
                     _selection_failure_note(
                         failure, hits, request.target_paths, point='recommendation356')
+                    failure.add_note(_bounded_failure_note(
+                        *_zero_hit_failure_snapshots(call, request.target_paths)))
                 raise
             expected_delivery_paths.append(tuple(row['provenance']['source_locator']
                 for handle in call.contract.offers.issued_handle_aliases if handle in selected
