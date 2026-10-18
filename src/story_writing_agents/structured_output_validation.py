@@ -1499,6 +1499,7 @@ _ContractValue = TypeVar("_ContractValue")
 def _hook_default_identity(
     value: object, seen: set[int], *,
     _digests: tuple[dict[int, tuple[object, str]], dict[int, tuple[object, str]]] | None = None,
+    _attest_captures: bool = False,
 ) -> object:
     if _digests is None:
         _digests = ({}, {})
@@ -1519,6 +1520,7 @@ def _hook_default_identity(
             value.value,
             seen,
             _digests=_digests,
+            _attest_captures=_attest_captures,
         ))
     if id(value) in seen:
         raise TypeError("hook default declarations cannot be cyclic")
@@ -1529,16 +1531,19 @@ def _hook_default_identity(
                 item,
                 seen,
                 _digests=_digests,
+                _attest_captures=_attest_captures,
             ) for item in value))
         if isinstance(value, Mapping):
             pairs = [(_hook_default_identity(
                 key,
                 seen,
                 _digests=_digests,
+                _attest_captures=_attest_captures,
             ), _hook_default_identity(
                 item,
                 seen,
                 _digests=_digests,
+                _attest_captures=_attest_captures,
             )) for key, item in value.items()]
             return ("mapping", sorted(pairs, key=lambda pair: json.dumps(pair[0], sort_keys=True)))
         if type(value) in {set, frozenset}:
@@ -1546,6 +1551,7 @@ def _hook_default_identity(
                 item,
                 seen,
                 _digests=_digests,
+                _attest_captures=_attest_captures,
             ) for item in value),
                                                 key=lambda item: json.dumps(item, sort_keys=True)))
         if inspect.isfunction(value) or inspect.ismethod(value):
@@ -1553,14 +1559,31 @@ def _hook_default_identity(
                 value,
                 seen,
                 _digests=_digests,
+                _attest_captures=_attest_captures,
             ))
         if is_dataclass(value) and getattr(type(value), "__dataclass_params__").frozen:
+            declared_fields = fields(value)
+            if _attest_captures:
+                declaration = vars(type(value))
+                field_names = {item.name for item in declared_fields}
+                slot_names = [
+                    name for base in type(value).__mro__
+                    for name, descriptor in vars(base).items()
+                    if inspect.ismemberdescriptor(descriptor)
+                ]
+                if ("__dataclass_fields__" not in declaration
+                        or "__dataclass_params__" not in declaration
+                        or hasattr(value, "__dict__")
+                        or any(name not in field_names | {"__weakref__"} for name in slot_names)
+                        or len(slot_names) != len(set(slot_names))):
+                    raise TypeError("typed decoder dataclass captures require only declared slot fields")
             return ("frozen_dataclass", type(value).__module__, type(value).__qualname__,
                     tuple((item.name, _hook_default_identity(
                         getattr(value, item.name),
                         seen,
                         _digests=_digests,
-                    )) for item in fields(value)))
+                        _attest_captures=_attest_captures,
+                    )) for item in declared_fields))
         raise TypeError("unsupported semantic hook default declaration")
     finally:
         seen.remove(id(value))
@@ -1569,6 +1592,7 @@ def _hook_default_identity(
 def _permitted_hook_identity(
     callback: Callable, seen: set[int] | None = None, *,
     _digests: tuple[dict[int, tuple[object, str]], dict[int, tuple[object, str]]] | None = None,
+    _attest_captures: bool = False,
 ) -> str:
     """Derived content-free actual hook provenance, never a caller-supplied pin."""
     if _digests is None:
@@ -1625,13 +1649,30 @@ def _permitted_hook_identity(
             _digests[0][id(code_object)] = (code_object, code)
     else:
         code = cached_code[1]
+    declaration_seen = set() if seen is None else seen
     defaults = _hook_default_identity(
         (function.__defaults__, function.__kwdefaults__),
-        set() if seen is None else seen,
+        declaration_seen,
         _digests=_digests,
+        _attest_captures=_attest_captures,
     )
     provenance = (function.__module__, function.__qualname__, id(function),
                   None if receiver is None else id(receiver), code, defaults)
+    if _attest_captures:
+        try:
+            captures = tuple((name, cell.cell_contents) for name, cell in zip(
+                code_object.co_freevars, function.__closure__ or (), strict=True,
+            ))
+        except ValueError as exc:
+            raise TypeError("typed decoder closures must contain bound values") from exc
+        provenance += (
+            _hook_default_identity(
+                captures, declaration_seen, _digests=_digests, _attest_captures=True,
+            ),
+            _hook_default_identity(
+                receiver, declaration_seen, _digests=_digests, _attest_captures=True,
+            ),
+        )
     return hashlib.sha256(json.dumps(provenance, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
@@ -1661,7 +1702,9 @@ class TypedDecoder(Generic[_ContractValue]):
                 or not self.revision or type(self.dependencies) is not tuple):
             raise ValueError("incomplete typed decoder declaration")
         _require_hook_arity(self.decode, 1)
-        identities = tuple(_permitted_hook_identity(item) for item in (self.decode, *self.dependencies))
+        identities = tuple(_permitted_hook_identity(
+            item, _attest_captures=True,
+        ) for item in (self.decode, *self.dependencies))
         fingerprint = hashlib.sha256(json.dumps((self.name, self.revision, identities),
                                                separators=(",", ":")).encode("utf-8")).hexdigest()
         object.__setattr__(self, "_hook_fingerprints", identities)
@@ -1672,6 +1715,7 @@ class TypedDecoder(Generic[_ContractValue]):
         if tuple(_permitted_hook_identity(
             item,
             _digests=digests,
+            _attest_captures=True,
         ) for item in (self.decode, *self.dependencies)) != self._hook_fingerprints:
             raise ValueError("frozen typed decoder hook provenance changed")
 

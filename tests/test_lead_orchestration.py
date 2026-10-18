@@ -1901,6 +1901,45 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 type('OverriddenBinding', (sealed,), {})
         bound = call.contract
 
+        from story_writing_agents.lead_provider_contracts import LeadContractRejection
+        def require_current_correction(binding, failure, outer_id=None, inner_id=None):
+            self.assertIs(type(failure), LeadContractRejection)
+            correction = json.loads(binding.corrective_input(failure))
+            self.assertEqual(correction['current_physical_call_id'], binding.offers.call_id)
+            self.assertEqual(correction['current_offer_digest'], binding.offers.offer_digest)
+            self.assertEqual(correction['logical_origin_call_id'], binding.logical_origin_call_id)
+            self.assertEqual(correction['phase'], binding.phase)
+            self.assertEqual(correction['task_revisions'],
+                             [list(pair) for pair in binding.action_index.policy.task_revisions])
+            self.assertEqual(correction['offered_schema_ids'],
+                             list(binding.action_index.expected_schema_ids))
+            self.assertEqual(correction['selected_schema_id'], outer_id)
+            requirements = correction['requirements']
+            self.assertNotIn('schema_unoffered', json.dumps(correction))
+            self.assertNotIn('unoffered-semantic-id', json.dumps(correction))
+            if outer_id is None:
+                self.assertEqual(requirements['binding_id'], 'lead.current_offer_selection')
+                self.assertEqual(requirements['schema_requirements'], [
+                    {'path': '$.agent_action', 'rule': 'STRICT_CURRENT_CONTRACT_ENVELOPE',
+                     'expected': {'type': 'object'}},
+                    {'path': '$.agent_action.schema_id', 'rule': 'CURRENT_OFFERED_SCHEMA_ID',
+                     'expected': {'type': 'string',
+                                  'enum': list(binding.action_index.expected_schema_ids)}}])
+                self.assertNotIn('paired_semantic_requirements', correction)
+                return
+            self.assertEqual(dict(binding.outer_inner_schema_ids)[outer_id], inner_id)
+            paired = correction['paired_semantic_requirements']
+            for rule, member in ((requirements, binding.action_index.select(outer_id)),
+                                 (paired, binding.semantic_index.select(inner_id))):
+                digest = hashlib.sha256(member.rule_graph.canonical_bytes).hexdigest()
+                self.assertEqual(rule['binding_id'], 'lead.selected_rule_repair')
+                self.assertEqual(rule['rule_digest'], digest)
+                self.assertEqual(rule['wire_root_path'], member.identity.wire_root_path)
+                complete = [fact for fact in rule['schema_requirements']
+                            if fact['rule'] == 'COMPLETE_SELECTED_GRAPH']
+                self.assertEqual([fact['expected']['sha256'] for fact in complete], [digest])
+            self.assertTrue(any('response_type' in fact['expected'].get('required', ())
+                                for fact in paired['schema_requirements']))
         from tests.provider_wire_fixture import lead_fixture_assignments, lead_fixture_response
         self._require_fixture_field_neighbors(bound, physical)
         scope_names = ( {'activity': 'activity_type', 'intent': 'writing_intent',
@@ -2204,16 +2243,26 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             else:
                 with self.assertRaises(ValueError):
                     bound.decode_response(encoded_search)
-        for bad_id in (None, 1, '', 'schema_unoffered', search_id):
+        missing_id = object()
+        for bad_id in (missing_id, None, False, 1, '', 'schema_unoffered', search_id):
             bad = copy.deepcopy(physical)
-            bad['agent_action']['task_result']['schema_id'] = bad_id
-            with self.assertRaises(ValueError):
+            if bad_id is missing_id:
+                del bad['agent_action']['task_result']['schema_id']
+            else:
+                bad['agent_action']['task_result']['schema_id'] = bad_id
+            with self.assertRaises(LeadContractRejection) as rejected:
                 bound.decode_response(json.dumps(bad))
-        for bad_id in (None, 1, '', 'schema_unoffered'):
+            require_current_correction(bound, rejected.exception,
+                physical['agent_action']['schema_id'], physical['agent_action']['task_result']['schema_id'])
+        for bad_id in (missing_id, None, False, 1, '', 'schema_unoffered'):
             bad = copy.deepcopy(physical)
-            bad['agent_action']['schema_id'] = bad_id
-            with self.assertRaises(ValueError):
+            if bad_id is missing_id:
+                del bad['agent_action']['schema_id']
+            else:
+                bad['agent_action']['schema_id'] = bad_id
+            with self.assertRaises(LeadContractRejection) as rejected:
                 bound.decode_response(json.dumps(bad))
+            require_current_correction(bound, rejected.exception)
         bound.require_current_offer(bound.offers)
         calls_before = len(self.backend.calls)
         for method_name in ('_validate_response_structure', 'structural_findings'):
@@ -2276,9 +2325,126 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 changed.__defaults__, changed.__kwdefaults__ = defaults
             current.require_owner_provenance()
 
+        from story_writing_agents.lead_provider_contracts import TypedDecoder
+        class MutableReceiver:
+            def __init__(self):
+                self.marker = "current"
+            def decode(self, value):
+                return value if self.marker == "current" else None
+        with self.assertRaises(TypeError):
+            TypedDecoder("mutable-receiver", "receiver-v1", MutableReceiver().decode)
+        @dataclass(frozen=True, slots=True)
+        class FrozenReceiver:
+            marker: str
+            def decode(self, value, original=member.owner.variant.decode):
+                if self.marker != "current":
+                    raise AssertionError("changed receiver reached the decoder")
+                return original(value)
+        def hidden_decode(receiver, value, original=FrozenReceiver.decode):
+            if receiver.hidden:
+                raise AssertionError("hidden receiver state reached the decoder")
+            return original(receiver, value)
+        class DictionarySubclass(FrozenReceiver):
+            decode = hidden_decode
+        class ExtraSlotSubclass(FrozenReceiver):
+            __slots__ = ("hidden",)
+            decode = hidden_decode
+        @dataclass(frozen=True)
+        class DictionaryFrozenReceiver:
+            marker: str
+            decode = hidden_decode
+        for receiver_type in (DictionarySubclass, ExtraSlotSubclass, DictionaryFrozenReceiver):
+            hidden_receiver = receiver_type("current")
+            object.__setattr__(hidden_receiver, "hidden", ["unattested"])
+            self.assertEqual(asdict(hidden_receiver), {"marker": "current"})
+            with self.assertRaises(TypeError):
+                TypedDecoder("hidden-receiver", "receiver-v1", hidden_receiver.decode)
+        receiver = FrozenReceiver("current")
+        owner = replace(member.owner, variant=replace(member.owner.variant, decode=receiver.decode))
+        current = BoundContract.bind(owner, member.identity)
+        current_value = copy.deepcopy(physical["agent_action"]["task_result"])
+        current_value["schema_id"] = current.schema_id
+        self.assertTrue(current.decode_selected(current_value).belongs_to(current))
+        try:
+            object.__setattr__(receiver, "marker", "changed")
+            with self.assertRaises(ValueError) as stale:
+                current.decode_selected(current_value)
+            self.assertIs(type(stale.exception), ValueError)
+            self.assertEqual(str(stale.exception), "frozen typed decoder hook provenance changed")
+        finally:
+            object.__setattr__(receiver, "marker", "current")
+        self.assertTrue(current.decode_selected(current_value).belongs_to(current))
+        # A bound production owner cannot replace the decoder captured by an issued contract.
+        owner = replace(member.owner)
+        current = BoundContract.bind(owner, member.identity)
+        current_value = copy.deepcopy(physical["agent_action"]["task_result"])
+        current_value["schema_id"] = current.schema_id
+        original_value = current.decode_selected(current_value).value
+        original_variant = owner.variant
+        def replaced_owner_decode(_value):
+            raise AssertionError("replaced owner field reached the decoder")
+        try:
+            object.__setattr__(owner, "variant", replace(original_variant, decode=replaced_owner_decode))
+            try:
+                retained = current.decode_selected(current_value)
+            except ValueError as stale:
+                self.assertIs(type(stale), ValueError)
+                self.assertIn("provenance", str(stale))
+            else:
+                self.assertEqual(retained.value, original_value)
+        finally:
+            object.__setattr__(owner, "variant", original_variant)
+        # Pure decoder captures are frozen, including captures reached through defaults.
+        for through_default in (False, True):
+            captured = {"choices": ["current"]}
+            def captured_decode(value, original=member.owner.variant.decode):
+                if captured != {"choices": ["current"]}:
+                    raise AssertionError("changed capture reached the decoder")
+                return original(value)
+            def default_decode(value, decoder=captured_decode):
+                return decoder(value)
+            owner = replace(member.owner, variant=replace(member.owner.variant,
+                decode=default_decode if through_default else captured_decode))
+            current = BoundContract.bind(owner, member.identity)
+            current_value = copy.deepcopy(physical["agent_action"]["task_result"])
+            current_value["schema_id"] = current.schema_id
+            self.assertTrue(current.decode_selected(current_value).belongs_to(current))
+            original_capture = captured
+            captured = {"choices": ["reassigned"]}
+            with self.assertRaises(ValueError) as stale:
+                current.decode_selected(current_value)
+            # A decoder/host failure would be wrapped as a ContractRejection subclass.
+            self.assertIs(type(stale.exception), ValueError)
+            self.assertEqual(str(stale.exception), "frozen typed decoder hook provenance changed")
+            captured = original_capture
+            self.assertTrue(current.decode_selected(current_value).belongs_to(current))
+            captured["choices"].append("unoffered")
+            with self.assertRaises(ValueError) as stale:
+                current.decode_selected(current_value)
+            self.assertIs(type(stale.exception), ValueError)
+            self.assertEqual(str(stale.exception), "frozen typed decoder hook provenance changed")
+            captured["choices"].pop()
+            self.assertTrue(current.decode_selected(current_value).belongs_to(current))
+        # Named host checks deliberately consult live context after typed selection.
+        from story_writing_agents.structured_output_validation import SelectedHostContext
+        live_context = {"ready": False}
+        def live_check(_value, _context):
+            if not live_context["ready"]:
+                raise ValueError("live context is not ready")
+        live_owner = replace(member.owner, checks=(replace(member.owner.checks[0],
+            check=live_check, context_type=SelectedHostContext),))
+        current = BoundContract.bind(live_owner, member.identity)
+        current_value = copy.deepcopy(physical["agent_action"]["task_result"])
+        current_value["schema_id"] = current.schema_id
+        selected = current.decode_selected(current_value)
+        with self.assertRaisesRegex(ValueError, "live context is not ready"):
+            current.require_host_checks(selected, "authorized", SelectedHostContext())
+        live_context["ready"] = True
+        current.require_host_checks(selected, "authorized", SelectedHostContext())
+        current.require_owner_provenance()
+        self.assertEqual(len(self.backend.calls), calls_before)
         # Repeated public hook identities share one guard operation, not a cross-call cache.
         import marshal
-        from story_writing_agents.lead_provider_contracts import TypedDecoder
         for memo_kind in ('flat', 'tuple', 'nested_code', 'immutable'):
             memo_leaf = []
             def memo_decode(value, unused=None):
@@ -2755,8 +2921,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 native['agent_action']['schema_id']], decoded.selected_result.schema_id)
             bad = copy.deepcopy(native)
             bad['agent_action']['task_result']['schema_id'] = 'unoffered-semantic-id'
-            with self.assertRaises(ValueError):
+            with self.assertRaises(LeadContractRejection) as rejected:
                 selected.decode_response(json.dumps(bad))
+            require_current_correction(selected, rejected.exception,
+                native['agent_action']['schema_id'], native['agent_action']['task_result']['schema_id'])
             return selected, native
         # Handwritten semantic expectations; schemas only supply current issued identities.
         profile_record = { 'schema_version': 3, 'activity': 'review', 'intent': 'authoring',
@@ -3919,6 +4087,80 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertTrue(explored.validation_details)
         diagnostics = tuple(part for event in self.history(exploration_conversation) if type(event.payload) is CollaborationMessagePayload and (event.payload.validation_invocation_id, event.payload.validation_call_id) == (calls[0].invocation_id, calls[0].call_id) for part in event.payload.validation_details)
         self.assertEqual(explored.validation_details, diagnostics)
+
+        from tests.test_artifact_objectives import ObjectiveCase, OUTLINE
+        from story_writing_agents import conversations as collaboration
+        case = ObjectiveCase()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        pending_conversation, _ = await case.clarify(message="Which ending should the outline use?")
+        pending = case.objective(pending_conversation)
+        prefix = case.history(pending_conversation)
+        initial_scope = next(event.payload.authoring_scope for event in reversed(prefix)
+                             if type(event.payload) is CollaborationLeadJudgmentPayload)
+        before = case.snapshots()
+        intent = {'action': 'continue', 'objective_id': pending.facts.objective_id,
+                  'next_step': 'clarify', 'draft_source_event_ids': []}
+        captured_scopes = []
+        rejected_text = "Prepare the requested outline before its ending has been supplied."
+        question_text = "Which ending should the outline use before I prepare its draft?"
+        def current_pending_scope(call):
+            scope = {**case.scope(call, intent=intent, activity='draft'),
+                     'domains': ['plot_structure']}
+            self.assertEqual((scope['task_id'], scope['task_revision']),
+                             (initial_scope.task_id, initial_scope.task_revision))
+            self.assertEqual(scope['target_paths'], [OUTLINE])
+            return scope
+        def invalid_pending_proposal(call, _provider):
+            scope = current_pending_scope(call)
+            captured_scopes.append(scope)
+            native = json.loads(lead_fixture_response(call, {
+                'response_type': 'specialist_consultation_proposal',
+                'response_text': rejected_text,
+                'response_details': {'task_scope': lead_fixture_bound_scope(call, scope, record=True)},
+            }, family=0))
+            self.assertNotIn('authoring_assessment', native['agent_action']['task_result']['response_details'])
+            self.assertTrue(call.contract.rule_graph.findings(native))
+            return json.dumps(native)
+        clarify_pending = case.question(intent=intent, message=question_text, native_update={
+            'update_type': 'continue_request', 'document_change_request_id': pending.facts.objective_id,
+            'requested_workflow_step': 'ask_clarification'})
+        def repair_pending_question(call, provider):
+            self.assertEqual(current_pending_scope(call), captured_scopes[0])
+            return clarify_pending(call, provider)
+        call_start = len(case.backend.calls)
+        case.backend.enqueue(invalid_pending_proposal, repair_pending_question)
+        repaired = await case.runtime.lead_turn(case.session_id, pending_conversation,
+            "Continue the pending outline request; the ending is still unspecified.")
+        self.assertIs(repaired.kind, LeadOutcomeKind.QUESTION)
+        self.assertEqual(repaired.message, question_text)
+        self.assertIs(repaired.trace.origin, ReplyTraceOrigin.RECOVERED)
+        self.assertEqual(len(case.backend.calls) - call_start, 2)
+        self.assertEqual(len(_submitted_calls(case.history(pending_conversation))), 3)
+        current = case.objective(pending_conversation)
+        self.assertEqual(current.facts, pending.facts)
+        self.assertEqual(current.draft_sources, pending.draft_sources)
+        self.assertIs(current.state, collaboration.ArtifactObjectiveState.OPEN)
+        self.assertEqual(current.next_step, collaboration.ArtifactObjectiveNextStep.CLARIFY)
+        self.assertTrue(all(request is None for request in (
+            repaired.proposal, repaired.recommendation_request,
+            repaired.artifact_application_request, repaired.story_commit_request)))
+        history = case.history(pending_conversation)
+        self.assertEqual(history[:len(prefix)], prefix)
+        self.assertFalse(any(type(event.payload) is CollaborationAssignmentDispatchPayload
+                             for event in history[len(prefix):]))
+        self.assertEqual(case.snapshots(), before)
+        judgment = next(event.payload for event in reversed(history)
+                        if type(event.payload) is CollaborationLeadJudgmentPayload)
+        self.assertEqual((judgment.authoring_scope.task_id, judgment.authoring_scope.task_revision),
+                         (initial_scope.task_id, initial_scope.task_revision))
+        self.assertEqual(len(repaired.public_responses), 2)
+        original, correction = (item.response for item in repaired.public_responses)
+        self.assertEqual((original.response_text, correction.response_text), (rejected_text, question_text))
+        self.assertEqual((original.acceptance, correction.acceptance),
+            (task.LeadPublicResponseAcceptance.REJECTED, task.LeadPublicResponseAcceptance.ACCEPTED))
+        self.assertTrue(original.validation_details)
+        self.assertEqual(correction.repair_of_call_id, original.call_id)
 
     async def test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing(
         self,

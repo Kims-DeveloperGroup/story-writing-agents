@@ -394,18 +394,21 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
     def declare_rules(self) -> SchemaRules:
         return self.variant.rules
 
-    def decode_typed(self, value: ValidatedValue) -> LeadDecodedResult:
-        if type(value) is not ValidatedValue:
-            raise TypeError("Lead codec requires a selected whole-graph input")
-        body = value.as_object()
-        map_current_task_literals(body, self.task_revisions)
-        domain = self.variant.decode(body)
-        _require_intrinsic_lead_result(domain)
-        return LeadDecodedResult(json.dumps(domain, ensure_ascii=False, allow_nan=False, separators=(",", ":")))
-
     def typed_decoder(self) -> TypedDecoder[LeadDecodedResult]:
-        return TypedDecoder("lead.current_codec", "848-v3:typed-family-owner", self.decode_typed,
-                            (self.variant.decode, schema_fragment_findings,
+        variant_decode = self.variant.decode
+        task_revisions = self.task_revisions
+
+        def decode_typed(value: ValidatedValue) -> LeadDecodedResult:
+            if type(value) is not ValidatedValue:
+                raise TypeError("Lead codec requires a selected whole-graph input")
+            body = value.as_object()
+            map_current_task_literals(body, task_revisions)
+            domain = variant_decode(body)
+            _require_intrinsic_lead_result(domain)
+            return LeadDecodedResult(json.dumps(domain, ensure_ascii=False, allow_nan=False, separators=(",", ":")))
+
+        return TypedDecoder("lead.current_codec", "848-v3:typed-family-owner", decode_typed,
+                            (variant_decode, schema_fragment_findings,
              artifact_source_operation_rule, artifact_kind_path_rule, canonical_artifact_kind,
              artifact_domain,
              authoring_scope_rules, finite_authoring_scope_rules, legal_specialist_rosters,

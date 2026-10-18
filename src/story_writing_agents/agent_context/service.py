@@ -425,25 +425,30 @@ class ContextActionContractOwner(ContractOwner[ContextActionValue]):
     def declare_rules(self) -> SchemaRules:
         return self.rules
 
-    def decode_typed(self, value: ValidatedValue) -> ContextActionValue:
-        if type(value) is not ValidatedValue:
-            raise TypeError("action codec requires complete selected graph validation")
-        domain = normalize_context_action({"agent_action": value.as_object()}, finite_source_kinds=True)
-        action = domain["action"]
-        if action["kind"] == "read":
-            maximum = min(dict(self.eligibility_offers.action_limits)["handles_per_read"],
-                          dict(self.eligibility_offers.action_limits)["cumulative_handles"],
-                          CONTEXT_ACTION_POLICY.max_handles_per_read,
-                          len(self.eligibility_offers.issued_handle_aliases))
-            action["handles"] = list(decode_finite_selection(action["handles"],
-                self.eligibility_offers.issued_handle_aliases, minimum=1, maximum=maximum))
-        return ContextActionValue(deepcopy(domain))
-
     def named_host_checks(self) -> tuple[NamedHostCheck[ContextActionValue], ...]:
         return self._checks
 
     def typed_decoder(self) -> TypedDecoder[ContextActionValue]:
-        return TypedDecoder("context.current_action_codec", "848-v3:typed-action-owner", self.decode_typed,
+        issued_handle_aliases = self.eligibility_offers.issued_handle_aliases
+        read_maximum = (
+            min(dict(self.eligibility_offers.action_limits)["handles_per_read"],
+                dict(self.eligibility_offers.action_limits)["cumulative_handles"],
+                CONTEXT_ACTION_POLICY.max_handles_per_read, len(issued_handle_aliases))
+            if self.rules.literal_at(("action_type",)) == "read_context" else 0
+        )
+
+        def decode_typed(value: ValidatedValue) -> ContextActionValue:
+            if type(value) is not ValidatedValue:
+                raise TypeError("action codec requires complete selected graph validation")
+            domain = normalize_context_action({"agent_action": value.as_object()}, finite_source_kinds=True)
+            action = domain["action"]
+            if action["kind"] == "read":
+                action["handles"] = list(decode_finite_selection(action["handles"],
+                                                                issued_handle_aliases,
+                                                                minimum=1, maximum=read_maximum))
+            return ContextActionValue(deepcopy(domain))
+
+        return TypedDecoder("context.current_action_codec", "848-v3:typed-action-owner", decode_typed,
                             (normalize_context_action, decode_finite_selection))
 
     def _require_normalized_queries(self, value: ContextActionValue, context: HostCheckContext) -> None:
