@@ -709,7 +709,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 + '\nYou may give bounded artifact review judgments and prepare a separate proposal; preserve supplied facts. Execution requires separate exact confirmation.'
             )) )
         history = self.history(revise_id)
-        self.assertIsNone(project_collaboration_history(history).current_artifact_state)
+        self.assertIsNone(project_collaboration_history(history).current_artifact_state, getattr(self, '_revision_fixture_failure', None))
         self.assertIsNone(revised.turn.artifact_proposal)
         self.assertNotEqual(revised.turn.step_id, first.step_id)
         request = revised.turn.recommendation_request
@@ -805,8 +805,8 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         second = replacement.turn
         self.assertEqual(second.step_id, first.step_id)
         self.assertIs(
-            second.artifact_proposal.state,
-            ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION, )
+            second.artifact_proposal.state, ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION,
+            getattr(self, '_revision_fixture_failure', None))
         self.assertNotEqual(
             second.artifact_proposal.candidate.candidate.candidate_id,
             first.artifact_proposal.candidate.candidate.candidate_id, )

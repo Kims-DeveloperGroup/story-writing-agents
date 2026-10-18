@@ -1293,44 +1293,50 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
 
 
     def _require_revision_fixture(self, call, encoded, prior_scope, *, artifact=False):
-        from story_writing_agents.antigravity_adapter import AntigravityAdapter
-        bound, packet = call.contract, json.loads(encoded)
-        self._require_fixture_census(bound, {f'lead-response-v9:family:{i}' for i in range(3)})
-        self.assertEqual(bound.factory.constraints.task_revisions, ((prior_scope.task_id, prior_scope.task_revision + 1),))
-        self.assertTrue(bound.decode_response(encoded).belongs_to(bound))
-        schemas = (call.schema, AntigravityAdapter.native_output_schema(call.schema))
-        self._require_fixture_field_neighbors(bound, packet, native_projections=tuple(zip(('codex', 'antigravity'), schemas)))
-        values = {name: set() for name in ('response_type', 'action_type', 'activity', 'intent')}
-        for member in bound.semantic_index.contracts:
-            graph = member.rule_graph.schema_value()
-            pending = [graph]
-            while pending:
-                node = pending.pop()
-                if type(node) is list: pending.extend(node)
-                if type(node) is not dict: continue
-                pending.extend(node.values())
-                for name in values.keys() & node.get('properties', {}).keys():
-                    field = node['properties'][name]
-                    while '$ref' in field: field = graph['$defs'][field['$ref'].removeprefix('#/$defs/').replace('~1', '/').replace('~0', '~')]
-                    values[name].update(field['enum'])
-        self.assertEqual(values['response_type'], {'answer', 'clarification_question', 'proposal_drafting_recommendation',
-            'artifact_change_proposal' if artifact else 'specialist_consultation_proposal'})
-        self.assertEqual(values['action_type'], {'draft_document_change_proposal' if artifact else 'draft_specialist_consultation_proposal'})
-        self.assertEqual(values['intent'], {'authoring'})
-        self.assertNotIn('workflow_guidance', values['activity'])
-        if artifact: self.assertEqual(values['activity'], {'review_writing'})
-        details = packet['agent_action']['task_result']['response_details']
-        for field, key, value in (('task_scope', 'activity', 'draft_writing' if artifact else 'workflow_guidance'),
-                ('task_scope', 'task', {'id': prior_scope.task_id, 'revision': prior_scope.task_revision}),
-                ('proposal_drafting_request', 'action_type', 'draft_specialist_consultation_proposal' if artifact else 'draft_document_change_proposal')):
-            if field not in details: continue
-            changed = copy.deepcopy(packet)
-            changed['agent_action']['task_result']['response_details'][field][key] = value
-            self.assertTrue(bound.rule_graph.findings(changed), (field, value))
-            with self.assertRaisesRegex(ValueError, '^LEAD_SCHEMA_RULE_REJECTED$'):
-                bound.decode_response(json.dumps(changed))
-            self.assertTrue(all(diagnose_json_text(json.dumps(changed), schema) for schema in schemas), (field, value))
-        return encoded
+        try:
+            from story_writing_agents.antigravity_adapter import AntigravityAdapter
+            bound, packet = call.contract, json.loads(encoded)
+            self._require_fixture_census(bound, {f'lead-response-v9:family:{i}' for i in range(3)})
+            self.assertEqual(bound.factory.constraints.task_revisions, ((prior_scope.task_id, prior_scope.task_revision + 1),))
+            self.assertTrue(bound.decode_response(encoded).belongs_to(bound))
+            schemas = (call.schema, AntigravityAdapter.native_output_schema(call.schema))
+            self._require_fixture_field_neighbors(bound, packet, native_projections=tuple(zip(('codex', 'antigravity'), schemas)))
+            values = {name: set() for name in ('response_type', 'action_type', 'activity', 'intent')}
+            for member in bound.semantic_index.contracts:
+                graph = member.rule_graph.schema_value()
+                pending = [graph]
+                while pending:
+                    node = pending.pop()
+                    if type(node) is list: pending.extend(node)
+                    if type(node) is not dict: continue
+                    pending.extend(node.values())
+                    if 'task_scope' in node.get('properties', {}):
+                        self.assertIn('authoring_assessment', node['required'])
+                    for name in values.keys() & node.get('properties', {}).keys():
+                        field = node['properties'][name]
+                        while '$ref' in field: field = graph['$defs'][field['$ref'].removeprefix('#/$defs/').replace('~1', '/').replace('~0', '~')]
+                        values[name].update(field['enum'])
+            self.assertEqual(values['response_type'], {'answer', 'clarification_question', 'proposal_drafting_recommendation',
+                'artifact_change_proposal' if artifact else 'specialist_consultation_proposal'})
+            self.assertEqual(values['action_type'], {'draft_document_change_proposal' if artifact else 'draft_specialist_consultation_proposal'})
+            self.assertEqual(values['intent'], {'authoring'})
+            self.assertNotIn('workflow_guidance', values['activity'])
+            if artifact: self.assertEqual(values['activity'], {'review_writing'})
+            details = packet['agent_action']['task_result']['response_details']
+            for field, key, value in (('task_scope', 'activity', 'draft_writing' if artifact else 'workflow_guidance'),
+                    ('task_scope', 'task', {'id': prior_scope.task_id, 'revision': prior_scope.task_revision}),
+                    ('proposal_drafting_request', 'action_type', 'draft_specialist_consultation_proposal' if artifact else 'draft_document_change_proposal')):
+                if field not in details: continue
+                changed = copy.deepcopy(packet)
+                changed['agent_action']['task_result']['response_details'][field][key] = value
+                self.assertTrue(bound.rule_graph.findings(changed), (field, value))
+                with self.assertRaisesRegex(ValueError, '^LEAD_SCHEMA_RULE_REJECTED$'):
+                    bound.decode_response(json.dumps(changed))
+                self.assertTrue(all(diagnose_json_text(json.dumps(changed), schema) for schema in schemas), (field, value))
+            return encoded
+        except Exception as failure:
+            self._revision_fixture_failure = (type(failure).__name__, str(failure)[:384])
+            raise
 
 def _discussion_reply(text, kind="answer"):
     result = {"response_type": kind, "response_text": text, "used_evidence_ids": []}
@@ -4672,7 +4678,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         self.backend.enqueue(checked_revision)
         revised = await self._decide(revised_source, CollaborationConfirmationDecision.REVISE)
         replacement = revised.turn.proposal
-        assert replacement is not None
+        assert replacement is not None, getattr(self, '_revision_fixture_failure', None)
         self.assertEqual(replacement.step_id, revised_source.step_id)
         self.assertEqual(replacement.proposal_revision, revised_source.proposal.proposal_revision + 1,)
         self.assertNotEqual(replacement.proposal_id, revised_source.proposal.proposal_id)
@@ -4878,7 +4884,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
 
                 revised = await self._decide(proposed, CollaborationConfirmationDecision.REVISE)
 
-                self.assertIs(revised.turn.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD,)
+                self.assertIs(revised.turn.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD, getattr(self, '_revision_fixture_failure', None))
                 self.assertIs(revised.turn.state, CollaborationStepState.SUPERSEDED,)
                 notice = json.loads(revised.turn.message)
                 self.assertEqual((notice['code'], notice['language'], notice['state'], notice['task_revisions']),

@@ -766,13 +766,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             conversation_id,
             "Report whether ${manuscript/part-01/empty.md} is empty.",
         )
-        try:
-            self.assertIs(result.kind, LeadOutcomeKind.QUESTION)
-        except AssertionError as failure:
-            from tests.recommendation_fixture import _current_policy_failure_note
-            failure.add_note(_current_policy_failure_note(
-                self.backend, result))
-            raise
+        self.assertIs(result.kind, LeadOutcomeKind.QUESTION)
         self.assertIs(result.next_action, CollaborationNextAction.REPLY_TO_LEAD)
         self.assertIsNotNone(result.evidence)
         assert result.evidence is not None

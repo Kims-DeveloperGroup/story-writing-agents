@@ -768,6 +768,8 @@ def _lead_revision_result_contract(
             if variant.get("properties", {}).get("response_type", {}).get("enum", [])
             in (["artifact_change_proposal"], ["proposal_drafting_recommendation"])
             and variant.get("properties", {}).get("writing_task_scope", {}).get("type") == "object"
+            and variant["properties"]["writing_task_scope"].get("properties", {}).get(
+                "writing_intent", {}).get("enum", []) == [AuthoringIntent.AUTHORING.value]
         ]
         artifact_variants = []
         for variant in variants:
@@ -794,7 +796,9 @@ def _lead_revision_result_contract(
         variants = [variant for variant in variants
                     if variant.get("properties", {}).get("response_type", {}).get("enum", [])
                     in (["specialist_consultation_proposal"], ["proposal_drafting_recommendation"])
-                    and variant.get("properties", {}).get("writing_task_scope", {}).get("type") == "object"]
+                    and variant.get("properties", {}).get("writing_task_scope", {}).get("type") == "object"
+                    and variant["properties"]["writing_task_scope"].get("properties", {}).get(
+                        "writing_intent", {}).get("enum", []) == [AuthoringIntent.AUTHORING.value]]
         consultations = []
         for variant in variants:
             properties = variant["properties"]
