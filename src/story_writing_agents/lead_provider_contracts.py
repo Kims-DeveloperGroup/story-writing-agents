@@ -34,7 +34,9 @@ from .authoring_admission import assessment_from_dict
 from .authoring_admission import assessment_schema as admission_rule
 from .core_document_readiness import current_assessment_schema, decode_current_assessment, assessment_from_dict as core_assessment_from_dict
 from .agents import SPECIALIST_IDS
-from .conversations import COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES, LeadOutcomeKind
+from .conversations import (
+    COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES, LeadOutcomeKind, lead_outcome_scope_paths,
+)
 from .conversations.events import authoring_scope_from_dict
 from .conversations.session_context import MAX_PROVIDER_SCHEMA_UTF8_BYTES
 from .specialist_routing import (
@@ -1394,56 +1396,6 @@ def visible_text(value: object) -> bool:
     except UnicodeError:
         return False
 
-
-def lead_outcome_scope_paths(
-    kind: LeadOutcomeKind,
-    activity: AuthoringActivity,
-    domains: tuple[ArtifactReviewDomain, ...],
-    writing_read_facts: tuple[tuple[str, str, bool], ...],
-    *,
-    target_paths: tuple[str, ...] = (),
-    ordinary_answer: bool = False,
-) -> tuple[str, ...] | None:
-    """Derive current Lead kind/scope eligibility without granting authority.
-
-    None means unavailable; an empty tuple is a valid WORKFLOW result. Existing
-    substantive QUESTION/PROPOSAL/RECOMMENDATION scopes retain their targets.
-    Ordinary factual ANSWER requires REVIEW and returns canonical writing-READ
-    paths in offered order. Whole and ranged READs may both support inspection.
-    """
-    if (type(kind) is not LeadOutcomeKind or type(ordinary_answer) is not bool
-            or type(activity) is not AuthoringActivity
-            or type(domains) is not tuple
-            or any(type(domain) is not ArtifactReviewDomain for domain in domains)
-            or len(set(domains)) != len(domains)
-            or type(target_paths) is not tuple
-            or any(type(path) is not str for path in target_paths)
-            or len(set(target_paths)) != len(target_paths)
-            or type(writing_read_facts) is not tuple
-            or any(type(fact) is not tuple or len(fact) != 3
-                   or type(fact[0]) is not str or not fact[0]
-                   or type(fact[1]) is not str or not fact[1]
-                   or type(fact[2]) is not bool for fact in writing_read_facts)):
-        raise ValueError("Lead outcome scope requires exact current kind and READ facts")
-    if activity is AuthoringActivity.WORKFLOW:
-        return () if not domains and not target_paths else None
-    if not domains:
-        return None
-    if kind in (LeadOutcomeKind.QUESTION, LeadOutcomeKind.PROPOSAL,
-                LeadOutcomeKind.RECOMMENDATION):
-        return target_paths
-    if (kind is not LeadOutcomeKind.ANSWER or not ordinary_answer
-            or activity is not AuthoringActivity.REVIEW):
-        return None
-    read_domains = {
-        locator: artifact_domain(locator) for _, locator, _ in writing_read_facts
-    }
-    if not set(domains).issubset(set(read_domains.values())):
-        return None
-    paths = tuple(path for path, domain in read_domains.items() if domain in domains)
-    if not set(target_paths).issubset(paths):
-        return None
-    return paths
 
 
 _LEAD_OUTCOME_SCOPE_DECLARATION = (

@@ -222,6 +222,72 @@ class DurableLeadEvidenceMatrixTests(unittest.TestCase):
                             rejected += 1
         self.assertEqual((accepted, rejected), (23, 37))
 
+        from story_writing_agents.specialist_routing import (
+            ArtifactReviewDomain, AuthoringActivity, AuthoringContribution,
+            AuthoringContributionRole, AuthoringIntent, AuthoringScope,
+        )
+        path = "core_documents/global_outline.md"
+        domain = ArtifactReviewDomain.PLOT_STRUCTURE
+        scope = AuthoringScope(
+            AuthoringActivity.REVIEW, (path,), (domain,), "Report the observed outline.", "task", 1,
+            schema_version=3, intent=AuthoringIntent.REVIEW_ONLY,
+            contributions=(AuthoringContribution(domain, AuthoringContributionRole.CONSTRAINT_ASSESSOR),))
+        unrelated_empty = _core_status(evidence_id="status_2", utf8_bytes=0)
+        read = replace(_attached("read_1"), acquisition=CollaborationEvidenceAcquisition.READ,
+                       source_kind=CollaborationInputKind.WRITING_ARTIFACT, locator=path,
+                       ordinal=None, action_index=2, origin_action_index=1)
+        for receipt, whole_source in (
+            (read, True), (replace(read, boundary_kind="artifact_lines", boundary_start=2, boundary_end=3,
+                                   start_line=2, end_line=3), False),
+            (_attached(), True), (_attached(locator=f"${{{path}}}#L2-L3", ranged=True), False),
+        ):
+            evidence = CollaborationLeadEvidence(
+                LeadOutcomeScope.STORY_SPECIFIC, LeadEvidenceStatus.INCOMPLETE, (unrelated_empty, receipt))
+            self.assertEqual(evidence.factual_writing_read_facts(),
+                             ((receipt.evidence_id, path, whole_source),))
+            payload = CollaborationLeadJudgmentPayload(
+                LeadOutcomeKind.ANSWER, "The observed text is present.", evidence, scope)
+            self.assertIs(payload.evidence, evidence)
+            self.assertIs(payload.evidence.status, LeadEvidenceStatus.INCOMPLETE)
+            self.assertIsNone(payload.core_document_readiness)
+        for receipts in (
+            (unrelated_empty,), (unrelated_empty, _zero_hit()),
+            (unrelated_empty, replace(read, utf8_bytes=0)),
+            (unrelated_empty, replace(read, source_kind=CollaborationInputKind.CONVERSATION_EVENT,
+                                      locator="event_1")),
+        ):
+            evidence = CollaborationLeadEvidence(
+                LeadOutcomeScope.STORY_SPECIFIC, LeadEvidenceStatus.INCOMPLETE, receipts)
+            self.assertEqual(evidence.factual_writing_read_facts(), ())
+            with self.assertRaisesRegex(ValueError, "closed evidence matrix"):
+                CollaborationLeadJudgmentPayload(LeadOutcomeKind.ANSWER, "Unsupported answer.", evidence, scope)
+        inexact_reference = CollaborationLeadEvidence(
+            LeadOutcomeScope.STORY_SPECIFIC, LeadEvidenceStatus.INCOMPLETE,
+            (unrelated_empty, replace(_attached(), locator=f"Read ${{{path}}}")))
+        with self.assertRaisesRegex(ValueError, "factual READ reference is not exact"):
+            CollaborationLeadJudgmentPayload(
+                LeadOutcomeKind.ANSWER, "Unsupported reference.", inexact_reference, scope)
+        read_evidence = CollaborationLeadEvidence(
+            LeadOutcomeScope.STORY_SPECIFIC, LeadEvidenceStatus.INCOMPLETE, (unrelated_empty, read))
+        other_domain = ArtifactReviewDomain.CHARACTER_WORLD
+        for invalid_scope in (
+            replace(scope, target_paths=(), domains=(other_domain,), contributions=(
+                AuthoringContribution(other_domain, AuthoringContributionRole.CONSTRAINT_ASSESSOR),)),
+            replace(scope, target_paths=("core_documents/part_outlines.md",)),
+            replace(scope, schema_version=2, contributions=()),
+            replace(scope, activity=AuthoringActivity.DRAFT, intent=AuthoringIntent.AUTHORING,
+                    contributions=(AuthoringContribution(domain, AuthoringContributionRole.DRAFT_OWNER),)),
+        ):
+            with self.assertRaisesRegex(ValueError, "closed evidence matrix"):
+                CollaborationLeadJudgmentPayload(
+                    LeadOutcomeKind.ANSWER, "Unsupported scope.", read_evidence, invalid_scope)
+        for status in (LeadEvidenceStatus.MISSING, LeadEvidenceStatus.EMPTY, LeadEvidenceStatus.CONFLICTING):
+            previous = _evidence_for(LeadOutcomeScope.STORY_SPECIFIC, status)
+            evidence = replace(previous, receipts=previous.receipts + (read,))
+            self.assertEqual(evidence.factual_writing_read_facts()[-1], (read.evidence_id, path, True))
+            with self.assertRaisesRegex(ValueError, "closed evidence matrix"):
+                CollaborationLeadJudgmentPayload(LeadOutcomeKind.ANSWER, "Unsupported status.", evidence, scope)
+
     def test_missing_search_scope_and_conflict_distinctness_fail_closed(self) -> None:
         for kinds, accepted in (
             ((CollaborationInputKind.WRITING_ARTIFACT,), True),

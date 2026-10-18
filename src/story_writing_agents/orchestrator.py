@@ -40,7 +40,6 @@ from .lead_provider_contracts import (
     LeadResultRuleSeed,
     LeadDecodedResult,
     empty_core_status_evidence,
-    lead_outcome_scope_paths,
 )
 from .provider_wire import normalize_result, recover_lead_public_response, hoist_schema_definitions
 
@@ -68,7 +67,10 @@ from .editorial_state import (
     EditorialRecordRef, EditorialStateProjection, EditorialApprovalState,
     EditorialStateIntegrityError, EditorialRelationKind, editorial_ref_from_dict, build_editorial_revision, editorial_ref_to_dict,
 )
-from .conversations import CollaborationEditorialRecordPayload, editorial_provenance_available
+from .conversations import (
+    CollaborationEditorialRecordPayload, editorial_provenance_available,
+    lead_outcome_scope_paths,
+)
 
 from .lead_exploration import (LeadInteractionMode, ExplorationIdeaKind, ExplorationReportStatus,
     ExplorationIdea, ExplorationObservation, ExplorationArtifactRead, LeadExplorationReport,
@@ -12243,29 +12245,9 @@ class StoryRuntime:
                             and not any((decoded.proposal, decoded.recommended_action,
                                          decoded.objective_intent, decoded.artifact_intent))
                         )
-                        writing_reads = ()
-                        if ordinary_answer:
-                            writing_reads = tuple(
-                                (item.evidence_id, item.provenance.locator,
-                                 item.source_digest == item.boundary_digest
-                                 and item.source_utf8_bytes == item.boundary_utf8_bytes)
-                                for item in authorization.used_evidence
-                                if item.source_kind is ContextSourceKind.WRITING_ARTIFACT
-                            )
-                            for receipt in decoded_evidence.receipts:
-                                if (receipt.acquisition
-                                        is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE
-                                        and receipt.source_kind in {
-                                            CollaborationInputKind.CORE_DOCUMENT,
-                                            CollaborationInputKind.MANUSCRIPT,
-                                            CollaborationInputKind.WRITING_ARTIFACT,
-                                        }):
-                                    references = parse_artifact_references(receipt.locator).references
-                                    if len(references) != 1 or references[0].token != receipt.locator:
-                                        raise _LeadOutcomeValidationError(
-                                            "factual READ reference is not exact")
-                                    writing_reads += ((receipt.evidence_id, references[0].path,
-                                                       references[0].line_range is None),)
+                        writing_reads = (
+                            decoded_evidence.factual_writing_read_facts() if ordinary_answer else ()
+                        )
                         scope_paths = lead_outcome_scope_paths(
                             decoded.kind, resolved_scope.activity,
                             required_authoring_domains(resolved_scope), writing_reads,
