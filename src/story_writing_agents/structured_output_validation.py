@@ -1508,6 +1508,8 @@ _HOOK_TYPE_ACCESSORS = tuple(vars(type)[name] for name in (
 ))
 _HOOK_ENUM_METACLASS = type(Enum)
 _HOOK_ENUM_METACLASS_LAYOUT = tuple(vars(_HOOK_ENUM_METACLASS).items())
+_HOOK_MEMBER_DESCRIPTOR_TYPE = type(vars(_DataclassField)["name"])
+_HOOK_DICT_DESCRIPTOR_TYPE = type(vars(type)["__dict__"])
 
 
 def _capture_hook_layout(kind: type) -> tuple | None:
@@ -1568,18 +1570,18 @@ def _capture_hook_slots(value: object) -> tuple | None:
         if ((type(declared) is not tuple and type(declared) is not list)
                 or any(type(name) is not str
                        or (name != "__weakref__"
-                           and not inspect.ismemberdescriptor(resolved.get(name)))
+                           and type(resolved.get(name)) is not _HOOK_MEMBER_DESCRIPTOR_TYPE)
                        for name in declared)):
             return None
         for name, descriptor in namespace.items():
-            if inspect.ismemberdescriptor(descriptor) and name != "__weakref__":
+            if type(descriptor) is _HOOK_MEMBER_DESCRIPTOR_TYPE and name != "__weakref__":
                 if resolved.get(name) is not descriptor:
                     return None
                 try:
                     slots.append((descriptor, descriptor.__get__(value, kind)))
-                except AttributeError:
+                except (AttributeError, TypeError):
                     return None
-    return layout, ("slots", value, kind, tuple(slots))
+    return layout, ("metadata_slots", value, kind, tuple(slots))
 
 
 def _capture_hook_enum(value: Enum) -> tuple | None:
@@ -1588,7 +1590,8 @@ def _capture_hook_enum(value: Enum) -> tuple | None:
     if (layout is None or all(_hook_raw_class_attribute(kind, "__getattribute__") is not allowed
                              for allowed in (object.__getattribute__, str.__getattribute__,
                                              int.__getattribute__))
-            or any(key == "__getattr__" for _, _, edges in layout[5] for key, _ in edges)):
+            or any(key in {"__getattr__", "_value_"}
+                   for _, _, edges in layout[5] for key, _ in edges)):
         return None
     descriptor = _hook_raw_class_attribute(kind, "value")
     if descriptor is not _HOOK_ENUM_VALUE:
@@ -1608,24 +1611,31 @@ def _capture_hook_enum(value: Enum) -> tuple | None:
         return None
     dict_slots = tuple(_hook_raw_class_attribute(owner, "__dict__")
                        for owner in (kind, descriptor_kind))
-    if any(not inspect.isgetsetdescriptor(slot) for slot in dict_slots):
+    if any(type(slot) is not _HOOK_DICT_DESCRIPTOR_TYPE for slot in dict_slots):
         return None
-    storage = dict_slots[0].__get__(value, kind)
-    descriptor_storage = dict_slots[1].__get__(descriptor, descriptor_kind)
+    try:
+        storage = dict_slots[0].__get__(value, kind)
+        descriptor_storage = dict_slots[1].__get__(descriptor, descriptor_kind)
+    except (AttributeError, TypeError):
+        return None
     if (type(storage) is not dict or type(descriptor_storage) is not dict
+            or any(type(key) is not str for key in storage)
+            or any(type(key) is not str for key in descriptor_storage)
+            or "_value_" not in storage
             or descriptor_storage.get("fget") is not getter):
         return None
-    return (layout, descriptor_layout,
-            ("code", getter, getter_code), ("defaults", getter, None, None),
-            ("code", access, access_code),
-            ("defaults", access, access.__defaults__, access.__kwdefaults__),
-            ("slots", value, kind, ((dict_slots[0], storage),)),
-            ("mapping", storage, tuple(storage.items())),
-            ("slots", descriptor, descriptor_kind, ((dict_slots[1], descriptor_storage),)),
-            ("mapping", descriptor_storage, tuple(descriptor_storage.items())))
+    steps = (layout, descriptor_layout,
+             ("code", getter, getter_code), ("defaults", getter, None, None),
+             ("code", access, access_code),
+             ("defaults", access, access.__defaults__, access.__kwdefaults__),
+             ("slots", value, kind, ((dict_slots[0], storage),)),
+             ("mapping", storage, tuple(storage.items())),
+             ("slots", descriptor, descriptor_kind, ((dict_slots[1], descriptor_storage),)),
+             ("mapping", descriptor_storage, tuple(descriptor_storage.items())))
+    return steps, (layout[2], layout[3], storage["_value_"])
 
 
-def _capture_hook_dataclass(value: object, declared_fields: tuple) -> tuple | None:
+def _capture_hook_dataclass(value: object) -> tuple | None:
     kind = type(value)
     layout = _capture_hook_layout(kind)
     if (layout is None or _hook_raw_class_attribute(kind, "__getattribute__")
@@ -1638,26 +1648,38 @@ def _capture_hook_dataclass(value: object, declared_fields: tuple) -> tuple | No
         descriptors.update(edges)
     params = descriptors.get("__dataclass_params__")
     field_map = descriptors.get("__dataclass_fields__")
+    if (type(field_map) is not dict
+            or any(type(key) is not str for key in field_map)
+            or any(type(item) is not _DataclassField for item in field_map.values())):
+        return None
+    # The original fields() result must later match these ordinary instance fields.
+    declared_fields = tuple(field_map.values())
     params_state = _capture_hook_slots(params)
-    if (params_state is None or type(field_map) is not dict
-            or any(key == "__get__" for _, _, edges in params_state[0][5] for key, _ in edges)
-            or any(type(item) is not _DataclassField for item in declared_fields)):
+    if (params_state is None
+            or any(key == "__get__" for _, _, edges in params_state[0][5] for key, _ in edges)):
         return None
     frozen = _hook_raw_class_attribute(type(params), "frozen")
-    if (not inspect.ismemberdescriptor(frozen)
+    if (type(frozen) is not _HOOK_MEMBER_DESCRIPTOR_TYPE
             or frozen.__get__(params, type(params)) is not True):
         return None
     field_states = tuple(_capture_hook_slots(item) for item in declared_fields)
-    if (any(state is None for state in field_states)
-            or any(type(item.name) is not str
-                   or not inspect.ismemberdescriptor(descriptors.get(item.name))
-                   for item in declared_fields)):
+    if any(state is None for state in field_states):
+        return None
+    name_slot = _hook_raw_class_attribute(_DataclassField, "name")
+    if type(name_slot) is not _HOOK_MEMBER_DESCRIPTOR_TYPE:
+        return None
+    field_names = tuple(name_slot.__get__(item, _DataclassField) for item in declared_fields)
+    if any(type(name) is not str
+           or type(descriptors.get(name)) is not _HOOK_MEMBER_DESCRIPTOR_TYPE
+           for name in field_names):
         return None
     # Retain one common Field layout per dataclass, but every Field's own edges.
-    steps = (layout, *params_state, ("mapping", field_map, tuple(field_map.items())))
+    steps = (layout, *params_state,
+             ("metadata_mapping", field_map, tuple(field_map.items())))
     if field_states:
         steps += (field_states[0][0],)
-    return steps + tuple(state[1] for state in field_states), descriptors
+    return (steps + tuple(state[1] for state in field_states), descriptors,
+            (layout[2], layout[3], declared_fields, field_names))
 
 
 def _hook_guard_matches(steps: tuple) -> bool:
@@ -1687,7 +1709,7 @@ def _hook_guard_matches(steps: tuple) -> bool:
                 if (type(value) is not kind or len(value) != len(edges)
                         or any(item is not expected for item, expected in zip(value, edges))):
                     return False
-            elif tag == "mapping":
+            elif tag in {"mapping", "metadata_mapping"}:
                 value, edges = step[1:]
                 if (type(value) is not dict or len(value) != len(edges)
                         or any(key is not old_key or item is not old_item
@@ -1719,7 +1741,7 @@ def _hook_guard_matches(steps: tuple) -> bool:
                                    for (key, item), (old_key, old_item)
                                    in zip(current.items(), edges))):
                         return False
-            elif tag == "slots":
+            elif tag in {"slots", "metadata_slots"}:
                 value, kind, edges = step[1:]
                 if (type(value) is not kind
                         or any(descriptor.__get__(value, kind) is not expected
@@ -1737,6 +1759,41 @@ def _hook_guard_matches(steps: tuple) -> bool:
     return True
 
 
+def _compact_hook_metadata(steps: list[tuple | None]) -> tuple | None:
+    """Retain each exact metadata observation once, within this hook only."""
+    if any(step is None for step in steps):
+        return None
+    observed: set[tuple] = set()
+    compact = []
+    for step in steps:
+        tag = step[0]
+        if tag == "layout":
+            kind, module, name, bases, layouts, metaclass, meta_layout, accessors = step[1:]
+            key = (tag, id(kind), id(module), id(name), id(bases),
+                   tuple((id(base), id(base_meta),
+                          tuple((id(member), id(value)) for member, value in edges))
+                         for base, base_meta, edges in layouts),
+                   id(metaclass), tuple((id(member), id(value))
+                                        for member, value in meta_layout),
+                   tuple(id(accessor) for accessor in accessors))
+        elif tag == "metadata_mapping":
+            value, edges = step[1:]
+            key = (tag, id(value), tuple((id(member), id(item)) for member, item in edges))
+        elif tag == "metadata_slots":
+            value, kind, edges = step[1:]
+            key = (tag, id(value), id(kind),
+                   tuple((id(descriptor), id(item)) for descriptor, item in edges))
+        else:
+            compact.append(step)
+            continue
+        # The retained record anchors every object represented by an identity.
+        # A different snapshot of the same target therefore remains a check.
+        if key not in observed:
+            observed.add(key)
+            compact.append(step)
+    return tuple(compact)
+
+
 def _derive_hook_guard(callback: Callable, *, _digests: tuple,
                        _attest_captures: bool) -> tuple:
     steps: list[tuple | None] = []
@@ -1745,8 +1802,7 @@ def _derive_hook_guard(callback: Callable, *, _digests: tuple,
     )
     function = callback.__func__ if inspect.ismethod(callback) else callback
     receiver = callback.__self__ if inspect.ismethod(callback) else None
-    return (function, receiver, _attest_captures, identity,
-            None if any(step is None for step in steps) else tuple(steps))
+    return (function, receiver, _attest_captures, identity, _compact_hook_metadata(steps))
 
 
 def _require_hook_guards(callbacks: tuple[Callable, ...], identities: tuple[str, ...],
@@ -1798,13 +1854,14 @@ def _hook_default_identity(
             raise TypeError("hook defaults cannot contain nonfinite values")
         return (type(value).__name__, str(value))
     if isinstance(value, Enum):
+        enum_guard = _capture_hook_enum(value) if _guard is not None else None
         module, name, member = type(value).__module__, type(value).__qualname__, value.value
         if _guard is not None:
-            enum_guard = _capture_hook_enum(value)
-            if enum_guard is None:
+            if (enum_guard is None or any(actual is not expected
+                    for actual, expected in zip((module, name, member), enum_guard[1]))):
                 _guard.append(None)
             else:
-                _guard.extend(enum_guard)
+                _guard.extend(enum_guard[0])
         return ("enum", module, name, _hook_default_identity(
             member, seen, _digests=_digests, _attest_captures=_attest_captures,
             _guard=_guard,
@@ -1873,6 +1930,7 @@ def _hook_default_identity(
                 value, seen, _digests=_digests, _attest_captures=_attest_captures,
                 _guard=_guard,
             ))
+        dataclass_guard = _capture_hook_dataclass(value) if _guard is not None else None
         if is_dataclass(value) and getattr(type(value), "__dataclass_params__").frozen:
             declared_fields = fields(value)
             identity_fields = declared_fields
@@ -1910,12 +1968,19 @@ def _hook_default_identity(
             module, name = type(value).__module__, type(value).__qualname__
             guard_start = len(_guard) if _guard is not None else 0
             descriptors = {}
+            expected_field_names = {}
             if _guard is not None:
-                dataclass_guard = _capture_hook_dataclass(value, declared_fields)
-                if dataclass_guard is None:
+                if (dataclass_guard is None
+                        or module is not dataclass_guard[2][0]
+                        or name is not dataclass_guard[2][1]
+                        or len(declared_fields) != len(dataclass_guard[2][2])
+                        or any(actual is not expected for actual, expected
+                               in zip(declared_fields, dataclass_guard[2][2]))):
                     _guard.append(None)
                 else:
-                    steps, descriptors = dataclass_guard
+                    steps, descriptors, expected = dataclass_guard
+                    expected_field_names = {id(item): field_name for item, field_name
+                                            in zip(expected[2], expected[3])}
                     _guard.extend(steps)
                 if owner_guard_state is not None:
                     _guard.append(owner_guard_state)
@@ -1924,6 +1989,9 @@ def _hook_default_identity(
             edges, identities = [], []
             for item in identity_fields:
                 field_name = item.name
+                if (expected_field_names
+                        and field_name is not expected_field_names.get(id(item))):
+                    _guard.append(None)
                 field_value = getattr(value, field_name)
                 if _guard is not None:
                     edges.append((descriptors.get(field_name), field_value))
