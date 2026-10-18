@@ -511,6 +511,11 @@ jobs:
                   samples.append({"fallback": value is None, "config_sha256": hashlib.sha256(config).hexdigest(), "format_lines": [line.decode("ascii").strip() for line in safe], "packed_refs": (self.common_git / "packed-refs").exists(), "reftable": (self.common_git / "reftable").exists()})
               return value
           session_resources._Repository._loose_ref_output = refs
+          import sys
+          observer_process = subprocess.Popen([sys.executable, '-u', '-c', "\nimport json, os, pathlib, sys, time\nparent = int(sys.argv[1])\nticks_per_second = os.sysconf('SC_CLK_TCK')\nprevious = None\ndef state(pid):\n    root = pathlib.Path('/proc') / str(pid)\n    text = (root / 'stat').read_text()\n    fields = text[text.rfind(')') + 2:].split()\n    return {'pid': pid, 'state': fields[0], 'ppid': int(fields[1]),\n            'cpu_ticks': int(fields[11]) + int(fields[12]),\n            'rss_pages': int(fields[21]),\n            'wchan': (root / 'wchan').read_text().strip()}\nwhile True:\n    try:\n        current = state(parent)\n    except FileNotFoundError:\n        break\n    stamp = time.monotonic()\n    sample = {'observer': 'issue848-stall', 'wall_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),\n              'monotonic_seconds': stamp, 'ticks_per_second': ticks_per_second,\n              'page_bytes': os.sysconf('SC_PAGE_SIZE'), 'parent': current}\n    if previous is not None:\n        sample['parent_cpu_seconds_since_sample'] = (current['cpu_ticks'] - previous[1]) / ticks_per_second\n        sample['elapsed_seconds_since_sample'] = stamp - previous[0]\n    previous = stamp, current['cpu_ticks']\n    threads, children = [], []\n    for task in (pathlib.Path('/proc') / str(parent) / 'task').iterdir():\n        try:\n            threads.append({'tid': int(task.name), 'wchan': (task / 'wchan').read_text().strip()})\n        except FileNotFoundError:\n            pass\n    for path in pathlib.Path('/proc').iterdir():\n        if path.name.isdecimal() and int(path.name) != os.getpid():\n            try:\n                child = state(int(path.name))\n                if child['ppid'] == parent:\n                    children.append(child)\n            except (FileNotFoundError, ProcessLookupError, PermissionError):\n                pass\n    sample.update(threads=threads, direct_children=children)\n    print(json.dumps(sample, sort_keys=True), flush=True)\n    time.sleep(60)\n", str(os.getpid())])
+          print(json.dumps({'observer': 'issue848-stall-start', 'pid': os.getpid(),
+                            'stack_interval_seconds': None, 'cpu_interval_seconds': 60,
+                            'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()}), flush=True)
           profile = cProfile.Profile() if os.environ["DIAGNOSTIC_PROFILE_MODE"] == "cprofile" else None
           started = time.perf_counter()
           if profile is not None:
@@ -518,6 +523,8 @@ jobs:
           try:
               code = runner.main(["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")])
           finally:
+              observer_process.terminate()
+              observer_process.wait(timeout=10)
               if profile is not None:
                   profile.disable()
                   profile.dump_stats(str(output / "profile.pstats"))
