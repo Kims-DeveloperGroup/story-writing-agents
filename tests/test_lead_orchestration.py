@@ -4129,7 +4129,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertEqual(current_pending_scope(call), captured_scopes[0])
             return clarify_pending(call, provider)
         call_start = len(case.backend.calls)
-        case.backend.enqueue(invalid_pending_proposal, repair_pending_question)
+        # Schema repair starts a new provider invocation with its own script.
+        case.backend.enqueue(invalid_pending_proposal)
+        case.backend.enqueue(repair_pending_question)
         repaired = await case.runtime.lead_turn(case.session_id, pending_conversation,
             "Continue the pending outline request; the ending is still unspecified.")
         self.assertIs(repaired.kind, LeadOutcomeKind.QUESTION, {
