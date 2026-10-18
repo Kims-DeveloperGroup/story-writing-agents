@@ -4132,7 +4132,12 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         case.backend.enqueue(invalid_pending_proposal, repair_pending_question)
         repaired = await case.runtime.lead_turn(case.session_id, pending_conversation,
             "Continue the pending outline request; the ending is still unspecified.")
-        self.assertIs(repaired.kind, LeadOutcomeKind.QUESTION)
+        self.assertIs(repaired.kind, LeadOutcomeKind.QUESTION, {
+            'message': repaired.message, 'validation': repaired.validation_details,
+            'calls': len(case.backend.calls) - call_start, 'fixture_scopes': len(captured_scopes),
+            'public_responses': tuple((item.response.response_text, item.response.acceptance.value,
+                                       item.response.validation_details) for item in repaired.public_responses),
+        })
         self.assertEqual(repaired.message, question_text)
         self.assertIs(repaired.trace.origin, ReplyTraceOrigin.RECOVERED)
         self.assertEqual(len(case.backend.calls) - call_start, 2)
