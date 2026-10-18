@@ -18,7 +18,7 @@ from decimal import Decimal
 import re
 import unicodedata
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import Field as _DataclassField, dataclass, field, fields, is_dataclass
 from enum import Enum, StrEnum
 from itertools import islice, combinations
 from typing import Callable, Generic, NoReturn, TypeVar
@@ -1497,12 +1497,289 @@ def validate_details(details: object) -> None:
 _CONTRACT_INPUT_SEAL = object()
 _ContractValue = TypeVar("_ContractValue")
 
+# These are implementation pins, not declaration fingerprints or a mutable cache.
+_HOOK_ENUM_VALUE = vars(Enum)["value"]
+_HOOK_ENUM_ACCESSORS = (
+    _HOOK_ENUM_VALUE.fget, _HOOK_ENUM_VALUE.fget.__code__,
+    type(_HOOK_ENUM_VALUE).__get__, type(_HOOK_ENUM_VALUE).__get__.__code__,
+)
+_HOOK_TYPE_ACCESSORS = tuple(vars(type)[name] for name in (
+    "__mro__", "__dict__", "__module__", "__qualname__",
+))
+_HOOK_ENUM_METACLASS = type(Enum)
+_HOOK_ENUM_METACLASS_LAYOUT = tuple(vars(_HOOK_ENUM_METACLASS).items())
+
+
+def _capture_hook_layout(kind: type) -> tuple | None:
+    """Describe only classes whose attribute reads cannot run user code."""
+    metaclass = type(kind)
+    if metaclass is not type and metaclass is not _HOOK_ENUM_METACLASS:
+        return None
+    mro_slot, dict_slot, module_slot, name_slot = _HOOK_TYPE_ACCESSORS
+    meta_layout = () if metaclass is type else _HOOK_ENUM_METACLASS_LAYOUT
+    if meta_layout:
+        current = dict_slot.__get__(metaclass, type)
+        if (len(current) != len(meta_layout)
+                or any(key is not old_key or item is not old_item
+                       for (key, item), (old_key, old_item)
+                       in zip(current.items(), meta_layout))):
+            return None
+    bases = mro_slot.__get__(kind, metaclass)
+    if any(type(base) is not type and type(base) is not metaclass for base in bases):
+        return None
+    module = module_slot.__get__(kind, metaclass)
+    name = name_slot.__get__(kind, metaclass)
+    if type(module) is not str or type(name) is not str:
+        return None
+    layouts = tuple((base, type(base), tuple(dict_slot.__get__(base, type(base)).items()))
+                    for base in bases)
+    if any(type(key) is not str for _, _, edges in layouts for key, _ in edges):
+        return None
+    return ("layout", kind, module, name, bases,
+            layouts, metaclass, meta_layout, _HOOK_TYPE_ACCESSORS)
+
+
+def _hook_raw_class_attribute(kind: type, name: str) -> object:
+    mro_slot, dict_slot, _, _ = _HOOK_TYPE_ACCESSORS
+    for base in mro_slot.__get__(kind, type(kind)):
+        namespace = dict_slot.__get__(base, type(base))
+        if name in namespace:
+            return namespace[name]
+    return None
+
+
+def _capture_hook_slots(value: object) -> tuple | None:
+    kind = type(value)
+    layout = _capture_hook_layout(kind)
+    if (layout is None or _hook_raw_class_attribute(kind, "__getattribute__")
+            is not object.__getattribute__
+            or any(key in {"__dict__", "__getattr__"}
+                   for _, _, edges in layout[5] for key, _ in edges)):
+        return None
+    namespaces = tuple(dict(edges) for _, _, edges in layout[5])
+    resolved = {}
+    for namespace in reversed(namespaces):
+        resolved.update(namespace)
+    slots = []
+    for namespace in namespaces:
+        declared = namespace.get("__slots__", ())
+        if type(declared) is str:
+            declared = (declared,)
+        if ((type(declared) is not tuple and type(declared) is not list)
+                or any(type(name) is not str
+                       or (name != "__weakref__"
+                           and not inspect.ismemberdescriptor(resolved.get(name)))
+                       for name in declared)):
+            return None
+        for name, descriptor in namespace.items():
+            if inspect.ismemberdescriptor(descriptor) and name != "__weakref__":
+                if resolved.get(name) is not descriptor:
+                    return None
+                try:
+                    slots.append((descriptor, descriptor.__get__(value, kind)))
+                except AttributeError:
+                    return None
+    return layout, ("slots", value, kind, tuple(slots))
+
+
+def _capture_hook_enum(value: Enum) -> tuple | None:
+    kind = type(value)
+    layout = _capture_hook_layout(kind)
+    if (layout is None or all(_hook_raw_class_attribute(kind, "__getattribute__") is not allowed
+                             for allowed in (object.__getattribute__, str.__getattribute__,
+                                             int.__getattribute__))
+            or any(key == "__getattr__" for _, _, edges in layout[5] for key, _ in edges)):
+        return None
+    descriptor = _hook_raw_class_attribute(kind, "value")
+    if descriptor is not _HOOK_ENUM_VALUE:
+        return None
+    descriptor_kind = type(descriptor)
+    descriptor_layout = _capture_hook_layout(descriptor_kind)
+    getter, getter_code, access, access_code = _HOOK_ENUM_ACCESSORS
+    if (descriptor_layout is None
+            or _hook_raw_class_attribute(descriptor_kind, "__getattribute__")
+            is not object.__getattribute__
+            or _hook_raw_class_attribute(descriptor_kind, "__get__") is not access
+            or access.__code__ is not access_code
+            or getter.__code__ is not getter_code
+            or getter.__defaults__ is not None or getter.__kwdefaults__ is not None
+            or getter.__closure__ is not None
+            or any(key == "fget" for _, _, edges in descriptor_layout[5] for key, _ in edges)):
+        return None
+    dict_slots = tuple(_hook_raw_class_attribute(owner, "__dict__")
+                       for owner in (kind, descriptor_kind))
+    if any(not inspect.isgetsetdescriptor(slot) for slot in dict_slots):
+        return None
+    storage = dict_slots[0].__get__(value, kind)
+    descriptor_storage = dict_slots[1].__get__(descriptor, descriptor_kind)
+    if (type(storage) is not dict or type(descriptor_storage) is not dict
+            or descriptor_storage.get("fget") is not getter):
+        return None
+    return (layout, descriptor_layout,
+            ("code", getter, getter_code), ("defaults", getter, None, None),
+            ("code", access, access_code),
+            ("defaults", access, access.__defaults__, access.__kwdefaults__),
+            ("slots", value, kind, ((dict_slots[0], storage),)),
+            ("mapping", storage, tuple(storage.items())),
+            ("slots", descriptor, descriptor_kind, ((dict_slots[1], descriptor_storage),)),
+            ("mapping", descriptor_storage, tuple(descriptor_storage.items())))
+
+
+def _capture_hook_dataclass(value: object, declared_fields: tuple) -> tuple | None:
+    kind = type(value)
+    layout = _capture_hook_layout(kind)
+    if (layout is None or _hook_raw_class_attribute(kind, "__getattribute__")
+            is not object.__getattribute__
+            or any(key in {"__dict__", "__getattr__"}
+                   for _, _, edges in layout[5] for key, _ in edges)):
+        return None
+    descriptors = {}
+    for _, _, edges in reversed(layout[5]):
+        descriptors.update(edges)
+    params = descriptors.get("__dataclass_params__")
+    field_map = descriptors.get("__dataclass_fields__")
+    params_state = _capture_hook_slots(params)
+    if (params_state is None or type(field_map) is not dict
+            or any(key == "__get__" for _, _, edges in params_state[0][5] for key, _ in edges)
+            or any(type(item) is not _DataclassField for item in declared_fields)):
+        return None
+    frozen = _hook_raw_class_attribute(type(params), "frozen")
+    if (not inspect.ismemberdescriptor(frozen)
+            or frozen.__get__(params, type(params)) is not True):
+        return None
+    field_states = tuple(_capture_hook_slots(item) for item in declared_fields)
+    if (any(state is None for state in field_states)
+            or any(type(item.name) is not str
+                   or not inspect.ismemberdescriptor(descriptors.get(item.name))
+                   for item in declared_fields)):
+        return None
+    # Retain one common Field layout per dataclass, but every Field's own edges.
+    steps = (layout, *params_state, ("mapping", field_map, tuple(field_map.items())))
+    if field_states:
+        steps += (field_states[0][0],)
+    return steps + tuple(state[1] for state in field_states), descriptors
+
+
+def _hook_guard_matches(steps: tuple) -> bool:
+    """Fresh ordered edge checks; a miss always returns to full derivation."""
+    try:
+        for step in steps:
+            tag = step[0]
+            if tag == "code":
+                if step[1].__code__ is not step[2]:
+                    return False
+            elif tag == "defaults":
+                if (step[1].__defaults__ is not step[2]
+                        or step[1].__kwdefaults__ is not step[3]):
+                    return False
+            elif tag == "metadata":
+                if (step[1].__module__ is not step[2]
+                        or step[1].__qualname__ is not step[3]):
+                    return False
+            elif tag == "closure":
+                function, closure, edges = step[1:]
+                if function.__closure__ is not closure:
+                    return False
+                if any(cell.cell_contents is not expected for cell, expected in edges):
+                    return False
+            elif tag == "sequence":
+                value, kind, edges = step[1:]
+                if (type(value) is not kind or len(value) != len(edges)
+                        or any(item is not expected for item, expected in zip(value, edges))):
+                    return False
+            elif tag == "mapping":
+                value, edges = step[1:]
+                if (type(value) is not dict or len(value) != len(edges)
+                        or any(key is not old_key or item is not old_item
+                               for (key, item), (old_key, old_item)
+                               in zip(value.items(), edges))):
+                    return False
+            elif tag == "layout":
+                kind, module, name, bases, layouts, metaclass, meta_layout, accessors = step[1:]
+                mro_slot, dict_slot, module_slot, name_slot = accessors
+                if type(kind) is not metaclass:
+                    return False
+                if meta_layout:
+                    current = dict_slot.__get__(metaclass, type)
+                    if (len(current) != len(meta_layout)
+                            or any(key is not old_key or item is not old_item
+                                   for (key, item), (old_key, old_item)
+                                   in zip(current.items(), meta_layout))):
+                        return False
+                if (module_slot.__get__(kind, metaclass) is not module
+                        or name_slot.__get__(kind, metaclass) is not name
+                        or mro_slot.__get__(kind, metaclass) is not bases):
+                    return False
+                for base, base_meta, edges in layouts:
+                    if type(base) is not base_meta:
+                        return False
+                    current = dict_slot.__get__(base, base_meta)
+                    if (len(current) != len(edges)
+                            or any(key is not old_key or item is not old_item
+                                   for (key, item), (old_key, old_item)
+                                   in zip(current.items(), edges))):
+                        return False
+            elif tag == "slots":
+                value, kind, edges = step[1:]
+                if (type(value) is not kind
+                        or any(descriptor.__get__(value, kind) is not expected
+                               for descriptor, expected in edges)):
+                    return False
+            elif tag == "declaration":
+                value, guards, anchor = step[1:]
+                if (object.__getattribute__(value, "_hook_guards") is not guards
+                        or object.__getattribute__(value, "_hook_guard_anchor") is not anchor):
+                    return False
+            else:
+                return False
+    except (AttributeError, TypeError, ValueError, RuntimeError):
+        return False
+    return True
+
+
+def _derive_hook_guard(callback: Callable, *, _digests: tuple,
+                       _attest_captures: bool) -> tuple:
+    steps: list[tuple | None] = []
+    identity = _permitted_hook_identity(
+        callback, _digests=_digests, _attest_captures=_attest_captures, _guard=steps,
+    )
+    function = callback.__func__ if inspect.ismethod(callback) else callback
+    receiver = callback.__self__ if inspect.ismethod(callback) else None
+    return (function, receiver, _attest_captures, identity,
+            None if any(step is None for step in steps) else tuple(steps))
+
+
+def _require_hook_guards(callbacks: tuple[Callable, ...], identities: tuple[str, ...],
+                         guards: tuple, anchor: tuple, *, _attest_captures: bool,
+                         message: str) -> None:
+    if (guards is not anchor[0] or anchor[1] is not _hook_guard_matches
+            or anchor[2] is not _hook_guard_matches.__code__
+            or len(callbacks) != len(guards) or len(identities) != len(guards)):
+        raise ValueError(message)
+    digests = ({}, {}, {})
+    current = []
+    for callback, identity, guard in zip(callbacks, identities, guards):
+        function = callback.__func__ if inspect.ismethod(callback) else callback
+        receiver = callback.__self__ if inspect.ismethod(callback) else None
+        if guard[2] is not _attest_captures or guard[3] != identity:
+            raise ValueError(message)
+        if (function is guard[0] and receiver is guard[1]
+                and guard[4] is not None and _hook_guard_matches(guard[4])):
+            current.append(identity)
+            continue
+        current.append(_permitted_hook_identity(
+            callback, _digests=digests, _attest_captures=_attest_captures,
+        ))
+    if tuple(current) != identities:
+        raise ValueError(message)
+
 
 def _hook_default_identity(
     value: object, seen: set[int], *,
     _digests: tuple[dict[int, tuple[object, str]], dict[int, tuple[object, str]],
                     dict[int, tuple[object, object]]] | None = None,
     _attest_captures: bool = False,
+    _guard: list[tuple | None] | None = None,
 ) -> object:
     if _digests is None:
         _digests = ({}, {}, {})
@@ -1515,15 +1792,22 @@ def _hook_default_identity(
             _digests[1][id(value)] = cached_bytes
         return ("bytes", cached_bytes[1])
     if type(value) in {float, Decimal}:
+        if type(value) is Decimal and _guard is not None:
+            _guard.append(None)
         if not (value.is_finite() if type(value) is Decimal else math.isfinite(value)):
             raise TypeError("hook defaults cannot contain nonfinite values")
         return (type(value).__name__, str(value))
     if isinstance(value, Enum):
-        return ("enum", type(value).__module__, type(value).__qualname__, _hook_default_identity(
-            value.value,
-            seen,
-            _digests=_digests,
-            _attest_captures=_attest_captures,
+        module, name, member = type(value).__module__, type(value).__qualname__, value.value
+        if _guard is not None:
+            enum_guard = _capture_hook_enum(value)
+            if enum_guard is None:
+                _guard.append(None)
+            else:
+                _guard.extend(enum_guard)
+        return ("enum", module, name, _hook_default_identity(
+            member, seen, _digests=_digests, _attest_captures=_attest_captures,
+            _guard=_guard,
         ))
     if id(value) in seen:
         raise TypeError("hook default declarations cannot be cyclic")
@@ -1534,53 +1818,81 @@ def _hook_default_identity(
     seen.add(id(value))
     try:
         if type(value) in {tuple, list}:
-            identity = (type(value).__name__, tuple(_hook_default_identity(
-                item,
-                seen,
-                _digests=_digests,
-                _attest_captures=_attest_captures,
-            ) for item in value))
+            guard_start = len(_guard) if _guard is not None else 0
+            if _guard is not None:
+                _guard.append(None)
+            edges, identities = [], []
+            for item in value:
+                if _guard is not None:
+                    edges.append(item)
+                identities.append(_hook_default_identity(
+                    item, seen, _digests=_digests, _attest_captures=_attest_captures,
+                    _guard=_guard,
+                ))
+            identity = (type(value).__name__, tuple(identities))
+            if _guard is not None:
+                _guard[guard_start] = ("sequence", value, type(value), tuple(edges))
             # Reuse only immutable values whose complete identities were checked
             # in this operation. Decimal spelling can depend on live context.
             if type(value) is tuple and all(
                 item is None or type(item) in {str, int, bool, bytes, float}
-                or (type(item) is tuple
-                    and (child := _digests[2].get(id(item))) is not None
+                or (type(item) is tuple and (child := _digests[2].get(id(item))) is not None
                     and child[0] is item)
                 for item in value
             ):
                 _digests[2][id(value)] = (value, identity)
+                if _guard is not None:
+                    del _guard[guard_start:]
             return identity
         if isinstance(value, Mapping):
-            pairs = [(_hook_default_identity(
-                key,
-                seen,
-                _digests=_digests,
-                _attest_captures=_attest_captures,
-            ), _hook_default_identity(
-                item,
-                seen,
-                _digests=_digests,
-                _attest_captures=_attest_captures,
-            )) for key, item in value.items()]
+            guard_start = len(_guard) if _guard is not None else 0
+            if _guard is not None:
+                _guard.append(None)
+            edges, pairs = [], []
+            for key, item in value.items():
+                if _guard is not None:
+                    edges.append((key, item))
+                pairs.append((_hook_default_identity(
+                    key, seen, _digests=_digests, _attest_captures=_attest_captures,
+                    _guard=_guard,
+                ), _hook_default_identity(
+                    item, seen, _digests=_digests, _attest_captures=_attest_captures,
+                    _guard=_guard,
+                )))
+            if _guard is not None and type(value) is dict:
+                _guard[guard_start] = ("mapping", value, tuple(edges))
             return ("mapping", sorted(pairs, key=lambda pair: json.dumps(pair[0], sort_keys=True)))
         if type(value) in {set, frozenset}:
+            if _guard is not None:
+                _guard.append(None)
             return (type(value).__name__, sorted((_hook_default_identity(
-                item,
-                seen,
-                _digests=_digests,
-                _attest_captures=_attest_captures,
-            ) for item in value),
-                                                key=lambda item: json.dumps(item, sort_keys=True)))
+                item, seen, _digests=_digests, _attest_captures=_attest_captures,
+            ) for item in value), key=lambda item: json.dumps(item, sort_keys=True)))
         if inspect.isfunction(value) or inspect.ismethod(value):
             return ("function", _permitted_hook_identity(
-                value,
-                seen,
-                _digests=_digests,
-                _attest_captures=_attest_captures,
+                value, seen, _digests=_digests, _attest_captures=_attest_captures,
+                _guard=_guard,
             ))
         if is_dataclass(value) and getattr(type(value), "__dataclass_params__").frozen:
             declared_fields = fields(value)
+            identity_fields = declared_fields
+            owner_guard_state = None
+            if type(value) is TypedDecoder or type(value) is NamedHostCheck:
+                guards = object.__getattribute__(value, "_hook_guards")
+                anchor = object.__getattribute__(value, "_hook_guard_anchor")
+                if (guards is not anchor[0] or anchor[1] is not _hook_guard_matches
+                        or anchor[2] is not _hook_guard_matches.__code__
+                        or anchor[3] is not _require_hook_guards
+                        or anchor[4] is not _require_hook_guards.__code__):
+                    message = ("frozen typed decoder hook provenance changed"
+                               if type(value) is TypedDecoder
+                               else "frozen named owner hook provenance changed")
+                    raise ValueError(message)
+                # Derived proof storage is not new declared hook material.
+                # Physical layout and the anchor remain checked independently.
+                identity_fields = tuple(item for item in declared_fields
+                                        if item.name not in {"_hook_guards", "_hook_guard_anchor"})
+                owner_guard_state = ("declaration", value, guards, anchor)
             if _attest_captures:
                 declaration = vars(type(value))
                 field_names = {item.name for item in declared_fields}
@@ -1595,13 +1907,33 @@ def _hook_default_identity(
                         or any(name not in field_names | {"__weakref__"} for name in slot_names)
                         or len(slot_names) != len(set(slot_names))):
                     raise TypeError("typed decoder dataclass captures require only declared slot fields")
-            return ("frozen_dataclass", type(value).__module__, type(value).__qualname__,
-                    tuple((item.name, _hook_default_identity(
-                        getattr(value, item.name),
-                        seen,
-                        _digests=_digests,
-                        _attest_captures=_attest_captures,
-                    )) for item in declared_fields))
+            module, name = type(value).__module__, type(value).__qualname__
+            guard_start = len(_guard) if _guard is not None else 0
+            descriptors = {}
+            if _guard is not None:
+                dataclass_guard = _capture_hook_dataclass(value, declared_fields)
+                if dataclass_guard is None:
+                    _guard.append(None)
+                else:
+                    steps, descriptors = dataclass_guard
+                    _guard.extend(steps)
+                if owner_guard_state is not None:
+                    _guard.append(owner_guard_state)
+                guard_start = len(_guard)
+                _guard.append(None)
+            edges, identities = [], []
+            for item in identity_fields:
+                field_name = item.name
+                field_value = getattr(value, field_name)
+                if _guard is not None:
+                    edges.append((descriptors.get(field_name), field_value))
+                identities.append((field_name, _hook_default_identity(
+                    field_value, seen, _digests=_digests, _attest_captures=_attest_captures,
+                    _guard=_guard,
+                )))
+            if _guard is not None and all(inspect.ismemberdescriptor(item) for item, _ in edges):
+                _guard[guard_start] = ("slots", value, type(value), tuple(edges))
+            return ("frozen_dataclass", module, name, tuple(identities))
         raise TypeError("unsupported semantic hook default declaration")
     finally:
         seen.remove(id(value))
@@ -1612,6 +1944,7 @@ def _permitted_hook_identity(
     _digests: tuple[dict[int, tuple[object, str]], dict[int, tuple[object, str]],
                     dict[int, tuple[object, object]]] | None = None,
     _attest_captures: bool = False,
+    _guard: list[tuple | None] | None = None,
 ) -> str:
     """Derived content-free actual hook provenance, never a caller-supplied pin."""
     if _digests is None:
@@ -1668,28 +2001,46 @@ def _permitted_hook_identity(
             _digests[0][id(code_object)] = (code_object, code)
     else:
         code = cached_code[1]
+    if _guard is not None:
+        cached_code = _digests[0].get(id(code_object))
+        _guard.append(("code", function, code_object)
+                      if cached_code is not None and cached_code[0] is code_object else None)
     declaration_seen = set() if seen is None else seen
+    default_values = (function.__defaults__, function.__kwdefaults__)
+    if _guard is not None:
+        _guard.append(("defaults", function, *default_values))
     defaults = _hook_default_identity(
-        (function.__defaults__, function.__kwdefaults__),
+        default_values,
         declaration_seen,
         _digests=_digests,
         _attest_captures=_attest_captures,
+        _guard=_guard,
     )
     provenance = (function.__module__, function.__qualname__, id(function),
                   None if receiver is None else id(receiver), code, defaults)
+    if _guard is not None:
+        _guard.append(("metadata", function, *provenance[:2])
+                      if (provenance[0] is None or type(provenance[0]) is str)
+                      and type(provenance[1]) is str else None)
     if _attest_captures:
         try:
-            captures = tuple((name, cell.cell_contents) for name, cell in zip(
-                code_object.co_freevars, function.__closure__ or (), strict=True,
-            ))
+            closure = function.__closure__
+            captures, closure_edges = [], []
+            for name, cell in zip(code_object.co_freevars, closure or (), strict=True):
+                contents = cell.cell_contents
+                captures.append((name, contents))
+                closure_edges.append((cell, contents))
+            captures = tuple(captures)
         except ValueError as exc:
             raise TypeError("typed decoder closures must contain bound values") from exc
+        if _guard is not None:
+            _guard.append(("closure", function, closure, tuple(closure_edges)))
         provenance += (
             _hook_default_identity(
-                captures, declaration_seen, _digests=_digests, _attest_captures=True,
+                captures, declaration_seen, _digests=_digests, _attest_captures=True, _guard=_guard,
             ),
             _hook_default_identity(
-                receiver, declaration_seen, _digests=_digests, _attest_captures=True,
+                receiver, declaration_seen, _digests=_digests, _attest_captures=True, _guard=_guard,
             ),
         )
     return hashlib.sha256(json.dumps(provenance, separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -1712,6 +2063,8 @@ class TypedDecoder(Generic[_ContractValue]):
     dependencies: tuple[Callable, ...] = field(default=(), repr=False, compare=False)
     binding_fingerprint: str = field(init=False)
     _hook_fingerprints: tuple[str, ...] = field(init=False, repr=False)
+    _hook_guards: tuple = field(init=False, repr=False, compare=False)
+    _hook_guard_anchor: tuple = field(init=False, repr=False, compare=False)
 
     def __init_subclass__(cls, **kwargs):
         raise TypeError("typed decoder declarations cannot be overridden")
@@ -1722,22 +2075,30 @@ class TypedDecoder(Generic[_ContractValue]):
             raise ValueError("incomplete typed decoder declaration")
         _require_hook_arity(self.decode, 1)
         digests = ({}, {}, {})
-        identities = tuple(_permitted_hook_identity(
+        guards = tuple(_derive_hook_guard(
             item, _digests=digests, _attest_captures=True,
         ) for item in (self.decode, *self.dependencies))
+        identities = tuple(guard[3] for guard in guards)
         fingerprint = hashlib.sha256(json.dumps((self.name, self.revision, identities),
                                                separators=(",", ":")).encode("utf-8")).hexdigest()
         object.__setattr__(self, "_hook_fingerprints", identities)
+        object.__setattr__(self, "_hook_guards", guards)
+        object.__setattr__(self, "_hook_guard_anchor", (
+            guards, _hook_guard_matches, _hook_guard_matches.__code__,
+            _require_hook_guards, _require_hook_guards.__code__,
+        ))
         object.__setattr__(self, "binding_fingerprint", fingerprint)
 
     def require_provenance(self) -> None:
-        digests = ({}, {}, {})
-        if tuple(_permitted_hook_identity(
-            item,
-            _digests=digests,
-            _attest_captures=True,
-        ) for item in (self.decode, *self.dependencies)) != self._hook_fingerprints:
+        anchor = self._hook_guard_anchor
+        if (anchor[3] is not _require_hook_guards
+                or anchor[4] is not _require_hook_guards.__code__):
             raise ValueError("frozen typed decoder hook provenance changed")
+        _require_hook_guards(
+            (self.decode, *self.dependencies), self._hook_fingerprints,
+            self._hook_guards, anchor, _attest_captures=True,
+            message="frozen typed decoder hook provenance changed",
+        )
 
     @staticmethod
     def require_hook_shape(callback: Callable, input_count: int) -> None:
@@ -1767,6 +2128,8 @@ class NamedHostCheck(Generic[_ContractValue]):
     dependencies: tuple[Callable, ...] = field(default=(), kw_only=True, repr=False, compare=False)
     binding_fingerprint: str = field(init=False)
     _hook_fingerprints: tuple[str, ...] = field(init=False, repr=False)
+    _hook_guards: tuple = field(init=False, repr=False, compare=False)
+    _hook_guard_anchor: tuple = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if (type(self.name) is not str or not self.name
@@ -1782,8 +2145,16 @@ class NamedHostCheck(Generic[_ContractValue]):
         if type(self.dependencies) is not tuple:
             raise TypeError("host hook dependencies must be immutable declarations")
         digests = ({}, {}, {})
-        identities = tuple(_permitted_hook_identity(item, _digests=digests) for item in (self.check, *self.dependencies))
+        guards = tuple(_derive_hook_guard(
+            item, _digests=digests, _attest_captures=False,
+        ) for item in (self.check, *self.dependencies))
+        identities = tuple(guard[3] for guard in guards)
         object.__setattr__(self, "_hook_fingerprints", identities)
+        object.__setattr__(self, "_hook_guards", guards)
+        object.__setattr__(self, "_hook_guard_anchor", (
+            guards, _hook_guard_matches, _hook_guard_matches.__code__,
+            _require_hook_guards, _require_hook_guards.__code__,
+        ))
         object.__setattr__(self, "binding_fingerprint", hashlib.sha256(json.dumps(identities, separators=(",", ":")).encode("utf-8")).hexdigest())
         value = strict_json_object(self.corrective_facts.decode("utf-8", "strict"))
         if set(value) != {"requirements"} or type(value["requirements"]) is not list or len(value["requirements"]) > 32:
@@ -1800,12 +2171,15 @@ class NamedHostCheck(Generic[_ContractValue]):
 
 
     def require_provenance(self) -> None:
-        digests = ({}, {}, {})
-        if tuple(_permitted_hook_identity(
-            item,
-            _digests=digests,
-        ) for item in (self.check, *self.dependencies)) != self._hook_fingerprints:
+        anchor = self._hook_guard_anchor
+        if (anchor[3] is not _require_hook_guards
+                or anchor[4] is not _require_hook_guards.__code__):
             raise ValueError("frozen named owner hook provenance changed")
+        _require_hook_guards(
+            (self.check, *self.dependencies), self._hook_fingerprints,
+            self._hook_guards, anchor, _attest_captures=False,
+            message="frozen named owner hook provenance changed",
+        )
 
 
 class ContractOwner(Generic[_ContractValue], ABC):
