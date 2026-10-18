@@ -4093,11 +4093,14 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         case = ObjectiveCase()
         case.setUp()
         self.addCleanup(case.doCleanups)
-        pending_conversation, _ = await case.clarify(message="Which ending should the outline use?")
+        initial_question_text = "Which ending should the outline use?"
+        pending_conversation, _ = await case.clarify(message=initial_question_text)
         pending = case.objective(pending_conversation)
         prefix = case.history(pending_conversation)
-        initial_scope = next(event.payload.authoring_scope for event in reversed(prefix)
-                             if type(event.payload) is CollaborationLeadJudgmentPayload)
+        initial_judgment = next(event for event in reversed(prefix)
+                                if type(event.payload) is CollaborationLeadJudgmentPayload)
+        initial_scope = initial_judgment.payload.authoring_scope
+        self.assertEqual(initial_judgment.payload.message, initial_question_text)
         before = case.snapshots()
         intent = {'action': 'continue', 'objective_id': pending.facts.objective_id,
                   'next_step': 'clarify', 'draft_source_event_ids': []}
@@ -4146,7 +4149,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(len(_submitted_calls(case.history(pending_conversation))), 3)
         current = case.objective(pending_conversation)
         self.assertEqual(current.facts, pending.facts)
-        self.assertEqual(current.draft_sources, pending.draft_sources)
+        self.assertEqual(current.draft_sources, pending.draft_sources + (
+            collaboration.ArtifactDraftSource(
+                pending_conversation, initial_judgment.event_id,
+                "sha256:" + hashlib.sha256(initial_question_text.encode("utf-8")).hexdigest()),))
         self.assertIs(current.state, collaboration.ArtifactObjectiveState.OPEN)
         self.assertEqual(current.next_step, collaboration.ArtifactObjectiveNextStep.CLARIFY)
         self.assertTrue(all(request is None for request in (
@@ -4154,6 +4160,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             repaired.artifact_application_request, repaired.story_commit_request)))
         history = case.history(pending_conversation)
         self.assertEqual(history[:len(prefix)], prefix)
+        source_event_ids = {source.event_id for source in current.draft_sources}
+        self.assertTrue(source_event_ids.isdisjoint(event.event_id for event in history[len(prefix):]))
+        self.assertTrue(source_event_ids.isdisjoint(item.ref.event_id for item in repaired.public_responses))
         self.assertFalse(any(type(event.payload) is CollaborationAssignmentDispatchPayload
                              for event in history[len(prefix):]))
         self.assertEqual(case.snapshots(), before)
