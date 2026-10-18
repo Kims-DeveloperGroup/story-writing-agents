@@ -619,7 +619,7 @@ def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
                 lead_fixture_scope_record, lead_fixture_result, lead_fixture_response,
                 author_positive_fixture_review_bases, lead_fixture_assessment)
             inputs = [item.input_id for item in request.basis.inputs]
-            proposal = {'relation': 'new_step', 'purpose': request.instruction,
+            proposal = {'shared_premises': [],
                 'assignments': [{'agent_id': agent, 'instruction': request.instruction,
                     'mode': 'review', 'input_ids': list(inputs)} for agent in request.specialist_ids]}
             if request.objective_id is not None:
