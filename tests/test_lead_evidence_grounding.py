@@ -359,16 +359,6 @@ def _search(query: str, kinds: list[str]):
     return respond
 
 
-def _scoped_progress(script, progress):
-    def respond(call, provider):
-        progress[0] += 1
-        frame = script(call, provider)
-        progress[1] += 1
-        progress[2] += 1
-        return frame
-    return respond
-
-
 def _missing_outcome(*, proposal: bool = False, authoring_assessment=None):
     def respond(call, _provider):
         observation = call.payload["context_observation"]
@@ -950,76 +940,6 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                              "contains 1 unexpected properties (names withheld)")
                     self.assertIn(source_rule, "\n".join(result.validation_details))
 
-        prior_call_facts = [('not_retained',)]
-
-        def retained_prior_facts(call, evidence_id):
-            try:
-                from story_writing_agents.agent_context.actions import ContextCallReadFact
-                from story_writing_agents.agent_context.service import (
-                    BoundCallContract, ContextCallOffers)
-                from story_writing_agents.agent_context.manifest import ContextSourceKind
-                from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
-                from story_writing_agents.orchestrator import OrchestrationLeadCallFactory
-                from story_writing_agents.specialist_routing import (
-                    ArtifactReviewDomain, AuthoringActivity, AuthoringIntent,
-                    AuthoringScope, AuthoringScopeRuleSet)
-                if (type(call) is not BoundContextProviderCallRequest
-                        or type(call.contract) is not BoundCallContract
-                        or type(call.contract.factory) is not OrchestrationLeadCallFactory
-                        or type(call.contract.factory.constraints) is not LeadProviderConstraints
-                        or type(evidence_id) is not str or len(evidence_id) > 4096):
-                    return ('unsupported',)
-                constraints = call.contract.factory.constraints
-                offers = call.contract.eligibility_offers
-                if type(offers) is not ContextCallOffers:
-                    return ('unsupported',)
-                domains = (ArtifactReviewDomain.PLOT_STRUCTURE,
-                           ArtifactReviewDomain.CHARACTER_WORLD,
-                           ArtifactReviewDomain.TONE_EXECUTION)
-
-                def scope_bits(scope):
-                    if scope is None:
-                        return ('none',)
-                    if (type(scope) not in (AuthoringScope, AuthoringScopeRuleSet)
-                            or type(scope.activity) is not AuthoringActivity
-                            or type(scope.intent) is not AuthoringIntent
-                            or type(scope.domains) is not tuple or len(scope.domains) > 3
-                            or any(type(item) is not ArtifactReviewDomain
-                                   for item in scope.domains)):
-                        return ('unsupported',)
-                    targets = None
-                    if type(scope) is AuthoringScope:
-                        if (type(scope.target_paths) is not tuple or len(scope.target_paths) > 64
-                                or any(type(item) is not str or len(item) > 4096
-                                       for item in scope.target_paths)):
-                            return ('unsupported',)
-                        targets = len(scope.target_paths)
-                    return (scope.activity.name, scope.intent.name, len(scope.domains),
-                            tuple(any(item is known for item in scope.domains)
-                                  for known in domains),
-                            targets)
-
-                groups = offers.completed_read_facts, offers.delivery_read_facts
-                if not all(type(rows) is tuple and len(rows) <= 64 and all(
-                        type(row) is ContextCallReadFact
-                        and type(row.source_kind) is ContextSourceKind
-                        and type(row.evidence_id) is str and len(row.evidence_id) <= 4096
-                        and type(row.whole_source) is bool for row in rows) for rows in groups):
-                    return ('unsupported',)
-                reads = tuple((sum(row.source_kind is ContextSourceKind.WRITING_ARTIFACT
-                                   for row in rows),
-                               sum(row.source_kind is ContextSourceKind.WRITING_ARTIFACT
-                                   and row.evidence_id == evidence_id for row in rows),
-                               sum(row.source_kind is ContextSourceKind.WRITING_ARTIFACT
-                                   and row.evidence_id == evidence_id and row.whole_source
-                                   for row in rows)) for rows in groups)
-                adoption = constraints.adoption_intent
-                adoption = ('none' if adoption is None else adoption.name
-                            if type(adoption) is AuthoringIntent else 'unsupported')
-                return ('stored_current', scope_bits(constraints.scope),
-                        scope_bits(constraints.scope_rule), adoption, reads)
-            except BaseException:
-                return ('unsupported',)
 
         prior_evidence_ids: list[str] = []
 
@@ -1051,7 +971,6 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             constraints = call.contract.factory.constraints
             if constraints.scope is None and constraints.adoption_intent is None:
                 native_scope['paths'] = finite_fixture_selection(eligible_paths, ())
-            prior_call_facts[:] = [retained_prior_facts(call, evidence_id)]
             return lead_fixture_response(call, {
                 'response_type': 'answer',
                 'response_text': 'The current READ supports this answer.',
@@ -1059,53 +978,11 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 branch_key=call.contract.factory.rule_seed.contract_id + ':family:0')
 
         conversation_id = self.conversation("Stale prior-turn evidence")
-        progress = [0, 0, 0]
-        scoped = ((len(self.backend.calls), len(self.backend.call_records),
-                   len(self.backend.finalizers)), self.session_id,
-                  conversation_id, progress, None, None)
         self.backend.enqueue(_search("Outline", ["w"]), read_prior_turn,
-                             _scoped_progress(answer_prior_turn, progress))
+                             answer_prior_turn)
         first = await self.runtime.lead_turn(self.session_id, conversation_id, "Read current evidence.")
         self.assertIs(first.kind, LeadOutcomeKind.ANSWER)
-        try:
-            self.assertEqual(first.message, "The current READ supports this answer.")
-        except AssertionError as failure:
-            from tests.recommendation_fixture import _current_policy_failure_note
-            failure.add_note(_current_policy_failure_note(
-                self.backend, first, scoped=scoped))
-            try:
-                from story_writing_agents.conversations import LeadTurnResult
-                details_note = ('unsupported',)
-                if type(first) is LeadTurnResult and type(first.validation_details) is tuple:
-                    details = first.validation_details
-                    if len(details) > 8:
-                        details_note = ('overflow',)
-                    elif all(type(item) is str and len(item) <= 512 and item.isascii()
-                             for item in details) and sum(len(item) for item in details) <= 4096:
-                        catalog = tuple(prefix + '\n' + literal
-                            for literal in (
-                                '$.agent_action.task_result: current authorized owner requirements',
-                                '$.agent_action.task_result: rejected by domain result rule',
-                                '$.agent_action.task_result.response_details.task_scope: provider '
-                                'Lead outcomes require explicit authoring scope',
-                                '$.agent_action.task_result.response_details.task_scope.task: '
-                                'authoring scope uses an unoffered task revision',
-                                '$.agent_action.task_result.response_details.task_scope: selected '
-                                'authoring task changed while the Lead was interpreting the '
-                                'request',
-                                '$.agent_action.task_result.response_type: substantive story work '
-                                'requires specialist involvement',)
-                            for prefix in ('Original response', 'Repair response'))
-                        details_note = ('details', len(details),
-                            tuple(sum(item == known for item in details) for known in catalog),
-                            sum(item not in catalog for item in details))
-                note = json.dumps(('prior_positive_public_v1', details_note, prior_call_facts[0]),
-                                  ensure_ascii=True, separators=(',', ':'))
-                BaseException.add_note(failure, note if len(note) <= 1024
-                                       else '["prior_positive_public_v1","overflow"]')
-            except BaseException:
-                pass
-            raise
+        self.assertEqual(first.message, "The current READ supports this answer.")
         self.assertEqual(len(prior_evidence_ids), 1)
 
         self.backend.enqueue(selected_sources(prior_evidence_ids,

@@ -1313,9 +1313,17 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                     if 'task_scope' in node.get('properties', {}):
                         self.assertIn('authoring_assessment', node['required'])
                     for name in values.keys() & node.get('properties', {}).keys():
-                        field = node['properties'][name]
-                        while '$ref' in field: field = graph['$defs'][field['$ref'].removeprefix('#/$defs/').replace('~1', '/').replace('~0', '~')]
-                        values[name].update(field['enum'])
+                        fields = [node['properties'][name]]
+                        while fields:
+                            field = fixture_schema_node(graph, fields.pop())
+                            if 'anyOf' in field:
+                                self.assertTrue(field['anyOf'], name)
+                                fields.extend(field['anyOf'])
+                            else:
+                                self.assertEqual(field.get('type'), 'string', name)
+                                self.assertTrue(field.get('enum'), name)
+                                self.assertTrue(all(type(value) is str for value in field['enum']), name)
+                                values[name].update(field['enum'])
             self.assertEqual(values['response_type'], {'answer', 'clarification_question', 'proposal_drafting_recommendation',
                 'artifact_change_proposal' if artifact else 'specialist_consultation_proposal'})
             self.assertEqual(values['action_type'], {'draft_document_change_proposal' if artifact else 'draft_specialist_consultation_proposal'})
