@@ -24,6 +24,7 @@ from .writing_artifacts.relationship_policy import artifact_source_operation_rul
 from .provider_wire import (
     project_result_schema, normalize_result, hoist_schema_definitions, rebase_schema_definitions,
     project_lead_scope_schema, restore_lead_scope_result, project_lead_scope_diagnostic,
+    diagnostic_to_wire,
     ACTIVITIES as AUTHORING_ACTIVITIES, ASSIGNMENT_TYPES,
 )
 from .provider_wire import share_schema_descriptions
@@ -322,6 +323,56 @@ class LeadDecodedResult:
         return strict_json_object(self.domain_json)
 
 
+def _has_free_dependency_slots(rules: SchemaRules) -> bool:
+    """Only free native slot arrays need the residual cross-row ID rule."""
+    # Closed object keys cannot preserve arbitrary IDs; whole-row uniqueness
+    # would still allow one ID with different domain selections.
+    root = rules.schema_value()
+    seen: set[tuple[int, tuple[str, ...]]] = set()
+
+    def visit(node: dict[str, object], path: tuple[str, ...]) -> bool:
+        key = (id(node), path)
+        if key in seen:
+            return False
+        seen.add(key)
+        if "$ref" in node:
+            return visit(root["$defs"][node["$ref"].removeprefix("#/$defs/")], path)
+        if "anyOf" in node:
+            return any(visit(child, path) for child in node["anyOf"])
+        if not path:
+            return node.get("type") == "array" and node.get("maxItems") != 0
+        properties = node.get("properties", {})
+        return path[0] in properties and visit(properties[path[0]], path[1:])
+
+    return visit(root, ("response_details", "task_scope", "slots"))
+
+
+def _require_dependency_slot_ids(
+    value: object, *, rule=AuthoringScopeRuleSet.dependency_slot_id_rule,
+    wire_path=diagnostic_to_wire, scope_path=project_lead_scope_diagnostic,
+) -> None:
+    """Use the domain rule before intrinsic scope construction can reject it."""
+    if AuthoringScopeRuleSet.dependency_slot_id_rule is not rule:
+        raise ValueError("frozen dependency-slot identity rule changed")
+    def visit(node: object, path: str) -> None:
+        if type(node) is dict:
+            for name, child in node.items():
+                child_path = path + "." + name
+                if name == "authoring_scope" and child is not None:
+                    finding = rule(tuple(slot["slot_id"] for slot in child["dependency_slots"]))
+                    if finding is not None:
+                        raise validation_failure(
+                            ValueError("dependency slots must be unique"),
+                            scope_path(wire_path(child_path + finding.path[1:])), finding.requirement,
+                        )
+                visit(child, child_path)
+        elif type(node) is list:
+            for index, child in enumerate(node):
+                visit(child, f"{path}[{index}]")
+
+    visit(value, "$")
+
+
 def _require_intrinsic_lead_result(value: object) -> None:
     if type(value) is not dict or type(value.get("message")) is not str:
         raise TypeError("selected Lead response requires typed text")
@@ -398,7 +449,26 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
             separators=(",", ":")).encode("utf-8")
         visible = NamedHostCheck("owner.visible_text_utf8", "848-v3:existing-visible-text-cap", "selected",
                                 SelectedHostContext, facts, self._require_visible_text)
-        object.__setattr__(self, "_declared_checks", (visible, *self.checks))
+        free_slots = _has_free_dependency_slots(self.variant.rules)
+        slot_checks = ()
+        check_slots = _require_dependency_slot_ids
+        if free_slots:
+            finding = AuthoringScopeRuleSet.dependency_slot_id_rule()
+            slot_facts = json.dumps({"requirements": [{
+                "path": project_lead_scope_diagnostic(diagnostic_to_wire("$.authoring_scope" + finding.path[1:])),
+                "rule": "DEPENDENCY_SLOT_IDS_UNIQUE",
+                "expected": {"requirement": finding.requirement, "comparison": "SLOT_ID_WITHIN_ONE_SCOPE"},
+            }]}, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+
+            def selected_slots(value: LeadDecodedResult, context: HostCheckContext, *, check_slots=check_slots) -> None:
+                check_slots(value.domain_value())
+
+            slot_checks = (NamedHostCheck(
+                "owner.dependency_slot_ids_unique", "848-v1:dependency-slot-identity", "selected",
+                SelectedHostContext, slot_facts, selected_slots,
+                dependencies=(AuthoringScopeRuleSet.dependency_slot_id_rule,),
+            ),)
+        object.__setattr__(self, "_declared_checks", (visible, *slot_checks, *self.checks))
         variant_decode = self.variant.decode
         task_revisions = self.task_revisions
 
@@ -408,6 +478,8 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
             body = value.as_object()
             map_current_task_literals(body, task_revisions)
             domain = variant_decode(body)
+            if free_slots:
+                check_slots(domain)
             _require_intrinsic_lead_result(domain)
             return LeadDecodedResult(json.dumps(domain, ensure_ascii=False, allow_nan=False, separators=(",", ":")))
         object.__setattr__(self, "_declared_decode", decode_typed)
@@ -453,7 +525,9 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
              LeadProviderConstraints._allocation_input_ids, lead_outcome_scope_paths, normalize_result,
              map_current_task_literals,
             _require_intrinsic_lead_result,
-                             project_lead_scope_schema, restore_lead_scope_result, project_lead_scope_diagnostic))
+             project_lead_scope_schema, restore_lead_scope_result, project_lead_scope_diagnostic,
+             diagnostic_to_wire, AuthoringScopeRuleSet.dependency_slot_id_rule,
+             _has_free_dependency_slots, _require_dependency_slot_ids))
 
     def named_host_checks(self) -> tuple[NamedHostCheck[LeadDecodedResult], ...]:
         self._require_declaration()

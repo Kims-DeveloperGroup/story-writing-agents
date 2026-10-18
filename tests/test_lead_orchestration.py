@@ -62,10 +62,8 @@ from story_writing_agents.structured_output_validation import DomainValidationRu
 from story_writing_agents.lead_provider_contracts import (
     LeadContractError, LeadProviderConstraints, canonical_assignments, canonical_scope,)
 from story_writing_agents.writing_artifacts.authorization import (ReferenceAuthorizationErrorCode,)
-from story_writing_agents.writing_artifacts.read_actions import (ReferenceReadAction,
-    ReferenceReadActionKind,)
-from story_writing_agents.workspace.initialization import (SessionArtifactBindingError,
-    provision_session_resources,)
+from story_writing_agents.writing_artifacts.read_actions import ReferenceReadAction, ReferenceReadActionKind
+from story_writing_agents.workspace.initialization import SessionArtifactBindingError, provision_session_resources
 
 from story_writing_agents import lead_exploration as exploration
 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id, scenario_input, response as wire_response, result as wire_result, assert_guidance, assert_schema_descriptions, capture_sample
@@ -1151,8 +1149,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                     valid = bound.decode_response(json.dumps(packet, ensure_ascii=False))
                     bound.require_authorized_answer(valid, authorization)
                     if synthesis:
-                        from story_writing_agents.lead_provider_contracts import (
-                            LeadContractRejection)
+                        from story_writing_agents.lead_provider_contracts import LeadContractRejection
                         self.assertIs(bound.factory.constraints.continuation, True)
                         self.assertEqual(
                             path[:4], root + ('response_details', 'follow_up_consultation'))
@@ -1291,6 +1288,15 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                 self._require_fixture_field_neighbors(matcher, packet, projection=True)
 
 
+
+    def _require_slot_repair(self, guidance):
+        residual = next(item for item in guidance['paired_semantic_requirements']['owner_requirements']
+                        if item['binding_id'] == 'owner.dependency_slot_ids_unique')
+        self.assertEqual((residual['revision'], residual['phase']), ('848-v1:dependency-slot-identity', 'selected'))
+        self.assertEqual(residual['facts'], [{'path': '$.agent_action.task_result.response_details.task_scope.slots[*].id',
+            'rule': 'DEPENDENCY_SLOT_IDS_UNIQUE', 'expected': {
+                'requirement': 'dependency slot IDs must be unique within one authoring scope',
+                'comparison': 'SLOT_ID_WITHIN_ONE_SCOPE'}}])
 
     def _require_revision_fixture(self, call, encoded, prior_scope, *, artifact=False):
         try:
@@ -3107,6 +3113,22 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 'source_ids': ['user_input'], 'specialist_ids': [EXECUTION_SPECIALIST]}})
         bound.require_authorized_answer(actual_decoded, front_authorization)
         self._require_fixture_text_boundaries(bound, actual_recommendation, authorization=front_authorization)
+        replacement_calls, before_authorization_calls = [], len(self.backend.calls)
+        def replaced_authorization(_result, _authorization):
+            replacement_calls.append(True)
+        original_authorization = bound.factory.authorized_validator
+        object.__setattr__(bound.factory, 'authorized_validator', replaced_authorization)
+        try:
+            for operation in (lambda: bound.require_submission(call.payload, call.schema),
+                              lambda: bound.require_authorized_answer(actual_decoded, front_authorization)):
+                with self.assertRaises(ValueError):
+                    operation()
+            self.assertEqual(replacement_calls, [])
+            self.assertEqual(len(self.backend.calls), before_authorization_calls)
+        finally:
+            object.__setattr__(bound.factory, 'authorized_validator', original_authorization)
+        bound.require_submission(call.payload, call.schema)
+        bound.require_authorized_answer(actual_decoded, front_authorization)
         workflow_record = {**profile_record, 'activity': 'workflow', 'domains': [],
                            'contributions': [], 'interpretation': 'Track the pending request.'}
         workflow_value = authoring_scope_from_dict(workflow_record)
@@ -3248,6 +3270,60 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             root = fixture_schema_node(group_schema, group_schema)
             types = fixture_schema_node(group_schema, root['properties']['response_type'])['enum']
             plain_scope_members.append((original_key, group_schema, tuple(types)))
+        free_record = {**profile_record, 'activity': 'draft', 'domains': list(domain_order),
+            'contributions': [{'domain': domain, 'role': role} for domain, role in zip(
+                domain_order, ('draft_owner', 'draft_owner', 'constraint_assessor'))],
+            'dependency_slots': [{'slot_id': 'shared', 'dependent_domains': ['plot_structure', 'character_world']}]}
+        free_seed = orchestrator_module._lead_front_result_contract(
+            orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=declared)
+        free_bound = replace(factory, rule_seed=free_seed, constraints=declared).for_offer(call.contract.offers)
+        free_packet = json.loads(lead_fixture_response(SimpleNamespace(contract=free_bound), {
+            'response_type': 'clarification_question',
+            'response_text': 'Retain the declared dependency subset.',
+            'response_details': {'task_scope': lead_fixture_scope_record(free_record)}},
+            family=0, branch_key=free_seed.contract_id + ':family:1'))
+        free_schema = free_bound.schema_value()
+        free_native = (free_schema, AntigravityAdapter.native_output_schema(free_schema))
+        for schema, lowering in zip(free_native, ('identity', 'integer_singleton_bounds')):
+            free_bound.require_projection(schema, declared_lowering=lowering)
+        for duplicate_domains in ({'plot_structure': True, 'character_world': True}, {'plot_structure': True}):
+            duplicated = copy.deepcopy(free_packet)
+            slots = duplicated['agent_action']['task_result']['response_details']['task_scope']['slots']
+            self.assertIs(type(slots), list)
+            slots.append({'id': slots[0]['id'], 'domains': duplicate_domains})
+            self.assertFalse(free_bound.rule_graph.findings(duplicated))
+            self.assertTrue(all(not diagnose_json_text(json.dumps(duplicated), schema) for schema in free_native))
+            with self.assertRaises(LeadContractRejection) as rejected_slot:
+                free_bound.decode_response(json.dumps(duplicated))
+            self.assertEqual(rejected_slot.exception.code, 'LEAD_OWNER_RULE_REJECTED')
+            self.assertEqual(rejected_slot.exception.requirements, (
+                '$.response_details.task_scope.slots[1].id: dependency slot IDs must be unique within one authoring scope',))
+            require_current_correction(free_bound, rejected_slot.exception, duplicated['agent_action']['schema_id'],
+                                       duplicated['agent_action']['task_result']['schema_id'])
+            self._require_slot_repair(json.loads(free_bound.corrective_input(rejected_slot.exception)))
+            slots[1]['id'] = 'another_arbitrary_dependency'
+            self.assertFalse(free_bound.rule_graph.findings(duplicated))
+            self.assertTrue(all(not diagnose_json_text(json.dumps(duplicated), schema) for schema in free_native))
+            self.assertTrue(free_bound.decode_response(json.dumps(duplicated)).belongs_to(free_bound))
+        for free_selection, free_expected in (({'plot_structure': True, 'character_world': True},
+                ['plot_structure', 'character_world']), ({'plot_structure': True}, ['plot_structure']),
+            ({'character_world': True}, ['character_world']), ({}, None),
+            ({'plot_structure': True, 'foreign_domain': True}, None),
+            ({'plot_structure': True, 'tone_execution': True}, None)):
+            free_changed = copy.deepcopy(free_packet)
+            free_changed['agent_action']['task_result']['response_details']['task_scope'][
+                'slots'][0]['domains'] = free_selection
+            self.assertEqual(bool(free_bound.rule_graph.findings(free_changed)), free_expected is None)
+            free_encoded = json.dumps(free_changed)
+            for free_native_schema in free_native:
+                self.assertEqual(not bool(diagnose_json_text(free_encoded, free_native_schema)),
+                    free_expected is not None)
+            if free_expected is None:
+                self.assertRaises(ValueError, free_bound.decode_response, free_encoded)
+            else:
+                free_decoded = free_bound.decode_response(free_encoded)
+                self.assertEqual(json.loads(free_decoded.answer_json)['authoring_scope'][
+                    'dependency_slots'][0]['dependent_domains'], free_expected)
         review_basis_control = None
         nonreview_basis_controls = {}
         accepted_profiles = set()
@@ -3579,39 +3655,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     self.assertTrue(diagnose_json_text(json.dumps(authority_frame), schema))
                 with self.assertRaises(ValueError):
                     unit_bound.decode_response(json.dumps(authority_frame))
-        free_record = {**profile_record, 'activity': 'draft', 'domains': list(domain_order),
-            'contributions': [{'domain': domain, 'role': role} for domain, role in zip(
-                domain_order, ('draft_owner', 'draft_owner', 'constraint_assessor'))],
-            'dependency_slots': [{'slot_id': 'shared', 'dependent_domains': ['plot_structure', 'character_world']}]}
-        free_seed = orchestrator_module._lead_front_result_contract(
-            orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=declared)
-        free_bound = replace(factory, rule_seed=free_seed, constraints=declared).for_offer(call.contract.offers)
-        free_packet = json.loads(lead_fixture_response(SimpleNamespace(contract=free_bound), {
-            'response_type': 'clarification_question',
-            'response_text': 'Retain the declared dependency subset.',
-            'response_details': {'task_scope': lead_fixture_scope_record(free_record)}},
-            family=0, branch_key=free_seed.contract_id + ':family:1'))
-        free_schema = free_bound.schema_value()
-        free_native = (free_schema, AntigravityAdapter.native_output_schema(free_schema))
-        for free_selection, free_expected in (({'plot_structure': True, 'character_world': True},
-                ['plot_structure', 'character_world']), ({'plot_structure': True}, ['plot_structure']),
-            ({'character_world': True}, ['character_world']), ({}, None),
-            ({'plot_structure': True, 'foreign_domain': True}, None),
-            ({'plot_structure': True, 'tone_execution': True}, None)):
-            free_changed = copy.deepcopy(free_packet)
-            free_changed['agent_action']['task_result']['response_details']['task_scope'][
-                'slots'][0]['domains'] = free_selection
-            self.assertEqual(bool(free_bound.rule_graph.findings(free_changed)), free_expected is None)
-            free_encoded = json.dumps(free_changed)
-            for free_native_schema in free_native:
-                self.assertEqual(not bool(diagnose_json_text(free_encoded, free_native_schema)),
-                    free_expected is not None)
-            if free_expected is None:
-                self.assertRaises(ValueError, free_bound.decode_response, free_encoded)
-            else:
-                free_decoded = free_bound.decode_response(free_encoded)
-                self.assertEqual(json.loads(free_decoded.answer_json)['authoring_scope'][
-                    'dependency_slots'][0]['dependent_domains'], free_expected)
         preparation_record = {**profile_record, 'activity': 'draft', 'target_paths': [future_path], 'contributions': [
                                   {'domain': 'tone_execution', 'role': 'draft_owner'}]}
         preparation_scope = authoring_scope_from_dict(preparation_record)
@@ -4247,6 +4290,64 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             (task.LeadPublicResponseAcceptance.REJECTED, task.LeadPublicResponseAcceptance.ACCEPTED))
         self.assertTrue(original.validation_details)
         self.assertEqual(correction.repair_of_call_id, original.call_id)
+        slot_calls, slot_rejected_text = [], 'Retain this outline request with the declared dependency slots.'
+        slot_basis = next(event for event in reversed(history) if type(event.payload) is CollaborationLeadJudgmentPayload)
+        self.assertEqual(slot_basis.payload.message, question_text)
+        def duplicate_slot_question(call, provider):
+            packet = json.loads(clarify_pending(call, provider))
+            result = packet['agent_action']['task_result']
+            self.assertIs(type(result['response_details']['task_scope']['slots']), list)
+            result['response_details']['task_scope']['slots'] = [
+                {'id': 'shared', 'domains': {'plot_structure': True}} for _ in range(2)]
+            result['response_text'] = slot_rejected_text
+            self.assertFalse(call.contract.rule_graph.findings(packet))
+            slot_calls.append((call, packet))
+            return json.dumps(packet)
+        def repair_slot_question(call, provider):
+            failed, packet = slot_calls[0]
+            guidance = _workflow_material(call.payload)['response_correction']['bound_contract']
+            self.assertEqual((guidance['current_physical_call_id'], guidance['current_offer_digest'], guidance['selected_schema_id']),
+                             (failed.call_id, failed.contract.offers.offer_digest, packet['agent_action']['schema_id']))
+            self.assertEqual(guidance['task_revisions'], [list(pair) for pair in failed.contract.action_index.policy.task_revisions])
+            self.assertEqual(call.contract.action_index.policy.task_revisions, failed.contract.action_index.policy.task_revisions)
+            self.assertEqual((call.contract.phase, call.contract.logical_origin_call_id), ('repair', failed.call_id))
+            self.assertNotEqual(call.call_id, failed.call_id)
+            self.assertEqual(current_pending_scope(call), captured_scopes[0])
+            self._require_slot_repair(guidance)
+            corrected = json.loads(clarify_pending(call, provider))
+            self.assertIn((corrected['agent_action']['schema_id'], corrected['agent_action']['task_result']['schema_id']),
+                          call.contract.outer_inner_schema_ids)
+            self.assertTrue(call.contract.decode_response(json.dumps(corrected)).belongs_to(call.contract))
+            return json.dumps(corrected)
+        call_start = len(case.backend.calls)
+        case.backend.enqueue(duplicate_slot_question)
+        case.backend.enqueue(repair_slot_question)
+        slot_repaired = await case.runtime.lead_turn(case.session_id, pending_conversation, 'Retain the pending outline and clarify its ending.')
+        self.assertEqual((slot_repaired.kind, slot_repaired.message, getattr(slot_repaired.trace, 'origin', None)),
+                         (LeadOutcomeKind.QUESTION, question_text, ReplyTraceOrigin.RECOVERED))
+        self.assertEqual(len(case.backend.calls) - call_start, 2)
+        retained, slot_history = case.objective(pending_conversation), case.history(pending_conversation)
+        self.assertEqual(retained.facts, pending.facts)
+        self.assertEqual((retained.state, retained.next_step), (collaboration.ArtifactObjectiveState.OPEN, collaboration.ArtifactObjectiveNextStep.CLARIFY))
+        self.assertEqual(retained.draft_sources, current.draft_sources + (collaboration.ArtifactDraftSource(
+            pending_conversation, slot_basis.event_id, 'sha256:' + hashlib.sha256(question_text.encode('utf-8')).hexdigest()),))
+        self.assertEqual(slot_history[:len(history)], history)
+        self.assertFalse(any(type(event.payload) is CollaborationAssignmentDispatchPayload for event in slot_history[len(history):]))
+        self.assertTrue(all(value is None for value in (slot_repaired.proposal, slot_repaired.recommendation_request,
+                                                       slot_repaired.artifact_application_request, slot_repaired.story_commit_request)))
+        self.assertEqual(case.snapshots(), before)
+        slot_judgment = next(event.payload for event in reversed(slot_history) if type(event.payload) is CollaborationLeadJudgmentPayload)
+        self.assertEqual((slot_judgment.authoring_scope.task_id, slot_judgment.authoring_scope.task_revision),
+                         (initial_scope.task_id, initial_scope.task_revision))
+        self.assertEqual(len(slot_repaired.public_responses), 2)
+        original, correction = (item.response for item in slot_repaired.public_responses)
+        self.assertEqual((original.response_text, correction.response_text), (slot_rejected_text, question_text))
+        self.assertEqual((original.acceptance, correction.acceptance),
+                         (task.LeadPublicResponseAcceptance.REJECTED, task.LeadPublicResponseAcceptance.ACCEPTED))
+        self.assertEqual((original.call_id, correction.call_id, correction.repair_of_call_id),
+                         (slot_calls[0][0].call_id, case.backend.calls[-1].call_id, slot_calls[0][0].call_id))
+        self.assertTrue(any('$.agent_action.task_result.response_details.task_scope.slots[1].id' in item and
+            'dependency slot IDs must be unique within one authoring scope' in item for item in original.validation_details))
 
     async def test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing(
         self,
@@ -4444,8 +4545,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             **assignment, 'agent_id': CHARACTER_CUSTODIAN, 'input_ids': ['user_input','reference_1']}]))
         def duplicate_control(label):
             def respond(call, provider):
-                from tests.provider_wire_fixture import (
-                    lead_fixture_response, lead_fixture_assessment)
+                from tests.provider_wire_fixture import lead_fixture_response, lead_fixture_assessment
                 task = _live_material(call)['authoring_tasks'][0]
                 scope = lead_fixture_bound_scope(call, {
                     'writing_intent': 'authoring', 'activity_type': 'review_writing',
@@ -4682,6 +4782,12 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
             domains=('plot_structure',), relation='revise_pending', authoring_assessment=assessment,
                                  author_review_basis=True)
         def checked_revision(call, provider):
+            from tests.recommendation_fixture import action, recommendation
+            scope = asdict(revised_source.proposal.authoring_scope)
+            scope['task_revision'] += 1
+            recommend = recommendation(authoring_scope=scope, authoring_assessment=_fixture_assessment(), recommended_action=action(
+                kind='prepare_consultation', source_ids=('user_input',), specialist_ids=(PLOT_ARCHITECT,)))
+            self._require_revision_fixture(call, recommend(call, provider), revised_source.proposal.authoring_scope)
             return self._require_revision_fixture(call, revision_fixture(call, provider), revised_source.proposal.authoring_scope)
         self.backend.enqueue(checked_revision)
         revised = await self._decide(revised_source, CollaborationConfirmationDecision.REVISE)

@@ -516,6 +516,11 @@ class BoundCallFactory(ABC):
     def declare_result_owners(self, offers: ContextCallOffers) -> LeadStagePolicy:
         raise NotImplementedError
 
+    @abstractmethod
+    def require_declaration(self) -> None:
+        """Reject changed owner invocation targets without freezing live context."""
+        raise NotImplementedError
+
     def for_offer(self, offers: ContextCallOffers, lineage: BoundCallLineage | None = None) -> BoundCallContract:
         return BoundCallContract.bind(self, offers, lineage)
 
@@ -584,6 +589,7 @@ class BoundCallContract:
     logical_origin_call_id: str = field(init=False)
     phase: str = field(init=False)
     _factory_method: object = field(init=False, repr=False, compare=False)
+    _factory_guard: tuple[object, object] = field(init=False, repr=False, compare=False)
     _semantic_anchor: LeadContractIndex[LeadDecodedResult] = field(init=False, repr=False, compare=False)
     _action_anchor: LeadContractIndex[ContextActionValue] = field(init=False, repr=False, compare=False)
 
@@ -596,6 +602,11 @@ class BoundCallContract:
         if self.offers.scope.agent_id != LEAD_ORCHESTRATOR:
             raise TypeError("typed Lead call requires actual Lead offers")
         method = type(self.factory).declare_result_owners
+        guard = type(self.factory).require_declaration
+        TypedDecoder.require_hook_shape(self.factory.require_declaration, 0)
+        object.__setattr__(self, "_factory_guard", (guard, guard.__code__))
+        if guard(self.factory) is not None:
+            raise TypeError("frozen owner declaration guard must return None")
         if self.lineage is None:
             policy = self.factory.declare_result_owners(self.offers)
             owners = () if type(policy) is not LeadStagePolicy else policy.owner_declarations
@@ -655,6 +666,11 @@ class BoundCallContract:
         return cls(factory, offers, lineage)
 
     def require_current_offer(self, offers: ContextCallOffers) -> None:
+        guard, code = self._factory_guard
+        if type(self.factory).require_declaration is not guard or guard.__code__ is not code:
+            raise ValueError("frozen owner declaration guard changed")
+        if guard(self.factory) is not None:
+            raise TypeError("frozen owner declaration guard must return None")
         methods = (type(self)._validate_response_structure, type(self).structural_findings)
         if any(method is not declared or method.__code__ is not code
                for method, (declared, code) in zip(

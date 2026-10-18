@@ -10,6 +10,7 @@ import re
 import unicodedata
 from itertools import combinations, product
 from .structured_output_validation import (
+    ValidationFinding,
     unicode_category_exclusion,
     validation_failure,
     validation_call,
@@ -97,6 +98,19 @@ class AuthoringScopeRuleSet:
     assignment_modes: tuple[tuple[str, SpecialistAssignmentMode], ...]
     schema_version: int = AUTHORING_SCOPE_SCHEMA_VERSION
 
+    @staticmethod
+    def dependency_slot_id_rule(slot_ids: tuple[str, ...] | None = None) -> ValidationFinding | None:
+        """Declare the residual ID rule, or locate its first duplicate occurrence."""
+        requirement = "dependency slot IDs must be unique within one authoring scope"
+        if slot_ids is None:
+            return ValidationFinding("$.dependency_slots[*].slot_id", requirement)
+        seen: set[str] = set()
+        for index, slot_id in enumerate(slot_ids):
+            if slot_id in seen:
+                return ValidationFinding(f"$.dependency_slots[{index}].slot_id", requirement)
+            seen.add(slot_id)
+        return None
+
     def __post_init__(self) -> None:
         if type(self.schema_version) is not int:
             raise TypeError("scope rule version must be an exact integer")
@@ -169,8 +183,9 @@ def authoring_scope_rules(
             specialist_roles[specialist] = role
         if activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} and AuthoringContributionRole.DRAFT_OWNER not in roles.values():
             raise ValueError("authoring requires at least one substantive draft owner")
-        if len({item.slot_id for item in dependency_slots}) != len(dependency_slots):
-            raise ValueError("dependency slots must be unique")
+        slot_finding = AuthoringScopeRuleSet.dependency_slot_id_rule(tuple(item.slot_id for item in dependency_slots))
+        if slot_finding is not None:
+            raise validation_failure(ValueError("dependency slots must be unique"), slot_finding.path, slot_finding.requirement)
         if any(roles.get(domain) is not AuthoringContributionRole.DRAFT_OWNER
                for item in dependency_slots for domain in item.dependent_domains):
             raise ValueError("dependencies must bind declared draft owners")

@@ -2407,6 +2407,8 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
     language: str
     authorized_validator: Callable[[str, object], object] = field(repr=False, compare=False)
     reviewer_for_locator: Callable[[str], str] = field(repr=False, compare=False)
+    _declared_authorization_check: Callable[[LeadDecodedResult, HostCheckContext], None] = field(init=False, repr=False, compare=False)
+    _authorization_declaration: NamedHostCheck[LeadDecodedResult] = field(init=False, repr=False, compare=False)
     _status_rule: tuple[object, object] = field(
         default=(empty_core_status_evidence, empty_core_status_evidence.__code__),
         init=False, repr=False, compare=False,
@@ -2428,13 +2430,44 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
             raise TypeError("Lead factory requires its exact current owner declaration")
         TypedDecoder.require_hook_shape(self.authorized_validator, 2)
         TypedDecoder.require_hook_shape(self.reviewer_for_locator, 1)
+        validator = self.authorized_validator
+        guard = type(self).require_declaration
+
+        def authorized_check(result: LeadDecodedResult, context: HostCheckContext, *, validator=validator, guard=guard) -> None:
+            guard(self)
+            if self.authorized_validator is not validator:
+                raise ValueError("frozen Lead authorization declaration changed")
+            if type(result) is not LeadDecodedResult or type(context) is not AuthorizedAnswerHostContext:
+                raise TypeError("final Lead owner requires the actual selected result/authorization")
+            if validator(result.domain_json, context.authorization) is not None:
+                raise TypeError("final Lead owner check must return None")
+
+        object.__setattr__(self, "_declared_authorization_check", authorized_check)
+        object.__setattr__(self, "_authorization_declaration", NamedHostCheck(
+            "owner.authorized_final", "848-v3:actual-service-authorization", "authorized",
+            AuthorizedAnswerHostContext,
+            b'{"requirements":[{"expected":{"authorization":"ACTUAL_CURRENT_OWNER"},"path":"$","rule":"ACTUAL_CURRENT_OWNER_AUTHORIZATION"}]}',
+            authorized_check,
+            dependencies=(validator, guard, self._require_status_rule,
+                          self._status_rule[0], self._outcome_scope_rule[0], parse_artifact_references),
+        ))
+
+    def require_declaration(self) -> None:
+        declaration = self._authorization_declaration
+        declaration.require_provenance()
+        if (self._declared_authorization_check is not declaration.check
+                or self.authorized_validator is not declaration.dependencies[0]
+                or type(self).require_declaration is not declaration.dependencies[1]):
+            raise ValueError("frozen Lead authorization declaration changed")
+        self._require_status_rule()
 
     @property
     def contract_id(self) -> str:
         return self.rule_seed.contract_id
 
     def declare_result_owners(self, offers: ContextCallOffers) -> LeadStagePolicy:
-        self._require_status_rule()
+        self._authorization_declaration.require_provenance()
+        self._authorization_declaration.dependencies[1](self)
         if type(offers) is not ContextCallOffers:
             raise TypeError("Lead declaration requires actual service-owned physical offers")
         if self.constraints.continuation and self.constraints.review_candidate_ids is None:
@@ -2467,16 +2500,7 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
                 "new_target_path": "ACTUAL_CURRENT_PHYSICAL_ROOT_POLICY",
                 "admission": "EXISTING_OWNER_STATE_AND_FINAL_ADMISSION"}}]},
             sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
-        check = NamedHostCheck(
-            'owner.authorized_final',
-            '848-v3:actual-service-authorization',
-            'authorized',
-            AuthorizedAnswerHostContext,
-            facts_bytes,
-            self._require_authorized_result,
-            dependencies=(self.authorized_validator, self._status_rule[0],
-                          self._outcome_scope_rule[0], parse_artifact_references),
-        )
+        check = replace(self._authorization_declaration, corrective_facts=facts_bytes)
         owners = tuple(LeadResultContractOwner(variant, tasks, (check,)) for variant in variants)
         return LeadStagePolicy(self.stage, offers.call_id, tasks, self.language, offers.offer_digest,
                                current.choice_snapshot(), offers.offer_digest, offers.call_id,
@@ -2493,13 +2517,6 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
         function, code = self._outcome_scope_rule
         if lead_outcome_scope_paths is not function or function.__code__ is not code:
             raise ValueError("frozen Lead outcome scope rule changed")
-
-    def _require_authorized_result(self, result: LeadDecodedResult, context: HostCheckContext) -> None:
-        self._require_status_rule()
-        if type(result) is not LeadDecodedResult or type(context) is not AuthorizedAnswerHostContext:
-            raise TypeError("final Lead owner requires the actual selected result/authorization")
-        if self.authorized_validator(result.domain_json, context.authorization) is not None:
-            raise TypeError("final Lead owner check must return None")
 
 
 def _lead_call_contract_factory(*, constraints: LeadProviderConstraints, contract: LeadResultRuleSeed,

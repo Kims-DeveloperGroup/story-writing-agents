@@ -798,6 +798,11 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                     {'domain': domain, 'role': 'constraint_assessor'}
                     for domain in ('tone_execution',)]),)
         def checked_revision(call, provider):
+            for response_type in ('answer', 'clarification_question'):
+                discussion = {'response_type': response_type, 'response_text': 'Clarify the existing artifact revision.',
+                              'response_details': {'used_evidence_ids': {}}}
+                self._require_revision_fixture(call, lead_fixture_response(call, discussion, family=0),
+                                               first.proposal.authoring_scope, artifact=True)
             return self._require_revision_fixture(call, revision_fixture(call, provider), first.proposal.authoring_scope, artifact=True)
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, checked_revision)
         replacement = await self.runtime.decide_lead_step(
