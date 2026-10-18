@@ -12244,7 +12244,7 @@ class StoryRuntime:
                                          decoded.objective_intent, decoded.artifact_intent))
                         )
                         writing_reads = ()
-                        if ordinary_answer and decoded.evidence_status is LeadEvidenceStatus.VERIFIED:
+                        if ordinary_answer:
                             writing_reads = tuple(
                                 (item.evidence_id, item.provenance.locator,
                                  item.source_digest == item.boundary_digest
