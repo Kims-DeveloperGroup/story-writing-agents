@@ -1500,11 +1500,12 @@ _ContractValue = TypeVar("_ContractValue")
 
 def _hook_default_identity(
     value: object, seen: set[int], *,
-    _digests: tuple[dict[int, tuple[object, str]], dict[int, tuple[object, str]]] | None = None,
+    _digests: tuple[dict[int, tuple[object, str]], dict[int, tuple[object, str]],
+                    dict[int, tuple[object, object]]] | None = None,
     _attest_captures: bool = False,
 ) -> object:
     if _digests is None:
-        _digests = ({}, {})
+        _digests = ({}, {}, {})
     if value is None or type(value) in {str, int, bool}:
         return (type(value).__name__, value)
     if type(value) is bytes:
@@ -1526,15 +1527,30 @@ def _hook_default_identity(
         ))
     if id(value) in seen:
         raise TypeError("hook default declarations cannot be cyclic")
+    if type(value) is tuple:
+        cached_tuple = _digests[2].get(id(value))
+        if cached_tuple is not None and cached_tuple[0] is value:
+            return cached_tuple[1]
     seen.add(id(value))
     try:
         if type(value) in {tuple, list}:
-            return (type(value).__name__, tuple(_hook_default_identity(
+            identity = (type(value).__name__, tuple(_hook_default_identity(
                 item,
                 seen,
                 _digests=_digests,
                 _attest_captures=_attest_captures,
             ) for item in value))
+            # Reuse only immutable values whose complete identities were checked
+            # in this operation. Decimal spelling can depend on live context.
+            if type(value) is tuple and all(
+                item is None or type(item) in {str, int, bool, bytes, float}
+                or (type(item) is tuple
+                    and (child := _digests[2].get(id(item))) is not None
+                    and child[0] is item)
+                for item in value
+            ):
+                _digests[2][id(value)] = (value, identity)
+            return identity
         if isinstance(value, Mapping):
             pairs = [(_hook_default_identity(
                 key,
@@ -1593,12 +1609,13 @@ def _hook_default_identity(
 
 def _permitted_hook_identity(
     callback: Callable, seen: set[int] | None = None, *,
-    _digests: tuple[dict[int, tuple[object, str]], dict[int, tuple[object, str]]] | None = None,
+    _digests: tuple[dict[int, tuple[object, str]], dict[int, tuple[object, str]],
+                    dict[int, tuple[object, object]]] | None = None,
     _attest_captures: bool = False,
 ) -> str:
     """Derived content-free actual hook provenance, never a caller-supplied pin."""
     if _digests is None:
-        _digests = ({}, {})
+        _digests = ({}, {}, {})
     if inspect.ismethod(callback):
         function, receiver = callback.__func__, callback.__self__
     elif inspect.isfunction(callback):
@@ -1713,7 +1730,7 @@ class TypedDecoder(Generic[_ContractValue]):
         object.__setattr__(self, "binding_fingerprint", fingerprint)
 
     def require_provenance(self) -> None:
-        digests = ({}, {})
+        digests = ({}, {}, {})
         if tuple(_permitted_hook_identity(
             item,
             _digests=digests,
@@ -1781,7 +1798,7 @@ class NamedHostCheck(Generic[_ContractValue]):
 
 
     def require_provenance(self) -> None:
-        digests = ({}, {})
+        digests = ({}, {}, {})
         if tuple(_permitted_hook_identity(
             item,
             _digests=digests,
