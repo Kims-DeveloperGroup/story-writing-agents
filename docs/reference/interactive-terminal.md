@@ -302,30 +302,39 @@ Partial UTF-8 and buffered input survive these nonfatal polling pauses.
 ## Retained agent-output history
 
 Agent JSON/progress frames kept by the existing `/progress` retention rules remain
-available in a scrollable output-history area above the main prompt. The history
+available in a scrollable output-history area above the main prompt. History
 includes each agent's retained frame from earlier operations in the current shell,
-including across conversation and session switches. It is discarded when the shell
-exits. These are the same bounded previews shown during inspection; opening an old
-frame does not reload files or call a provider.
+including across conversation and session switches. It is discarded when the
+shell exits. These are the same bounded previews shown during inspection; opening
+an old frame does not reload files or call a provider.
 
-Left-click a frame's header, border, or body to focus it. The focused frame uses the
-selected-control accent and a `Focused` marker; the marker also appears with
-`NO_COLOR`. A `>` in the history gutter keeps focus visible when a frame's header
-and footer are clipped. Arrows and paging keys navigate the focused frame. The mouse wheel over
-a frame scrolls its content, while the left history gutter scrolls through earlier
-frames. New output follows the bottom only when you are already viewing the bottom.
+The mouse wheel normally scrolls the terminal's own scrollback. Press `F6` to
+enter output mouse mode and focus the newest visible frame. Left-click another
+frame's header, border, or body to change focus. Enter immediately after F6
+returns to the prompt without submitting the draft. Press `F6` again or `Escape`
+to leave mouse mode and restore ordinary wheel scrolling. Mouse mode is available
+only while output frames are visible.
 
-Click the prompt or press Escape to return to the unchanged input draft and cursor.
-Enter while an output frame is focused returns to input without submitting the
-draft. Typing printable text returns to input and preserves the first character.
-History navigation does not add entries to command history or change conversation
-focus.
+The focused frame uses the selected-control accent and a `Focused` marker, which
+also appears with `NO_COLOR`. A `>` in the history gutter keeps focus visible when
+the frame's header and footer are clipped. Arrows and paging keys navigate the
+focused frame. In mouse mode, the wheel over a frame scrolls its content, while the
+left history gutter scrolls through earlier frames. New output follows the bottom
+only when you are already viewing the bottom.
 
-The history area fits above the prompt and its controls and is omitted when the
-terminal is too short to show both. Line-fallback terminals retain their ordinary
-output behavior. Mouse reporting is scoped to Story's active history/inspector
-interaction and is released before native authentication or an external viewer.
-Terminal keyboard shortcuts and preferences are unchanged.
+Click the prompt or press `Escape` to leave mouse mode and return to the unchanged
+input draft and cursor. Enter while an output frame is focused returns to input
+without submitting the draft. Printable text returns to input, releases mouse
+capture, and preserves the first character. History navigation does not add
+command-history entries or change conversation focus.
+
+The history area fits above the prompt and is omitted when the terminal is too
+short or narrow to display it; omitting it releases mouse capture. Line-fallback
+terminals retain ordinary output behavior. The keyboard inspector also leaves
+wheel scrolling to the terminal until `F6` enables mouse interaction. Mouse
+reporting is released on exit and before native authentication or an external
+viewer. Ordinary input never re-enables capture merely because history exists.
+Terminal preferences and existing keyboard shortcuts are unchanged.
 
 ## Safety
 

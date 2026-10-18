@@ -381,7 +381,7 @@ def render_nested_scroll_view(
             else ""
         )
         compact_line = _clip_cells(
-            f"[{'Focused • ' if focused.is_focused else ''}{prefix} {focused.title}]{multi_indicator} {counter_str}{content} • ↑/↓: scroll • Enter/Esc: input",
+            f"[{'Focused • ' if focused.is_focused else ''}{prefix} {focused.title}]{multi_indicator} {counter_str}{content} • F6: mouse mode • Esc: native scroll",
             render_width,
         )
         if focused.is_focused and capabilities.decorative_sgr:
@@ -426,7 +426,7 @@ def render_nested_scroll_view(
         body_lines.append(box.body_row(safe_content, right_marker=bar))
 
     # 3. Footer Line
-    hints = "↑/↓: scroll • ←/→: pan • Tab: switch agent • t: toggle view • Enter/Esc: dismiss"
+    hints = "F6: mouse mode • Esc: native scroll • ↑/↓: scroll • Tab: agent • t: toggle • Enter: dismiss"
     footer_line = box.bottom(("Focused • " if focused.is_focused else "") + hints)
 
     all_rows = [header_line, *body_lines, footer_line]

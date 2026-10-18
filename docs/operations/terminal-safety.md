@@ -437,25 +437,33 @@ context, and error records remain the authoritative output.
 The terminal driver owns one shell-lifetime history of eligible retained
 agent-output snapshots. Per-operation progress state remains separate. History
 copies the final immutable per-agent viewport once per retained operation, uses
-distinct chronological identities, and preserves the existing sanitization and
-preview limits. It does not persist content, read storage, or replay providers.
-Conversation/session switches keep the shell-local history; shell exit releases it.
+distinct chronological identities, and preserves existing sanitization and preview
+limits. It is shell-local across conversation/session switches and is released
+when the shell exits.
 
 The main prompt renders a bounded history viewport with renderer-derived pointer
-hit regions. Only a left-button press can focus a frame. Releases, unsupported or
-malformed reports, and wheel navigation cannot submit input or become draft text.
+hit regions. Mouse capture is disabled by default in both retained history and the
+keyboard inspector, leaving ordinary wheel scrollback to the terminal. F6
+explicitly acquires mouse reporting for visible output interaction; F6 or Escape
+releases it. Returning to the prompt by Enter, printable input, or prompt click
+also releases capture, as does omitting the history viewport. Showing history alone
+never acquires mouse modes.
+
+F6 selects the newest visible frame in main history when entering mouse mode;
+the inspector keeps its current keyboard focus. A left-button press in mouse mode
+can change frame focus. Releases, unsupported or malformed reports, and wheel
+navigation cannot submit input or become draft text.
 Frame focus preserves the input draft, cursor, and command-history navigation.
 Focused Enter returns to input without committing; printable input transfers back
-exactly once. Focus has a visible text marker independently of decorative SGR,
-including a gutter marker when only a clipped frame body is visible.
+exactly once. Focus has a text marker independently of decorative SGR, including a
+gutter marker when only a clipped frame body is visible.
 
-SGR mouse reporting belongs to the existing raw-input owner. History interaction
-uses the same persistent reader and input operation rather than acquiring another
-one. Mouse modes are released on cleanup and before native-authentication or
-external-viewer handoffs. The separate viewer continues to own its own terminal
-modes. Pointer geometry is refreshed with terminal size and does not authorize
-control sequences from provider text. No application preferences or macOS keyboard
-hooks are used.
+SGR mouse reporting belongs to the existing raw-input owner and uses the same
+persistent reader and input operation. Mouse modes are released on cleanup and
+before native-authentication or external-viewer handoffs; ordinary input does not
+silently reacquire them. The separate viewer continues to own its own terminal
+modes. Refreshed pointer geometry never authorizes control sequences from provider
+text. No terminal preferences or macOS keyboard hooks are used.
 
 ## Typed errors, never raw diagnostics
 
