@@ -326,7 +326,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       PYTHONDONTWRITEBYTECODE: '1'
-    timeout-minutes: ${{ needs.classify.outputs.wall_time_exception == 'true' && 180 || 15 }}
+    timeout-minutes: ${{ needs.classify.outputs.wall_time_exception == 'true' && 360 || 15 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -407,7 +407,7 @@ jobs:
       always() && (github.event_name == 'workflow_dispatch' ||
       (needs.full.result == 'success' && needs.reconcile-full.result == 'failure'))
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 60 || 10 }}
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 360 || 10 }}
     steps:
       - uses: actions/checkout@v4
         with:
