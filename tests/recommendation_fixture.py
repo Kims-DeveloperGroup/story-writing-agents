@@ -617,7 +617,7 @@ def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
                 return unbound(call, provider)
             from tests.provider_wire_fixture import (result, lead_fixture_assignments,
                 lead_fixture_scope_record, lead_fixture_result, lead_fixture_response,
-                author_positive_fixture_review_bases)
+                author_positive_fixture_review_bases, lead_fixture_assessment)
             inputs = [item.input_id for item in request.basis.inputs]
             proposal = {'relation': 'new_step', 'purpose': request.instruction,
                 'assignments': [{'agent_id': agent, 'instruction': request.instruction,
@@ -636,6 +636,9 @@ def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
             native['task_scope'] = lead_fixture_bound_scope(
                 call, body['authoring_scope'], record=True)
             choices = dict(call.contract.semantic_index.policy.choices)
+            if 'authoring_assessment' in native:
+                native['authoring_assessment'] = lead_fixture_assessment(
+                    native['authoring_assessment'], source_choices=choices['input_ids'])
             rows = (
                 [{'agent_id': row['agent_id'], 'assignment_type': 'review_content',
                 'task_instructions': row['instruction'],
