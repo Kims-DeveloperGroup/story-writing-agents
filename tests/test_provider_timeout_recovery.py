@@ -232,15 +232,89 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         scoped = ((len(self.backend.calls), len(self.backend.call_records),
                    len(self.backend.finalizers)), self.session_id,
                   conversation, None, None, None)
+        import sys
+        from types import CodeType, FrameType
+        from story_writing_agents.agent_context import service as context_service
+        original_fail = context_service._fail_provider_call_without_replacing
+        service_filename = context_service.__file__
+        boundary_rows = []
+        boundary_flags = [False, False]
+
+        def record_retry_failure(finalizer, code):
+            active = (sys.exception()
+                      if code is context_service.ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED
+                      else None)
+            frame = frame_code = None
+            try:
+                if code is context_service.ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED:
+                    finalizers = self.backend.finalizers
+                    start = scoped[0][2]
+                    if (type(self.backend) is not lead._LeadBackend or type(finalizers) is not list
+                            or type(start) is not int or not 0 <= start <= len(finalizers)
+                            or type(finalizer) is not lead._Finalizer):
+                        boundary_flags[0] = True
+                    elif len(finalizers) - start > 3:
+                        boundary_flags[1] = True
+                    else:
+                        matches = [i for i, item in enumerate(finalizers[start:])
+                                   if item is finalizer]
+                        if len(matches) != 1:
+                            boundary_flags[0] = True
+                        elif len(boundary_rows) >= 3:
+                            boundary_flags[1] = True
+                        else:
+                            emitter = 0
+                            frame = sys._getframe(1)
+                            if type(frame) is FrameType:
+                                frame_code = FrameType.f_code.__get__(frame)
+                                if type(frame_code) is CodeType:
+                                    filename = CodeType.co_filename.__get__(frame_code)
+                                    firstline = CodeType.co_firstlineno.__get__(frame_code)
+                                    name = CodeType.co_name.__get__(frame_code)
+                                    line = FrameType.f_lineno.__get__(frame)
+                                    if (type(filename) is str and len(filename) <= 512
+                                            and type(service_filename) is str
+                                            and filename == service_filename):
+                                        table = ((1, 'invoke', 5284, 5489, 5491),
+                                                 (2, 'abort_unpublished', 6571, 6592, 6595),
+                                                 (3, '_invoke_locked', 5510, 6704, 6707))
+                                        emitter = next((tag for tag, owner, first, lo, hi in table
+                                            if name == owner and firstline == first
+                                            and lo <= line <= hi), 0)
+                            classes = (AssertionError, IndexError, KeyError, TypeError, ValueError,
+                                       asyncio.CancelledError)
+                            class_id = next((i + 1 for i, known in enumerate(classes)
+                                             if type(active) is known), 0)
+                            boundary_rows.append((matches[0], emitter, active is not None,
+                                                  class_id != 0, class_id,
+                                                  emitter in (1, 3) and active is not None))
+                            if emitter == 0 or (active is not None and class_id == 0):
+                                boundary_flags[0] = True
+            except BaseException:
+                boundary_flags[0] = True
+            finally:
+                active = frame = frame_code = None
+            return original_fail(finalizer, code)
+
         # Bound test progress across the entire retry, including fixture Git work.
-        try:
-            async with asyncio.timeout(30):
-                await self.answer(
-                    conversation, "A new request after cancellation.", runtime=restarted)
-        except TimeoutError as failure:
-            from tests.recommendation_fixture import _current_policy_failure_note
-            failure.add_note(_current_policy_failure_note(self.backend, scoped=scoped))
-            raise
+        with mock.patch.object(context_service, '_fail_provider_call_without_replacing',
+                               new=record_retry_failure):
+            try:
+                async with asyncio.timeout(30):
+                    await self.answer(
+                        conversation, "A new request after cancellation.", runtime=restarted)
+            except TimeoutError as failure:
+                from tests.recommendation_fixture import _current_policy_failure_note
+                failure.add_note(_current_policy_failure_note(self.backend, scoped=scoped))
+                try:
+                    note = json.dumps(('retry_failure_boundary_v1', boundary_rows,
+                                       not boundary_rows,
+                                       *boundary_flags), ensure_ascii=True, separators=(',', ':'))
+                    BaseException.add_note(failure, note if len(note) <= 1024
+                                           else '["retry_failure_boundary_v1","overflow"]')
+                except BaseException:
+                    pass
+                raise
         self.assertEqual(len(self.backend.calls), 2)
         self.assertEqual(len(self.backend.reference_calls), 1)
         self.assertIsNone(self.backend.calls[-1].expected_thread_id)

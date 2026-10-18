@@ -60,10 +60,15 @@ class LeadRecommendationTests(RecommendationCase):
             self.assertEqual(decision_event.batch_id, started.batch_id)
             self.assertEqual(started.payload.decision_event_id, decision_event.event_id)
             self.assertEqual(started.payload.request_event_id, request.request_event_id)
-            material = lead._workflow_material(call.payload)["structured_recommendation_execution"]
-            self.assertEqual(call.payload["context_reuse"]["format"], "shared-objects-v1")
-            self.assertLess(len(json.dumps(dict(call.payload), ensure_ascii=False)),
-                            len(json.dumps(lead._expanded_context_payload(call.payload), ensure_ascii=False)))
+            initial = self.backend.calls[calls]
+            self.assertIs(initial.contract.factory, call.contract.factory)
+            self.assertEqual(initial.scope, call.scope)
+            self.assertIs(initial.call_kind, lead.ProviderCallKind.COLLABORATION_INITIAL)
+            material = lead._live_material(call)["structured_recommendation_execution"]
+            self.assertEqual(initial.payload["context_reuse"]["format"], "shared-objects-v1")
+            self.assertLess(len(json.dumps(dict(initial.payload), ensure_ascii=False)),
+                            len(json.dumps(lead._expanded_context_payload(initial.payload),
+                                           ensure_ascii=False)))
             self.assertEqual(material["request"]["action_digest"], request.action_digest)
             self.assertEqual(material["decision"]["decision"]["kind"], "confirm")
             self.assertEqual(material["start"]["execution_attempt_id"], started.payload.execution_attempt_id)
@@ -109,7 +114,7 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertEqual(self.snapshots(), before)
 
         for call in self.backend.calls:
-            self.assertNotIn("response_correction", lead._workflow_material(call.payload))
+            self.assertNotIn("response_correction", lead._live_material(call))
             self.assertNotIn("structured_response_repair", call.payload)
         for aliases, omit_source in (((), False), (("recommendation_request",), False),
                                      (("recommendation_decision",), False),
@@ -323,8 +328,15 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertEqual(state.scope_state(whole_result.record_ref).status, "partial")
         drift_work, offered = await self.recommend(self.conversation("Range anchor drift"))
         def search_outline(call, _provider):
-            return json.dumps({"action": {
-                "kind": "search", "path_prefix": "core_documents/", "queries": [{"text": "Source-bound outline line.", "source_kinds": ["writing_artifact"]}], }})
+            from tests.provider_wire_fixture import indexed_response, offered_fixture_bindings
+            outer, inner = offered_fixture_bindings(
+                call, action_type="search_context", response_type=None, family=1)
+            assert inner is None
+            return indexed_response({
+                "action_type": "search_context", "artifact_directory_prefix": "core_documents/",
+                "queries": [{"search_text": "Source-bound outline line.",
+                             "source_types": {"story_document": True}}]},
+                outer_schema_id=outer, inner_schema_id=inner)
         self.backend.enqueue(
             search_outline, lead._read_history_hit, preparation(offered, read_evidence=True))
         drift_plan = await self.runtime.decide_lead_recommendation(decision(offered))

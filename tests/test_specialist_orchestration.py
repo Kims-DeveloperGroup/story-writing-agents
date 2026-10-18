@@ -969,7 +969,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 recipients={alias: PLOT_ARCHITECT for alias in choices['required_input_ids']}))
             grouped = lead_fixture_result(native)
             outer_id, inner_id = offered_fixture_bindings(
-                call, action_type='submit_result', response_type='answer', family=0,
+                call, action_type='submit_result', response_type='consultation_summary', family=0,
                 branch_key='consultation-summary-v4:family:1', value=grouped)
             encoded = indexed_response(
                 {'action_type': 'submit_result', 'task_result': grouped},

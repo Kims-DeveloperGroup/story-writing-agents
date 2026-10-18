@@ -23,65 +23,46 @@ from types import SimpleNamespace
 from typing import Any, get_type_hints
 from unittest import mock
 
-from story_writing_agents import (
-    CONVERSATION_CONTEXT_POLICY,
-    CONVERSATION_EVENT_SCHEMA_VERSION,
-    AgentBackend,
+from story_writing_agents import (CONVERSATION_CONTEXT_POLICY,
+    CONVERSATION_EVENT_SCHEMA_VERSION, AgentBackend,
     AgentReply,
     AgentRequest,
-    BoundAgent,
-    CHARACTER_CUSTODIAN,
-    ConversationContextWindow,
-    ConversationEvent,
-    ConversationEventKind,
-    ConversationReply,
+    BoundAgent, CHARACTER_CUSTODIAN,
+    ConversationContextWindow, ConversationEvent,
+    ConversationEventKind, ConversationReply,
     ConversationRequest,
     ConversationRetrievalAction,
-    ConversationRetrievalActionHandler,
-    ConversationRetrievalActionKind,
+    ConversationRetrievalActionHandler, ConversationRetrievalActionKind,
     ConversationRetrievalAnswerAction,
     ConversationRetrievalObservation,
-    ConversationRetrievalReadAction,
-    ConversationRetrievalReadObservation,
+    ConversationRetrievalReadAction, ConversationRetrievalReadObservation,
     ConversationRetrievalReply,
     ConversationRetrievalRequest,
-    ConversationRetrievalSearchAction,
-    ConversationRetrievalSearchItem,
-    ConversationRetrievalSearchObservation,
-    ConversationRetrievalSource,
+    ConversationRetrievalSearchAction, ConversationRetrievalSearchItem,
+    ConversationRetrievalSearchObservation, ConversationRetrievalSource,
     EXECUTION_SPECIALIST,
     PLOT_ARCHITECT,
     Phase,
-    PromptFileReference,
-    ROSTER,
+    PromptFileReference, ROSTER,
     ReplyTrace,
     ReplyTraceOrigin,
     SessionAccessState,
     SessionDurableState,
-    SessionLifecycleState,
-    Workspace,
+    SessionLifecycleState, Workspace,
 )
 from story_writing_agents import cli as cli_module
-from story_writing_agents.conversation_retrieval import (
-    CONVERSATION_RETRIEVAL_POLICY,
-    ConversationRagAttemptOutcome,
-    ConversationRagContext,
-    ConversationRagExcerpt,
-    serialize_conversation_retrieval_observation,
+from story_writing_agents.conversation_retrieval import (CONVERSATION_RETRIEVAL_POLICY,
+    ConversationRagAttemptOutcome, ConversationRagContext,
+    ConversationRagExcerpt, serialize_conversation_retrieval_observation,
 )
 from story_writing_agents.models import AgentReplyKind, AgentReplyNextPhase
-from story_writing_agents.conversation_rag import (
-    ConversationRagDocumentIdentity,
-    ConversationRagDocumentKey,
-    ConversationRagOutcome,
-    ConversationRagReason,
-    ConversationRagSourceReference,
+from story_writing_agents.conversation_rag import (ConversationRagDocumentIdentity,
+    ConversationRagDocumentKey, ConversationRagOutcome,
+    ConversationRagReason, ConversationRagSourceReference,
 )
 from story_writing_agents.conversation_search import CollaborationHistoryCitation
-from story_writing_agents.conversations import (
-    CollaborationReadableFieldKey,
-    select_bounded_collaboration_context,
-)
+from story_writing_agents.conversations import (CollaborationReadableFieldKey,
+    select_bounded_collaboration_context,)
 from story_writing_agents.cli import _parse_backend_overrides, build_parser, main
 from story_writing_agents.backend import backend_configuration_snapshot
 from story_writing_agents.structured_output_validation import diagnose_json_text, failure_issues
@@ -90,103 +71,66 @@ from story_writing_agents.agent_context import (
     ProviderCallAccounting,
     ProviderCallKind,
     ProviderCallState,
-    ProviderUsage,
-    account_provider_payload,
-    canonical_provider_json,
-)
-from story_writing_agents.agent_context.manifest import (
-    ContextContinuationIdentity,
-    ContextScope,
-    ContextSubjectKind,
+    ProviderUsage, account_provider_payload,
+    canonical_provider_json,)
+from story_writing_agents.agent_context.manifest import (ContextContinuationIdentity,
+    ContextScope, ContextSubjectKind,
 )
 from story_writing_agents.agents import CORE_DOCUMENTS, LEAD_ORCHESTRATOR
-from story_writing_agents.agent_context.service import (
-    ContextProviderCallRequest,
-    ContextProviderTerminalCode,
-    ContextReferencePreludeRequest,
-    context_provider_failure_facts,
-)
+from story_writing_agents.agent_context.service import (ContextProviderCallRequest,
+    ContextProviderTerminalCode, ContextReferencePreludeRequest,
+    context_provider_failure_facts,)
 from story_writing_agents.config import ConfigManager, ConfigurationSnapshot
-from story_writing_agents.errors import (
-    BackendProtocolError,
-    ConfigurationError,
-    ConversationRetrievalBudgetError,
-    ConversationRetrievalObserverError,
-    ConversationRetrievalSemanticError,
-    SessionIdError,
-    SessionNotFoundError,
-    WorkspaceFormatError,
-)
-from story_writing_agents.debug_log import (
-    DEBUG_LOG_RELATIVE_PATH,
-    WorkspaceDebugLog,
-)
+from story_writing_agents.errors import (BackendProtocolError,
+    ConfigurationError, ConversationRetrievalBudgetError,
+    ConversationRetrievalObserverError, ConversationRetrievalSemanticError,
+    SessionIdError, SessionNotFoundError,
+    WorkspaceFormatError,)
+from story_writing_agents.debug_log import (DEBUG_LOG_RELATIVE_PATH,
+    WorkspaceDebugLog,)
 from story_writing_agents.prompts import PromptAssembler
-from story_writing_agents.interactive_settings import (
-    ProviderRouteEntry,
-    commit_prepared_settings_save,
-    load_settings_state,
-    prepare_settings_save,
-    update_agent_backend,
+from story_writing_agents.interactive_settings import (ProviderRouteEntry,
+    commit_prepared_settings_save, load_settings_state,
+    prepare_settings_save, update_agent_backend,
 )
 from story_writing_agents.git.session_resources import GitSessionGenerationPin
 from story_writing_agents.orchestrator import StoryRuntime
-from story_writing_agents.provider_execution_workspace import (
-    ProviderExecutionWorkspace,
-    mint_provider_execution_workspace,
-)
+from story_writing_agents.provider_execution_workspace import (ProviderExecutionWorkspace,
+    mint_provider_execution_workspace,)
 from story_writing_agents.workspace.initialization import provision_session_resources
 from story_writing_agents.workspace.initialization import SessionArtifactBindingError
 from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
-from story_writing_agents.writing_artifacts import (
-    ArtifactLineRange,
-    ArtifactReference,
-    ArtifactReferenceBatch,
-    ReferenceAuthorizationError,
-    ReferenceAuthorizationErrorCode,
-    ReferenceInvocationCorrelation,
-    ReferenceInvocationState,
-    ReferenceOperationState,
-    ReferenceReadAction,
-    ReferenceReadActionKind,
-    ReferenceReadRequest,
+from story_writing_agents.writing_artifacts import (ArtifactLineRange,
+    ArtifactReference, ArtifactReferenceBatch,
+    ReferenceAuthorizationError, ReferenceAuthorizationErrorCode,
+    ReferenceInvocationCorrelation, ReferenceInvocationState,
+    ReferenceOperationState, ReferenceReadAction,
+    ReferenceReadActionKind, ReferenceReadRequest,
 )
-from story_writing_agents.provider_adapter import (
-    AgentExecutionProfile,
-    ExecutionValueSource,
-    ProviderInvocationError,
-    ProviderResult,
-    provider_failure_accounting,
-    record_provider_failure_accounting,
+from story_writing_agents.provider_adapter import (AgentExecutionProfile,
+    ExecutionValueSource, ProviderInvocationError,
+    ProviderResult, provider_failure_accounting,
+    record_provider_failure_accounting,)
+from story_writing_agents.provider_error_artifacts import (PROVIDER_ERROR_ARTIFACT_DIRECTORY,
+    PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY, WorkspaceProviderErrorArtifacts,
 )
-from story_writing_agents.provider_error_artifacts import (
-    PROVIDER_ERROR_ARTIFACT_DIRECTORY,
-    PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY,
-    WorkspaceProviderErrorArtifacts,
-)
-from story_writing_agents.provider_process import (
-    ProcessRequest,
-    run_process,
-    stop_process,
+from story_writing_agents.provider_process import (ProcessRequest,
+    run_process, stop_process,
 )
 from story_writing_agents.models import StoryFocusedContextMode
 
 from story_writing_agents.agent_context.request_compaction import compact_context_payload
 from tests.test_agent_context_accounting import _shared_context_payload
 from tests.provider_wire_fixture import assert_guidance, direct_reply, direct_response
-from tests.helpers import (
-    SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE,
-    all_manuscripts,
-    core_snapshot,
-    initialized_workspace,
-    pristine_initialized_workspace,
+from tests.helpers import (SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE,
+    all_manuscripts, core_snapshot,
+    initialized_workspace, pristine_initialized_workspace,
 )
 
 
-_FAKE_CODEX = (
-    """#!/usr/bin/env python3
+_FAKE_CODEX = ("""#!/usr/bin/env python3
 import os
 import signal
 
@@ -357,8 +301,7 @@ if "STORY_FAKE_CODEX_USAGE" in os.environ:
         "type": "turn.completed",
         "usage": json.loads(os.environ["STORY_FAKE_CODEX_USAGE"]),
     }))
-"""
-)
+""")
 
 
 _TIMESTAMP = "2026-08-15T01:02:03+00:00"
@@ -368,96 +311,67 @@ def _fresh_literal_object_side_effect(target, attribute, value):
     return mock.patch.object(target, attribute, side_effect=value)
 
 def _rejected_response_artifact_patch():
-    return mock.patch.object(
-        WorkspaceProviderErrorArtifacts,
+    return mock.patch.object(WorkspaceProviderErrorArtifacts,
         "record_rejected_response",)
 
 def _wrapped_thread_taint_patch(backend, wrapped):
     return mock.patch.object(
-        backend,
-        "_taint_thread",
+        backend, "_taint_thread",
         wraps=wrapped,
     )
 
 def _wrapped_thread_store_patch(backend, wrapped):
     return mock.patch.object(
-        backend,
-        "_store_thread",
+        backend, "_store_thread",
         wraps=wrapped,
     )
 
-def _conversation_pair(
-    turn_id: str,
-    sequence: int = 1,
-    *,
+def _conversation_pair(turn_id: str,
+    sequence: int = 1, *,
     session_id: str = "story_session",
-    conversation_id: str = "conversation_a",
-    recipient: str = PLOT_ARCHITECT,
-    user_content: str = "visible question",
-    outcome_content: str = "visible answer",
+    conversation_id: str = "conversation_a", recipient: str = PLOT_ARCHITECT,
+    user_content: str = "visible question", outcome_content: str = "visible answer",
     outcome_kind: ConversationEventKind = ConversationEventKind.AGENT_REPLY,
 ) -> tuple[ConversationEvent, ConversationEvent]:
-    def event(
-        offset: int,
-        kind: ConversationEventKind,
-        sender: str,
-        target: str,
-        content: str,
+    def event(offset: int,
+        kind: ConversationEventKind, sender: str,
+        target: str, content: str,
     ) -> ConversationEvent:
-        return ConversationEvent(
-            CONVERSATION_EVENT_SCHEMA_VERSION,
-            session_id,
-            conversation_id,
-            turn_id,
-            sequence + offset,
-            _TIMESTAMP,
-            sender,
-            target,
-            kind,
+        return ConversationEvent(CONVERSATION_EVENT_SCHEMA_VERSION,
+            session_id, conversation_id,
+            turn_id, sequence + offset,
+            _TIMESTAMP, sender,
+            target, kind,
             content,)
 
     user = event(0, ConversationEventKind.USER_MESSAGE, "user", recipient, user_content)
-    sender = (
-        recipient if outcome_kind is ConversationEventKind.AGENT_REPLY else "runtime"
+    sender = (recipient if outcome_kind is ConversationEventKind.AGENT_REPLY else "runtime"
     )
     return user, event(1, outcome_kind, sender, "user", outcome_content)
 
 
-def _context_window(
-    events: tuple[ConversationEvent, ...] = (),
-    *,
-    retained_turns: int | None = None,
-    retained_utf8_bytes: int | None = None,
-    omitted_turns: int = 0,
+def _context_window(events: tuple[ConversationEvent, ...] = (),
+    *, retained_turns: int | None = None,
+    retained_utf8_bytes: int | None = None, omitted_turns: int = 0,
 ) -> ConversationContextWindow:
-    retained = (
-        len({event.turn_id for event in events})
-        if retained_turns is None
-        else retained_turns
+    retained = (len({event.turn_id for event in events})
+        if retained_turns is None else retained_turns
     )
-    retained_bytes = (
-        sum(len(event.content.encode("utf-8")) for event in events)
-        if retained_utf8_bytes is None
-        else retained_utf8_bytes
+    retained_bytes = (sum(len(event.content.encode("utf-8")) for event in events)
+        if retained_utf8_bytes is None else retained_utf8_bytes
     )
-    return ConversationContextWindow(
-        events=events,
-        total_complete_turns=retained + omitted_turns,
-        retained_turns=retained,
-        omitted_turns=omitted_turns,
-        retained_utf8_bytes=retained_bytes,
+    return ConversationContextWindow(events=events,
+        total_complete_turns=retained + omitted_turns, retained_turns=retained,
+        omitted_turns=omitted_turns, retained_utf8_bytes=retained_bytes,
         truncated=omitted_turns > 0,)
 
 
 def _tree_snapshot(root: Path) -> dict[str, bytes | None]:
     if not root.exists():
         return {}
-    return {
-        path.relative_to(root).as_posix(): (
-            None if path.is_dir() else path.read_bytes()
-        )
-        for path in sorted(root.rglob("*"))
-    }
+    return {path.relative_to(root).as_posix(): (
+            None if path.is_dir() else path.read_bytes())
+        for path in sorted(root.rglob("*"))}
 
 
 def _workspace_debug_records(workspace: Any) -> list[dict[str, object]]:
@@ -484,10 +398,8 @@ def _provider_error_records(workspace: Any) -> list[dict[str, object]]:
     directory = workspace.path(PROVIDER_ERROR_ARTIFACT_DIRECTORY)
     if not directory.exists():
         return []
-    return [
-        json.loads(path.read_text(encoding="utf-8"))
-        for path in sorted(directory.glob("*.json"))
-    ]
+    return [json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(directory.glob("*.json"))]
 
 
 def _agent_exchange_records(workspace: Any) -> list[dict[str, object]]:
@@ -496,11 +408,9 @@ def _agent_exchange_records(workspace: Any) -> list[dict[str, object]]:
     directory = workspace.path("debug_logs/agent_exchanges")
     if not directory.exists():
         return []
-    records = [
-        json.loads(line)
+    records = [json.loads(line)
         for path in directory.rglob("*.jsonl")
-        for line in path.read_text(encoding="utf-8").splitlines()
-    ]
+        for line in path.read_text(encoding="utf-8").splitlines()]
     return sorted(records, key=lambda record: record["workspace_sequence"])
 
 
@@ -508,31 +418,22 @@ def _debug_signature(record: dict[str, object]) -> tuple[object, ...]:
     """Project one diagnostic record to its exact content-safe contract."""
 
     exception = record.get("exception")
-    return (
-        record.get("schema_version"),
-        record.get("level"),
-        record.get("component"),
-        record.get("operation"),
-        record.get("phase"),
-        record.get("outcome"),
-        record.get("session_id"),
-        record.get("debate_id"),
-        record.get("conversation_id"),
+    return (record.get("schema_version"),
+        record.get("level"), record.get("component"),
+        record.get("operation"), record.get("phase"),
+        record.get("outcome"), record.get("session_id"),
+        record.get("debate_id"), record.get("conversation_id"),
         record.get("agent_id"),
         exception.get("type") if isinstance(exception, dict) else None,)
 
 
-def _conversation_request(
-    *,
+def _conversation_request(*,
     session_id: str = "story_session",
     conversation_id: str = "conversation_a",
     turn_id: str = "turn_current",
-    agent_id: str = PLOT_ARCHITECT,
-    content: str = "visible user request",
-    context: ConversationContextWindow | None = None,
-) -> ConversationRequest:
-    return ConversationRequest(
-        session_id=session_id,
+    agent_id: str = PLOT_ARCHITECT, content: str = "visible user request",
+    context: ConversationContextWindow | None = None,) -> ConversationRequest:
+    return ConversationRequest(session_id=session_id,
         conversation_id=conversation_id,
         turn_id=turn_id,
         agent_id=agent_id,
@@ -546,66 +447,49 @@ def _readable_context():  # type: ignore[no-untyped-def]
     return select_bounded_collaboration_context(())
 
 
-def _retrieval_request(
-    *,
+def _retrieval_request(*,
     session_id: str = "story_session",
     conversation_id: str = "conversation_a",
     turn_id: str = "turn_current",
-    agent_id: str = PLOT_ARCHITECT,
-    content: str = "visible retrieval request",
-    context: object | None = None,
-    rag_context: ConversationRagContext | None = None,
+    agent_id: str = PLOT_ARCHITECT, content: str = "visible retrieval request",
+    context: object | None = None, rag_context: ConversationRagContext | None = None,
 ) -> ConversationRetrievalRequest:
     """Build one exact bounded-retrieval provider request."""
 
-    return ConversationRetrievalRequest(
-        session_id=session_id,
+    return ConversationRetrievalRequest(session_id=session_id,
         conversation_id=conversation_id,
         turn_id=turn_id,
         agent_id=agent_id,
-        content=content,
-        context=_readable_context() if context is None else context,
+        content=content, context=_readable_context() if context is None else context,
         rag_context=rag_context,)
 
 
 def _provider_rag_context() -> ConversationRagContext:
     """Build one attempted context whose full reference must reach call one."""
 
-    identity = ConversationRagDocumentIdentity(
-        key=ConversationRagDocumentKey(
+    identity = ConversationRagDocumentIdentity(key=ConversationRagDocumentKey(
             session_id="story_session",
             document_id="a" * 64,),
-        conversation_id="source_conversation",
-        start_turn_id="source_turn",
-        end_turn_id="source_turn",
-        start_sequence=1,
+        conversation_id="source_conversation", start_turn_id="source_turn",
+        end_turn_id="source_turn", start_sequence=1,
         end_sequence=2,
         revision_id="sha256:" + "b" * 64,)
     content = "authoritative excerpt 🙂"
-    excerpt = ConversationRagExcerpt(
-        citation_id="g1",
-        source=ConversationRetrievalSource(
-            citation=CollaborationHistoryCitation(
-                session_id="story_session",
-                conversation_id="source_conversation",
-                event_id="source_event",
-                sequence=2,
-                field_key=CollaborationReadableFieldKey.SPECIALIST_REPLY_CONTENT,
-                start_codepoint=0,
+    excerpt = ConversationRagExcerpt(citation_id="g1",
+        source=ConversationRetrievalSource(citation=CollaborationHistoryCitation(
+                session_id="story_session", conversation_id="source_conversation",
+                event_id="source_event", sequence=2,
+                field_key=CollaborationReadableFieldKey.SPECIALIST_REPLY_CONTENT, start_codepoint=0,
                 end_codepoint=len(content),),
-        ),
-        reference=ConversationRagSourceReference(
-            document=identity,
-            fragment_id="fragment-authorized",
+        ), reference=ConversationRagSourceReference(
+            document=identity, fragment_id="fragment-authorized",
             start_codepoint=0,
             end_codepoint=len(content),),
         content=content,)
-    return ConversationRagContext(
-        outcome=ConversationRagAttemptOutcome(
+    return ConversationRagContext(outcome=ConversationRagAttemptOutcome(
             outcome=ConversationRagOutcome.COMPLETE,
             reason=ConversationRagReason.NONE,),
-        excerpts=(excerpt,),
-        retained_utf8_bytes=len(content.encode("utf-8")),
+        excerpts=(excerpt,), retained_utf8_bytes=len(content.encode("utf-8")),
         truncated=False,)
 
 
@@ -614,62 +498,47 @@ class _RecordingRetrievalHandler:
 
     def __init__(self) -> None:
         self.actions: list[ConversationRetrievalAction] = []
-        self.outcomes: list[
-            ConversationRetrievalObservation | ConversationRetrievalReply
+        self.outcomes: list[ConversationRetrievalObservation | ConversationRetrievalReply
         ] = []
         self.source: ConversationRetrievalSource | None = None
 
     def handle_conversation_retrieval_action(
-        self,
-        action: ConversationRetrievalAction,
+        self, action: ConversationRetrievalAction,
     ) -> ConversationRetrievalObservation | ConversationRetrievalReply:
         """Return the corresponding exact outcome for one decoded action."""
 
         self.actions.append(action)
         if type(action) is ConversationRetrievalSearchAction:
-            self.source = ConversationRetrievalSource(
-                citation=CollaborationHistoryCitation(
-                    session_id=action.session_id,
-                    conversation_id="source_conversation",
-                    event_id="source_event",
-                    sequence=1,
-                    field_key=CollaborationReadableFieldKey.PROPOSAL_PURPOSE,
-                    start_codepoint=0,
+            self.source = ConversationRetrievalSource(citation=CollaborationHistoryCitation(
+                    session_id=action.session_id, conversation_id="source_conversation",
+                    event_id="source_event", sequence=1,
+                    field_key=CollaborationReadableFieldKey.PROPOSAL_PURPOSE, start_codepoint=0,
                     end_codepoint=len("Needle source"),),
             )
             outcome: ConversationRetrievalObservation | ConversationRetrievalReply = (
-                ConversationRetrievalSearchObservation(
-                    session_id=action.session_id,
+                ConversationRetrievalSearchObservation(session_id=action.session_id,
                     conversation_id=action.conversation_id,
                     turn_id=action.turn_id,
-                    action_index=action.action_index,
-                    hits=(
-                        ConversationRetrievalSearchItem(
-                            citation_id=f"s{action.action_index}h1",
+                    action_index=action.action_index, hits=(
+                        ConversationRetrievalSearchItem(citation_id=f"s{action.action_index}h1",
                             source=self.source,
                             snippet='Needle "source" 한🙂',),
-                    ),
-                    truncated=False,
+                    ), truncated=False,
                 )
             )
         elif type(action) is ConversationRetrievalReadAction:
             assert self.source is not None
-            outcome = ConversationRetrievalReadObservation(
-                session_id=action.session_id,
+            outcome = ConversationRetrievalReadObservation(session_id=action.session_id,
                 conversation_id=action.conversation_id,
-                turn_id=action.turn_id,
-                action_index=action.action_index,
-                source_citation_id=action.citation_id,
-                source=self.source,
+                turn_id=action.turn_id, action_index=action.action_index,
+                source_citation_id=action.citation_id, source=self.source,
                 records=(),
                 truncated=False,)
         else:
             assert type(action) is ConversationRetrievalAnswerAction
-            outcome = ConversationRetrievalReply(
-                session_id=action.session_id,
+            outcome = ConversationRetrievalReply(session_id=action.session_id,
                 conversation_id=action.conversation_id,
-                turn_id=action.turn_id,
-                content=action.content,
+                turn_id=action.turn_id, content=action.content,
                 sources=() if self.source is None else (self.source,),)
         self.outcomes.append(outcome)
         return outcome
@@ -683,8 +552,7 @@ class _RaisingRetrievalHandler:
         self.calls = 0
 
     def handle_conversation_retrieval_action(
-        self,
-        _action: ConversationRetrievalAction,
+        self, _action: ConversationRetrievalAction,
     ) -> ConversationRetrievalObservation | ConversationRetrievalReply:
         """Record the action and raise the original configured failure."""
 
@@ -692,28 +560,19 @@ class _RaisingRetrievalHandler:
         raise self.failure
 
 
-def _retrieval_action_json(
-    request: ConversationRetrievalRequest,
-    *,
-    kind: ConversationRetrievalActionKind,
-    action_index: int,
-    **fields: object,
+def _retrieval_action_json(request: ConversationRetrievalRequest,
+    *, kind: ConversationRetrievalActionKind,
+    action_index: int, **fields: object,
 ) -> str:
     """Encode one exact provider action with stable insertion order."""
 
-    return direct_response(json.dumps(
-        {
-            "action": {
-                "kind": kind.value,
-                **{
-                    ("message" if key == "content" else key): value
-                    for key, value in fields.items()
-                    if value is not None
+    return direct_response(json.dumps({
+            "action": {"kind": kind.value,
+                **{("message" if key == "content" else key): value
+                    for key, value in fields.items() if value is not None
                 },},
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ), {"request_type": "answer_with_conversation_history"})
+        }, ensure_ascii=False,
+        separators=(",", ":"),), {"request_type": "answer_with_conversation_history"})
 
 
 def _needle_search(request):
@@ -723,39 +582,29 @@ def _needle_search(request):
 
 
 def _read_first_search_hit(request):
-    return _retrieval_action_json(
-        request, kind=ConversationRetrievalActionKind.READ_HISTORY,
+    return _retrieval_action_json(request, kind=ConversationRetrievalActionKind.READ_HISTORY,
         action_index=2, citation_id="s1h1", start_sequence=1, end_sequence=None,)
 
 
 def _provider_candidate_reply(*, role=PLOT_ARCHITECT, context_sources=("current_input",)):
-    return replace(
-        AgentReply.candidate("r0", "generated candidate"),
-        trace=ReplyTrace(
-            role=role,
-            action="candidate",
-            context_sources=context_sources,
+    return replace(AgentReply.candidate("r0", "generated candidate"),
+        trace=ReplyTrace(role=role,
+            action="candidate", context_sources=context_sources,
             recovered_fields=(),
             origin=ReplyTraceOrigin.PROVIDER,),
     )
 
 
-def _assert_provider_supported_schema(
-    test: unittest.TestCase,
-    specification: object,
-) -> None:
+def _assert_provider_supported_schema(test: unittest.TestCase,
+    specification: object,) -> None:
     """Assert the strict response-schema subset used by reference reads."""
 
     test.assertIs(type(specification), dict)
     assert type(specification) is dict
-    allowed = {
-        "type",
-        "properties",
-        "required",
-        "additionalProperties",
-        "items",
-        "minItems",
-        "maxItems",
+    allowed = {"type",
+        "properties", "required",
+        "additionalProperties", "items",
+        "minItems", "maxItems",
         "anyOf",
         "enum",}
     test.assertTrue(set(specification) <= allowed)
@@ -792,55 +641,39 @@ def _assert_provider_supported_schema(
 class ConversationModelContractTests(unittest.TestCase):
     def test_agent_reply_kinds_are_closed_and_fields_are_phase_exact(self) -> None:
         digest = "sha256:" + "a" * 64
-        replies = (
-            AgentReply.candidate("r0", "draft"),
-            AgentReply.approval("r0"),
-            AgentReply.conflict("r0", "repair this"),
+        replies = (AgentReply.candidate("r0", "draft"),
+            AgentReply.approval("r0"), AgentReply.conflict("r0", "repair this"),
             AgentReply.synthesis(
                 "r0", "repair plan", AgentReplyNextPhase.REPAIR),
             AgentReply.synthesis(
                 "r0", "ready", AgentReplyNextPhase.FINALIZATION),
             AgentReply.deadlock("r0", "conflict remains"),
             AgentReply.finalization("r0", "reviewed-proposal", digest),)
-        self.assertEqual(
-            tuple(reply.kind for reply in replies),
-            (
-                AgentReplyKind.CANDIDATE,
-                AgentReplyKind.AUDIT,
-                AgentReplyKind.AUDIT,
-                AgentReplyKind.SYNTHESIS,
-                AgentReplyKind.SYNTHESIS,
+        self.assertEqual(tuple(reply.kind for reply in replies),
+            (AgentReplyKind.CANDIDATE,
+                AgentReplyKind.AUDIT, AgentReplyKind.AUDIT,
+                AgentReplyKind.SYNTHESIS, AgentReplyKind.SYNTHESIS,
                 AgentReplyKind.DEADLOCK,
                 AgentReplyKind.FINALIZATION,),
         )
-        self.assertEqual(
-            (replies[3].next_phase, replies[4].next_phase),
+        self.assertEqual((replies[3].next_phase, replies[4].next_phase),
             (AgentReplyNextPhase.REPAIR, AgentReplyNextPhase.FINALIZATION),)
         self.assertTrue(replies[5].deadlocked)
         self.assertEqual(replies[6].reviewed_proposal_digest, digest)
 
-        invalid = (
-            dict(kind="candidate", revision_id="r0", content="draft"),
-            dict(kind=AgentReplyKind.CANDIDATE, revision_id="r0", content=""),
-            dict(
-                kind=AgentReplyKind.CANDIDATE,
-                revision_id="r0",
+        invalid = (dict(kind="candidate", revision_id="r0", content="draft"),
+            dict(kind=AgentReplyKind.CANDIDATE, revision_id="r0", content=""), dict(
+                kind=AgentReplyKind.CANDIDATE, revision_id="r0",
                 content="draft",
                 deadlocked=True,),
-            dict(kind=AgentReplyKind.AUDIT, revision_id="r0"),
-            dict(
-                kind=AgentReplyKind.SYNTHESIS,
-                revision_id="r0",
+            dict(kind=AgentReplyKind.AUDIT, revision_id="r0"), dict(
+                kind=AgentReplyKind.SYNTHESIS, revision_id="r0",
                 content="proposal",),
-            dict(
-                kind=AgentReplyKind.DEADLOCK,
-                revision_id="r0",
-                content="blocked",
+            dict(kind=AgentReplyKind.DEADLOCK,
+                revision_id="r0", content="blocked",
                 deadlocked=False,),
-            dict(
-                kind=AgentReplyKind.FINALIZATION,
-                revision_id="r0",
-                reviewed_proposal_id="reviewed-proposal",
+            dict(kind=AgentReplyKind.FINALIZATION,
+                revision_id="r0", reviewed_proposal_id="reviewed-proposal",
                 reviewed_proposal_digest="a" * 64,),
         )
         for values in invalid:

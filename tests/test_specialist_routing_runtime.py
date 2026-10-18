@@ -262,6 +262,69 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         late_call_start = len(self.backend.calls)
         late_helper_failure = 'not_observed'
 
+        late_error_facts = [('late_error_v1', 0, False, None, None, False, False, False, ())]
+
+        def capture_late_error(failure, call):
+            from types import CodeType, FrameType, TracebackType
+            classes = (AssertionError, IndexError, KeyError, TypeError, ValueError)
+            code = next((i for i, kind in enumerate(classes, 1) if type(failure) is kind), 0)
+            if not code:
+                return ('late_error_v1', 0, False, None, None, False, True, False, ())
+            ordinal = None
+            try:
+                if self.backend.calls and self.backend.calls[-1] is call:
+                    ordinal = min(len(self.backend.calls) - late_call_start, 65)
+                suffix = 'tests/test_specialist_routing_runtime.py'
+                if (type(__file__) is not str or len(__file__) > 512
+                        or not __file__.endswith(suffix)):
+                    return ('late_error_v1', code, True, ordinal, None, False, True, False, ())
+                prefix = __file__[:-len(suffix)]
+                filenames = (suffix, 'tests/test_lead_orchestration.py',
+                    'tests/provider_wire_fixture.py',
+                    'src/story_writing_agents/agent_context/service.py',
+                    'src/story_writing_agents/lead_provider_contracts.py',
+                    'src/story_writing_agents/structured_output_validation.py')
+                trace = BaseException.__traceback__.__get__(failure)
+                seen, coordinates = [], ()
+                complete = unsupported = overflow = False
+                for _ in range(16):
+                    if trace is None:
+                        complete = True
+                        break
+                    if type(trace) is not TracebackType or any(trace is item for item in seen):
+                        unsupported = True
+                        break
+                    seen.append(trace)
+                    frame = TracebackType.tb_frame.__get__(trace)
+                    if type(frame) is not FrameType:
+                        unsupported = True
+                        break
+                    frame_code = FrameType.f_code.__get__(frame)
+                    if type(frame_code) is not CodeType:
+                        unsupported = True
+                        break
+                    filename = CodeType.co_filename.__get__(frame_code)
+                    line = TracebackType.tb_lineno.__get__(trace)
+                    if (type(filename) is not str or len(filename) > 512
+                            or type(line) is not int or not 1 <= line <= 100000):
+                        unsupported = True
+                    else:
+                        matches = tuple(i for i, name in enumerate(filenames)
+                                        if filename == prefix + name)
+                        if len(matches) == 1:
+                            overflow = overflow or len(coordinates) == 8
+                            coordinates = (*coordinates, (matches[0], line))[-8:]
+                        else:
+                            unsupported = True
+                    trace = TracebackType.tb_next.__get__(trace)
+                else:
+                    complete = trace is None
+                    overflow = overflow or trace is not None
+                return ('late_error_v1', code, True, ordinal, None,
+                        complete, unsupported, overflow, coordinates)
+            except BaseException:
+                return ('late_error_v1', code, True, ordinal, None, False, True, False, ())
+
         def late_read_history_hit(call, provider):
             nonlocal late_helper_failure
             try:
@@ -271,6 +334,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                     AssertionError: 'AssertionError', IndexError: 'IndexError',
                     KeyError: 'KeyError', TypeError: 'TypeError', ValueError: 'ValueError',
                 }.get(type(failure), 'unsupported_builtin_subclass')
+                late_error_facts[0] = capture_late_error(failure, call)
                 raise
 
         self.backend.enqueue(
@@ -348,6 +412,158 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                     late_helper_failure,
                     len(late) > 3, 'absolute_physical_limit_not_retained', finalizer_counts,
                     tuple(late_snapshot(row) for row in late[-3:]))
+            from story_writing_agents.lead_provider_contracts import (
+                LeadContractIndex, LeadProviderConstraints)
+            from story_writing_agents.orchestrator import OrchestrationLeadCallFactory
+            from story_writing_agents.structured_output_validation import BoundContract, SchemaRules
+
+            def last_offer_facts(row):
+                unsupported = ('last_offer_v1', False, row is None, False, 0, 0, 0,
+                    False, 0, 0, False, 0, None, False,
+                    None, None, None, None, None, None, False, None, None)
+                try:
+                    if (type(row) is not BoundContextProviderCallRequest
+                            or type(row.contract) is not BoundCallContract
+                            or type(row.contract.semantic_index) is not LeadContractIndex):
+                        return unsupported
+                    binding = row.contract
+                    index = binding.semantic_index
+                    members = index.contracts
+                    if type(members) is not tuple:
+                        return unsupported
+                    response_names = ('answer', 'clarification_question', 'critique',
+                        'specialist_consultation_proposal', 'artifact_change_proposal',
+                        'proposal_drafting_recommendation', 'core_document_readiness_assessment')
+                    activity_names = ('workflow_guidance', 'draft_writing',
+                                      'revise_writing', 'review_writing')
+
+                    def fixed_node(root, path):
+                        if path not in ((), ('response_type',), ('response_details',),
+                                ('response_details', 'task_scope', 'activity')):
+                            return None
+                        node, hops, visited = root, 0, set()
+                        for field in (*path, None):
+                            while type(node) is dict and '$ref' in node:
+                                reference = node['$ref']
+                                if (set(node) - {'$ref', 'title', 'description'}
+                                        or type(reference) is not str
+                                        or not reference.startswith('#/$defs/')
+                                        or '/' in reference[8:] or '~' in reference[8:]
+                                        or reference in visited or hops == 8):
+                                    return None
+                                visited.add(reference)
+                                hops += 1
+                                definitions = root.get('$defs')
+                                if type(definitions) is not dict:
+                                    return None
+                                node = definitions.get(reference[8:])
+                            if (type(node) is not dict or any(key in node for key in (
+                                    'anyOf', 'oneOf', 'allOf', 'if', 'then', 'else', 'not',
+                                    'dependentSchemas', 'unevaluatedProperties'))):
+                                return None
+                            if field is None:
+                                return node
+                            properties = node.get('properties')
+                            if type(properties) is not dict:
+                                return None
+                            node = properties.get(field)
+                        return None
+
+                    examined = bad = total = response_bits = plain = activity_bits = 0
+                    overflow = len(members) > 64
+                    response_complete = scope_complete = not overflow
+                    for member in members[:64]:
+                        examined += 1
+                        if (type(member) is not BoundContract
+                                or type(member.rule_graph) is not SchemaRules):
+                            bad += 1
+                            response_complete = scope_complete = False
+                            continue
+                        raw = member.rule_graph.canonical_bytes
+                        if type(raw) is not bytes or not 0 < len(raw) <= 65536:
+                            bad += 1
+                            overflow = True
+                            response_complete = scope_complete = False
+                            continue
+                        if total + len(raw) > 524288:
+                            overflow = True
+                            response_complete = scope_complete = False
+                            break
+                        total += len(raw)
+                        root = json.loads(raw)
+                        if type(root) is not dict:
+                            bad += 1
+                            response_complete = scope_complete = False
+                            continue
+                        response = fixed_node(root, ('response_type',))
+                        values = None if response is None else response.get('enum')
+                        if (type(values) is not list or not 1 <= len(values) <= 7
+                                or any(type(value) is not str or value not in response_names
+                                       for value in values) or len(set(values)) != len(values)):
+                            bad += 1
+                            response_complete = scope_complete = False
+                            continue
+                        response_bits |= sum(1 << response_names.index(value) for value in values)
+                        if values != ['answer']:
+                            if 'answer' in values:
+                                scope_complete = False
+                            continue
+                        top = fixed_node(root, ())
+                        details = fixed_node(root, ('response_details',))
+                        if (top is None or details is None or top.get('type') != 'object'
+                                or top.get('additionalProperties') is not False
+                                or type(top.get('properties')) is not dict
+                                or set(top['properties']) != {
+                                    'schema_id', 'response_type', 'response_text',
+                                    'response_details'}
+                                or details.get('type') != 'object'
+                                or details.get('additionalProperties') is not False
+                                or type(details.get('properties')) is not dict
+                                or set(details['properties']) != {'task_scope'}):
+                            scope_complete = False
+                            continue
+                        plain += 1
+                        activity = fixed_node(root, ('response_details', 'task_scope', 'activity'))
+                        values = None if activity is None else activity.get('enum')
+                        if (type(values) is not list or not 1 <= len(values) <= 4
+                                or any(type(value) is not str or value not in activity_names
+                                       for value in values) or len(set(values)) != len(values)):
+                            scope_complete = False
+                            continue
+                        activity_bits |= sum(1 << activity_names.index(value) for value in values)
+                    pins = (None,) * 6
+                    if (type(binding.factory) is OrchestrationLeadCallFactory
+                            and type(binding.factory.constraints) is LeadProviderConstraints):
+                        constraints = binding.factory.constraints
+                        pins = (constraints.scope is not None, constraints.scope_rule is not None,
+                            constraints.adoption_intent is not None,
+                            constraints.continuation
+                                if type(constraints.continuation) is bool else None,
+                            constraints.recommendation_only
+                                if type(constraints.recommendation_only) is bool else None,
+                            constraints.preparation_kind is not None)
+                    digest = None
+                    if type(index.rule_graph) is SchemaRules:
+                        raw = index.rule_graph.canonical_bytes
+                        if type(raw) is bytes and 0 < len(raw) <= 524288:
+                            digest = hashlib.sha256(raw).hexdigest()
+                    return ('last_offer_v1', True, False, overflow, min(len(members), 65),
+                        examined, min(bad, 65), response_complete, response_bits, min(plain, 65),
+                        scope_complete, activity_bits, None, False, *pins, False, None, digest)
+                except BaseException:
+                    return unsupported
+
+            offer_facts = last_offer_facts(late[-1] if late else None)
+            error_facts = late_error_facts[0]
+            ordinal = error_facts[3]
+            matches_last = (ordinal == len(late)
+                if type(ordinal) is int and 0 < ordinal < 65 and len(late) < 65 else None)
+            error_facts = (*error_facts[:4], matches_last, *error_facts[5:])
+            note = json.dumps((note, offer_facts, error_facts), ensure_ascii=True,
+                              separators=(',', ':'))
+            if len(note.encode('ascii')) > 1024:
+                note = json.dumps(('late_history_facts_overflow', min(len(calls), 65),
+                    min(len(late), 65), True), ensure_ascii=True, separators=(',', ':'))
         self.assertEqual(len(calls), 2, note)
         self.assertIsNone(bounded.proposal)
         self.assertFalse(any(event.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for event in self.history(conversation)[len(prefix):]))

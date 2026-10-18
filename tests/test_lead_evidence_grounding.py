@@ -342,11 +342,31 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None):
             ),
         }
         if not proposal:
-            from tests.recommendation_fixture import recommendation
-            return recommendation(
-                message=value["message"], recommended_action=value["recommended_action"],
-                authoring_scope=value["authoring_scope"],
-                authoring_assessment=value.get("authoring_assessment"))(call, _provider)
+            from tests.provider_wire_fixture import (
+                result, finite_fixture_selection, lead_fixture_scope_record,
+                lead_fixture_assessment, lead_fixture_result, lead_fixture_response)
+            from tests.test_lead_orchestration import _compact_recommended
+            compact = {'kind': value['kind'], 'message': value['message'],
+                       'authoring_scope': value['authoring_scope'],
+                       'recommended_action': _compact_recommended(value['recommended_action'])}
+            if 'authoring_assessment' in value:
+                compact['authoring_assessment'] = value['authoring_assessment']
+            native = result(compact, 'lead-response-v9')
+            native.pop('writing_task_scope')
+            native['task_scope'] = lead_fixture_scope_record(value['authoring_scope'])
+            choices = dict(call.contract.semantic_index.policy.choices)
+            sources = (choices['input_ids'] if choices['source_binding'] == ('unbound',)
+                       else choices['source_ids'])
+            drafting = native['proposal_drafting_request']
+            drafting['source_ids'] = finite_fixture_selection(
+                sources, tuple(drafting['source_ids']))
+            drafting['specialist_ids'] = finite_fixture_selection(
+                (PLOT_ARCHITECT, 'character_custodian', EXECUTION_SPECIALIST),
+                tuple(drafting['specialist_ids']))
+            if 'authoring_assessment' in native:
+                native['authoring_assessment'] = lead_fixture_assessment(
+                    native['authoring_assessment'], source_choices=choices['input_ids'])
+            return lead_fixture_response(call, lead_fixture_result(native), family=0)
         from tests.provider_wire_fixture import (
             lead_fixture_assignments, lead_fixture_bound_scope,
             lead_fixture_assessment, lead_fixture_response,
@@ -904,6 +924,77 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                             self.backend, result, selection=ids))
                         raise
 
+        prior_call_facts = [('not_retained',)]
+
+        def retained_prior_facts(call, evidence_id):
+            try:
+                from story_writing_agents.agent_context.actions import ContextCallReadFact
+                from story_writing_agents.agent_context.service import (
+                    BoundCallContract, ContextCallOffers)
+                from story_writing_agents.agent_context.manifest import ContextSourceKind
+                from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
+                from story_writing_agents.orchestrator import OrchestrationLeadCallFactory
+                from story_writing_agents.specialist_routing import (
+                    ArtifactReviewDomain, AuthoringActivity, AuthoringIntent,
+                    AuthoringScope, AuthoringScopeRuleSet)
+                if (type(call) is not BoundContextProviderCallRequest
+                        or type(call.contract) is not BoundCallContract
+                        or type(call.contract.factory) is not OrchestrationLeadCallFactory
+                        or type(call.contract.factory.constraints) is not LeadProviderConstraints
+                        or type(evidence_id) is not str or len(evidence_id) > 4096):
+                    return ('unsupported',)
+                constraints = call.contract.factory.constraints
+                offers = call.contract.eligibility_offers
+                if type(offers) is not ContextCallOffers:
+                    return ('unsupported',)
+                domains = (ArtifactReviewDomain.PLOT_STRUCTURE,
+                           ArtifactReviewDomain.CHARACTER_WORLD,
+                           ArtifactReviewDomain.TONE_EXECUTION)
+
+                def scope_bits(scope):
+                    if scope is None:
+                        return ('none',)
+                    if (type(scope) not in (AuthoringScope, AuthoringScopeRuleSet)
+                            or type(scope.activity) is not AuthoringActivity
+                            or type(scope.intent) is not AuthoringIntent
+                            or type(scope.domains) is not tuple or len(scope.domains) > 3
+                            or any(type(item) is not ArtifactReviewDomain
+                                   for item in scope.domains)):
+                        return ('unsupported',)
+                    targets = None
+                    if type(scope) is AuthoringScope:
+                        if (type(scope.target_paths) is not tuple or len(scope.target_paths) > 64
+                                or any(type(item) is not str or len(item) > 4096
+                                       for item in scope.target_paths)):
+                            return ('unsupported',)
+                        targets = len(scope.target_paths)
+                    return (scope.activity.name, scope.intent.name, len(scope.domains),
+                            tuple(any(item is known for item in scope.domains)
+                                  for known in domains),
+                            targets)
+
+                groups = offers.completed_read_facts, offers.delivery_read_facts
+                if not all(type(rows) is tuple and len(rows) <= 64 and all(
+                        type(row) is ContextCallReadFact
+                        and type(row.source_kind) is ContextSourceKind
+                        and type(row.evidence_id) is str and len(row.evidence_id) <= 4096
+                        and type(row.whole_source) is bool for row in rows) for rows in groups):
+                    return ('unsupported',)
+                reads = tuple((sum(row.source_kind is ContextSourceKind.WRITING_ARTIFACT
+                                   for row in rows),
+                               sum(row.source_kind is ContextSourceKind.WRITING_ARTIFACT
+                                   and row.evidence_id == evidence_id for row in rows),
+                               sum(row.source_kind is ContextSourceKind.WRITING_ARTIFACT
+                                   and row.evidence_id == evidence_id and row.whole_source
+                                   for row in rows)) for rows in groups)
+                adoption = constraints.adoption_intent
+                adoption = ('none' if adoption is None else adoption.name
+                            if type(adoption) is AuthoringIntent else 'unsupported')
+                return ('stored_current', scope_bits(constraints.scope),
+                        scope_bits(constraints.scope_rule), adoption, reads)
+            except BaseException:
+                return ('unsupported',)
+
         prior_evidence_ids: list[str] = []
 
         def read_prior_turn(call, provider: _LeadContextProvider):
@@ -934,6 +1025,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             constraints = call.contract.factory.constraints
             if constraints.scope is None and constraints.adoption_intent is None:
                 native_scope['paths'] = finite_fixture_selection(eligible_paths, ())
+            prior_call_facts[:] = [retained_prior_facts(call, evidence_id)]
             return lead_fixture_response(call, {
                 'response_type': 'answer',
                 'response_text': 'The current READ supports this answer.',
@@ -955,6 +1047,38 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             from tests.recommendation_fixture import _current_policy_failure_note
             failure.add_note(_current_policy_failure_note(
                 self.backend, first, scoped=scoped))
+            try:
+                from story_writing_agents.conversations import LeadTurnResult
+                details_note = ('unsupported',)
+                if type(first) is LeadTurnResult and type(first.validation_details) is tuple:
+                    details = first.validation_details
+                    if len(details) > 8:
+                        details_note = ('overflow',)
+                    elif all(type(item) is str and len(item) <= 512 and item.isascii()
+                             for item in details) and sum(len(item) for item in details) <= 4096:
+                        catalog = tuple(prefix + '\n' + literal
+                            for literal in (
+                                '$.agent_action.task_result: current authorized owner requirements',
+                                '$.agent_action.task_result: rejected by domain result rule',
+                                '$.agent_action.task_result.response_details.task_scope: provider '
+                                'Lead outcomes require explicit authoring scope',
+                                '$.agent_action.task_result.response_details.task_scope.task: '
+                                'authoring scope uses an unoffered task revision',
+                                '$.agent_action.task_result.response_details.task_scope: selected '
+                                'authoring task changed while the Lead was interpreting the '
+                                'request',
+                                '$.agent_action.task_result.response_type: substantive story work '
+                                'requires specialist involvement',)
+                            for prefix in ('Original response', 'Repair response'))
+                        details_note = ('details', len(details),
+                            tuple(sum(item == known for item in details) for known in catalog),
+                            sum(item not in catalog for item in details))
+                note = json.dumps(('prior_positive_public_v1', details_note, prior_call_facts[0]),
+                                  ensure_ascii=True, separators=(',', ':'))
+                BaseException.add_note(failure, note if len(note) <= 1024
+                                       else '["prior_positive_public_v1","overflow"]')
+            except BaseException:
+                pass
             raise
         self.assertEqual(len(prior_evidence_ids), 1)
 
@@ -991,6 +1115,9 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         from story_writing_agents import conversations as c
+        from story_writing_agents import ReplyTraceOrigin
+        from story_writing_agents.lead_task_transitions import LeadPublicResponseAcceptance
+        from tests.test_lead_orchestration import _live_material
         from story_writing_agents.agent_context.manifest import (
             ContextSourceKind, ContextSubjectKind)
         from tests.test_lead_orchestration import _Finalizer
@@ -1034,6 +1161,61 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                         code is ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)
                 states.append(state)
             self.assertCountEqual(states, expected_states)
+
+        def require_terminal_fallback(result, conversation_id, call_start, original_message):
+            self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
+            self.assertIsNone(result.state)
+            self.assertIsNone(result.confirmation_request_id)
+            self.assertIsNotNone(result.trace)
+            self.assertIs(result.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
+            self.assertEqual(result.trace.action, 'none')
+            self.assertIsNotNone(result.evidence)
+            self.assertIs(result.evidence.scope, LeadOutcomeScope.WORKFLOW_META)
+            self.assertIs(result.evidence.status, LeadEvidenceStatus.NOT_APPLICABLE)
+            self.assertEqual(result.evidence.receipts, ())
+            notice = json.loads(result.message)
+            self.assertEqual(set(notice), {'code', 'language', 'task_revisions', 'state', 'paths'})
+            self.assertEqual((notice['code'], notice['language'], notice['state']),
+                             ('LEAD_CONTRACT_REJECTED', 'KO', None))
+            task = _live_material(self.backend.calls[call_start])['authoring_tasks'][-1]
+            self.assertEqual(task['task_revision'], 1)
+            self.assertEqual(notice['task_revisions'],
+                             [{'task_id': task['task_id'], 'task_revision': 1}])
+            self.assertTrue(notice['paths'])
+            self.assertTrue(all(type(path) is str
+                and path.startswith('$.agent_action.task_result') for path in notice['paths']))
+            self.assertTrue(result.validation_details)
+            for label in ('Original response', 'Repair response'):
+                self.assertTrue(any(item.startswith(label) for item in result.validation_details))
+            self.assertTrue(any('$.agent_action.task_result' in item
+                                for item in result.validation_details))
+            events = tuple(event for event in self.history(conversation_id)
+                if (event.turn_id, event.step_id) == (result.turn_id, result.step_id))
+            failures = tuple(event.payload for event in events
+                if type(event.payload) is CollaborationLeadOutcomeFailurePayload)
+            self.assertEqual(len(failures), 1)
+            self.assertIs(failures[0].code,
+                          CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED)
+            messages = tuple(event.payload for event in events
+                if type(event.payload) is c.CollaborationMessagePayload
+                and event.payload.content == result.message and event.payload.trace is not None
+                and event.payload.trace.origin is ReplyTraceOrigin.RUNTIME_FALLBACK)
+            self.assertEqual(len(messages), 1)
+            self.assertEqual(messages[0].trace, result.trace)
+            public = tuple(event.payload.response for event in events
+                if type(event.payload) is c.CollaborationLeadPublicResponsePayload)
+            self.assertEqual(len(public), 2)
+            self.assertEqual(tuple(response.response_text for response in public),
+                             (original_message, 'Correction still claims unread evidence.'))
+            self.assertTrue(all(response.acceptance is LeadPublicResponseAcceptance.REJECTED
+                                for response in public))
+            self.assertIsNone(public[0].repair_of_call_id)
+            self.assertEqual(public[1].repair_of_call_id, public[0].call_id)
+            self.assertNotEqual(public[0].call_id, public[1].call_id)
+            for response, label in zip(
+                    public, ('Original response', 'Repair response'), strict=True):
+                self.assertTrue(response.validation_details)
+                self.assertTrue(all(item.startswith(label) for item in response.validation_details))
 
         def unread_answer(call, message, domain):
             nonlocal answer_returns
@@ -1156,7 +1338,9 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 ('accepted', 'rejected', 'rejected') if index == 0
                 else ('accepted', 'accepted', 'accepted'))
             if index == 0:
-                self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+                self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
+                require_terminal_fallback(
+                    result, conversation_id, call_start, 'A SEARCH hit is not READ evidence.')
             else:
                 self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
                 self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
@@ -1202,7 +1386,9 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             conversation_id, call_start, finalizer_start, 2,
             ('accepted', 'rejected', 'rejected'))
         try:
-            self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+            self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
+            require_terminal_fallback(
+                result, conversation_id, call_start, 'A SEARCH hit is not READ evidence.')
         except AssertionError as failure:
             from tests.recommendation_fixture import _current_policy_failure_note
             failure.add_note(_current_policy_failure_note(

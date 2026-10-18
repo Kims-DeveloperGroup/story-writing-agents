@@ -2077,6 +2077,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     'instruction': 'Review supplied material.',
                     'mode': 'draft' if mode == 'draft_content' else 'review',
                     'input_ids': ['user_input']}], 'shared_premises': []}, }
+            if mode == 'review_content':
+                expected['proposal']['assignments'][0]['review_basis'] = {
+                    'candidate_input_ids': ['user_input'],
+                    'criteria': 'Review supplied material.'}
             if intent == 'authoring':
                 expected['authoring_assessment'] = None
             self.assertEqual(json.loads(decoded.answer_json), expected)

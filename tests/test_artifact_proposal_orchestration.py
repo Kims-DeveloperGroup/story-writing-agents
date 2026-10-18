@@ -516,12 +516,14 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         by_path = {row['provenance']['source_locator']: row['evidence_id'] for row in reads}
         self.assertEqual(tuple(identity for _path, _kind, identity
                                in self.backend.artifact_read_links),
-                         tuple(by_path[path] for path, _kind in expected_links))
+                         tuple(by_path[path.removeprefix('manuscript/')]
+                               for path, _kind in expected_links))
         hits = physical[1].payload['context_observation']['search_results']
         self.assertEqual(tuple(row['read_handle'] for row in reads),
                          tuple(row['read_handle'] for path, _query in expected_links
                                for row in hits
-                               if row['provenance']['source_locator'] == path))
+                               if row['provenance']['source_locator'] ==
+                                  path.removeprefix('manuscript/')))
         self.assertIs(
             manuscript.artifact_proposal.state,
             ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION, )
