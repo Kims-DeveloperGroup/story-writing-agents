@@ -518,25 +518,56 @@ class InputLatchAndDriverTests(unittest.TestCase):
                     self.assertEqual(termios.attributes, original)
 
         from story_writing_agents.interactive_terminal._model import MultiAgentScrollState, NestedScrollViewport
-        click = "\x1b[<0;2;248M"
-        scripted = "draft\x1b[D" + click + "\x1b[B\r" + click + "x" + click + "\x1b[<0;2;250M"
-        scripted += "\x1b[<x;2;3M\x1b[<0;" + "1" * 100 + ";3M\r"
-        with _session_driver(*(bytes([byte]) for byte in scripted.encode())) as (driver, termios, _, output, fallback):
-            original = list(termios.attributes)
-            view = NestedScrollViewport("a:1", "Agent", 3, 1, ("first",), 1, False,
-                                        buffer_lines=("first", "second", "third"))
+        f6, click, prompt = "\x1b[17~", "\x1b[<0;2;248M", "\x1b[<0;2;250M"
+        prefix = "draft\x1b[D"
+        cases = [(prefix + click + "\x1b[<64;2;249M\r", "draft", 0, 40, 250, True)]
+        cases += [(prefix + f6 + click + "\x1b[<65;2;249M\x1b[<64;2;249M\x1b[B" + release + "x\r", "drafxt", 1, 40, 250, True)
+                  for release in ("\r", "\x1b", f6, "", prompt)]
+        cases += [(f6 + "x\r", "x", 0, width, height, retain)
+                  for width, height, retain in ((40, 250, False), (7, 250, True), (40, 1, True))]
+        cases += [(prefix + f6 + click + "\x1b[D\r", "draft", 1, -7, 250, True)]
+        cases += [(prefix + f6 + "\rx\r", "drafxt", 1, 40, 250, True)]
+        cutoff = len((prefix + f6 + click).encode())
+        for scripted, expected, captures, width, height, retain in cases:
+            scripted = scripted[:-1] + "\x1b[<x;2;3M\x1b[<0;" + "1" * 100 + ";3M\r"
+            with _session_driver(*(bytes([byte]) for byte in scripted.encode())) as (driver, termios, stream, output, fallback):
+                original = list(termios.attributes)
+                view = NestedScrollViewport("a:1", "Agent", 3, 1, ("first",), 1, False,
+                                            buffer_lines=("first", "second", "third"))
+                if retain:
+                    driver._output_history.retain(MultiAgentScrollState((view,), 0))
+                output.fileno.return_value = 8
+                driver._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=(7 if len(stream.calls) > cutoff else 40) if width == -7 else width, lines=height))
+                with mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True):
+                    self.assertEqual(driver.read_main_line("main> ", lambda _: ()), expected)
+                rendered = "".join(call.args[0] for call in output.write.call_args_list)
+                self.assertEqual(rendered.count(driver_module._MOUSE_ENABLE), captures)
+                if captures:
+                    self.assertIn("Focused", rendered)
+                    if width != -7 and click in scripted:
+                        self.assertIn("second", rendered)
+                        self.assertIn("third", rendered)
+                        self.assertLess(rendered.rfind(driver_module._MOUSE_DISABLE), rendered.rfind(expected))
+                    self.assertGreater(rendered.rfind(driver_module._MOUSE_DISABLE), rendered.rfind(driver_module._MOUSE_ENABLE))
+                self.assertEqual(driver._history_state.entries, (expected,))
+                self.assertIsNone(driver._output_history.focused_id)
+                self.assertEqual(termios.attributes, original)
+                fallback.assert_not_called()
+
+        with _session_driver(*(bytes([byte]) for byte in (f6 + click + "\r").encode())) as (driver, termios, _, output, fallback):
             driver._output_history.retain(MultiAgentScrollState((view,), 0))
             output.fileno.return_value = 8
             driver._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=40, lines=250))
-            with mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True):
-                self.assertEqual(driver.read_main_line("main> ", lambda _: ()), "drafxt")
-            rendered = "".join(call.args[0] for call in output.write.call_args_list)
-            self.assertIn("Focused", rendered)
-            self.assertIn("second", rendered)
-            self.assertIn(driver_module._MOUSE_ENABLE, rendered)
-            self.assertTrue(rendered.endswith(driver_module._MOUSE_DISABLE))
-            self.assertEqual(driver._history_state.entries, ("drafxt",))
-            self.assertIsNone(driver._output_history.focused_id)
+            failures = []
+            def write(text):
+                if text == driver_module._MOUSE_DISABLE and not failures:
+                    failures.append(True)
+                    raise OSError("mouse release failed")
+                return len(text)
+            output.write.side_effect = write
+            with mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True), self.assertRaisesRegex(OSError, "mouse release failed"):
+                driver.read_main_line("main> ", lambda _: ())
+            self.assertEqual(output.write.call_args_list.count(mock.call(driver_module._MOUSE_DISABLE)), 2)
             self.assertEqual(termios.attributes, original)
             fallback.assert_not_called()
 

@@ -166,6 +166,7 @@ class _LiveEditorState:
     history_layout: HistoryLayout = HistoryLayout()
     history_top: int = 1
     history_enabled: bool = False
+    history_mouse_active: bool = False
     history_anchored: bool = False
     history_line_count: int = 0
 
@@ -1211,13 +1212,28 @@ class RawTerminalDriver:
         state = initial_state
         active_failure: BaseException | None = None
         lifecycle_failure: BaseException | None = None
+        mouse_active = False
+
+        def set_mouse_mode(active: bool) -> None:
+            nonlocal mouse_active
+            if active:
+                width, height = self._text_viewer_geometry(capabilities.width, bounded_height=False)
+                active = bool(state.views) and width >= 8 and height >= 3
+            if mouse_active == active:
+                return
+            if active:
+                mouse_active = True
+                self._write_live_text(_MOUSE_ENABLE)
+            else:
+                self._write_live_text(_MOUSE_DISABLE)
+                mouse_active = False
+
         try:
             try:
                 _activate_terminal(configuration)
             except BaseException as failure:
                 lifecycle_failure = failure
             else:
-                self._write_live_text(_MOUSE_ENABLE)
                 self._inspector_anchored = False
                 self._redraw_nested_scroll_frame(state, capabilities, renderer)
                 escape_sequence: _EscapeSequenceState = None
@@ -1227,6 +1243,8 @@ class RawTerminalDriver:
                     except (KeyboardInterrupt, EOFError):
                         break
 
+                    if mouse_active:
+                        set_mouse_mode(True)
                     configured_event = _configured_control_event(
                         character,
                         configuration,
@@ -1243,7 +1261,7 @@ class RawTerminalDriver:
                         )
                         escape_sequence = escape_state.escape_sequence
                         pointer = escape_state.pointer_event
-                        if pointer is not None:
+                        if pointer is not None and mouse_active:
                             self._redraw_nested_scroll_frame(state, capabilities, renderer)
                             if pointer.pressed and pointer.button == 0 and pointer.row == self._inspector_top:
                                 column = 4
@@ -1258,11 +1276,19 @@ class RawTerminalDriver:
                                         break
                                     column += size + 1
                                 self._redraw_nested_scroll_frame(state, capabilities, renderer)
-                        if pointer is not None and pointer.pressed and pointer.button in {64, 65}:
+                        if pointer is not None and mouse_active and pointer.pressed and pointer.button in {64, 65}:
                             wheel = KeyEvent(KeyKind.UP if pointer.button == 64 else KeyKind.DOWN)
                             for _ in range(3):
                                 state = transition(state, wheel)
                             self._redraw_nested_scroll_frame(state, capabilities, renderer)
+                        if event is not None and event.kind is KeyKind.ESCAPE and mouse_active:
+                            set_mouse_mode(False)
+                            self._redraw_nested_scroll_frame(state, capabilities, renderer)
+                            event = None
+                        if event is not None and event.kind is KeyKind.F6:
+                            set_mouse_mode(not mouse_active)
+                            self._redraw_nested_scroll_frame(state, capabilities, renderer)
+                            event = None
                         if event is not None:
                             old_collapsed = state.collapsed
                             state = transition(state, event)
@@ -1281,12 +1307,20 @@ class RawTerminalDriver:
                         except KeyboardInterrupt:
                             break
                         if not escape_input_is_ready:
+                            if mouse_active:
+                                set_mouse_mode(False)
+                                self._redraw_nested_scroll_frame(state, capabilities, renderer)
+                                continue
                             break
                         escape_sequence = character
                         continue
 
                     event = _key_event(character, configuration)
                     if event.kind in {KeyKind.ENTER, KeyKind.INTERRUPT, KeyKind.EOF}:
+                        break
+                    if mouse_active and event.kind is KeyKind.TEXT:
+                        set_mouse_mode(False)
+                        self._typeahead_buffer.append(character)
                         break
                     if event.kind is KeyKind.TEXT and event.text in {"q", "Q"}:
                         break
@@ -1299,7 +1333,7 @@ class RawTerminalDriver:
             active_failure = failure
         finally:
             try:
-                self._write_live_text(_MOUSE_DISABLE)
+                set_mouse_mode(False)
             except BaseException as failure:
                 active_failure = active_failure or failure
             try:
@@ -3688,9 +3722,9 @@ class RawTerminalDriver:
                 # cannot use the same failed output collaborator.
                 pass
 
-        if display_state.history_enabled:
+        if display_state.history_mouse_active:
             try:
-                self._write_live_text(_MOUSE_DISABLE)
+                self._set_history_mouse_mode(display_state, False)
             except BaseException as failure:
                 active_failure = active_failure or failure
         _restore_terminal_or_raise(configuration, active_failure)
@@ -3730,18 +3764,43 @@ class RawTerminalDriver:
             type(initial_state) in {MainInputControlState, MainCommandControlState}
             and bool(self._output_history.frames)
         )
+        self._output_history.focused_id = None
+
+        def redraw(state):
+            display_state.rendered_cursor_row = self._redraw_live_display(
+                prompt, configuration.width, display_state, state,
+                suggestion_provider, rendered_input, live_capabilities,
+                palette_projector, palette_renderer, input_frame_provider,
+            )
+
         def transition(state, event):
-            if display_state.history_enabled and self._output_history.handle_key(event):
-                display_state.rendered_cursor_row = self._redraw_live_display(
-                    prompt, configuration.width, display_state, state,
-                    suggestion_provider, rendered_input, live_capabilities,
-                    palette_projector, palette_renderer, input_frame_provider,
-                )
+            if display_state.history_mouse_active:
+                width, height = self._text_viewer_geometry(configuration.width, bounded_height=False)
+                prompt_rows = display_state.history_line_count - len(display_state.history_layout.lines)
+                if width - 1 < 8 or min(height, _MAX_VIEWER_HEIGHT) <= prompt_rows + 1:
+                    self._set_history_mouse_mode(display_state, False)
+            if display_state.history_enabled and event.kind is KeyKind.F6:
+                if display_state.history_mouse_active:
+                    self._set_history_mouse_mode(display_state, False)
+                else:
+                    redraw(state)
+                    self._set_history_mouse_mode(display_state, True)
+                redraw(state)
                 return state, None
+            if display_state.history_mouse_active:
+                if event.kind is KeyKind.ESCAPE:
+                    self._set_history_mouse_mode(display_state, False)
+                    redraw(state)
+                    return state, None
+                focused = self._output_history.focused_id is not None
+                consumed = self._output_history.handle_key(event)
+                if event.kind in {KeyKind.ENTER, KeyKind.TEXT} or (focused and self._output_history.focused_id is None):
+                    self._set_history_mouse_mode(display_state, False)
+                if consumed:
+                    redraw(state)
+                    return state, None
             return ordinary_transition(state, event)
 
-        if display_state.history_enabled:
-            self._write_live_text(_MOUSE_ENABLE)
         display_state.rendered_cursor_row = self._redraw_live_display(
             prompt,
             configuration.width,
@@ -3808,14 +3867,17 @@ class RawTerminalDriver:
                 if display_state.pointer_event is not None:
                     pointer = display_state.pointer_event
                     display_state.pointer_event = None
-                    if display_state.history_enabled:
+                    if display_state.history_mouse_active:
                         display_state.rendered_cursor_row = self._redraw_live_display(
                             prompt, configuration.width, display_state, control_state,
                             suggestion_provider, rendered_input, live_capabilities,
                             palette_projector, palette_renderer, input_frame_provider,
                         )
                         local = replace(pointer, row=pointer.row - display_state.history_top + 1)
-                        self._output_history.handle_pointer(local, display_state.history_layout)
+                        if display_state.history_mouse_active:
+                            self._output_history.handle_pointer(local, display_state.history_layout)
+                            if pointer.pressed and pointer.button == 0 and self._output_history.focused_id is None:
+                                self._set_history_mouse_mode(display_state, False)
                         display_state.rendered_cursor_row = self._redraw_live_display(
                             prompt, configuration.width, display_state, control_state,
                             suggestion_provider, rendered_input, live_capabilities,
@@ -3952,8 +4014,7 @@ class RawTerminalDriver:
         if type(outcome) is ReferenceInputFailure:
             bindings.write_failure(outcome.kind)
             return state, None, True
-        if display_state.history_enabled:
-            self._write_live_text(_MOUSE_DISABLE)
+        self._set_history_mouse_mode(display_state, False)
         try:
             updated = self._run_live_reference_activation(
                 state, outcome, configuration, display_state, capabilities, bindings,
@@ -3962,7 +4023,6 @@ class RawTerminalDriver:
             if display_state.history_enabled:
                 display_state.history_anchored = False
                 display_state.history_line_count = 0
-                self._write_live_text(_MOUSE_ENABLE)
         return updated, None, True
 
     def _run_live_reference_activation(
@@ -4401,6 +4461,20 @@ class RawTerminalDriver:
             raise TypeError("input reader must return one character")
         return character
 
+    def _set_history_mouse_mode(self, state: _LiveEditorState, active: bool) -> None:
+        """Own explicit call-local mouse capture; native scrolling is the default."""
+        active = active and bool(state.history_layout.hits)
+        if state.history_mouse_active == active:
+            return
+        if active:
+            state.history_mouse_active = True
+            self._output_history.focus_visible(state.history_layout)
+            self._write_live_text(_MOUSE_ENABLE)
+        else:
+            self._write_live_text(_MOUSE_DISABLE)
+            state.history_mouse_active = False
+            self._output_history.focused_id = None
+
     def _redraw_live_display(
         self,
         prompt: str,
@@ -4506,8 +4580,12 @@ class RawTerminalDriver:
         if display_state.history_enabled:
             available = max(0, min(history_screen_height, _MAX_VIEWER_HEIGHT) - len(output_lines) - 1)
             history_capabilities = live_capabilities or _capabilities_with_width(self.capabilities(), width)
-            layout = self._output_history.render(history_capabilities, available)
+            layout = self._output_history.render(
+                history_capabilities, available, mouse_mode=display_state.history_mouse_active,
+            )
             display_state.history_layout = layout
+            if not layout.hits:
+                self._set_history_mouse_mode(display_state, False)
             if layout.lines:
                 if not display_state.history_anchored:
                     self._write_live_text(f"\x1b[{history_screen_height};1H")
@@ -5256,6 +5334,7 @@ def _escape_event(sequence: str) -> KeyEvent | None:
         "\x1b[3~": KeyKind.DELETE,
         "\x1b[5~": KeyKind.PAGE_UP,
         "\x1b[6~": KeyKind.PAGE_DOWN,
+        "\x1b[17~": KeyKind.F6,
         "\x1b[Z": KeyKind.SHIFT_TAB,
         "\x1b[1;2A": KeyKind.SHIFT_UP,
         "\x1b[1;2B": KeyKind.SHIFT_DOWN,

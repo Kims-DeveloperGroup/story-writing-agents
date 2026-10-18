@@ -789,7 +789,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertTrue(has_thumb)
         # Footer navigation hints
         self.assertIn("↑/↓: scroll", rows[-1])
-        self.assertIn("Tab: switch agent", rows[-1])
+        self.assertIn("F6: mouse mode", rows[-1])
 
 
     def test_to_scroll_state_projection(self) -> None:
@@ -1038,7 +1038,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         expanded_state = MultiAgentScrollState((v,), 0, collapsed=False)
         expanded_frame = render_nested_scroll_view(expanded_state, capabilities)
         self.assertGreater(expanded_frame.line_count, 1)
-        self.assertIn("t: toggle view", expanded_frame.text)
+        self.assertIn("F6: mouse mode", expanded_frame.text)
         self.assertIn("┌─ [► Lead]", expanded_frame.text)
 
         # Collapsed state
@@ -1046,7 +1046,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         collapsed_frame = render_nested_scroll_view(collapsed_state, capabilities)
         self.assertEqual(collapsed_frame.line_count, 1)
         self.assertEqual(len(collapsed_frame.text.splitlines()), 1)
-        self.assertIn("↑/↓: scroll", collapsed_frame.text)
+        self.assertIn("F6: mouse mode", collapsed_frame.text)
         self.assertIn("[Focused • ! Lead]", collapsed_frame.text)
         self.assertIn("First error line", collapsed_frame.text)
 
@@ -1132,14 +1132,15 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertEqual([frame.identity for frame in history.frames], [1, 2])
         self.assertEqual(view.start_line, 1)
         layout = history.render(caps, 30)
+        self.assertIn("F6: mouse mode", "\n".join(layout.lines))
         first, second = layout.hits
         self.assertFalse(history.handle_pointer(PointerEvent(0, 2, first.top, False), layout))
         history.handle_pointer(PointerEvent(0, 2, first.top, True), layout)
         self.assertEqual(history.focused_id, first.identity)
-        focused = history.render(caps, 30)
+        focused = history.render(caps, 30, mouse_mode=True)
         self.assertEqual("\n".join(focused.lines).count("Focused"), 1)
         self.assertIn("\x1b[", "\n".join(focused.lines))
-        plain = history.render(replace(caps, profile=CapabilityProfile.PLAIN, decorative_sgr=False), 30)
+        plain = history.render(replace(caps, profile=CapabilityProfile.PLAIN, decorative_sgr=False), 30, mouse_mode=True)
         self.assertEqual("\n".join(plain.lines).count("Focused"), 1)
         self.assertNotIn("\x1b[", "\n".join(plain.lines))
         history.handle_pointer(PointerEvent(0, 2, second.top, True), layout)
@@ -1668,14 +1669,8 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             CapabilityProfile,
             TerminalCapabilities,
         )
-        driver = RawTerminalDriver(
-            lambda _prompt: "",
-            io.StringIO(),
-            io.StringIO(),
-            lambda s, e: (s, None),
-            lambda s, e, h: (s, None),
-            lambda h, t: h,
-        )
+        driver = RawTerminalDriver(lambda _prompt: '', io.StringIO(), io.StringIO(),
+                 lambda s, e: (s, None), lambda s, e, h: (s, None), lambda h, t: h)
 
         closed = []
         async def dummy_op():
@@ -2217,14 +2212,8 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertIn("\r\x1b[K", out.getvalue())
 
     def test_nested_scroll_inspector_preserves_buffered_typeahead(self) -> None:
-        driver = RawTerminalDriver(
-            lambda _p: "",
-            io.StringIO(),
-            io.StringIO(),
-            transition_line_input,
-            transition_main_input,
-            append_main_input_history,
-        )
+        driver = RawTerminalDriver(lambda _p: '', io.StringIO(), io.StringIO(),
+                 transition_line_input, transition_main_input, append_main_input_history)
         caps = _ansi_terminal_capabilities()
         configuration = _driver._TerminalConfiguration(
             0, 1, [0]*7, [0]*7, 80, None, None, 0, mock.MagicMock(),
@@ -2250,14 +2239,8 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
     def test_run_progress_frames_propagates_eof_and_interrupt_without_advisory_error_wrapping(self) -> None:
         from story_writing_agents.interactive_terminal._driver import AdvisoryProgressError
 
-        driver = RawTerminalDriver(
-            lambda _p: "",
-            io.StringIO(),
-            io.StringIO(),
-            transition_line_input,
-            transition_main_input,
-            append_main_input_history,
-        )
+        driver = RawTerminalDriver(lambda _p: '', io.StringIO(), io.StringIO(),
+                 transition_line_input, transition_main_input, append_main_input_history)
         fake_caps = _ansi_terminal_capabilities()
         configuration = _driver._TerminalConfiguration(
             0, 1, [0]*7, [0]*7, 80, None, None, 0, mock.MagicMock(),
@@ -2428,7 +2411,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertIn("←", rendered.text.splitlines()[1])
         self.assertIn("→", rendered.text.splitlines()[1])
         self.assertIn("Focused", rendered.text.splitlines()[-1])
-        self.assertIn("←/→: pan", render_nested_scroll_view(MultiAgentScrollState((view,), 0), _ansi_terminal_capabilities()).text)
+        self.assertIn("F6: mouse mode", render_nested_scroll_view(MultiAgentScrollState((view,), 0), _ansi_terminal_capabilities()).text)
 
     def test_run_advisory_progress_frame_persists_when_keep_frame_true(self) -> None:
         capabilities = _ansi_terminal_capabilities()
@@ -2442,14 +2425,8 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
             mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep),
         ):
-            driver = RawTerminalDriver(
-                lambda _prompt: "",
-                io.StringIO(),
-                output,
-                lambda s, e: (s, None),
-                lambda s, e, h: (s, None),
-                lambda h, t: h,
-            )
+            driver = RawTerminalDriver(lambda _prompt: '', io.StringIO(), output,
+                     lambda s, e: (s, None), lambda s, e, h: (s, None), lambda h, t: h)
 
             async def successful_op() -> dict:
                 await real_sleep(0.01)
@@ -2480,14 +2457,8 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
             mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep),
         ):
-            driver = RawTerminalDriver(
-                lambda _prompt: "",
-                io.StringIO(),
-                output,
-                lambda s, e: (s, None),
-                lambda s, e, h: (s, None),
-                lambda h, t: h,
-            )
+            driver = RawTerminalDriver(lambda _prompt: '', io.StringIO(), output,
+                     lambda s, e: (s, None), lambda s, e, h: (s, None), lambda h, t: h)
 
             async def successful_op() -> dict:
                 await real_sleep(0.01)
@@ -2691,6 +2662,14 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
 
         fake_config = mock.MagicMock()
         fake_caps = _ansi_terminal_capabilities()
+        keys = iter("\t\x1b[17~\x1b[<0;5;248M\x1bxq")
+        def read_character(*_args, **_kwargs):
+            character = next(keys)
+            if character == "\t":
+                self.assertNotIn(_driver._MOUSE_ENABLE, out.getvalue())
+            if character == "q":
+                self.assertGreater(out.getvalue().rfind(_driver._MOUSE_DISABLE), out.getvalue().rfind(_driver._MOUSE_ENABLE))
+            return character
 
         # User presses Tab (cycle focus to Agent 2) then q (exit inspector)
         with (
@@ -2698,7 +2677,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(fake_caps, fake_config)),
             mock.patch("story_writing_agents.interactive_terminal._driver._activate_terminal"),
             mock.patch("story_writing_agents.interactive_terminal._driver._restore_terminal_or_raise"),
-            mock.patch.object(RawTerminalDriver, "_read_character", side_effect=["\t", *"\x1b[<0;5;248M", "q"]),
+            mock.patch.object(RawTerminalDriver, "_read_character", side_effect=read_character),
             mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True),
             mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as mock_clear,
         ):
@@ -2715,9 +2694,10 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertFalse(final_state.views[1].is_focused)
 
         # Clear before Tab/pointer redraws, but NOT upon exit because keep_frame=True
-        self.assertEqual(mock_clear.call_count, 3)
+        self.assertGreaterEqual(mock_clear.call_count, 3)
         self.assertTrue(out.getvalue().endswith("\r\n"))
         self.assertIn("\x1b[250;1H", out.getvalue())
+        self.assertEqual(list(driver._typeahead_buffer), [])
 
     def test_provide_scroll_state_on_success_sets_idle_state_and_does_not_record_error(self) -> None:
         """Verify success response passes ViewState.IDLE and does not record result message as an error."""
@@ -2871,14 +2851,8 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         """Verify CancelledError and KeyboardInterrupt clear frame and bypass inspector even with keep_frame=True."""
         capabilities = _ansi_terminal_capabilities()
         out = io.StringIO()
-        driver = RawTerminalDriver(
-            lambda _p: "",
-            io.StringIO(),
-            out,
-            lambda s, e: (s, None),
-            lambda s, e, h: (s, None),
-            lambda h, t: h,
-        )
+        driver = RawTerminalDriver(lambda _p: '', io.StringIO(), out,
+                 lambda s, e: (s, None), lambda s, e, h: (s, None), lambda h, t: h)
 
         for error_type in (asyncio.CancelledError, KeyboardInterrupt):
             with self.subTest(error_type=error_type):
@@ -2914,14 +2888,8 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         """Verify None result (e.g. auth recovery handoff) clears frame and does not open inspector even if keep_frame=True."""
         capabilities = _ansi_terminal_capabilities()
         out = io.StringIO()
-        driver = RawTerminalDriver(
-            lambda _p: "",
-            io.StringIO(),
-            out,
-            lambda s, e: (s, None),
-            lambda s, e, h: (s, None),
-            lambda h, t: h,
-        )
+        driver = RawTerminalDriver(lambda _p: '', io.StringIO(), out,
+                 lambda s, e: (s, None), lambda s, e, h: (s, None), lambda h, t: h)
 
         async def none_op():
             return None

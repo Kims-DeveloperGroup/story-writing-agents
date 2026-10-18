@@ -56,7 +56,7 @@ class OutputHistory:
             self._frames.append(OutputFrame(self._next_identity, replace(view, is_focused=False), state.collapsed))
             self._next_identity += 1
 
-    def render(self, capabilities: TerminalCapabilities, height: int) -> HistoryLayout:
+    def render(self, capabilities: TerminalCapabilities, height: int, *, mouse_mode: bool = False) -> HistoryLayout:
         """Render only intersecting frames and reserve column one as a gutter."""
         if height <= 0 or capabilities.width < 8 or not self._frames:
             self.focused_id = None
@@ -88,7 +88,7 @@ class OutputHistory:
             rendered = render_nested_scroll_view(MultiAgentScrollState((projected,), collapsed=frame.collapsed), frame_capabilities)
             rows = rendered.text.split("\n")
             if not frame.collapsed:
-                hint = "Focused • ↑/↓: scroll • Enter/Esc: input" if projected.is_focused else "Click: focus • wheel: scroll"
+                hint = ("Focused • Enter/Esc: native scroll" if projected.is_focused else "Click: focus • Esc: native scroll") if mouse_mode else "F6: mouse mode • wheel: terminal scroll"
                 footer = Box(max(1, frame_capabilities.width - 1)).bottom(hint)
                 if projected.is_focused and capabilities.decorative_sgr:
                     footer = f"\x1b[1;7;36m{footer}\x1b[0m"
@@ -101,6 +101,12 @@ class OutputHistory:
             hits.append(FrameHit(frame.identity, top, len(lines), capabilities.width - 1))
             position += size
         return HistoryLayout(tuple(lines), tuple(hits))
+
+    def focus_visible(self, layout: HistoryLayout) -> None:
+        """Select the newest visible frame when entering output mouse mode."""
+        visible = tuple(hit.identity for hit in layout.hits)
+        if self.focused_id not in visible:
+            self.focused_id = visible[-1] if visible else None
 
     def handle_pointer(self, event: PointerEvent, layout: HistoryLayout) -> bool:
         """Focus on left press; wheel over frames scrolls without moving focus."""

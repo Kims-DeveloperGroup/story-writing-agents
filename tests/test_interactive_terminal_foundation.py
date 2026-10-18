@@ -1519,6 +1519,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                     self.assertIsNone(state.escape_sequence)
 
         from story_writing_agents.interactive_terminal._pointer import PointerEvent, decode_pointer
+        self.assertEqual(_driver._escape_event("\x1b[17~"), KeyEvent(KeyKind.F6))
         self.assertEqual(decode_pointer("\x1b[<0;12;3M"), PointerEvent(0, 12, 3, True))
         self.assertEqual(decode_pointer("\x1b[<0;12;3m"), PointerEvent(0, 12, 3, False))
         self.assertEqual(decode_pointer("\x1b[<65;1;3M"), PointerEvent(65, 1, 3, True))

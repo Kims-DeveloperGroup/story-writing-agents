@@ -98,6 +98,7 @@ class KeyKind(StrEnum):
     SHIFT_DOWN = "shift_down"
     TAB = "tab"
     SHIFT_TAB = "shift_tab"
+    F6 = "f6"
     ESCAPE = "escape"
     INTERRUPT = "interrupt"
     EOF = "eof"
