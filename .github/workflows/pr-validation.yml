@@ -478,6 +478,27 @@ jobs:
           from pathlib import Path
           from story_writing_agents.git import process, session_resources
           from tests import runner
+          from story_writing_agents.orchestrator import StoryRuntime
+          import resource
+          first_lead_turn = []
+          original_lead_turn = StoryRuntime.lead_turn
+          @functools.wraps(original_lead_turn)
+          async def measured_lead_turn(self, *args, **kwargs):
+              call_started = time.perf_counter()
+              completed = False
+              try:
+                  result = await original_lead_turn(self, *args, **kwargs)
+                  completed = True
+                  return result
+              finally:
+                  if not first_lead_turn:
+                      finished = time.perf_counter()
+                      first_lead_turn.append({
+                          "successful_return": completed,
+                          "call_seconds": finished - call_started,
+                          "seconds_since_runner_start": finished - started,
+                      })
+          StoryRuntime.lead_turn = measured_lead_turn
           output = Path(os.environ["RUNNER_TEMP"]) / "timing-diagnostic"
           output.mkdir(mode=0o700)
           paths = subprocess.check_output(["git", "ls-files", "-z", "src", "tests", "config", "pyproject.toml", "uv.lock"]).decode().split("\0")
@@ -526,7 +547,8 @@ jobs:
               else:
                   (output / "profile.txt").write_text("cProfile disabled by diagnostic input profile_mode=none.\n")
               after = hashes()
-              evidence = {"diagnostic_only": True, "source_valid": before == after, "source_before": before, "source_after": after, "instrumented_seconds": time.perf_counter() - started, "counts": dict(counts), "fixture_samples": samples, "platform": platform.platform(), "python": platform.python_version(), "cpu_count": os.cpu_count(), "git": subprocess.check_output(["git", "--version"], text=True).strip()}
+              evidence = {"diagnostic_only": True, "source_valid": before == after, "source_before": before, "source_after": after, "instrumented_seconds": time.perf_counter() - started, "counts": dict(counts), "fixture_samples": samples, "first_lead_turn": first_lead_turn,
+                        "peak_process_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss, "platform": platform.platform(), "python": platform.python_version(), "cpu_count": os.cpu_count(), "git": subprocess.check_output(["git", "--version"], text=True).strip()}
               evidence.update(python_compiler=platform.python_compiler(), python_enable_optimizations_flag="--enable-optimizations" in (sysconfig.get_config_var("CONFIG_ARGS") or ""), temporary_filesystem=subprocess.check_output(["stat", "-f", "-c", "%T", tempfile.gettempdir()], text=True).strip())
               (output / "counters.json").write_text(json.dumps(evidence, indent=2))
           raise SystemExit(code if before == after else 2)
