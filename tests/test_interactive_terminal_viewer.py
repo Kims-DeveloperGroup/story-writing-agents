@@ -390,7 +390,7 @@ class ViewerModelContractTests(unittest.TestCase):
             (
                 "text", "enter", "backspace", "delete", "left", "right",
                 "home", "end", "up", "down", "page_up", "page_down",
-                "shift_up", "shift_down", "tab", "shift_tab", "escape",
+                "shift_up", "shift_down", "tab", "shift_tab", "f6", "escape",
                 "interrupt", "eof",
             ),
         )
