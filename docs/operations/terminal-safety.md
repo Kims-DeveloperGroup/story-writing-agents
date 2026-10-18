@@ -449,8 +449,10 @@ releases it. Returning to the prompt by Enter, printable input, or prompt click
 also releases capture, as does omitting the history viewport. Showing history alone
 never acquires mouse modes.
 
-Only a left-button press in mouse mode can focus a frame. Releases, unsupported or
-malformed reports, and wheel navigation cannot submit input or become draft text.
+F6 selects the newest visible frame in main history when entering mouse mode;
+the inspector keeps its current keyboard focus. A left-button press in mouse mode
+can change frame focus. Releases, unsupported or malformed reports, and wheel
+navigation cannot submit input or become draft text.
 Frame focus preserves the input draft, cursor, and command-history navigation.
 Focused Enter returns to input without committing; printable input transfers back
 exactly once. Focus has a text marker independently of decorative SGR, including a

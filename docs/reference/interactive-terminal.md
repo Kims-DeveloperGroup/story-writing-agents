@@ -309,9 +309,11 @@ shell exits. These are the same bounded previews shown during inspection; openin
 an old frame does not reload files or call a provider.
 
 The mouse wheel normally scrolls the terminal's own scrollback. Press `F6` to
-enter output mouse mode, then left-click a frame's header, border, or body to focus
-it. Press `F6` again or `Escape` to leave mouse mode and restore ordinary wheel
-scrolling. Mouse mode is available only while output frames are visible.
+enter output mouse mode and focus the newest visible frame. Left-click another
+frame's header, border, or body to change focus. Enter immediately after F6
+returns to the prompt without submitting the draft. Press `F6` again or `Escape`
+to leave mouse mode and restore ordinary wheel scrolling. Mouse mode is available
+only while output frames are visible.
 
 The focused frame uses the selected-control accent and a `Focused` marker, which
 also appears with `NO_COLOR`. A `>` in the history gutter keeps focus visible when
