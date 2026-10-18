@@ -392,6 +392,8 @@ class ContextActionContractOwner(ContractOwner[ContextActionValue]):
     semantic_member: BoundContract[LeadDecodedResult] | None = field(repr=False, compare=False)
     owner_revision: str = field(init=False, default="848-v3:typed-action-owner")
     _checks: tuple[NamedHostCheck[ContextActionValue], ...] = field(init=False, repr=False, compare=False)
+    _declared_decode: Callable[[ValidatedValue], ContextActionValue] = field(init=False, repr=False, compare=False)
+    _declared_inputs: tuple[tuple[object, ...], tuple[object, ...]] = field(init=False, repr=False, compare=False)
 
     def __init_subclass__(cls, **kwargs):
         raise TypeError("context action owner cannot be overridden")
@@ -421,14 +423,6 @@ class ContextActionContractOwner(ContractOwner[ContextActionValue]):
                 "selected", SelectedHostContext, facts, self._require_normalized_queries,
                 dependencies=(normalized_search_text,)),)
         object.__setattr__(self, "_checks", checks)
-
-    def declare_rules(self) -> SchemaRules:
-        return self.rules
-
-    def named_host_checks(self) -> tuple[NamedHostCheck[ContextActionValue], ...]:
-        return self._checks
-
-    def typed_decoder(self) -> TypedDecoder[ContextActionValue]:
         issued_handle_aliases = self.eligibility_offers.issued_handle_aliases
         read_maximum = (
             min(dict(self.eligibility_offers.action_limits)["handles_per_read"],
@@ -447,8 +441,54 @@ class ContextActionContractOwner(ContractOwner[ContextActionValue]):
                                                                 issued_handle_aliases,
                                                                 minimum=1, maximum=read_maximum))
             return ContextActionValue(deepcopy(domain))
+        object.__setattr__(self, "_declared_decode", decode_typed)
+        object.__setattr__(self, "_declared_inputs", self._capture_declaration(action_type))
 
-        return TypedDecoder("context.current_action_codec", "848-v3:typed-action-owner", decode_typed,
+    def _capture_declaration(self, action_type: object) -> tuple[tuple[object, ...], tuple[object, ...]]:
+        member = self.semantic_member
+        references = (self.rules, self.eligibility_offers,
+                      self.eligibility_offers.issued_handle_aliases,
+                      self.eligibility_offers.action_limits, member,
+                      None if member is None else member.rule_graph,
+                      self._checks, self._declared_decode,
+                      type(self)._require_normalized_queries,
+                      normalized_search_text if action_type == "search_context" else None,
+                      *(item for check in self._checks
+                        for item in (check, check.check, check.dependencies)))
+        # The canonical rules pin action_type without reparsing the graph on each access.
+        values = (action_type, self.owner_id, self.owner_revision,
+                  self.rules.canonical_bytes, self.rules.maximum_bytes,
+                  CONTEXT_ACTION_POLICY.max_handles_per_read
+                  if action_type == "read_context" else None,
+                  SEARCH_NORMALIZATION_REVISION if action_type == "search_context" else None,
+                  None if member is None else (member.schema_id, member.rule_graph.canonical_bytes),
+                  tuple((check.name, check.revision, check.phase, check.context_type,
+                         check.corrective_facts) for check in self._checks))
+        return references, values
+
+    def _require_declaration(self) -> None:
+        expected_references, expected_values = self._declared_inputs
+        try:
+            references, values = self._capture_declaration(expected_values[0])
+        except (AttributeError, TypeError) as exc:
+            raise ValueError("frozen context action owner declaration changed") from exc
+        if (len(references) != len(expected_references)
+                or any(current is not expected
+                       for current, expected in zip(references, expected_references))
+                or values != expected_values):
+            raise ValueError("frozen context action owner declaration changed")
+
+    def declare_rules(self) -> SchemaRules:
+        self._require_declaration()
+        return self.rules
+
+    def named_host_checks(self) -> tuple[NamedHostCheck[ContextActionValue], ...]:
+        self._require_declaration()
+        return self._checks
+
+    def typed_decoder(self) -> TypedDecoder[ContextActionValue]:
+        self._require_declaration()
+        return TypedDecoder("context.current_action_codec", "848-v3:typed-action-owner", self._declared_decode,
                             (normalize_context_action, decode_finite_selection))
 
     def _require_normalized_queries(self, value: ContextActionValue, context: HostCheckContext) -> None:

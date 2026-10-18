@@ -372,6 +372,8 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
     owner_id: str = field(init=False)
     owner_revision: str = field(init=False, default="848-v3:typed-family-owner")
     _declared_checks: tuple[NamedHostCheck[LeadDecodedResult], ...] = field(init=False, repr=False, compare=False)
+    _declared_decode: Callable[[ValidatedValue], LeadDecodedResult] = field(init=False, repr=False, compare=False)
+    _declared_inputs: tuple[tuple[object, ...], tuple[object, ...]] = field(init=False, repr=False, compare=False)
 
     def __init_subclass__(cls, **kwargs):
         raise TypeError("Lead result owner declaration cannot be overridden")
@@ -384,6 +386,11 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
                 or len(self.checks) != 1 or self.checks[0].name != "owner.authorized_final"
                 or self.checks[0].phase != "authorized"):
             raise ValueError("incomplete Lead result owner declaration")
+        if (type(self.task_revisions) is not tuple
+                or any(type(item) is not tuple or len(item) != 2
+                       or type(item[0]) is not str or type(item[1]) is not int
+                       for item in self.task_revisions)):
+            raise ValueError("Lead task revisions must be immutable declared pairs")
         object.__setattr__(self, "owner_id", "lead.result." + self.variant.branch_key)
         facts = json.dumps({"requirements": [{"path": "$.response_text", "rule": "VISIBLE_TEXT_UTF8",
             "expected": {"minimum_utf8_bytes": 1, "maximum_utf8_bytes": COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
@@ -392,11 +399,6 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
         visible = NamedHostCheck("owner.visible_text_utf8", "848-v3:existing-visible-text-cap", "selected",
                                 SelectedHostContext, facts, self._require_visible_text)
         object.__setattr__(self, "_declared_checks", (visible, *self.checks))
-
-    def declare_rules(self) -> SchemaRules:
-        return self.variant.rules
-
-    def typed_decoder(self) -> TypedDecoder[LeadDecodedResult]:
         variant_decode = self.variant.decode
         task_revisions = self.task_revisions
 
@@ -408,9 +410,42 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
             domain = variant_decode(body)
             _require_intrinsic_lead_result(domain)
             return LeadDecodedResult(json.dumps(domain, ensure_ascii=False, allow_nan=False, separators=(",", ":")))
+        object.__setattr__(self, "_declared_decode", decode_typed)
+        object.__setattr__(self, "_declared_inputs", self._capture_declaration())
 
-        return TypedDecoder("lead.current_codec", "848-v3:typed-family-owner", decode_typed,
-                            (variant_decode, schema_fragment_findings,
+    def _capture_declaration(self) -> tuple[tuple[object, ...], tuple[object, ...]]:
+        references = (self.variant, self.variant.rules, self.variant.decode,
+                      self.task_revisions, self.checks, self._declared_checks,
+                      self._declared_decode, type(self)._require_visible_text, visible_text,
+                      *(item for check in self._declared_checks
+                        for item in (check, check.check, check.dependencies)))
+        values = (self.owner_id, self.owner_revision, self.variant.branch_key,
+                  self.variant.rules.canonical_bytes, self.variant.rules.maximum_bytes,
+                  COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
+                  tuple((check.name, check.revision, check.phase, check.context_type,
+                         check.corrective_facts) for check in self._declared_checks))
+        return references, values
+
+    def _require_declaration(self) -> None:
+        expected_references, expected_values = self._declared_inputs
+        try:
+            references, values = self._capture_declaration()
+        except (AttributeError, TypeError) as exc:
+            raise ValueError("frozen Lead owner declaration changed") from exc
+        if (len(references) != len(expected_references)
+                or any(current is not expected
+                       for current, expected in zip(references, expected_references))
+                or values != expected_values):
+            raise ValueError("frozen Lead owner declaration changed")
+
+    def declare_rules(self) -> SchemaRules:
+        self._require_declaration()
+        return self.variant.rules
+
+    def typed_decoder(self) -> TypedDecoder[LeadDecodedResult]:
+        self._require_declaration()
+        return TypedDecoder("lead.current_codec", "848-v3:typed-family-owner", self._declared_decode,
+                            (self.variant.decode, schema_fragment_findings,
              artifact_source_operation_rule, artifact_kind_path_rule, canonical_artifact_kind,
              artifact_domain,
              authoring_scope_rules, finite_authoring_scope_rules, legal_specialist_rosters,
@@ -421,6 +456,7 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
                              project_lead_scope_schema, restore_lead_scope_result, project_lead_scope_diagnostic))
 
     def named_host_checks(self) -> tuple[NamedHostCheck[LeadDecodedResult], ...]:
+        self._require_declaration()
         return self._declared_checks
 
     def _require_visible_text(self, value: LeadDecodedResult, context: HostCheckContext) -> None:

@@ -1191,7 +1191,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                 bound.require_authorized_answer(decoded_purpose, authorization)
 
 
-    def _require_fixture_field_neighbors(self, bound, packet, *, projection=False):
+    def _require_fixture_field_neighbors(self, bound, packet, *, projection=False, native_projections=None):
         details_path = ('agent_action', 'task_result', 'response_details')
         def findings(changed, invalid=True):
             if invalid and not projection:
@@ -1278,9 +1278,12 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
             from story_writing_agents.antigravity_adapter import AntigravityAdapter
             from story_writing_agents.structured_output_validation import diagnose_json_text
             # Codex publishes the literal bound schema; Antigravity uses this native projector.
-            declared = bound.schema_value()
-            for provider, schema in (
-                    ('codex', declared), ('antigravity', AntigravityAdapter.native_output_schema(declared))):
+            if native_projections is None:
+                declared = bound.schema_value()
+                native_projections = (
+                    ('codex', declared),
+                    ('antigravity', AntigravityAdapter.native_output_schema(declared)))
+            for provider, schema in native_projections:
                 bound.require_projection(schema, declared_lowering='integer_singleton_bounds' if provider == 'antigravity' else 'identity')
                 matcher = SimpleNamespace(rule_graph=SimpleNamespace(findings=lambda value:
                     diagnose_json_text(json.dumps(value, ensure_ascii=True), schema)))
@@ -1900,6 +1903,63 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             with self.assertRaises(TypeError):
                 type('OverriddenBinding', (sealed,), {})
         bound = call.contract
+        member = next(item for item in bound.semantic_index.contracts if item.schema_id == result['schema_id'])
+        for field in ('schema_id', 'rule_graph'):
+            with self.assertRaises(ValueError):
+                replace(member, **{field: None})
+        for field in ('semantic_index', 'action_index', 'rule_graph', 'outer_inner_schema_ids'):
+            with self.assertRaises(ValueError):
+                replace(bound, **{field: None})
+        with self.assertRaises(TypeError):
+            BoundContract(member.owner, member.identity, rule_graph=member.rule_graph)
+        with self.assertRaises(TypeError):
+            BoundCallContract(bound.factory, bound.offers, semantic_index=bound.semantic_index)
+        for hook in ('decode', 'check'):
+            owner = member.owner
+            if hook == 'decode':
+                original = owner.variant.decode
+                def changed(value, original=original, marker='unchanged'):
+                    return original(value)
+                owner = replace(owner, variant=replace(owner.variant, decode=changed))
+            else:
+                original = owner.checks[0].check
+                def changed(value, context, original=original, *, marker='unchanged'):
+                    return original(value, context)
+                owner = replace(owner, checks=(replace(owner.checks[0], check=changed),))
+            current = BoundContract.bind(owner, member.identity)
+            current.require_owner_provenance()
+            self.assertNotEqual(current.schema_id, member.schema_id)
+            self.assertEqual(BoundContract.bind(owner, member.identity).schema_id, current.schema_id)
+            defaults = changed.__defaults__, changed.__kwdefaults__
+            try:
+                if hook == 'decode':
+                    changed.__defaults__ = (original, 'changed')
+                else:
+                    changed.__kwdefaults__ = {'marker': 'changed'}
+                refreshed_owner = owner if hook == 'decode' else replace(owner, checks=(replace(owner.checks[0]),))
+                self.assertNotEqual(BoundContract.bind(refreshed_owner, member.identity).schema_id, current.schema_id)
+                with self.assertRaises(ValueError):
+                    current.require_owner_provenance()
+            finally:
+                changed.__defaults__, changed.__kwdefaults__ = defaults
+            current.require_owner_provenance()
+
+        action_member = bound.action_index.select(physical['agent_action']['schema_id'])
+        self.assertEqual(
+            BoundContract.bind(action_member.owner, action_member.identity).schema_id,
+            action_member.schema_id)
+        action_owner = action_member.owner
+        for field, replacement in (
+                ('rules', replace(action_owner.rules)),
+                ('eligibility_offers', replace(action_owner.eligibility_offers, call_id='changed_owner_call'))):
+            original = getattr(action_owner, field)
+            try:
+                object.__setattr__(action_owner, field, replacement)
+                with self.assertRaisesRegex(ValueError, '^frozen context action owner declaration changed$'):
+                    BoundContract.bind(action_owner, action_member.identity)
+            finally:
+                object.__setattr__(action_owner, field, original)
+            self.assertEqual(BoundContract.bind(action_owner, action_member.identity).schema_id, action_member.schema_id)
 
         from story_writing_agents.lead_provider_contracts import LeadContractRejection
         def require_current_correction(binding, failure, outer_id=None, inner_id=None):
@@ -2284,47 +2344,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertEqual(plain(call.schema), full_schema)
         with self.assertRaises(ValueError):
             bound.require_current_offer(replace(bound.offers, call_id='another_physical_call'))
-        member = next(item for item in bound.semantic_index.contracts if item.schema_id == result['schema_id'])
-        for field in ('schema_id', 'rule_graph'):
-            with self.assertRaises(ValueError):
-                replace(member, **{field: None})
-        for field in ('semantic_index', 'action_index', 'rule_graph', 'outer_inner_schema_ids'):
-            with self.assertRaises(ValueError):
-                replace(bound, **{field: None})
-        with self.assertRaises(TypeError):
-            BoundContract(member.owner, member.identity, rule_graph=member.rule_graph)
-        with self.assertRaises(TypeError):
-            BoundCallContract(bound.factory, bound.offers, semantic_index=bound.semantic_index)
-        for hook in ('decode', 'check'):
-            owner = member.owner
-            if hook == 'decode':
-                original = owner.variant.decode
-                def changed(value, original=original, marker='unchanged'):
-                    return original(value)
-                owner = replace(owner, variant=replace(owner.variant, decode=changed))
-            else:
-                original = owner.checks[0].check
-                def changed(value, context, original=original, *, marker='unchanged'):
-                    return original(value, context)
-                owner = replace(owner, checks=(replace(owner.checks[0], check=changed),))
-            current = BoundContract.bind(owner, member.identity)
-            current.require_owner_provenance()
-            self.assertNotEqual(current.schema_id, member.schema_id)
-            self.assertEqual(BoundContract.bind(owner, member.identity).schema_id, current.schema_id)
-            defaults = changed.__defaults__, changed.__kwdefaults__
-            try:
-                if hook == 'decode':
-                    changed.__defaults__ = (original, 'changed')
-                else:
-                    changed.__kwdefaults__ = {'marker': 'changed'}
-                refreshed_owner = owner if hook == 'decode' else replace(owner, checks=(replace(owner.checks[0]),))
-                self.assertNotEqual(BoundContract.bind(refreshed_owner, member.identity).schema_id, current.schema_id)
-                with self.assertRaises(ValueError):
-                    current.require_owner_provenance()
-            finally:
-                changed.__defaults__, changed.__kwdefaults__ = defaults
-            current.require_owner_provenance()
-
         from story_writing_agents.lead_provider_contracts import TypedDecoder
         class MutableReceiver:
             def __init__(self):
@@ -2385,6 +2404,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             raise AssertionError("replaced owner field reached the decoder")
         try:
             object.__setattr__(owner, "variant", replace(original_variant, decode=replaced_owner_decode))
+            with self.assertRaisesRegex(ValueError, '^frozen Lead owner declaration changed$'):
+                BoundContract.bind(owner, member.identity)
             try:
                 retained = current.decode_selected(current_value)
             except ValueError as stale:
@@ -3110,6 +3131,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         free_seed = orchestrator_module._lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=free_facts)
         profile_binding = replace(factory, rule_seed=free_seed, constraints=free_facts).for_offer(call.contract.offers)
+        profile_schema = profile_binding.schema_value()
+        profile_projections = (('codex', profile_schema),
+            ('antigravity', AntigravityAdapter.native_output_schema(profile_schema)))
         stem = free_seed.contract_id
         free_reads = profile_binding.offers.completed_read_facts + profile_binding.offers.delivery_read_facts
         free_inputs = tuple(dict.fromkeys(free_facts.input_ids + tuple(row.evidence_id for row in free_reads)))
@@ -3205,7 +3229,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         self.assertEqual(json.loads(decoded_profile.answer_json),
                             {'kind': 'question', 'message': base['response_text'],
                              'authoring_scope': expected_scope})
-                        self._require_fixture_field_neighbors(profile_binding, complete)
+                        self._require_fixture_field_neighbors(profile_binding, complete, native_projections=profile_projections)
                         required_agents = tuple(agent for domain, agent in profile_roster.items() if domain in domains)
                         selected_agents = tuple(agent for agent in profile_roster.values()
                                                 if agent == 'execution_specialist' or agent in required_agents)
@@ -3358,11 +3382,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                 with self.assertRaises(ValueError):
                                     profile_binding.decode_response(json.dumps(wrong_kind))
                             if family in (6, 7, 8):
-                                self._require_fixture_field_neighbors(profile_binding, packet)
+                                self._require_fixture_field_neighbors(profile_binding, packet, native_projections=profile_projections)
                             if family in (3, 4) and required_agents == tuple(profile_roster.values()):
-                                declared_schema = profile_binding.schema_value()
-                                native_schemas = (declared_schema,
-                                                  AntigravityAdapter.native_output_schema(declared_schema))
                                 for required_agent in required_agents:
                                     missing_specialist = copy.deepcopy(packet)
                                     details = missing_specialist['agent_action']['task_result']['response_details']
@@ -3370,7 +3391,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                     self.assertTrue(profile_binding.rule_graph.findings(missing_specialist))
                                     with self.assertRaises(ValueError):
                                         profile_binding.decode_response(json.dumps(missing_specialist))
-                                    for schema in native_schemas:
+                                    for _provider, schema in profile_projections:
                                         self.assertTrue(SchemaRules.declare(schema).findings(missing_specialist))
                         self.assertEqual(checked_profile_cases,
                             [(case[0], case[1]) for case in profile_cases])
