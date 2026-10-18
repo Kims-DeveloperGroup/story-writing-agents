@@ -1721,8 +1721,9 @@ class TypedDecoder(Generic[_ContractValue]):
                 or not self.revision or type(self.dependencies) is not tuple):
             raise ValueError("incomplete typed decoder declaration")
         _require_hook_arity(self.decode, 1)
+        digests = ({}, {}, {})
         identities = tuple(_permitted_hook_identity(
-            item, _attest_captures=True,
+            item, _digests=digests, _attest_captures=True,
         ) for item in (self.decode, *self.dependencies))
         fingerprint = hashlib.sha256(json.dumps((self.name, self.revision, identities),
                                                separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -1780,7 +1781,8 @@ class NamedHostCheck(Generic[_ContractValue]):
         _require_hook_arity(self.check, 2)
         if type(self.dependencies) is not tuple:
             raise TypeError("host hook dependencies must be immutable declarations")
-        identities = tuple(_permitted_hook_identity(item) for item in (self.check, *self.dependencies))
+        digests = ({}, {}, {})
+        identities = tuple(_permitted_hook_identity(item, _digests=digests) for item in (self.check, *self.dependencies))
         object.__setattr__(self, "_hook_fingerprints", identities)
         object.__setattr__(self, "binding_fingerprint", hashlib.sha256(json.dumps(identities, separators=(",", ":")).encode("utf-8")).hexdigest())
         value = strict_json_object(self.corrective_facts.decode("utf-8", "strict"))
