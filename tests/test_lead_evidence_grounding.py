@@ -1186,6 +1186,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             lead_fixture_bound_scope, lead_fixture_response)
 
         answer_returns = 0
+        retained_tasks = ()
 
         def writing_bytes():
             return {path.relative_to(self.workspace.root): path.read_bytes()
@@ -1240,10 +1241,15 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             self.assertEqual(set(notice), {'code', 'language', 'task_revisions', 'state', 'paths'})
             self.assertEqual((notice['code'], notice['language'], notice['state']),
                              ('LEAD_CONTRACT_REJECTED', 'KO', None))
-            task = _live_material(self.backend.calls[call_start])['authoring_tasks'][-1]
+            tasks = _live_material(self.backend.calls[call_start])['authoring_tasks']
+            task = tasks[-1]
             self.assertEqual(task['task_revision'], 1)
+            offered_tasks = tuple((item['task_id'], item['task_revision']) for item in tasks)
+            self.assertEqual(offered_tasks, retained_tasks + ((result.step_id, 1),))
+            self.assertTrue(all(call.contract.factory.constraints.task_revisions == offered_tasks
+                                for call in self.backend.calls[call_start:]))
             self.assertEqual(notice['task_revisions'],
-                             [{'task_id': task['task_id'], 'task_revision': 1}])
+                             [{'task_id': identity, 'task_revision': revision} for identity, revision in offered_tasks])
             self.assertTrue(notice['paths'])
             self.assertTrue(all(type(path) is str
                 and path.startswith('$.agent_action.task_result') for path in notice['paths']))
@@ -1415,6 +1421,13 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 self.assertEqual(len(receipts), 1)
                 self.assertIs(receipts[0].acquisition, CollaborationEvidenceAcquisition.READ)
                 self.assertIn('core_documents/global_outline.md', receipts[0].locator)
+                (read_scope,) = tuple(event.payload.authoring_scope for event in self.history(conversation_id)
+                    if type(event.payload) is c.CollaborationLeadJudgmentPayload
+                    and (event.turn_id, event.step_id) == (result.turn_id, result.step_id))
+                self.assertIsNotNone(read_scope)
+                self.assertIs(read_scope.activity, AuthoringActivity.REVIEW)
+                retained_tasks = ((read_scope.task_id, read_scope.task_revision),)
+                self.assertEqual(retained_tasks, ((result.step_id, 1),))
             self.assertIsNone(result.proposal)
             self.assertIsNone(result.artifact_proposal)
             self.assertIsNone(result.artifact_application_request)
