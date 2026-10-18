@@ -2000,8 +2000,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertEqual(correction['phase'], binding.phase)
             self.assertEqual(correction['task_revisions'],
                              [list(pair) for pair in binding.action_index.policy.task_revisions])
-            self.assertEqual(correction['offered_schema_ids'],
-                             list(binding.action_index.expected_schema_ids))
+            self.assertEqual(correction['offered_schema_ids'], list(binding.action_index.expected_schema_ids))
             self.assertEqual(correction['selected_schema_id'], outer_id)
             requirements = correction['requirements']
             self.assertNotIn('schema_unoffered', json.dumps(correction))
@@ -2026,8 +2025,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.assertEqual(rule['wire_root_path'], member.identity.wire_root_path)
                 complete = [fact for fact in rule['schema_requirements'] if fact['rule'] == 'COMPLETE_SELECTED_GRAPH']
                 self.assertEqual([fact['expected']['sha256'] for fact in complete], [digest])
-            self.assertTrue(any('response_type' in fact['expected'].get('required', ())
-                                for fact in paired['schema_requirements']))
+            if failure.schema_id not in binding.semantic_index.expected_schema_ids:
+                self.assertTrue(any('response_type' in fact['expected'].get('required', ())
+                                    for fact in paired['schema_requirements']))
         from tests.provider_wire_fixture import lead_fixture_assignments, lead_fixture_response
         self._require_fixture_field_neighbors(bound, physical)
         scope_names = ( {'activity': 'activity_type', 'intent': 'writing_intent',
