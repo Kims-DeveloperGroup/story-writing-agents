@@ -1152,9 +1152,6 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     expect_unoffered=True))
         self.backend.enqueue(selected_sources(prior_evidence_ids,
                     expect_unoffered=True))
-        scoped = ((len(self.backend.calls), len(self.backend.call_records),
-                   len(self.backend.finalizers)), self.session_id,
-                  conversation_id, None, None, None)
         stale = await self.runtime.lead_turn(
             self.session_id, conversation_id,
             _ADMISSION_BRIEF + "\nReject evidence issued to the prior invocation.",
@@ -1167,15 +1164,9 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                        if event.turn_id == stale.turn_id and type(
                            event.payload) is CollaborationLeadOutcomeFailurePayload)
         self.assertIs(failure.code, CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED)
-        try:
-            self.assertIn("select only frozen offered aliases or evidence IDs "
-                          "from completed authorized READs",
-                          "\n".join(stale.validation_details))
-        except AssertionError as failure:
-            from tests.recommendation_fixture import _current_policy_failure_note
-            failure.add_note(_current_policy_failure_note(
-                self.backend, stale, scoped=scoped))
-            raise
+        self.assertIn("$.agent_action.task_result.response_details.proposal_drafting_request.source_ids: "
+                      "contains 1 unexpected properties (names withheld)",
+                      "\n".join(stale.validation_details))
 
     async def test_unread_and_truncated_search_fall_back_while_reads_attach_locally(
         self,
@@ -1204,7 +1195,13 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         def check_native_delivery(conversation_id, call_start, finalizer_start,
                                   expected_returns, expected_states):
             calls = self.backend.calls[call_start:]
-            self.assertEqual(len(calls), 3)
+            self.assertEqual(len(calls), 3, {
+                'finalizers': tuple(tuple((state, None if code is None else str(code)[:96])
+                    for state, code in finalizer.calls[:3])
+                    for finalizer in self.backend.finalizers[finalizer_start:][:3]),
+                'answer_returns': answer_returns, 'message': str(result.message)[:512],
+                'validation': tuple(str(detail)[:256] for detail in result.validation_details[:4]),
+            })
             self.assertTrue(all(
                 call.scope.session_id == self.session_id
                 and call.scope.subject_kind is ContextSubjectKind.CONVERSATION
@@ -1451,15 +1448,9 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         check_native_delivery(
             conversation_id, call_start, finalizer_start, 2,
             ('accepted', 'rejected', 'rejected'))
-        try:
-            self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
-            require_terminal_fallback(
-                result, conversation_id, call_start, 'A SEARCH hit is not READ evidence.')
-        except AssertionError as failure:
-            from tests.recommendation_fixture import _current_policy_failure_note
-            failure.add_note(_current_policy_failure_note(
-                self.backend, result))
-            raise
+        self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
+        require_terminal_fallback(
+            result, conversation_id, call_start, 'A SEARCH hit is not READ evidence.')
         self.assertIsNone(result.proposal)
         self.assertIsNone(result.artifact_proposal)
         self.assertIsNone(result.artifact_application_request)
