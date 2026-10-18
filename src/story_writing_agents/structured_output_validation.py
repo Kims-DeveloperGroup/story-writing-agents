@@ -590,7 +590,9 @@ def finite_selection_rule(choices: tuple[str, ...], *, minimum: int, maximum: in
         return counts
 
     roots = build(0, len(choices))
-    variants = [roots[count] for count in range(minimum, maximum + 1)]
+    variants = [{**roots[count], "description":
+                 f"Select exactly {count} of {len(choices)} offered choices."}
+                for count in range(minimum, maximum + 1)]
     return {**(variants[0] if len(variants) == 1 else {"anyOf": variants}), "$defs": definitions}
 
 
