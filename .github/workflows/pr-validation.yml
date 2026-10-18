@@ -478,57 +478,190 @@ jobs:
           from pathlib import Path
           from story_writing_agents.git import process, session_resources
           from tests import runner
-          output = Path(os.environ["RUNNER_TEMP"]) / "timing-diagnostic"
-          output.mkdir(mode=0o700)
-          paths = subprocess.check_output(["git", "ls-files", "-z", "src", "tests", "config", "pyproject.toml", "uv.lock"]).decode().split("\0")
+          output = Path(os.environ['RUNNER_TEMP']) / 'timing-diagnostic'
+          output.mkdir(mode=448)
+          paths = subprocess.check_output(['git', 'ls-files', '-z', 'src', 'tests', 'config', 'pyproject.toml', 'uv.lock']).decode().split('\x00')
+
           def hashes():
               return {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in paths if path}
           before = hashes()
-          counts = collections.defaultdict(lambda: {"calls": 0, "seconds": 0.0})
+          counts = collections.defaultdict(lambda: {'calls': 0, 'seconds': 0.0})
+
           def record(key, elapsed):
-              counts[key]["calls"] += 1
-              counts[key]["seconds"] += elapsed
+              counts[key]['calls'] += 1
+              counts[key]['seconds'] += elapsed
           original_git = process.GitProcessRunner.run
+
           @functools.wraps(original_git)
           def git(self, args, **kwargs):
               started = time.perf_counter()
               try:
                   return original_git(self, args, **kwargs)
               finally:
-                  record("git:" + args[0], time.perf_counter() - started)
+                  record('git:' + args[0], time.perf_counter() - started)
           process.GitProcessRunner.run = git
           original_refs = session_resources._Repository._loose_ref_output
           samples = []
+
           @functools.wraps(original_refs)
           def refs(self):
               started = time.perf_counter()
               value = original_refs(self)
-              record("loose_refs:" + ("fallback" if value is None else "bytes"), time.perf_counter() - started)
+              record('loose_refs:' + ('fallback' if value is None else 'bytes'), time.perf_counter() - started)
               if len(samples) < 8:
-                  with (self.common_git / "config").open("rb") as source:
+                  with (self.common_git / 'config').open('rb') as source:
                       config = source.read(65536)
-                  safe = re.findall(rb"(?m)^\s*(?:repositoryformatversion|filemode|bare|logallrefupdates|objectformat|submodulepathconfig|relativeworktrees|worktreeconfig)\s*=\s*(?:true|false|0|1|sha1|sha256)\s*$", config)
-                  samples.append({"fallback": value is None, "config_sha256": hashlib.sha256(config).hexdigest(), "format_lines": [line.decode("ascii").strip() for line in safe], "packed_refs": (self.common_git / "packed-refs").exists(), "reftable": (self.common_git / "reftable").exists()})
+                  safe = re.findall(b'(?m)^\\s*(?:repositoryformatversion|filemode|bare|logallrefupdates|objectformat|submodulepathconfig|relativeworktrees|worktreeconfig)\\s*=\\s*(?:true|false|0|1|sha1|sha256)\\s*$', config)
+                  samples.append({'fallback': value is None, 'config_sha256': hashlib.sha256(config).hexdigest(), 'format_lines': [line.decode('ascii').strip() for line in safe], 'packed_refs': (self.common_git / 'packed-refs').exists(), 'reftable': (self.common_git / 'reftable').exists()})
               return value
           session_resources._Repository._loose_ref_output = refs
-          profile = cProfile.Profile() if os.environ["DIAGNOSTIC_PROFILE_MODE"] == "cprofile" else None
+          import sys
+          import signal
+          _stack_state = dict(active=False, busy=False, installed=False, attempts=0, emitted=0, dropped=0, errors=0, disabled_reason=None)
+          _stack_read_fd = _stack_write_fd = -1
+          _stack_byte_limit = 0
+          try:
+              _stack_read_fd, _stack_write_fd = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+              _stack_byte_limit = min(4096, int(os.fpathconf(_stack_write_fd, 'PC_PIPE_BUF')))
+          except Exception:
+              _stack_state['errors'] += 1
+              _stack_state['disabled_reason'] = 'pipe_setup_failed'
+          _stack_pass_fds = (_stack_read_fd,) if _stack_read_fd >= 0 else ()
+
+          def _sample_python_stack(signum, frame, _state=_stack_state, _write=os.write, _dumps=json.dumps, _clock=time.monotonic, _gmtime=time.gmtime, _strftime=time.strftime, _fd=_stack_write_fd, _limit=_stack_byte_limit):
+              if not _state['active']:
+                  return
+              if _state['busy']:
+                  _state['dropped'] += 1
+                  return
+              _state['busy'] = True
+              cursor = frame
+              try:
+                  _state['attempts'] += 1
+                  frames, front_line, walked = ([], None, 0)
+                  for _ in range(128):
+                      if cursor is None:
+                          break
+                      code = cursor.f_code
+                      if len(frames) < 12:
+                          frames.append([code.co_filename.rsplit('/', 1)[-1][:96], code.co_name[:96], cursor.f_lineno])
+                      if code.co_name == 'test_front_schema_is_minimal_closed_and_provider_strict':
+                          front_line = cursor.f_lineno
+                      walked += 1
+                      cursor = cursor.f_back
+                  payload = dict(observer='issue848-python-stack', sample=_state['attempts'], wall_utc=_strftime('%Y-%m-%dT%H:%M:%SZ', _gmtime()), monotonic_seconds=_clock(), signal=signum, frames=frames, front_test_line=front_line, walked_frames=walked, walk_truncated=cursor is not None)
+                  while True:
+                      encoded = (_dumps(payload, ensure_ascii=True, separators=(',', ':')) + '\n').encode('ascii')
+                      if len(encoded) <= _limit:
+                          break
+                      if not frames:
+                          _state['dropped'] += 1
+                          return
+                      frames.pop()
+                  if _write(_fd, encoded) != len(encoded):
+                      _state['errors'] += 1
+                  else:
+                      _state['emitted'] += 1
+              except BlockingIOError:
+                  _state['dropped'] += 1
+              except Exception:
+                  _state['errors'] += 1
+              finally:
+                  cursor = frame = None
+                  _state['busy'] = False
+
+          def _start_python_stack_observer():
+              try:
+                  if _stack_state['disabled_reason'] is not None:
+                      return
+                  if observer_process is None or observer_process.poll() is not None:
+                      _stack_state['disabled_reason'] = 'external_observer_unavailable'
+                      return
+                  if signal.SIGALRM in signal.pthread_sigmask(signal.SIG_BLOCK, set()):
+                      _stack_state['disabled_reason'] = 'alarm_is_blocked'
+                      return
+                  if signal.getsignal(signal.SIGALRM) != signal.SIG_DFL:
+                      _stack_state['disabled_reason'] = 'existing_alarm_handler'
+                      return
+                  if signal.getitimer(signal.ITIMER_REAL) != (0.0, 0.0):
+                      _stack_state['disabled_reason'] = 'existing_alarm_timer'
+                      return
+                  signal.signal(signal.SIGALRM, _sample_python_stack)
+                  _stack_state['installed'] = True
+                  signal.siginterrupt(signal.SIGALRM, False)
+                  _stack_state['active'] = True
+                  signal.setitimer(signal.ITIMER_REAL, 120.0, 120.0)
+              except Exception:
+                  _stack_state['active'] = False
+                  _stack_state['errors'] += 1
+                  _stack_state['disabled_reason'] = 'alarm_setup_failed'
+
+          def _close_stack_descriptor(fd):
+              if fd >= 0:
+                  try:
+                      os.close(fd)
+                  except Exception:
+                      _stack_state['errors'] += 1
+
+          def _stop_python_stack_observer():
+              _stack_state['active'] = False
+              if _stack_state['installed']:
+                  try:
+                      signal.setitimer(signal.ITIMER_REAL, 0.0)
+                  except Exception:
+                      _stack_state['errors'] += 1
+              _close_stack_descriptor(_stack_write_fd)
+
+          def _stop_external_observer():
+              if observer_process is None:
+                  return
+              try:
+                  observer_process.terminate()
+              except ProcessLookupError:
+                  pass
+              except Exception:
+                  _stack_state['errors'] += 1
+              try:
+                  observer_process.wait(timeout=10)
+              except subprocess.TimeoutExpired:
+                  _stack_state['errors'] += 1
+                  try:
+                      observer_process.kill()
+                      observer_process.wait(timeout=5)
+                  except Exception:
+                      _stack_state['errors'] += 1
+              except Exception:
+                  _stack_state['errors'] += 1
+          observer_process = None
+          try:
+              observer_process = subprocess.Popen([sys.executable, '-u', '-c', "import json, os, pathlib, sys, time\nstack_read_fd = int(sys.argv[2])\nstack_buffer = b''\n\ndef drain_python_stacks():\n    global stack_buffer\n    if stack_read_fd < 0:\n        return\n    for _ in range(4):\n        try:\n            chunk = os.read(stack_read_fd, 16384)\n        except BlockingIOError:\n            break\n        except OSError:\n            return\n        if not chunk:\n            break\n        stack_buffer += chunk\n        while b'\\n' in stack_buffer:\n            line, stack_buffer = stack_buffer.split(b'\\n', 1)\n            print(line.decode('ascii', errors='replace'), flush=True)\n    if len(stack_buffer) > 4096:\n        stack_buffer = b''\nparent = int(sys.argv[1])\nticks_per_second = os.sysconf('SC_CLK_TCK')\nprevious = None\n\ndef state(pid):\n    root = pathlib.Path('/proc') / str(pid)\n    text = (root / 'stat').read_text()\n    fields = text[text.rfind(')') + 2:].split()\n    return {'pid': pid, 'state': fields[0], 'ppid': int(fields[1]), 'cpu_ticks': int(fields[11]) + int(fields[12]), 'rss_pages': int(fields[21]), 'wchan': (root / 'wchan').read_text().strip()}\nwhile True:\n    drain_python_stacks()\n    try:\n        current = state(parent)\n    except FileNotFoundError:\n        break\n    stamp = time.monotonic()\n    sample = {'observer': 'issue848-stall', 'wall_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'monotonic_seconds': stamp, 'ticks_per_second': ticks_per_second, 'page_bytes': os.sysconf('SC_PAGE_SIZE'), 'parent': current}\n    if previous is not None:\n        sample['parent_cpu_seconds_since_sample'] = (current['cpu_ticks'] - previous[1]) / ticks_per_second\n        sample['elapsed_seconds_since_sample'] = stamp - previous[0]\n    previous = (stamp, current['cpu_ticks'])\n    threads, children = ([], [])\n    for task in (pathlib.Path('/proc') / str(parent) / 'task').iterdir():\n        try:\n            threads.append({'tid': int(task.name), 'wchan': (task / 'wchan').read_text().strip()})\n        except FileNotFoundError:\n            pass\n    for path in pathlib.Path('/proc').iterdir():\n        if path.name.isdecimal() and int(path.name) != os.getpid():\n            try:\n                child = state(int(path.name))\n                if child['ppid'] == parent:\n                    children.append(child)\n            except (FileNotFoundError, ProcessLookupError, PermissionError):\n                pass\n    sample.update(threads=threads, direct_children=children)\n    print(json.dumps(sample, sort_keys=True), flush=True)\n    time.sleep(60)\n", str(os.getpid()), str(_stack_read_fd)], pass_fds=_stack_pass_fds)
+          except Exception:
+              _stack_state['errors'] += 1
+          finally:
+              _close_stack_descriptor(_stack_read_fd)
+          print(json.dumps({'observer': 'issue848-stall-start', 'pid': os.getpid(), 'stack_interval_seconds': 120, 'cpu_interval_seconds': 60, 'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'stack_mechanism': 'main-thread Python signal handler; bounded nonblocking pipe; diagnostic only'}), flush=True)
+          profile = cProfile.Profile() if os.environ['DIAGNOSTIC_PROFILE_MODE'] == 'cprofile' else None
           started = time.perf_counter()
           if profile is not None:
               profile.enable()
           try:
-              code = runner.main(["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")])
+              _start_python_stack_observer()
+              code = runner.main(['run', '--id', os.environ['DIAGNOSTIC_TEST_ID'], '--json', str(output / 'instrumented-run.json')])
           finally:
+              _stop_python_stack_observer()
+              _stop_external_observer()
               if profile is not None:
                   profile.disable()
-                  profile.dump_stats(str(output / "profile.pstats"))
-                  with (output / "profile.txt").open("w") as stream:
-                      pstats.Stats(profile, stream=stream).strip_dirs().sort_stats("cumulative").print_stats(100)
+                  profile.dump_stats(str(output / 'profile.pstats'))
+                  with (output / 'profile.txt').open('w') as stream:
+                      pstats.Stats(profile, stream=stream).strip_dirs().sort_stats('cumulative').print_stats(100)
               else:
-                  (output / "profile.txt").write_text("cProfile disabled by diagnostic input profile_mode=none.\n")
+                  (output / 'profile.txt').write_text('cProfile disabled by diagnostic input profile_mode=none.\n')
               after = hashes()
-              evidence = {"diagnostic_only": True, "source_valid": before == after, "source_before": before, "source_after": after, "instrumented_seconds": time.perf_counter() - started, "counts": dict(counts), "fixture_samples": samples, "platform": platform.platform(), "python": platform.python_version(), "cpu_count": os.cpu_count(), "git": subprocess.check_output(["git", "--version"], text=True).strip()}
-              evidence.update(python_compiler=platform.python_compiler(), python_enable_optimizations_flag="--enable-optimizations" in (sysconfig.get_config_var("CONFIG_ARGS") or ""), temporary_filesystem=subprocess.check_output(["stat", "-f", "-c", "%T", tempfile.gettempdir()], text=True).strip())
-              (output / "counters.json").write_text(json.dumps(evidence, indent=2))
+              evidence = {'diagnostic_only': True, 'source_valid': before == after, 'source_before': before, 'source_after': after, 'instrumented_seconds': time.perf_counter() - started, 'counts': dict(counts), 'fixture_samples': samples, 'platform': platform.platform(), 'python': platform.python_version(), 'cpu_count': os.cpu_count(), 'git': subprocess.check_output(['git', '--version'], text=True).strip()}
+              evidence.update(python_compiler=platform.python_compiler(), python_enable_optimizations_flag='--enable-optimizations' in (sysconfig.get_config_var('CONFIG_ARGS') or ''), temporary_filesystem=subprocess.check_output(['stat', '-f', '-c', '%T', tempfile.gettempdir()], text=True).strip())
+              evidence['python_stack_observer'] = dict(_stack_state)
+              (output / 'counters.json').write_text(json.dumps(evidence, indent=2))
           raise SystemExit(code if before == after else 2)
           PY
       - uses: actions/upload-artifact@v4
