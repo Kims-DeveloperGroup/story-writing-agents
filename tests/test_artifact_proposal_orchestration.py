@@ -672,7 +672,8 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                         choices['preparation_targets'], tuple(drafting['target_artifact_paths']))
                 native['authoring_assessment'] = lead_fixture_assessment(
                     native['authoring_assessment'], source_choices=choices['input_ids'])
-                return lead_fixture_response(call, lead_fixture_result(native), family=0)
+                return self._require_revision_fixture(call, lead_fixture_response(call, lead_fixture_result(native), family=0),
+                    first.proposal.authoring_scope, artifact=True)
             return encode_current(
                 call,
                 {
@@ -785,20 +786,20 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             ("Prepare the first narrative-rule candidate." + '\nSupplied requested candidate content:\n' + json.dumps(['First candidate.\n'])
              + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
-        self.backend.enqueue_for(
-            LEAD_ORCHESTRATOR,
-            _artifact_outcome(
-                operations=[ { "kind" : "create" , "new_text" : "Revised candidate.\n" , "suggested_path" : _RULES , } ],
-                evidence_status="missing",
-                evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
-                authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
+        revision_fixture = _artifact_outcome(
+            operations=[ { "kind" : "create" , "new_text" : "Revised candidate.\n" , "suggested_path" : _RULES , } ],
+            evidence_status="missing",
+            evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
+            authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
 
-                authoring_scope=lambda call: _live_scope(
-                    call, activity='review', domains=('tone_execution',),
-                    paths=(_RULES,), contributions=[
-                        {'domain': domain, 'role': 'constraint_assessor'}
-                        for domain in ('tone_execution',)]),),
-        )
+            authoring_scope=lambda call: _live_scope(
+                call, activity='review', domains=('tone_execution',),
+                paths=(_RULES,), contributions=[
+                    {'domain': domain, 'role': 'constraint_assessor'}
+                    for domain in ('tone_execution',)]),)
+        def checked_revision(call, provider):
+            return self._require_revision_fixture(call, revision_fixture(call, provider), first.proposal.authoring_scope, artifact=True)
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, checked_revision)
         replacement = await self.runtime.decide_lead_step(
             _decision(first, CollaborationConfirmationDecision.REVISE) )
         second = replacement.turn

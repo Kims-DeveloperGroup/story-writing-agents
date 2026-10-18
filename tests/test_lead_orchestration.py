@@ -1292,6 +1292,46 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
 
 
 
+    def _require_revision_fixture(self, call, encoded, prior_scope, *, artifact=False):
+        from story_writing_agents.antigravity_adapter import AntigravityAdapter
+        bound, packet = call.contract, json.loads(encoded)
+        self._require_fixture_census(bound, {f'lead-response-v9:family:{i}' for i in range(3)})
+        self.assertEqual(bound.factory.constraints.task_revisions, ((prior_scope.task_id, prior_scope.task_revision + 1),))
+        self.assertTrue(bound.decode_response(encoded).belongs_to(bound))
+        schemas = (call.schema, AntigravityAdapter.native_output_schema(call.schema))
+        self._require_fixture_field_neighbors(bound, packet, native_projections=tuple(zip(('codex', 'antigravity'), schemas)))
+        values = {name: set() for name in ('response_type', 'action_type', 'activity', 'intent')}
+        for member in bound.semantic_index.contracts:
+            graph = member.rule_graph.schema_value()
+            pending = [graph]
+            while pending:
+                node = pending.pop()
+                if type(node) is list: pending.extend(node)
+                if type(node) is not dict: continue
+                pending.extend(node.values())
+                for name in values.keys() & node.get('properties', {}).keys():
+                    field = node['properties'][name]
+                    while '$ref' in field: field = graph['$defs'][field['$ref'].removeprefix('#/$defs/').replace('~1', '/').replace('~0', '~')]
+                    values[name].update(field['enum'])
+        self.assertEqual(values['response_type'], {'answer', 'clarification_question', 'proposal_drafting_recommendation',
+            'artifact_change_proposal' if artifact else 'specialist_consultation_proposal'})
+        self.assertEqual(values['action_type'], {'draft_document_change_proposal' if artifact else 'draft_specialist_consultation_proposal'})
+        self.assertEqual(values['intent'], {'authoring'})
+        self.assertNotIn('workflow_guidance', values['activity'])
+        if artifact: self.assertEqual(values['activity'], {'review_writing'})
+        details = packet['agent_action']['task_result']['response_details']
+        for field, key, value in (('task_scope', 'activity', 'draft_writing' if artifact else 'workflow_guidance'),
+                ('task_scope', 'task', {'id': prior_scope.task_id, 'revision': prior_scope.task_revision}),
+                ('proposal_drafting_request', 'action_type', 'draft_specialist_consultation_proposal' if artifact else 'draft_document_change_proposal')):
+            if field not in details: continue
+            changed = copy.deepcopy(packet)
+            changed['agent_action']['task_result']['response_details'][field][key] = value
+            self.assertTrue(bound.rule_graph.findings(changed), (field, value))
+            with self.assertRaisesRegex(ValueError, '^LEAD_SCHEMA_RULE_REJECTED$'):
+                bound.decode_response(json.dumps(changed))
+            self.assertTrue(all(diagnose_json_text(json.dumps(changed), schema) for schema in schemas), (field, value))
+        return encoded
+
 def _discussion_reply(text, kind="answer"):
     result = {"response_type": kind, "response_text": text, "used_evidence_ids": []}
     return json.dumps({"agent_action": {"action_type": "submit_result", "task_result": result}})
@@ -4158,12 +4198,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         case.backend.enqueue(repair_pending_question)
         repaired = await case.runtime.lead_turn(case.session_id, pending_conversation,
             "Continue the pending outline request; the ending is still unspecified.")
-        self.assertIs(repaired.kind, LeadOutcomeKind.QUESTION, {
-            'message': repaired.message, 'validation': repaired.validation_details,
-            'calls': len(case.backend.calls) - call_start, 'fixture_scopes': len(captured_scopes),
-            'public_responses': tuple((item.response.response_text, item.response.acceptance.value,
-                                       item.response.validation_details) for item in repaired.public_responses),
-        })
+        self.assertIs(repaired.kind, LeadOutcomeKind.QUESTION)
         self.assertEqual(repaired.message, question_text)
         self.assertIs(repaired.trace.origin, ReplyTraceOrigin.RECOVERED)
         self.assertEqual(len(case.backend.calls) - call_start, 2)
@@ -4628,10 +4663,13 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
 
         revise_id = self.conversation("Revise")
         revised_source = await self.proposal(revise_id, text=qualified_request, authoring_assessment=assessment,)
-        self.backend.enqueue(_current_proposal_outcome([{'agent_id': PLOT_ARCHITECT,
+        revision_fixture = _current_proposal_outcome([{'agent_id': PLOT_ARCHITECT,
             'instruction': 'Perform the revised plot check.', 'input_ids': ['user_input']}],
             domains=('plot_structure',), relation='revise_pending', authoring_assessment=assessment,
-                                 author_review_basis=True))
+                                 author_review_basis=True)
+        def checked_revision(call, provider):
+            return self._require_revision_fixture(call, revision_fixture(call, provider), revised_source.proposal.authoring_scope)
+        self.backend.enqueue(checked_revision)
         revised = await self._decide(revised_source, CollaborationConfirmationDecision.REVISE)
         replacement = revised.turn.proposal
         assert replacement is not None
@@ -4804,12 +4842,16 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                 proposed = await self.proposal(conversation_id, text=_REVIEW_USER_INPUT,
                     authoring_assessment=assessment)
                 before = len(_submitted_calls(self.history(conversation_id)))
+                checked = set()
                 def invalid(call, _provider):
                     task = _live_material(call)['authoring_tasks'][-1]
                     baseline = {'response_type': 'clarification_question' if kind == 'question' else 'answer',
                         'response_text': 'The revised direction is safe without another consultation.',
                         'response_details': {'used_evidence_ids': {}}}
                     packet = json.loads(lead_fixture_response(call, baseline, family=0))
+                    if kind in ('answer', 'question') and not checked:
+                        self._require_revision_fixture(call, json.dumps(packet), proposed.proposal.authoring_scope)
+                        checked.add(kind)
                     body = packet['agent_action']['task_result']
                     body['response_type'] = {'answer': 'answer', 'question': 'clarification_question',
                         'critique': 'critique', 'recommendation': 'proposal_drafting_recommendation'}[kind]

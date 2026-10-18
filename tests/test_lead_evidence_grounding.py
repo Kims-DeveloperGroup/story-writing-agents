@@ -544,26 +544,15 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         for index, kinds in enumerate((["w"], ["w", "c"], ["c"])):
             with self.subTest(kinds=kinds):
                 conversation_id = self.conversation(f"Zero hit {index}")
-                progress = [0, 0, 0]
-                scoped = ((len(self.backend.calls), len(self.backend.call_records),
-                           len(self.backend.finalizers)), self.session_id,
-                          conversation_id, progress, None, None)
                 self.backend.enqueue(_search("phrase absent from every source", kinds),
-                    _scoped_progress(
-                        _missing_outcome(authoring_assessment=_fixture_assessment()), progress),)
+                    _missing_outcome(authoring_assessment=_fixture_assessment()),)
                 result = await self.runtime.lead_turn(
                     self.session_id,
                     conversation_id,
                     _ADMISSION_BRIEF + "\n" + "Check for absent evidence.",
                 )
                 self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
-                try:
-                    self.assertIsNotNone(result.evidence)
-                except AssertionError as failure:
-                    from tests.recommendation_fixture import _current_policy_failure_note
-                    failure.add_note(_current_policy_failure_note(
-                        self.backend, result, scoped=scoped))
-                    raise
+                self.assertIsNotNone(result.evidence)
                 assert result.evidence is not None
                 zero_hits = tuple(
                     receipt
@@ -602,23 +591,12 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Content-free zero hit")
-        progress = [0, 0, 0]
-        scoped = ((len(self.backend.calls), len(self.backend.call_records),
-                   len(self.backend.finalizers)), self.session_id,
-                  conversation_id, progress, None, None)
         self.backend.enqueue(_search("private internal search phrase", ["w"]),
-            _scoped_progress(
-                _missing_outcome(authoring_assessment=_fixture_assessment()), progress),)
+            _missing_outcome(authoring_assessment=_fixture_assessment()),)
         result = await self.runtime.lead_turn(self.session_id, conversation_id,
             _ADMISSION_BRIEF + "\n" + "Check canonical artifacts.",)
         self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
-        try:
-            self.assertIsNotNone(result.recommendation_request)
-        except AssertionError as failure:
-            from tests.recommendation_fixture import _current_policy_failure_note
-            failure.add_note(_current_policy_failure_note(
-                self.backend, result, scoped=scoped))
-            raise
+        self.assertIsNotNone(result.recommendation_request)
         self.assertIsNotNone(result.evidence)
         assert result.evidence is not None
         zero_hits = tuple(
@@ -944,13 +922,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 )
                 failure_payloads = tuple(event.payload for event in self.history(conversation_id)
                                          if type(event.payload) is CollaborationLeadOutcomeFailurePayload)
-                try:
-                    self.assertEqual(len(failure_payloads), 0 if index == 2 else 1)
-                except AssertionError as failure:
-                    from tests.recommendation_fixture import _current_policy_failure_note
-                    failure.add_note(_current_policy_failure_note(
-                        self.backend, result, selection=ids))
-                    raise
+                self.assertEqual(len(failure_payloads), 0 if index == 2 else 1)
                 self.assertEqual(len(_submitted_calls(self.history(conversation_id))), 1 if index == 2 else 2)
                 if index == 2:
                     self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
@@ -982,13 +954,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                         else "$.agent_action.task_result.response_details."
                              "proposal_drafting_request.source_ids: "
                              "contains 1 unexpected properties (names withheld)")
-                    try:
-                        self.assertIn(source_rule, "\n".join(result.validation_details))
-                    except AssertionError as failure:
-                        from tests.recommendation_fixture import _current_policy_failure_note
-                        failure.add_note(_current_policy_failure_note(
-                            self.backend, result, selection=ids))
-                        raise
+                    self.assertIn(source_rule, "\n".join(result.validation_details))
 
         prior_call_facts = [('not_retained',)]
 
@@ -1196,13 +1162,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         def check_native_delivery(conversation_id, call_start, finalizer_start,
                                   expected_returns, expected_states):
             calls = self.backend.calls[call_start:]
-            self.assertEqual(len(calls), 3, {
-                'finalizers': tuple(tuple((state, None if code is None else str(code)[:96])
-                    for state, code in finalizer.calls[:3])
-                    for finalizer in self.backend.finalizers[finalizer_start:][:3]),
-                'answer_returns': answer_returns, 'message': str(result.message)[:512],
-                'validation': tuple(str(detail)[:256] for detail in result.validation_details[:4]),
-            })
+            self.assertEqual(len(calls), 3)
             self.assertTrue(all(
                 call.scope.session_id == self.session_id
                 and call.scope.subject_kind is ContextSubjectKind.CONVERSATION
