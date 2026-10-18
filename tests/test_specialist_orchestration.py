@@ -986,7 +986,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                     bad = {**body, "next_intent": {**body["next_intent"], "assignments": [{**assignment, "input_ids": selected}]}}
                     self.assertIn(Rule.CONTINUATION_INPUT_COVERAGE, facts.diagnose(json.dumps(bad)))
                 bad = {**body, "next_intent": {**body["next_intent"], "assignments": [{**assignment, "input_ids": ["foreign_reply"]}]}}
-                self.assertIn(Rule.INPUT_NOT_OFFERED, facts.diagnose(json.dumps(bad)))
+                self.assertIn(Rule.CONTINUATION_INPUT_NOT_OFFERED, facts.diagnose(json.dumps(bad)))
                 rejected = json.loads(json.dumps(grouped))
                 rejected_rows = rejected['response_details']['follow_up_consultation']['assignments']
                 rejected_rows[PLOT_ARCHITECT]['input_anchor_id'] = (
