@@ -3392,7 +3392,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                     with self.assertRaises(ValueError):
                                         profile_binding.decode_response(json.dumps(missing_specialist))
                                     for _provider, schema in profile_projections:
-                                        self.assertTrue(SchemaRules.declare(schema).findings(missing_specialist))
+                                        self.assertTrue(SchemaRules.declare(schema, maximum_bytes=profile_binding.rule_graph.maximum_bytes).findings(missing_specialist))
                         self.assertEqual(checked_profile_cases,
                             [(case[0], case[1]) for case in profile_cases])
                         if intent == 'authoring':
