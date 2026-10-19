@@ -76,9 +76,13 @@ jobs:
               if (!Number.isFinite(created)) throw new Error("Missing workflow creation time.");
               const runDeadline = created + 30 * 60 * 1000;
               deadline = deadline === undefined ? runDeadline : Math.min(deadline, runDeadline);
+              if (Date.now() >= deadline - 30_000) {
+                core.setFailed("Workflow guard shutdown margin reached; no safe control window remains.");
+                return null;
+              }
               return run;
             }
-            while (Date.now() < (deadline ?? metadataDeadline)) {
+            while (Date.now() < (deadline === undefined ? metadataDeadline : deadline - 30_000)) {
               try {
                 if (!await currentRun()) return;
                 let complete;
@@ -101,13 +105,13 @@ jobs:
                   core.info("All validation jobs finished within the workflow deadline.");
                   return;
                 }
-                if (Date.now() >= deadline - 60_000) {
+                if (Date.now() >= deadline - 330_000) {
                   core.setFailed("Workflow shutdown reserve reached; force-cancelling this run.");
                   if (!await currentRun()) return;
                   await github.request("POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel", parameters());
                   return;
                 }
-                if (!cancellationRequested && Date.now() >= deadline - 90_000) {
+                if (!cancellationRequested && Date.now() >= deadline - 360_000) {
                   core.setFailed("Workflow shutdown reserve reached; cancelling this run.");
                   if (!await currentRun()) return;
                   await github.rest.actions.cancelWorkflowRun(parameters());
@@ -116,8 +120,8 @@ jobs:
               } catch (error) {
                 core.warning(`Deadline control request failed: ${error.message}`);
               }
-              const remaining = (deadline ?? metadataDeadline) - Date.now();
-              const poll = deadline !== undefined && remaining > 90_000 ? 30_000 : 5000;
+              const remaining = (deadline === undefined ? metadataDeadline : deadline - 30_000) - Date.now();
+              const poll = deadline !== undefined && deadline - Date.now() > 390_000 ? 30_000 : 5000;
               if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(poll, remaining)));
             }
             core.setFailed("Workflow deadline enforcement could not complete within its bounded window.");
@@ -467,9 +471,9 @@ jobs:
           git config --global user.email "story-tests@example.invalid"
       - name: Run fast runtime tests
         run: |
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 330 ))
-          if (( test_seconds > 1470 )); then test_seconds=1470; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":300}\n' "$test_seconds" > "$RUNNER_TEMP/fast-control.json"
+          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
+          if (( test_seconds > 1350 )); then test_seconds=1350; fi
+          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/fast-control.json"
           if (( test_seconds <= 0 )); then exit 124; fi
           set +e
           timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --tier fast --json "$RUNNER_TEMP/fast.json" 2>&1 | tee "$RUNNER_TEMP/fast.log"
@@ -479,6 +483,7 @@ jobs:
           printf '%s\n' "$test_status" > "$RUNNER_TEMP/fast-exit-code.txt"
           exit "$test_status"
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 1
         if: always()
         with:
           name: runtime-fast
@@ -539,9 +544,9 @@ jobs:
           git config --global user.email "story-tests@example.invalid"
       - name: Run full runtime shard
         run: |
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 330 ))
-          if (( test_seconds > 1470 )); then test_seconds=1470; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":300}\n' "$test_seconds" > "$RUNNER_TEMP/full-${{ matrix.shard }}-control.json"
+          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
+          if (( test_seconds > 1350 )); then test_seconds=1350; fi
+          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/full-${{ matrix.shard }}-control.json"
           if (( test_seconds <= 0 )); then exit 124; fi
           set +e
           timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "${{ matrix.shard }}/4" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json" 2>&1 | tee "$RUNNER_TEMP/full-${{ matrix.shard }}.log"
@@ -551,6 +556,7 @@ jobs:
           printf '%s\n' "$test_status" > "$RUNNER_TEMP/full-${{ matrix.shard }}-exit-code.txt"
           exit "$test_status"
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 1
         if: always()
         with:
           name: full-${{ matrix.shard }}
@@ -601,9 +607,9 @@ jobs:
           path: full-reports
       - name: Reconcile shard evidence
         run: |
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 90 ))
+          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
           if (( test_seconds <= 0 )); then
-            echo "Reconciliation deadline exhausted; preserve 30s termination and 60s upload reserve."
+            echo "Reconciliation deadline exhausted; preserve 30s termination, 60s upload, and 360s cancellation reserve."
             exit 124
           fi
           PYTHONPATH=src timeout --signal=INT --kill-after=30s "${test_seconds}s" \
@@ -625,7 +631,7 @@ jobs:
             echo "Maintainer-authorized wall-time exception: measured durations remain visible."
             budget_args+=(--allow-wall-time-overage)
           fi
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 90 ))
+          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
           if (( test_seconds <= 0 )); then
             echo "Reconciliation deadline exhausted before inventory and wall-time checks."
             exit 124
@@ -734,9 +740,9 @@ jobs:
           TMPDIR: ${{ steps.scratch.outputs.directory || '/tmp' }}
         run: |
           install -d -m 700 "$RUNNER_TEMP/timing-diagnostic"
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 330 ))
-          if (( test_seconds > 1470 )); then test_seconds=1470; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":300}\n' "$test_seconds" > "$RUNNER_TEMP/timing-diagnostic/control.json"
+          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
+          if (( test_seconds > 1350 )); then test_seconds=1350; fi
+          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/timing-diagnostic/control.json"
           if (( test_seconds <= 0 )); then exit 124; fi
           set +e
           timeout --signal=INT --kill-after=30s "${test_seconds}s" .venv/bin/python - <<'PY' 2>&1 | tee "$RUNNER_TEMP/timing-diagnostic/worker.log"
@@ -869,6 +875,7 @@ jobs:
           printf '%s\n' "$test_status" > "$RUNNER_TEMP/timing-diagnostic/exit-code.txt"
           exit "$test_status"
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 1
         if: always() && (github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true')
         with:
           name: ${{ github.event_name == 'workflow_dispatch' && format('timing-diagnostic-{0}-{1}', inputs.arch, inputs.scratch) || 'timing-diagnostic' }}

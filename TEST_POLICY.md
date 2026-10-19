@@ -80,29 +80,43 @@ The exception never permits failed or incomplete reports, inventory expansion,
 increased subtest counts or test source, budget-file increases, skipped required
 checks, or bypassed approvals and branch protection.
 
-Every `pr-validation` job declares native `timeout-minutes: 30`, including
+Every `pr-validation` job declares a native `timeout-minutes: 30`, including
 classification, static validation, fast validation, each full shard,
 reconciliation, automatic or manually dispatched diagnostics, and deadline
 control. Every event shares one absolute 30-minute deadline derived from the
 workflow run's GitHub `created_at`, including queue, setup, dependency waits,
 cancellation, and uploads. Classification records that deadline before selecting
 lanes. A rerun cannot extend the original run's window. Test and reconciliation
-workers clamp their 30-minute job clock to the shared deadline. Each test worker
-reserves 330 seconds for termination and evidence upload, allowing at most 1,470
-execution seconds minus setup and shared-clock consumption. Reconciliation
-reserves 90 seconds for termination and its one-minute artifact upload. Missing
-or exhausted shared budgets fail verification.
+workers clamp the 30-minute job clock to this shared deadline. Each of the three
+test-worker allowances and both reconciliation allowances reserves 450 seconds;
+the three explicit test-worker caps are 1,350 seconds, reduced by setup and
+shared-clock consumption. Each reconciliation gate recomputes its allowance.
+Missing or exhausted budgets fail verification rather than borrowing the
+cancellation reserve. Workers stop by minute 22.5, retain a 30-second kill grace,
+and allow at most one minute for artifact upload before normal cancellation at
+minute 24. Fast, full, diagnostic, and reconciliation artifact uploads each have
+a one-minute step timeout. Control metadata distinguishes the 60-second cleanup
+allowance from the 360-second cancellation reserve. These allowances do not
+guarantee the duration of queued jobs or checkout and other post-actions.
 
 An independent deadline job starts alongside classification and monitors a
-completion marker that depends on every validation job. It requests cancellation
-with 90 seconds remaining and force-cancellation with 60 seconds remaining. Only
-that guard has `actions: write`; each cancellation verifies the current run and
-attempt identity. Its polling and API requests are bounded, and unavailable
-deadline enforcement fails visibly. The marker does not replace any validation
-result. Native job timeouts remain a separate limit. Runner scheduling or an
-unavailable GitHub control API can delay cancellation, so acceptance also checks
-the observed complete workflow duration: it must finish within 30 minutes with
-all required reports and checks complete.
+completion marker that depends on every validation job. Its normal-cancellation
+threshold is 360 seconds remaining and its force-cancellation threshold is 330
+seconds remaining. Bounded polling and fresh identity checks can delay the actual
+request after a threshold. Five-second polling begins with 390 seconds remaining. The guard
+stops starting iterations and sleeping with 30 seconds remaining; metadata that
+arrives after that cutoff fails enforcement without granting a new control
+window. Only this guard has `actions: write`; each cancellation verifies the
+current run and attempt identity. API calls have five-second limits and zero
+retries. The reserve accounts for GitHub's documented [five-minute cancellation
+period](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation).
+The marker does not replace any validation result, and a cancellation response
+or HTTP 409 is not terminal proof. Native job timeouts remain a separate limit.
+Runner scheduling or an unavailable or inconsistent GitHub control API can
+delay enforcement. Acceptance therefore requires coherent terminal run and job
+records, matching run/attempt/source identities, and observed complete workflow
+and executed-job durations within 30 minutes, with every required report and
+check complete. An unavailable enforcement path fails visibly.
 
 Explicitly dispatched diagnostic jobs also stop after 30 minutes. Test execution
 has a separate earlier deadline to leave time for termination and evidence
