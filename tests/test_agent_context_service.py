@@ -241,8 +241,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
         def pair(leaf):
             return {'type': 'object', 'properties': {'left': leaf, 'right': leaf},
                     'required': ['left', 'right'], 'additionalProperties': False}
-        def shared_pair(leaf):
-            return {**pair({'$ref': '#/$defs/a'}), '$defs': {'a': leaf}}
+        def shared_pair(leaf): return {**pair({'$ref': '#/$defs/a'}), '$defs': {'a': leaf}}
         for width, inline_size, shared_size, wins in ((25, 214, 215, False), (26, 216, 216, False),
                                                      (27, 218, 217, True), (80, 324, 270, True)):
             leaf = {'type': 'string', 'enum': ['x' * width]}; original, shared = pair(leaf), shared_pair(leaf)
@@ -298,8 +297,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
         class Source(Mapping):
             def __iter__(self):
                 events.append('iterate'); return iter(original)
-            def __len__(self):
-                events.append('length'); return len(original)
+            def __len__(self): events.append('length'); return len(original)
             def __getitem__(self, name):
                 events.append(('read', name)); return original[name]
         events.clear(); dict(Source()); access_order = list(events); events.clear()
@@ -308,9 +306,11 @@ class StructuredOutputValidationTests(unittest.TestCase):
                                ({'$ref': '#/$defs/unused'}, '$defs: cyclic local definition')):
             malformed = {**original, '$defs': {**definitions, 'unused': invalid}}
             for operation in (SchemaRules.declare, factored):
-                with self.assertRaisesRegex(ValueError, '^schema rejected$') as caught:
+                cycle = operation is factored and invalid['$ref'] == '#/$defs/unused'
+                message = 'cyclic schema rule graph' if cycle else 'schema rejected'
+                with self.assertRaisesRegex(ValueError, f'^{message}$') as caught:
                     operation(malformed)
-                self.assertEqual(failure_issues(caught.exception), (issue,))
+                self.assertEqual(failure_issues(caught.exception), () if cycle else (issue,))
 
     def test_malformed_and_duplicate_json_have_value_free_diagnostics(self) -> None:
         schema = {"type": "object", "properties": {}, "additionalProperties": False}
