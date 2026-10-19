@@ -1836,7 +1836,25 @@ def _capture_hook_dataclass(value: object) -> tuple | None:
     if (type(frozen) is not _HOOK_MEMBER_DESCRIPTOR_TYPE
             or frozen.__get__(params, type(params)) is not True):
         return None
-    field_states = tuple(_capture_hook_slots(item) for item in declared_fields)
+    field_states = []
+    # Exact Field instances share a raw layout; read every instance slot freshly.
+    field_plan = None
+    for item in declared_fields:
+        if field_plan is None:
+            state = _capture_hook_slots(item)
+            if state is not None:
+                field_plan = (state[0], tuple(
+                    descriptor for descriptor, _ in state[1][3]))
+        else:
+            field_layout, slot_descriptors = field_plan
+            try:
+                slots = tuple((descriptor, descriptor.__get__(item, _DataclassField))
+                              for descriptor in slot_descriptors)
+            except (AttributeError, TypeError):
+                state = None
+            else:
+                state = (field_layout, ("metadata_slots", item, _DataclassField, slots))
+        field_states.append(state)
     if any(state is None for state in field_states):
         return None
     name_slot = _hook_raw_class_attribute(_DataclassField, "name")
