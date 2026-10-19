@@ -1391,25 +1391,26 @@ def _diagnostic_plain(value: object, root: object, _type=type, _dict=dict, _list
     completed: set[tuple[int, bool]] = set()
     # A cursor keeps the original child-edge snapshot without one work tuple per
     # child. None marks a pending root/ref action; an empty child list means leave.
-    pending = [[value, False, None], [root, True, None]]
+    pending = [[value, False, None, None], [root, True, None, None]]
     virtual_pending = 2
     remaining = 262_144
     while pending:
         frame = pending[-1]
-        node, schema, children = frame
+        node, schema, children, entry_key = frame
         leaving = children is not None and not children
         if children is None or leaving:
             pending.pop()
         else:
             node = children.pop()
         virtual_pending -= 1
+        if leaving:
+            _id(node)  # Preserve the original leave-time audit event and exception.
+            active.remove(entry_key)
+            completed.add(entry_key)
+            continue
         kind = _type(node)
         if kind is _dict or kind is _list:
             key = (_id(node), schema)
-            if leaving:
-                active.remove(key)
-                completed.add(key)
-                continue
             if key in active:
                 return False
             if key in completed:
@@ -1428,7 +1429,7 @@ def _diagnostic_plain(value: object, root: object, _type=type, _dict=dict, _list
                 children = _list(node.values())
             else:
                 children = _list(node)
-            pending.append([node, schema, children])
+            pending.append([node, schema, children, key])
             virtual_pending += size
             if kind is _dict and schema and "$ref" in node:
                 reference = node["$ref"]
@@ -1438,7 +1439,7 @@ def _diagnostic_plain(value: object, root: object, _type=type, _dict=dict, _list
                 name = reference[len("#/$defs/"):]
                 if not name or "/" in name or "~" in name or _type(definitions.get(name)) is not _dict:
                     return False
-                pending.append([definitions[name], True, None])
+                pending.append([definitions[name], True, None, None])
                 virtual_pending += 1
         elif not (node is None or kind is _str or kind is _int or kind is _bool
                   or kind is _float and _finite(node)):
