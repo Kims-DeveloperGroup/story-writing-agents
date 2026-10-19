@@ -40,7 +40,9 @@ jobs:
     name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - classification skipped' || 'Classify changed paths' }}
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
+    timeout-minutes: 2
     outputs:
+      test_run_deadline: ${{ steps.paths.outputs.test_run_deadline }}
       runtime: ${{ steps.paths.outputs.runtime }}
       policy_only: ${{ steps.paths.outputs.policy_only }}
       full: ${{ steps.paths.outputs.full }}
@@ -54,6 +56,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            core.setOutput("test_run_deadline", String(Math.floor(Date.now() / 1000) + 40 * 60));
             const {owner, repo} = context.repo;
             let files = [];
             let labels = [];
@@ -124,7 +127,17 @@ jobs:
     name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - static validation skipped' || 'Static validation' }}
     needs: classify
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
     steps:
+      - name: Check shared deadline before static work
+        run: |
+          [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
+          if (( TEST_RUN_DEADLINE <= $(date +%s) )); then
+            echo "Shared test-run deadline exhausted before static work."
+            exit 124
+          fi
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -289,12 +302,28 @@ jobs:
     needs: classify
     if: needs.classify.outputs.runtime == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 38
     env:
-      TEST_JOB_MINUTES: '40'
+      TEST_JOB_MINUTES: '38'
+      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
     steps:
-      - name: Record test job deadline before setup
-        run: echo "TEST_JOB_DEADLINE=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))" >> "$GITHUB_ENV"
+      - name: Record shared test deadline before setup
+        run: |
+          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
+          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
+            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
+            if (( TEST_RUN_DEADLINE < test_deadline )); then
+              test_deadline=$TEST_RUN_DEADLINE
+            fi
+          elif [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+            echo "Missing shared test-run deadline."
+            exit 2
+          fi
+          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
+          if (( test_deadline <= $(date +%s) )); then
+            echo "Shared test-run deadline exhausted before setup."
+            exit 124
+          fi
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -346,11 +375,27 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       PYTHONDONTWRITEBYTECODE: '1'
-      TEST_JOB_MINUTES: ${{ needs.classify.outputs.wall_time_exception == 'true' && '40' || '15' }}
-    timeout-minutes: ${{ needs.classify.outputs.wall_time_exception == 'true' && 40 || 15 }}
+      TEST_JOB_MINUTES: ${{ needs.classify.outputs.wall_time_exception == 'true' && '25' || '15' }}
+      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
+    timeout-minutes: ${{ needs.classify.outputs.wall_time_exception == 'true' && 25 || 15 }}
     steps:
-      - name: Record test job deadline before setup
-        run: echo "TEST_JOB_DEADLINE=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))" >> "$GITHUB_ENV"
+      - name: Record shared test deadline before setup
+        run: |
+          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
+          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
+            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
+            if (( TEST_RUN_DEADLINE < test_deadline )); then
+              test_deadline=$TEST_RUN_DEADLINE
+            fi
+          elif [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+            echo "Missing shared test-run deadline."
+            exit 2
+          fi
+          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
+          if (( test_deadline <= $(date +%s) )); then
+            echo "Shared test-run deadline exhausted before setup."
+            exit 124
+          fi
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -395,10 +440,31 @@ jobs:
     name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - reconciliation skipped' || 'Reconcile full runtime suite' }}
     needs: [classify, full]
     if: >-
-      always() && needs.classify.outputs.full == 'true' &&
+      !cancelled() && needs.classify.outputs.full == 'true' &&
       (needs.full.result == 'success' || needs.full.result == 'failure')
     runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    env:
+      TEST_JOB_MINUTES: '3'
+      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
     steps:
+      - name: Record shared test deadline before setup
+        run: |
+          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
+          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
+            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
+            if (( TEST_RUN_DEADLINE < test_deadline )); then
+              test_deadline=$TEST_RUN_DEADLINE
+            fi
+          elif [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+            echo "Missing shared test-run deadline."
+            exit 2
+          fi
+          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
+          if (( test_deadline <= $(date +%s) )); then
+            echo "Shared test-run deadline exhausted before setup."
+            exit 124
+          fi
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -409,13 +475,17 @@ jobs:
           pattern: full-*
           path: full-reports
       - name: Reconcile shard evidence
-        run: >-
-          PYTHONPATH=src python -m tests.runner reconcile
-          full-reports/full-1/full-1.json
-          full-reports/full-2/full-2.json
-          full-reports/full-3/full-3.json
-          full-reports/full-4/full-4.json
-          --json "$RUNNER_TEMP/full-reconciled.json"
+        run: |
+          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 90 ))
+          if (( test_seconds <= 0 )); then
+            echo "Reconciliation deadline exhausted; preserve 30s termination and 60s upload reserve."
+            exit 124
+          fi
+          PYTHONPATH=src timeout --signal=INT --kill-after=30s "${test_seconds}s" \
+            python -m tests.runner reconcile \
+            full-reports/full-1/full-1.json full-reports/full-2/full-2.json \
+            full-reports/full-3/full-3.json full-reports/full-4/full-4.json \
+            --json "$RUNNER_TEMP/full-reconciled.json"
       - name: Enforce frozen suite inventory and wall-time budget
         env:
           BASE_SHA: ${{ needs.classify.outputs.base_sha }}
@@ -430,8 +500,15 @@ jobs:
             echo "Maintainer-authorized wall-time exception: measured durations remain visible."
             budget_args+=(--allow-wall-time-overage)
           fi
-          PYTHONPATH=src python -m tests.suite_budget "${budget_args[@]}"
+          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 90 ))
+          if (( test_seconds <= 0 )); then
+            echo "Reconciliation deadline exhausted before inventory and wall-time checks."
+            exit 124
+          fi
+          PYTHONPATH=src timeout --signal=INT --kill-after=30s "${test_seconds}s" \
+            python -m tests.suite_budget "${budget_args[@]}"
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 1
         if: always()
         with:
           name: runtime-full-reconciled
@@ -448,9 +525,25 @@ jobs:
     timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 40 || 10 }}
     env:
       TEST_JOB_MINUTES: ${{ github.event_name == 'workflow_dispatch' && '40' || '10' }}
+      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
     steps:
-      - name: Record test job deadline before setup
-        run: echo "TEST_JOB_DEADLINE=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))" >> "$GITHUB_ENV"
+      - name: Record shared test deadline before setup
+        run: |
+          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
+          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
+            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
+            if (( TEST_RUN_DEADLINE < test_deadline )); then
+              test_deadline=$TEST_RUN_DEADLINE
+            fi
+          elif [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+            echo "Missing shared test-run deadline."
+            exit 2
+          fi
+          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
+          if (( test_deadline <= $(date +%s) )); then
+            echo "Shared test-run deadline exhausted before setup."
+            exit 124
+          fi
       - uses: actions/checkout@v4
         with:
           submodules: recursive

@@ -797,10 +797,9 @@ def canonical_schema_rules(schema: Mapping[str, object], *, maximum_bytes: int =
     return encoded
 
 
-def schema_rule_fingerprints(
+def _schema_rule_fingerprint_context(
     schema: Mapping[str, object], *, selected: Mapping[str, object] | None = None,
-) -> tuple[str, dict[str, str]]:
-    """Derive alias-neutral node identities without declaring or admitting a schema."""
+) -> tuple[str, Callable[[Mapping[str, object]], str]]:
     if not isinstance(schema, Mapping) or (selected is not None and not isinstance(selected, Mapping)):
         raise ValueError("schema fingerprint inputs must be objects")
     root = schema
@@ -842,8 +841,23 @@ def schema_rule_fingerprints(
         memo[identity] = result
         return result
 
-    result = fingerprint(root if selected is None else selected)
-    definitions = root.get("$defs", {})
+    return fingerprint(root if selected is None else selected), fingerprint
+
+
+def schema_rule_fingerprint(
+    schema: Mapping[str, object], *, selected: Mapping[str, object] | None = None,
+) -> str:
+    """Derive a fresh selected-root identity, without admitting the whole schema."""
+    result, _ = _schema_rule_fingerprint_context(schema, selected=selected)
+    return result
+
+
+def schema_rule_fingerprints(
+    schema: Mapping[str, object], *, selected: Mapping[str, object] | None = None,
+) -> tuple[str, dict[str, str]]:
+    """Derive alias-neutral node identities without declaring or admitting a schema."""
+    result, fingerprint = _schema_rule_fingerprint_context(schema, selected=selected)
+    definitions = schema.get("$defs", {})
     if not isinstance(definitions, Mapping) or any(
         type(name) is not str or not isinstance(node, Mapping) for name, node in definitions.items()
     ):

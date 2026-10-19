@@ -29,7 +29,7 @@ from .provider_wire import (
 )
 from .provider_wire import share_schema_descriptions
 from .provider_wire import CHANGE_TYPES, ENUM_MEANINGS, field_description
-from .structured_output_validation import closed_rule, finite_subset_rule, schema_rule_fingerprints
+from .structured_output_validation import closed_rule, finite_subset_rule, schema_rule_fingerprint, schema_rule_fingerprints
 from .lead_exploration import exploration_result_schema
 from .authoring_admission import assessment_from_dict
 from .authoring_admission import assessment_schema as admission_rule
@@ -607,6 +607,43 @@ def _compile_closed_choices(
     """Certify a same-payload one-property distribution of closed alternatives."""
     original = deepcopy(dict(schema))
     original_fingerprints = schema_rule_fingerprints(original)
+
+    def plain_json_graph(value: object) -> bool:
+        pending = [(value, False)]
+        visiting: set[int] = set()
+        complete: set[int] = set()
+        try:
+            while pending:
+                node, leaving = pending.pop()
+                kind = type(node)
+                if kind is dict or kind is list:
+                    identity = id(node)
+                    if leaving:
+                        visiting.remove(identity)
+                        complete.add(identity)
+                        continue
+                    if identity in visiting:
+                        return False
+                    if identity in complete:
+                        continue
+                    visiting.add(identity)
+                    pending.append((node, True))
+                    if kind is dict:
+                        if any(type(name) is not str for name in node):
+                            return False
+                        pending.extend((child, False) for child in node.values())
+                    else:
+                        pending.extend((child, False) for child in node)
+                elif node is None or kind is str or kind is int or kind is bool:
+                    continue
+                elif kind is not float or node.hex() in ("nan", "inf", "-inf"):
+                    return False
+        except Exception:
+            return False
+        return True
+
+    # The complete proof above remains authoritative for this private snapshot.
+    plain_context = plain_json_graph(original)
     working = deepcopy(original)
     fingerprints: dict[str, str] = {}
     grouping_prefill: tuple[list, list[str]] | None = None
@@ -658,7 +695,9 @@ def _compile_closed_choices(
                 grouping_prefill = None
                 prefill_grouping_fingerprints(choices, names)
             if key not in fingerprints:
-                fingerprints[key] = schema_rule_fingerprints(original, selected=node)[0]
+                fingerprints[key] = (schema_rule_fingerprint(original, selected=node)
+                                     if plain_context and plain_json_graph(node)
+                                     else schema_rule_fingerprints(original, selected=node)[0])
         return fingerprints[key]
 
     def prefill_grouping_fingerprints(choices: list, names: list[str]) -> None:

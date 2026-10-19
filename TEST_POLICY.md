@@ -68,7 +68,7 @@ the existing 1,080/540-second ceilings; aim for 900/450 seconds to leave margin.
 
 A maintainer may authorize extra validation time for a specific PR and record the
 reason and authorization in its owning Issue and PR. The root then applies
-`test:wall-time-exception`. On that PR, CI allows each full shard up to 40 minutes
+`test:wall-time-exception`. On that PR, CI allows each full shard up to 25 minutes
 including setup, and passes `--allow-wall-time-overage` to the budget checker.
 The checker still reports actual durations; only the measured sequential and
 per-shard time comparisons are waived. Local validation may use the same option
@@ -79,6 +79,18 @@ and PRs without the label retain the 15-minute job limit and both time checks.
 This exception never permits failed or incomplete reports, inventory expansion,
 increased subtest counts or test source, budget-file increases, skipped required
 checks, or bypassed approvals or branch protection.
+
+PR and merge-group jobs share one absolute 40-minute deadline recorded before
+classification work. Test workers and both reconciliation gates consume the
+remaining allowance instead of starting a new run budget. Native job limits also
+bound the longest active path: classification 2 minutes, exception-full 25,
+reconciliation 3, and automatic diagnostics 10. Parallel fast validation has 38
+minutes and static validation 30; ordinary full shards retain 15 minutes. A worker
+reserves 330 seconds for termination and evidence upload. Reconciliation reserves
+90 seconds for termination and its one-minute artifact upload. Missing or exhausted
+shared budgets fail verification. Queue delay and cancellation latency are recorded
+separately from this active-path bound; acceptance requires the observed complete
+workflow to finish within 40 minutes, with all required reports and checks complete.
 
 Explicitly dispatched diagnostic jobs also allow up to 40 minutes. Test execution
 has a separate earlier deadline to leave time for termination and evidence upload.

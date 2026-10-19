@@ -46,9 +46,7 @@ from story_writing_agents.structured_output_validation import (bounded_chunks,
 _PRIVATE_ANSWER = "PRIVATE_FINAL_ANSWER_한🙂"
 _PRIVATE_BODY_A = "PRIVATE_SOURCE_A needle 한🙂\n"
 _PRIVATE_BODY_B = "PRIVATE_SOURCE_B needle\n"
-_SCOPE = ContextScope("workspace",
-    "session", ContextSubjectKind.CONVERSATION,
-    "conversation", "lead_orchestrator", )
+_SCOPE = ContextScope("workspace", "session", ContextSubjectKind.CONVERSATION, "conversation", "lead_orchestrator", )
 
 
 from tests.provider_wire_fixture import assert_schema_descriptions
@@ -100,6 +98,60 @@ class StructuredOutputValidationTests(unittest.TestCase):
             "$.message: expected string, got integer", ))
         self.assertNotIn("query", repr(issues))
         self.assertNotIn("PRIVATE_UNKNOWN", repr(issues))
+
+        from story_writing_agents.structured_output_validation import (
+            SchemaRules, schema_rule_fingerprint as single, schema_rule_fingerprints as plural)
+        from story_writing_agents.lead_provider_contracts import _compile_closed_choices
+        import sys
+        leaf = {"type": "string", "enum": ["draft"]}
+        graph = {"type": "integer", "enum": [1], "$defs": {"choice": leaf}}
+        draft_id = hashlib.sha256(b'{"enum":["draft"],"type":"string"}').hexdigest()
+        integer_id = hashlib.sha256(b'{"enum":[1],"type":"integer"}').hexdigest()
+        for selected, expected in ((None, integer_id), (leaf, draft_id),
+                                   ({"$ref": "#/$defs/choice"}, draft_id)):
+            self.assertEqual(single(graph, selected=selected), expected)
+            self.assertEqual(plural(graph, selected=selected), (expected, {"choice": draft_id}))
+        leaf["enum"][0] = "review"; self.assertNotEqual(single(graph, selected=leaf), draft_id)
+        leaf["enum"][0] = "draft"; self.assertEqual(single(graph, selected=leaf), draft_id)
+        graph["$defs"]["unused"] = {"$ref": "#/$defs/missing"}
+        self.assertEqual(single(graph, selected=leaf), draft_id)
+        for operation in (plural, SchemaRules.declare, _compile_closed_choices):
+            with self.assertRaisesRegex(ValueError, "^schema rejected$") as rejected:
+                operation(graph)
+            self.assertEqual(failure_issues(rejected.exception), ("$: local definition missing",))
+        events = []
+        class Observed(dict):
+            def __deepcopy__(self, memo): return self
+            def get(self, key, *default):
+                if key == "$defs": events.append(("definitions", id(self)))
+                return super().get(key, *default)
+            def items(self):
+                frame = sys._getframe(1)
+                while frame and frame.f_code is not plural.__code__: frame = frame.f_back
+                events.append(("items", id(self), frame is not None and frame.f_locals["selected"] is not None))
+                del frame
+                return super().items()
+        selected = Observed(leaf); first, last = Observed(type="boolean"), Observed(type="null")
+        observed = Observed(type="integer", **{"$defs": {"z": last, "a": first}})
+        self.assertEqual(single(observed, selected=selected), draft_id)
+        self.assertEqual(events, [("items", id(selected), False)]); events.clear()
+        self.assertEqual(plural(observed, selected=selected)[0], draft_id)
+        self.assertEqual(events, [("items", id(selected), True), ("definitions", id(observed)),
+                                  ("items", id(first), True), ("items", id(last), True)])
+        choices = {"anyOf": [
+            {"type": "object", "properties": {"kind": {"type": "string", "enum": [kind]},
+             "payload": {"type": "string"}}, "required": ["kind", "payload"], "additionalProperties": False}
+            for kind in ("a", "b")], "$defs": {"unused": first}}
+        events.clear(); compiled = _compile_closed_choices(choices)
+        self.assertNotIn("anyOf", compiled)
+        self.assertIn(("items", id(first), True), events)
+        before, after = SchemaRules.declare(choices), SchemaRules.declare(compiled)
+        for value, valid in (({"kind": "a", "payload": "value"}, True),
+                             ({"kind": "b", "payload": "value"}, True),
+                             ({"kind": "c", "payload": "value"}, False),
+                             ({"kind": "a", "payload": 0}, False)):
+            self.assertEqual(not before.findings(value), valid)
+            self.assertEqual(not after.findings(value), valid)
 
     def test_malformed_and_duplicate_json_have_value_free_diagnostics(self) -> None:
         schema = {"type": "object", "properties": {}, "additionalProperties": False}
@@ -412,9 +464,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
     ) -> None:
         manifest, _ = _manifest_fixture()
         references = (_reference(1), _reference(2, digest_character="5"))
-        valid = _binding(manifest,
-            reference_operation_id="reference-operation",
-            references=references, )
+        valid = _binding(manifest, reference_operation_id="reference-operation", references=references, )
         self.assertEqual(valid.mandatory_references, references)
         other_scope = replace(_SCOPE, session_id="other")
         cases = (lambda: ContextInvocationBinding(
@@ -799,12 +849,7 @@ class CompactWireDecoderTests(unittest.TestCase):
             "contextual provider read action is invalid: `handles` must contain "
             "source handles returned by the preceding context search", )
         self.assertIsNone(failure.__cause__)
-        rendered = "\n".join(
-            (
-                str(failure),
-                repr(failure),
-                repr(failure.__cause__),
-                repr(failure.__context__), ) )
+        rendered = "\n".join( ( str(failure), repr(failure), repr(failure.__cause__), repr(failure.__context__), ) )
         for private in private_values:
             self.assertNotIn(private, rendered)
 
@@ -822,12 +867,7 @@ class CompactWireDecoderTests(unittest.TestCase):
             service_module.ContextExecutionErrorCode.MALFORMED_ACTION, )
         self.assertEqual(str(failure), "contextual provider action is malformed")
         self.assertIsNone(failure.__cause__)
-        rendered = "\n".join(
-            (
-                str(failure),
-                repr(failure),
-                repr(failure.__cause__),
-                repr(failure.__context__), ) )
+        rendered = "\n".join( ( str(failure), repr(failure), repr(failure.__cause__), repr(failure.__context__), ) )
         for private in (self.token,
             actual_correlation, "PRIVATE critique prose",
             "\x1b", "\x07",
@@ -1017,11 +1057,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         consumed_handle = _mint_handles(consumed,
             consumed_registry, self.snapshots,
         )[0][1]
-        _observation, receipt = consumed.read(
-            ContextReadAction(
-                _correlation(self.binding, 2),
-                (consumed_handle,),
-            ) )
+        _observation, receipt = consumed.read( ContextReadAction( _correlation(self.binding, 2), (consumed_handle,), ) )
         consumed.complete_read(receipt)
         assert_failure(consumed,
             ContextReadAction(_correlation(self.binding, 3),
@@ -1171,11 +1207,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
     ) -> None:
         entry = self.manifest.entries[0]
         stable = self.snapshots[entry.source_id]
-        drifted = _snapshot(
-            _SCOPE,
-            entry.provenance.locator,
-            "changed needle\n",
-            revision_seed=b"changed", )
+        drifted = _snapshot( _SCOPE, entry.provenance.locator, "changed needle\n", revision_seed=b"changed", )
         registry = _registry(_SCOPE, self.snapshots)
         registry.capture = mock.Mock(side_effect=(stable, drifted))
         session = _session(self.binding, registry)
@@ -1295,17 +1327,9 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         registry = _registry(_SCOPE, snapshots)
         registry.search = ContextSourceRegistry.search.__get__(registry)
         session = _session(_binding(manifest), registry)
-        query = ContextSearchQuery(
-            "needle",
-            (ContextSourceKind.WRITING_ARTIFACT,),
-            "manuscript/part_01/", )
+        query = ContextSearchQuery( "needle", (ContextSourceKind.WRITING_ARTIFACT,), "manuscript/part_01/", )
 
-        observation = session.search(
-            ContextSearchAction(
-                _correlation(session.binding, 1),
-                (query,),
-            )
-        )
+        observation = session.search( ContextSearchAction( _correlation(session.binding, 1), (query,), ) )
 
         self.assertEqual(len(observation.hits), 1)
         self.assertEqual(observation.hits[0].query_index, 1)
@@ -1364,21 +1388,10 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             max_hits_per_search=1,
             max_hits_per_query=1,
             max_hits_per_source_query=1, )
-        session = _session(
-            _binding(manifest),
-            registry,
-            action_policy=policy, )
-        query = ContextSearchQuery(
-            "part one release needle",
-            (ContextSourceKind.WRITING_ARTIFACT,),
-            prefix, )
+        session = _session( _binding(manifest), registry, action_policy=policy, )
+        query = ContextSearchQuery( "part one release needle", (ContextSourceKind.WRITING_ARTIFACT,), prefix, )
 
-        observation = session.search(
-            ContextSearchAction(
-                _correlation(session.binding, 1),
-                (query,),
-            )
-        )
+        observation = session.search( ContextSearchAction( _correlation(session.binding, 1), (query,), ) )
 
         self.assertEqual(len(observation.hits), 1)
         self.assertTrue(observation.truncated)
@@ -1447,10 +1460,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 construct()
 
     def test_compact_search_read_evidence_retains_all_authoritative_facts(self) -> None:
-        scope = replace(
-            _SCOPE,
-            subject_kind=ContextSubjectKind.DEBATE,
-            subject_id="debate-one", )
+        scope = replace( _SCOPE, subject_kind=ContextSubjectKind.DEBATE, subject_id="debate-one", )
         cases = (
             (
                 ContextSourceKind.WRITING_ARTIFACT,
@@ -1516,10 +1526,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         aliases = {
             entry.source_id: f"s{index}"
             for index, entry in enumerate(manifest.entries, start=1) }
-        session = _session(
-            _binding(manifest),
-            registry,
-            source_aliases=aliases, )
+        session = _session( _binding(manifest), registry, source_aliases=aliases, )
         search = session.search(ContextSearchAction(
                 _correlation(session.binding, 1), (
                     ContextSearchQuery("needle",
@@ -1577,10 +1584,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         self.assertEqual(
             tuple(item.handle for item in authorization.used_evidence),
             handles, )
-        framed = json.dumps(
-            [search_wire, read_wire],
-            ensure_ascii=False,
-            separators=(",", ":"), )
+        framed = json.dumps( [search_wire, read_wire], ensure_ascii=False, separators=(",", ":"), )
         self.assertNotIn("/Users/", framed)
         self.assertNotIn("character_custodian", framed)
         self.assertLessEqual(
@@ -1726,10 +1730,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             _reference(1, reference_id="whole", digest_character="4"),
             _reference(2, reference_id="range-2-4", digest_character="5"),
             _reference(3, reference_id="range-8-9", digest_character="6"), )
-        binding = _binding(
-            self.manifest,
-            reference_operation_id="reference-operation",
-            references=references, )
+        binding = _binding( self.manifest, reference_operation_id="reference-operation", references=references, )
         registry = _registry(_SCOPE, self.snapshots)
         session = _session(binding, registry)
         authorization = session.authorize_answer(
