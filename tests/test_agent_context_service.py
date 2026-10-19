@@ -79,8 +79,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertNotIn("query", repr(issues)); self.assertNotIn("PRIVATE_UNKNOWN", repr(issues))
 
         # Literal diagnostic oracles remain independent of evaluation reuse.
-        from collections.abc import Mapping
-        from decimal import Decimal
+        from collections.abc import Mapping; from decimal import Decimal
         text_rule = {"type": "string", "enum": ["ok"]}
         references = {"type": "object", "properties": {
             "left": {"$ref": "#/$defs/text"}, "right": {"$ref": "#/$defs/text"}},
@@ -114,6 +113,16 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertEqual(diagnose_value({}, {"anyOf": [
             object_alternative("z", "a", "left"), object_alternative("z", "a", "right")]}),
             ("$.z: required property is missing", "$.a: required property is missing"))
+        repeated_ref = {"$ref": "#/$defs/shared"}
+        repeated_rule = {"anyOf": [repeated_ref, repeated_ref], "$defs": {"shared": {"type": "integer"}}}
+        self.assertEqual(diagnose_value(1, repeated_rule),
+                         ("$: expected one unambiguous schema alternative",))
+        repeated_rule["anyOf"] = [object_alternative("shared", name) for name in ("left", "right")]
+        for alternative in repeated_rule["anyOf"]:
+            alternative["properties"]["shared"] = repeated_ref
+        self.assertEqual(diagnose_value({"shared": 1}, repeated_rule), (
+            "$.left: allowed alternative 1 requires required property is missing",
+            "$.right: allowed alternative 2 requires required property is missing"))
         nullable = {"type": ["integer", "null"], "enum": [1, None]}
         for value in (1, Decimal("1"), None):
             self.assertEqual(diagnose_value(value, nullable), ())
@@ -145,8 +154,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
             diagnose_value(supplied, references)
         self.assertIs(interrupted.exception, trace_options["error"])
         self.assertEqual(events, accesses[:4]); trace_options["error"] = None; events.clear()
-        self.assertEqual(diagnose_value(supplied, references), ())
-        self.assertEqual(events, accesses * 2)
+        self.assertEqual(diagnose_value(supplied, references), ()); self.assertEqual(events, accesses * 2)
         with self.assertRaisesRegex(ValueError, "^schema rejected$") as absent_definition:
             diagnose_value("ok", {"$ref": "#/$defs/absent"})
         self.assertEqual(failure_issues(absent_definition.exception), ("$: local definition missing",))
@@ -1385,8 +1393,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
 
         observation = session.search( ContextSearchAction( _correlation(session.binding, 1), (query,), ) )
 
-        self.assertEqual(len(observation.hits), 1)
-        self.assertEqual(observation.hits[0].query_index, 1)
+        self.assertEqual(len(observation.hits), 1); self.assertEqual(observation.hits[0].query_index, 1)
         self.assertEqual( observation.hits[0].source_id, snapshots_tuple[0].descriptor.source_id, )
         self.assertEqual(registry.capture.call_count, 2)
         captured_manifests = tuple((call.args[0] for call in registry.capture.call_args_list))
@@ -1433,8 +1440,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
 
         observation = session.search( ContextSearchAction( _correlation(session.binding, 1), (query,), ) )
 
-        self.assertEqual(len(observation.hits), 1)
-        self.assertTrue(observation.truncated)
+        self.assertEqual(len(observation.hits), 1); self.assertTrue(observation.truncated)
         captured_entries = tuple((call.args[1] for call in registry.capture.call_args_list))
         captured_paths = tuple(entry.provenance.locator for entry in captured_entries)
         self.assertEqual( set(captured_paths), set(eligible_paths), )
@@ -1526,10 +1532,8 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 len(encoded),
                 1,)
             snapshot = object.__new__(ContextSourceSnapshot)
-            object.__setattr__(snapshot, "descriptor", descriptor)
-            object.__setattr__(snapshot, "records", (record,))
-            object.__setattr__(snapshot, "content", encoded)
-            snapshots_list.append(snapshot)
+            object.__setattr__(snapshot, "descriptor", descriptor); object.__setattr__(snapshot, "records", (record,))
+            object.__setattr__(snapshot, "content", encoded); snapshots_list.append(snapshot)
         manifest = ContextManifest(
             scope,
             tuple(
@@ -1546,8 +1550,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 ),))
         search_serialized = session.serialize_observation(search); search_wire = json.loads(search_serialized)
         self.assertEqual(search_wire["observation_type"], "context_search_results")
-        self.assertFalse(search_wire["truncated"])
-        self.assertIsNone(search_wire["zero_hit_receipt"])
+        self.assertFalse(search_wire["truncated"]); self.assertIsNone(search_wire["zero_hit_receipt"])
         self.assertEqual(len(search_wire["search_results"]), 4)
         source_types = ("story_document", "conversation_history", "current_consensus_run", "agent_work_history")
         for expected_index, (hit, expected) in enumerate(zip(search_wire["search_results"], cases, strict=True), start=1):
@@ -1590,8 +1593,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             ) )
         self.assertEqual( tuple(item.handle for item in authorization.used_evidence), handles, )
         framed = json.dumps( [search_wire, read_wire], ensure_ascii=False, separators=(",", ":"), )
-        self.assertNotIn("/Users/", framed)
-        self.assertNotIn("character_custodian", framed)
+        self.assertNotIn("/Users/", framed); self.assertNotIn("character_custodian", framed)
         self.assertLessEqual(
             len(search_serialized.encode("utf-8"))
             + len(read_serialized.encode("utf-8")),
@@ -1607,8 +1609,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                         ContextSearchQuery(
                             "needle", (ContextSourceKind.WRITING_ARTIFACT,)),),))
         self.assertEqual(preflight.exception.code, ContextActionErrorCode.CORRELATION_MISMATCH)
-        self.assertEqual(session.next_action_index, 1)
-        registry.search.assert_not_called()
+        self.assertEqual(session.next_action_index, 1); registry.search.assert_not_called()
         registry = _registry(_SCOPE, self.snapshots)
         registry.search = mock.Mock(side_effect=ContextSourceError(ContextSourceErrorCode.SOURCE_DRIFT))
         session = _session(self.binding, registry)
@@ -1619,8 +1620,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                     (
                         ContextSearchQuery(
                             "needle", (ContextSourceKind.WRITING_ARTIFACT,)),),))
-        self.assertEqual(session.next_action_index, 2)
-        self.assertEqual(session.state, ContextInvocationState.FAILED)
+        self.assertEqual(session.next_action_index, 2); self.assertEqual(session.state, ContextInvocationState.FAILED)
 
     def test_every_correlation_dimension_is_exact_and_preflight_noncharging(self,
     ) -> None:
