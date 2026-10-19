@@ -367,6 +367,8 @@ class StructuredOutputValidationTests(unittest.TestCase):
         # Admission is separate from validation; zero remaining work is permitted.
         plain = diagnostics._diagnostic_plain
         self.assertTrue(plain([None, True, 1, 1.25, "한\n"], {}))
+        scalar_mixed = [0, "resume", {"nested": [None, 1.25]}, True, "start"]
+        self.assertTrue(plain(scalar_mixed, {})); self.assertTrue(plain(None, {"metadata": scalar_mixed}))
         class DictSubclass(dict): pass
         class ListSubclass(list): pass
         class FloatSubclass(float): pass
@@ -374,6 +376,8 @@ class StructuredOutputValidationTests(unittest.TestCase):
         for value in (Decimal(1), IntegerSubclass(1), DictSubclass(), ListSubclass(), FloatSubclass(1),
                       TracedSchema(), float("nan"), float("inf"), float("-inf")):
             self.assertFalse(plain(value, {})); self.assertFalse(plain(None, {"metadata": value}))
+            for late_scalar in ([value, {}, None, 1.25], [{"nested": value}, None, 1.25]):
+                self.assertFalse(plain(late_scalar, {})); self.assertFalse(plain(None, {"metadata": late_scalar}))
         self.assertEqual(events, [])
         key_events = []
         class ForeignKey(str):
@@ -1672,24 +1676,20 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
     def test_search_trims_tail_to_frame_budget_and_empty_frame_failure_is_terminal(self,
     ) -> None:
         entry = self.manifest.entries[0]; snapshot = self.snapshots[entry.source_id]
-        matches = tuple(
-            ContextSourceSearchMatch(
+        matches = tuple(ContextSourceSearchMatch(
                 1, snapshot.descriptor, snapshot.records[0], "needle", 6)
             for _ in range(3) )
         # Give each logical hit a distinct record identity accepted by the observation.
-        matches = tuple(replace(
-                match, record=replace(
+        matches = tuple(replace(match, record=replace(
                     match.record, record_id=f"line_{index}",
                     boundary=ContextSourceBoundary.artifact_lines(index, index),),)
             for index, match in enumerate(matches, start=1))
         registry = _registry(_SCOPE, self.snapshots)
         registry.search = mock.Mock(return_value=(matches, False, snapshot.descriptor.utf8_bytes))
-        policy = replace(
-            CONTEXT_ACTION_POLICY,
+        policy = replace(CONTEXT_ACTION_POLICY,
             max_snippet_utf8_bytes=100,
             max_excerpt_utf8_bytes=200,
-            max_source_read_utf8_bytes=300,
-            max_read_utf8_bytes=400,
+            max_source_read_utf8_bytes=300, max_read_utf8_bytes=400,
             max_observation_utf8_bytes=900, )
         session = _session(self.binding, registry, action_policy=policy)
         observation = session.search(
