@@ -22,6 +22,11 @@ on:
         type: choice
         options: [cprofile, none]
         default: cprofile
+      synthetic_timeout_mode:
+        description: Diagnostic-only forced-timeout workload; never canonical test credit
+        type: choice
+        options: [cooperative, forced-kill]
+        default: cooperative
       test_id:
         description: Diagnostic-only exact canonical test ID
         type: string
@@ -32,7 +37,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-diagnostic-{1}-{2}-{3}', github.workflow, github.ref, inputs.arch, inputs.scratch) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.event.merge_group.head_ref || github.ref) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-diagnostic-{1}-{2}-{3}-{4}', github.workflow, github.ref, inputs.arch, inputs.scratch, inputs.synthetic_timeout_mode || 'cooperative') || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.event.merge_group.head_ref || github.ref) }}
   cancel-in-progress: true
 
 jobs:
@@ -513,11 +518,12 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
           DIAGNOSTIC_TEST_ID: ${{ inputs.test_id || 'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles' }}
           DIAGNOSTIC_PROFILE_MODE: ${{ inputs.profile_mode || 'cprofile' }}
+          SYNTHETIC_TIMEOUT_MODE: ${{ inputs.synthetic_timeout_mode || 'cooperative' }}
           TMPDIR: ${{ steps.scratch.outputs.directory || '/tmp' }}
         run: |
           install -d -m 700 "$RUNNER_TEMP/timing-diagnostic"
           test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 330 ))
-          if (( test_seconds > 2040 )); then test_seconds=2040; fi
+          if (( test_seconds > 20 )); then test_seconds=20; fi
           printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":300}\n' "$test_seconds" > "$RUNNER_TEMP/timing-diagnostic/control.json"
           if (( test_seconds <= 0 )); then exit 124; fi
           set +e
@@ -613,7 +619,40 @@ jobs:
                   observer_errors.append(type(error).__name__)
               if profile is not None:
                   profile.enable()
-              code = runner.main(["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")])
+              import signal
+              synthetic_mode = os.environ["SYNTHETIC_TIMEOUT_MODE"]
+              if synthetic_mode not in {"cooperative", "forced-kill"}:
+                  raise ValueError("invalid synthetic timeout mode")
+              synthetic_output = output / "synthetic"
+              synthetic_output.mkdir(mode=0o700, exist_ok=False)
+              synthetic_ready = {"diagnostic_only": True, "acceptance_credit": False, "canonical_test_executed": False,
+                                 "mode": synthetic_mode, "pid": os.getpid(), "ppid": os.getppid(), "pgid": os.getpgrp(),
+                                 "monotonic_ns": time.monotonic_ns(), "wall_ns": time.time_ns(),
+                                 "control_mtime_ns": (output / "control.json").stat().st_mtime_ns,
+                                 "proc_stat": Path("/proc/self/stat").read_text()}
+              if signal.getsignal(signal.SIGINT) is not signal.default_int_handler:
+                  raise RuntimeError("synthetic probe requires the default initial SIGINT handler")
+              if synthetic_mode == "cooperative":
+                  (synthetic_output / "ready.json").write_text(json.dumps(synthetic_ready, indent=2))
+                  while True:
+                      time.sleep(1)
+              synthetic_fd = os.open(synthetic_output / "parent-events.jsonl", os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_CLOEXEC, 0o600)
+              def synthetic_emit(event):
+                  row = {"event": event, "pid": os.getpid(), "ppid": os.getppid(), "pgid": os.getpgrp(),
+                         "monotonic_ns": time.monotonic_ns(), "wall_ns": time.time_ns()}
+                  encoded = (json.dumps(row, separators=(",", ":")) + "\n").encode("ascii")
+                  if os.write(synthetic_fd, encoded) != len(encoded):
+                      raise RuntimeError("incomplete synthetic evidence write")
+              def synthetic_interrupt(signum, frame):
+                  synthetic_emit("SIGINT")
+              signal.signal(signal.SIGINT, synthetic_interrupt)
+              synthetic_child = subprocess.Popen([sys.executable, "-c", 'import json, os, signal, sys, time\nfrom pathlib import Path\nsynthetic_output = Path(sys.argv[1])\nsynthetic_fd = os.open(synthetic_output / "child-events.jsonl", os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_CLOEXEC, 0o600)\ndef synthetic_emit(event):\n    row = {"event": event, "pid": os.getpid(), "ppid": os.getppid(), "pgid": os.getpgrp(), "monotonic_ns": time.monotonic_ns(), "wall_ns": time.time_ns()}\n    if event == "ready":\n        row["proc_stat"] = Path("/proc/self/stat").read_text()\n    encoded = (json.dumps(row, separators=(",", ":")) + "\\n").encode("ascii")\n    if os.write(synthetic_fd, encoded) != len(encoded):\n        raise RuntimeError("incomplete synthetic evidence write")\ndef synthetic_interrupt(signum, frame):\n    synthetic_emit("SIGINT")\nsignal.signal(signal.SIGINT, synthetic_interrupt)\nsynthetic_emit("ready")\nwhile True:\n    synthetic_emit("heartbeat")\n    time.sleep(1)\n', str(synthetic_output)], stdin=subprocess.DEVNULL)
+              synthetic_ready["child_pid"] = synthetic_child.pid
+              (synthetic_output / "ready.json").write_text(json.dumps(synthetic_ready, indent=2))
+              synthetic_emit("ready")
+              while True:
+                  synthetic_emit("heartbeat")
+                  time.sleep(1)
           except BaseException as error:
               interrupted = type(error).__name__
               raise
@@ -650,10 +689,142 @@ jobs:
           if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
           printf '%s\n' "$test_status" > "$RUNNER_TEMP/timing-diagnostic/exit-code.txt"
           exit "$test_status"
+      - name: Record bounded synthetic timeout process evidence
+        if: always() && (github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true')
+        env:
+          SYNTHETIC_TIMEOUT_MODE: ${{ inputs.synthetic_timeout_mode || 'cooperative' }}
+        run: |
+          python - <<'PY'
+          """Read-only bounded observation after an expected synthetic worker timeout."""
+          import json, os, time
+          from pathlib import Path
+          output = Path(os.environ["RUNNER_TEMP"]) / "timing-diagnostic"
+          output.mkdir(mode=0o700, exist_ok=True)
+          synthetic = output / "synthetic"
+          result = {"diagnostic_only": True, "acceptance_credit": False, "canonical_test_executed": False,
+                    "mode": os.environ["SYNTHETIC_TIMEOUT_MODE"], "wall_ns": time.time_ns(),
+                    "monotonic_ns": time.monotonic_ns(), "errors": [], "event_logs": {}, "processes": {}}
+          def error(stage, exc):
+              result["errors"].append({"stage": stage, "type": type(exc).__name__, "detail": str(exc)[:240]})
+          def read_bounded(path, limit):
+              with path.open("rb") as stream:
+                  data = stream.read(limit + 1)
+              if len(data) > limit:
+                  raise ValueError("evidence file exceeds bound")
+              return data
+          def proc_identity(raw):
+              opening, closing = raw.find("("), raw.rfind(")")
+              if opening < 1 or closing < opening:
+                  raise ValueError("invalid proc stat framing")
+              tail = raw[closing + 1:].split()
+              if len(tail) < 20:
+                  raise ValueError("incomplete proc stat")
+              return {"pid": int(raw[:opening].strip()), "state": tail[0], "ppid": int(tail[1]),
+                      "pgid": int(tail[2]), "start_ticks": int(tail[19])}
+          def observed(identity):
+              pid = identity["pid"]
+              if type(pid) is not int or pid <= 0:
+                  raise ValueError("invalid observed pid")
+              try:
+                  current = proc_identity(read_bounded(Path("/proc") / str(pid) / "stat", 16384).decode())
+              except FileNotFoundError:
+                  return {"status": "absent", "original_running": False}
+              if current["start_ticks"] != identity["start_ticks"]:
+                  return {"status": "pid_reused", "original_running": False, "current": current}
+              terminal = current["state"] in {"Z", "X"}
+              return {"status": "terminated_awaiting_reap" if terminal else "present", "original_running": not terminal, "current": current}
+          identities = {}
+          try:
+              ready = json.loads(read_bounded(synthetic / "ready.json", 65536))
+              result["ready"] = ready
+              parent = proc_identity(ready["proc_stat"])
+              if parent["pid"] != ready["pid"] or parent["pgid"] != ready["pgid"]:
+                  raise ValueError("parent identity receipt mismatch")
+              identities["parent"] = parent
+          except Exception as exc:
+              error("ready", exc)
+          for role in ("parent", "child"):
+              path = synthetic / (role + "-events.jsonl")
+              if not path.exists():
+                  continue
+              try:
+                  data = read_bounded(path, 262144)
+                  lines = data.splitlines(keepends=True)
+                  if len(lines) > 256:
+                      raise ValueError("event count exceeds bound")
+                  events = []
+                  truncated_tail = False
+                  for index, line in enumerate(lines):
+                      try:
+                          events.append(json.loads(line))
+                      except Exception:
+                          if index == len(lines) - 1 and not line.endswith(b"\n"):
+                              truncated_tail = True
+                          else:
+                              raise
+                  signals = [row for row in events if row.get("event") == "SIGINT"]
+                  hearts = [row for row in events if row.get("event") == "heartbeat"]
+                  entry = {"complete_event_count": len(events), "truncated_tail": truncated_tail,
+                           "signal_receipts": signals, "last_heartbeat": hearts[-1] if hearts else None}
+                  if signals and hearts:
+                      entry["post_int_heartbeat_seconds"] = (hearts[-1]["monotonic_ns"] - signals[0]["monotonic_ns"]) / 1e9
+                  result["event_logs"][role] = entry
+                  if role == "child":
+                      child_ready = next(row for row in events if row.get("event") == "ready")
+                      child = proc_identity(child_ready["proc_stat"])
+                      if child["pid"] != child_ready["pid"] or child["pgid"] != child_ready["pgid"]:
+                          raise ValueError("child identity receipt mismatch")
+                      if child["pid"] != result.get("ready", {}).get("child_pid") or child["ppid"] != identities.get("parent", {}).get("pid"):
+                          raise ValueError("child does not match the parent spawn receipt")
+                      identities[role] = child
+              except Exception as exc:
+                  error(role + "_events", exc)
+          deadline = time.monotonic() + 5
+          while identities:
+              for role, identity in identities.items():
+                  try:
+                      result["processes"][role] = {"identity": identity, **observed(identity)}
+                  except Exception as exc:
+                      error(role + "_proc", exc)
+                      result["processes"][role] = {"identity": identity, "status": "observation_error", "original_running": None}
+              if not any(item["original_running"] is True for item in result["processes"].values()):
+                  break
+              remaining = deadline - time.monotonic()
+              if remaining <= 0:
+                  break
+              time.sleep(min(0.1, remaining))
+          try:
+              result["worker_exit_code"] = int(read_bounded(output / "exit-code.txt", 64).decode().strip())
+              result["expected_worker_exit_code"] = {"cooperative": 124, "forced-kill": 137}[result["mode"]]
+              result["expected_nonzero_observed"] = result["worker_exit_code"] == result["expected_worker_exit_code"]
+          except Exception as exc:
+              error("exit_code", exc)
+          try:
+              result["control"] = json.loads(read_bounded(output / "control.json", 4096))
+          except Exception as exc:
+              error("control", exc)
+          result["files"] = {name: {"present": (output / name).is_file(), "bytes": (output / name).stat().st_size if (output / name).is_file() else None}
+                             for name in ("prepared.json", "progress.jsonl", "worker.log", "profile.pstats", "profile.txt", "counters.json", "instrumented-run.json")}
+          if (output / "counters.json").exists():
+              try:
+                  counters = json.loads(read_bounded(output / "counters.json", 2097152))
+                  result["counter_summary"] = {key: counters.get(key) for key in ("partial", "acceptance_credit", "runner_exit_code", "interruption", "source_valid", "observer_errors", "finalization_errors")}
+              except Exception as exc:
+                  error("counters", exc)
+          if "parent" in identities and "child" in identities:
+              result["same_process_group"] = identities["parent"]["pgid"] == identities["child"]["pgid"]
+          required_roles = {"parent"} if result["mode"] == "cooperative" else {"parent", "child"}
+          result["required_process_receipts_present"] = required_roles <= set(identities)
+          result["required_processes_nonrunning"] = (result["required_process_receipts_present"] and
+              all(result["processes"].get(role, {}).get("original_running") is False for role in required_roles))
+          result["observation_finished_ns"] = time.monotonic_ns()
+          result["limitation"] = "Read-only synthetic process evidence; artifact upload is verified externally. No canonical pass or arbitrary escaped-descendant guarantee."
+          (output / "synthetic-post-evidence.json").write_text(json.dumps(result, indent=2) + "\n")
+          PY
       - uses: actions/upload-artifact@v4
         if: always() && (github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true')
         with:
-          name: ${{ github.event_name == 'workflow_dispatch' && format('timing-diagnostic-{0}-{1}', inputs.arch, inputs.scratch) || 'timing-diagnostic' }}
+          name: ${{ github.event_name == 'workflow_dispatch' && format('timing-diagnostic-{0}-{1}-{2}', inputs.arch, inputs.scratch, inputs.synthetic_timeout_mode || 'cooperative') || 'timing-diagnostic-cooperative' }}
           path: ${{ runner.temp }}/timing-diagnostic
           if-no-files-found: error
       - name: Remove diagnostic scratch storage
