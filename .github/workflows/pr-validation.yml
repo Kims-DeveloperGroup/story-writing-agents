@@ -1,979 +1,471 @@
-name: PR validation
-
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
-  merge_group:
-    types: [checks_requested]
-  workflow_dispatch:
-    inputs:
-      arch:
-        description: Diagnostic-only standard runner architecture
-        type: choice
-        options: [x64, arm64]
-        default: x64
-      scratch:
-        description: Diagnostic-only temporary filesystem
-        type: choice
-        options: [disk, memory]
-        default: disk
-      profile_mode:
-        description: Optional cProfile instrumentation for the exact diagnostic
-        type: choice
-        options: [cprofile, none]
-        default: cprofile
-      test_id:
-        description: Diagnostic-only exact canonical test ID
-        type: string
-        default: tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles
-
-permissions:
-  contents: read
-  pull-requests: read
-
-concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-diagnostic-{1}-{2}-{3}', github.workflow, github.ref, inputs.arch, inputs.scratch) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.event.merge_group.head_ref || github.ref) }}
-  cancel-in-progress: true
-
-jobs:
-  workflow-deadline:
-    name: Enforce 30-minute workflow limit
-    # Cover classification, setup and dependency waits independently.
-    # Survive normal cancellation long enough to force-cancel stalled jobs.
-    if: always()
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      actions: write
-    steps:
-      - name: Enforce total workflow deadline
-        uses: actions/github-script@v7
-        with:
-          retries: 0
-          script: |
-            const parameters = () => ({
-              ...context.repo,
-              run_id: context.runId,
-              request: {signal: AbortSignal.timeout(5000)},
-            });
-            const attempt = Number(process.env.GITHUB_RUN_ATTEMPT);
-            if (!Number.isSafeInteger(attempt) || attempt < 1) {
-              core.setFailed("Missing workflow attempt identity.");
-              return;
-            }
-            // Metadata retries never grant a new test budget.
-            const metadataDeadline = Date.now() + 30_000;
-            let deadline;
-            let cancellationRequested = false;
-            async function currentRun() {
-              const {data: run} = await github.rest.actions.getWorkflowRun(parameters());
-              if (run.id !== context.runId || run.run_attempt !== attempt) {
-                core.setFailed("Workflow attempt changed; the stale guard cannot cancel it.");
-                return null;
-              }
-              if (run.status === "completed") return null;
-              const created = Date.parse(run.created_at);
-              if (!Number.isFinite(created)) throw new Error("Missing workflow creation time.");
-              const runDeadline = created + 30 * 60 * 1000;
-              deadline = deadline === undefined ? runDeadline : Math.min(deadline, runDeadline);
-              if (Date.now() >= deadline - 30_000) {
-                core.setFailed("Workflow guard shutdown margin reached; no safe control window remains.");
-                return null;
-              }
-              return run;
-            }
-            while (Date.now() < (deadline === undefined ? metadataDeadline : deadline - 30_000)) {
-              try {
-                if (!await currentRun()) return;
-                let complete;
-                try {
-                  const {data: page} = await github.rest.actions.listJobsForWorkflowRunAttempt({
-                    ...parameters(), attempt_number: attempt, per_page: 100,
-                  });
-                  if (!Number.isSafeInteger(page.total_count) || page.total_count > 100 ||
-                      !Array.isArray(page.jobs) || page.total_count !== page.jobs.length) {
-                    throw new Error("Cannot establish the complete validation job list.");
-                  }
-                  // A marker covers downstream jobs absent from an earlier API snapshot.
-                  complete = page.jobs.find(job => job.name === "Validation jobs complete");
-                } catch (error) {
-                  // Job-list failures cannot prevent cancellation at the deadline.
-                  core.warning(`Completion lookup failed: ${error.message}`);
-                }
-                if (Date.now() < deadline && complete?.status === "completed" &&
-                    ["success", "failure"].includes(complete.conclusion)) {
-                  core.info("All validation jobs finished within the workflow deadline.");
-                  return;
-                }
-                if (Date.now() >= deadline - 330_000) {
-                  core.setFailed("Workflow shutdown reserve reached; force-cancelling this run.");
-                  if (!await currentRun()) return;
-                  await github.request("POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel", parameters());
-                  return;
-                }
-                if (!cancellationRequested && Date.now() >= deadline - 360_000) {
-                  core.setFailed("Workflow shutdown reserve reached; cancelling this run.");
-                  if (!await currentRun()) return;
-                  await github.rest.actions.cancelWorkflowRun(parameters());
-                  cancellationRequested = true;
-                }
-              } catch (error) {
-                core.warning(`Deadline control request failed: ${error.message}`);
-              }
-              const remaining = (deadline === undefined ? metadataDeadline : deadline - 30_000) - Date.now();
-              const poll = deadline !== undefined && deadline - Date.now() > 390_000 ? 30_000 : 5000;
-              if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(poll, remaining)));
-            }
-            core.setFailed("Workflow deadline enforcement could not complete within its bounded window.");
-
-  validation-complete:
-    name: Validation jobs complete
-    needs: [classify, static, fast, full, reconcile-full, diagnose-full-budget]
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions: {}
-    steps:
-      - name: Mark validation jobs terminal
-        timeout-minutes: 1
-        run: echo "Validation jobs are terminal; their individual results remain authoritative."
-
-  classify:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Initialize diagnostic deadline' || 'Classify changed paths' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      pull-requests: read
-      actions: read
-    outputs:
-      test_run_deadline: ${{ steps.paths.outputs.test_run_deadline }}
-      runtime: ${{ steps.paths.outputs.runtime }}
-      policy_only: ${{ steps.paths.outputs.policy_only }}
-      full: ${{ steps.paths.outputs.full }}
-      wall_time_exception: ${{ steps.paths.outputs.wall_time_exception }}
-      base_sha: ${{ steps.paths.outputs.base_sha }}
-      head_sha: ${{ steps.paths.outputs.head_sha }}
-      checkout_sha: ${{ steps.paths.outputs.checkout_sha }}
-    steps:
-      - name: Classify paths and select runtime evidence
-        id: paths
-        uses: actions/github-script@v7
-        timeout-minutes: 2
-        with:
-          script: |
-            const {owner, repo} = context.repo;
-            const {data: run} = await github.rest.actions.getWorkflowRun({
-              owner, repo, run_id: context.runId, request: {signal: AbortSignal.timeout(5000)},
-            });
-            const created = Date.parse(run.created_at);
-            if (run.id !== context.runId || run.run_attempt !== Number(process.env.GITHUB_RUN_ATTEMPT) ||
-                !Number.isFinite(created)) {
-              core.setFailed("Cannot establish this workflow attempt's creation time.");
-              return;
-            }
-            const deadline = Math.floor(created / 1000) + 30 * 60;
-            core.setOutput("test_run_deadline", String(deadline));
-            if (Date.now() >= deadline * 1000) {
-              core.setFailed("Shared workflow deadline exhausted before classification.");
-              return;
-            }
-            if (context.eventName === "workflow_dispatch") {
-              core.setOutput("runtime", "false");
-              core.setOutput("policy_only", "true");
-              core.setOutput("full", "false");
-              core.setOutput("wall_time_exception", "false");
-              for (const name of ["base_sha", "head_sha", "checkout_sha"]) core.setOutput(name, context.sha);
-              return;
-            }
-            let files = [];
-            let labels = [];
-            let baseSha;
-            let headSha;
-            let truncated = false;
-
-            if (context.eventName === "pull_request") {
-              const pr = context.payload.pull_request;
-              baseSha = pr.base.sha;
-              headSha = pr.head.sha;
-              labels = pr.labels.map(label => label.name);
-              files = await github.paginate(github.rest.pulls.listFiles, {
-                owner, repo, pull_number: pr.number, per_page: 100,
-              });
-              truncated = files.length >= 3000;
-            } else {
-              const group = context.payload.merge_group;
-              baseSha = group.base_sha;
-              headSha = group.head_sha;
-              const comparison = await github.rest.repos.compareCommitsWithBasehead({
-                owner, repo, basehead: `${baseSha}...${headSha}`, per_page: 100,
-              });
-              files = comparison.data.files || [];
-              // A full page may hide later files. Fail closed rather than infer a partial diff.
-              truncated = !Array.isArray(comparison.data.files) || files.length >= 100;
-            }
-
-            const paths = files.flatMap(file =>
-              [file.filename, file.previous_filename].filter(Boolean));
-            const isRuntime = path =>
-              path.startsWith("src/") ||
-              path.startsWith("config/") ||
-              path === "pyproject.toml" ||
-              path === "uv.lock" ||
-              path === "MANIFEST.in" ||
-              path === ".gitmodules" ||
-              path === "vendor/generic-rag" ||
-              path === "vendor/jsonl-viewer";
-            const runtimePaths = truncated || paths.some(isRuntime);
-            const isTest = path => path.startsWith("tests/") ||
-              path === ".github/workflows/pr-validation.yml" || path === "TEST_POLICY.md";
-            const testPaths = truncated || paths.some(isTest);
-            const fullRequested = labels.includes("test:full");
-            const wallTimeException = context.eventName === "pull_request" && labels.includes("test:wall-time-exception");
-            const runtime = runtimePaths || testPaths || fullRequested;
-            const full = runtime;
-            core.setOutput("runtime", String(runtime));
-            core.setOutput("policy_only", String(!runtimePaths && !testPaths));
-            core.setOutput("full", String(full));
-            core.setOutput("wall_time_exception", String(wallTimeException));
-            core.setOutput("base_sha", baseSha);
-            core.setOutput("head_sha", headSha);
-            // Event SHA is the PR test merge or merge-group commit, pinned across jobs.
-            core.setOutput("checkout_sha", context.sha);
-            core.summary
-              .addHeading("Validation selection")
-              .addTable([
-                [{data: "Runtime paths", header: true}, String(runtimePaths)],
-                [{data: "Policy/config only", header: true}, String(!runtimePaths)],
-                [{data: "Run runtime lanes", header: true}, String(runtime)],
-                [{data: "Full suite", header: true}, String(full)],
-                [{data: "Wall-time exception", header: true}, String(wallTimeException)],
-              ])
-              .write();
-
-  static:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - static validation skipped' || 'Static validation' }}
-    needs: classify
-    if: github.event_name != 'workflow_dispatch'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Check shared deadline before static work
-        run: |
-          [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-          if (( TEST_RUN_DEADLINE <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before static work."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Check patch whitespace
-        env:
-          BASE_SHA: ${{ needs.classify.outputs.base_sha }}
-          HEAD_SHA: ${{ needs.classify.outputs.head_sha }}
-        run: git diff --check "$BASE_SHA...$HEAD_SHA"
-      - name: Parse repository configuration
-        run: |
-          python - <<'PY'
-          import json
-          import pathlib
-          import tomllib
-
-          for path in pathlib.Path(".").glob("**/*.toml"):
-              if ".git" not in path.parts:
-                  data = tomllib.loads(path.read_text(encoding="utf-8"))
-                  if path.parent == pathlib.Path(".codex/agents"):
-                      if data.get("name") != path.stem:
-                          raise SystemExit(f"{path}: agent name must match filename")
-                      for field in ("description", "developer_instructions"):
-                          value = data.get(field)
-                          if not isinstance(value, str) or not value.strip():
-                              raise SystemExit(f"{path}: missing {field}")
-          for path in pathlib.Path(".").glob("**/*.json"):
-              if ".git" not in path.parts:
-                  json.loads(path.read_text(encoding="utf-8"))
-          for path in (*pathlib.Path("src").rglob("*.py"), *pathlib.Path("tests").rglob("*.py")):
-              compile(path.read_text(encoding="utf-8"), str(path), "exec", dont_inherit=True)
-          PY
-          ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |path| YAML.parse_file(path) }'
-          ruby -ryaml -ropen3 <<'RB'
-          Dir[".agents/skills/*/SKILL.md"].each do |path|
-            source = File.read(path)
-            match = source.match(/\A---\r?\n(.*?)\r?\n---(?:\r?\n|\z)/m)
-            abort "#{path}: missing YAML frontmatter" unless match
-            data = YAML.safe_load(match[1], aliases: false)
-            abort "#{path}: name must match directory and description must be nonempty" unless
-              data.is_a?(Hash) && data["name"] == File.basename(File.dirname(path)) &&
-              data["description"].is_a?(String) && !data["description"].strip.empty?
-          end
-          issue_path = ".github/ISSUE_TEMPLATE/work_item.md"
-          issue_source = File.read(issue_path)
-          issue_match = issue_source.match(/\A---\r?\n(.*?)\r?\n---(?:\r?\n|\z)/m)
-          abort "#{issue_path}: missing YAML frontmatter" unless issue_match
-          issue = YAML.safe_load(issue_match[1], aliases: false)
-          abort "#{issue_path}: invalid frontmatter mapping" unless issue.is_a?(Hash)
-          %w[name about title labels assignees].each do |field|
-            value = issue[field]
-            abort "#{issue_path}: missing or non-string #{field}" unless value.is_a?(String)
-          end
-          %w[name about].each do |field|
-            abort "#{issue_path}: empty #{field}" if issue[field].strip.empty?
-          end
-          Dir[".github/workflows/*.{yml,yaml}"].each do |path|
-            document = YAML.safe_load(File.read(path), aliases: false)
-            document.fetch("jobs").each do |job_name, job|
-              job.fetch("steps", []).each do |step|
-                script = step["with"]&.fetch("script", nil)
-                next unless script
-                _, error, status = Open3.capture3(
-                  "node", "--input-type=module", "--check",
-                  stdin_data: "async function main() {\n#{script}\n}")
-                abort "#{path} #{job_name}: #{error}" unless status.success?
-              end
-            end
-          end
-          RB
-      - name: Validate runner metadata
-        run: |
-          python -B - <<'PY'
-          from tests import suite_policy
-
-          suite_policy.load_timing_weights()
-          ids = suite_policy.FAST_TEST_IDS
-          if not ids or len(ids) != len(set(ids)):
-              raise SystemExit("fast tier must contain unique test IDs")
-          if any(not identifier.rsplit(".", 1)[-1].startswith("test") for identifier in ids):
-              raise SystemExit("fast tier contains a non-test method ID")
-          PY
-      - name: Validate locked vendor pins
-        run: |
-          python - <<'PY'
-          import subprocess
-          import tomllib
-          from pathlib import Path
-
-          if Path("MANIFEST.in").read_text(encoding="utf-8") != "prune vendor/jsonl-viewer\n":
-              raise SystemExit("MANIFEST.in must exclude vendored jsonl-viewer source")
-
-          with open("uv.lock", "rb") as source:
-              packages = {package["name"]: package for package in tomllib.load(source)["package"]}
-          for name in ("generic-rag", "jsonl-viewer"):
-              pinned = packages[name]["source"]["git"].rsplit("#", 1)[-1]
-              gitlink = subprocess.check_output(
-                  ["git", "rev-parse", f"HEAD:vendor/{name}"], text=True
-              ).strip()
-              if pinned != gitlink:
-                  raise SystemExit(f"{name}: uv.lock pin {pinned} differs from gitlink {gitlink}")
-          PY
-      - name: Validate policy artifacts
-        run: |
-          python - <<'PY'
-          import pathlib
-
-          root = pathlib.Path.cwd()
-          templates = {
-              ".github/ISSUE_TEMPLATE/work_item.md": [
-                  "## Objective", "## Use cases and expected results",
-                  "## Implementation summary", "## Acceptance criteria",
-                  "## Boundaries and dependencies",
-                  "## Related work and verification plan", "## Implementation plan",
-              ],
-              ".github/pull_request_template.md": [
-                  "## What changed", "## Before and after", "## Implementation",
-                  "## Verification", "## Limitations and follow-ups",
-                  "## Related Issue",
-              ],
-              ".github/templates/evidence.md": [
-                  "## What this demonstrates", "## Scenario results",
-                  "## Reproduction and environment", "## Failures and coverage gaps",
-                  "## Technical provenance and artifacts", "## Assessment",
-              ],
-              ".github/templates/working-status-comment.md": [
-                  "## Current status", "## What works now", "## What remains",
-                  "## Blocker or decision", "## Next step", "## Evidence links",
-              ],
+{
+  "name": "PR validation",
+  "permissions": {
+    "contents": "read",
+    "pull-requests": "read"
+  },
+  "concurrency": {
+    "group": "${{ github.event_name == 'workflow_dispatch' && format('{0}-diagnostic-{1}-{2}-{3}', github.workflow, github.ref, inputs.arch, inputs.scratch) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.event.merge_group.head_ref || github.ref) }}",
+    "cancel-in-progress": true
+  },
+  "jobs": {
+    "workflow-deadline": {
+      "name": "Enforce 30-minute workflow limit",
+      "if": "always()",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "permissions": {
+        "actions": "write"
+      },
+      "steps": [
+        {
+          "name": "Enforce total workflow deadline",
+          "uses": "actions/github-script@v7",
+          "with": {
+            "retries": 0,
+            "script": "const parameters = () => ({\n  ...context.repo,\n  run_id: context.runId,\n  request: {signal: AbortSignal.timeout(5000)},\n});\nconst attempt = Number(process.env.GITHUB_RUN_ATTEMPT);\nif (!Number.isSafeInteger(attempt) || attempt < 1) {\n  core.setFailed(\"Missing workflow attempt identity.\");\n  return;\n}\n// Metadata retries never grant a new test budget.\nconst metadataDeadline = Date.now() + 30_000;\nlet deadline;\nlet cancellationRequested = false;\nasync function currentRun() {\n  const {data: run} = await github.rest.actions.getWorkflowRun(parameters());\n  if (run.id !== context.runId || run.run_attempt !== attempt) {\n    core.setFailed(\"Workflow attempt changed; the stale guard cannot cancel it.\");\n    return null;\n  }\n  if (run.status === \"completed\") return null;\n  const created = Date.parse(run.created_at);\n  if (!Number.isFinite(created)) throw new Error(\"Missing workflow creation time.\");\n  const runDeadline = created + 30 * 60 * 1000;\n  deadline = deadline === undefined ? runDeadline : Math.min(deadline, runDeadline);\n  if (Date.now() >= deadline - 30_000) {\n    core.setFailed(\"Workflow guard shutdown margin reached; no safe control window remains.\");\n    return null;\n  }\n  return run;\n}\nwhile (Date.now() < (deadline === undefined ? metadataDeadline : deadline - 30_000)) {\n  try {\n    if (!await currentRun()) return;\n    let complete;\n    try {\n      const {data: page} = await github.rest.actions.listJobsForWorkflowRunAttempt({\n        ...parameters(), attempt_number: attempt, per_page: 100,\n      });\n      if (!Number.isSafeInteger(page.total_count) || page.total_count > 100 ||\n          !Array.isArray(page.jobs) || page.total_count !== page.jobs.length) {\n        throw new Error(\"Cannot establish the complete validation job list.\");\n      }\n      // A marker covers downstream jobs absent from an earlier API snapshot.\n      complete = page.jobs.find(job => job.name === \"Validation jobs complete\");\n    } catch (error) {\n      // Job-list failures cannot prevent cancellation at the deadline.\n      core.warning(`Completion lookup failed: ${error.message}`);\n    }\n    if (Date.now() < deadline && complete?.status === \"completed\" &&\n        [\"success\", \"failure\"].includes(complete.conclusion)) {\n      core.info(\"All validation jobs finished within the workflow deadline.\");\n      return;\n    }\n    if (Date.now() >= deadline - 330_000) {\n      core.setFailed(\"Workflow shutdown reserve reached; force-cancelling this run.\");\n      if (!await currentRun()) return;\n      await github.request(\"POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel\", parameters());\n      return;\n    }\n    if (!cancellationRequested && Date.now() >= deadline - 360_000) {\n      core.setFailed(\"Workflow shutdown reserve reached; cancelling this run.\");\n      if (!await currentRun()) return;\n      await github.rest.actions.cancelWorkflowRun(parameters());\n      cancellationRequested = true;\n    }\n  } catch (error) {\n    core.warning(`Deadline control request failed: ${error.message}`);\n  }\n  const remaining = (deadline === undefined ? metadataDeadline : deadline - 30_000) - Date.now();\n  const poll = deadline !== undefined && deadline - Date.now() > 390_000 ? 30_000 : 5000;\n  if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(poll, remaining)));\n}\ncore.setFailed(\"Workflow deadline enforcement could not complete within its bounded window.\");\n"
           }
-          for relative, expected in templates.items():
-              text = (root / relative).read_text(encoding="utf-8")
-              actual = [line for line in text.splitlines() if line.startswith("## ")]
-              if actual != expected:
-                  raise SystemExit(f"{relative}: template headings changed: {actual!r}")
-
-          agents = {path.name for path in (root / ".codex/agents").glob("*.toml")}
-          if agents != {"runtime_implementer.toml", "test_engineer.toml"}:
-              raise SystemExit(f"unexpected development agents: {sorted(agents)!r}")
-          required = [
-              root / ".agents/skills/project-workflow/SKILL.md",
-              root / ".codex/agents/runtime_implementer/PYTHON_MODULARITY_POLICY.md",
+        }
+      ]
+    },
+    "validation-complete": {
+      "name": "Validation jobs complete",
+      "needs": [
+        "classify",
+        "static",
+        "fast",
+        "full",
+        "reconcile-full",
+        "diagnose-full-budget"
+      ],
+      "if": "${{ !cancelled() }}",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "permissions": {},
+      "steps": [
+        {
+          "name": "Mark validation jobs terminal",
+          "timeout-minutes": 1,
+          "run": "echo \"Validation jobs are terminal; their individual results remain authoritative.\""
+        }
+      ]
+    },
+    "classify": {
+      "name": "${{ github.event_name == 'workflow_dispatch' && 'Initialize diagnostic deadline' || 'Classify changed paths' }}",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "permissions": {
+        "contents": "read",
+        "pull-requests": "read",
+        "actions": "read"
+      },
+      "outputs": {
+        "test_run_deadline": "${{ steps.paths.outputs.test_run_deadline }}",
+        "runtime": "${{ steps.paths.outputs.runtime }}",
+        "policy_only": "${{ steps.paths.outputs.policy_only }}",
+        "full": "${{ steps.paths.outputs.full }}",
+        "wall_time_exception": "${{ steps.paths.outputs.wall_time_exception }}",
+        "base_sha": "${{ steps.paths.outputs.base_sha }}",
+        "head_sha": "${{ steps.paths.outputs.head_sha }}",
+        "checkout_sha": "${{ steps.paths.outputs.checkout_sha }}"
+      },
+      "steps": [
+        {
+          "name": "Classify paths and select runtime evidence",
+          "id": "paths",
+          "uses": "actions/github-script@v7",
+          "timeout-minutes": 2,
+          "with": {
+            "script": "const {owner, repo} = context.repo;\nconst {data: run} = await github.rest.actions.getWorkflowRun({\n  owner, repo, run_id: context.runId, request: {signal: AbortSignal.timeout(5000)},\n});\nconst created = Date.parse(run.created_at);\nif (run.id !== context.runId || run.run_attempt !== Number(process.env.GITHUB_RUN_ATTEMPT) ||\n    !Number.isFinite(created)) {\n  core.setFailed(\"Cannot establish this workflow attempt's creation time.\");\n  return;\n}\nconst deadline = Math.floor(created / 1000) + 30 * 60;\ncore.setOutput(\"test_run_deadline\", String(deadline));\nif (Date.now() >= deadline * 1000) {\n  core.setFailed(\"Shared workflow deadline exhausted before classification.\");\n  return;\n}\nif (context.eventName === \"workflow_dispatch\") {\n  core.setOutput(\"runtime\", \"false\");\n  core.setOutput(\"policy_only\", \"true\");\n  core.setOutput(\"full\", \"false\");\n  core.setOutput(\"wall_time_exception\", \"false\");\n  for (const name of [\"base_sha\", \"head_sha\", \"checkout_sha\"]) core.setOutput(name, context.sha);\n  return;\n}\nlet files = [];\nlet labels = [];\nlet baseSha;\nlet headSha;\nlet truncated = false;\n\nif (context.eventName === \"pull_request\") {\n  const pr = context.payload.pull_request;\n  baseSha = pr.base.sha;\n  headSha = pr.head.sha;\n  labels = pr.labels.map(label => label.name);\n  files = await github.paginate(github.rest.pulls.listFiles, {\n    owner, repo, pull_number: pr.number, per_page: 100,\n  });\n  truncated = files.length >= 3000;\n} else {\n  const group = context.payload.merge_group;\n  baseSha = group.base_sha;\n  headSha = group.head_sha;\n  const comparison = await github.rest.repos.compareCommitsWithBasehead({\n    owner, repo, basehead: `${baseSha}...${headSha}`, per_page: 100,\n  });\n  files = comparison.data.files || [];\n  // A full page may hide later files. Fail closed rather than infer a partial diff.\n  truncated = !Array.isArray(comparison.data.files) || files.length >= 100;\n}\n\nconst paths = files.flatMap(file =>\n  [file.filename, file.previous_filename].filter(Boolean));\nconst isRuntime = path =>\n  path.startsWith(\"src/\") ||\n  path.startsWith(\"config/\") ||\n  path === \"pyproject.toml\" ||\n  path === \"uv.lock\" ||\n  path === \"MANIFEST.in\" ||\n  path === \".gitmodules\" ||\n  path === \"vendor/generic-rag\" ||\n  path === \"vendor/jsonl-viewer\";\nconst runtimePaths = truncated || paths.some(isRuntime);\nconst isTest = path => path.startsWith(\"tests/\") ||\n  path === \".github/workflows/pr-validation.yml\" || path === \"TEST_POLICY.md\";\nconst testPaths = truncated || paths.some(isTest);\nconst fullRequested = labels.includes(\"test:full\");\nconst wallTimeException = context.eventName === \"pull_request\" && labels.includes(\"test:wall-time-exception\");\nconst runtime = runtimePaths || testPaths || fullRequested;\nconst full = runtime;\ncore.setOutput(\"runtime\", String(runtime));\ncore.setOutput(\"policy_only\", String(!runtimePaths && !testPaths));\ncore.setOutput(\"full\", String(full));\ncore.setOutput(\"wall_time_exception\", String(wallTimeException));\ncore.setOutput(\"base_sha\", baseSha);\ncore.setOutput(\"head_sha\", headSha);\n// Event SHA is the PR test merge or merge-group commit, pinned across jobs.\ncore.setOutput(\"checkout_sha\", context.sha);\ncore.summary\n  .addHeading(\"Validation selection\")\n  .addTable([\n    [{data: \"Runtime paths\", header: true}, String(runtimePaths)],\n    [{data: \"Policy/config only\", header: true}, String(!runtimePaths)],\n    [{data: \"Run runtime lanes\", header: true}, String(runtime)],\n    [{data: \"Full suite\", header: true}, String(full)],\n    [{data: \"Wall-time exception\", header: true}, String(wallTimeException)],\n  ])\n  .write();\n"
+          }
+        }
+      ]
+    },
+    "static": {
+      "name": "${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - static validation skipped' || 'Static validation' }}",
+      "needs": "classify",
+      "if": "github.event_name != 'workflow_dispatch'",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "env": {
+        "TEST_RUN_DEADLINE": "${{ needs.classify.outputs.test_run_deadline }}"
+      },
+      "steps": [
+        {
+          "name": "Check shared deadline before static work",
+          "run": "[[ \"$TEST_RUN_DEADLINE\" =~ ^[0-9]+$ ]] || exit 2\nif (( TEST_RUN_DEADLINE <= $(date +%s) )); then\n  echo \"Shared test-run deadline exhausted before static work.\"\n  exit 124\nfi\n"
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 0,
+            "ref": "${{ needs.classify.outputs.checkout_sha }}"
+          }
+        },
+        {
+          "uses": "actions/setup-python@v5",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "name": "Check patch whitespace",
+          "env": {
+            "BASE_SHA": "${{ needs.classify.outputs.base_sha }}",
+            "HEAD_SHA": "${{ needs.classify.outputs.head_sha }}"
+          },
+          "run": "git diff --check \"$BASE_SHA...$HEAD_SHA\""
+        },
+        {
+          "name": "Parse repository configuration",
+          "run": "python - <<'PY'\nimport json\nimport pathlib\nimport tomllib\n\nfor path in pathlib.Path(\".\").glob(\"**/*.toml\"):\n    if \".git\" not in path.parts:\n        data = tomllib.loads(path.read_text(encoding=\"utf-8\"))\n        if path.parent == pathlib.Path(\".codex/agents\"):\n            if data.get(\"name\") != path.stem:\n                raise SystemExit(f\"{path}: agent name must match filename\")\n            for field in (\"description\", \"developer_instructions\"):\n                value = data.get(field)\n                if not isinstance(value, str) or not value.strip():\n                    raise SystemExit(f\"{path}: missing {field}\")\nfor path in pathlib.Path(\".\").glob(\"**/*.json\"):\n    if \".git\" not in path.parts:\n        json.loads(path.read_text(encoding=\"utf-8\"))\nfor path in (*pathlib.Path(\"src\").rglob(\"*.py\"), *pathlib.Path(\"tests\").rglob(\"*.py\")):\n    compile(path.read_text(encoding=\"utf-8\"), str(path), \"exec\", dont_inherit=True)\nPY\nruby -e 'require \"yaml\"; Dir[\".github/workflows/*.{yml,yaml}\"].each { |path| YAML.parse_file(path) }'\nruby -ryaml -ropen3 <<'RB'\nDir[\".agents/skills/*/SKILL.md\"].each do |path|\n  source = File.read(path)\n  match = source.match(/\\A---\\r?\\n(.*?)\\r?\\n---(?:\\r?\\n|\\z)/m)\n  abort \"#{path}: missing YAML frontmatter\" unless match\n  data = YAML.safe_load(match[1], aliases: false)\n  abort \"#{path}: name must match directory and description must be nonempty\" unless\n    data.is_a?(Hash) && data[\"name\"] == File.basename(File.dirname(path)) &&\n    data[\"description\"].is_a?(String) && !data[\"description\"].strip.empty?\nend\nissue_path = \".github/ISSUE_TEMPLATE/work_item.md\"\nissue_source = File.read(issue_path)\nissue_match = issue_source.match(/\\A---\\r?\\n(.*?)\\r?\\n---(?:\\r?\\n|\\z)/m)\nabort \"#{issue_path}: missing YAML frontmatter\" unless issue_match\nissue = YAML.safe_load(issue_match[1], aliases: false)\nabort \"#{issue_path}: invalid frontmatter mapping\" unless issue.is_a?(Hash)\n%w[name about title labels assignees].each do |field|\n  value = issue[field]\n  abort \"#{issue_path}: missing or non-string #{field}\" unless value.is_a?(String)\nend\n%w[name about].each do |field|\n  abort \"#{issue_path}: empty #{field}\" if issue[field].strip.empty?\nend\nDir[\".github/workflows/*.{yml,yaml}\"].each do |path|\n  document = YAML.safe_load(File.read(path), aliases: false)\n  document.fetch(\"jobs\").each do |job_name, job|\n    job.fetch(\"steps\", []).each do |step|\n      script = step[\"with\"]&.fetch(\"script\", nil)\n      next unless script\n      _, error, status = Open3.capture3(\n        \"node\", \"--input-type=module\", \"--check\",\n        stdin_data: \"async function main() {\\n#{script}\\n}\")\n      abort \"#{path} #{job_name}: #{error}\" unless status.success?\n    end\n  end\nend\nRB\n"
+        },
+        {
+          "name": "Validate runner metadata",
+          "run": "python -B - <<'PY'\nfrom tests import suite_policy\n\nsuite_policy.load_timing_weights()\nids = suite_policy.FAST_TEST_IDS\nif not ids or len(ids) != len(set(ids)):\n    raise SystemExit(\"fast tier must contain unique test IDs\")\nif any(not identifier.rsplit(\".\", 1)[-1].startswith(\"test\") for identifier in ids):\n    raise SystemExit(\"fast tier contains a non-test method ID\")\nPY\n"
+        },
+        {
+          "name": "Validate locked vendor pins",
+          "run": "python - <<'PY'\nimport subprocess\nimport tomllib\nfrom pathlib import Path\n\nif Path(\"MANIFEST.in\").read_text(encoding=\"utf-8\") != \"prune vendor/jsonl-viewer\\n\":\n    raise SystemExit(\"MANIFEST.in must exclude vendored jsonl-viewer source\")\n\nwith open(\"uv.lock\", \"rb\") as source:\n    packages = {package[\"name\"]: package for package in tomllib.load(source)[\"package\"]}\nfor name in (\"generic-rag\", \"jsonl-viewer\"):\n    pinned = packages[name][\"source\"][\"git\"].rsplit(\"#\", 1)[-1]\n    gitlink = subprocess.check_output(\n        [\"git\", \"rev-parse\", f\"HEAD:vendor/{name}\"], text=True\n    ).strip()\n    if pinned != gitlink:\n        raise SystemExit(f\"{name}: uv.lock pin {pinned} differs from gitlink {gitlink}\")\nPY\n"
+        },
+        {
+          "name": "Validate policy artifacts",
+          "run": "python - <<'PY'\nimport pathlib\n\nroot = pathlib.Path.cwd()\ntemplates = {\n    \".github/ISSUE_TEMPLATE/work_item.md\": [\n        \"## Objective\", \"## Use cases and expected results\",\n        \"## Implementation summary\", \"## Acceptance criteria\",\n        \"## Boundaries and dependencies\",\n        \"## Related work and verification plan\", \"## Implementation plan\",\n    ],\n    \".github/pull_request_template.md\": [\n        \"## What changed\", \"## Before and after\", \"## Implementation\",\n        \"## Verification\", \"## Limitations and follow-ups\",\n        \"## Related Issue\",\n    ],\n    \".github/templates/evidence.md\": [\n        \"## What this demonstrates\", \"## Scenario results\",\n        \"## Reproduction and environment\", \"## Failures and coverage gaps\",\n        \"## Technical provenance and artifacts\", \"## Assessment\",\n    ],\n    \".github/templates/working-status-comment.md\": [\n        \"## Current status\", \"## What works now\", \"## What remains\",\n        \"## Blocker or decision\", \"## Next step\", \"## Evidence links\",\n    ],\n}\nfor relative, expected in templates.items():\n    text = (root / relative).read_text(encoding=\"utf-8\")\n    actual = [line for line in text.splitlines() if line.startswith(\"## \")]\n    if actual != expected:\n        raise SystemExit(f\"{relative}: template headings changed: {actual!r}\")\n\nagents = {path.name for path in (root / \".codex/agents\").glob(\"*.toml\")}\nif agents != {\"runtime_implementer.toml\", \"test_engineer.toml\"}:\n    raise SystemExit(f\"unexpected development agents: {sorted(agents)!r}\")\nrequired = [\n    root / \".agents/skills/project-workflow/SKILL.md\",\n    root / \".codex/agents/runtime_implementer/PYTHON_MODULARITY_POLICY.md\",\n]\nif any(not path.is_file() for path in required):\n    raise SystemExit(\"required simplified workflow artifact is missing\")\nforbidden = [\n    root / \".agents/skills/adaptive-verification/SKILL.md\",\n    root / \".agents/skills/subagent-model-selection/SKILL.md\",\n    root / \"tests/test_repository_agent_policy.py\",\n]\nif any(path.exists() for path in forbidden):\n    raise SystemExit(\"retired policy artifact still exists\")\nif len((root / \"PYTHON_MODULE_INDEX.md\").read_text(encoding=\"utf-8\").splitlines()) > 300:\n    raise SystemExit(\"PYTHON_MODULE_INDEX.md exceeds 300 lines\")\nPY\n"
+        }
+      ]
+    },
+    "fast": {
+      "name": "${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - fast tier skipped' || 'Runtime fast tier' }}",
+      "needs": "classify",
+      "if": "needs.classify.outputs.runtime == 'true'",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "env": {
+        "TEST_JOB_MINUTES": "30",
+        "TEST_RUN_DEADLINE": "${{ needs.classify.outputs.test_run_deadline }}"
+      },
+      "steps": [
+        {
+          "name": "Record shared test deadline before setup",
+          "run": "test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))\nif [[ -n \"$TEST_RUN_DEADLINE\" ]]; then\n  [[ \"$TEST_RUN_DEADLINE\" =~ ^[0-9]+$ ]] || exit 2\n  if (( TEST_RUN_DEADLINE < test_deadline )); then\n    test_deadline=$TEST_RUN_DEADLINE\n  fi\nelse\n  echo \"Missing shared test-run deadline.\"\n  exit 2\nfi\necho \"TEST_JOB_DEADLINE=$test_deadline\" >> \"$GITHUB_ENV\"\nif (( test_deadline <= $(date +%s) )); then\n  echo \"Shared test-run deadline exhausted before setup.\"\n  exit 124\nfi\n"
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "submodules": "recursive",
+            "ref": "${{ needs.classify.outputs.checkout_sha }}"
+          }
+        },
+        {
+          "uses": "actions/setup-python@v5",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "uses": "astral-sh/setup-uv@v10.2.0",
+          "with": {
+            "version": "0.12.17"
+          }
+        },
+        {
+          "name": "Install runtime test dependencies",
+          "run": "uv sync --locked --all-extras --python 3.11 --no-progress"
+        },
+        {
+          "name": "Configure deterministic test Git identity",
+          "run": "git config --global user.name \"Story Tests\"\ngit config --global user.email \"story-tests@example.invalid\"\n"
+        },
+        {
+          "name": "Run fast runtime tests",
+          "run": "test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds > 1350 )); then test_seconds=1350; fi\nprintf '{\"worker_limit_seconds\":%s,\"kill_grace_seconds\":30,\"cleanup_reserve_seconds\":60,\"cancellation_reserve_seconds\":360}\\n' \"$test_seconds\" > \"$RUNNER_TEMP/fast-control.json\"\nif (( test_seconds <= 0 )); then exit 124; fi\nset +e\ntimeout --signal=INT --kill-after=30s \"${test_seconds}s\" env PYTHONPATH=src .venv/bin/python -m tests.runner run --tier fast --json \"$RUNNER_TEMP/fast.json\" 2>&1 | tee \"$RUNNER_TEMP/fast.log\"\ntest_statuses=(\"${PIPESTATUS[@]}\")\ntest_status=${test_statuses[0]}\nif (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi\nprintf '%s\\n' \"$test_status\" > \"$RUNNER_TEMP/fast-exit-code.txt\"\nexit \"$test_status\"\n"
+        },
+        {
+          "uses": "actions/upload-artifact@v4",
+          "timeout-minutes": 1,
+          "if": "always()",
+          "with": {
+            "name": "runtime-fast",
+            "path": "${{ runner.temp }}/fast.json\n${{ runner.temp }}/fast.log\n${{ runner.temp }}/fast-control.json\n${{ runner.temp }}/fast-exit-code.txt\n",
+            "if-no-files-found": "warn"
+          }
+        }
+      ]
+    },
+    "full": {
+      "name": "${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - full suite skipped' || format('Full runtime shard {0}/4', matrix.shard) }}",
+      "needs": "classify",
+      "if": "needs.classify.outputs.full == 'true'",
+      "strategy": {
+        "fail-fast": false,
+        "matrix": {
+          "shard": [
+            1,
+            2,
+            3,
+            4
           ]
-          if any(not path.is_file() for path in required):
-              raise SystemExit("required simplified workflow artifact is missing")
-          forbidden = [
-              root / ".agents/skills/adaptive-verification/SKILL.md",
-              root / ".agents/skills/subagent-model-selection/SKILL.md",
-              root / "tests/test_repository_agent_policy.py",
-          ]
-          if any(path.exists() for path in forbidden):
-              raise SystemExit("retired policy artifact still exists")
-          if len((root / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8").splitlines()) > 300:
-              raise SystemExit("PYTHON_MODULE_INDEX.md exceeds 300 lines")
-          PY
-
-  fast:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - fast tier skipped' || 'Runtime fast tier' }}
-    needs: classify
-    if: needs.classify.outputs.runtime == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: '0.12.17'
-      - name: Install runtime test dependencies
-        run: uv sync --locked --all-extras --python 3.11 --no-progress
-      - name: Configure deterministic test Git identity
-        run: |
-          git config --global user.name "Story Tests"
-          git config --global user.email "story-tests@example.invalid"
-      - name: Run fast runtime tests
-        run: |
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds > 1350 )); then test_seconds=1350; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/fast-control.json"
-          if (( test_seconds <= 0 )); then exit 124; fi
-          set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --tier fast --json "$RUNNER_TEMP/fast.json" 2>&1 | tee "$RUNNER_TEMP/fast.log"
-          test_statuses=("${PIPESTATUS[@]}")
-          test_status=${test_statuses[0]}
-          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
-          printf '%s\n' "$test_status" > "$RUNNER_TEMP/fast-exit-code.txt"
-          exit "$test_status"
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 1
-        if: always()
-        with:
-          name: runtime-fast
-          path: |
-            ${{ runner.temp }}/fast.json
-            ${{ runner.temp }}/fast.log
-            ${{ runner.temp }}/fast-control.json
-            ${{ runner.temp }}/fast-exit-code.txt
-          if-no-files-found: warn
-
-  full:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - full suite skipped' || format('Full runtime shard {0}/4', matrix.shard) }}
-    needs: classify
-    if: needs.classify.outputs.full == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    runs-on: ubuntu-24.04
-    env:
-      PYTHONDONTWRITEBYTECODE: '1'
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    timeout-minutes: 30
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: '0.12.17'
-      - name: Install runtime test dependencies
-        run: uv sync --locked --all-extras --python 3.11 --no-progress
-      - name: Configure deterministic test Git identity
-        run: |
-          git config --global user.name "Story Tests"
-          git config --global user.email "story-tests@example.invalid"
-      - name: Run full runtime shard
-        run: |
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds > 1350 )); then test_seconds=1350; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/full-${{ matrix.shard }}-control.json"
-          if (( test_seconds <= 0 )); then exit 124; fi
-          set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "${{ matrix.shard }}/4" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json" 2>&1 | tee "$RUNNER_TEMP/full-${{ matrix.shard }}.log"
-          test_statuses=("${PIPESTATUS[@]}")
-          test_status=${test_statuses[0]}
-          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
-          printf '%s\n' "$test_status" > "$RUNNER_TEMP/full-${{ matrix.shard }}-exit-code.txt"
-          exit "$test_status"
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 1
-        if: always()
-        with:
-          name: full-${{ matrix.shard }}
-          path: |
-            ${{ runner.temp }}/full-${{ matrix.shard }}.json
-            ${{ runner.temp }}/full-${{ matrix.shard }}.log
-            ${{ runner.temp }}/full-${{ matrix.shard }}-control.json
-            ${{ runner.temp }}/full-${{ matrix.shard }}-exit-code.txt
-          if-no-files-found: error
-
-  reconcile-full:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - reconciliation skipped' || 'Reconcile full runtime suite' }}
-    needs: [classify, full]
-    if: >-
-      !cancelled() && needs.classify.outputs.full == 'true' &&
-      (needs.full.result == 'success' || needs.full.result == 'failure')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: full-*
-          path: full-reports
-      - name: Reconcile shard evidence
-        run: |
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds <= 0 )); then
-            echo "Reconciliation deadline exhausted; preserve 30s termination, 60s upload, and 360s cancellation reserve."
-            exit 124
-          fi
-          PYTHONPATH=src timeout --signal=INT --kill-after=30s "${test_seconds}s" \
-            python -m tests.runner reconcile \
-            full-reports/full-1/full-1.json full-reports/full-2/full-2.json \
-            full-reports/full-3/full-3.json full-reports/full-4/full-4.json \
-            --json "$RUNNER_TEMP/full-reconciled.json"
-      - name: Enforce frozen suite inventory and wall-time budget
-        env:
-          BASE_SHA: ${{ needs.classify.outputs.base_sha }}
-          WALL_TIME_EXCEPTION: ${{ needs.classify.outputs.wall_time_exception }}
-        run: |
-          budget_args=(--base-ref "$BASE_SHA"
-            --report full-reports/full-1/full-1.json
-            --report full-reports/full-2/full-2.json
-            --report full-reports/full-3/full-3.json
-            --report full-reports/full-4/full-4.json)
-          if [[ "$WALL_TIME_EXCEPTION" == "true" ]]; then
-            echo "Maintainer-authorized wall-time exception: measured durations remain visible."
-            budget_args+=(--allow-wall-time-overage)
-          fi
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds <= 0 )); then
-            echo "Reconciliation deadline exhausted before inventory and wall-time checks."
-            exit 124
-          fi
-          PYTHONPATH=src timeout --signal=INT --kill-after=30s "${test_seconds}s" \
-            python -m tests.suite_budget "${budget_args[@]}"
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 1
-        if: always()
-        with:
-          name: runtime-full-reconciled
-          path: ${{ runner.temp }}/full-reconciled.json
-          if-no-files-found: warn
-
-  diagnose-full-budget:
-    name: ${{ github.event_name == 'workflow_dispatch' && format('Diagnostic only ({0}, {1})', inputs.arch, inputs.scratch) || 'Diagnose full-suite timing failure' }}
-    needs: [classify, full, reconcile-full]
-    if: >-
-      !cancelled() && (github.event_name == 'workflow_dispatch' ||
-      (needs.full.result == 'success' && needs.reconcile-full.result == 'failure'))
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    timeout-minutes: 30
-    env:
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: '0.12.17'
-      - uses: actions/download-artifact@v4
-        if: github.event_name != 'workflow_dispatch'
-        with:
-          pattern: full-*
-          path: ${{ runner.temp }}/diagnostic-inputs
-      - name: Select actual timing failures
-        if: github.event_name != 'workflow_dispatch'
-        id: timing
-        run: |
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          from tests.suite_budget import load_budget
-          root = Path(os.environ["RUNNER_TEMP"]) / "diagnostic-inputs"
-          reports = [json.loads((root / f"full-{i}" / f"full-{i}.json").read_text()) for i in (1, 2, 3, 4)]
-          budget = load_budget()
-          seconds = [report["durations"]["wall_seconds"] for report in reports]
-          over = sum(seconds) > budget["max_sequential_wall_seconds"] or max(seconds) > budget["max_shard_wall_seconds"]
-          selected = over and all(report["outcome"] == "success" for report in reports)
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"selected={str(selected).lower()}\n")
-          PY
-      - name: Install diagnostic dependencies
-        if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
-        run: uv sync --locked --all-extras --python 3.11 --no-progress
-      - name: Configure diagnostic test Git identity
-        if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
-        run: |
-          git config --global user.name "Story Tests"
-          git config --global user.email "story-tests@example.invalid"
-      - name: Prepare diagnostic scratch storage
-        if: github.event_name == 'workflow_dispatch'
-        id: scratch
-        env:
-          MEMORY: ${{ inputs.scratch == 'memory' }}
-        run: |
-          scratch="$(mktemp -d "${TMPDIR:-/tmp}/story-timing.XXXXXXXX")"
-          if [[ "$MEMORY" == "true" ]]; then
-            echo "directory=$scratch" >> "$GITHUB_OUTPUT"
-            sudo mount -t tmpfs -o "size=2G,mode=0700,uid=$(id -u),gid=$(id -g)" tmpfs "$scratch"
-          else
-            SCRATCH="$scratch" python - <<'PY'
-          import json, os, re, stat
-          raw = os.environ["SCRATCH"]
-          parent = os.path.realpath(os.path.dirname(os.path.abspath(raw)))
-          name = os.path.basename(raw)
-          path = os.path.join(parent, name)
-          if not re.fullmatch(r"story-timing\.[A-Za-z0-9]{8}", name) or any(c in path for c in "\r\n"):
-              raise RuntimeError("Unexpected diagnostic scratch path")
-          flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-          fd = os.open(parent, flags)
-          try:
-              outer = os.fstat(fd)
-              inner = os.stat(name, dir_fd=fd, follow_symlinks=False)
-              if not stat.S_ISDIR(inner.st_mode) or inner.st_uid != os.geteuid() or inner.st_dev != outer.st_dev:
-                  raise RuntimeError("Diagnostic scratch creation identity is unsafe")
-              record = {"path": path, "parent": parent,
-                        "root": [inner.st_dev, inner.st_ino, inner.st_uid],
-                        "parent_identity": [outer.st_dev, outer.st_ino, outer.st_uid]}
-              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                  output.write("directory=" + path + "\n")
-                  output.write("identity=" + json.dumps(record, separators=(",", ":")) + "\n")
-              print(json.dumps({"diagnostic_scratch_created": record}, sort_keys=True))
-          finally:
-              os.close(fd)
-          PY
-          fi
-      - name: Run one existing canonical scenario with optional profiling
-        if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
-        env:
-          GIT_AUTHOR_NAME: Story Tests
-          GIT_AUTHOR_EMAIL: story-tests@example.invalid
-          GIT_COMMITTER_NAME: Story Tests
-          GIT_COMMITTER_EMAIL: story-tests@example.invalid
-          PYTHONPATH: src
-          PYTHONDONTWRITEBYTECODE: '1'
-          DIAGNOSTIC_TEST_ID: ${{ inputs.test_id || 'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles' }}
-          DIAGNOSTIC_PROFILE_MODE: ${{ inputs.profile_mode || 'cprofile' }}
-          TMPDIR: ${{ steps.scratch.outputs.directory || '/tmp' }}
-        run: |
-          install -d -m 700 "$RUNNER_TEMP/timing-diagnostic"
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds > 1350 )); then test_seconds=1350; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/timing-diagnostic/control.json"
-          if (( test_seconds <= 0 )); then exit 124; fi
-          set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" .venv/bin/python - <<'PY' 2>&1 | tee "$RUNNER_TEMP/timing-diagnostic/worker.log"
-          import collections, cProfile, functools, hashlib, json, os, platform, pstats, re, resource, subprocess, sys, sysconfig, tempfile, threading, time
-          from pathlib import Path
-          output = Path(os.environ["RUNNER_TEMP"]) / "timing-diagnostic"
-          output.mkdir(mode=0o700, exist_ok=True)
-          paths = subprocess.check_output(["git", "ls-files", "-z", "src", "tests", "config", "pyproject.toml", "uv.lock"]).decode().split("\0")
-          def hashes():
-              return {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in paths if path}
-          before = hashes()
-          environment = {"platform": platform.platform(), "python": platform.python_version(),
-                         "cpu_count": os.cpu_count(), "python_compiler": platform.python_compiler(),
-                         "python_enable_optimizations_flag": "--enable-optimizations" in (sysconfig.get_config_var("CONFIG_ARGS") or ""),
-                         "git": subprocess.check_output(["git", "--version"], text=True, timeout=10).strip(),
-                         "temporary_filesystem": subprocess.check_output(["stat", "-f", "-c", "%T", tempfile.gettempdir()], text=True, timeout=10).strip()}
-          prepared = {"diagnostic_only": True, "acceptance_credit": False, "phase": "prepared",
-                      "selection": {"requested_canonical_id": os.environ["DIAGNOSTIC_TEST_ID"], "validated_by_runner": False},
-                      "profile_mode": os.environ["DIAGNOSTIC_PROFILE_MODE"], "source_before": before,
-                      "checkout_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, timeout=10).strip(),
-                      "checkout_tree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True, timeout=10).strip(),
-                      "environment": environment, "observer_thread": True}
-          (output / "prepared.json").write_text(json.dumps(prepared, indent=2))
-          from story_writing_agents.git import process, session_resources
-          from tests import runner
-          counts = collections.defaultdict(lambda: {"calls": 0, "seconds": 0.0})
-          def record(key, elapsed):
-              counts[key]["calls"] += 1
-              counts[key]["seconds"] += elapsed
-          original_git = process.GitProcessRunner.run
-          @functools.wraps(original_git)
-          def git(self, args, **kwargs):
-              started = time.perf_counter()
-              try:
-                  return original_git(self, args, **kwargs)
-              finally:
-                  record("git:" + args[0], time.perf_counter() - started)
-          process.GitProcessRunner.run = git
-          original_refs = session_resources._Repository._loose_ref_output
-          samples = []
-          @functools.wraps(original_refs)
-          def refs(self):
-              started = time.perf_counter()
-              value = original_refs(self)
-              record("loose_refs:" + ("fallback" if value is None else "bytes"), time.perf_counter() - started)
-              if len(samples) < 8:
-                  with (self.common_git / "config").open("rb") as source:
-                      config = source.read(65536)
-                  safe = re.findall(rb"(?m)^\s*(?:repositoryformatversion|filemode|bare|logallrefupdates|objectformat|submodulepathconfig|relativeworktrees|worktreeconfig)\s*=\s*(?:true|false|0|1|sha1|sha256)\s*$", config)
-                  samples.append({"fallback": value is None, "config_sha256": hashlib.sha256(config).hexdigest(), "format_lines": [line.decode("ascii").strip() for line in safe], "packed_refs": (self.common_git / "packed-refs").exists(), "reftable": (self.common_git / "reftable").exists()})
-              return value
-          session_resources._Repository._loose_ref_output = refs
-          observer_stop = threading.Event()
-          observer_errors = []
-          main_thread = threading.main_thread().ident
-          def observe():
-              try:
-                  with (output / "progress.jsonl").open("a", buffering=1) as stream:
-                      while not observer_stop.is_set():
-                          frame = sys._current_frames().get(main_thread)
-                          frames, test_frame, depth = [], None, 0
-                          while frame is not None and depth < 64:
-                              code = frame.f_code
-                              location = {"file": code.co_filename, "function": code.co_name, "line": frame.f_lineno}
-                              if depth < 12:
-                                  frames.append(location)
-                              if code.co_name.startswith("test_"):
-                                  test_frame = location
-                              frame = frame.f_back
-                              depth += 1
-                          truncated = frame is not None
-                          frame = None
-                          row = {"diagnostic_only": True, "wall_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                 "elapsed_seconds": time.perf_counter() - started, "process_cpu_seconds": time.process_time(),
-                                 "max_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-                                 "main_thread_stack": frames, "test_frame": test_frame, "walk_truncated": truncated}
-                          stream.write(json.dumps(row, separators=(",", ":")) + "\n")
-                          if observer_stop.wait(60):
-                              break
-              except Exception as error:
-                  observer_errors.append(type(error).__name__)
-          profile = cProfile.Profile() if os.environ["DIAGNOSTIC_PROFILE_MODE"] == "cprofile" else None
-          started = time.perf_counter()
-          observer = threading.Thread(target=observe, name="diagnostic-progress", daemon=True)
-          observer_started = False
-          code, interrupted, finalization_errors = None, None, []
-          try:
-              try:
-                  observer.start()
-                  observer_started = True
-              except Exception as error:
-                  observer_errors.append(type(error).__name__)
-              if profile is not None:
-                  profile.enable()
-              code = runner.main(["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")])
-          except BaseException as error:
-              interrupted = type(error).__name__
-              raise
-          finally:
-              if profile is not None:
-                  profile.disable()
-              observer_stop.set()
-              if observer_started:
-                  observer.join(timeout=2)
-              try:
-                  if profile is not None:
-                      profile.dump_stats(str(output / "profile.pstats"))
-                      with (output / "profile.txt").open("w") as stream:
-                          pstats.Stats(profile, stream=stream).strip_dirs().sort_stats("cumulative").print_stats(100)
-                  else:
-                      (output / "profile.txt").write_text("cProfile disabled by diagnostic input profile_mode=none.\n")
-              except Exception as error:
-                  finalization_errors.append({"stage": "profile", "error_type": type(error).__name__})
-              after = None
-              try:
-                  after = hashes()
-              except Exception as error:
-                  finalization_errors.append({"stage": "source", "error_type": type(error).__name__})
-              evidence = {"diagnostic_only": True, "acceptance_credit": False,
-                          "partial": code not in (0, 1), "runner_exit_code": code, "interruption": interrupted,
-                          "source_valid": after is not None and before == after, "source_before": before, "source_after": after,
-                          "instrumented_seconds": time.perf_counter() - started, "counts": dict(counts), "fixture_samples": samples,
-                          "observer_thread": observer_started, "observer_errors": observer_errors, "finalization_errors": finalization_errors, **environment}
-              (output / "counters.json").write_text(json.dumps(evidence, indent=2))
-          raise SystemExit(code if before == after and not finalization_errors else 2)
-          PY
-          test_statuses=("${PIPESTATUS[@]}")
-          test_status=${test_statuses[0]}
-          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
-          printf '%s\n' "$test_status" > "$RUNNER_TEMP/timing-diagnostic/exit-code.txt"
-          exit "$test_status"
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 1
-        if: always() && (github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true')
-        with:
-          name: ${{ github.event_name == 'workflow_dispatch' && format('timing-diagnostic-{0}-{1}', inputs.arch, inputs.scratch) || 'timing-diagnostic' }}
-          path: ${{ runner.temp }}/timing-diagnostic
-          if-no-files-found: error
-      - name: Remove diagnostic scratch storage
-        if: always() && steps.scratch.outputs.directory != ''
-        env:
-          SCRATCH: ${{ steps.scratch.outputs.directory }}
-          SCRATCH_IDENTITY: ${{ steps.scratch.outputs.identity }}
-          MEMORY: ${{ inputs.scratch == 'memory' }}
-        run: |
-          if [[ "$MEMORY" == "true" ]]; then
-            if mountpoint -q "$SCRATCH"; then
-              sudo umount "$SCRATCH"
-            fi
-            rmdir "$SCRATCH"
-          else
-            printf 'Diagnostic scratch cleanup path=%s identity=%s\n' "$SCRATCH" "$SCRATCH_IDENTITY"
-            cleanup_seconds="$(python - <<'PY'
-          import os, time
-          remaining = int(os.environ["TEST_JOB_DEADLINE"]) - 360 - time.time()
-          work_ms = min(28000, int((remaining - 2) * 1000))
-          if work_ms <= 0:
-              raise SystemExit("No diagnostic scratch cleanup budget remains before cancellation reserve")
-          print(f"{work_ms / 1000:.3f}")
-          PY
-            )"
-            timeout --signal=TERM --kill-after=2s "${cleanup_seconds}s" python -u - <<'PY'
-          import json, os, re, shutil, stat, time
-          record = json.loads(os.environ["SCRATCH_IDENTITY"])
-          path = os.environ["SCRATCH"]
-          parent = record["parent"]
-          name = os.path.basename(path)
-          stop = int(os.environ["TEST_JOB_DEADLINE"]) - 360
-          if time.time() >= stop - 2:
-              raise RuntimeError("Diagnostic scratch cleanup window expired")
-          if (not os.path.isabs(path) or path != record["path"]
-                  or os.path.dirname(path) != parent or os.path.realpath(parent) != parent
-                  or not re.fullmatch(r"story-timing\.[A-Za-z0-9]{8}", name)):
-              raise RuntimeError("Diagnostic scratch path identity changed")
-          if not shutil.rmtree.avoids_symlink_attacks:
-              raise RuntimeError("Symlink-resistant diagnostic cleanup is unavailable")
-          fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-          try:
-              outer = os.fstat(fd)
-              if [outer.st_dev, outer.st_ino, outer.st_uid] != record["parent_identity"]:
-                  raise RuntimeError("Diagnostic scratch parent identity changed")
-              inner = os.stat(name, dir_fd=fd, follow_symlinks=False)
-              if (not stat.S_ISDIR(inner.st_mode) or inner.st_uid != os.geteuid()
-                      or inner.st_dev != outer.st_dev
-                      or [inner.st_dev, inner.st_ino, inner.st_uid] != record["root"]):
-                  raise RuntimeError("Diagnostic scratch directory identity changed")
-              with open("/proc/self/mountinfo", encoding="utf-8") as mounts:
-                  for line in mounts:
-                      mount = line.split()[4]
-                      for escaped, decoded in ((r"\040", " "), (r"\011", "\t"), (r"\012", "\n"), (r"\134", chr(92))):
-                          mount = mount.replace(escaped, decoded)
-                      if mount == path or mount.startswith(path + os.sep):
-                          raise RuntimeError("Mounted diagnostic scratch storage cannot be recursively removed")
-              current = os.stat(name, dir_fd=fd, follow_symlinks=False)
-              if ([current.st_dev, current.st_ino, current.st_uid] != record["root"]
-                      or not stat.S_ISDIR(current.st_mode) or time.time() >= stop - 2):
-                  raise RuntimeError("Diagnostic scratch identity or cleanup window changed")
-              shutil.rmtree(name, dir_fd=fd)
-              try:
-                  os.stat(name, dir_fd=fd, follow_symlinks=False)
-              except FileNotFoundError:
-                  print(json.dumps({"diagnostic_scratch_removed": record}, sort_keys=True), flush=True)
-              else:
-                  raise RuntimeError("Diagnostic scratch path remains after cleanup")
-          finally:
-              os.close(fd)
-          PY
-          fi
+        }
+      },
+      "runs-on": "ubuntu-24.04",
+      "env": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TEST_JOB_MINUTES": "30",
+        "TEST_RUN_DEADLINE": "${{ needs.classify.outputs.test_run_deadline }}"
+      },
+      "timeout-minutes": 30,
+      "steps": [
+        {
+          "name": "Record shared test deadline before setup",
+          "run": "test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))\nif [[ -n \"$TEST_RUN_DEADLINE\" ]]; then\n  [[ \"$TEST_RUN_DEADLINE\" =~ ^[0-9]+$ ]] || exit 2\n  if (( TEST_RUN_DEADLINE < test_deadline )); then\n    test_deadline=$TEST_RUN_DEADLINE\n  fi\nelse\n  echo \"Missing shared test-run deadline.\"\n  exit 2\nfi\necho \"TEST_JOB_DEADLINE=$test_deadline\" >> \"$GITHUB_ENV\"\nif (( test_deadline <= $(date +%s) )); then\n  echo \"Shared test-run deadline exhausted before setup.\"\n  exit 124\nfi\n"
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "submodules": "recursive",
+            "ref": "${{ needs.classify.outputs.checkout_sha }}"
+          }
+        },
+        {
+          "uses": "actions/setup-python@v5",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "uses": "astral-sh/setup-uv@v10.2.0",
+          "with": {
+            "version": "0.12.17"
+          }
+        },
+        {
+          "name": "Install runtime test dependencies",
+          "run": "uv sync --locked --all-extras --python 3.11 --no-progress"
+        },
+        {
+          "name": "Configure deterministic test Git identity",
+          "run": "git config --global user.name \"Story Tests\"\ngit config --global user.email \"story-tests@example.invalid\"\n"
+        },
+        {
+          "name": "Run full runtime shard",
+          "run": "test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds > 1350 )); then test_seconds=1350; fi\nprintf '{\"worker_limit_seconds\":%s,\"kill_grace_seconds\":30,\"cleanup_reserve_seconds\":60,\"cancellation_reserve_seconds\":360}\\n' \"$test_seconds\" > \"$RUNNER_TEMP/full-${{ matrix.shard }}-control.json\"\nif (( test_seconds <= 0 )); then exit 124; fi\nset +e\ntimeout --signal=INT --kill-after=30s \"${test_seconds}s\" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard \"${{ matrix.shard }}/4\" --json \"$RUNNER_TEMP/full-${{ matrix.shard }}.json\" 2>&1 | tee \"$RUNNER_TEMP/full-${{ matrix.shard }}.log\"\ntest_statuses=(\"${PIPESTATUS[@]}\")\ntest_status=${test_statuses[0]}\nif (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi\nprintf '%s\\n' \"$test_status\" > \"$RUNNER_TEMP/full-${{ matrix.shard }}-exit-code.txt\"\nexit \"$test_status\"\n"
+        },
+        {
+          "uses": "actions/upload-artifact@v4",
+          "timeout-minutes": 1,
+          "if": "always()",
+          "with": {
+            "name": "full-${{ matrix.shard }}",
+            "path": "${{ runner.temp }}/full-${{ matrix.shard }}.json\n${{ runner.temp }}/full-${{ matrix.shard }}.log\n${{ runner.temp }}/full-${{ matrix.shard }}-control.json\n${{ runner.temp }}/full-${{ matrix.shard }}-exit-code.txt\n",
+            "if-no-files-found": "error"
+          }
+        }
+      ]
+    },
+    "reconcile-full": {
+      "name": "${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - reconciliation skipped' || 'Reconcile full runtime suite' }}",
+      "needs": [
+        "classify",
+        "full"
+      ],
+      "if": "!cancelled() && needs.classify.outputs.full == 'true' && (needs.full.result == 'success' || needs.full.result == 'failure')",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "env": {
+        "TEST_JOB_MINUTES": "30",
+        "TEST_RUN_DEADLINE": "${{ needs.classify.outputs.test_run_deadline }}"
+      },
+      "steps": [
+        {
+          "name": "Record shared test deadline before setup",
+          "run": "test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))\nif [[ -n \"$TEST_RUN_DEADLINE\" ]]; then\n  [[ \"$TEST_RUN_DEADLINE\" =~ ^[0-9]+$ ]] || exit 2\n  if (( TEST_RUN_DEADLINE < test_deadline )); then\n    test_deadline=$TEST_RUN_DEADLINE\n  fi\nelse\n  echo \"Missing shared test-run deadline.\"\n  exit 2\nfi\necho \"TEST_JOB_DEADLINE=$test_deadline\" >> \"$GITHUB_ENV\"\nif (( test_deadline <= $(date +%s) )); then\n  echo \"Shared test-run deadline exhausted before setup.\"\n  exit 124\nfi\n"
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 0,
+            "submodules": "recursive",
+            "ref": "${{ needs.classify.outputs.checkout_sha }}"
+          }
+        },
+        {
+          "uses": "actions/download-artifact@v4",
+          "with": {
+            "pattern": "full-*",
+            "path": "full-reports"
+          }
+        },
+        {
+          "name": "Reconcile shard evidence",
+          "run": "test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds <= 0 )); then\n  echo \"Reconciliation deadline exhausted; preserve 30s termination, 60s upload, and 360s cancellation reserve.\"\n  exit 124\nfi\nPYTHONPATH=src timeout --signal=INT --kill-after=30s \"${test_seconds}s\" \\\n  python -m tests.runner reconcile \\\n  full-reports/full-1/full-1.json full-reports/full-2/full-2.json \\\n  full-reports/full-3/full-3.json full-reports/full-4/full-4.json \\\n  --json \"$RUNNER_TEMP/full-reconciled.json\"\n"
+        },
+        {
+          "name": "Enforce frozen suite inventory and wall-time budget",
+          "env": {
+            "BASE_SHA": "${{ needs.classify.outputs.base_sha }}",
+            "WALL_TIME_EXCEPTION": "${{ needs.classify.outputs.wall_time_exception }}"
+          },
+          "run": "budget_args=(--base-ref \"$BASE_SHA\"\n  --report full-reports/full-1/full-1.json\n  --report full-reports/full-2/full-2.json\n  --report full-reports/full-3/full-3.json\n  --report full-reports/full-4/full-4.json)\nif [[ \"$WALL_TIME_EXCEPTION\" == \"true\" ]]; then\n  echo \"Maintainer-authorized wall-time exception: measured durations remain visible.\"\n  budget_args+=(--allow-wall-time-overage)\nfi\ntest_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds <= 0 )); then\n  echo \"Reconciliation deadline exhausted before inventory and wall-time checks.\"\n  exit 124\nfi\nPYTHONPATH=src timeout --signal=INT --kill-after=30s \"${test_seconds}s\" \\\n  python -m tests.suite_budget \"${budget_args[@]}\"\n"
+        },
+        {
+          "uses": "actions/upload-artifact@v4",
+          "timeout-minutes": 1,
+          "if": "always()",
+          "with": {
+            "name": "runtime-full-reconciled",
+            "path": "${{ runner.temp }}/full-reconciled.json",
+            "if-no-files-found": "warn"
+          }
+        }
+      ]
+    },
+    "diagnose-full-budget": {
+      "name": "${{ github.event_name == 'workflow_dispatch' && format('Diagnostic only ({0}, {1})', inputs.arch, inputs.scratch) || 'Diagnose full-suite timing failure' }}",
+      "needs": [
+        "classify",
+        "full",
+        "reconcile-full"
+      ],
+      "if": "!cancelled() && (github.event_name == 'workflow_dispatch' || (needs.full.result == 'success' && needs.reconcile-full.result == 'failure'))",
+      "runs-on": "${{ github.event_name == 'workflow_dispatch' && inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}",
+      "timeout-minutes": 30,
+      "env": {
+        "TEST_JOB_MINUTES": "30",
+        "TEST_RUN_DEADLINE": "${{ needs.classify.outputs.test_run_deadline }}"
+      },
+      "steps": [
+        {
+          "name": "Record shared test deadline before setup",
+          "run": "test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))\nif [[ -n \"$TEST_RUN_DEADLINE\" ]]; then\n  [[ \"$TEST_RUN_DEADLINE\" =~ ^[0-9]+$ ]] || exit 2\n  if (( TEST_RUN_DEADLINE < test_deadline )); then\n    test_deadline=$TEST_RUN_DEADLINE\n  fi\nelse\n  echo \"Missing shared test-run deadline.\"\n  exit 2\nfi\necho \"TEST_JOB_DEADLINE=$test_deadline\" >> \"$GITHUB_ENV\"\nif (( test_deadline <= $(date +%s) )); then\n  echo \"Shared test-run deadline exhausted before setup.\"\n  exit 124\nfi\n"
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "submodules": "recursive",
+            "ref": "${{ github.event_name == 'workflow_dispatch' && github.sha || needs.classify.outputs.checkout_sha }}",
+            "fetch-depth": 2
+          }
+        },
+        {
+          "uses": "actions/setup-python@v5",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "uses": "astral-sh/setup-uv@v10.2.0",
+          "with": {
+            "version": "0.12.17"
+          }
+        },
+        {
+          "uses": "actions/download-artifact@v4",
+          "if": "github.event_name != 'workflow_dispatch'",
+          "with": {
+            "pattern": "full-*",
+            "path": "${{ runner.temp }}/diagnostic-inputs"
+          }
+        },
+        {
+          "name": "Select actual timing failures",
+          "if": "github.event_name != 'workflow_dispatch'",
+          "id": "timing",
+          "run": "python - <<'PY'\nimport json, os\nfrom pathlib import Path\nfrom tests.suite_budget import load_budget\nroot = Path(os.environ[\"RUNNER_TEMP\"]) / \"diagnostic-inputs\"\nreports = [json.loads((root / f\"full-{i}\" / f\"full-{i}.json\").read_text()) for i in (1, 2, 3, 4)]\nbudget = load_budget()\nseconds = [report[\"durations\"][\"wall_seconds\"] for report in reports]\nover = sum(seconds) > budget[\"max_sequential_wall_seconds\"] or max(seconds) > budget[\"max_shard_wall_seconds\"]\nselected = over and all(report[\"outcome\"] == \"success\" for report in reports)\nwith open(os.environ[\"GITHUB_OUTPUT\"], \"a\") as output:\n    output.write(f\"selected={str(selected).lower()}\\n\")\nPY\n"
+        },
+        {
+          "name": "Install diagnostic dependencies",
+          "if": "github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'",
+          "run": "uv sync --locked --all-extras --python 3.11 --no-progress"
+        },
+        {
+          "name": "Configure diagnostic test Git identity",
+          "if": "github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'",
+          "run": "git config --global user.name \"Story Tests\"\ngit config --global user.email \"story-tests@example.invalid\"\n"
+        },
+        {
+          "name": "Prepare diagnostic scratch storage",
+          "if": "github.event_name == 'workflow_dispatch'",
+          "id": "scratch",
+          "env": {
+            "MEMORY": "${{ inputs.scratch == 'memory' }}"
+          },
+          "run": "scratch=\"$(mktemp -d \"${TMPDIR:-/tmp}/story-timing.XXXXXXXX\")\"\nif [[ \"$MEMORY\" == \"true\" ]]; then\n  echo \"directory=$scratch\" >> \"$GITHUB_OUTPUT\"\n  sudo mount -t tmpfs -o \"size=2G,mode=0700,uid=$(id -u),gid=$(id -g)\" tmpfs \"$scratch\"\nelse\n  SCRATCH=\"$scratch\" python - <<'PY'\nimport json, os, re, stat\nraw = os.environ[\"SCRATCH\"]\nparent = os.path.realpath(os.path.dirname(os.path.abspath(raw)))\nname = os.path.basename(raw)\npath = os.path.join(parent, name)\nif not re.fullmatch(r\"story-timing\\.[A-Za-z0-9]{8}\", name) or any(c in path for c in \"\\r\\n\"):\n    raise RuntimeError(\"Unexpected diagnostic scratch path\")\nflags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW\nfd = os.open(parent, flags)\ntry:\n    outer = os.fstat(fd)\n    inner = os.stat(name, dir_fd=fd, follow_symlinks=False)\n    if not stat.S_ISDIR(inner.st_mode) or inner.st_uid != os.geteuid() or inner.st_dev != outer.st_dev:\n        raise RuntimeError(\"Diagnostic scratch creation identity is unsafe\")\n    record = {\"path\": path, \"parent\": parent,\n              \"root\": [inner.st_dev, inner.st_ino, inner.st_uid],\n              \"parent_identity\": [outer.st_dev, outer.st_ino, outer.st_uid]}\n    with open(os.environ[\"GITHUB_OUTPUT\"], \"a\", encoding=\"utf-8\") as output:\n        output.write(\"directory=\" + path + \"\\n\")\n        output.write(\"identity=\" + json.dumps(record, separators=(\",\", \":\")) + \"\\n\")\n    print(json.dumps({\"diagnostic_scratch_created\": record}, sort_keys=True))\nfinally:\n    os.close(fd)\nPY\nfi\n"
+        },
+        {
+          "name": "Run seven pinned canonical compatibility scenarios without instrumentation",
+          "if": "github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'",
+          "env": {
+            "GIT_AUTHOR_NAME": "Story Tests",
+            "GIT_AUTHOR_EMAIL": "story-tests@example.invalid",
+            "GIT_COMMITTER_NAME": "Story Tests",
+            "GIT_COMMITTER_EMAIL": "story-tests@example.invalid",
+            "PYTHONPATH": "src",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "DIAGNOSTIC_TEST_ID": "${{ inputs.test_id || 'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles' }}",
+            "DIAGNOSTIC_PROFILE_MODE": "${{ inputs.profile_mode || 'cprofile' }}",
+            "TMPDIR": "${{ steps.scratch.outputs.directory || '/tmp' }}"
+          },
+          "run": "install -d -m 700 \"$RUNNER_TEMP/timing-diagnostic\"\ntest_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds > 570 )); then test_seconds=570; fi\nprintf '{\"worker_limit_seconds\":%s,\"kill_grace_seconds\":30,\"cleanup_reserve_seconds\":60,\"cancellation_reserve_seconds\":360}\\n' \"$test_seconds\" > \"$RUNNER_TEMP/timing-diagnostic/control.json\"\nif (( test_seconds <= 0 )); then exit 124; fi\n.venv/bin/python - <<'PY_SOURCE'\nimport base64,os,pathlib\n(pathlib.Path(os.environ['RUNNER_TEMP'])/'timing-diagnostic'/'source-metadata.py').write_bytes(base64.b64decode('aW1wb3J0IGhhc2hsaWIsanNvbixvcyxwYXRobGliLHN1YnByb2Nlc3Msc3lzCnJvb3Q9cGF0aGxpYi5QYXRoKG9zLmVudmlyb25bJ0dJVEhVQl9XT1JLU1BBQ0UnXSkKb3V0PXBhdGhsaWIuUGF0aChvcy5lbnZpcm9uWydSVU5ORVJfVEVNUCddKS8ndGltaW5nLWRpYWdub3N0aWMnCmV4cGVjdGVkPXsnY29uZmlnL2FnZW50X2NvbmZpZ3MuanNvbic6ICczZDk2MzdkYTc1MzA1YzJlNzA3MGFmYmQ3MzM2YjFiYTg3ZTMyZGNhNTA5ZTE3NTc5MTg1ZTQ5YmYwMGVjMGEwJywgJ2NvbmZpZy9hZ2VudHMvY2hhcmFjdGVyX2N1c3RvZGlhbi9BR0VOVFMubWQnOiAnNjY4MGI4OGMyMWYxNGRiZDQ3NjNkZjczNmI1ZDYyMjJmMzYxMDI0ZGUwYTBjZWI4ZmZhNjY0MmQ0MDBmNmU4YScsICdjb25maWcvYWdlbnRzL2NvbW1vbi9BR0VOVFMubWQnOiAnOGFhZDI5MTQ5YmFmZjg0ZDc0MGU4OTZhYWIyMTE4ZjVhOTc4ZTlhZGQ2ZWM5YjhmM2NlNTViNmU2NDRjNTk5NScsICdjb25maWcvYWdlbnRzL2V4ZWN1dGlvbl9zcGVjaWFsaXN0L0FHRU5UUy5tZCc6ICc2YTdiNzkyYzEyZGFjNzhjZmU5MDIwNzJiZTk1MDhjYmRlMTY3ZTA2MDVjOTVlZjYyMjRmYzFhOTdiZGVkYmM1JywgJ2NvbmZpZy9hZ2VudHMvbGVhZF9vcmNoZXN0cmF0b3IvQUdFTlRTLm1kJzogJ2FlM2E3OGJkYzQxNzMyODU1MDVhZjdkZTIxYWE0MDQ2YmRiMzYyYmI0MzRlN2IyNDBkYjhkYjlhYWE1ZTFkNzknLCAnY29uZmlnL2FnZW50cy9wbG90X2FyY2hpdGVjdC9BR0VOVFMubWQnOiAnZTVhN2RmYjIyN2IzODdjZWIxMGExOTBhYzAxMjdmMTUxMDhlYTFlMzI3YjBmMDg0NTU0ZWE2ZDE2ZjBlODZkNycsICdjb25maWcvYWdlbnRzL3NwZWNpYWxpc3RfY29sbGFib3JhdGlvbi9BR0VOVFMubWQnOiAnZTI5ZWFmOTZmMzg1MDYyOTA3MzA0ZDk1YjgzYjFjNDY2ZjVlOWExMjI2ZDJlZjljZDRlM2Q0ZjE3MDQyOTJlNCcsICdjb25maWcvcGVyc29uYV90ZW1wbGF0ZXMvYWx0ZXJuYXRpdmVfdGVtcGxhdGVzLy5naXRrZWVwJzogJzAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmInLCAnY29uZmlnL3BlcnNvbmFfdGVtcGxhdGVzL2RlZmF1bHRfa2ltX2V1bl9oZWUubWQnOiAnZmQxYzkxNDI1Mzk0ZDA3YjMwOGIzODY5YzU2NTc5YTc2MGRjODY4NTY4YjZjNmNmYzYzNzE0OGE1ZjMzMzZkMScsICdjb25maWcvc3lzdGVtX2RlZmF1bHRzLmpzb24nOiAnNDFjYjQ5ZDk4YTg4ZTRlNzAzNmJiNjY2YTlkNjI3NzIzMGEyMGU5ZDg3MjcxZmFmYzhmZGU0MWM5ZjExOWM2ZicsICdweXByb2plY3QudG9tbCc6ICc3MzEzNjRjOWU0YTMzMjk1MDdhNmNjMjJkY2FkODRjMzk1ZjE5NDY5YzMzNGIwZjU1YWQwYWU0MTUxZDE1NDAxJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9fX2luaXRfXy5weSc6ICc2ZDI0YTg1MTU1ZTM2M2EzNDU4Y2ZkMzVkZDg2ZjY5YzBjZmY2M2JlMTg0MTdhZmFiZmZkOWZkYmIyZjQ3MTUwJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9fX21haW5fXy5weSc6ICc3ZTY3YzQ3ODg1NjkwYmViZTRlMzZlZjQzZGU0NWFiNzQ5MWNkMzRiN2JmMGY5NzJlZDgyMWVhOTQzNjU3ZDgyJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9hZ2VudF9jb250ZXh0L19faW5pdF9fLnB5JzogJ2ZjMmI2NzAxYTY4NDhlNDRiYTA1ZmQ4ODYyNzFhMmRhNDU1MWFlYjJjYmEzNzViNjZhM2E1MDgwNmFmZWM3NDAnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2FnZW50X2NvbnRleHQvYWNjb3VudGluZy5weSc6ICczOTBiZjAwMjAyNmIxY2E4ZDdjODU2NTc2YThmYWYwMmRjYzI3NmVkOWVmY2U3ZmExNzgzMGFmMDBmZGYyNWIwJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9hZ2VudF9jb250ZXh0L2FjdGlvbnMucHknOiAnOGYzNWVjZjE5N2FjYjdmMmZhODhjMGJmZmYwM2VlZDA1M2Y5OGFhN2NkZjM5ODUwYmQyZGI5ZmMzYjcwNDhkZScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfY29udGV4dC9jb250aW51YXRpb24ucHknOiAnZDljOWM1MWRlYzEzZjliZWRjNzRkNWNhYjBjMGYyZDYxOTIxMjA2YTZmN2MxMDZhNGZmNTIyYjFjZDlkMjMzZCcsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfY29udGV4dC9sZWRnZXIucHknOiAnZTAxMWJiN2IzMjkwNGVjMzNmZTdiMjU2ZjBhNjk2MGVmNjAwOTQ2OWJiZGY3NTFmNTViYTZlODc0YTY3NDBjYScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfY29udGV4dC9tYW5pZmVzdC5weSc6ICczZTRjYWY1MWNiYjU2NDI5NTExOTYyYWU0NDdlMzBiOGJiMmI4MjhiMjFjMWVmNTJmOGUwYTI2NjE5NWI4OGU4JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9hZ2VudF9jb250ZXh0L3BsYW5uaW5nLnB5JzogJ2JiOWNmZDU4ZWE2ZDkwMTc2ZWY4NDAzYzBlMzM2OGNhODgyMzRiYzFkYmM0ZjcxYmZhZjc3MjBjNjMyODhhNDUnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2FnZW50X2NvbnRleHQvcHJvZ3Jlc3MucHknOiAnYWI4MzI5NWQ0YzBiZTI5N2Q0NmE4ODU1YTRhNWM0ODdjMDQ2ZGUyOWRmZmQzYTIzZmEzZTA2OWVmZTExOTJiMicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfY29udGV4dC9yZXF1ZXN0X2NvbXBhY3Rpb24ucHknOiAnZTQyYTEwN2I0ZWZjODllN2RhZmQxNmYzNjZjYWVmMmZiMTIzODk5ODczYmVjOWUyNzRkYTViZDVmNGZjOWJlMScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfY29udGV4dC9zZXJ2aWNlLnB5JzogJzhkNTIxOWI0NzIxZTFkN2Y4YWU0YzJmN2Y5NjkzOWJiNGE5N2U3ZGMzZDE3NGYzMjcyMTVlYjlkYjk1NmIwZGUnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2FnZW50X2NvbnRleHQvc291cmNlcy5weSc6ICc1ZmVlNzlkYTA5NTU3OTE2MzE5MGIzOWY4OGQ5MGNjMWZhNGVhMWMyMTJhMWU0NzgzNGI4NGZlYzVjMDk1NjI4JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9hZ2VudF9leGNoYW5nZV9wYXRocy5weSc6ICcyOTk2ZjQyMDM3YmE2NDA0YThlZWM3NDgzM2Q1OTM4NTQ4YTI1NmU3MGUwY2E2YzdiZWZlNDEwODNiNzI1MzJmJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9hZ2VudF9leGNoYW5nZXMvX19pbml0X18ucHknOiAnN2ZkM2M2ZThhZjE4MTJiYTc4ZWE1OGE0ODAyMTIzZDg2MmE4ZTllMGNiN2MyOGUzZTc1NTYxYTk3MmE3ZmE1MCcsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfZXhjaGFuZ2VzL2NhcHR1cmUucHknOiAnOWM4ZjI1ODVkNDgzZWRmYjdlZWI2YjBjM2IzODkwMzM2YzVmOWJkODc1NGRjZjVkMzVjNDdlNWQ3YjMzY2Q1YScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfZXhjaGFuZ2VzL2NvbnRyYWN0cy5weSc6ICdjNmRiNzBjNjA2YmNhNDcyMTFjNDFhZjhkZWI5NmExZDE1OTEwNWU1OWQ0ZGQxZjNjMWM4ZjFhYmY3ODI4YTM0JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9hZ2VudF9leGNoYW5nZXMvc3RvcmFnZS5weSc6ICczYjY0OWRiYmRmODVmM2Q1ZTRjZmNmY2FkOTlmYjc1NmUwODRjZDY1NmQ0YzYwYzlkNWQ3NzQwOWUzYWFjZjRkJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9hZ2VudHMucHknOiAnZjRiMTQwNWE1OTM4OGU0YzQ1MDNmNmI1YmMwNzgyNGJhYTUyZmQzYWYzNjA4ODgzZDliZmM5ZDViODU1ZWJiNScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYW50aWdyYXZpdHlfYWRhcHRlci5weSc6ICdhMmRhMDAxNzNiZWZkODRlNTIyZjMwZWZhYzA1NzY3NjQ4NjMwNzJlYmYxYjU5ZTk0ZTM2ZWUwZmNiZGRlZjE2JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9hcnRpZmFjdF9wcm9wb3NhbHMucHknOiAnMDZkM2Q1MGIxYTJiNzE0ZWQxZmQ0ZTUyMGJlZjg4NTg1NjIwYmNhNWZmMzlkYzhiNWE0NmMyZGUwYWJjNjUyNCcsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYXV0aG9yaW5nX2FkbWlzc2lvbi5weSc6ICdkNTc3ZTFhODlkZGRkOGQzNjExODQyMTg1MzUzY2NiYWFlNTZkYTI0MjNlYWMzMzk3NTc5ZjQyOTM4ODNjZjlhJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9iYWNrZW5kLnB5JzogJzJhMmRmZGNhNzE2NTg5NDNmZWY5M2IwNmJhZTU5NjQyNjRiNGVhMzg3YzY0ZWE3MDg4M2VkMzYxZGY4NTI0NzQnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NsaS5weSc6ICc1OGJlZmQxNTlkZWY5ODVlYTI3YmU2OTBlNjJkYzBjODdjYjRmNTVjN2E1YzU3NWUxMzNlZmRmYjM5MDFiZTY0JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jbGlfY29udGV4dC5weSc6ICcyMDgwNTI1NzA4YWRiYTBkYjE2NzI4MmNmYzY5OGM0ZTBlOTA1MTY4NjBlMTEyYWRjNjViMDU0MGJiNDkwOTEzJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb2RleF9hZGFwdGVyLnB5JzogJzlhNzUzYjg4YzY0ZWRhYjJjZjM0MDIwNTY2NTU4NWZiZTExNDRmYjAyYmI0NThiZjBmNDhmYTA4NzRmN2VhYjknLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NvbmZpZy5weSc6ICc2ODBmMTJhYjIzMTk4N2ZhNjE1ZTQ3YmM2MmY3MjJlNjQ1MmM1NmJjZTIyMTZjYzE3NDkyMDYzODYxM2FhZTQ2JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb25zZW5zdXMvX19pbml0X18ucHknOiAnZTVjZDljNTI0NjBiNDkxMzE1MWU2MDk5MTViZDNlZjlhM2Q4ZWVjMzdhMDdlOTc0ZWVlOTEzMGI0NjAxYTk4NScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29uc2Vuc3VzL2NvbnRyYWN0cy5weSc6ICcwMTI0MTlmNzc5OWNlODQ5MzkwY2Y5OWZiNDRhMmU1MDRmODNkYTAxM2ZmMDM0ZGE4ODgzMDNhNGI2ODVlYjI2JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb25zZW5zdXMvZXZlbnRfc3RvcmUucHknOiAnNzdjNDdkZTM0NGY1M2MwZjAzYjRjYzQwYTQ4MWM1NWI4YmMxMjVkYzk0NDljMTVlM2Q2MTgxYTBjNmY3NWFmYicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29uc2Vuc3VzL2V4ZWN1dGlvbi5weSc6ICdjMGVlZGI1OTcxOWQzZTNiMGE2MjU3MGFiMmUzZmE5NDc0ZTg1MzFlYmRjZWM3OGU2ZDgxMzlhNDc4NzY0OGZjJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb25zZW5zdXMvbWF0ZXJpYWxfc3RvcmUucHknOiAnNDI5ZmI3YzQyM2U3M2E5OTlkNTczZmU1MWUzNDc2ZWZkZTdhNzdlMDY2MTMxZDU2OTM4ZTVhZjliZWRlZDk5ZicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29uc2Vuc3VzL3Byb2plY3Rpb24ucHknOiAnYTUzZjgyMDk5MTdjZjY0NjU0NzU2Yjg2NzA1NDg2YmRjZDMyYWFlOGU4YzQ5MzY5NmJkNjA4ZTc3MTQ5YTFiYScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29uc2Vuc3VzL3J1bnRpbWVfYWRhcHRlci5weSc6ICdkYTFhNTk4Y2Y1YzhkMTEyMWUyNWU2YjIyNjJmNWMxZjYxNTAyOWU1MjM3MDQ0ZDg0MjczZGQ1ZjY2MzNhNGZlJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb25zZW5zdXMvc2VyaWFsaXphdGlvbi5weSc6ICcxZGI3MzU2YWFlMDg4NGY3ZDFkMzI0ZDJhNjI3NTBhNTRiNTY3NDhhN2Q4YWJlZGQzOGVkZjE2NDAwY2JhN2MxJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25fbGl0ZXJhbF9zZWFyY2gucHknOiAnNTJiNjVkZWJmMWUwNjc5YmUwYWZiMjdkZjhhMDdhZmVhOGI3M2FkNTgxNDlkM2JkYmJhYzlmM2EzZDJmYThiMScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3JhZy5weSc6ICc1YjA3MjEwODhkODRkM2IyYzdjNTNhYWE0MmI0MjJhMWVlZGM1NjM1ZmQyMjkwZWRhN2QwYjc1YmUwMmMyNjcwJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25fcmFnX2NsaS5weSc6ICc1MTAxNzdkZmUxNzEwMmVjMjVkNWY0ODAzYWE0YzljYjdjOTAyNDBmZDQxYjBjOTMyOGZiMGU3NTg2ZmJmNGU3JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25fcmFnX2NvbXBvc2l0aW9uLnB5JzogJ2ExNjFlNzBmYWFhNTFlMjA5YjFkNGYxOGVkYmE1Y2VjZGQ0NzY3ODhlNjYxYzNlOWQwNDU4NDc5MTE1MjgyZWQnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NvbnZlcnNhdGlvbl9yYWdfbG9jYWwucHknOiAnNjBmYjZkZTc2MGM5YWYzZmQ3YjE3N2E2NTQ4NGZlN2VlNjIwZjI4MmE4MDQ0OWFlNGIxNDE0MjljYTViZjBkYScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3JhZ19ydW50aW1lLnB5JzogJzk0ZGVjODIzMWFjZGZiMDMwNTNiZjU3M2RhZDgxNDlkZjU2NmIwMTUzMDBlMDdiZjE2NjNmZjgxYTAyMzIxZGYnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NvbnZlcnNhdGlvbl9yYWdfc3RvcmUucHknOiAnZjRmOTYxYjE5MmE5YmExNmVlYjA0ZDA3MjFkNzQzMDRhN2Q3YTExNjZkNTc0ZTUwMDAwMTEzNGFmODg5OTcyMicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3JldHJpZXZhbC5weSc6ICc5MjNhODYyMTliZGJhMWU0ODM3NmY4ODc4MTU5Y2E0YmQzOTQxYzVlZTljNjU1ZWM2ZDk4YTFlMDlmYzBjMDY0JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25fc2VhcmNoLnB5JzogJ2RhOGE3ZmYzZmFhODYzMGQ2Zjk1Y2UyNGVkMTNkYjRmYzRhMDliNDc2Yzk3NmI1ZGIxZjI2Yzc2NjMzMDhjZWEnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NvbnZlcnNhdGlvbl9zdG9yYWdlL19faW5pdF9fLnB5JzogJ2JiNTZhMjRhOTA5ZDE2MWJmMzU1YjRhMDdmYTlhMTQzNTVlZTM1ZTlmNmJhM2U4OWQ5MDM1Yzk4OTEzNzU2MDknLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NvbnZlcnNhdGlvbl9zdG9yYWdlL2FyY2hpdmUucHknOiAnMGU2NTk2ODJjODIzNWJlOGY4MTk3ZGEwNTUwMjUwNjFmMTlhZjk3NzY4NTcwZWZiMGJkZTcwMDBhODhkZTQwNScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3N0b3JhZ2UvY29tcG9zaXRpb24ucHknOiAnMmE1NmRlMDljNjEwZGQwZjU0NDMzYWIxNDc0YTE3MzQ0NmI1ZjIwM2Q4ZjZiMDE1NDNlZjBmMjI1OGNjNGE1MicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3N0b3JhZ2UvY29udHJhY3RzLnB5JzogJ2EzMjkzMWQwMWI2NzRhMTljNDY5YzdhZDAzM2FkOGYxY2IyZjNjZGU2MzNjZmIzZGYzMjA3ZGExOTg4YzI0NGMnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NvbnZlcnNhdGlvbl9zdG9yYWdlL2ZpbGVzeXN0ZW0ucHknOiAnYTlhZDlmYTA2ZTFmN2EyZGZhNTlmOTMyMTYwMzI5MTkwZDhmNDZkZDE1MzE0NTI1M2Q5YTJhZGFmMzkyMzhmNicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3N0b3JhZ2UvZmlsZXN5c3RlbV9hcmNoaXZlLnB5JzogJzJhMDljZTg2NjI2YzRmNTAwM2FiNTNkZGYwYWY5MGU0MDBlZGZjZTM0NzkyMDg3ZTI3OWExZDRhYWVkYWVjYmInLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NvbnZlcnNhdGlvbl9zdG9yYWdlL21pZ3JhdGlvbi5weSc6ICc0Y2UxM2RjODBhMWNkNjlkNDIxOGRlNzY4YzY2Y2UxMDM0NDdlZjk2YjZiZmNlNzlmZWNiZWJiOTVjYTExYmMwJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25fc3RvcmFnZS9wcm92aXNpb25pbmcucHknOiAnZjY0M2FlMTE1ZmM1OTM2MGZiZjYwOTVhOGIwMmJkNTM3ZTRlMGVlZmIyZTRmNjdiMTgzMmZkYTk1MDZmMWE5MCcsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3N0b3JhZ2Uvc2VsZWN0aW9uLnB5JzogJzUxODFlY2M2MjRiNGU4NTdiODE0YTUxOGVhZDU3OTNlYzA1YTYzNmU4YjgxOWM4Y2YxOTZkNDk1ZmI4YmRiZGEnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NvbnZlcnNhdGlvbl9zdG9yYWdlL3NxbGl0ZS5weSc6ICdlZjExYzQ0MmI0M2Y4YjkyMjNjYTc5ZjQzZDFlZTYxYjk5YzIwYWIxNzM0ZTU4YjZlMjVjMDUwMzVhMDMzYjYwJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25fc3RvcmFnZS9zcWxpdGVfZGF0YWJhc2UucHknOiAnNGQyNWEzOTY3NmQ5YzkwZjcxNTBlM2NjNTViZmZhZDhlYTBkZmMwNDdmMDViOWMxZmFlM2RlM2E5Zjk0YjUxOScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3N0b3JhZ2Uvc3FsaXRlX3NlYXJjaF9pbmRleC5weSc6ICdmOWM2MWNjY2JkNmJmYjEwZWI2NjdjMzlmM2RjN2MyMmNkYjMwODgwZDdkMzJjNjc1NzhkODFmYmU5MmNiYmY1JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25zL19faW5pdF9fLnB5JzogJzVlYWMzMGQ0MTU2Yzc1MzNhMjNmOWQ5MDQ2YjQzMDVkMDkxNDYwOGQwNDc5ZTAwNGIyMGFmN2NiMGM1OGNkNDknLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NvbnZlcnNhdGlvbnMvY2F0YWxvZy5weSc6ICdmNmRlMTlmMzk0NzNjZjc1NWJmM2QwNDkwYzJhMTk2MWQxM2VkZTkzZTZmZmY3NDU1ZjNjOWQzZTI1MjA0MWVkJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25zL2NvbnRleHQucHknOiAnYzE3OGYxNmQ4ODcwMGJkMTc3Y2EwZWY4Y2VjYjJhNGU1NTJmMzI5YzlmMzdjZWZjNmM1NDU5NmZiYmFlMjg4MicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9ucy9ldmVudHMucHknOiAnOGY1OTI5ZDI2Zjk4Yjg0MDU5MWZmNmE2NWE1OTc4N2YwNjUzM2ZkYzJmZjEyYmJmYjg4MjM3MjFhMzAxYWY0MicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9ucy9zZXNzaW9uX2NvbnRleHQucHknOiAnNWI0NDNhOGU5Y2Y0ZmI2ZDZjZmNlZDMwODk3NTY0ZjRkNDk3YzFlMDkzODI1OTUyMmU1Y2E2YWI0ZTc3OWFmYScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29yZV9kb2N1bWVudF9yZWFkaW5lc3MucHknOiAnNjk1NTUwZGY0NWJmYzUwZGMzYzIwZDdiZjIzYjk4YjdmYWZjYzkzOWI5YzA4NTcyYzU0NWYwMWFjNjRmMzkzNycsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZGVidWdfbG9nLnB5JzogJzM5MDgwMTJmODdjNzljMWU3ZWFiYmZiMjYyY2E2YWM0YmIyNDgyNDA1N2FiNDYzZTA0MmNhZDE3MDUwZjAzNzAnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2RpcmVjdGl2ZXMucHknOiAnMDMyNWIyMTJhMmI5MjFiMzllMWI5NGZhZjk0MzkzYzE5ZDU3YmUxM2EwYzQ0YjU2NDZlMGJhYWYyZTY4ZGY3MCcsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZWRpdG9yaWFsX3Njb3BlLnB5JzogJzI0ZDk1OTdmYzcyNmExODM1MTRiYWFkYWUyMWUxY2I1YmExYjkwZDAyMmY4NjUxODVkZDA3YWJjZWI2ZTVhMzUnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2VkaXRvcmlhbF9zdGF0ZS5weSc6ICc5YWFjMmU2NTg5MmI3YTA4NmU1NjU5YmFiZDgyNmU5NmFjNTE5NjU5M2QxNDQ0ZjA5ODQ0NWQ5ZDJhZWVjYWYzJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9lcnJvcnMucHknOiAnMmRjNGNkZjFiYjQ5Y2Y0NjcyNzIwNTFmOGJiZjcxOTM1NGJiMmIzMjk2NTE3Y2U5NGUwOTVhMjQwYzE1MzVkMScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZ2VuZXJpY19yYWdfYWRhcHRlci5weSc6ICdjM2Y4MjI0M2NlZmE2MDJmMDA5YjAyZWVhYjE5ZWFhZDE2ZmE2YWMwZDQ3M2QyZDczOTVkMGRmZTliZTUxODk1JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9naXQvX19pbml0X18ucHknOiAnYWJiZDU5ZjAzODJlNDE1ZGFmNGMxMWJmZWUzNGNlMjZlZGM3YmMxMTlhOGE4NjY4M2M5ODYyNTYzNDBlMDA5NCcsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZ2l0L2FkYXB0ZXIucHknOiAnN2I4MjVjNTlkNWI3MjI3NDVkOWEyMDgyNDllMjBlY2EwYzZjZWFhZGI2OTA2NWE2NDYzM2Y1NjdhNjBkY2ZjOScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZ2l0L2NvbnRyYWN0cy5weSc6ICdiMDZhODk4Yzc4MmQ0NDRiY2Q1NTYyNjYzYjczYWRlNTE0ZjAwZDRkMGIwNDk2NTVkZGJhN2Y3NTM4NTNkNzEwJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9naXQvaW5zcGVjdGlvbl9vYmplY3RzLnB5JzogJzQ2ZjUyOGM5ZDk4MWQyMWZmYjA1NGQyNjRkZDkxYWRmODM1NzY1M2NlOTkyZTI3NzQzYWJhYmMyZmRiZTRlOGYnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2dpdC9wcm9jZXNzLnB5JzogJzUzNjEyZTUxNmU3ODY2ZTliYjc5MDkxMzVlZWNjYjE2MjNkNWQwMDVhZTZkZThmODg2MWYwNTM5ZjNmYmU4OTQnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2dpdC9yZXBvc2l0b3J5X2xvY2sucHknOiAnZmFiMjMyMGFmMTE0OGJkY2MzMDk5Y2NmMTQ4NmZiNTdmZDkxYjQzMDA5YjYwM2JlODk0ZDU5ZjI0OGNiYWQzYicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZ2l0L3Nlc3Npb25fY2hlY2twb2ludF9jb250cmFjdHMucHknOiAnYzNiODI5ZTRkZjE2OWE3NzhiNGRkZTg2N2U5YjY0MTYwZDM0Y2U3Y2Y0YzgyNjQ2ZTkwNTJiYjI1MTY2ODUwNCcsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZ2l0L3Nlc3Npb25fY2hlY2twb2ludHMucHknOiAnZjIwZWY0MTc2ZjgzOTYxNTM4YmUzZjNhMzVmMDdhYmUyMWI1MGQ0ZTgzZDg1NWNiY2UzZDlmOTQ3Y2VlZjg5YScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZ2l0L3Nlc3Npb25fY29udHJhY3RzLnB5JzogJzJhM2M5MWQwZTFjYzczZDk0YjEzOWYzODRjZDA5ODUwZmIyMzJkMTYzM2QzZDJlNjY3ZDM1YWZkZjM5Y2VkMzAnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2dpdC9zZXNzaW9uX2hpc3RvcnkucHknOiAnYjg4YmQ3NmI0Nzg3MzkzMjdjZWE1ZDg0MWNlNTk0YzBkMWZiMTZjYmNlMmU3Yjk1YzFkMzg1ZWMxNTZmOWE3ZCcsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZ2l0L3Nlc3Npb25faGlzdG9yeV9jb250cmFjdHMucHknOiAnZDVjM2Q3NGE2NmJlZjIyNmJlNTYwNGZlZDUwOWM4ZjEyMDc3MjIzMmViYWVhZDQ5NTM2MGUzZjQyMDc3YmYyZCcsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZ2l0L3Nlc3Npb25fcmVzb3VyY2VzLnB5JzogJzU3MGFhOWM0MmM1OGUxYTNhYmJkNTRkMjY0YzQ3MWI1NjFlZjUzODYwMWJhMzZjZGM1OThkNGRjNjk2ZTcxYWInLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2dpdC9zdG9yeV9jb21taXRfY2FuZGlkYXRlcy5weSc6ICc3NWQxYzg2ZTY3YWUyZjU2Yzg3MGYwYmRlMjNhMDc0NTU3M2Y4ZWU2MTAzMmIyZTc2NGExMDNhNmVmMTE1N2M3JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9naXQvc3RvcnlfY29tbWl0X2NvbnRyYWN0cy5weSc6ICc4MzM2OTI0ZDM1ZWIwMmU3MWFjOTRkODg1NDllZmYwOGExMGEwOGUwZjNlZGUyZDQwNTEyMjJiMjZlMjI0N2RkJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9naXQvc3RvcnlfY29tbWl0cy5weSc6ICc5NWMzNDQyMGQ4N2VjZTQ4YzY3ZTUzN2ZkNTg4ZjdlYjhjZmRkNjkzMWNhMTdkODc1YWUxOGVlMWJkYzU4OGNkJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV9hdXRoLnB5JzogJ2Q1MjNmNzhmNTAxZDNjYTMwZjQ5N2YyMzAxZjc3ZjllZmQ4ZDE3MjI0NDA3YTM5Mjc0ZGQ5NjhiNTliZTA2ZmInLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX2NvbW1hbmRzLnB5JzogJ2NmNDNmYjhiNTIxNGRlNTg0ODBhNTk4YzdjODFiMmNiMDg1NzM1ZDA3OTYwNzZkZmJhOWYwNWUwYjYzNjNkNDInLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX2NvbnRyb2xsZXIvX19pbml0X18ucHknOiAnNjdmZDJkNGIyYjI5YTIwMTFkNWRkYTNlYTcwNmI2YTViMDIyMDY1OWI4ODkzY2I0N2U0ZmRhYWIyOWZhZjlhOCcsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfY29udHJvbGxlci9fY29udmVyc2F0aW9uX3BvbGljeS5weSc6ICcwZWM2NmVjYzNlMTM0OWIxODFkNDdmNTI1ODA4Y2QyZjBkMWY4YzllYzNmOTU4MWRjODlmZDQ2ZDlhMTNmYjkyJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV9jb250cm9sbGVyL19jb3JlLnB5JzogJzkxODllM2MxZTlmMTE2ZDMxMDIwMDgwMzdkMTg3NGZmNmQ4Mzc3MmY0NjhmNDUyY2I0MjFhN2Y0MWMyZjNiZDMnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX2NvbnRyb2xsZXIvX2V4Y2hhbmdlX3BvbGljeS5weSc6ICdlMDhlNzk3ZTZmZTkwNTZjOTQ0Y2RkOTQwMGQ0YzNiOTAyZjYyMzg0NmZkYWVjMjBhYTQzMzZmZDE1NTZiZGYxJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV9jb250cm9sbGVyL19leGNoYW5nZV92aWV3ZXIucHknOiAnODE2NGUwYTA4NWExYmQ1OTkxYTAxMmMzNTc0NmU5M2U4MjcwY2E4YTJkNjE0ZGNkZTIyZTc5ZTc5ODQyN2Q3MCcsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfY29udHJvbGxlci9fbGVhZF9wb2xpY3kucHknOiAnNGJkZDNkM2ZlNjg2YjY3ZWQ4NjUxNzI5OWRlYmQ0MTgxOTdiMGE2N2E0NDk5N2M2NmE1NjAzMDdkNjgzMTM3ZCcsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfY29udHJvbGxlci9fcnVudGltZV9wb2xpY3kucHknOiAnNmRmYTgwOTNiOTc5NGZmNzk0YmY0N2VkMTA0NjQ5ZGUzMjc1ZTAxMGFiNjk0ZWRjODVmMzUyZmNkZTQ2NDlhMScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfY29udHJvbGxlci9fc2Vzc2lvbl9wb2xpY3kucHknOiAnNTQzN2IxNDU5MDQxMTdjZGQ2ZGZlYmI4NTI3YjgwNmZkZjRhODAxMDc4MDA3ZWJiOTAwNzZhMDAzYjIwY2ZhYycsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfbGluZV9lZGl0b3IucHknOiAnNmE4ZTU4YzAzZmY1ZDU1ODRhNzlkYzhiZWI5NGU2MTk4MTVhNTIzMDRmMDhlMzVhMjgzMGE5ODZlZGFlNGVmNycsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfc2V0dGluZ3MucHknOiAnZGNkMzYwMGJjNTRkMThhZWE4OGVhZTRkMGQ3NWRiMjcxYTJhZDBjNmZlZWQ5ZWQyODBiNGYxZmFjNjJmZjg5NicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfdGVybWluYWwvX19pbml0X18ucHknOiAnZjkzNWVhOTEwYjFhNTk2OWUyMzlkMjk5Y2NhZGQ5NDJhNjA3YzE5ZWRlOGJhN2YwZjczNWQ4NDAyN2I3MzAwMicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfdGVybWluYWwvX2Fkdmlzb3J5X3Byb2dyZXNzLnB5JzogJzJmMmQ5MGU3N2ZhOGFmM2NiMjQzZDAxNmUyMTY1MWQxZmUxZTBlMGI5ZmZkM2UxZjNhZjFjMjE4N2MxNTEwZjQnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX3Rlcm1pbmFsL19ib3gucHknOiAnZTJlMjMwZjdhNjFhMjM5M2FkYTZmNDFmODI4M2QxODFiOWMzODBkNDAyNzkzZDhhZWE3Y2NiOThiZjRjMDQ0YycsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfdGVybWluYWwvX2NvbGxhYm9yYXRpb25fdmlldy5weSc6ICdiOGMwNGQ4YzE5MmNjM2E0Yjg1YTcwNzY3MzMwMmZjNDFhN2MyNmNkNWVjMDQyYzEyODQ2MDFlMTI5ZDJkZGIwJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV90ZXJtaW5hbC9fY29udHJvbHMucHknOiAnOTg4YzJkNTc1OWQyNGVmODg0YTg3N2JkZWU0ZWM3OWUyNDI5YWE4NTU5ZWYzMGEwMWNhMmVlMThkMDk4MmZjYScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfdGVybWluYWwvX2NvcmUucHknOiAnMDhmNGFiYjVhMTdiMjM0NTMyMGQzNGNiZTdlMzQwNmQ1NTIzYjJlNTAwY2VjOWMzMGI2OGY4ODgzZDk1OGNkYycsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfdGVybWluYWwvX2RyaXZlci5weSc6ICcwMTM4Yjg3ZjQ3NzJlZWY4NDM3NWE1MjNmNmFlYmY0NDg3YWQ5ZGJhODQwMTI3YzY1ZmE2NTcwYWJmN2IyNDZlJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV90ZXJtaW5hbC9fZXh0ZXJuYWxfdmlldy5weSc6ICdhMDA2MzdkOGMxMzA2NDQxYmRhOTAxZWYwMmJjNzYwNDM0ZDQ5OGY1MDdmODRhYmRhOTlmNzllOTg2MjkzNGZkJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV90ZXJtaW5hbC9faW5wdXRfbGlmZWN5Y2xlLnB5JzogJzlkY2I1ZDI1NGIyMGYzZjZjZmU2NjIzM2E4NjgxNTQ5ZWFhMDViOTBhNDJmZDRiNTZmYTMyNjlkZDE0NzY4ZWYnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX3Rlcm1pbmFsL19saXZlX2NvbXBvc2VyLnB5JzogJzFlYzQ2NDE3NDc2ZjQ4OWM2NzYxMTA3ZWU3NmM4Yzc2MzIzN2QxOThiOWViYjk3OTY0NzU0MTBiYWRkNjcwYzgnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX3Rlcm1pbmFsL19tYXJrZG93bi5weSc6ICc1MzYzNjdjN2E2YWUyOTg5MDA5MGVhM2E1OGY5OTU4OTk0MzM0ZTczNGQ1YjNjNjdhZDhhY2VlNDE4NTA3MmYzJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV90ZXJtaW5hbC9fbW9kZWwucHknOiAnYzllNDU0OGYwZWRhNjlmNzk2YzFiMmRmZjk2NjE1YTBkYzRmNjdkNzljY2U4YzMwOWQyODUyNmJlODVkOTkxYycsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfdGVybWluYWwvX291dHB1dF9oaXN0b3J5LnB5JzogJ2EwY2MyOGNiMThkM2U3Zjg5OWE3OGY2MzllM2M0YmYyZTk4NTEzNjQyZTVjMzdjMjU3MmVjMjI4NmZjY2IzN2EnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX3Rlcm1pbmFsL19wb2ludGVyLnB5JzogJzIwYTA0MGQ3Y2Y1OGIxMTYwMDQ4ZjE3MGI5ODdiNThmM2I5M2ZkYjZiMTZmOWVkZjA0NzkzM2E5MWI3ZDZmZGYnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX3Rlcm1pbmFsL19yZWZlcmVuY2VfYWN0aXZhdGlvbi5weSc6ICcyM2Q0M2NjNDYxOTU1ZDcyZjVhZjhjNWU5OTZkNTNkNzE1NzQ0NjgzNzc5MDFhZTUzMjJkYjM4OGZlNDY3NjM0JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV90ZXJtaW5hbC9fcmVuZGVyLnB5JzogJ2E5ODhiNTM0YzdlY2E1MjdmOTA0NzE5YjRhNzMyZWM0NmI0NDg5ZTkxOGYwN2I2NTEyM2EyMTMxOTgxMDY3YTMnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX3Rlcm1pbmFsL19yZXNwb25zZV91c2FnZS5weSc6ICcwMmYyMjgwZTg4MDZhNDkzNTJkMGI2MjQxN2NmNWJjNGUxZGYxMTYyNmM1YWUwMTA1YjMwMmYwOWMxZmExMWRkJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV90ZXJtaW5hbC9fdHJhbnNjcmlwdF92aWV3LnB5JzogJzUzODY1MjkwZTliYWZmMmQ3ODY2NjBmMWY1MjI4YThhYzBiNTMyN2NjMGJkMGE1MDVmYjlhY2E1ZTMzYjE5NDInLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX3Rlcm1pbmFsL192aWV3ZXJfY29udHJvbHMucHknOiAnYTU3ZjUxMzRjMWM1MDk0M2I0N2MzZDk4NmU3NzI2YTAzMTJlYzEzNDJjYTdkNjM3ZWU0MTJlMmNiNjA0OWMxMycsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfdGVybWluYWwvX3ZpZXdlcl9tb2RlbC5weSc6ICc2NTJhMTY5NDFjMmUzOTcwY2JlNGE1NGRmMTA2NDcxZjdhMzg3N2I0MWE0MjI1YmUyOGViZWU3NTZhN2FmN2EyJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV90ZXJtaW5hbC9fdmlld2VyX3JlbmRlci5weSc6ICcxMzJlODBkNTkwYTg5ZjllZjNjMDBhMmRlMmE4NGE5ZjJlNTc4MjQ1MmI4ZmUwZDUwYzU0NjcwMDU5NTZkNTYzJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9sZWFkX2V4cGxvcmF0aW9uLnB5JzogJ2ZkNjk2NDJmMDI5MjliNzI0ODM3OWNkZTIwNjIxMjc3NzMxN2ViM2ZlY2VkODNjYzE1YmE5ODhmMDk0N2RhOTEnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2xlYWRfcHJlbWlzZV9kZWNpc2lvbnMucHknOiAnZDUyYWRkY2U1MWI4ZDk0ZDc2NzhjNjA0MzIwZDNkZWM1ZjJhY2Q1YWIxZGYwYWQ1YWU0YzcwYTBkMGFiZDBhMScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvbGVhZF9wcm92aWRlcl9jb250cmFjdHMucHknOiAnZDI0YzQ4MWFmZmFjMmMxZTlhYjU1OTI1NzQyNGNkNjlkMmQwZWRiYTZjNDdkZDVlZTkyZDMwZWJlMzdkZDkwZScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvbGVhZF90YXNrX3RyYW5zaXRpb25zLnB5JzogJzVhNmQ5NDA5OTgzODc2MTdkMmU4M2I0YjVmOTE0N2RiZmNiNjJkZDBiMTYwNTA1NzQzNDdlYTUxNWE5ZmY2MWInLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL21vZGVscy5weSc6ICc4MGQ5MWY3NDdiOTZmMjVlZjA3ODU2MzljOTA4YWZkZmY2N2M4MTU0YjA1ZmMwYjQ3MzIwYTVkZmY0NTk3MmQ2JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9vcmNoZXN0cmF0b3IucHknOiAnNDJhNDRjZTYxMzZkNjQxYmY0NTM1ZGFhOGE1NjBjOGI3OTgyOTkyYmE5NDU3MDJjZWM5NjhmYjcyYzRjNjk3MicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvcHJvbXB0cy5weSc6ICdkNDJjZGRlNjFjZTUyYzBiMWY2YWZkYTEyYjRlMWMzYmI0NGNmOTJmOWIxODkzMTU0YWFhNjU1MTFmMGI4MDMxJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9wcm92aWRlcl9hZGFwdGVyLnB5JzogJzBkMDZlMTc2ZDNjOTYxODM2NmFkYTY3NDkzNDgxYTAyOGJiMjgxNTgwMTE1MjFlMmJmNjVkMjk1NzZhYWZmNjMnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3Byb3ZpZGVyX2F1dGgucHknOiAnMWM5YTI4MGViOWNlZjE5MmI0YTYxYjhlNzRjYmU1NjQ4OGMxZmU3M2FlYmNmNTMzNjBhOTgxOWEwN2ZiZTBiMCcsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvcHJvdmlkZXJfYXV0aF9yZWNvdmVyeS5weSc6ICc5MjYwZmJkY2JmNTcxMDY1ZTk3ZjJlZGFlMjIxMGMyZjUzOWFiODQ2NzAzOTVkNDdhODRmYTI2NmVjMTQ3OWVmJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9wcm92aWRlcl9jYXRhbG9nLnB5JzogJzg2MmIyOWQ1NGQ3ZTA4YWU4MDQyZmNiMWUyODRhYTE1ZWY4ZGMzMWY3MzA2MmE3ODI5OTM1ODNhYzg0MmI4NzgnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3Byb3ZpZGVyX2Vycm9yX2FydGlmYWN0cy5weSc6ICc1MjE5MWYyNGY1MWYzNzVkZmZjMjY1MzM3ZGI2MjI1OTIzNjhmYzk5OWVmMDUwMmE0ZGMzNjM0MWU0YWU4OTQyJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9wcm92aWRlcl9leGVjdXRpb25fd29ya3NwYWNlLnB5JzogJzNlZmM4MGI3ZGIwYWY1ZWNhZWUyZjk4NmMwZTI5MjFiMmQ4ZjM0NDBiMDg0YTc4YjQ3ZGU1ZTJlMTQzYjVjMmMnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3Byb3ZpZGVyX3Byb2Nlc3MucHknOiAnMjhmMzZhODEwYjdlM2ZmYTBiOGVjZGY0YTM2NzNkZDk3ZDRhMWU4ODI5MmZhNWE4YzI1MzU0N2IwYTg5N2IzYicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvcHJvdmlkZXJfd2lyZS5weSc6ICdjNzkyZGVhYmRhMzQ3YzJlNmZjODdjMTBiZDJjNjU5YWU3N2U3NTkyN2UyYWU1ZjgzNGNmNWY0ZmM0MzQzOTE4JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9yZXBseV90cmFjZS5weSc6ICc0NWE2NGFlMDM2MzRiMjAxNGViMDU2NDhmNzA0MTQ5ZDAzNzNiZDhhMDYyNzE4M2EyM2Q3ZTljMzNiMThhNTNlJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9ydW5faW5wdXRzLnB5JzogJ2ZiZDA2ODVjYWRhMmRkYTI2ZDE5YTVjMzA5OGU4MDViNTk3MGJhY2RlMGI3YTYyYWQ2ZWE3NzA0M2JlNGFkODAnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3J1bnRpbWVfc3RhdGVfcGF0aHMucHknOiAnNzdkNjYxYWM3ZjdkYWNkZmYxYWExMDVmZjQ0OTU2NTRlZTUxY2VmNjNlMzFkYTlmYjg5MTdiOWRiMzVlMGM1ZCcsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvc2Vzc2lvbl9saWZlY3ljbGUucHknOiAnMjMxMjhjMTZiY2IzMjAwMGMyZmIzZDIxMjBlNmE3YzhhNDYyZTllYjhmNGYwNzc4NzBhOTU3ODk0ZDllNTgzOScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvc2Vzc2lvbl9yZWNvdmVyeS9fX2luaXRfXy5weSc6ICczNzc3MWVlZTJjMWRlNjYxMTcxNjM3YWM4YzVlOTVjZDAyOTQ1ZTUwYmU3MTU3MjZkYzE4YTM3MWI2NTZkNmQ0JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9zZXNzaW9uX3JlY292ZXJ5L2NvbnRyYWN0cy5weSc6ICc1ZjAwNWI4OGFiMzFjZDRmZWNmYWI5YWI0NzM3OTc3Y2Y1OWUxMmFlMGY3OGExYWJmOTJlNDkzYWU0MDc3YzE1JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9zZXNzaW9uX3JlY292ZXJ5L3JlY29uY2lsaWF0aW9uLnB5JzogJ2UzMjljZDY3ZjY4NzBkOWU5NmQ0MWM2ZDcyNjljYTE3YTUwNTA4MTE5NDRjNGUyZTFmYWQ3MzRjYWYxZTUzNzInLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3Nlc3Npb25fcmVjb3ZlcnkvdHJhbnNpdGlvbl9hc3Nlc3NtZW50LnB5JzogJzFlN2E5Nzk4NDFmNjU5ZmI0MTdhNmYwZWM3ODkzYWEzZjJiMjMxZDFkYjlhZjg3MGVhZWY5Mjg4ZjEzNjg5YTInLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3Ntb2tlLnB5JzogJ2JhNDliNGM5ZTZkMmIyOGZiZjAxOTQ3MjAzMDM4NzJhYTdkYWQyY2FmNWY4YmM3NzcyYTQ0ZmRiZjc4ZTA5NDMnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3NwZWNpYWxpc3Rfcm91dGluZy5weSc6ICdjOGJkYjA2Y2E3MTEyMmJlM2M0Y2E1ZGUxZWIxYmIxNDMxNDA3ZjVhNWZmZjNkYmJiMTBjZjFiOTg3NmRiYjIwJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy9zdHJ1Y3R1cmVkX291dHB1dF92YWxpZGF0aW9uLnB5JzogJzdiZWI0MWMzYmM0ZDM4YWU1NjNjZWNmZTA5YjEyYmRkODdjZDJlMmM0YWZjZDM3ZGQ1NjhlMDA5Njk3ZGQ3YmYnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dvcmtzcGFjZS9fX2luaXRfXy5weSc6ICdhMzA2M2E5NmZiOTdlMDhiNmFlZWM5ZTRiOGJhNWJhZTY2ZjBhYTQ5MmE4MGM2ZTc0MzZiMzBhNmVkNjQxNjIwJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy93b3Jrc3BhY2UvX3BvbGljeV9iYXNlbGluZXMucHknOiAnOGJhNmJlOWI5Y2YwNDU4MDgxODZmZTk2ZGY3Nzc3ZmM1YTNkMDA0YmZhYWMwZTFmODZlYzJkYTY2NzQwMzg5MicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvd29ya3NwYWNlL2NvcmUucHknOiAnYmVhNDU0ZjY5Y2YwZWMxN2JiNWJkNTBmMjU2MDlkMGVmNTRmOTJiYzFlMjViYmY5NWVkYzMyMzI4ZTRhNDZkYycsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvd29ya3NwYWNlL2luaXRpYWxpemF0aW9uLnB5JzogJ2RhYmUzNjYwMTE2NjM5ZDBhMzM0MGM0N2U4MWFiNTFhM2NjNWFiZjEwNWJmOWUxZjI2ZmE1OWQ2MDAzNzVjYjYnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dvcmtzcGFjZS9zY2hlbWEucHknOiAnMjNiMjJlZmY5MmFhMDExNGUzNzRhNGU2YTJjNzYyODZmM2YzZGI2NWQ5NWNjYzI5ZjYwNzA1NmZmNzcyODYyZicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvd29ya3NwYWNlL3Nlc3Npb25fcm9sZV9wcm9qZWN0aW9uLnB5JzogJ2VlMTQ5MjIwODkwYWMyZDhmYjhkMjhkZDQyZTc1MDAzMjNjY2E4ZjQ4ZTAzMDlmZTQxNjRlODg2MGM5M2Y0ZGEnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dyaXRpbmdfYXJ0aWZhY3RzL19faW5pdF9fLnB5JzogJ2VhMDZjZWNkMDRlMjIyNWUyZjI2NjA4MjhiOTI3YjZiYmE0NDUyNzY0Mzg5ZGJjYzAxOTU1NGMwNWYzNDYxMWMnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dyaXRpbmdfYXJ0aWZhY3RzL19hcHBsaWNhdGlvbl9zdG9yZS5weSc6ICdjZmVjYWE5NTUwYTMzNjYwNzk2YWE1MzFmMDdhOGZhZTEwYjFmNTM3ZWFmNTExMWIxMjMzYzQ4OWMwMzY2N2IxJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy93cml0aW5nX2FydGlmYWN0cy9fcmVmZXJlbmNlX2V2aWRlbmNlLnB5JzogJzk4YjUyYjc1NTYwZDNmZGQ4NDc0YmVlMGM0MTY3N2IzYjZjYjQ0NjVhOWQ1YmJkOGZkODI4ZTkyNTUwMzRiYTEnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dyaXRpbmdfYXJ0aWZhY3RzL19zdG9yYWdlLnB5JzogJzJhNWQ2ODNjMTM5MjMzZjI2YWE1Yjc3NjBlNDI5NTk3YzZjZDU1MTQyNDRjNzc1MzdiZDY2ODMzNWEzMzYwMDEnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dyaXRpbmdfYXJ0aWZhY3RzL2FwcGxpY2F0aW9uX2NvbnRyYWN0cy5weSc6ICc0ZjFjNjYyYWQyYzkwZTJhZmE1OWFlMDQxMWZhZDEwNGE4MzZlZTJlMGJmODk5ZjBlMjQ1ZjUwZjIxMWQxMDQ4JywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy93cml0aW5nX2FydGlmYWN0cy9hdXRob3JpemF0aW9uLnB5JzogJzNmZTlkYTE5ZTIyZDgyOGI4NjkwOTQyOGRmOGQ1MjgyMTc1M2U5NzhmZWE4YmFjOTI5Y2ViY2FjNTk5OGQyM2EnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dyaXRpbmdfYXJ0aWZhY3RzL2NhdGFsb2cucHknOiAnZGEwOTJkZTI4MGQ5MDU0OTUyNjUzZWE5NjFiM2YxYzllYWIwYWVkNjU3ZGYyODZmMDU5ZDI4YWIxNTFkOTMyOScsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvd3JpdGluZ19hcnRpZmFjdHMvY2hhbmdlX3NldHMucHknOiAnMTE1ZTlmNzFkMGNiMzQyZTk3OTU2NWY4MTI2NTUwNGJmMmE3N2VmYTY3MmZkN2JkYTk4MmY1ODQzYTlmZjg0MCcsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvd3JpdGluZ19hcnRpZmFjdHMvZGlyZWN0aXZlcy5weSc6ICcwMTJlNjNlNTVmZTM0YzZjOGI1YWIyODI4Y2FiYTQ4NTEyMTI5ZWU5NTI0NDJlYWM5ODhhMDAxMzgzNDliNjEyJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy93cml0aW5nX2FydGlmYWN0cy9maWxlc3lzdGVtX3NvdXJjZXMucHknOiAnNjJiNmRhYTFhZGZiYzNmZmM1Y2MyNzY5Y2UxYzhmOGY0M2NkNjg1YThmNTI5MTYxMTVmMGE4YmE4ZmVmNzBlNicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvd3JpdGluZ19hcnRpZmFjdHMvcmVhZF9hY3Rpb25zLnB5JzogJ2Q5M2I4MWUwNTFkOWVkNmU5MzEwZDk4OWU0ZjY1OThhYTdiNzc2N2M4ODlhZTg3NDUxZWMwMjhhY2ExYjgwYTUnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dyaXRpbmdfYXJ0aWZhY3RzL3JlZmVyZW5jZXMucHknOiAnYzI0ZDlkOTI0MjRjZGFlY2NkNjE5MzJhNzIwNWZlYzkyYTAzOTUxZjc5ODYxMjUzYzFhOTk0MzVmYjc4ZjYxNicsICdzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvd3JpdGluZ19hcnRpZmFjdHMvcmVsYXRpb25zaGlwX3BvbGljeS5weSc6ICc3MzE4NjQ2NWFhY2IwY2VlZmJjYTMxNjM4ZWEzYzgxNTg2NjFkYjc2ZjdiYmRiZmJjYmZjZDk4YzQwOTZkMDkyJywgJ3NyYy9zdG9yeV93cml0aW5nX2FnZW50cy93cml0aW5nX2FydGlmYWN0cy9yZXBvc2l0b3J5LnB5JzogJ2ZmMmM1NDhlOTA4MWRlMGRlZDI5YmQ0ZThkMDM2Y2U2YWViYjZmNzQzMDM3NjgxZjY0YjQwMjA1M2Q4ZDY1ZDAnLCAnc3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dyaXRpbmdfYXJ0aWZhY3RzL3J1bnRpbWVfcmVmZXJlbmNlcy5weSc6ICdhYzllMzcyMzkwYzNhYTg1NDY4ZmE3NGE5NTljNjJlNTM4YjczMGRhNjkzYTM3YzIwY2FlNzc0M2Q4ODY4ZjQxJywgJ3Rlc3RzL19faW5pdF9fLnB5JzogJzZhZGM0MjE0YzVlMzYzMGNiNDY3MjJjZDllMTkzYjRhYWViNmY2OWZlN2MzMTE1Y2MyYmIzMGRkNWJmODk2NTgnLCAndGVzdHMvX2V4dGVybmFsX3ZpZXdfc3VwcG9ydC5weSc6ICcxMjhjNzc1ZmU5M2FjODk4ODI3MzZlYWQ2MTc5MzYzNWJiMjQzZjk4ZTcxNDc1NTJhOGM2NjlhMDM4MTQyNDNmJywgJ3Rlc3RzL2FudGlncmF2aXR5X2xpdmVfaGFybmVzcy5weSc6ICc0MDdmMWQwMjBmMjBiYmUwNjE4ZDUwYmRhZTFiZWY5MjU5OTZmZGM5MTFhMDgwNGU5MmQ0NjM0ZmZlMjU1MGZhJywgJ3Rlc3RzL2NvbGxhYm9yYXRpb25fY29udHJhY3RfZml4dHVyZS5weSc6ICc1YjExZjcxYjBlMWVkNmIxMDhiNThlNGM0ZDc2NjI1MjgzNTY0ZTY3NTc1OWU3NWQ1M2ZjY2YyYmQxOGQ4ODk1JywgJ3Rlc3RzL2NvbnZlcnNhdGlvbl9hcmNoaXZlX2ZpeHR1cmUucHknOiAnMzIyYzcyM2U4NzBiNjUyMDQ0ZTYyMDk4ZTMzODkzYTYyNDIwYTk5Mzc5ZjNmYThmNzdiZTU0NzNhYWMyNjEzOScsICd0ZXN0cy9jb252ZXJzYXRpb25fY2F0YWxvZ19jb250cmFjdC5weSc6ICczZDFmMGFhYWE2Y2UzZjk3MTU0ZDA2NTJiZjg4ZWZkMWEyZTkxNWQ4NDNmM2E2OGM3NGQ4MWZjMjE5YjBiYzc5JywgJ3Rlc3RzL2NvbnZlcnNhdGlvbl9zZWFyY2hfY29udHJhY3QucHknOiAnNzlhOTZkODNlYWNlMGFlZjIxZjI5NDc3MDMxNWVmY2Q3Y2JjMzYwZDFjOWMzYTk4ZWZmNTBkMTFjMDQ0MzIwNicsICd0ZXN0cy9jb252ZXJzYXRpb25fc3RvcmFnZV9taWdyYXRpb25fZml4dHVyZS5weSc6ICdlNDY5YTZkMjY5MzYzMDgwZGVkYmFmOGZlYmQ0ZTFjNWY5MGQzODAwZDczZWE5Y2I2ZmMwN2JiYzc2NjU0OTMwJywgJ3Rlc3RzL2ZpeHR1cmVzL2FnZW50X2NvbnRleHQvcHJvdmlkZXJfY29udGV4dF9iYXNlbGluZV92MS5qc29uJzogJ2M4YjM3MzdiOTdlMzNmYTkwZDgyNWI0Y2E0MWNmZGE2YjNiMzQ4ZDYyNDAxNjg5YmRmZDkwZGJiZDdiMjE0ZjQnLCAndGVzdHMvZml4dHVyZXMvYWdlbnRfY29udGV4dC9wcm92aWRlcl9jb250ZXh0X29wdGltaXplZF92MS5qc29uJzogJzIwYjJhMmExMTAyOGExN2ZiMzVlNmJlMGNlOGU4MTA3ZjUxNjZhNDA5MTIyMzRiMzY3ODU3ZjlmZTYzYjFhNWInLCAndGVzdHMvZml4dHVyZXMvYW50aWdyYXZpdHlfbGl2ZV9jYXNlcy5qc29uJzogJzM3MWU5NTQxODgwOTIxYTA5ZDI3NzVjMjFkZGJjN2EwYzMyNjRhZDBhODc5NmFiMmM3ODY5Yjg3YzZiNzc5MDInLCAndGVzdHMvZml4dHVyZXMvYW50aWdyYXZpdHlfcmVjb3ZlcmVkX2ZpbmlzaC9tZXRhZGF0YS5qc29uJzogJzA2ODc3NzYxNTQwNTFiZDVhOTYyNjA1NjM5MTY0YzA0YTAxMDFlNmViMmY0NzBjNzc3YTZjMGY5MjU4NjU4MzEnLCAndGVzdHMvZml4dHVyZXMvYW50aWdyYXZpdHlfcmVjb3ZlcmVkX2ZpbmlzaC9yZXF1ZXN0Lmpzb24nOiAnNGRlZDJhNjI1YmQwNTgwODQzMWRlZWMxZGQ0NzMzMWU4NjE4YTUyN2UyYWVjZTg5ZGFkOTlkNTRiYTI5MmI3YScsICd0ZXN0cy9maXh0dXJlcy9hbnRpZ3Jhdml0eV9yZWNvdmVyZWRfZmluaXNoL3Rlcm1pbmFsLmpzb24nOiAnN2Q0NTkxZTg4ODA5YTA3MWQ0YWJhY2M5ZWQ4MzI2ZjhkYjU1NmIyYmRhNTdjODk0ZmFkYjA3N2I0M2E1ZDA0ZScsICd0ZXN0cy9maXh0dXJlcy9hbnRpZ3Jhdml0eV9yZWNvdmVyZWRfZmluaXNoL3RyYW5zY3JpcHQuanNvbmwnOiAnYjM5MWJjNjRiNzVlYjE3YWY1ZDJkNzA1YzkwOTM5ZmZhNDBiMTkwNmRmY2Q4MGE3NzM5NWM4NzdiYjc4NjMyOCcsICd0ZXN0cy9maXh0dXJlcy9hdXRob3Jpbmdfc2NvcGVfY29tcGF0aWJpbGl0eS9vcmRpbmFyeV92MV9jMjBkYzQwLmpzb24nOiAnYjBmMmMyMGQ4ODgyMjJlMTZhZGRmYTA1ODA3ZGY2M2RmYjNmZThlMDM3OWFkZGRiMmQ3NWYxMzdiNWMwY2ExZCcsICd0ZXN0cy9maXh0dXJlcy9hdXRob3Jpbmdfc2NvcGVfY29tcGF0aWJpbGl0eS9vcmRpbmFyeV92MV9jMjBkYzQwLm1hbmlmZXN0Lmpzb24nOiAnNzRkOTc1ODM3MTUyN2RkYTA0MmY3MjlhNjFhNWFmMjJkYzJkZjRiODYxOTk2NzlmODI3ZmU5NDAwZjU3OTdhMicsICd0ZXN0cy9maXh0dXJlcy9hdXRob3Jpbmdfc2NvcGVfY29tcGF0aWJpbGl0eS9zY29wZV92Ml9iYXNpc192MV83NmE4MGY3Lmpzb24nOiAnNjE3ODk2ZjQ0ZWQxNTdiYTc5MDM0ZWZhZjI5OTEwYzhhY2NlZDhiNzliMTE1M2UwNTBiNDEzNjczZDM1NWMxNScsICd0ZXN0cy9maXh0dXJlcy9hdXRob3Jpbmdfc2NvcGVfY29tcGF0aWJpbGl0eS9zY29wZV92Ml9iYXNpc192MV83NmE4MGY3Lm1hbmlmZXN0Lmpzb24nOiAnNzE5MTJkZjQxNDY0MDU4ODU5ZWVlZjJkMTZhNjRiZTFlZTk1M2MwZTY2NzAxYzBiN2RlNDg0ZjFiODE4Nzg5ZCcsICd0ZXN0cy9maXh0dXJlcy9jb25zZW5zdXNfY29tcGF0aWJpbGl0eS9hdXRob3JpbmdfdjNfYzIwZGM0MC5qc29uJzogJzE3MzAyM2Q1NDg0YzllODVjM2RkZjJmYjJhMDhiY2YzMjk0Yzg1ZTlhMzljMGRlZDUxZGM0YmI5NmQ1NTRkMmMnLCAndGVzdHMvZml4dHVyZXMvY29uc2Vuc3VzX2NvbXBhdGliaWxpdHkvYXV0aG9yaW5nX3YzX2MyMGRjNDAubWFuaWZlc3QuanNvbic6ICdlZDNiZTk4NmU3YTEzNzk3ZTE1OWI4NmRlMmY2ODkzZjllZWNlYWFkZmQ0MGVjNWIxZjZkMWUzYTQxNGI1MDgzJywgJ3Rlc3RzL2ZpeHR1cmVzL2xlYWRfZWRpdG9yaWFsX2NvbXBhcmlzb24vY2FwdHVyZXMuanNvbic6ICdlYmZjYTgwYmZlZTgzZjQ5Y2U2N2FlMzkxZTI1NjZhOGMzNThkNjM2OTkwZDJiODE1YTk5MzkwMWFlMjM3ZGJiJywgJ3Rlc3RzL2ZpeHR1cmVzL2xlYWRfZWRpdG9yaWFsX2NvbXBhcmlzb24vaW5jb21wYXRpYmxlLXJlY29tbWVuZGF0aW9ucy50eHQnOiAnZTZhNDAyZTZjZDllYjEzNGY0NmQyYjBjMjA0NTMzY2FmZDFlZDYzZjlhNzk5ZGNhMTU1Yjg3MTliZTdiZTc3YicsICd0ZXN0cy9maXh0dXJlcy9sZWFkX2VkaXRvcmlhbF9jb21wYXJpc29uL3JlY29yZC50eHQnOiAnNGRhZmIzOWNlYzg5MjZlYmRiOTcwNzE2MmFmNDA2MGFmNGY1MGU4NjEzODBjYzk0MjdhN2FjMmM5NGYyZTcxMScsICd0ZXN0cy9maXh0dXJlcy9sZWFkX2VkaXRvcmlhbF9jb21wYXJpc29uL3Jldmlld3MuanNvbic6ICc4ZTYwYzlkMmZiYTVlYzlkODU0NzgyYWJlZTM0M2FmYzBlNzliOWFjMGE3ZjY1YWJkY2E5MjQ3YmJiNmJkMjU3JywgJ3Rlc3RzL2ZpeHR1cmVzL2xlYWRfZWRpdG9yaWFsX2NvbXBhcmlzb24vc3Ryb25nZXItZWZmZWN0LnR4dCc6ICdiZGNhMmYxMzMzYzE2ZDY5MjFmMDBiM2E2ODUyZTA4NjA5ZDc3NzZmZDcyZTU4YzBkNjQzNzc4YTMzZTMzOWZiJywgJ3Rlc3RzL2ZpeHR1cmVzL3Rlc3RfYnVkZ2V0X3YxLmpzb24nOiAnZGU0Zjk4NGU0NTk1ZDYyZGZhODZmZjM5MjhlOTgxN2FhMzQxNjc3ZTY1OGRjZDdiMmQ2ZTAwNThmZTQ1MTE3YycsICd0ZXN0cy9maXh0dXJlcy90ZXN0X3RpbWluZ193ZWlnaHRzX3YxLmpzb24nOiAnN2MzNTIxZTAyYmQxYzA0ODEwZjQxZTcwN2M0ZTJjY2NkODE4MWNmZGUxNzFkNmEzMzQxMDUwM2U2NDdlNTRhOScsICd0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9jaGFyYWN0ZXJfY3VzdG9kaWFuLm1kJzogJzE4YjNlZjQ2NTI3OTQ0NTM4Y2YzNjE3OTE5MGI4MjIxNDgwOWY5ZGI1NjU4MmFmYTQ3ZTIxODUxY2Q3ZDc5N2EnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvY29tbW9uLm1kJzogJzkwOTQwMmVhZTMyYTBiMWFlNGY5NzhiZWExNGEwM2Y3NTJkODQ1MDA0MGFlNWU1MGZjZjU5MmEyNmMzZDA3MDMnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvZXhlY3V0aW9uX3NwZWNpYWxpc3QubWQnOiAnZDYzOGNkYTRlZTI3MzA2YjhjODczNzliZjlmZWU1ZTc2NjUyODMyYmJkNjNhNTliNDM3MmFhYmZiZmMyYjQ1OCcsICd0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9pbnRlZ3JhdGVkXzc5NF8wOWRiNjVjL2NoYXJhY3Rlcl9jdXN0b2RpYW4ubWQnOiAnODA2ZGIwYmFlMTQ1ZTJiYTUwZTkyMDE3NDI5OWRlMDZjMjBjMDgzZTQ1YmJhMDRiNzZmZmU5YzJkNTUwZTkyMycsICd0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9pbnRlZ3JhdGVkXzc5NF8wOWRiNjVjL2NvbW1vbi5tZCc6ICdlYjc4YTdkM2E1YTNkODMyOTFiMTg4ZjUxMDlmM2IzMTMyNTgyMTA5ZTEyMTFlMzBiYWM3ZTMzYTllYWIxOGE1JywgJ3Rlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL2ludGVncmF0ZWRfNzk0XzA5ZGI2NWMvZXhlY3V0aW9uX3NwZWNpYWxpc3QubWQnOiAnNGEzZWFkM2UyMzg5YmRhOTY2Mjk4OWQwMmJiODgxN2FkMWVjMmQ3YjRkNGYzMjJiMjQ2Yjg5MjU0NWQzOTc5YicsICd0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9pbnRlZ3JhdGVkXzc5NF8wOWRiNjVjL2xlYWRfb3JjaGVzdHJhdG9yLm1kJzogJzQ5N2MwOTI3YTc3MzNmYzM3YzU1M2FlZmQwNTY3NTMyNDZiZmQwNTU0MzMxYmZkNjRkZDZmNmNjZDZjZjExNjAnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvaW50ZWdyYXRlZF83OTRfMDlkYjY1Yy9tYW5pZmVzdC5qc29uJzogJ2ExNmNmNzE0MzIxOWRjYzYyMmUwZWQ0NjQwYzFlMmMwMmJlZTg5NzljOGE0ZDVhNTY3MjA1N2Y4MGU3OTFhZTYnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvaW50ZWdyYXRlZF83OTRfMDlkYjY1Yy9wbG90X2FyY2hpdGVjdC5tZCc6ICdlNTlhYmEyYjJlNzUwYzdiOWVmMDBiMmMzZjFlYTRlN2U5YjI4ODlmN2FiZjI1YTg0MGQ3ZGI3ODFkNWQ5M2U3JywgJ3Rlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL2ludGVncmF0ZWRfNzk0XzA5ZGI2NWMvc3BlY2lhbGlzdF9jb2xsYWJvcmF0aW9uLm1kJzogJzRhYjgzZjM3OTJhMjU5OGExNzRlNmJmYjAyNTExMTYyZTI2Zjk2M2I1ZmU3M2M2NjFhZmNmZGFhM2E1YWZjYzMnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvaW50ZWdyYXRlZF83OTZfNzZhODBmNy9tYW5pZmVzdC5qc29uJzogJ2ZmYTg1YWYyOTExZGEyY2I3NjNiMmJlMjljZjlkMDIwNTNjODQ1MTZkZjgwOWNmZTUyODM0NjVkYTRlZjI4ODAnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvaW50ZWdyYXRlZF83OTZfNzZhODBmNy9wb2xpY2llcy9jaGFyYWN0ZXJfY3VzdG9kaWFuLm1kJzogJzgwNmRiMGJhZTE0NWUyYmE1MGU5MjAxNzQyOTlkZTA2YzIwYzA4M2U0NWJiYTA0Yjc2ZmZlOWMyZDU1MGU5MjMnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvaW50ZWdyYXRlZF83OTZfNzZhODBmNy9wb2xpY2llcy9jb21tb24ubWQnOiAnZWI3OGE3ZDNhNWEzZDgzMjkxYjE4OGY1MTA5ZjNiMzEzMjU4MjEwOWUxMjExZTMwYmFjN2UzM2E5ZWFiMThhNScsICd0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9pbnRlZ3JhdGVkXzc5Nl83NmE4MGY3L3BvbGljaWVzL2V4ZWN1dGlvbl9zcGVjaWFsaXN0Lm1kJzogJzRhM2VhZDNlMjM4OWJkYTk2NjI5ODlkMDJiYjg4MTdhZDFlYzJkN2I0ZDRmMzIyYjI0NmI4OTI1NDVkMzk3OWInLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvaW50ZWdyYXRlZF83OTZfNzZhODBmNy9wb2xpY2llcy9sZWFkX29yY2hlc3RyYXRvci5tZCc6ICc5MzE4MTgxOTYzNWRkZDliMWE1YzYzNmNhZTRmZjNlMWE4Yjc4YmYzYmYxNDQyYThiNGZiNzkwYzEzMWMzYTE4JywgJ3Rlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL2ludGVncmF0ZWRfNzk2Xzc2YTgwZjcvcG9saWNpZXMvcGxvdF9hcmNoaXRlY3QubWQnOiAnZTU5YWJhMmIyZTc1MGM3YjllZjAwYjJjM2YxZWE0ZTdlOWIyODg5ZjdhYmYyNWE4NDBkN2RiNzgxZDVkOTNlNycsICd0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9pbnRlZ3JhdGVkXzc5Nl83NmE4MGY3L3BvbGljaWVzL3NwZWNpYWxpc3RfY29sbGFib3JhdGlvbi5tZCc6ICc5ZmQ2MjlkNTE1NzI5OTBjNzllZmZmY2Y2NmZkODU3ZGUxYmNlNzkxMmYzZTMwNGFmNzg1MjQ4YTY3NmNjYjRiJywgJ3Rlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL2xlYWRfb3JjaGVzdHJhdG9yLm1kJzogJzhlMzYwZDE1YjRhOThkNTBjMDI1YTRmYTExNTBiOGM4NDU3ODY5OTZkODM1NjlhZGFhZWIxY2UyNmM3ZGZjNTMnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvbWFuaWZlc3QuanNvbic6ICc3ZjIwODZjMDRhNjJhMDY5OGY4ZWI5MDBhZmQ2ZGZlM2Y5NmI3NTA5YWNhOTVhMGNkYWE1ZDMxZjAxMjI3YTEyJywgJ3Rlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL3Bsb3RfYXJjaGl0ZWN0Lm1kJzogJzc5ZjJmMDcyYmVlYWNiNDIwNDc5MDk4Nzg4ZGY2YjljZGEzNGQ1YmM1YjMzYzljMDJjNTc3ZjQ1ZWVlZjdmM2QnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHJlX2d1aWRhbmNlXzk3ODc5ZDQvY2hhcmFjdGVyX2N1c3RvZGlhbi5tZCc6ICc4MDZkYjBiYWUxNDVlMmJhNTBlOTIwMTc0Mjk5ZGUwNmMyMGMwODNlNDViYmEwNGI3NmZmZTljMmQ1NTBlOTIzJywgJ3Rlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL3ByZV9ndWlkYW5jZV85Nzg3OWQ0L2NvbW1vbi5tZCc6ICcyYmMwZWEzNDM3NzMxOTg0M2MzYTk5OGM5NWE4NzNiZDdjNzBkNzdkNGYzMTMwNGY3MjU5YjZhOTI4ZTY4OGI4JywgJ3Rlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL3ByZV9ndWlkYW5jZV85Nzg3OWQ0L2V4ZWN1dGlvbl9zcGVjaWFsaXN0Lm1kJzogJzRhM2VhZDNlMjM4OWJkYTk2NjI5ODlkMDJiYjg4MTdhZDFlYzJkN2I0ZDRmMzIyYjI0NmI4OTI1NDVkMzk3OWInLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHJlX2d1aWRhbmNlXzk3ODc5ZDQvbGVhZF9ieXRlcy5qc29uJzogJzBiNDkwZTg1NjYxY2EzMTk4ZGE1NmM1MmZmYzk0OTNkMzlhMjI4MGYyY2VkZGViMjMxZmM2ZWE3NmY0YzEyNWUnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHJlX2d1aWRhbmNlXzk3ODc5ZDQvbGVhZF9vcmNoZXN0cmF0b3IubWQnOiAnNTI3OGI5MGJhNTkzOWRiNmVlMzFkNGUyZTQ4MDhiYTU4M2I2NmViYjI1NjE0YWNhZjhhNzkyMDBiOWU3ZWE3YScsICd0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9wcmVfZ3VpZGFuY2VfOTc4NzlkNC9tYW5pZmVzdC5qc29uJzogJzAzMGY4ODQ3YTE1MzRiMWM3ZDk1YTFjNDdhZDEyMjY1NjdkZjYzYjE4Y2FjN2RiNDJhYWY5ZTZiNWJlNjQ2YWMnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHJlX2d1aWRhbmNlXzk3ODc5ZDQvcGxvdF9hcmNoaXRlY3QubWQnOiAnZTU5YWJhMmIyZTc1MGM3YjllZjAwYjJjM2YxZWE0ZTdlOWIyODg5ZjdhYmYyNWE4NDBkN2RiNzgxZDVkOTNlNycsICd0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9wcmVfZ3VpZGFuY2VfOTc4NzlkNC9zcGVjaWFsaXN0X2NvbGxhYm9yYXRpb24ubWQnOiAnNGFiODNmMzc5MmEyNTk4YTE3NGU2YmZiMDI1MTExNjJlMjZmOTYzYjVmZTczYzY2MWFmY2ZkYWEzYTVhZmNjMycsICd0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9wdWJsaXNoZWRfMmU5L2NoYXJhY3Rlcl9jdXN0b2RpYW4ubWQnOiAnMThiM2VmNDY1Mjc5NDQ1MzhjZjM2MTc5MTkwYjgyMjE0ODA5ZjlkYjU2NTgyYWZhNDdlMjE4NTFjZDdkNzk3YScsICd0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9wdWJsaXNoZWRfMmU5L2NvbW1vbi5tZCc6ICc5MDk0MDJlYWUzMmEwYjFhZTRmOTc4YmVhMTRhMDNmNzUyZDg0NTAwNDBhZTVlNTBmY2Y1OTJhMjZjM2QwNzAzJywgJ3Rlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL3B1Ymxpc2hlZF8yZTkvZXhlY3V0aW9uX3NwZWNpYWxpc3QubWQnOiAnZDYzOGNkYTRlZTI3MzA2YjhjODczNzliZjlmZWU1ZTc2NjUyODMyYmJkNjNhNTliNDM3MmFhYmZiZmMyYjQ1OCcsICd0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9wdWJsaXNoZWRfMmU5L2xlYWRfb3JjaGVzdHJhdG9yLm1kJzogJzU1Y2Q4MzgzZWYxOTFkZWEyZDEyOTY3ODU1MmVhNDU5ZjhhNDAzYmM0NDg4NDAyYWYyYjIzNDNmMDZmM2M2MmMnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHVibGlzaGVkXzJlOS9tYW5pZmVzdC5qc29uJzogJzVjZmM3OTQ4MDA2ZGRhMjQ1OGM5NzgwYjEwYTdmZGExMDY0OTljYTMwMjNiMDJiYTAzNDFjZTMzYWFkNTFmZjYnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHVibGlzaGVkXzJlOS9wbG90X2FyY2hpdGVjdC5tZCc6ICc3OWYyZjA3MmJlZWFjYjQyMDQ3OTA5ODc4OGRmNmI5Y2RhMzRkNWJjNWIzM2M5YzAyYzU3N2Y0NWVlZWY3ZjNkJywgJ3Rlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL3B1Ymxpc2hlZF8yZTkvc3BlY2lhbGlzdF9jb2xsYWJvcmF0aW9uLm1kJzogJzdhYWQ2NWIwNTExZmU0MDg3NTEzZmY1NWM5OTlkOWNhOTc0YzYwMGQzMzkwOGViNWIzMjc3MGUyYTdkNzYzZjEnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHVibGlzaGVkX21haW5fMWU0ODJmZS9jaGFyYWN0ZXJfY3VzdG9kaWFuLm1kJzogJzE4YjNlZjQ2NTI3OTQ0NTM4Y2YzNjE3OTE5MGI4MjIxNDgwOWY5ZGI1NjU4MmFmYTQ3ZTIxODUxY2Q3ZDc5N2EnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHVibGlzaGVkX21haW5fMWU0ODJmZS9jb21tb24ubWQnOiAnOTA5NDAyZWFlMzJhMGIxYWU0Zjk3OGJlYTE0YTAzZjc1MmQ4NDUwMDQwYWU1ZTUwZmNmNTkyYTI2YzNkMDcwMycsICd0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9wdWJsaXNoZWRfbWFpbl8xZTQ4MmZlL2V4ZWN1dGlvbl9zcGVjaWFsaXN0Lm1kJzogJ2Q2MzhjZGE0ZWUyNzMwNmI4Yzg3Mzc5YmY5ZmVlNWU3NjY1MjgzMmJiZDYzYTU5YjQzNzJhYWJmYmZjMmI0NTgnLCAndGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHVibGlzaGVkX21haW5fMWU0ODJmZS9sZWFkX29yY2hlc3RyYXRvci5tZCc6ICc2ZGJmZDY1NjA3YmU2Nzk5NTExYzgzMDAzNzA0NDViNTE5NGMwMWFlNDU1NGU1NDAwZWE1MjFjMWJiN2NlNWViJywgJ3Rlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL3B1Ymxpc2hlZF9tYWluXzFlNDgyZmUvbWFuaWZlc3QuanNvbic6ICdlMzMxMjJlMjFjNGI1OGYyMGI3ODJmNGY1Nzc3NzU2NWNhOTk5MjNhNjRmMzM4ZWQyYWVjNTY3ZTE5NTJmMTZkJywgJ3Rlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL3B1Ymxpc2hlZF9tYWluXzFlNDgyZmUvcGxvdF9hcmNoaXRlY3QubWQnOiAnNzlmMmYwNzJiZWVhY2I0MjA0NzkwOTg3ODhkZjZiOWNkYTM0ZDViYzViMzNjOWMwMmM1NzdmNDVlZWVmN2YzZCcsICd0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9wdWJsaXNoZWRfbWFpbl8xZTQ4MmZlL3NwZWNpYWxpc3RfY29sbGFib3JhdGlvbi5tZCc6ICc3YWFkNjViMDUxMWZlNDA4NzUxM2ZmNTVjOTk5ZDljYTk3NGM2MDBkMzM5MDhlYjViMzI3NzBlMmE3ZDc2M2YxJywgJ3Rlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL3NwZWNpYWxpc3RfY29sbGFib3JhdGlvbi5tZCc6ICc3YWFkNjViMDUxMWZlNDA4NzUxM2ZmNTVjOTk5ZDljYTk3NGM2MDBkMzM5MDhlYjViMzI3NzBlMmE3ZDc2M2YxJywgJ3Rlc3RzL2dpdF9jb250cmFjdF9maXh0dXJlLnB5JzogJzRiYjEwYWNlYmU0M2U5NjM1YTMyOTJkNTBjY2JkMmVlZjIzZDY0NTNmMmFjMmRhYjE5MWYwOTBkNTMyNDE5ODUnLCAndGVzdHMvaGVscGVycy5weSc6ICdkZDM2NGE3NGVmNDJmMmJlY2VjNTI5ZGE5N2RhYzBiMTAxYTMyNDZjOWJhZDlmNTRkNjAwMzEwN2MzMDRkZjIwJywgJ3Rlc3RzL2ludGVyYWN0aXZlX2NvbnRyb2xsZXJfZml4dHVyZS5weSc6ICdmOGNlNzI5MzI0ODZmMDcxMTBlMzdhNjY4YWI4NzVkOWU4Mjc5OWFlMWE1ZDNiMGZkOGVlZGRkODZkNmRjYjc5JywgJ3Rlc3RzL2xlYWRfYWN0aW9uX2xpdmVfaGFybmVzcy5weSc6ICdhNzg3NzlmZWIxZjI5MWQ1Y2ZlYTMxOTQ3ZDc3MjQ3NzNkZjkxOTFlYjVjMDMzNDdmMzY0YTc4OWU1MTA5NWRhJywgJ3Rlc3RzL2xvY2FsX2NpLnB5JzogJzUwNjgxYjA5NDc4OTRmMTRhMzlmZTRjMjRhMWJiNzE3MmE2M2Y5NTIwMjkzZDZlYzhkNzUzNjdkYTcyYjUzYmEnLCAndGVzdHMvbG9jYWxfY2lfY29vcmRpbmF0b3IucHknOiAnYjA0Nzk4ODRlNzYzOTE2N2IxYWQwMzRiZjdkNTBhYzZhZDU0ZGI0MmVjOGU4NDg2N2YwMzVmYjljMDhkZjc0YycsICd0ZXN0cy9sb2NhbF9jaV9zdGF0ZS5weSc6ICc1N2ZiYjgwZGUwMGE3ZWQ0YTJkNzc4Y2U4ZTBhOGYyY2Q3ZWY4MzQzMTQxYjQzODljYWRjY2UzODkzZDMxNjY3JywgJ3Rlc3RzL2xvY2FsX2NpX3dvcmtlci5weSc6ICc4NDA1Njk5NmZkMmE4MTE2MmE3NWY4MTJkZDk3ZTcwODI5NWQwNmM3ZDAxOTgwN2IxOGUzNzBhMGZhZjkyY2NlJywgJ3Rlc3RzL3Byb3ZpZGVyX2F1dGhfcmVjb3ZlcnlfbGl2ZV9oYXJuZXNzLnB5JzogJzJkNWMzMzliYzdiNWYwNTBiOGNjY2YzYjA0ZTIwYzZjNDcwMjA2MDAwM2Q0ZTgyNzFkNDQxOWY0MWRlZDE1YzgnLCAndGVzdHMvcHJvdmlkZXJfd2lyZV9maXh0dXJlLnB5JzogJzNjZjg1Y2Y4YTEwNmIxMmIyYjM0MjYxZGI4MDkwZmM3NjkxMTgyMzNhMzMyZWZkNjgzZTBhNTFiMjQxNjMwNzAnLCAndGVzdHMvcmVjb21tZW5kYXRpb25fZml4dHVyZS5weSc6ICcyOGQzMzhlODRhYTczODhjNjRiNmNlMGI2YzE1MTBiZWI5NDc2ZmM1NzljYTZiMTVmZmE4MmNkZTRmMTIwNTgyJywgJ3Rlc3RzL3J1bm5lci5weSc6ICcwMThhODUzNGQ4MzQyMGVjZTdkM2RlYTZmMTM2OGI0NDA4NDQ1ZjU5YWU2ZmMyNDg3NzVhYzQzYTNlZGExZTc2JywgJ3Rlc3RzL3NwZWNpYWxpc3Rfcm91dGluZ19saXZlLnB5JzogJzMwNDNhZjc2NDA5MWM0OWQyOGZmOTZjZTc1YWM3MjAyMjgwZmQwY2ZhOGJjMDNhODQ3NDU3Y2M5YTg4NzU1ZmYnLCAndGVzdHMvc3FsaXRlX2NvbnZlcnNhdGlvbl9zdG9yYWdlX2ZpeHR1cmUucHknOiAnM2JmNGFmOGJmZDM1MzJiM2NlZjdhNDgwZjFmZmQ2OWIyZjFjOWQwYTJmMjhkMmUyOWNiOWRkZjY4ZWEyNWNkZCcsICd0ZXN0cy9zdWl0ZV9idWRnZXQucHknOiAnNjc4ZjVjNjM0OWVlM2ZhNzI5MzZmODQzN2RlM2I1ZDg0MTM3YTIwMWEyYjc0YTMzODc2Yzc4MjU5YjdiMjBkMScsICd0ZXN0cy9zdWl0ZV9wb2xpY3kucHknOiAnNjBjMGQ1NTViYTNlY2IxMDNmY2Q0NzEwYmIyMzM3NzM5NTVlODI5YzcxOTI2NTZmOWU2MjY2OTVlZjRjZTI4MycsICd0ZXN0cy90ZXN0X2FkYXB0ZXJfc3RyZWFtaW5nLnB5JzogJzZjOTI0NWEwNTZiYzE4YjM5MGJmNTY4NTVhNjgyM2Y2ODEzMDEyNTJiOTdkNmYyNTNmN2JkZDI4MGYwOWEwZTknLCAndGVzdHMvdGVzdF9hZHZpc29yeV9wcm9ncmVzc19zdHJlYW1pbmcucHknOiAnZjhhM2Q1ZDNkMWE2YTExMWU4NzVlMzI1ZWUzZDIxODdiZWU4MzMwOTExZTMzOGZmMDhlNTZmZTI5OTMwZTI0OScsICd0ZXN0cy90ZXN0X2FnZW50X2NvbnRleHRfYWNjb3VudGluZy5weSc6ICc3MjAyYWRmNGZhOTBmM2UxZGQ0YjdkOTQ5Y2M2OWVhODlhMzMzNmY0OTU2NDg0YmY5OTAwZDc3YWYwMWE4NWI4JywgJ3Rlc3RzL3Rlc3RfYWdlbnRfY29udGV4dF9hY3Rpb25zLnB5JzogJ2Q2YWQwMDY3YmUzODZhN2VkNDA3NWJlNzFmODUzNDQxOTM1NGY1MDA2MzJkMmQ0Y2Y4MGRlZWVlNWUyMjM0ZTYnLCAndGVzdHMvdGVzdF9hZ2VudF9jb250ZXh0X2NvbmZvcm1hbmNlLnB5JzogJzNkMDhiODFkNTJhYjcyZmI2YTQxMTg0NmVlYzI1NmJhNzgwOGIyYTI1YTQ3MmMyZGQxMDhlZWJhNmZmM2I4NTEnLCAndGVzdHMvdGVzdF9hZ2VudF9jb250ZXh0X2V4ZWN1dGlvbi5weSc6ICc2NDc4YTc0MjFkMDRiOWZiOTk4Y2Y5MzFhMTlkOGNhYWE3MjhkNmZmZTY2MTkxZmYzNTVlZDNmOWU2OWQ0ZWE0JywgJ3Rlc3RzL3Rlc3RfYWdlbnRfY29udGV4dF9sZWRnZXIucHknOiAnZDMwMzkyMjhkZTg5ZWU5ZTg3MDA5ZDJkOTQyMTZhYzVlNDI1YmJlOWMzYjFjNGU2NjZlYTBiNTg3NzAwMWZmNScsICd0ZXN0cy90ZXN0X2FnZW50X2NvbnRleHRfbWFuaWZlc3QucHknOiAnMGNjYTIzNGE1Mjc0OTYwZWExNTAxYjE2MWMxYzc1YzE2ZDQwYThjZjA4NjljOGU4NWRjYzRiNjMwMWYzYjhmYicsICd0ZXN0cy90ZXN0X2FnZW50X2NvbnRleHRfcGxhbm5pbmcucHknOiAnNjMzNTAyNzQxYTcyYWRjMmRjZjIxZDA1ZmFjZmRkOWZjMTM3OTYwMmI0YzMzNmNmOGM3NTkxYzk1NWI0YWE4NScsICd0ZXN0cy90ZXN0X2FnZW50X2NvbnRleHRfcnVudGltZV9hZG9wdGlvbi5weSc6ICdkOThiODE5OTY2NDdmNzBmNzI2ZGEzNmNlMTRjMWJlZWE5ZGEwOTE5M2E0OWI2MTI1M2QwOGUwZjVjZDE1YTdiJywgJ3Rlc3RzL3Rlc3RfYWdlbnRfY29udGV4dF9zZXJ2aWNlLnB5JzogJ2MwNjg4NDhiZWMyYTBhNmZhMjY0MmIyYWI0MjJlNTAyZWI2OTUyMjU5MDIwMDdmMjgwOTEwZDJlNzJiYTAzZjknLCAndGVzdHMvdGVzdF9hZ2VudF9jb250ZXh0X3NvdXJjZXMucHknOiAnOTRmNDgxMWM3YmExN2ZmMzBmODRjOTZhMzY5NGVjMTZjMmI4YmRmZWI5MGFjZGJhNGFlYTk2MjhhZjQzMWE2OCcsICd0ZXN0cy90ZXN0X2FnZW50X2V4Y2hhbmdlX2NhcHR1cmUucHknOiAnM2NjM2JlZGFhNjc2OWFmY2Q2NWZkYzBjMWZiMTEwZmIzMTViOWJhMDk1ZWY5NzA4OTY1ZWY4OGU5M2JmYmRiOCcsICd0ZXN0cy90ZXN0X2FnZW50X2V4Y2hhbmdlX2NvbnRyYWN0cy5weSc6ICcwM2JiZjg5OWExY2NjMzhlMTg3NGJlZDg4YmQzYWRjYzNlNWU4M2YzM2NlZGM5ZGYyNDc1NTg3YTVlZGExZDhlJywgJ3Rlc3RzL3Rlc3RfYWdlbnRfZXhjaGFuZ2Vfc3RvcmFnZS5weSc6ICc1ZjljM2Q4MjRiYTUxYmQ2YjQ0MzE3MDgyOWQ5MjRmZDA1N2E0NGZlOTZhNTA0YTA2MmViZTcwYzk1YmU4YTE0JywgJ3Rlc3RzL3Rlc3RfYWdlbnRfZXhjaGFuZ2Vfdmlld2VyLnB5JzogJzdlNjhjNWNmMjcxYzc2NGM5YWFkZDNlMTgwNTBjNzZiNzJmODljOTljNmY4OTY2MmNiYjlhNTRkZmI1NzZjZTEnLCAndGVzdHMvdGVzdF9hZ2VudF9wb2xpY3lfY29tcG9zaXRpb24ucHknOiAnYmZhNGI5YTUyYjhjZWJiMmJkY2IyOTAzMjdlNjRkZmE5YzA5ODA5ODBhYWViNjg0MmJkOTdmYTVmNzg1NTA0MCcsICd0ZXN0cy90ZXN0X2FnZW50X3N0YXRlLnB5JzogJzU5M2Q3M2ExYjZkOWUwMmYzOGI1YmQ5NTgxNWFhNzg4OTE5NWQ0ZWQ4YTc0YjliM2U3N2UzZDk2MTRjOTM1YTQnLCAndGVzdHMvdGVzdF9hbnRpZ3Jhdml0eV9hZGFwdGVyLnB5JzogJzJmNjQ3YjQyMGQ1MjNlOGJhYmVmMjg5YWE1ZTZiOTljYjI0NDk0OTMxODVkZTMwOTU5NDg5ZjIxMGRkMmJiYmQnLCAndGVzdHMvdGVzdF9hbnRpZ3Jhdml0eV9saXZlX2NvbnZlcnNhdGlvbnMucHknOiAnZTAxYTRkMTM1YThiYTIwMTQ5NjcwNmFmOTQxM2UxOGQ4ZGJmNDBhOTA2NWU3YmY4ODE5MGM1Y2QxYjEyODA0OScsICd0ZXN0cy90ZXN0X2FudGlncmF2aXR5X2xpdmVfaGFybmVzc19hdWRpdC5weSc6ICdiNzEzN2FmZTE3MTZjMzVkNGUwNmU4MjQxNzMzYjRhODRjNGRkNDE0OGI2NGVmNTk1MGU0NDdjNzIxMmM5Y2Y1JywgJ3Rlc3RzL3Rlc3RfYW50aWdyYXZpdHlfcGFyaXR5LnB5JzogJ2JjZjk3Y2UxNmU5NTA3ZGEzYWQ4NzliZTkxYzBjZmZjOTVhMGYyOGM0MTQ0ZWRkMDZmODg2NjI2YjhiOGRkZGUnLCAndGVzdHMvdGVzdF9hcnRpZmFjdF9hcHBsaWNhdGlvbl9jb250cmFjdHMucHknOiAnOTZjZGEwYmU3MTFjNTQ5NTk3OGRmY2QzNTRmNjhhNjJiODZlMmEwOGQ1ZGM1NGEzYzcwZDExOTAxMzgwNjczMycsICd0ZXN0cy90ZXN0X2FydGlmYWN0X2FwcGxpY2F0aW9uX2luc3BlY3Rpb24ucHknOiAnMGJjMDMxZjg4YzRlNDFhOTdlNzQwZDZmNzQ1ZjA5Y2IxOTQ0ZjcyNzQ5ODM4NDU1YmMxMjY3ZTQzNjY5M2NjMScsICd0ZXN0cy90ZXN0X2FydGlmYWN0X2FwcGxpY2F0aW9uX3NlYW0ucHknOiAnM2E4YTdhZjE0YWI3M2MzMTFhNmI2OWE3NWRlZjIyZTNlMzNmZjg1MTI2ZDhmZjhmYmIyZGViNDhjM2NhNTkwOScsICd0ZXN0cy90ZXN0X2FydGlmYWN0X2FwcGxpY2F0aW9uX3N0b3JlX2xpZmVjeWNsZS5weSc6ICdiM2U5Zjc5NDg0NDI0YTVhMDgxNTdlZWI5NWEwYTMxMjVjNmM2MTBiNGIwZTdiMzBjN2QxOWZiNGFkMWJmZDM4JywgJ3Rlc3RzL3Rlc3RfYXJ0aWZhY3RfYXBwbGljYXRpb25fc3RvcmVfcmVjb3ZlcnkucHknOiAnYzg3NWM2ZjNhZjhhYjllNTE4YWVjNWEwNTA0Y2M5ZTM4NzA5ZjE5N2NjOWE4YmQzNGE4Mjg1MWU1MjlmZjAxNScsICd0ZXN0cy90ZXN0X2FydGlmYWN0X2NoYW5nZV9zZXRzLnB5JzogJzRlNzhkYWVkMjYxZTMxMWI5NzcyYjdmNThiOGM3Mjc4YTM2OWExZTA3NjU2ZDI5ODQ5NzU3Y2E0NDVkZDkyNmUnLCAndGVzdHMvdGVzdF9hcnRpZmFjdF9vYmplY3RpdmVzLnB5JzogJzk0MDlmNjdkYTY0YmFmMDA1NzllY2U0MjUwNmIwMjg2ZTY1YjRkNjRhMWZhNWEzNDc1Y2UzZmFjM2YzMDlkNjEnLCAndGVzdHMvdGVzdF9hcnRpZmFjdF9wcm9wb3NhbF9vcmNoZXN0cmF0aW9uLnB5JzogJ2I0NzYzN2EzYjI2ODU1OTNhYzA5NzcyNGViNmJmYTZiZDllYWI1NGNkODI4ZTRkNGU2NjRiNjVhZDRjZGNkODUnLCAndGVzdHMvdGVzdF9hcnRpZmFjdF9wcm9wb3NhbHMucHknOiAnNzRkNmRiODI2YzIzOTRlNjk5YWY0ZGI2YjVjOTU5MjRiYWRlZDg0NjUxMjIwNTQ3YTFkMDgyNmFjMTdhNTMxYycsICd0ZXN0cy90ZXN0X2FydGlmYWN0X3JlZmVyZW5jZV9hdXRob3JpemF0aW9uLnB5JzogJzdiNjQzZWNiMTM0OWM3ZThmNjcwMTc1MjM5NGZlMzMwYTU2YjBmNDk5ZDM4M2I2YTEyNTFjZWFjMjAxYjE0NTknLCAndGVzdHMvdGVzdF9hcnRpZmFjdF9yZWZlcmVuY2VfZGlyZWN0aXZlcy5weSc6ICcyMWMwMzE3NmM4MTdmOTE4ZmFjNjM0YjVmZDdlMzJiMTU2NzljNzdlNmY3Y2I0NTNlZjNmMzBmZWQxMjUxODFmJywgJ3Rlc3RzL3Rlc3RfYXJ0aWZhY3RfcmVmZXJlbmNlX2V2aWRlbmNlLnB5JzogJ2M0MDU4MGMyMTZhZjg0NmQxZWU1ODM1YTQ3YjY5MzU5ZjQzY2IwYWJlYTVmMTg1ZWVjNjQxMGM5MjBlNTkxMDQnLCAndGVzdHMvdGVzdF9hcnRpZmFjdF9yZWZlcmVuY2VfcmVhZF9hY3Rpb25zLnB5JzogJzkxMTdlOWJmZDRmOTdjZTYxZTFjZDM3MGU4ZjhkODBlZTJjYzlhYjg4MzY4MDg1YjBiMTgyOTQ3NWVjMzE3YWMnLCAndGVzdHMvdGVzdF9hcnRpZmFjdF9yZWxhdGlvbnNoaXBfcG9saWN5LnB5JzogJzA4MGQwODc5NzU2ZTU2ZGU1OTM1Y2YxNDM3ZmMyODM4YTIwNTgzZTY4MzVlZjg5NDJjNTY4NDM2MDcyYjI1YjUnLCAndGVzdHMvdGVzdF9jbGlfY29udGV4dC5weSc6ICdhNGVmYWM4M2IwNWJjZDk0MjE4ZmQ2ODY2ZmJmYTdhMDBkYTZmMDk3ZTYyZWQzNjMyMmEzODYyYmZiNTY2NzhmJywgJ3Rlc3RzL3Rlc3RfY29kZXhfYmFja2VuZC5weSc6ICdlMTMwNThhYjA3Y2NlODdlMzg1OTgzYTc4MzgyODNmMWNjMTFjMDA4NjIxMDVhOGE5YjhiY2NkMGU0YjU3OGY2JywgJ3Rlc3RzL3Rlc3RfY29sbGFib3JhdGlvbl9jb250ZXh0LnB5JzogJzc1MjNhMjIyNWI3ZDE2YzEzMDZlMDVlZTI4NjA0OTJlODVkNzFjYjY0MzgwYWM1YmM4OWFmMmJlNGViOTc4ZjEnLCAndGVzdHMvdGVzdF9jb2xsYWJvcmF0aW9uX2V2ZW50cy5weSc6ICc2MGUwZWYzNjc4NzM5MjlkODljYTAwMTI1ZWJhOGZkODAwYTY3NjE2ZGM1YjJmYzkyYzM3NGM3NjZlNmEzYjRiJywgJ3Rlc3RzL3Rlc3RfY29uc2Vuc3VzX2RlYWRsb2NrX2NvbnRpbnVhdGlvbi5weSc6ICdiZGEyYzJmM2M2NGQ3Y2VhZDY5ZWE5MTYzNjFhNjYyMTI3ODM5Nzk2NGM5MDIxYWNmMmY3YzljMjRiZGIzZGUxJywgJ3Rlc3RzL3Rlc3RfY29uc2Vuc3VzX2V2ZW50X3N0b3JlLnB5JzogJ2ZjMzFjMjdjYWYyNjM5MDk3ZjM5MzJjMGVhNjAwYzYyODNiODU3OWZiNDU2Yzg2NWIxNDYzNjZmNzg1NWQ2ZmYnLCAndGVzdHMvdGVzdF9jb25zZW5zdXNfZXhlY3V0aW9uLnB5JzogJ2EwYTI0Njc2MjYwMzM2Zjc2YTViYTE3ZGNiNzM5MzRmNzliODlkYjY2YjM1Y2I2MjcwODI0OTNmMWJkMDUyMzgnLCAndGVzdHMvdGVzdF9jb25zZW5zdXNfbWF0ZXJpYWxfc3RvcmUucHknOiAnMjAxMzY1Y2ZiYjY0ZWVlZmRiZDBkMjJkN2FhOWI3NzgxNDUwM2MzYTIzYWJkMWY0YmY0ZjdiZTZkYWZhNDZlZScsICd0ZXN0cy90ZXN0X2NvbnNlbnN1c19wcm9qZWN0aW9uLnB5JzogJzBkMTM0ZTZiNWJmMWI2M2Q0NGRkNzQwODZjNTQ4MDBhYTFiZjJmMTNiMTMzMTNiMjA4ODE4OWY3Y2Q0ODJkM2MnLCAndGVzdHMvdGVzdF9jb25zZW5zdXNfcnVudGltZV9hZGFwdGVyLnB5JzogJzAwOWFhNTU5MzJkYjUyODk1ZWRhZDQxZTMyZjBjYWU2ZDFmOTE4N2QyNzhlMzBmYTM5ZWY0OGNkYzkwYjM5MDAnLCAndGVzdHMvdGVzdF9jb25zZW5zdXNfcnVudGltZV9jb3JyZWxhdGlvbi5weSc6ICcwYzlhMTNkNTU2MWZmYTBhOGNkZjYwNjg1ZDg0NzVhODY5OTQ3YWY1ZDMwYzNhYTNmNThlYmIyMmNkNjI1YWEwJywgJ3Rlc3RzL3Rlc3RfY29uc2Vuc3VzX3N0b3J5X3J1bnRpbWVfYnJpZGdlLnB5JzogJzRlYzBmNzAzOTlhYWQ4YTIxMDVkZGI1Yzc4YzIwN2ZiN2I5MGRjZDNhMDVmZmMxNGZlM2IzMWIwZGU4ZTMyZjQnLCAndGVzdHMvdGVzdF9jb252ZXJzYXRpb25fYXJjaGl2ZS5weSc6ICdlYzA3ZDE4N2E3MDk0NTJkOWY3YTM5NTA4MDJkMjdmZWJmZTZlYjBhM2RiYzc1ZWQ2YTY3Zjk4Mjg4NWRiOTYxJywgJ3Rlc3RzL3Rlc3RfY29udmVyc2F0aW9uX2NhdGFsb2cucHknOiAnMmYxMzlkNzg3NmFhMjdkMDgzYzNjMWYxNDIyYzMyMTM4NDk1YTAzN2I2YzA3MDg2MzU2YWVmZTJiYTRmMTU5ZScsICd0ZXN0cy90ZXN0X2NvbnZlcnNhdGlvbl9yYWcucHknOiAnZTliYzFlMTY4OTU5ZGM1NTIwYTdmNDYwYWIxY2JmNTE3MWFhNjRmM2QzOTZjM2I5OTAzYmEzMGMyOGNjMzQwMicsICd0ZXN0cy90ZXN0X2NvbnZlcnNhdGlvbl9yYWdfY2xpLnB5JzogJzNhZDU2YWY0YTk4YzJmZjNmNGRmYzAwMGE4ZGNkMWU3NWU1YjMzYWEwYTY1OTY0Y2QwYTgyNjQzZGFmZjkyOTYnLCAndGVzdHMvdGVzdF9jb252ZXJzYXRpb25fcmFnX2NvbXBvc2l0aW9uLnB5JzogJzM1MWViZmFjZjYzYTFlNWIzZmU4YzI2YWVjNWZlNTYzMTlhODVmODZiYWExZTZmMWJlMmIyNmMyN2RhNzAzZTcnLCAndGVzdHMvdGVzdF9jb252ZXJzYXRpb25fcmFnX2xvY2FsLnB5JzogJzk1MzM1OGE4YTA4YTMyYzc2MmYzNDdhZGI1YjRkNzg0YWNkMDUyODQ1OWRmM2FmYjM1ZDkyNjBmNGMzY2U4MGQnLCAndGVzdHMvdGVzdF9jb252ZXJzYXRpb25fcmFnX3J1bnRpbWUucHknOiAnNjA5ZWZmYTRlMmEzMDQzMzMwYWU3NjI1ZjQ0OTYwNmY0MDYxOGMzZjVmYWVhNjA3MmY4NzE4NDZlOGE1NzdkZCcsICd0ZXN0cy90ZXN0X2NvbnZlcnNhdGlvbl9yYWdfc3RvcmUucHknOiAnZjIyNDliZmI3YzAwMDAyZTE4OTQxNWE0NDRhNTc5NjA2NTg4NzU3OWFkNDg5MTYxNTYyMjg3OTY5MTlmNjk3NycsICd0ZXN0cy90ZXN0X2NvbnZlcnNhdGlvbl9yZXRyaWV2YWwucHknOiAnYmJkNDkxZDZiMTE0YWRkMWU2ZGYxZjhhZWY4MjkyYjdlM2FiNmMxYTRjNTRjOTJhY2RhMjg3OTk2YjUyNmJlMicsICd0ZXN0cy90ZXN0X2NvbnZlcnNhdGlvbl9ydW50aW1lLnB5JzogJzg1ODdkNmQ1ODk3ZjljODc5OTk2YWYwNzFiNjAwZTk4OTc5Yzc0MTNiYmUyZTFiZjgyNTFkZTc4MzAyNmM5MDgnLCAndGVzdHMvdGVzdF9jb252ZXJzYXRpb25fc2VhcmNoLnB5JzogJzQyNmJjNjBiZWVhZDI2ZDRhMjNlODc0OWMzYzg0YWEyZmZmOWYxZGNkZDEwMmE1NDQzZTUxY2YxNjM3OGM0MzAnLCAndGVzdHMvdGVzdF9jb252ZXJzYXRpb25fc3RvcmFnZS5weSc6ICdmZWY3NTM5Yzk0MmZkMzIyOTlhOWI1ZmQ2MDM2ZTBiMDAxNGQ2YTRlNTRlMzgxNGVlNjhmZGRkNzgwMzJhMjMyJywgJ3Rlc3RzL3Rlc3RfY29udmVyc2F0aW9uX3N0b3JhZ2VfbWlncmF0aW9uLnB5JzogJ2U0OTIyYjYyZWJlOWJhOGIwZmM3ODY3ODZhZjVhMjYyMTNkYjIyMjc1MTg1MDhiOWEwZWFmMmE5NGE2Nzg2NzAnLCAndGVzdHMvdGVzdF9jb252ZXJzYXRpb25fc3RvcmFnZV9taWdyYXRpb25fY2xpLnB5JzogJzIxZjMxNzlkMjlmMTBjOWZlMjNiMzlkOGEzMzdiZjNhMzg3MmI3MmRhZDdkMmRjNTIxOTdiNzc4OTM1MDg2ZTInLCAndGVzdHMvdGVzdF9jb252ZXJzYXRpb25fc3RvcmFnZV9wcm92aXNpb25pbmcucHknOiAnNmI2ZWNlZTM1ZDVlMWFjNjk3MjFhMDI1MTQ2NTE5MzJiYjA0ZmU2ZTRiNDdiYTNiYzE3ZjNjNTQwNmY2YmUxNicsICd0ZXN0cy90ZXN0X2NvbnZlcnNhdGlvbl9zdG9yYWdlX3NlbGVjdGlvbi5weSc6ICc3MjUxNzgyZDI1MDA5MjY4ODQ1YjFiMjI3Nzk0ZGVhZDFmZjQzYjkxNjhhMzhmZmExZDU5YWI4OGUwMDBiOTliJywgJ3Rlc3RzL3Rlc3RfY29udmVyc2F0aW9uX3N0b3JhZ2Vfc2VsZWN0aW9uX2NsaS5weSc6ICcxZDY4YTc1MGU4ZTY5OGM1MzljZWJjZTlhMTZmOTc5YzQzYjM3MzQwYzQwNTA3Njg4ZjM5OWQzYWI2ZWYwNjNlJywgJ3Rlc3RzL3Rlc3RfZGVidWdfbG9nLnB5JzogJ2M1MGMwOTY5OGI3NmI2Y2VjZWZmMzQzOTY4YmQxYTBiMjU2YTU3YmM1YzMwOGJlNWQ4OTg0OTdjZjk0ZDk3M2YnLCAndGVzdHMvdGVzdF9maWxlc3lzdGVtX2NvbGxhYm9yYXRpb25fZXZlbnRfc3RvcmUucHknOiAnNDE5MDRkOWU3N2ZkOTRlNzE5YWE4Y2Y0YzIxMzU3MzlkYjdhNjE1MzNmZTcxZjE0ZWY2NzZmYmRkNTJkNjRkNycsICd0ZXN0cy90ZXN0X2ZpbGVzeXN0ZW1fY29udmVyc2F0aW9uX2FyY2hpdmUucHknOiAnY2UxNTRjNTc1MTNkNmViODNlZGQ1ZDg4ODA4ZmFhZjNmNzViYzI3YjU1YTMzMTNmMGYyY2JmODFiOTMwZTdhNScsICd0ZXN0cy90ZXN0X2dlbmVyaWNfcmFnX2FkYXB0ZXIucHknOiAnNWUzYzE3Nzk0ZGY5Y2U5ZjU5YzI0NGM2MWI3MzViZWE1NjgxNmM2ZDlkNjE1YmRmMzA5ZDQ5NTA1Nzk4YzQ4NCcsICd0ZXN0cy90ZXN0X2dpdF9hZGFwdGVyX2ludGVncmF0aW9uLnB5JzogJ2I1NTEzNGUyOGI4MjUxODM5M2JiOTJlNDU5YWU0YzdlYmM3ZDc1NzgzYmQ3YjRiNjZlNGFlNjdjZDNlOTVkYTcnLCAndGVzdHMvdGVzdF9naXRfYWRhcHRlcl9wcm9jZXNzLnB5JzogJ2U4YzJhZmZmNWY1YzhhMjkzM2NhNzE2NzM3ZjIyMDI3MWZiOGY1YjIyZGMxNWNmYTY5OTJkMzc0NjA4NjRjM2EnLCAndGVzdHMvdGVzdF9naXRfY29udHJhY3RzLnB5JzogJzg3YWM3ZTA0ZjkzOTA0ZjQ1ZjUwNDg5NjEwNGJmNjllOGUwNTRiNDNmNDk5OTQ4YzY3MzEyMDNiN2Q5MWMyYWEnLCAndGVzdHMvdGVzdF9naXRfZXh0ZXJuYWxfb3BlcmF0aW9uX2luc3BlY3Rpb24ucHknOiAnNTdlMWJjODdjZTk3MmQyMGVhZTM2ODVkZWJjMzExMzk3Y2EyNDUxYjIxZGVhNTY1Mjk4MGNmYmEyZjJlYjBlNScsICd0ZXN0cy90ZXN0X2dpdF9saW5rZWRfd29ya3RyZWVfcmVhZHMucHknOiAnMzhhOTA0YTQ0NzhlOTA5YWNmMjg2OTVjOGEzMTA0YzU0YTk1MGY4MzhkYmQ2NzU2OTQzOGZhMmRjZjE2ZTc5ZCcsICd0ZXN0cy90ZXN0X2dpdF9wcm9jZXNzLnB5JzogJ2QwY2MzNjM0ZTk1YzQ1OTgyY2M0NzkzNGMyYmE4NDljODc0YTIwYjEwMTljZmMzOTdmYjIxMWQzNDk3YjU4OGQnLCAndGVzdHMvdGVzdF9naXRfcHJvY2Vzc19wcm9maWxlcy5weSc6ICc3YmJjMDg3Y2ZhZTk2OGYwMjI4MzE1NmJjMjAwNjI4MGNkNTc2Y2NkNGM2YjlkYTljMGI5NGQ0YmQ1YTQ5NGM4JywgJ3Rlc3RzL3Rlc3RfZ2l0X3JlcG9zaXRvcnlfbG9jay5weSc6ICc0ZjMwNDRmNThjMDgxZjBjZWVlY2NhZGI4Yzk3N2YxMjYyOTQ4OGQ4NGE4YjhhNTJiMjMzNjljN2NiZWMzY2I3JywgJ3Rlc3RzL3Rlc3RfZ2l0X3Nlc3Npb25fY2hlY2twb2ludF9jbGFzc2lmaWVyLnB5JzogJzg5MTQ3OTFkOWQ4ZjcwMjVjMjFlODc1ZWVjNzhhNDEwOGVhZWJjNzM2NDZjYmYyNTM3YmRmMDMwY2ViNDI1YWEnLCAndGVzdHMvdGVzdF9naXRfc2Vzc2lvbl9jaGVja3BvaW50X2NvbnRyYWN0cy5weSc6ICdjY2Q1OWUyZTFhMGU3ZGQ0YzkwNDlkZjYyNzE5YzA4MThhYmY5ZDcwMzQyMWI3Mjk0MWQ1YmVjOTUzMGY1ZjkxJywgJ3Rlc3RzL3Rlc3RfZ2l0X3Nlc3Npb25fY2hlY2twb2ludF9wcm9jZXNzLnB5JzogJzkzY2I3NTYzYmE5NTc1YjU5NzU4ZTFhZTI2M2Q5N2NmMmY4ZGI0NWYyYjg2OTZhYzA0MmUzYTRiM2JmNjNmOTcnLCAndGVzdHMvdGVzdF9naXRfc2Vzc2lvbl9jaGVja3BvaW50cy5weSc6ICc0N2QwY2EzN2I2NTRmYWViNjRiY2VlYTE0NTk3ZTZmODQ1MjViYWUxOTIyOTZiMWM0OGQxODg4MTg1ZDI2NTQ0JywgJ3Rlc3RzL3Rlc3RfZ2l0X3Nlc3Npb25fY29udHJhY3RzLnB5JzogJ2U3MjcwMTZiMzZkODQyZDEzZDAwN2Q5MmUxMDFlOTBkNjRmN2E0ODI2OTRmZTNiNTQ0ZTNkMGQzYjRhYjc5ZDUnLCAndGVzdHMvdGVzdF9naXRfc2Vzc2lvbl9oaXN0b3J5LnB5JzogJ2YzZTU4YTliZWQzNjhlZTM2M2VmMjBjOWFlYjQ4ZWFiNDFkM2E3Yjg0NjJhY2IwMWMyZjUxZDg3YWZjYjNjNDUnLCAndGVzdHMvdGVzdF9naXRfc2Vzc2lvbl9oaXN0b3J5X2NvbnRyYWN0cy5weSc6ICdhMTFiYmM1NWFhODY0ZmU3OTAyODQ2YWZkMjg5OGY1NzQ1YjNkMWZmMDEwZTEyNDA2OGU0ZGIzMjkwMWNlYmU3JywgJ3Rlc3RzL3Rlc3RfZ2l0X3Nlc3Npb25fcmVzb3VyY2VzLnB5JzogJzhlYzRiM2M5ZDUxMTAwZWJkY2E1Y2E5MzdkMjAzYjIwZmJmYjAwNGVhMGQxZjc5ZmY5NDc0MjNjOWM2OGQxYzgnLCAndGVzdHMvdGVzdF9naXRfc3RvcnlfY29tbWl0X2NhbmRpZGF0ZXMucHknOiAnNDAzNjk5YTE3ZjcwNmUxOTNmZTNkN2JjNjk1ZTFhODBkMDdiZjA2NGJiNGRjZTFjZWE5ZDM5NmRhZDZjNTJhMycsICd0ZXN0cy90ZXN0X2dpdF9zdG9yeV9jb21taXRfY29udHJhY3RzLnB5JzogJzZjNzEyODc2MGI5NmI2NzU3Zjc5Mzg0ZDRmMGRhOWUxNDBmMDBkY2Q3YzA0MzIxODUxZmQzZWY2ZDM1MjViYTgnLCAndGVzdHMvdGVzdF9naXRfc3RvcnlfY29tbWl0cy5weSc6ICdhN2I2ZDgwYTVmZmUyNjI1YmU4ZjQzOTJjYzE4M2QwNzdlODkwMjFmZTAwNTBkOWVkOGVlY2Y3NTgyNmE5ZDY3JywgJ3Rlc3RzL3Rlc3RfaW50ZXJhY3RpdmVfYXV0aC5weSc6ICdkNTBhMWQxMzhlMGJmNWIxNzc1MWQ5ZjViMWQ4NzYxYTQ5ZTNjOGNlNTczMGE5OWZlYjNkOTBmNDMxNGEzNmNmJywgJ3Rlc3RzL3Rlc3RfaW50ZXJhY3RpdmVfY2FuY2VsbGF0aW9uLnB5JzogJzVhNjdmNDE1NTlkZmQ5N2I3NDg0NGMyYWMyNjI5ZjNkZTkwMmMxMWMzMDUxZTg3MDc0YTUxODk5MGU4ZmVjODYnLCAndGVzdHMvdGVzdF9pbnRlcmFjdGl2ZV9jb2xsYWJvcmF0aW9uX3ZpZXcucHknOiAnMDg1YmVmNjI2ZmMxNTUwOTAxMzUzMWY4NWZiOTczNDU1MDc2YzI4NjM4ZjkzMWFiOThmMDNlOWUwOTkwZTk3OCcsICd0ZXN0cy90ZXN0X2ludGVyYWN0aXZlX2NvbW1hbmRzLnB5JzogJzM1Mjg3OGRmODVhYWFhMmY3YzBhN2M2Zjg1NWJmMWUyNDIwZTdiNDE5MzdkMWVhNzA3MWQ5OGRhYjI5ZTA1YWMnLCAndGVzdHMvdGVzdF9pbnRlcmFjdGl2ZV9jb250cm9sbGVyLnB5JzogJ2YzOGE1MzQzMTY2N2VkNjA3NDcxZWU3MWZjNmQzZTBmNWQzNTFhYjFlNjMwNGExNWZiYTU4ZjA4OTEwODU3MjInLCAndGVzdHMvdGVzdF9pbnRlcmFjdGl2ZV9saW5lX2VkaXRvci5weSc6ICc1ODQyYmU5OWU0YTc0NTc2OTExMDc5ZGZkMWQ5NTU3OThkYTQ4ZTBiNjAwYWFiNzU0OGE0MDQzMjU0ZTE5NjIyJywgJ3Rlc3RzL3Rlc3RfaW50ZXJhY3RpdmVfbGl2ZV9jb21wb3Nlci5weSc6ICdiNWU1MGQ3NThiZWY2NzU3MDUxMGQ0OWQzM2ExZGFkOGQ2Y2Q0OTI5YWE1MzczZjA4N2I0MWViNmZmZTk2NWJjJywgJ3Rlc3RzL3Rlc3RfaW50ZXJhY3RpdmVfbWFuYWdlbWVudC5weSc6ICdjZDE4YmNmOTViNzZlNjQzOTI1ODFmZTM3MGFjZWU1ZDdhNmE0NTAyNmM0NWFiZmYwYjYxM2QyZGVjNTk0NDQzJywgJ3Rlc3RzL3Rlc3RfaW50ZXJhY3RpdmVfcHR5LnB5JzogJzA5OTg0OGE1MzYyNGFjMWU1Mjg0YjhmMGM5YTZjNzNmZTQzMDg2NDRlMGFmNzFiOTkyYmEwMzU4Mjg3MGQyZDUnLCAndGVzdHMvdGVzdF9pbnRlcmFjdGl2ZV9zZWFyY2gucHknOiAnMTBiNzZkNWFmYzM4Yzc4ODM3ZjY5N2ZkY2ViN2MyYTE1YzYzODE0ZmUwYWFiOTM1ODE1YTg1OTQ0OThhNWY3MycsICd0ZXN0cy90ZXN0X2ludGVyYWN0aXZlX3NldHRpbmdzLnB5JzogJ2RlOGFmOGM3N2UwM2RhNGU5ZGM2YmI2ZjVhMjg5ZGRlNzRkM2IwYWU2MDMyZTJmNDA5ZGM3MGFjNjc3YWY1MmMnLCAndGVzdHMvdGVzdF9pbnRlcmFjdGl2ZV90ZXJtaW5hbC5weSc6ICc4ODkyYmYwMTVlZTM4Mjk1MmRiZmViNjdlOWVmY2IwOGVhMDM2YjRjMzg5NGMwODExYmJhYWE3NjQzYjM2M2EzJywgJ3Rlc3RzL3Rlc3RfaW50ZXJhY3RpdmVfdGVybWluYWxfY29tcGxldGlvbi5weSc6ICcxMTFmNGIwYTQzYTcwNDlhMzU5ZjcyODY2ZjQ0NzRjNjJiZGQ2MzY5Mzg5YjkxYzU2NDk1NGUzMGI0ZTAzMDhmJywgJ3Rlc3RzL3Rlc3RfaW50ZXJhY3RpdmVfdGVybWluYWxfY29tcG9zZXIucHknOiAnYjhlYzhkYWVjNGZkMDFmZmZlMGU4NWVhYTRiNjNhYTZkN2Y5Y2EyM2RhMzY1ODdjMmY2ZThjMTNkM2VkNjA2NCcsICd0ZXN0cy90ZXN0X2ludGVyYWN0aXZlX3Rlcm1pbmFsX2V4dGVybmFsX3ZpZXcucHknOiAnMjMzOGI1ZGVmMGUzYWM4YjQzODk0ZDAyOTBhZGIyOGVhY2M4OWU4ZDA0NWVlNDAzMzU5M2Q0ODBkM2MxYjRiYScsICd0ZXN0cy90ZXN0X2ludGVyYWN0aXZlX3Rlcm1pbmFsX2ZvdW5kYXRpb24ucHknOiAnODE2NmZhZjE3NzlmMTBhN2JiNGEzM2IxYTUxZmEwMjQ4ZjUxMGU1N2Q0ZjM1NDAyNWU3N2FkYmU0MTI4OTEyZScsICd0ZXN0cy90ZXN0X2ludGVyYWN0aXZlX3Rlcm1pbmFsX2hpc3RvcnkucHknOiAnYjFhNTJhMDIzMjkwYTA4YmFkNzc3ZjkyNGIzZWUzMTYxMDkzMWYyZWQ2NzNhNTBlNDA2OTYzMDQ0Mjc4NzkwNycsICd0ZXN0cy90ZXN0X2ludGVyYWN0aXZlX3Rlcm1pbmFsX2lucHV0X2xpZmVjeWNsZS5weSc6ICc5NWYzNmMwYTljMjI3YjUxMzRjNDA2OGFlNGRjNmMxOTYzNjdmYjdkMTE0MjM3NDI0NjZmMTFlNGZkNDY0YjhmJywgJ3Rlc3RzL3Rlc3RfaW50ZXJhY3RpdmVfdGVybWluYWxfcGlja2VyLnB5JzogJ2RjMmVhODhjN2ZmMjgxYjJkZTM1MzEyYTZkMzU5NTU5OGMzODk3NjJkMWRjNWZlNDJkZmNhMzljZjdmZjYwMDMnLCAndGVzdHMvdGVzdF9pbnRlcmFjdGl2ZV90ZXJtaW5hbF9yZWZlcmVuY2VfYWN0aXZhdGlvbi5weSc6ICcyZWVlZTgzNzEzNTA3OThhZDcxYzQ0YzI1YTU0Y2Q1YzRjYmQ5NzFhNWQwOWJiOTZmOTlkYjkwZTZiYmY3ZjRiJywgJ3Rlc3RzL3Rlc3RfaW50ZXJhY3RpdmVfdGVybWluYWxfdmlld2VyLnB5JzogJzkzODU2M2VhZDg5NzYxZGIwNGM5NGFiNThmNzkwYjM5YTdhYjQzNmE2OTg0Zjc4MTdkNjAwNGY3OGYxM2U0ZDMnLCAndGVzdHMvdGVzdF9pbnRlcmFjdGl2ZV90ZXJtaW5hbF92aWV3cy5weSc6ICdkMmFjYWY2YWY0N2RhMmNkMjQ5YjNlMTFlZWRmNDVkNWI5NjgyNDJjNjJkMWM0OTYyZDFiNWI4YWE0MWM1MzZkJywgJ3Rlc3RzL3Rlc3RfbGVhZF9hY3Rpb25fbGl2ZV9oYXJuZXNzLnB5JzogJzdhMWFiMzdiODU3MTYwMjI4ZGU4ZmNlOGJiM2JiMTY4YzkwN2MwMmM0MmMzMTE1OWZlNGRkNWZlMzU4M2EwMTcnLCAndGVzdHMvdGVzdF9sZWFkX2FydGlmYWN0X2FwcGxpY2F0aW9uLnB5JzogJzA0OGE1M2QxMTM4YWIzNGZiMWRkYTYxMzk3YzY3MDIyZDcxOGM5Y2JlZTJlMDk0ZDU2NWNmN2QzYjVhYmQyYjknLCAndGVzdHMvdGVzdF9sZWFkX2FydGlmYWN0X29iamVjdGl2ZXMucHknOiAnOTM5ODJlMjQ0ZmY3Yjk5Mzk0ZWIyYjNhM2Q2YTE5ZTU0NTczZTg2MWVkMTQ5ZjY0MmEwZTI5NmY1ZDNjMmFlMScsICd0ZXN0cy90ZXN0X2xlYWRfZXZpZGVuY2VfZ3JvdW5kaW5nLnB5JzogJ2ZhMDE4NTFmYjljMWUzYjlhODZmYTYxODc5NTMxODUyODYxOTkzYjMwNTc3MTFhZmU5YjM1M2QzMDc3YzgwOGEnLCAndGVzdHMvdGVzdF9sZWFkX29yY2hlc3RyYXRpb24ucHknOiAnODEzOTViMDlkNTVhNTkxOTZkM2RhYWNiYTMwMjZlY2FkNDMyYzNjZmRmYzFhYWYzYzYzMWRmMmY5NDM1ODJhNicsICd0ZXN0cy90ZXN0X2xlYWRfcmVjb21tZW5kYXRpb25zLnB5JzogJ2M0MDYxMzJiODk1ZmFiYjcxODYwYzU4Yjg2NGRjNTMxOWNiNmQ5Y2M0MTEyYWVlYWVmMGU3YjI3NGM0MGE4OGUnLCAndGVzdHMvdGVzdF9sZWFkX3Nlc3Npb25fY29udGludWl0eS5weSc6ICc0ZmM3OTE0N2NkMWE5NWU2YWUwZDA5NGRmZDllOTdmNTkwODY5NTA2ZjhmNjNlYjU4YmRkOWQ4MDFlZmVmMGZiJywgJ3Rlc3RzL3Rlc3RfbGVhZF9zdG9yeV9jb21taXQucHknOiAnOWM4NDcxNWYzMzA4NmI0ODAxYTZiZWQ4YjBkODI5ODZhYmYyNjUwYjFmNDMzODk0ZDYwYTdkMWZiZjEyN2RmYycsICd0ZXN0cy90ZXN0X3Byb21wdHMucHknOiAnYWI5ODE2OWQwNTg1ZDE4ZmRlZmExMWI3NzMyNjI1ZWMxMGUxODkyYzI4Mzg5ZjAwODJjZWMxM2VhMjFhODE5OScsICd0ZXN0cy90ZXN0X3Byb3ZpZGVyX2F1dGgucHknOiAnYzcyZDYxMGFiZTY4MmVjYTdhYWY1YTE4ZmRjZmEyNjM2OGI0ZDNiZjAyMTM2NjA2ODgwMjNiMTNkYzJmMDA3YScsICd0ZXN0cy90ZXN0X3Byb3ZpZGVyX2F1dGhfcmVjb3ZlcnkucHknOiAnOWQyY2RmZDdlMjkzNWVmODEzZTM4YzlkYzI2MGE1YTMwOGFjMDRkMjdmZWRmZTRiMjlmZTA0NTVhMTQxODhjMicsICd0ZXN0cy90ZXN0X3Byb3ZpZGVyX2F1dGhfcmVjb3ZlcnlfbGl2ZS5weSc6ICc3MTg0Y2EzZjE0ZDQ3NGQ1OGM1NDVhYjc4NTNhNDc2YTI1MjlkOGYwNTk5YjJhNzlkMDc2OGU1MmJiODYyZWJhJywgJ3Rlc3RzL3Rlc3RfcHJvdmlkZXJfY2F0YWxvZy5weSc6ICc2ZTk1NGQ2ZGU2ZGU3YjNlNDdlYjQ3YjE1NTkyNDVlMDQzMmNkMThlZmEzYmU5MzQyMTY4OWQyMGZmNDg5OWYwJywgJ3Rlc3RzL3Rlc3RfcHJvdmlkZXJfZXJyb3JfYXJ0aWZhY3RzLnB5JzogJ2ZlMWJjNDNjMmVkZjMyYzc1Y2Q5ZTJiYzg3NThjZjk2ODFkYTFlMGVhOGJmYmJiMDE3OWMyNThjZGQzZjdkNDAnLCAndGVzdHMvdGVzdF9wcm92aWRlcl9wcm9jZXNzX3N0cmVhbWluZy5weSc6ICdiZTZhZTBkZTFhYzI0Njk5NjAyZWE0N2RmOWNlOWZiZDExNThjY2Q2ZTE1NWYzNzU0Y2QzOGI1MGMyNmZmZTcxJywgJ3Rlc3RzL3Rlc3RfcHJvdmlkZXJfdGltZW91dF9yZWNvdmVyeS5weSc6ICcwOTQxYTZlNjA5MjMxZTczMTM4ZThiMzc1NTEwNmU0ZDUwYzUxYzViMWQzMmNlZGNmM2MwMWY0NjU4ZTgwMWEyJywgJ3Rlc3RzL3Rlc3RfcHVibGljX2FwaV9hbmRfY2xpLnB5JzogJzc3NTQyNjYxYzU1MzI4NGYzMjkzNzgyZjEzOTgxOWZhOTMyNGM2MmUwYTU2MTQyYzQxYWRiZDJhMmY0N2Q1N2QnLCAndGVzdHMvdGVzdF9yYWdfbW9kdWxlX2FuZF9wYWNrYWdpbmdfYm91bmRhcnkucHknOiAnN2FmNDZhOTc3ZmUxNzRhNTU0ZmFkMzRmYTNhNGZjMDZjZWY2NWJjMTgyMWQ2MTM3MzlkMWQyMDUwZmY3MmRjOScsICd0ZXN0cy90ZXN0X3JlY29tbWVuZGF0aW9uX2FjdGlvbnMucHknOiAnMzk4NDc0MDhhZWMwOGU3ZjM3YmI3NTI2MjQ2NDk3Y2JhZjQ2MTdhMDI5YTg4ZjBhMWY5N2RlMWU0YzY4OTZkNScsICd0ZXN0cy90ZXN0X3JlcGx5X3RyYWNlLnB5JzogJzg3Zjg2NDg1ZDhmNWY4ZmQzMjA2Y2I2Y2FlOGM2YTYyNTY2YzExN2JjZTM1ZTdiNGIzOTA0YzUwMDE1MTNkNzEnLCAndGVzdHMvdGVzdF9ydW50aW1lX3JlZmVyZW5jZV9pbnRlZ3JhdGlvbi5weSc6ICczNzFhMGI0N2Q2ZjM4NjMwYmI2NDdkOThjZTM2ZWMyNzg4Nzc2ZTliMzkyYmE0MWY4NWQzYTRiNDQ2ZWQyZjg2JywgJ3Rlc3RzL3Rlc3Rfc2Vzc2lvbl9saWZlY3ljbGUucHknOiAnZTczYTllNWE5ZWI5NWQ1MjMyNjc3OTc4MjVjNDY5MGMzNmVlZDYxZjUxOTFkOGJjYmUxOTBiODQ5NWZmMjMwNScsICd0ZXN0cy90ZXN0X3Nlc3Npb25fcmVjb3ZlcnlfY29udHJhY3RzLnB5JzogJzJkODAzNzY1ZTRmNjhmYTNjYzJjOTI2OGNjMmQ5MGNmZjFlNTcyOGNjYTAzN2ExNTA5Y2MwMjA3N2IwZjljNmEnLCAndGVzdHMvdGVzdF9zZXNzaW9uX3JlY292ZXJ5X3JlY29uY2lsaWF0aW9uLnB5JzogJzM3MzFhMTEwMzBiMGJlYmJiOThiNTcwNGFkODYyZTYzYzk1MDNiODJhZjgyNGYyM2ZiOTNjODY5OTBkYjQzYWEnLCAndGVzdHMvdGVzdF9zZXNzaW9uX3RyYW5zaXRpb25fYXNzZXNzbWVudC5weSc6ICdhZGExYTRhN2FmNGIwYmU2NTk3NDZiMmJhNGE0ZjVkN2QzYmYzNjA2YjExMjk0Njg5MTg2ODI5ZjU4NDQ1ZTg1JywgJ3Rlc3RzL3Rlc3Rfc21va2VfY2xpLnB5JzogJzU1YWMzNmQ1MWFlZGZhYTBiMjJiMTcwMTg1MjJkMWJiYzE4YjAyOTA5NjY5ZTA2N2QwZDI5NTY0YjE5M2FjMWQnLCAndGVzdHMvdGVzdF9zcGVjaWFsaXN0X29yY2hlc3RyYXRpb24ucHknOiAnYjgzNzBiMGQ0YjdkZGZkZjgyMDFkM2FiNmVlMjE4NjRiMDgxYzZkNTRlZjUyYzMzYTcxYzdjNmY5OWUwZGUxNicsICd0ZXN0cy90ZXN0X3NwZWNpYWxpc3Rfcm91dGluZy5weSc6ICc2OWYzODY5MjJhOGJkZDQ1NmM2ODQ4MGZjNmE5ZTg3MzA4NjRiM2I4NTlmMmY5YmFmYzRhYzFkMDY4MTRkNmQ0JywgJ3Rlc3RzL3Rlc3Rfc3BlY2lhbGlzdF9yb3V0aW5nX3J1bnRpbWUucHknOiAnMDAyZjY5NDcxNjRmODRkYzQ3MzVlZWQxNDhkOTEzNmYxNWNkMTM2N2M1MWUxZDFlYjkxN2UwNGU2NzRkNWUxMycsICd0ZXN0cy90ZXN0X3NxbGl0ZV9jb2xsYWJvcmF0aW9uX2V2ZW50X3N0b3JlLnB5JzogJ2E0OGVmMWY4MWU3YjczNDVjZGY4NTNlNDYyMGNjZDkzNDQ5MDliM2MxYWQ0NTliZDk0NjU2ZjA2NjM0ODQ4NGMnLCAndGVzdHMvdGVzdF9zcWxpdGVfY29udmVyc2F0aW9uX3N0b3JhZ2UucHknOiAnOGRlMDlmNGI1NmRjMDNlYmEwNDRhZjIwY2Y1MDE0NWE1ZGE3ZjVmM2MxYTg0ZTZlMmM1NmEwZmZlNGNhZWVhNScsICd0ZXN0cy90ZXN0X3NxbGl0ZV9kYXRhYmFzZS5weSc6ICdlNGE3MzFlYTI5NjRhYTEwMDZlZjJmODUwYWYzNzE2NzVlMDI3YTgzM2E5NDFkMzc3Nzk2MzU3OGFmZTk5ZDNlJywgJ3Rlc3RzL3Rlc3Rfc3VpdGVfYnVkZ2V0LnB5JzogJ2IxZjYwOThlY2RjMTQ3N2YxNmMzNGI0OTU5ZmQwNTZhYTEwYzVhNGFlZjEwZTJjNGM5ZTE3NDRjYWMzNTkzZWQnLCAndGVzdHMvdGVzdF93b3Jrc3BhY2VfYW5kX2NvbmZpZy5weSc6ICdhYTlhN2IxOTlkNDE5NmVlMzY2ZjlkMGY3NDkwNWUyOTgzMDAwYWJkN2RjZjQ3MDI3MTlkMzNkNDdiMzg4M2ExJywgJ3Rlc3RzL3Rlc3Rfd29ya3NwYWNlX2ZpeHR1cmVzLnB5JzogJzM0NjUwZDgwNDZhNWI4MjA2MTQzM2YzZjYzZDA5ODkwMWYyMDI5MThiZDJkMzAzOWNjZThkYjA2MzE1OWFmZTgnLCAndGVzdHMvdGVzdF93b3Jrc3BhY2VfcG9saWN5X2NvbXBhdGliaWxpdHkucHknOiAnM2YwMzc0OGRlZjNkMTlkYzY0YzIwNGNmYTYyNzM3MGRjNjQxYzNkNTFkZjcyMTkxMGEyZjhjZGZkNzVmYjVkOScsICd0ZXN0cy90ZXN0X3dvcmtzcGFjZV9zZXNzaW9uX2hpc3RvcnkucHknOiAnMmI5NjlmYTliYjQ5N2RjNmViYjE5YmM5NGUzYjZlZjAwZDIyMDk2Y2ViZmFlYWYwZGYyMmUwNTc2N2JlMzM2YycsICd0ZXN0cy90ZXN0X3dvcmtzcGFjZV9zZXNzaW9uX3Jlc291cmNlcy5weSc6ICcxYjY0Y2MwZmE0OWRkYzg4NDAwMTM1MmQ0NDJiOGQwNTRmNDY1YTFmNDg4NDMwNjgyYWE0MDM1NmZjNjFmMzEyJywgJ3Rlc3RzL3Rlc3Rfd29ya3NwYWNlX3YyX2luaXRpYWxpemF0aW9uLnB5JzogJzA3ZTQzZjk1MTUzNzc4ODhkOTRmMjZjYzhiNjU0MmVhZTE5MmNlMzNiNDg2NWFkOWI2YzY0YTIxNjQ3NjNiOWUnLCAndGVzdHMvdGVzdF93cml0aW5nX2FydGlmYWN0cy5weSc6ICc0NDVmYTRmMmY5Y2FmNTdlZTU3OWE3ZGMwOTdkN2Y3NmQwODNkODY3MTM4ZTlkNzAyYTU1YTA2YmJhODM2MGQ0JywgJ3V2LmxvY2snOiAnZjhkM2ViYjRiYzdiMDY5ZDI2Njk5MDdlODJkOTNhNWEwZDNiNTVkNDA1Njg5Nzk0NGE1MWUzMjMxNTAzMGI5MSd9CnNvdXJjZT17bmFtZTpoYXNobGliLnNoYTI1Nigocm9vdC9uYW1lKS5yZWFkX2J5dGVzKCkpLmhleGRpZ2VzdCgpIGZvciBuYW1lIGluIGV4cGVjdGVkfQphc3NlcnQgc291cmNlPT1leHBlY3RlZCBhbmQgbGVuKHNvdXJjZSk9PTQxMgppZiBzeXMuYXJndlsxXT09J2JlZm9yZSc6CiAgICBoZWFkPXN1YnByb2Nlc3MuY2hlY2tfb3V0cHV0KFsnZ2l0JywncmV2LXBhcnNlJywnSEVBRCddLGN3ZD1yb290LHRleHQ9VHJ1ZSkuc3RyaXAoKQogICAgcGFyZW50PXN1YnByb2Nlc3MuY2hlY2tfb3V0cHV0KFsnZ2l0JywncmV2LXBhcnNlJywnSEVBRF4nXSxjd2Q9cm9vdCx0ZXh0PVRydWUpLnN0cmlwKCkKICAgIGFzc2VydCBwYXJlbnQ9PScwNTVlMjliNTYyNTI2ZDEwODEwZjQ5Mjc2YWU4NjFlZWRhNjkyOWZiJwogICAgYXNzZXJ0IHN1YnByb2Nlc3MuY2hlY2tfb3V0cHV0KFsnZ2l0JywncmV2LXBhcnNlJyxwYXJlbnQrJ157dHJlZX0nXSxjd2Q9cm9vdCx0ZXh0PVRydWUpLnN0cmlwKCk9PSdmN2QwYTE0ZDY2ZDI2YTU3OWY5ZGE0Y2JlOTNjZDcyNTZhYWM2NTg2JwogICAgYXNzZXJ0IHN1YnByb2Nlc3MuY2hlY2tfb3V0cHV0KFsnZ2l0JywnZGlmZicsJy0tbmFtZS1vbmx5JyxwYXJlbnQsaGVhZF0sY3dkPXJvb3QsdGV4dD1UcnVlKS5zcGxpdGxpbmVzKCk9PVsnLmdpdGh1Yi93b3JrZmxvd3MvcHItdmFsaWRhdGlvbi55bWwnXQogICAgcmVjb3JkPXsnc291cmNlX2NhbmRpZGF0ZSc6JzA1NWUyOWI1NjI1MjZkMTA4MTBmNDkyNzZhZTg2MWVlZGE2OTI5ZmInLCdzb3VyY2VfdHJlZSc6J2Y3ZDBhMTRkNjZkMjZhNTc5ZjlkYTRjYmU5M2NkNzI1NmFhYzY1ODYnLCdzb3VyY2VfYmVmb3JlJzpzb3VyY2UsCiAgICAgICAgICAgICd0ZXN0X2lkcyc6Wyd0ZXN0cy50ZXN0X2FnZW50X2NvbnRleHRfc2VydmljZS5TdHJ1Y3R1cmVkT3V0cHV0VmFsaWRhdGlvblRlc3RzLnRlc3RfYm91bmRlZF9jaHVua3NfcHJlc2VydmVfb3JkZXJfYW5kX292ZXJfMzJrX2NvbnRlbnQnLCAndGVzdHMudGVzdF9hZ2VudF9jb250ZXh0X3NlcnZpY2UuU3RydWN0dXJlZE91dHB1dFZhbGlkYXRpb25UZXN0cy50ZXN0X2RpYWdub3NlX2pzb25fdGV4dF9yZXBvcnRzX2FsbF9pbmRlcGVuZGVudF9zYWZlX2lzc3VlcycsICd0ZXN0cy50ZXN0X2FnZW50X2NvbnRleHRfc2VydmljZS5TdHJ1Y3R1cmVkT3V0cHV0VmFsaWRhdGlvblRlc3RzLnRlc3RfbWFsZm9ybWVkX2FuZF9kdXBsaWNhdGVfanNvbl9oYXZlX3ZhbHVlX2ZyZWVfZGlhZ25vc3RpY3MnLCAndGVzdHMudGVzdF9hZ2VudF9jb250ZXh0X3NlcnZpY2UuU3RydWN0dXJlZE91dHB1dFZhbGlkYXRpb25UZXN0cy50ZXN0X3Byb3BlcnRpZXNfb21pdHRlZF9mcm9tX3JlcXVpcmVkX3JlbWFpbl9vcHRpb25hbCcsICd0ZXN0cy50ZXN0X2FnZW50X2NvbnRleHRfc2VydmljZS5TdHJ1Y3R1cmVkT3V0cHV0VmFsaWRhdGlvblRlc3RzLnRlc3RfdW5pb25fc2VsZWN0c19tYXRjaGluZ19icmFuY2hfd2l0aG91dF9vdGhlcl9icmFuY2hfbm9pc2UnLCAndGVzdHMudGVzdF9jb2RleF9iYWNrZW5kLkNvZGV4QmFja2VuZFRlc3RDYXNlLnRlc3RfcmV0cmlldmFsX25vbl9zdHJpbmdfa2luZF9yZXBvcnRzX2V4YWN0X3R5cGVfYW5kX2NvbW1vbl9pc3N1ZXMnLCAndGVzdHMudGVzdF9jb2RleF9iYWNrZW5kLkNvZGV4QmFja2VuZFRlc3RDYXNlLnRlc3RfcmV0cmlldmFsX3JlYWRfZXhwbGljaXRfbnVsbF9pc19ub3RfYW5fb21pdHRlZF9lbmRfc2VxdWVuY2UnXSwndGVzdF9pZCc6b3MuZW52aXJvblsnRElBR05PU1RJQ19URVNUX0lEJ10sJ3Byb2ZpbGVfbW9kZSc6J25vbmUnLAogICAgICAgICAgICAnY2hlY2tvdXRfc2hhJzpoZWFkLCdjaGVja291dF90cmVlJzpzdWJwcm9jZXNzLmNoZWNrX291dHB1dChbJ2dpdCcsJ3Jldi1wYXJzZScsJ0hFQURee3RyZWV9J10sY3dkPXJvb3QsdGV4dD1UcnVlKS5zdHJpcCgpLAogICAgICAgICAgICAnd29ya2Zsb3dfc2hhMjU2JzpoYXNobGliLnNoYTI1Nigocm9vdC8nLmdpdGh1Yi93b3JrZmxvd3MvcHItdmFsaWRhdGlvbi55bWwnKS5yZWFkX2J5dGVzKCkpLmhleGRpZ2VzdCgpLAogICAgICAgICAgICAncnVuX2lkJzppbnQob3MuZW52aXJvblsnR0lUSFVCX1JVTl9JRCddKSwncnVuX2F0dGVtcHQnOmludChvcy5lbnZpcm9uWydHSVRIVUJfUlVOX0FUVEVNUFQnXSl9CiAgICBhc3NlcnQgcmVjb3JkWyd0ZXN0X2lkJ109PVsndGVzdHMudGVzdF9hZ2VudF9jb250ZXh0X3NlcnZpY2UuU3RydWN0dXJlZE91dHB1dFZhbGlkYXRpb25UZXN0cy50ZXN0X2JvdW5kZWRfY2h1bmtzX3ByZXNlcnZlX29yZGVyX2FuZF9vdmVyXzMya19jb250ZW50JywgJ3Rlc3RzLnRlc3RfYWdlbnRfY29udGV4dF9zZXJ2aWNlLlN0cnVjdHVyZWRPdXRwdXRWYWxpZGF0aW9uVGVzdHMudGVzdF9kaWFnbm9zZV9qc29uX3RleHRfcmVwb3J0c19hbGxfaW5kZXBlbmRlbnRfc2FmZV9pc3N1ZXMnLCAndGVzdHMudGVzdF9hZ2VudF9jb250ZXh0X3NlcnZpY2UuU3RydWN0dXJlZE91dHB1dFZhbGlkYXRpb25UZXN0cy50ZXN0X21hbGZvcm1lZF9hbmRfZHVwbGljYXRlX2pzb25faGF2ZV92YWx1ZV9mcmVlX2RpYWdub3N0aWNzJywgJ3Rlc3RzLnRlc3RfYWdlbnRfY29udGV4dF9zZXJ2aWNlLlN0cnVjdHVyZWRPdXRwdXRWYWxpZGF0aW9uVGVzdHMudGVzdF9wcm9wZXJ0aWVzX29taXR0ZWRfZnJvbV9yZXF1aXJlZF9yZW1haW5fb3B0aW9uYWwnLCAndGVzdHMudGVzdF9hZ2VudF9jb250ZXh0X3NlcnZpY2UuU3RydWN0dXJlZE91dHB1dFZhbGlkYXRpb25UZXN0cy50ZXN0X3VuaW9uX3NlbGVjdHNfbWF0Y2hpbmdfYnJhbmNoX3dpdGhvdXRfb3RoZXJfYnJhbmNoX25vaXNlJywgJ3Rlc3RzLnRlc3RfY29kZXhfYmFja2VuZC5Db2RleEJhY2tlbmRUZXN0Q2FzZS50ZXN0X3JldHJpZXZhbF9ub25fc3RyaW5nX2tpbmRfcmVwb3J0c19leGFjdF90eXBlX2FuZF9jb21tb25faXNzdWVzJywgJ3Rlc3RzLnRlc3RfY29kZXhfYmFja2VuZC5Db2RleEJhY2tlbmRUZXN0Q2FzZS50ZXN0X3JldHJpZXZhbF9yZWFkX2V4cGxpY2l0X251bGxfaXNfbm90X2FuX29taXR0ZWRfZW5kX3NlcXVlbmNlJ11bNF0gYW5kIG9zLmVudmlyb25bJ0RJQUdOT1NUSUNfUFJPRklMRV9NT0RFJ109PSdub25lJwogICAgZGVzdGluYXRpb249J3ByZXBhcmVkLmpzb24nCmVsc2U6CiAgICBiZWZvcmU9anNvbi5sb2Fkcygob3V0LydwcmVwYXJlZC5qc29uJykucmVhZF90ZXh0KCkpCiAgICByZWNvcmQ9eydzb3VyY2VfY2FuZGlkYXRlJzonMDU1ZTI5YjU2MjUyNmQxMDgxMGY0OTI3NmFlODYxZWVkYTY5MjlmYicsJ3NvdXJjZV9iZWZvcmUnOmJlZm9yZVsnc291cmNlX2JlZm9yZSddLCdzb3VyY2VfYWZ0ZXInOnNvdXJjZSwKICAgICAgICAgICAgJ3NvdXJjZV92YWxpZCc6c291cmNlPT1iZWZvcmVbJ3NvdXJjZV9iZWZvcmUnXSwncnVubmVyX2V4aXRfY29kZSc6aW50KHN5cy5hcmd2WzJdKSwKICAgICAgICAgICAgJ3BhcnRpYWwnOmludChzeXMuYXJndlsyXSkgbm90IGluICgwLDEpLCdpbnN0cnVtZW50YXRpb24nOkZhbHNlfQogICAgZGVzdGluYXRpb249J2NvdW50ZXJzLmpzb24nCihvdXQvZGVzdGluYXRpb24pLndyaXRlX3RleHQoanNvbi5kdW1wcyhyZWNvcmQsaW5kZW50PTIsc29ydF9rZXlzPVRydWUpKydcbicpCg=='))\nPY_SOURCE\n.venv/bin/python \"$RUNNER_TEMP/timing-diagnostic/source-metadata.py\" before\nset +e\ntimeout --signal=INT --kill-after=30s \"${test_seconds}s\" .venv/bin/python -m tests.runner run --id tests.test_agent_context_service.StructuredOutputValidationTests.test_bounded_chunks_preserve_order_and_over_32k_content --id tests.test_agent_context_service.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues --id tests.test_agent_context_service.StructuredOutputValidationTests.test_malformed_and_duplicate_json_have_value_free_diagnostics --id tests.test_agent_context_service.StructuredOutputValidationTests.test_properties_omitted_from_required_remain_optional --id tests.test_agent_context_service.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise --id tests.test_codex_backend.CodexBackendTestCase.test_retrieval_non_string_kind_reports_exact_type_and_common_issues --id tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence --json \"$RUNNER_TEMP/timing-diagnostic/instrumented-run.json\" 2>&1 | tee \"$RUNNER_TEMP/timing-diagnostic/worker.log\"\ntest_statuses=(\"${PIPESTATUS[@]}\")\ntest_status=${test_statuses[0]}\nif (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi\nprintf '%s\\n' \"$test_status\" > \"$RUNNER_TEMP/timing-diagnostic/exit-code.txt\"\nprintf '{\"worker\":%s,\"tee\":%s}\\n' \"${test_statuses[0]}\" \"${test_statuses[1]}\" > \"$RUNNER_TEMP/timing-diagnostic/pipeline-status.json\"\nset -e\n.venv/bin/python \"$RUNNER_TEMP/timing-diagnostic/source-metadata.py\" after \"$test_status\"\nexit \"$test_status\"\n"
+        },
+        {
+          "uses": "actions/upload-artifact@v4",
+          "timeout-minutes": 1,
+          "if": "always() && (github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true')",
+          "with": {
+            "name": "${{ github.event_name == 'workflow_dispatch' && format('timing-diagnostic-{0}-{1}', inputs.arch, inputs.scratch) || 'timing-diagnostic' }}",
+            "path": "${{ runner.temp }}/timing-diagnostic",
+            "if-no-files-found": "error"
+          }
+        },
+        {
+          "name": "Remove diagnostic scratch storage",
+          "if": "always() && steps.scratch.outputs.directory != ''",
+          "env": {
+            "SCRATCH": "${{ steps.scratch.outputs.directory }}",
+            "SCRATCH_IDENTITY": "${{ steps.scratch.outputs.identity }}",
+            "MEMORY": "${{ inputs.scratch == 'memory' }}"
+          },
+          "run": "if [[ \"$MEMORY\" == \"true\" ]]; then\n  if mountpoint -q \"$SCRATCH\"; then\n    sudo umount \"$SCRATCH\"\n  fi\n  rmdir \"$SCRATCH\"\nelse\n  printf 'Diagnostic scratch cleanup path=%s identity=%s\\n' \"$SCRATCH\" \"$SCRATCH_IDENTITY\"\n  cleanup_seconds=\"$(python - <<'PY'\nimport os, time\nremaining = int(os.environ[\"TEST_JOB_DEADLINE\"]) - 360 - time.time()\nwork_ms = min(28000, int((remaining - 2) * 1000))\nif work_ms <= 0:\n    raise SystemExit(\"No diagnostic scratch cleanup budget remains before cancellation reserve\")\nprint(f\"{work_ms / 1000:.3f}\")\nPY\n  )\"\n  timeout --signal=TERM --kill-after=2s \"${cleanup_seconds}s\" python -u - <<'PY'\nimport json, os, re, shutil, stat, time\nrecord = json.loads(os.environ[\"SCRATCH_IDENTITY\"])\npath = os.environ[\"SCRATCH\"]\nparent = record[\"parent\"]\nname = os.path.basename(path)\nstop = int(os.environ[\"TEST_JOB_DEADLINE\"]) - 360\nif time.time() >= stop - 2:\n    raise RuntimeError(\"Diagnostic scratch cleanup window expired\")\nif (not os.path.isabs(path) or path != record[\"path\"]\n        or os.path.dirname(path) != parent or os.path.realpath(parent) != parent\n        or not re.fullmatch(r\"story-timing\\.[A-Za-z0-9]{8}\", name)):\n    raise RuntimeError(\"Diagnostic scratch path identity changed\")\nif not shutil.rmtree.avoids_symlink_attacks:\n    raise RuntimeError(\"Symlink-resistant diagnostic cleanup is unavailable\")\nfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)\ntry:\n    outer = os.fstat(fd)\n    if [outer.st_dev, outer.st_ino, outer.st_uid] != record[\"parent_identity\"]:\n        raise RuntimeError(\"Diagnostic scratch parent identity changed\")\n    inner = os.stat(name, dir_fd=fd, follow_symlinks=False)\n    if (not stat.S_ISDIR(inner.st_mode) or inner.st_uid != os.geteuid()\n            or inner.st_dev != outer.st_dev\n            or [inner.st_dev, inner.st_ino, inner.st_uid] != record[\"root\"]):\n        raise RuntimeError(\"Diagnostic scratch directory identity changed\")\n    with open(\"/proc/self/mountinfo\", encoding=\"utf-8\") as mounts:\n        for line in mounts:\n            mount = line.split()[4]\n            for escaped, decoded in ((r\"\\040\", \" \"), (r\"\\011\", \"\\t\"), (r\"\\012\", \"\\n\"), (r\"\\134\", chr(92))):\n                mount = mount.replace(escaped, decoded)\n            if mount == path or mount.startswith(path + os.sep):\n                raise RuntimeError(\"Mounted diagnostic scratch storage cannot be recursively removed\")\n    current = os.stat(name, dir_fd=fd, follow_symlinks=False)\n    if ([current.st_dev, current.st_ino, current.st_uid] != record[\"root\"]\n            or not stat.S_ISDIR(current.st_mode) or time.time() >= stop - 2):\n        raise RuntimeError(\"Diagnostic scratch identity or cleanup window changed\")\n    shutil.rmtree(name, dir_fd=fd)\n    try:\n        os.stat(name, dir_fd=fd, follow_symlinks=False)\n    except FileNotFoundError:\n        print(json.dumps({\"diagnostic_scratch_removed\": record}, sort_keys=True), flush=True)\n    else:\n        raise RuntimeError(\"Diagnostic scratch path remains after cleanup\")\nfinally:\n    os.close(fd)\nPY\nfi\n"
+        }
+      ]
+    }
+  },
+  "on": {
+    "workflow_dispatch": {
+      "inputs": {
+        "arch": {
+          "description": "Diagnostic-only standard runner architecture",
+          "type": "choice",
+          "options": [
+            "x64"
+          ],
+          "default": "x64"
+        },
+        "scratch": {
+          "description": "Diagnostic-only temporary filesystem",
+          "type": "choice",
+          "options": [
+            "disk"
+          ],
+          "default": "disk"
+        },
+        "profile_mode": {
+          "description": "Optional cProfile instrumentation for the exact diagnostic",
+          "type": "choice",
+          "options": [
+            "none"
+          ],
+          "default": "none"
+        },
+        "test_id": {
+          "description": "Fixed representative of the seven pinned canonical IDs",
+          "type": "choice",
+          "options": [
+            "tests.test_agent_context_service.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise"
+          ],
+          "default": "tests.test_agent_context_service.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise"
+        }
+      }
+    }
+  }
+}
