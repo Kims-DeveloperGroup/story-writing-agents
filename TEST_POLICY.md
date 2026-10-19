@@ -111,6 +111,31 @@ interruption; a partial or timed-out execution never counts as a passing test.
 These reports remain diagnostic evidence and never replace the required
 complete full-suite gate.
 
+## Runtime optimization evidence
+
+Before changing a validation shortcut, add independent compatibility oracles to
+existing test IDs and run them against the unchanged implementation. Preserve
+exact ordered diagnostics, fallback behavior, mutation checks, test inventory,
+and source budgets. Run the same checks against the candidate before expensive
+runtime scenarios.
+
+Measure at least three ordinary fresh-process samples per source on the same
+existing runner, balancing source order and recording setup and workload CPU and
+wall time separately. Run profiling in a separate process; profiled time is not
+an ordinary benchmark sample, and overlapping cumulative costs cannot be added.
+Compare the exact semantic workload and mutation inventory. Record per-sample
+source pins, graph hashes and sizes, accepted results, and checked cleanup.
+Generated task identities may differ only where the fixture explicitly binds
+them; do not substitute byte tolerances or blanket identifier normalization for
+behavioral equivalence.
+
+Keep native workflow outcomes, missing reports and cleanup failures visible.
+A successful representative benchmark gives no canonical test credit and does
+not establish that a complete class or full suite fits the 30-minute deadline.
+Refresh shard weights only from complete verified timings, retaining whole
+classes and required fast-tier membership. The active optimization record is
+[child #872](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/872).
+
 ## Initial calibration
 
 Issue #732 first reduced the 2,872-ID snapshot to 2,530 IDs (342 fewer,

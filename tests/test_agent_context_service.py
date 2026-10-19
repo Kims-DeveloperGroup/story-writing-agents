@@ -96,16 +96,16 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertEqual(diagnose_value(supplied, references), (
             '$.left: expected one of ["changed"] (string), got string',
             '$.right: expected one of ["changed"] (string), got string'))
-        text_rule["enum"] = ["ok"]
-        self.assertEqual(diagnose_value(supplied, references), ())
+        text_rule["enum"] = ["ok"]; self.assertEqual(diagnose_value(supplied, references), ())
         alternatives = {"anyOf": [{"type": "integer"}, {"type": "string", "minLength": 2}]}
         for value in (3, "ok"):
             self.assertEqual(diagnose_value(value, alternatives), ())
         self.assertEqual(diagnose_value("q", alternatives), ("$: expected at least 2 characters, got 1",))
         self.assertEqual(diagnose_value([], alternatives), (
-            "$: expected one unambiguous schema alternative",
             "$: allowed alternative 1 requires expected integer, got array",
             "$: allowed alternative 2 requires expected string, got array"))
+        self.assertEqual(diagnose_value(1, {"anyOf": [{"type": "integer"}, {"type": "number"}]}),
+                         ("$: expected one unambiguous schema alternative",))
         def object_alternative(*names):
             return {"type": "object", "properties": {name: {"type": "integer"} for name in names},
                     "required": list(names)}
