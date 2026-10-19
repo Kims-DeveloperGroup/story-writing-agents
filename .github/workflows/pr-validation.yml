@@ -1,886 +1,99 @@
-name: PR validation
-
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
-  merge_group:
-    types: [checks_requested]
-  workflow_dispatch:
-    inputs:
-      arch:
-        description: Diagnostic-only standard runner architecture
-        type: choice
-        options: [x64, arm64]
-        default: x64
-      scratch:
-        description: Diagnostic-only temporary filesystem
-        type: choice
-        options: [disk, memory]
-        default: disk
-      profile_mode:
-        description: Optional cProfile instrumentation for the exact diagnostic
-        type: choice
-        options: [cprofile, none]
-        default: cprofile
-      test_id:
-        description: Diagnostic-only exact canonical test ID
-        type: string
-        default: tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles
-
-permissions:
-  contents: read
-  pull-requests: read
-
-concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-diagnostic-{1}-{2}-{3}', github.workflow, github.ref, inputs.arch, inputs.scratch) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.event.merge_group.head_ref || github.ref) }}
-  cancel-in-progress: true
-
-jobs:
-  workflow-deadline:
-    name: Enforce 30-minute workflow limit
-    # Cover classification, setup and dependency waits independently.
-    # Survive normal cancellation long enough to force-cancel stalled jobs.
-    if: always()
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      actions: write
-    steps:
-      - name: Enforce total workflow deadline
-        uses: actions/github-script@v7
-        with:
-          retries: 0
-          script: |
-            const parameters = () => ({
-              ...context.repo,
-              run_id: context.runId,
-              request: {signal: AbortSignal.timeout(5000)},
-            });
-            const attempt = Number(process.env.GITHUB_RUN_ATTEMPT);
-            if (!Number.isSafeInteger(attempt) || attempt < 1) {
-              core.setFailed("Missing workflow attempt identity.");
-              return;
-            }
-            // Metadata retries never grant a new test budget.
-            const metadataDeadline = Date.now() + 30_000;
-            let deadline;
-            let cancellationRequested = false;
-            async function currentRun() {
-              const {data: run} = await github.rest.actions.getWorkflowRun(parameters());
-              if (run.id !== context.runId || run.run_attempt !== attempt) {
-                core.setFailed("Workflow attempt changed; the stale guard cannot cancel it.");
-                return null;
-              }
-              if (run.status === "completed") return null;
-              const created = Date.parse(run.created_at);
-              if (!Number.isFinite(created)) throw new Error("Missing workflow creation time.");
-              const runDeadline = created + 30 * 60 * 1000;
-              deadline = deadline === undefined ? runDeadline : Math.min(deadline, runDeadline);
-              return run;
-            }
-            while (Date.now() < (deadline ?? metadataDeadline)) {
-              try {
-                if (!await currentRun()) return;
-                let complete;
-                try {
-                  const {data: page} = await github.rest.actions.listJobsForWorkflowRunAttempt({
-                    ...parameters(), attempt_number: attempt, per_page: 100,
-                  });
-                  if (!Number.isSafeInteger(page.total_count) || page.total_count > 100 ||
-                      !Array.isArray(page.jobs) || page.total_count !== page.jobs.length) {
-                    throw new Error("Cannot establish the complete validation job list.");
-                  }
-                  // A marker covers downstream jobs absent from an earlier API snapshot.
-                  complete = page.jobs.find(job => job.name === "Validation jobs complete");
-                } catch (error) {
-                  // Job-list failures cannot prevent cancellation at the deadline.
-                  core.warning(`Completion lookup failed: ${error.message}`);
-                }
-                if (Date.now() < deadline && complete?.status === "completed" &&
-                    ["success", "failure"].includes(complete.conclusion)) {
-                  core.info("All validation jobs finished within the workflow deadline.");
-                  return;
-                }
-                if (Date.now() >= deadline - 60_000) {
-                  core.setFailed("Workflow shutdown reserve reached; force-cancelling this run.");
-                  if (!await currentRun()) return;
-                  await github.request("POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel", parameters());
-                  return;
-                }
-                if (!cancellationRequested && Date.now() >= deadline - 90_000) {
-                  core.setFailed("Workflow shutdown reserve reached; cancelling this run.");
-                  if (!await currentRun()) return;
-                  await github.rest.actions.cancelWorkflowRun(parameters());
-                  cancellationRequested = true;
-                }
-              } catch (error) {
-                core.warning(`Deadline control request failed: ${error.message}`);
-              }
-              const remaining = (deadline ?? metadataDeadline) - Date.now();
-              const poll = deadline !== undefined && remaining > 90_000 ? 30_000 : 5000;
-              if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(poll, remaining)));
-            }
-            core.setFailed("Workflow deadline enforcement could not complete within its bounded window.");
-
-  validation-complete:
-    name: Validation jobs complete
-    needs: [classify, static, fast, full, reconcile-full, diagnose-full-budget]
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions: {}
-    steps:
-      - name: Mark validation jobs terminal
-        timeout-minutes: 1
-        run: echo "Validation jobs are terminal; their individual results remain authoritative."
-
-  classify:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Initialize diagnostic deadline' || 'Classify changed paths' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      pull-requests: read
-      actions: read
-    outputs:
-      test_run_deadline: ${{ steps.paths.outputs.test_run_deadline }}
-      runtime: ${{ steps.paths.outputs.runtime }}
-      policy_only: ${{ steps.paths.outputs.policy_only }}
-      full: ${{ steps.paths.outputs.full }}
-      wall_time_exception: ${{ steps.paths.outputs.wall_time_exception }}
-      base_sha: ${{ steps.paths.outputs.base_sha }}
-      head_sha: ${{ steps.paths.outputs.head_sha }}
-      checkout_sha: ${{ steps.paths.outputs.checkout_sha }}
-    steps:
-      - name: Classify paths and select runtime evidence
-        id: paths
-        uses: actions/github-script@v7
-        timeout-minutes: 2
-        with:
-          script: |
-            const {owner, repo} = context.repo;
-            const {data: run} = await github.rest.actions.getWorkflowRun({
-              owner, repo, run_id: context.runId, request: {signal: AbortSignal.timeout(5000)},
-            });
-            const created = Date.parse(run.created_at);
-            if (run.id !== context.runId || run.run_attempt !== Number(process.env.GITHUB_RUN_ATTEMPT) ||
-                !Number.isFinite(created)) {
-              core.setFailed("Cannot establish this workflow attempt's creation time.");
-              return;
-            }
-            const deadline = Math.floor(created / 1000) + 30 * 60;
-            core.setOutput("test_run_deadline", String(deadline));
-            if (Date.now() >= deadline * 1000) {
-              core.setFailed("Shared workflow deadline exhausted before classification.");
-              return;
-            }
-            if (context.eventName === "workflow_dispatch") {
-              core.setOutput("runtime", "false");
-              core.setOutput("policy_only", "true");
-              core.setOutput("full", "false");
-              core.setOutput("wall_time_exception", "false");
-              for (const name of ["base_sha", "head_sha", "checkout_sha"]) core.setOutput(name, context.sha);
-              return;
-            }
-            let files = [];
-            let labels = [];
-            let baseSha;
-            let headSha;
-            let truncated = false;
-
-            if (context.eventName === "pull_request") {
-              const pr = context.payload.pull_request;
-              baseSha = pr.base.sha;
-              headSha = pr.head.sha;
-              labels = pr.labels.map(label => label.name);
-              files = await github.paginate(github.rest.pulls.listFiles, {
-                owner, repo, pull_number: pr.number, per_page: 100,
-              });
-              truncated = files.length >= 3000;
-            } else {
-              const group = context.payload.merge_group;
-              baseSha = group.base_sha;
-              headSha = group.head_sha;
-              const comparison = await github.rest.repos.compareCommitsWithBasehead({
-                owner, repo, basehead: `${baseSha}...${headSha}`, per_page: 100,
-              });
-              files = comparison.data.files || [];
-              // A full page may hide later files. Fail closed rather than infer a partial diff.
-              truncated = !Array.isArray(comparison.data.files) || files.length >= 100;
-            }
-
-            const paths = files.flatMap(file =>
-              [file.filename, file.previous_filename].filter(Boolean));
-            const isRuntime = path =>
-              path.startsWith("src/") ||
-              path.startsWith("config/") ||
-              path === "pyproject.toml" ||
-              path === "uv.lock" ||
-              path === "MANIFEST.in" ||
-              path === ".gitmodules" ||
-              path === "vendor/generic-rag" ||
-              path === "vendor/jsonl-viewer";
-            const runtimePaths = truncated || paths.some(isRuntime);
-            const isTest = path => path.startsWith("tests/") ||
-              path === ".github/workflows/pr-validation.yml" || path === "TEST_POLICY.md";
-            const testPaths = truncated || paths.some(isTest);
-            const fullRequested = labels.includes("test:full");
-            const wallTimeException = context.eventName === "pull_request" && labels.includes("test:wall-time-exception");
-            const runtime = runtimePaths || testPaths || fullRequested;
-            const full = runtime;
-            core.setOutput("runtime", String(runtime));
-            core.setOutput("policy_only", String(!runtimePaths && !testPaths));
-            core.setOutput("full", String(full));
-            core.setOutput("wall_time_exception", String(wallTimeException));
-            core.setOutput("base_sha", baseSha);
-            core.setOutput("head_sha", headSha);
-            // Event SHA is the PR test merge or merge-group commit, pinned across jobs.
-            core.setOutput("checkout_sha", context.sha);
-            core.summary
-              .addHeading("Validation selection")
-              .addTable([
-                [{data: "Runtime paths", header: true}, String(runtimePaths)],
-                [{data: "Policy/config only", header: true}, String(!runtimePaths)],
-                [{data: "Run runtime lanes", header: true}, String(runtime)],
-                [{data: "Full suite", header: true}, String(full)],
-                [{data: "Wall-time exception", header: true}, String(wallTimeException)],
-              ])
-              .write();
-
-  static:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - static validation skipped' || 'Static validation' }}
-    needs: classify
-    if: github.event_name != 'workflow_dispatch'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Check shared deadline before static work
-        run: |
-          [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-          if (( TEST_RUN_DEADLINE <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before static work."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Check patch whitespace
-        env:
-          BASE_SHA: ${{ needs.classify.outputs.base_sha }}
-          HEAD_SHA: ${{ needs.classify.outputs.head_sha }}
-        run: git diff --check "$BASE_SHA...$HEAD_SHA"
-      - name: Parse repository configuration
-        run: |
-          python - <<'PY'
-          import json
-          import pathlib
-          import tomllib
-
-          for path in pathlib.Path(".").glob("**/*.toml"):
-              if ".git" not in path.parts:
-                  data = tomllib.loads(path.read_text(encoding="utf-8"))
-                  if path.parent == pathlib.Path(".codex/agents"):
-                      if data.get("name") != path.stem:
-                          raise SystemExit(f"{path}: agent name must match filename")
-                      for field in ("description", "developer_instructions"):
-                          value = data.get(field)
-                          if not isinstance(value, str) or not value.strip():
-                              raise SystemExit(f"{path}: missing {field}")
-          for path in pathlib.Path(".").glob("**/*.json"):
-              if ".git" not in path.parts:
-                  json.loads(path.read_text(encoding="utf-8"))
-          for path in (*pathlib.Path("src").rglob("*.py"), *pathlib.Path("tests").rglob("*.py")):
-              compile(path.read_text(encoding="utf-8"), str(path), "exec", dont_inherit=True)
-          PY
-          ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |path| YAML.parse_file(path) }'
-          ruby -ryaml -ropen3 <<'RB'
-          Dir[".agents/skills/*/SKILL.md"].each do |path|
-            source = File.read(path)
-            match = source.match(/\A---\r?\n(.*?)\r?\n---(?:\r?\n|\z)/m)
-            abort "#{path}: missing YAML frontmatter" unless match
-            data = YAML.safe_load(match[1], aliases: false)
-            abort "#{path}: name must match directory and description must be nonempty" unless
-              data.is_a?(Hash) && data["name"] == File.basename(File.dirname(path)) &&
-              data["description"].is_a?(String) && !data["description"].strip.empty?
-          end
-          issue_path = ".github/ISSUE_TEMPLATE/work_item.md"
-          issue_source = File.read(issue_path)
-          issue_match = issue_source.match(/\A---\r?\n(.*?)\r?\n---(?:\r?\n|\z)/m)
-          abort "#{issue_path}: missing YAML frontmatter" unless issue_match
-          issue = YAML.safe_load(issue_match[1], aliases: false)
-          abort "#{issue_path}: invalid frontmatter mapping" unless issue.is_a?(Hash)
-          %w[name about title labels assignees].each do |field|
-            value = issue[field]
-            abort "#{issue_path}: missing or non-string #{field}" unless value.is_a?(String)
-          end
-          %w[name about].each do |field|
-            abort "#{issue_path}: empty #{field}" if issue[field].strip.empty?
-          end
-          Dir[".github/workflows/*.{yml,yaml}"].each do |path|
-            document = YAML.safe_load(File.read(path), aliases: false)
-            document.fetch("jobs").each do |job_name, job|
-              job.fetch("steps", []).each do |step|
-                script = step["with"]&.fetch("script", nil)
-                next unless script
-                _, error, status = Open3.capture3(
-                  "node", "--input-type=module", "--check",
-                  stdin_data: "async function main() {\n#{script}\n}")
-                abort "#{path} #{job_name}: #{error}" unless status.success?
-              end
-            end
-          end
-          RB
-      - name: Validate runner metadata
-        run: |
-          python -B - <<'PY'
-          from tests import suite_policy
-
-          suite_policy.load_timing_weights()
-          ids = suite_policy.FAST_TEST_IDS
-          if not ids or len(ids) != len(set(ids)):
-              raise SystemExit("fast tier must contain unique test IDs")
-          if any(not identifier.rsplit(".", 1)[-1].startswith("test") for identifier in ids):
-              raise SystemExit("fast tier contains a non-test method ID")
-          PY
-      - name: Validate locked vendor pins
-        run: |
-          python - <<'PY'
-          import subprocess
-          import tomllib
-          from pathlib import Path
-
-          if Path("MANIFEST.in").read_text(encoding="utf-8") != "prune vendor/jsonl-viewer\n":
-              raise SystemExit("MANIFEST.in must exclude vendored jsonl-viewer source")
-
-          with open("uv.lock", "rb") as source:
-              packages = {package["name"]: package for package in tomllib.load(source)["package"]}
-          for name in ("generic-rag", "jsonl-viewer"):
-              pinned = packages[name]["source"]["git"].rsplit("#", 1)[-1]
-              gitlink = subprocess.check_output(
-                  ["git", "rev-parse", f"HEAD:vendor/{name}"], text=True
-              ).strip()
-              if pinned != gitlink:
-                  raise SystemExit(f"{name}: uv.lock pin {pinned} differs from gitlink {gitlink}")
-          PY
-      - name: Validate policy artifacts
-        run: |
-          python - <<'PY'
-          import pathlib
-
-          root = pathlib.Path.cwd()
-          templates = {
-              ".github/ISSUE_TEMPLATE/work_item.md": [
-                  "## Objective", "## Use cases and expected results",
-                  "## Implementation summary", "## Acceptance criteria",
-                  "## Boundaries and dependencies",
-                  "## Related work and verification plan", "## Implementation plan",
-              ],
-              ".github/pull_request_template.md": [
-                  "## What changed", "## Before and after", "## Implementation",
-                  "## Verification", "## Limitations and follow-ups",
-                  "## Related Issue",
-              ],
-              ".github/templates/evidence.md": [
-                  "## What this demonstrates", "## Scenario results",
-                  "## Reproduction and environment", "## Failures and coverage gaps",
-                  "## Technical provenance and artifacts", "## Assessment",
-              ],
-              ".github/templates/working-status-comment.md": [
-                  "## Current status", "## What works now", "## What remains",
-                  "## Blocker or decision", "## Next step", "## Evidence links",
-              ],
+{
+  "name": "PR validation",
+  "on": {
+    "workflow_dispatch": {}
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "concurrency": {
+    "group": "issue-848-bound-query-check-${{ github.ref }}",
+    "cancel-in-progress": false
+  },
+  "jobs": {
+    "workflow-deadline": {
+      "name": "Enforce 30-minute workflow limit",
+      "if": "always()",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "permissions": {
+        "actions": "write"
+      },
+      "steps": [
+        {
+          "name": "Enforce total workflow deadline",
+          "uses": "actions/github-script@v7",
+          "with": {
+            "retries": 0,
+            "script": "const parameters = () => ({\n  ...context.repo,\n  run_id: context.runId,\n  request: {signal: AbortSignal.timeout(5000)},\n});\nconst attempt = Number(process.env.GITHUB_RUN_ATTEMPT);\nif (!Number.isSafeInteger(attempt) || attempt < 1) {\n  core.setFailed(\"Missing workflow attempt identity.\");\n  return;\n}\n// Metadata retries never grant a new test budget.\nconst metadataDeadline = Date.now() + 30_000;\nlet deadline;\nlet cancellationRequested = false;\nasync function currentRun() {\n  const {data: run} = await github.rest.actions.getWorkflowRun(parameters());\n  if (run.id !== context.runId || run.run_attempt !== attempt) {\n    core.setFailed(\"Workflow attempt changed; the stale guard cannot cancel it.\");\n    return null;\n  }\n  if (run.status === \"completed\") return null;\n  const created = Date.parse(run.created_at);\n  if (!Number.isFinite(created)) throw new Error(\"Missing workflow creation time.\");\n  const runDeadline = created + 30 * 60 * 1000;\n  deadline = deadline === undefined ? runDeadline : Math.min(deadline, runDeadline);\n  return run;\n}\nwhile (Date.now() < (deadline ?? metadataDeadline)) {\n  try {\n    if (!await currentRun()) return;\n    let complete;\n    try {\n      const {data: page} = await github.rest.actions.listJobsForWorkflowRunAttempt({\n        ...parameters(), attempt_number: attempt, per_page: 100,\n      });\n      if (!Number.isSafeInteger(page.total_count) || page.total_count > 100 ||\n          !Array.isArray(page.jobs) || page.total_count !== page.jobs.length) {\n        throw new Error(\"Cannot establish the complete validation job list.\");\n      }\n      // A marker covers downstream jobs absent from an earlier API snapshot.\n      complete = page.jobs.find(job => job.name === \"Validation jobs complete\");\n    } catch (error) {\n      // Job-list failures cannot prevent cancellation at the deadline.\n      core.warning(`Completion lookup failed: ${error.message}`);\n    }\n    if (Date.now() < deadline && complete?.status === \"completed\" &&\n        [\"success\", \"failure\"].includes(complete.conclusion)) {\n      core.info(\"All validation jobs finished within the workflow deadline.\");\n      return;\n    }\n    if (Date.now() >= deadline - 60_000) {\n      core.setFailed(\"Workflow shutdown reserve reached; force-cancelling this run.\");\n      if (!await currentRun()) return;\n      await github.request(\"POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel\", parameters());\n      return;\n    }\n    if (!cancellationRequested && Date.now() >= deadline - 90_000) {\n      core.setFailed(\"Workflow shutdown reserve reached; cancelling this run.\");\n      if (!await currentRun()) return;\n      await github.rest.actions.cancelWorkflowRun(parameters());\n      cancellationRequested = true;\n    }\n  } catch (error) {\n    core.warning(`Deadline control request failed: ${error.message}`);\n  }\n  const remaining = (deadline ?? metadataDeadline) - Date.now();\n  const poll = deadline !== undefined && remaining > 90_000 ? 30_000 : 5000;\n  if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(poll, remaining)));\n}\ncore.setFailed(\"Workflow deadline enforcement could not complete within its bounded window.\");\n"
           }
-          for relative, expected in templates.items():
-              text = (root / relative).read_text(encoding="utf-8")
-              actual = [line for line in text.splitlines() if line.startswith("## ")]
-              if actual != expected:
-                  raise SystemExit(f"{relative}: template headings changed: {actual!r}")
-
-          agents = {path.name for path in (root / ".codex/agents").glob("*.toml")}
-          if agents != {"runtime_implementer.toml", "test_engineer.toml"}:
-              raise SystemExit(f"unexpected development agents: {sorted(agents)!r}")
-          required = [
-              root / ".agents/skills/project-workflow/SKILL.md",
-              root / ".codex/agents/runtime_implementer/PYTHON_MODULARITY_POLICY.md",
-          ]
-          if any(not path.is_file() for path in required):
-              raise SystemExit("required simplified workflow artifact is missing")
-          forbidden = [
-              root / ".agents/skills/adaptive-verification/SKILL.md",
-              root / ".agents/skills/subagent-model-selection/SKILL.md",
-              root / "tests/test_repository_agent_policy.py",
-          ]
-          if any(path.exists() for path in forbidden):
-              raise SystemExit("retired policy artifact still exists")
-          if len((root / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8").splitlines()) > 300:
-              raise SystemExit("PYTHON_MODULE_INDEX.md exceeds 300 lines")
-          PY
-
-  fast:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - fast tier skipped' || 'Runtime fast tier' }}
-    needs: classify
-    if: needs.classify.outputs.runtime == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: '0.12.17'
-      - name: Install runtime test dependencies
-        run: uv sync --locked --all-extras --python 3.11 --no-progress
-      - name: Configure deterministic test Git identity
-        run: |
-          git config --global user.name "Story Tests"
-          git config --global user.email "story-tests@example.invalid"
-      - name: Run fast runtime tests
-        run: |
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 330 ))
-          if (( test_seconds > 1470 )); then test_seconds=1470; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":300}\n' "$test_seconds" > "$RUNNER_TEMP/fast-control.json"
-          if (( test_seconds <= 0 )); then exit 124; fi
-          set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --tier fast --json "$RUNNER_TEMP/fast.json" 2>&1 | tee "$RUNNER_TEMP/fast.log"
-          test_statuses=("${PIPESTATUS[@]}")
-          test_status=${test_statuses[0]}
-          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
-          printf '%s\n' "$test_status" > "$RUNNER_TEMP/fast-exit-code.txt"
-          exit "$test_status"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: runtime-fast
-          path: |
-            ${{ runner.temp }}/fast.json
-            ${{ runner.temp }}/fast.log
-            ${{ runner.temp }}/fast-control.json
-            ${{ runner.temp }}/fast-exit-code.txt
-          if-no-files-found: warn
-
-  full:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - full suite skipped' || format('Full runtime shard {0}/4', matrix.shard) }}
-    needs: classify
-    if: needs.classify.outputs.full == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    runs-on: ubuntu-24.04
-    env:
-      PYTHONDONTWRITEBYTECODE: '1'
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    timeout-minutes: 30
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: '0.12.17'
-      - name: Install runtime test dependencies
-        run: uv sync --locked --all-extras --python 3.11 --no-progress
-      - name: Configure deterministic test Git identity
-        run: |
-          git config --global user.name "Story Tests"
-          git config --global user.email "story-tests@example.invalid"
-      - name: Run full runtime shard
-        run: |
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 330 ))
-          if (( test_seconds > 1470 )); then test_seconds=1470; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":300}\n' "$test_seconds" > "$RUNNER_TEMP/full-${{ matrix.shard }}-control.json"
-          if (( test_seconds <= 0 )); then exit 124; fi
-          set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "${{ matrix.shard }}/4" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json" 2>&1 | tee "$RUNNER_TEMP/full-${{ matrix.shard }}.log"
-          test_statuses=("${PIPESTATUS[@]}")
-          test_status=${test_statuses[0]}
-          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
-          printf '%s\n' "$test_status" > "$RUNNER_TEMP/full-${{ matrix.shard }}-exit-code.txt"
-          exit "$test_status"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: full-${{ matrix.shard }}
-          path: |
-            ${{ runner.temp }}/full-${{ matrix.shard }}.json
-            ${{ runner.temp }}/full-${{ matrix.shard }}.log
-            ${{ runner.temp }}/full-${{ matrix.shard }}-control.json
-            ${{ runner.temp }}/full-${{ matrix.shard }}-exit-code.txt
-          if-no-files-found: error
-
-  reconcile-full:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - reconciliation skipped' || 'Reconcile full runtime suite' }}
-    needs: [classify, full]
-    if: >-
-      !cancelled() && needs.classify.outputs.full == 'true' &&
-      (needs.full.result == 'success' || needs.full.result == 'failure')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: full-*
-          path: full-reports
-      - name: Reconcile shard evidence
-        run: |
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 90 ))
-          if (( test_seconds <= 0 )); then
-            echo "Reconciliation deadline exhausted; preserve 30s termination and 60s upload reserve."
-            exit 124
-          fi
-          PYTHONPATH=src timeout --signal=INT --kill-after=30s "${test_seconds}s" \
-            python -m tests.runner reconcile \
-            full-reports/full-1/full-1.json full-reports/full-2/full-2.json \
-            full-reports/full-3/full-3.json full-reports/full-4/full-4.json \
-            --json "$RUNNER_TEMP/full-reconciled.json"
-      - name: Enforce frozen suite inventory and wall-time budget
-        env:
-          BASE_SHA: ${{ needs.classify.outputs.base_sha }}
-          WALL_TIME_EXCEPTION: ${{ needs.classify.outputs.wall_time_exception }}
-        run: |
-          budget_args=(--base-ref "$BASE_SHA"
-            --report full-reports/full-1/full-1.json
-            --report full-reports/full-2/full-2.json
-            --report full-reports/full-3/full-3.json
-            --report full-reports/full-4/full-4.json)
-          if [[ "$WALL_TIME_EXCEPTION" == "true" ]]; then
-            echo "Maintainer-authorized wall-time exception: measured durations remain visible."
-            budget_args+=(--allow-wall-time-overage)
-          fi
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 90 ))
-          if (( test_seconds <= 0 )); then
-            echo "Reconciliation deadline exhausted before inventory and wall-time checks."
-            exit 124
-          fi
-          PYTHONPATH=src timeout --signal=INT --kill-after=30s "${test_seconds}s" \
-            python -m tests.suite_budget "${budget_args[@]}"
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 1
-        if: always()
-        with:
-          name: runtime-full-reconciled
-          path: ${{ runner.temp }}/full-reconciled.json
-          if-no-files-found: warn
-
-  diagnose-full-budget:
-    name: ${{ github.event_name == 'workflow_dispatch' && format('Diagnostic only ({0}, {1})', inputs.arch, inputs.scratch) || 'Diagnose full-suite timing failure' }}
-    needs: [classify, full, reconcile-full]
-    if: >-
-      !cancelled() && (github.event_name == 'workflow_dispatch' ||
-      (needs.full.result == 'success' && needs.reconcile-full.result == 'failure'))
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    timeout-minutes: 30
-    env:
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: '0.12.17'
-      - uses: actions/download-artifact@v4
-        if: github.event_name != 'workflow_dispatch'
-        with:
-          pattern: full-*
-          path: ${{ runner.temp }}/diagnostic-inputs
-      - name: Select actual timing failures
-        if: github.event_name != 'workflow_dispatch'
-        id: timing
-        run: |
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          from tests.suite_budget import load_budget
-          root = Path(os.environ["RUNNER_TEMP"]) / "diagnostic-inputs"
-          reports = [json.loads((root / f"full-{i}" / f"full-{i}.json").read_text()) for i in (1, 2, 3, 4)]
-          budget = load_budget()
-          seconds = [report["durations"]["wall_seconds"] for report in reports]
-          over = sum(seconds) > budget["max_sequential_wall_seconds"] or max(seconds) > budget["max_shard_wall_seconds"]
-          selected = over and all(report["outcome"] == "success" for report in reports)
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"selected={str(selected).lower()}\n")
-          PY
-      - name: Install diagnostic dependencies
-        if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
-        run: uv sync --locked --all-extras --python 3.11 --no-progress
-      - name: Configure diagnostic test Git identity
-        if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
-        run: |
-          git config --global user.name "Story Tests"
-          git config --global user.email "story-tests@example.invalid"
-      - name: Prepare diagnostic scratch storage
-        if: github.event_name == 'workflow_dispatch'
-        id: scratch
-        env:
-          MEMORY: ${{ inputs.scratch == 'memory' }}
-        run: |
-          scratch="$(mktemp -d "${TMPDIR:-/tmp}/story-timing.XXXXXXXX")"
-          echo "directory=$scratch" >> "$GITHUB_OUTPUT"
-          if [[ "$MEMORY" == "true" ]]; then
-            sudo mount -t tmpfs -o "size=2G,mode=0700,uid=$(id -u),gid=$(id -g)" tmpfs "$scratch"
-          fi
-      - name: Run one existing canonical scenario with optional profiling
-        if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
-        env:
-          GIT_AUTHOR_NAME: Story Tests
-          GIT_AUTHOR_EMAIL: story-tests@example.invalid
-          GIT_COMMITTER_NAME: Story Tests
-          GIT_COMMITTER_EMAIL: story-tests@example.invalid
-          PYTHONPATH: src
-          PYTHONDONTWRITEBYTECODE: '1'
-          DIAGNOSTIC_TEST_ID: ${{ inputs.test_id || 'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles' }}
-          DIAGNOSTIC_PROFILE_MODE: ${{ inputs.profile_mode || 'cprofile' }}
-          TMPDIR: ${{ steps.scratch.outputs.directory || '/tmp' }}
-        run: |
-          install -d -m 700 "$RUNNER_TEMP/timing-diagnostic"
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 330 ))
-          if (( test_seconds > 1470 )); then test_seconds=1470; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":300}\n' "$test_seconds" > "$RUNNER_TEMP/timing-diagnostic/control.json"
-          if (( test_seconds <= 0 )); then exit 124; fi
-          set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" .venv/bin/python - <<'PY' 2>&1 | tee "$RUNNER_TEMP/timing-diagnostic/worker.log"
-          import collections, cProfile, functools, hashlib, json, os, platform, pstats, re, resource, subprocess, sys, sysconfig, tempfile, threading, time
-          from pathlib import Path
-          output = Path(os.environ["RUNNER_TEMP"]) / "timing-diagnostic"
-          output.mkdir(mode=0o700, exist_ok=True)
-          paths = subprocess.check_output(["git", "ls-files", "-z", "src", "tests", "config", "pyproject.toml", "uv.lock"]).decode().split("\0")
-          def hashes():
-              return {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in paths if path}
-          before = hashes()
-          environment = {"platform": platform.platform(), "python": platform.python_version(),
-                         "cpu_count": os.cpu_count(), "python_compiler": platform.python_compiler(),
-                         "python_enable_optimizations_flag": "--enable-optimizations" in (sysconfig.get_config_var("CONFIG_ARGS") or ""),
-                         "git": subprocess.check_output(["git", "--version"], text=True, timeout=10).strip(),
-                         "temporary_filesystem": subprocess.check_output(["stat", "-f", "-c", "%T", tempfile.gettempdir()], text=True, timeout=10).strip()}
-          prepared = {"diagnostic_only": True, "acceptance_credit": False, "phase": "prepared",
-                      "selection": {"requested_canonical_id": os.environ["DIAGNOSTIC_TEST_ID"], "validated_by_runner": False},
-                      "profile_mode": os.environ["DIAGNOSTIC_PROFILE_MODE"], "source_before": before,
-                      "checkout_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, timeout=10).strip(),
-                      "checkout_tree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True, timeout=10).strip(),
-                      "environment": environment, "observer_thread": True}
-          (output / "prepared.json").write_text(json.dumps(prepared, indent=2))
-          from story_writing_agents.git import process, session_resources
-          from tests import runner
-          counts = collections.defaultdict(lambda: {"calls": 0, "seconds": 0.0})
-          def record(key, elapsed):
-              counts[key]["calls"] += 1
-              counts[key]["seconds"] += elapsed
-          original_git = process.GitProcessRunner.run
-          @functools.wraps(original_git)
-          def git(self, args, **kwargs):
-              started = time.perf_counter()
-              try:
-                  return original_git(self, args, **kwargs)
-              finally:
-                  record("git:" + args[0], time.perf_counter() - started)
-          process.GitProcessRunner.run = git
-          original_refs = session_resources._Repository._loose_ref_output
-          samples = []
-          @functools.wraps(original_refs)
-          def refs(self):
-              started = time.perf_counter()
-              value = original_refs(self)
-              record("loose_refs:" + ("fallback" if value is None else "bytes"), time.perf_counter() - started)
-              if len(samples) < 8:
-                  with (self.common_git / "config").open("rb") as source:
-                      config = source.read(65536)
-                  safe = re.findall(rb"(?m)^\s*(?:repositoryformatversion|filemode|bare|logallrefupdates|objectformat|submodulepathconfig|relativeworktrees|worktreeconfig)\s*=\s*(?:true|false|0|1|sha1|sha256)\s*$", config)
-                  samples.append({"fallback": value is None, "config_sha256": hashlib.sha256(config).hexdigest(), "format_lines": [line.decode("ascii").strip() for line in safe], "packed_refs": (self.common_git / "packed-refs").exists(), "reftable": (self.common_git / "reftable").exists()})
-              return value
-          session_resources._Repository._loose_ref_output = refs
-          observer_stop = threading.Event()
-          observer_errors = []
-          main_thread = threading.main_thread().ident
-          def observe():
-              try:
-                  with (output / "progress.jsonl").open("a", buffering=1) as stream:
-                      while not observer_stop.is_set():
-                          frame = sys._current_frames().get(main_thread)
-                          frames, test_frame, depth = [], None, 0
-                          while frame is not None and depth < 64:
-                              code = frame.f_code
-                              location = {"file": code.co_filename, "function": code.co_name, "line": frame.f_lineno}
-                              if depth < 12:
-                                  frames.append(location)
-                              if code.co_name.startswith("test_"):
-                                  test_frame = location
-                              frame = frame.f_back
-                              depth += 1
-                          truncated = frame is not None
-                          frame = None
-                          row = {"diagnostic_only": True, "wall_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                 "elapsed_seconds": time.perf_counter() - started, "process_cpu_seconds": time.process_time(),
-                                 "max_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-                                 "main_thread_stack": frames, "test_frame": test_frame, "walk_truncated": truncated}
-                          stream.write(json.dumps(row, separators=(",", ":")) + "\n")
-                          if observer_stop.wait(60):
-                              break
-              except Exception as error:
-                  observer_errors.append(type(error).__name__)
-          profile = cProfile.Profile() if os.environ["DIAGNOSTIC_PROFILE_MODE"] == "cprofile" else None
-          started = time.perf_counter()
-          observer = threading.Thread(target=observe, name="diagnostic-progress", daemon=True)
-          observer_started = False
-          code, interrupted, finalization_errors = None, None, []
-          try:
-              try:
-                  observer.start()
-                  observer_started = True
-              except Exception as error:
-                  observer_errors.append(type(error).__name__)
-              if profile is not None:
-                  profile.enable()
-              code = runner.main(["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")])
-          except BaseException as error:
-              interrupted = type(error).__name__
-              raise
-          finally:
-              if profile is not None:
-                  profile.disable()
-              observer_stop.set()
-              if observer_started:
-                  observer.join(timeout=2)
-              try:
-                  if profile is not None:
-                      profile.dump_stats(str(output / "profile.pstats"))
-                      with (output / "profile.txt").open("w") as stream:
-                          pstats.Stats(profile, stream=stream).strip_dirs().sort_stats("cumulative").print_stats(100)
-                  else:
-                      (output / "profile.txt").write_text("cProfile disabled by diagnostic input profile_mode=none.\n")
-              except Exception as error:
-                  finalization_errors.append({"stage": "profile", "error_type": type(error).__name__})
-              after = None
-              try:
-                  after = hashes()
-              except Exception as error:
-                  finalization_errors.append({"stage": "source", "error_type": type(error).__name__})
-              evidence = {"diagnostic_only": True, "acceptance_credit": False,
-                          "partial": code not in (0, 1), "runner_exit_code": code, "interruption": interrupted,
-                          "source_valid": after is not None and before == after, "source_before": before, "source_after": after,
-                          "instrumented_seconds": time.perf_counter() - started, "counts": dict(counts), "fixture_samples": samples,
-                          "observer_thread": observer_started, "observer_errors": observer_errors, "finalization_errors": finalization_errors, **environment}
-              (output / "counters.json").write_text(json.dumps(evidence, indent=2))
-          raise SystemExit(code if before == after and not finalization_errors else 2)
-          PY
-          test_statuses=("${PIPESTATUS[@]}")
-          test_status=${test_statuses[0]}
-          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
-          printf '%s\n' "$test_status" > "$RUNNER_TEMP/timing-diagnostic/exit-code.txt"
-          exit "$test_status"
-      - uses: actions/upload-artifact@v4
-        if: always() && (github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true')
-        with:
-          name: ${{ github.event_name == 'workflow_dispatch' && format('timing-diagnostic-{0}-{1}', inputs.arch, inputs.scratch) || 'timing-diagnostic' }}
-          path: ${{ runner.temp }}/timing-diagnostic
-          if-no-files-found: error
-      - name: Remove diagnostic scratch storage
-        if: always() && steps.scratch.outputs.directory != ''
-        env:
-          SCRATCH: ${{ steps.scratch.outputs.directory }}
-          MEMORY: ${{ inputs.scratch == 'memory' }}
-        run: |
-          if [[ "$MEMORY" == "true" ]] && mountpoint -q "$SCRATCH"; then
-            sudo umount "$SCRATCH"
-          fi
-          rmdir "$SCRATCH"
+        }
+      ]
+    },
+    "matched-check": {
+      "name": "Measure repeated offer checks",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "permissions": {
+        "contents": "read"
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@v4"
+        },
+        {
+          "uses": "actions/setup-python@v5",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "uses": "astral-sh/setup-uv@v10.2.0"
+        },
+        {
+          "name": "Install locked environment",
+          "timeout-minutes": 5,
+          "run": "uv sync --locked --all-extras --python 3.11 --no-progress"
+        },
+        {
+          "name": "Prepare pinned diagnostic",
+          "run": "python3 - <<'PY'\nimport base64,os,pathlib\nroot=pathlib.Path(os.environ[\"RUNNER_TEMP\"])/\"bound-query-check\"\nroot.mkdir()\n(root/\"probe.py\").write_bytes(base64.b64decode('IiIiSG9zdGVkLW9ubHkgZGlhZ25vc3RpYzsgbm8gY2Fub25pY2FsIHRlc3Qgb3IgYWNjZXB0YW5jZSBjcmVkaXQuIiIiCmZyb20gX19mdXR1cmVfXyBpbXBvcnQgYW5ub3RhdGlvbnMKCmltcG9ydCBhcmdwYXJzZQppbXBvcnQgYXN0CmltcG9ydCBhc3luY2lvCmltcG9ydCBoYXNobGliCmltcG9ydCBqc29uCmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAppbXBvcnQgcGxhdGZvcm0KaW1wb3J0IHNpZ25hbAppbXBvcnQgc3RhdGlzdGljcwppbXBvcnQgc3VicHJvY2VzcwppbXBvcnQgc3lzCmltcG9ydCB0aW1lCmltcG9ydCB0cmFjZWJhY2sKaW1wb3J0IG9zCgojIFRoZSBwdWJsaXNoZXIgc3Vic3RpdHV0ZXMgdGhlIGV4YWN0IGZyb3plbiBEIG1ldGhvZCBzb3VyY2UgYW5kIGl0cyBzb3VyY2UgaGFzaC4KUkVGRVJFTkNFX01FVEhPRF9TT1VSQ0UgPSAnZGVmIHJlcXVpcmVfY3VycmVudF9vZmZlcihzZWxmLCBvZmZlcnM6IENvbnRleHRDYWxsT2ZmZXJzKSAtPiBOb25lOlxuICAgIGd1YXJkLCBjb2RlID0gc2VsZi5fZmFjdG9yeV9ndWFyZFxuICAgIGlmIHR5cGUoc2VsZi5mYWN0b3J5KS5yZXF1aXJlX2RlY2xhcmF0aW9uIGlzIG5vdCBndWFyZCBvciBndWFyZC5fX2NvZGVfXyBpcyBub3QgY29kZTpcbiAgICAgICAgcmFpc2UgVmFsdWVFcnJvcigiZnJvemVuIG93bmVyIGRlY2xhcmF0aW9uIGd1YXJkIGNoYW5nZWQiKVxuICAgIGlmIGd1YXJkKHNlbGYuZmFjdG9yeSkgaXMgbm90IE5vbmU6XG4gICAgICAgIHJhaXNlIFR5cGVFcnJvcigiZnJvemVuIG93bmVyIGRlY2xhcmF0aW9uIGd1YXJkIG11c3QgcmV0dXJuIE5vbmUiKVxuICAgIG1ldGhvZHMgPSAodHlwZShzZWxmKS5fdmFsaWRhdGVfcmVzcG9uc2Vfc3RydWN0dXJlLCB0eXBlKHNlbGYpLnN0cnVjdHVyYWxfZmluZGluZ3MpXG4gICAgaWYgYW55KG1ldGhvZCBpcyBub3QgZGVjbGFyZWQgb3IgbWV0aG9kLl9fY29kZV9fIGlzIG5vdCBjb2RlXG4gICAgICAgICAgIGZvciBtZXRob2QsIChkZWNsYXJlZCwgY29kZSkgaW4gemlwKFxuICAgICAgICAgICAgICAgbWV0aG9kcywgX0JPVU5EX0NBTExfU1RSVUNUVVJFX0RFQ0xBUkFUSU9OUywgc3RyaWN0PVRydWUsXG4gICAgICAgICAgICkpOlxuICAgICAgICByYWlzZSBWYWx1ZUVycm9yKCJmcm96ZW4gYm91bmQgc3RydWN0dXJhbCBxdWVyeSBpbXBsZW1lbnRhdGlvbiBjaGFuZ2VkIilcbiAgICBpZiAodHlwZShvZmZlcnMpIGlzIG5vdCBDb250ZXh0Q2FsbE9mZmVycyBvciBvZmZlcnMgIT0gc2VsZi5vZmZlcnNcbiAgICAgICAgICAgIG9yIG9mZmVycy5vZmZlcl9kaWdlc3QgIT0gc2VsZi5vZmZlcnMub2ZmZXJfZGlnZXN0XG4gICAgICAgICAgICBvciB0eXBlKHNlbGYuZmFjdG9yeSkuZGVjbGFyZV9yZXN1bHRfb3duZXJzIGlzIG5vdCBzZWxmLl9mYWN0b3J5X21ldGhvZFxuICAgICAgICAgICAgb3Igc2VsZi5zZW1hbnRpY19pbmRleCBpcyBub3Qgc2VsZi5fc2VtYW50aWNfYW5jaG9yIG9yIHNlbGYuYWN0aW9uX2luZGV4IGlzIG5vdCBzZWxmLl9hY3Rpb25fYW5jaG9yXG4gICAgICAgICAgICBvciB0eXBlKHNlbGYucnVsZV9ncmFwaCkgaXMgbm90IFNjaGVtYVJ1bGVzXG4gICAgICAgICAgICBvciBzZWxmLnJ1bGVfZ3JhcGgubm9kZV9maW5nZXJwcmludCgoImFnZW50X2FjdGlvbiIsKSkgIT0gc2VsZi5hY3Rpb25faW5kZXgucnVsZV9ncmFwaC5ub2RlX2ZpbmdlcnByaW50KCkpOlxuICAgICAgICByYWlzZSBWYWx1ZUVycm9yKCJhY3R1YWwgY2FsbC9ncmFwaC9mcm96ZW4gb3duZXIgcHJvdmVuYW5jZSBjaGFuZ2VkIilcbiAgICBzZW1hbnRpY19pbmRleCA9IHNlbGYuc2VtYW50aWNfaW5kZXhcbiAgICBzZW1hbnRpY19jb250cmFjdHMgPSBzZW1hbnRpY19pbmRleC5jb250cmFjdHNcbiAgICBpZiB0eXBlKHNlbWFudGljX2NvbnRyYWN0cykgaXMgbm90IHR1cGxlOlxuICAgICAgICByYWlzZSBWYWx1ZUVycm9yKFwnZnJvemVuIGJvdW5kIHN0cnVjdHVyYWwgcXVlcnkgaW1wbGVtZW50YXRpb24gY2hhbmdlZFwnKVxuICAgIHNlbWFudGljX2luZGV4LnJlcXVpcmVfcHJvdmVuYW5jZSgpXG4gICAgc2VsZi5hY3Rpb25faW5kZXgucmVxdWlyZV9wcm92ZW5hbmNlKClcbiAgICBpZiAoc2VsZi5zZW1hbnRpY19pbmRleCBpcyBub3Qgc2VtYW50aWNfaW5kZXhcbiAgICAgICAgICAgIG9yIHNlbWFudGljX2luZGV4LmNvbnRyYWN0cyBpcyBub3Qgc2VtYW50aWNfY29udHJhY3RzKTpcbiAgICAgICAgcmFpc2UgVmFsdWVFcnJvcihcJ2Zyb3plbiBib3VuZCBzdHJ1Y3R1cmFsIHF1ZXJ5IGltcGxlbWVudGF0aW9uIGNoYW5nZWRcJylcbiAgICBpZiAoc2VsZi5zZW1hbnRpY19pbmRleC5wb2xpY3kuZWxpZ2liaWxpdHlfb2ZmZXJfZGlnZXN0ICE9IHNlbGYuZWxpZ2liaWxpdHlfb2ZmZXJzLm9mZmVyX2RpZ2VzdFxuICAgICAgICAgICAgb3Igc2VsZi5zZW1hbnRpY19pbmRleC5wb2xpY3kubG9naWNhbF9vcmlnaW5fY2FsbF9pZCAhPSBzZWxmLmxvZ2ljYWxfb3JpZ2luX2NhbGxfaWQpOlxuICAgICAgICByYWlzZSBWYWx1ZUVycm9yKCJmcm96ZW4gbG9naWNhbCBlbGlnaWJpbGl0eSBzbmFwc2hvdCBjaGFuZ2VkIilcbiAgICBpZiBzZWxmLmxpbmVhZ2UgaXMgTm9uZSBvciBzZWxmLmxpbmVhZ2Uua2luZCA9PSAicmVwbGF5IjpcbiAgICAgICAgaWYgKHNlbGYuc2VtYW50aWNfaW5kZXgucG9saWN5LnBoeXNpY2FsX2NhbGxfaWQgIT0gc2VsZi5vZmZlcnMuY2FsbF9pZFxuICAgICAgICAgICAgICAgIG9yIHNlbGYuc2VtYW50aWNfaW5kZXgucG9saWN5Lm9mZmVyX2RpZ2VzdCAhPSBzZWxmLm9mZmVycy5vZmZlcl9kaWdlc3RcbiAgICAgICAgICAgICAgICBvciBzZWxmLmFjdGlvbl9pbmRleC5wb2xpY3kucGh5c2ljYWxfY2FsbF9pZCAhPSBzZWxmLm9mZmVycy5jYWxsX2lkXG4gICAgICAgICAgICAgICAgb3Igc2VsZi5hY3Rpb25faW5kZXgucG9saWN5Lm9mZmVyX2RpZ2VzdCAhPSBzZWxmLm9mZmVycy5vZmZlcl9kaWdlc3QpOlxuICAgICAgICAgICAgcmFpc2UgVmFsdWVFcnJvcigiY3VycmVudCBwaHlzaWNhbCBwb2xpY3kvaW5kZXggZGlmZmVycyBmcm9tIGFjdHVhbCBvZmZlciIpXG4gICAgZWxzZTpcbiAgICAgICAgb3JpZ2luID0gc2VsZi5saW5lYWdlLm9yaWdpblxuICAgICAgICBpZiAob3JpZ2luLmZhY3RvcnkgaXMgbm90IHNlbGYuZmFjdG9yeSBvciBzZWxmLmVsaWdpYmlsaXR5X29mZmVycyBpcyBub3Qgb3JpZ2luLmVsaWdpYmlsaXR5X29mZmVyc1xuICAgICAgICAgICAgICAgIG9yIHNlbGYuc2VtYW50aWNfaW5kZXggaXMgbm90IG9yaWdpbi5zZW1hbnRpY19pbmRleCBvciBzZWxmLmFjdGlvbl9pbmRleCBpcyBub3Qgb3JpZ2luLmFjdGlvbl9pbmRleCk6XG4gICAgICAgICAgICByYWlzZSBWYWx1ZUVycm9yKCJjb3JyZWN0aXZlIHJlcXVlc3QgY2hhbmdlZCB0aGUgZnJvemVuIHJlamVjdGVkIGluZGV4IilcbiAgICBwYWlycyA9IFtdXG4gICAgZm9yIG1lbWJlciwgb3duZXIgaW4gemlwKHNlbGYuYWN0aW9uX2luZGV4LmNvbnRyYWN0cywgc2VsZi5hY3Rpb25faW5kZXgub3duZXJzLCBzdHJpY3Q9VHJ1ZSk6XG4gICAgICAgIGlmIHR5cGUob3duZXIpIGlzIG5vdCBDb250ZXh0QWN0aW9uQ29udHJhY3RPd25lciBvciBvd25lci5lbGlnaWJpbGl0eV9vZmZlcnMgaXMgbm90IHNlbGYuZWxpZ2liaWxpdHlfb2ZmZXJzOlxuICAgICAgICAgICAgcmFpc2UgVmFsdWVFcnJvcigib3V0ZXIgb3duZXIgZGlmZmVycyBmcm9tIGZyb3plbiBlbGlnaWJsZSBjYWxsIilcbiAgICAgICAga2luZCA9IG1lbWJlci5ydWxlX2dyYXBoLmxpdGVyYWxfYXQoKCJhY3Rpb25fdHlwZSIsKSlcbiAgICAgICAgaWYga2luZCA9PSAic3VibWl0X3Jlc3VsdCI6XG4gICAgICAgICAgICBpbm5lcl9pZCA9IG1lbWJlci5ydWxlX2dyYXBoLmxpdGVyYWxfYXQoKCJ0YXNrX3Jlc3VsdCIsICJzY2hlbWFfaWQiKSlcbiAgICAgICAgICAgIGlubmVyID0gbmV4dCgoaXRlbSBmb3IgaXRlbSBpbiBzZW1hbnRpY19jb250cmFjdHNcbiAgICAgICAgICAgICAgICAgICAgICAgICAgaWYgdHlwZShpbm5lcl9pZCkgaXMgc3RyIGFuZCBpdGVtLnNjaGVtYV9pZCA9PSBpbm5lcl9pZCksIE5vbmUpXG4gICAgICAgICAgICBpZiBpbm5lciBpcyBOb25lOlxuICAgICAgICAgICAgICAgIGlubmVyID0gc2VtYW50aWNfaW5kZXguc2VsZWN0KGlubmVyX2lkKVxuICAgICAgICAgICAgaWYgKG93bmVyLnNlbWFudGljX21lbWJlciBpcyBub3QgaW5uZXJcbiAgICAgICAgICAgICAgICAgICAgb3IgbWVtYmVyLnJ1bGVfZ3JhcGgubm9kZV9maW5nZXJwcmludCgoInRhc2tfcmVzdWx0IiwpKSAhPSBpbm5lci5ydWxlX2dyYXBoLm5vZGVfZmluZ2VycHJpbnQoKSk6XG4gICAgICAgICAgICAgICAgcmFpc2UgVmFsdWVFcnJvcigib3V0ZXIgb2ZmZXJlZCBJRCBkaWZmZXJzIGZyb20gZXhhY3QgcGFpcmVkIHNlbWFudGljIG1lbWJlciIpXG4gICAgICAgICAgICBwYWlycy5hcHBlbmQoKG1lbWJlci5zY2hlbWFfaWQsIGlubmVyX2lkKSlcbiAgICAgICAgZWxpZiBraW5kIGluIHsic2VhcmNoX2NvbnRleHQiLCAicmVhZF9jb250ZXh0In0gYW5kIG93bmVyLnNlbWFudGljX21lbWJlciBpcyBOb25lOlxuICAgICAgICAgICAgcGFpcnMuYXBwZW5kKChtZW1iZXIuc2NoZW1hX2lkLCBOb25lKSlcbiAgICAgICAgZWxzZTpcbiAgICAgICAgICAgIHJhaXNlIFZhbHVlRXJyb3IoImludmFsaWQgb3V0ZXIvc2VtYW50aWMgZmFtaWx5IHJlbGF0aW9uc2hpcCIpXG4gICAgaWYgKHR1cGxlKHBhaXJzKSAhPSBzZWxmLm91dGVyX2lubmVyX3NjaGVtYV9pZHMgb3JcbiAgICAgICAgICAgIHR1cGxlKGlubmVyIGZvciBfLCBpbm5lciBpbiBwYWlycyBpZiBpbm5lciBpcyBub3QgTm9uZSkgIT0gc2VsZi5zZW1hbnRpY19pbmRleC5leHBlY3RlZF9zY2hlbWFfaWRzKTpcbiAgICAgICAgcmFpc2UgVmFsdWVFcnJvcigiaW5jb21wbGV0ZS9kdXBsaWNhdGUvY3VycmVudCBvdXRlci1pbm5lciBwYWlyaW5nIilcbiAgICBpZiAoc2VsZi5zZW1hbnRpY19pbmRleCBpcyBub3Qgc2VtYW50aWNfaW5kZXhcbiAgICAgICAgICAgIG9yIHNlbWFudGljX2luZGV4LmNvbnRyYWN0cyBpcyBub3Qgc2VtYW50aWNfY29udHJhY3RzKTpcbiAgICAgICAgcmFpc2UgVmFsdWVFcnJvcihcJ2Zyb3plbiBib3VuZCBzdHJ1Y3R1cmFsIHF1ZXJ5IGltcGxlbWVudGF0aW9uIGNoYW5nZWRcJylcbiAgICBzZW1hbnRpY19pbmRleC5yZXF1aXJlX3Byb3ZlbmFuY2UoKVxuICAgIGlmIChzZWxmLnNlbWFudGljX2luZGV4IGlzIG5vdCBzZW1hbnRpY19pbmRleFxuICAgICAgICAgICAgb3Igc2VtYW50aWNfaW5kZXguY29udHJhY3RzIGlzIG5vdCBzZW1hbnRpY19jb250cmFjdHMpOlxuICAgICAgICByYWlzZSBWYWx1ZUVycm9yKFwnZnJvemVuIGJvdW5kIHN0cnVjdHVyYWwgcXVlcnkgaW1wbGVtZW50YXRpb24gY2hhbmdlZFwnKVxuJwpSRUZFUkVOQ0VfU0VSVklDRV9TSEEyNTYgPSAnNTVkYzYxOWY0MjQ4NWEwNDBiMmFhYTlmM2IwODk3YTY2MmFiMTY1NTRlMGUyYjdjODZiNWY2NjdhMGZjNDI2NScKUkVGRVJFTkNFX1NPVVJDRSA9ICI3NTAyMGRhNTU0YTVlOWI2YmQxNjJlNzk5ZDMxNzI2NDhkNmVmNjJhIgpGUk9OVF9JRCA9ICJ0ZXN0X2Zyb250X3NjaGVtYV9pc19taW5pbWFsX2Nsb3NlZF9hbmRfcHJvdmlkZXJfc3RyaWN0IgoKCmRlZiBzaGEoZGF0YSk6CiAgICByZXR1cm4gaGFzaGxpYi5zaGEyNTYoZGF0YSkuaGV4ZGlnZXN0KCkKCgpkZWYgbWV0aG9kX2FzdChzb3VyY2UpOgogICAgbW9kdWxlID0gYXN0LnBhcnNlKHNvdXJjZSkKICAgIG93bmVyID0gbmV4dChuIGZvciBuIGluIG1vZHVsZS5ib2R5IGlmIGlzaW5zdGFuY2UobiwgYXN0LkNsYXNzRGVmKQogICAgICAgICAgICAgICAgIGFuZCBuLm5hbWUgPT0gIkJvdW5kQ2FsbENvbnRyYWN0IikKICAgIHJldHVybiBuZXh0KG4gZm9yIG4gaW4gb3duZXIuYm9keSBpZiBpc2luc3RhbmNlKG4sIGFzdC5GdW5jdGlvbkRlZikKICAgICAgICAgICAgICAgIGFuZCBuLm5hbWUgPT0gInJlcXVpcmVfY3VycmVudF9vZmZlciIpCgoKYXN5bmMgZGVmIHByb2JlKGNvbmZpZywgY2hlY2tvdXQsIG91dHB1dCk6CiAgICBzdGFydCA9IHRpbWUucGVyZl9jb3VudGVyKCkKICAgIHJlcG9ydCA9IHsiZGlhZ25vc3RpY19vbmx5IjogVHJ1ZSwgImNhbm9uaWNhbF9wYXNzX2NyZWRpdCI6IEZhbHNlLAogICAgICAgICAgICAgICJjb21wbGV0ZSI6IEZhbHNlLCAib3V0Y29tZSI6ICJydW5uaW5nIiwgInN0YWdlcyI6IFtdLAogICAgICAgICAgICAgICJyZWZlcmVuY2Vfc291cmNlIjogUkVGRVJFTkNFX1NPVVJDRSwKICAgICAgICAgICAgICAicmVmZXJlbmNlX3NlcnZpY2Vfc2hhMjU2IjogUkVGRVJFTkNFX1NFUlZJQ0VfU0hBMjU2LAogICAgICAgICAgICAgICJzb3VyY2VfY2FuZGlkYXRlIjogY29uZmlnWyJzb3VyY2VfY2FuZGlkYXRlIl0sCiAgICAgICAgICAgICAgInNjcmlwdF9zaGEyNTYiOiBzaGEoUGF0aChfX2ZpbGVfXykucmVhZF9ieXRlcygpKX0KCiAgICBkZWYgZmx1c2goKToKICAgICAgICByZXBvcnRbImVsYXBzZWRfc2Vjb25kcyJdID0gdGltZS5wZXJmX2NvdW50ZXIoKSAtIHN0YXJ0CiAgICAgICAgb3V0cHV0LnBhcmVudC5ta2RpcihwYXJlbnRzPVRydWUsIGV4aXN0X29rPVRydWUpCiAgICAgICAgdGVtcG9yYXJ5ID0gb3V0cHV0LndpdGhfc3VmZml4KCIudG1wIikKICAgICAgICB0ZW1wb3Jhcnkud3JpdGVfdGV4dChqc29uLmR1bXBzKHJlcG9ydCwgaW5kZW50PTIsIHNvcnRfa2V5cz1UcnVlKSArICJcbiIpCiAgICAgICAgdGVtcG9yYXJ5LnJlcGxhY2Uob3V0cHV0KQoKICAgIGRlZiBzdGFnZShuYW1lKToKICAgICAgICByZXBvcnRbInN0YWdlcyJdLmFwcGVuZCh7Im5hbWUiOiBuYW1lLCAiZWxhcHNlZF9zZWNvbmRzIjogdGltZS5wZXJmX2NvdW50ZXIoKSAtIHN0YXJ0fSkKICAgICAgICBmbHVzaCgpCgogICAgZGVmIHNuYXBzaG90KCk6CiAgICAgICAgcmV0dXJuIHtuYW1lOiBzaGEoKGNoZWNrb3V0IC8gbmFtZSkucmVhZF9ieXRlcygpKSBmb3IgbmFtZSBpbiBjb25maWdbInNvdXJjZV9oYXNoZXMiXX0KCiAgICBjYXNlID0gTm9uZQogICAgdHJ5OgogICAgICAgIGFzc2VydCBpc2luc3RhbmNlKFJFRkVSRU5DRV9NRVRIT0RfU09VUkNFLCBzdHIpCiAgICAgICAgYXNzZXJ0IGxlbihjb25maWdbInNvdXJjZV9oYXNoZXMiXSkgPT0gNDEyCiAgICAgICAgcmVwb3J0WyJzb3VyY2VfaGFzaGVzX2JlZm9yZSJdID0gc25hcHNob3QoKQogICAgICAgIGFzc2VydCByZXBvcnRbInNvdXJjZV9oYXNoZXNfYmVmb3JlIl0gPT0gY29uZmlnWyJzb3VyY2VfaGFzaGVzIl0KICAgICAgICByZXBvcnRbImNoZWNrb3V0X3NoYSJdID0gc3VicHJvY2Vzcy5jaGVja19vdXRwdXQoCiAgICAgICAgICAgIFsiZ2l0IiwgInJldi1wYXJzZSIsICJIRUFEIl0sIGN3ZD1jaGVja291dCwgdGV4dD1UcnVlKS5zdHJpcCgpCiAgICAgICAgcmVwb3J0WyJjaGVja291dF90cmVlIl0gPSBzdWJwcm9jZXNzLmNoZWNrX291dHB1dCgKICAgICAgICAgICAgWyJnaXQiLCAicmV2LXBhcnNlIiwgIkhFQURee3RyZWV9Il0sIGN3ZD1jaGVja291dCwgdGV4dD1UcnVlKS5zdHJpcCgpCiAgICAgICAgcmVwb3J0WyJlbnZpcm9ubWVudCJdID0geyJweXRob24iOiBwbGF0Zm9ybS5weXRob25fdmVyc2lvbigpLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAiaW1wbGVtZW50YXRpb24iOiBwbGF0Zm9ybS5weXRob25faW1wbGVtZW50YXRpb24oKSwKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgInN5c3RlbSI6IHBsYXRmb3JtLnN5c3RlbSgpLCAibWFjaGluZSI6IHBsYXRmb3JtLm1hY2hpbmUoKX0KICAgICAgICBjYW5kaWRhdGVfdGV4dCA9IChjaGVja291dCAvICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfY29udGV4dC9zZXJ2aWNlLnB5IikucmVhZF90ZXh0KCkKICAgICAgICBjYW5kaWRhdGVfYXN0ID0gbWV0aG9kX2FzdChjYW5kaWRhdGVfdGV4dCkKICAgICAgICByZWZlcmVuY2VfYXN0ID0gYXN0LnBhcnNlKFJFRkVSRU5DRV9NRVRIT0RfU09VUkNFKS5ib2R5WzBdCiAgICAgICAgcmVwb3J0WyJjYW5kaWRhdGVfbWV0aG9kX2FzdF9zaGEyNTYiXSA9IHNoYShhc3QuZHVtcChjYW5kaWRhdGVfYXN0LCBpbmNsdWRlX2F0dHJpYnV0ZXM9RmFsc2UpLmVuY29kZSgpKQogICAgICAgIHJlcG9ydFsicmVmZXJlbmNlX21ldGhvZF9hc3Rfc2hhMjU2Il0gPSBzaGEoYXN0LmR1bXAocmVmZXJlbmNlX2FzdCwgaW5jbHVkZV9hdHRyaWJ1dGVzPUZhbHNlKS5lbmNvZGUoKSkKICAgICAgICBhc3NlcnQgcmVwb3J0WyJjYW5kaWRhdGVfbWV0aG9kX2FzdF9zaGEyNTYiXSA9PSBjb25maWdbImNhbmRpZGF0ZV9tZXRob2RfYXN0X3NoYTI1NiJdCiAgICAgICAgYXNzZXJ0IHJlcG9ydFsicmVmZXJlbmNlX21ldGhvZF9hc3Rfc2hhMjU2Il0gPT0gY29uZmlnWyJyZWZlcmVuY2VfbWV0aG9kX2FzdF9zaGEyNTYiXQogICAgICAgIHN0YWdlKCJzb3VyY2VfdmVyaWZpZWQiKQogICAgICAgIHN5cy5wYXRoWzowXSA9IFtzdHIoY2hlY2tvdXQgLyAic3JjIiksIHN0cihjaGVja291dCldCiAgICAgICAgZnJvbSB0ZXN0cy50ZXN0X2xlYWRfb3JjaGVzdHJhdGlvbiBpbXBvcnQgTGVhZE91dGNvbWVBbmRQcm9wb3NhbFRlc3RzLCBfbGl2ZV9tYXRlcmlhbCwgX3Zpc2libGVfb3V0Y29tZQogICAgICAgIGZyb20gc3Rvcnlfd3JpdGluZ19hZ2VudHMuYWdlbnRfY29udGV4dCBpbXBvcnQgc2VydmljZQogICAgICAgIGZyb20gc3Rvcnlfd3JpdGluZ19hZ2VudHMgaW1wb3J0IHN0cnVjdHVyZWRfb3V0cHV0X3ZhbGlkYXRpb24gYXMgdmFsaWRhdGlvbgoKICAgICAgICByZWZlcmVuY2VfZ2xvYmFscyA9IHZhcnMoc2VydmljZSkuY29weSgpCiAgICAgICAgZXhlYyhjb21waWxlKCJmcm9tIF9fZnV0dXJlX18gaW1wb3J0IGFubm90YXRpb25zXG4iICsgUkVGRVJFTkNFX01FVEhPRF9TT1VSQ0UsCiAgICAgICAgICAgICAgICAgICAgICJmcm96ZW4tRC1yZXF1aXJlLWN1cnJlbnQtb2ZmZXIucHkiLCAiZXhlYyIpLCByZWZlcmVuY2VfZ2xvYmFscykKICAgICAgICByZWZlcmVuY2UgPSByZWZlcmVuY2VfZ2xvYmFsc1sicmVxdWlyZV9jdXJyZW50X29mZmVyIl0KICAgICAgICBhc3NlcnQgcmVmZXJlbmNlLl9fY29kZV9fLmNvX25hbWUgPT0gInJlcXVpcmVfY3VycmVudF9vZmZlciIKICAgICAgICBjYXNlID0gTGVhZE91dGNvbWVBbmRQcm9wb3NhbFRlc3RzKEZST05UX0lEKQogICAgICAgIGNhc2Uuc2V0VXAoKQogICAgICAgIHN0YWdlKCJmaXh0dXJlX3JlYWR5IikKICAgICAgICBjb252ZXJzYXRpb25faWQgPSBjYXNlLmNvbnZlcnNhdGlvbigiTWluaW1hbCBzY2hlbWEiKQogICAgICAgIGNhc2UuYmFja2VuZC5lbnF1ZXVlKF92aXNpYmxlX291dGNvbWUoImFuc3dlciIpKQogICAgICAgIG91dGNvbWUgPSBhd2FpdCBjYXNlLnJ1bnRpbWUubGVhZF90dXJuKAogICAgICAgICAgICBjYXNlLnNlc3Npb25faWQsIGNvbnZlcnNhdGlvbl9pZCwgIkV4cGxhaW4gY29sbGFib3JhdGlvbiB3b3JrZmxvdy4iKQogICAgICAgIGFzc2VydCBjYXNlLmJhY2tlbmQuY2FsbHMsIG91dGNvbWUKICAgICAgICBjYWxsID0gY2FzZS5iYWNrZW5kLmNhbGxzWy0xXQogICAgICAgIGFzc2VydCBfbGl2ZV9tYXRlcmlhbChjYWxsKVsiYXV0aG9yaW5nX3Rhc2tzIl0KICAgICAgICBjb250cmFjdCA9IGNhbGwuY29udHJhY3QKICAgICAgICBvZmZlcnMgPSBjb250cmFjdC5vZmZlcnMKICAgICAgICBwcm9vZnMgPSBjb250cmFjdC5fbm9kZV9maW5nZXJwcmludF9wcm9vZnMKICAgICAgICBhbmNob3IgPSBjb250cmFjdC5fbm9kZV9maW5nZXJwcmludF9hbmNob3IKICAgICAgICBhc3NlcnQgdHlwZShwcm9vZnMpIGlzIHR1cGxlIGFuZCBwcm9vZnMgaXMgYW5jaG9yIGFuZCBwcm9vZnMKICAgICAgICBhc3NlcnQgYWxsKHByb29mIGlzIG5vdCBOb25lIGZvciBwcm9vZiBpbiBwcm9vZnMpCiAgICAgICAgZ3JhcGhzID0gW2NvbnRyYWN0LnJ1bGVfZ3JhcGgsIGNvbnRyYWN0LmFjdGlvbl9pbmRleC5ydWxlX2dyYXBoXQogICAgICAgIGdyYXBocyArPSBbbWVtYmVyLnJ1bGVfZ3JhcGggZm9yIG1lbWJlciBpbiBjb250cmFjdC5hY3Rpb25faW5kZXguY29udHJhY3RzXQogICAgICAgIGdyYXBocyArPSBbbWVtYmVyLnJ1bGVfZ3JhcGggZm9yIG1lbWJlciBpbiBjb250cmFjdC5zZW1hbnRpY19pbmRleC5jb250cmFjdHNdCiAgICAgICAgZ3JhcGhfc291cmNlcyA9IHR1cGxlKGdyYXBoLmNhbm9uaWNhbF9ieXRlcyBmb3IgZ3JhcGggaW4gZ3JhcGhzKQoKICAgICAgICBkZWYgZ3JhcGhfaGFzaGVzKCk6CiAgICAgICAgICAgIHJldHVybiBbc2hhKGdyYXBoLmNhbm9uaWNhbF9ieXRlcykgZm9yIGdyYXBoIGluIGdyYXBoc10KCiAgICAgICAgcmVwb3J0WyJjb21tb25fZ3JhcGhfc2hhMjU2X2JlZm9yZSJdID0gZ3JhcGhfaGFzaGVzKCkKICAgICAgICByZXBvcnRbInBhaXJpbmdzIl0gPSBsZW4oY29udHJhY3Qub3V0ZXJfaW5uZXJfc2NoZW1hX2lkcykKICAgICAgICByZXBvcnRbInByb29mX3JlY29yZHMiXSA9IGxlbihwcm9vZnMpCiAgICAgICAgc3RhZ2UoInNhbWVfY29udHJhY3RfY29uc3RydWN0ZWQiKQogICAgICAgIHNhbXBsZXMgPSB7InJlZmVyZW5jZSI6IFtdLCAiY2FuZGlkYXRlIjogW119CiAgICAgICAgbWV0aG9kcyA9IHsicmVmZXJlbmNlIjogbGFtYmRhOiByZWZlcmVuY2UoY29udHJhY3QsIG9mZmVycyksCiAgICAgICAgICAgICAgICAgICAiY2FuZGlkYXRlIjogbGFtYmRhOiBjb250cmFjdC5yZXF1aXJlX2N1cnJlbnRfb2ZmZXIob2ZmZXJzKX0KICAgICAgICBmb3IgbmFtZSBpbiAoInJlZmVyZW5jZSIsICJjYW5kaWRhdGUiLCAiY2FuZGlkYXRlIiwgInJlZmVyZW5jZSIsICJyZWZlcmVuY2UiLCAiY2FuZGlkYXRlIik6CiAgICAgICAgICAgIHdhbGwsIGNwdSA9IHRpbWUucGVyZl9jb3VudGVyKCksIHRpbWUucHJvY2Vzc190aW1lKCkKICAgICAgICAgICAgcmVzdWx0ID0gbWV0aG9kc1tuYW1lXSgpCiAgICAgICAgICAgIHNhbXBsZXNbbmFtZV0uYXBwZW5kKHsid2FsbF9zZWNvbmRzIjogdGltZS5wZXJmX2NvdW50ZXIoKSAtIHdhbGwsCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAiY3B1X3NlY29uZHMiOiB0aW1lLnByb2Nlc3NfdGltZSgpIC0gY3B1fSkKICAgICAgICAgICAgYXNzZXJ0IHJlc3VsdCBpcyBOb25lCiAgICAgICAgICAgIHJlcG9ydFsic2FtcGxlcyJdID0gc2FtcGxlcwogICAgICAgICAgICBzdGFnZSgidGltZWRfIiArIG5hbWUpCgogICAgICAgIGNvZGVzID0ge3ZhbGlkYXRpb24uU2NoZW1hUnVsZXMubm9kZV9maW5nZXJwcmludC5fX2NvZGVfXzogIm5vZGVfZmluZ2VycHJpbnQiLAogICAgICAgICAgICAgICAgIHZhbGlkYXRpb24uc2NoZW1hX3J1bGVfZmluZ2VycHJpbnRzLl9fY29kZV9fOiAic2NoZW1hX3J1bGVfZmluZ2VycHJpbnRzIn0KICAgICAgICBjZW5zdXMgPSB7fQogICAgICAgIGFzc2VydCBzeXMuZ2V0cHJvZmlsZSgpIGlzIE5vbmUKICAgICAgICBmb3IgbmFtZSBpbiAoInJlZmVyZW5jZSIsICJjYW5kaWRhdGUiKToKICAgICAgICAgICAgY291bnRzID0ge2xhYmVsOiAwIGZvciBsYWJlbCBpbiBjb2Rlcy52YWx1ZXMoKX0KCiAgICAgICAgICAgIGRlZiBvYnNlcnZlKGZyYW1lLCBldmVudCwgX2FyZyk6CiAgICAgICAgICAgICAgICBpZiBldmVudCA9PSAiY2FsbCIgYW5kIGZyYW1lLmZfY29kZSBpbiBjb2RlczoKICAgICAgICAgICAgICAgICAgICBjb3VudHNbY29kZXNbZnJhbWUuZl9jb2RlXV0gKz0gMQoKICAgICAgICAgICAgc3lzLnNldHByb2ZpbGUob2JzZXJ2ZSkKICAgICAgICAgICAgdHJ5OgogICAgICAgICAgICAgICAgYXNzZXJ0IG1ldGhvZHNbbmFtZV0oKSBpcyBOb25lCiAgICAgICAgICAgIGZpbmFsbHk6CiAgICAgICAgICAgICAgICBzeXMuc2V0cHJvZmlsZShOb25lKQogICAgICAgICAgICBjZW5zdXNbbmFtZV0gPSBjb3VudHMKICAgICAgICByZXBvcnRbInVudGltZWRfY2FsbF9jZW5zdXMiXSA9IGNlbnN1cwogICAgICAgIGFzc2VydCBjZW5zdXNbInJlZmVyZW5jZSJdWyJub2RlX2ZpbmdlcnByaW50Il0gPj0gbGVuKHByb29mcykKICAgICAgICBhc3NlcnQgY2Vuc3VzWyJyZWZlcmVuY2UiXVsic2NoZW1hX3J1bGVfZmluZ2VycHJpbnRzIl0gPj0gbGVuKHByb29mcykKICAgICAgICBmb3IgbGFiZWwgaW4gY29kZXMudmFsdWVzKCk6CiAgICAgICAgICAgIGFzc2VydCBjZW5zdXNbInJlZmVyZW5jZSJdW2xhYmVsXSAtIGNlbnN1c1siY2FuZGlkYXRlIl1bbGFiZWxdID09IGxlbihwcm9vZnMpCiAgICAgICAgYXNzZXJ0IGNvbnRyYWN0Ll9ub2RlX2ZpbmdlcnByaW50X3Byb29mcyBpcyBwcm9vZnMKICAgICAgICBhc3NlcnQgY29udHJhY3QuX25vZGVfZmluZ2VycHJpbnRfYW5jaG9yIGlzIGFuY2hvcgogICAgICAgIHJlcG9ydFsiY29tbW9uX2dyYXBoX3NoYTI1Nl9hZnRlciJdID0gZ3JhcGhfaGFzaGVzKCkKICAgICAgICBhc3NlcnQgcmVwb3J0WyJjb21tb25fZ3JhcGhfc2hhMjU2X2FmdGVyIl0gPT0gcmVwb3J0WyJjb21tb25fZ3JhcGhfc2hhMjU2X2JlZm9yZSJdCiAgICAgICAgcmVwb3J0WyJjb21tb25fZ3JhcGhfYnl0ZV9pZGVudGl0eV91bmNoYW5nZWQiXSA9IGFsbCgKICAgICAgICAgICAgZ3JhcGguY2Fub25pY2FsX2J5dGVzIGlzIHNvdXJjZSBmb3IgZ3JhcGgsIHNvdXJjZSBpbiB6aXAoZ3JhcGhzLCBncmFwaF9zb3VyY2VzLCBzdHJpY3Q9VHJ1ZSkpCiAgICAgICAgYXNzZXJ0IHJlcG9ydFsiY29tbW9uX2dyYXBoX2J5dGVfaWRlbnRpdHlfdW5jaGFuZ2VkIl0KICAgICAgICByZXBvcnRbIm1lZGlhbl93YWxsX3NlY29uZHMiXSA9IHsKICAgICAgICAgICAgbmFtZTogc3RhdGlzdGljcy5tZWRpYW4ocm93WyJ3YWxsX3NlY29uZHMiXSBmb3Igcm93IGluIHJvd3MpCiAgICAgICAgICAgIGZvciBuYW1lLCByb3dzIGluIHNhbXBsZXMuaXRlbXMoKX0KICAgICAgICByZXBvcnRbImNhbmRpZGF0ZV9vdmVyX3JlZmVyZW5jZV9yYXRpbyJdID0gKAogICAgICAgICAgICByZXBvcnRbIm1lZGlhbl93YWxsX3NlY29uZHMiXVsiY2FuZGlkYXRlIl0gLyByZXBvcnRbIm1lZGlhbl93YWxsX3NlY29uZHMiXVsicmVmZXJlbmNlIl0pCiAgICAgICAgcmVwb3J0WyJpbXByb3ZlbWVudF9vYnNlcnZlZCJdID0gcmVwb3J0WyJjYW5kaWRhdGVfb3Zlcl9yZWZlcmVuY2VfcmF0aW8iXSA8IDEKICAgICAgICByZXBvcnRbInNvdXJjZV9oYXNoZXNfYWZ0ZXIiXSA9IHNuYXBzaG90KCkKICAgICAgICBhc3NlcnQgcmVwb3J0WyJzb3VyY2VfaGFzaGVzX2FmdGVyIl0gPT0gY29uZmlnWyJzb3VyY2VfaGFzaGVzIl0KICAgICAgICBhc3NlcnQgdGltZS5wZXJmX2NvdW50ZXIoKSAtIHN0YXJ0IDwgNTQwCiAgICAgICAgcmVwb3J0LnVwZGF0ZShjb21wbGV0ZT1UcnVlLCBvdXRjb21lPSgiZXhwZWN0ZWRfb2JzZXJ2YXRpb25zIgogICAgICAgICAgICAgICAgICAgICAgaWYgcmVwb3J0WyJpbXByb3ZlbWVudF9vYnNlcnZlZCJdIGVsc2UgIm5vX2ltcHJvdmVtZW50IikpCiAgICBleGNlcHQgQmFzZUV4Y2VwdGlvbiBhcyBlcnJvcjoKICAgICAgICByZXBvcnQudXBkYXRlKGNvbXBsZXRlPUZhbHNlLCBvdXRjb21lPSJwcm9iZV9lcnJvciIsCiAgICAgICAgICAgICAgICAgICAgICBlcnJvcj17InR5cGUiOiB0eXBlKGVycm9yKS5fX25hbWVfXywgIm1lc3NhZ2UiOiBzdHIoZXJyb3IpLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICJ0cmFjZWJhY2siOiB0cmFjZWJhY2suZm9ybWF0X2V4YygpfSkKICAgIGZpbmFsbHk6CiAgICAgICAgaWYgY2FzZSBpcyBub3QgTm9uZToKICAgICAgICAgICAgdHJ5OgogICAgICAgICAgICAgICAgY2FzZS5kb0NsZWFudXBzKCkKICAgICAgICAgICAgZXhjZXB0IEJhc2VFeGNlcHRpb24gYXMgZXJyb3I6CiAgICAgICAgICAgICAgICByZXBvcnQudXBkYXRlKGNvbXBsZXRlPUZhbHNlLCBvdXRjb21lPSJjbGVhbnVwX2Vycm9yIiwKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgY2xlYW51cF9lcnJvcj17InR5cGUiOiB0eXBlKGVycm9yKS5fX25hbWVfXywgIm1lc3NhZ2UiOiBzdHIoZXJyb3IpfSkKICAgICAgICBmbHVzaCgpCiAgICByZXR1cm4gMCBpZiByZXBvcnRbImNvbXBsZXRlIl0gYW5kIHJlcG9ydFsib3V0Y29tZSJdID09ICJleHBlY3RlZF9vYnNlcnZhdGlvbnMiIGVsc2UgMQoKCmRlZiBtYWluKCk6CiAgICBpZiBvcy5lbnZpcm9uLmdldCgiR0lUSFVCX0FDVElPTlMiKSAhPSAidHJ1ZSI6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdCgiVGhpcyBkaWFnbm9zdGljIG1heSBleGVjdXRlIG9ubHkgb24gdGhlIGF1dGhvcml6ZWQgaG9zdGVkIHJ1bm5lci4iKQogICAgcGFyc2VyID0gYXJncGFyc2UuQXJndW1lbnRQYXJzZXIoKQogICAgcGFyc2VyLmFkZF9hcmd1bWVudCgiLS1jb25maWciLCByZXF1aXJlZD1UcnVlLCB0eXBlPVBhdGgpCiAgICBwYXJzZXIuYWRkX2FyZ3VtZW50KCItLWNoZWNrb3V0IiwgcmVxdWlyZWQ9VHJ1ZSwgdHlwZT1QYXRoKQogICAgcGFyc2VyLmFkZF9hcmd1bWVudCgiLS1vdXRwdXQiLCByZXF1aXJlZD1UcnVlLCB0eXBlPVBhdGgpCiAgICBhcmdzID0gcGFyc2VyLnBhcnNlX2FyZ3MoKQogICAgY29uZmlnID0ganNvbi5sb2FkcyhhcmdzLmNvbmZpZy5yZWFkX3RleHQoKSkKICAgIGFzc2VydCBvcy5lbnZpcm9uWyJHSVRIVUJfUkVQT1NJVE9SWSJdID09ICJLaW1zLURldmVsb3Blckdyb3VwL3N0b3J5LXdyaXRpbmctYWdlbnRzIgogICAgYXNzZXJ0IGludChvcy5lbnZpcm9uWyJHSVRIVUJfUlVOX0FUVEVNUFQiXSkgPT0gMQogICAgYXNzZXJ0IGNvbmZpZ1siZGlhZ25vc3RpY19vbmx5Il0gaXMgVHJ1ZSBhbmQgY29uZmlnWyJjYW5vbmljYWxfcGFzc19jcmVkaXQiXSBpcyBGYWxzZQoKICAgIGRlZiBleHBpcmVkKF9zaWdudW0sIF9mcmFtZSk6CiAgICAgICAgcmFpc2UgVGltZW91dEVycm9yKCI1NDAtc2Vjb25kIGRpYWdub3N0aWMgbGltaXQgZXhwaXJlZCIpCgogICAgc2lnbmFsLnNpZ25hbChzaWduYWwuU0lHQUxSTSwgZXhwaXJlZCkKICAgIHNpZ25hbC5hbGFybSg1NDApCiAgICB0cnk6CiAgICAgICAgcmV0dXJuIGFzeW5jaW8ucnVuKHByb2JlKGNvbmZpZywgYXJncy5jaGVja291dC5yZXNvbHZlKCksIGFyZ3Mub3V0cHV0KSkKICAgIGZpbmFsbHk6CiAgICAgICAgc2lnbmFsLmFsYXJtKDApCgoKaWYgX19uYW1lX18gPT0gIl9fbWFpbl9fIjoKICAgIHJhaXNlIFN5c3RlbUV4aXQobWFpbigpKQo='))\n(root/\"config.json\").write_bytes(base64.b64decode('ewogICJjYW5kaWRhdGVfbWV0aG9kX2FzdF9zaGEyNTYiOiAiY2I1ZjRkZTQ3YTAxOWZmZTMyNDFiNzliMzRlN2E0NjRkYjZlODRkNjIzMGY0MDU0Y2FkZjYyNWUzNDU3OTBmNyIsCiAgImNhbm9uaWNhbF9wYXNzX2NyZWRpdCI6IGZhbHNlLAogICJkaWFnbm9zdGljX29ubHkiOiB0cnVlLAogICJyZWZlcmVuY2VfbWV0aG9kX2FzdF9zaGEyNTYiOiAiY2M5Nzc4NDgzMjFlOTRhZTdlYmUyNmVhOTBkNDVhY2JhZWVmMzNhZTJjYjQ3ZWY0NzM4OTE4MzA3NDkyNTg3ZiIsCiAgInNvdXJjZV9jYW5kaWRhdGUiOiAiMDQ2NDBhZGMwY2ZhMWUyZjQ2N2EwNWNkY2ZiOWU5MDcyMjdmYTQ2MSIsCiAgInNvdXJjZV9oYXNoZXMiOiB7CiAgICAiY29uZmlnL2FnZW50X2NvbmZpZ3MuanNvbiI6ICIzZDk2MzdkYTc1MzA1YzJlNzA3MGFmYmQ3MzM2YjFiYTg3ZTMyZGNhNTA5ZTE3NTc5MTg1ZTQ5YmYwMGVjMGEwIiwKICAgICJjb25maWcvYWdlbnRzL2NoYXJhY3Rlcl9jdXN0b2RpYW4vQUdFTlRTLm1kIjogIjY2ODBiODhjMjFmMTRkYmQ0NzYzZGY3MzZiNWQ2MjIyZjM2MTAyNGRlMGEwY2ViOGZmYTY2NDJkNDAwZjZlOGEiLAogICAgImNvbmZpZy9hZ2VudHMvY29tbW9uL0FHRU5UUy5tZCI6ICI4YWFkMjkxNDliYWZmODRkNzQwZTg5NmFhYjIxMThmNWE5NzhlOWFkZDZlYzliOGYzY2U1NWI2ZTY0NGM1OTk1IiwKICAgICJjb25maWcvYWdlbnRzL2V4ZWN1dGlvbl9zcGVjaWFsaXN0L0FHRU5UUy5tZCI6ICI2YTdiNzkyYzEyZGFjNzhjZmU5MDIwNzJiZTk1MDhjYmRlMTY3ZTA2MDVjOTVlZjYyMjRmYzFhOTdiZGVkYmM1IiwKICAgICJjb25maWcvYWdlbnRzL2xlYWRfb3JjaGVzdHJhdG9yL0FHRU5UUy5tZCI6ICJhZTNhNzhiZGM0MTczMjg1NTA1YWY3ZGUyMWFhNDA0NmJkYjM2MmJiNDM0ZTdiMjQwZGI4ZGI5YWFhNWUxZDc5IiwKICAgICJjb25maWcvYWdlbnRzL3Bsb3RfYXJjaGl0ZWN0L0FHRU5UUy5tZCI6ICJlNWE3ZGZiMjI3YjM4N2NlYjEwYTE5MGFjMDEyN2YxNTEwOGVhMWUzMjdiMGYwODQ1NTRlYTZkMTZmMGU4NmQ3IiwKICAgICJjb25maWcvYWdlbnRzL3NwZWNpYWxpc3RfY29sbGFib3JhdGlvbi9BR0VOVFMubWQiOiAiZTI5ZWFmOTZmMzg1MDYyOTA3MzA0ZDk1YjgzYjFjNDY2ZjVlOWExMjI2ZDJlZjljZDRlM2Q0ZjE3MDQyOTJlNCIsCiAgICAiY29uZmlnL3BlcnNvbmFfdGVtcGxhdGVzL2FsdGVybmF0aXZlX3RlbXBsYXRlcy8uZ2l0a2VlcCI6ICIwMWJhNDcxOWM4MGI2ZmU5MTFiMDkxYTdjMDUxMjRiNjRlZWVjZTk2NGUwOWMwNThlZjhmOTgwNWRhY2E1NDZiIiwKICAgICJjb25maWcvcGVyc29uYV90ZW1wbGF0ZXMvZGVmYXVsdF9raW1fZXVuX2hlZS5tZCI6ICJmZDFjOTE0MjUzOTRkMDdiMzA4YjM4NjljNTY1NzlhNzYwZGM4Njg1NjhiNmM2Y2ZjNjM3MTQ4YTVmMzMzNmQxIiwKICAgICJjb25maWcvc3lzdGVtX2RlZmF1bHRzLmpzb24iOiAiNDFjYjQ5ZDk4YTg4ZTRlNzAzNmJiNjY2YTlkNjI3NzIzMGEyMGU5ZDg3MjcxZmFmYzhmZGU0MWM5ZjExOWM2ZiIsCiAgICAicHlwcm9qZWN0LnRvbWwiOiAiNzMxMzY0YzllNGEzMzI5NTA3YTZjYzIyZGNhZDg0YzM5NWYxOTQ2OWMzMzRiMGY1NWFkMGFlNDE1MWQxNTQwMSIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL19faW5pdF9fLnB5IjogIjZkMjRhODUxNTVlMzYzYTM0NThjZmQzNWRkODZmNjljMGNmZjYzYmUxODQxN2FmYWJmZmQ5ZmRiYjJmNDcxNTAiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9fX21haW5fXy5weSI6ICI3ZTY3YzQ3ODg1NjkwYmViZTRlMzZlZjQzZGU0NWFiNzQ5MWNkMzRiN2JmMGY5NzJlZDgyMWVhOTQzNjU3ZDgyIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfY29udGV4dC9fX2luaXRfXy5weSI6ICJmYzJiNjcwMWE2ODQ4ZTQ0YmEwNWZkODg2MjcxYTJkYTQ1NTFhZWIyY2JhMzc1YjY2YTNhNTA4MDZhZmVjNzQwIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfY29udGV4dC9hY2NvdW50aW5nLnB5IjogIjM5MGJmMDAyMDI2YjFjYThkN2M4NTY1NzZhOGZhZjAyZGNjMjc2ZWQ5ZWZjZTdmYTE3ODMwYWYwMGZkZjI1YjAiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9hZ2VudF9jb250ZXh0L2FjdGlvbnMucHkiOiAiOGYzNWVjZjE5N2FjYjdmMmZhODhjMGJmZmYwM2VlZDA1M2Y5OGFhN2NkZjM5ODUwYmQyZGI5ZmMzYjcwNDhkZSIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2FnZW50X2NvbnRleHQvY29udGludWF0aW9uLnB5IjogImQ5YzljNTFkZWMxM2Y5YmVkYzc0ZDVjYWIwYzBmMmQ2MTkyMTIwNmE2ZjdjMTA2YTRmZjUyMmIxY2Q5ZDIzM2QiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9hZ2VudF9jb250ZXh0L2xlZGdlci5weSI6ICJlMDExYmI3YjMyOTA0ZWMzM2ZlN2IyNTZmMGE2OTYwZWY2MDA5NDY5YmJkZjc1MWY1NWJhNmU4NzRhNjc0MGNhIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfY29udGV4dC9tYW5pZmVzdC5weSI6ICIzZTRjYWY1MWNiYjU2NDI5NTExOTYyYWU0NDdlMzBiOGJiMmI4MjhiMjFjMWVmNTJmOGUwYTI2NjE5NWI4OGU4IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfY29udGV4dC9wbGFubmluZy5weSI6ICJiYjljZmQ1OGVhNmQ5MDE3NmVmODQwM2MwZTMzNjhjYTg4MjM0YmMxZGJjNGY3MWJmYWY3NzIwYzYzMjg4YTQ1IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfY29udGV4dC9wcm9ncmVzcy5weSI6ICJhYjgzMjk1ZDRjMGJlMjk3ZDQ2YTg4NTVhNGE1YzQ4N2MwNDZkZTI5ZGZmZDNhMjNmYTNlMDY5ZWZlMTE5MmIyIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfY29udGV4dC9yZXF1ZXN0X2NvbXBhY3Rpb24ucHkiOiAiZTQyYTEwN2I0ZWZjODllN2RhZmQxNmYzNjZjYWVmMmZiMTIzODk5ODczYmVjOWUyNzRkYTViZDVmNGZjOWJlMSIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2FnZW50X2NvbnRleHQvc2VydmljZS5weSI6ICI4ZDUyMTliNDcyMWUxZDdmOGFlNGMyZjdmOTY5MzliYjRhOTdlN2RjM2QxNzRmMzI3MjE1ZWI5ZGI5NTZiMGRlIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfY29udGV4dC9zb3VyY2VzLnB5IjogIjVmZWU3OWRhMDk1NTc5MTYzMTkwYjM5Zjg4ZDkwY2MxZmE0ZWExYzIxMmExZTQ3ODM0Yjg0ZmVjNWMwOTU2MjgiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9hZ2VudF9leGNoYW5nZV9wYXRocy5weSI6ICIyOTk2ZjQyMDM3YmE2NDA0YThlZWM3NDgzM2Q1OTM4NTQ4YTI1NmU3MGUwY2E2YzdiZWZlNDEwODNiNzI1MzJmIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfZXhjaGFuZ2VzL19faW5pdF9fLnB5IjogIjdmZDNjNmU4YWYxODEyYmE3OGVhNThhNDgwMjEyM2Q4NjJhOGU5ZTBjYjdjMjhlM2U3NTU2MWE5NzJhN2ZhNTAiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9hZ2VudF9leGNoYW5nZXMvY2FwdHVyZS5weSI6ICI5YzhmMjU4NWQ0ODNlZGZiN2VlYjZiMGMzYjM4OTAzMzZjNWY5YmQ4NzU0ZGNmNWQzNWM0N2U1ZDdiMzNjZDVhIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfZXhjaGFuZ2VzL2NvbnRyYWN0cy5weSI6ICJjNmRiNzBjNjA2YmNhNDcyMTFjNDFhZjhkZWI5NmExZDE1OTEwNWU1OWQ0ZGQxZjNjMWM4ZjFhYmY3ODI4YTM0IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYWdlbnRfZXhjaGFuZ2VzL3N0b3JhZ2UucHkiOiAiM2I2NDlkYmJkZjg1ZjNkNWU0Y2ZjZmNhZDk5ZmI3NTZlMDg0Y2Q2NTZkNGM2MGM5ZDVkNzc0MDllM2FhY2Y0ZCIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2FnZW50cy5weSI6ICJmNGIxNDA1YTU5Mzg4ZTRjNDUwM2Y2YjViYzA3ODI0YmFhNTJmZDNhZjM2MDg4ODNkOWJmYzlkNWI4NTVlYmI1IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYW50aWdyYXZpdHlfYWRhcHRlci5weSI6ICJhMmRhMDAxNzNiZWZkODRlNTIyZjMwZWZhYzA1NzY3NjQ4NjMwNzJlYmYxYjU5ZTk0ZTM2ZWUwZmNiZGRlZjE2IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvYXJ0aWZhY3RfcHJvcG9zYWxzLnB5IjogIjA2ZDNkNTBiMWEyYjcxNGVkMWZkNGU1MjBiZWY4ODU4NTYyMGJjYTVmZjM5ZGM4YjVhNDZjMmRlMGFiYzY1MjQiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9hdXRob3JpbmdfYWRtaXNzaW9uLnB5IjogImQ1NzdlMWE4OWRkZGQ4ZDM2MTE4NDIxODUzNTNjY2JhYWU1NmRhMjQyM2VhYzMzOTc1NzlmNDI5Mzg4M2NmOWEiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9iYWNrZW5kLnB5IjogIjJhMmRmZGNhNzE2NTg5NDNmZWY5M2IwNmJhZTU5NjQyNjRiNGVhMzg3YzY0ZWE3MDg4M2VkMzYxZGY4NTI0NzQiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jbGkucHkiOiAiNThiZWZkMTU5ZGVmOTg1ZWEyN2JlNjkwZTYyZGMwYzg3Y2I0ZjU1YzdhNWM1NzVlMTMzZWZkZmIzOTAxYmU2NCIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NsaV9jb250ZXh0LnB5IjogIjIwODA1MjU3MDhhZGJhMGRiMTY3MjgyY2ZjNjk4YzRlMGU5MDUxNjg2MGUxMTJhZGM2NWIwNTQwYmI0OTA5MTMiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb2RleF9hZGFwdGVyLnB5IjogIjlhNzUzYjg4YzY0ZWRhYjJjZjM0MDIwNTY2NTU4NWZiZTExNDRmYjAyYmI0NThiZjBmNDhmYTA4NzRmN2VhYjkiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb25maWcucHkiOiAiNjgwZjEyYWIyMzE5ODdmYTYxNWU0N2JjNjJmNzIyZTY0NTJjNTZiY2UyMjE2Y2MxNzQ5MjA2Mzg2MTNhYWU0NiIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NvbnNlbnN1cy9fX2luaXRfXy5weSI6ICJlNWNkOWM1MjQ2MGI0OTEzMTUxZTYwOTkxNWJkM2VmOWEzZDhlZWMzN2EwN2U5NzRlZWU5MTMwYjQ2MDFhOTg1IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29uc2Vuc3VzL2NvbnRyYWN0cy5weSI6ICIwMTI0MTlmNzc5OWNlODQ5MzkwY2Y5OWZiNDRhMmU1MDRmODNkYTAxM2ZmMDM0ZGE4ODgzMDNhNGI2ODVlYjI2IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29uc2Vuc3VzL2V2ZW50X3N0b3JlLnB5IjogIjc3YzQ3ZGUzNDRmNTNjMGYwM2I0Y2M0MGE0ODFjNTViOGJjMTI1ZGM5NDQ5YzE1ZTNkNjE4MWEwYzZmNzVhZmIiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb25zZW5zdXMvZXhlY3V0aW9uLnB5IjogImMwZWVkYjU5NzE5ZDNlM2IwYTYyNTcwYWIyZTNmYTk0NzRlODUzMWViZGNlYzc4ZTZkODEzOWE0Nzg3NjQ4ZmMiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb25zZW5zdXMvbWF0ZXJpYWxfc3RvcmUucHkiOiAiNDI5ZmI3YzQyM2U3M2E5OTlkNTczZmU1MWUzNDc2ZWZkZTdhNzdlMDY2MTMxZDU2OTM4ZTVhZjliZWRlZDk5ZiIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NvbnNlbnN1cy9wcm9qZWN0aW9uLnB5IjogImE1M2Y4MjA5OTE3Y2Y2NDY1NDc1NmI4NjcwNTQ4NmJkY2QzMmFhZThlOGM0OTM2OTZiZDYwOGU3NzE0OWExYmEiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb25zZW5zdXMvcnVudGltZV9hZGFwdGVyLnB5IjogImRhMWE1OThjZjVjOGQxMTIxZTI1ZTZiMjI2MmY1YzFmNjE1MDI5ZTUyMzcwNDRkODQyNzNkZDVmNjYzM2E0ZmUiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb25zZW5zdXMvc2VyaWFsaXphdGlvbi5weSI6ICIxZGI3MzU2YWFlMDg4NGY3ZDFkMzI0ZDJhNjI3NTBhNTRiNTY3NDhhN2Q4YWJlZGQzOGVkZjE2NDAwY2JhN2MxIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX2xpdGVyYWxfc2VhcmNoLnB5IjogIjUyYjY1ZGViZjFlMDY3OWJlMGFmYjI3ZGY4YTA3YWZlYThiNzNhZDU4MTQ5ZDNiZGJiYWM5ZjNhM2QyZmE4YjEiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25fcmFnLnB5IjogIjViMDcyMTA4OGQ4NGQzYjJjN2M1M2FhYTQyYjQyMmExZWVkYzU2MzVmZDIyOTBlZGE3ZDBiNzViZTAyYzI2NzAiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25fcmFnX2NsaS5weSI6ICI1MTAxNzdkZmUxNzEwMmVjMjVkNWY0ODAzYWE0YzljYjdjOTAyNDBmZDQxYjBjOTMyOGZiMGU3NTg2ZmJmNGU3IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3JhZ19jb21wb3NpdGlvbi5weSI6ICJhMTYxZTcwZmFhYTUxZTIwOWIxZDRmMThlZGJhNWNlY2RkNDc2Nzg4ZTY2MWMzZTlkMDQ1ODQ3OTExNTI4MmVkIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3JhZ19sb2NhbC5weSI6ICI2MGZiNmRlNzYwYzlhZjNmZDdiMTc3YTY1NDg0ZmU3ZWU2MjBmMjgyYTgwNDQ5YWU0YjE0MTQyOWNhNWJmMGRhIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3JhZ19ydW50aW1lLnB5IjogIjk0ZGVjODIzMWFjZGZiMDMwNTNiZjU3M2RhZDgxNDlkZjU2NmIwMTUzMDBlMDdiZjE2NjNmZjgxYTAyMzIxZGYiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25fcmFnX3N0b3JlLnB5IjogImY0Zjk2MWIxOTJhOWJhMTZlZWIwNGQwNzIxZDc0MzA0YTdkN2ExMTY2ZDU3NGU1MDAwMDExMzRhZjg4OTk3MjIiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25fcmV0cmlldmFsLnB5IjogIjkyM2E4NjIxOWJkYmExZTQ4Mzc2Zjg4NzgxNTljYTRiZDM5NDFjNWVlOWM2NTVlYzZkOThhMWUwOWZjMGMwNjQiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25fc2VhcmNoLnB5IjogImRhOGE3ZmYzZmFhODYzMGQ2Zjk1Y2UyNGVkMTNkYjRmYzRhMDliNDc2Yzk3NmI1ZGIxZjI2Yzc2NjMzMDhjZWEiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25fc3RvcmFnZS9fX2luaXRfXy5weSI6ICJiYjU2YTI0YTkwOWQxNjFiZjM1NWI0YTA3ZmE5YTE0MzU1ZWUzNWU5ZjZiYTNlODlkOTAzNWM5ODkxMzc1NjA5IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3N0b3JhZ2UvYXJjaGl2ZS5weSI6ICIwZTY1OTY4MmM4MjM1YmU4ZjgxOTdkYTA1NTAyNTA2MWYxOWFmOTc3Njg1NzBlZmIwYmRlNzAwMGE4OGRlNDA1IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3N0b3JhZ2UvY29tcG9zaXRpb24ucHkiOiAiMmE1NmRlMDljNjEwZGQwZjU0NDMzYWIxNDc0YTE3MzQ0NmI1ZjIwM2Q4ZjZiMDE1NDNlZjBmMjI1OGNjNGE1MiIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NvbnZlcnNhdGlvbl9zdG9yYWdlL2NvbnRyYWN0cy5weSI6ICJhMzI5MzFkMDFiNjc0YTE5YzQ2OWM3YWQwMzNhZDhmMWNiMmYzY2RlNjMzY2ZiM2RmMzIwN2RhMTk4OGMyNDRjIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3N0b3JhZ2UvZmlsZXN5c3RlbS5weSI6ICJhOWFkOWZhMDZlMWY3YTJkZmE1OWY5MzIxNjAzMjkxOTBkOGY0NmRkMTUzMTQ1MjUzZDlhMmFkYWYzOTIzOGY2IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3N0b3JhZ2UvZmlsZXN5c3RlbV9hcmNoaXZlLnB5IjogIjJhMDljZTg2NjI2YzRmNTAwM2FiNTNkZGYwYWY5MGU0MDBlZGZjZTM0NzkyMDg3ZTI3OWExZDRhYWVkYWVjYmIiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25fc3RvcmFnZS9taWdyYXRpb24ucHkiOiAiNGNlMTNkYzgwYTFjZDY5ZDQyMThkZTc2OGM2NmNlMTAzNDQ3ZWY5NmI2YmZjZTc5ZmVjYmViYjk1Y2ExMWJjMCIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NvbnZlcnNhdGlvbl9zdG9yYWdlL3Byb3Zpc2lvbmluZy5weSI6ICJmNjQzYWUxMTVmYzU5MzYwZmJmNjA5NWE4YjAyYmQ1MzdlNGUwZWVmYjJlNGY2N2IxODMyZmRhOTUwNmYxYTkwIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3N0b3JhZ2Uvc2VsZWN0aW9uLnB5IjogIjUxODFlY2M2MjRiNGU4NTdiODE0YTUxOGVhZDU3OTNlYzA1YTYzNmU4YjgxOWM4Y2YxOTZkNDk1ZmI4YmRiZGEiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25fc3RvcmFnZS9zcWxpdGUucHkiOiAiZWYxMWM0NDJiNDNmOGI5MjIzY2E3OWY0M2QxZWU2MWI5OWMyMGFiMTczNGU1OGI2ZTI1YzA1MDM1YTAzM2I2MCIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NvbnZlcnNhdGlvbl9zdG9yYWdlL3NxbGl0ZV9kYXRhYmFzZS5weSI6ICI0ZDI1YTM5Njc2ZDljOTBmNzE1MGUzY2M1NWJmZmFkOGVhMGRmYzA0N2YwNWI5YzFmYWUzZGUzYTlmOTRiNTE5IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9uX3N0b3JhZ2Uvc3FsaXRlX3NlYXJjaF9pbmRleC5weSI6ICJmOWM2MWNjY2JkNmJmYjEwZWI2NjdjMzlmM2RjN2MyMmNkYjMwODgwZDdkMzJjNjc1NzhkODFmYmU5MmNiYmY1IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9ucy9fX2luaXRfXy5weSI6ICI1ZWFjMzBkNDE1NmM3NTMzYTIzZjlkOTA0NmI0MzA1ZDA5MTQ2MDhkMDQ3OWUwMDRiMjBhZjdjYjBjNThjZDQ5IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29udmVyc2F0aW9ucy9jYXRhbG9nLnB5IjogImY2ZGUxOWYzOTQ3M2NmNzU1YmYzZDA0OTBjMmExOTYxZDEzZWRlOTNlNmZmZjc0NTVmM2M5ZDNlMjUyMDQxZWQiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25zL2NvbnRleHQucHkiOiAiYzE3OGYxNmQ4ODcwMGJkMTc3Y2EwZWY4Y2VjYjJhNGU1NTJmMzI5YzlmMzdjZWZjNmM1NDU5NmZiYmFlMjg4MiIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2NvbnZlcnNhdGlvbnMvZXZlbnRzLnB5IjogIjhmNTkyOWQyNmY5OGI4NDA1OTFmZjZhNjVhNTk3ODdmMDY1MzNmZGMyZmYxMmJiZmI4ODIzNzIxYTMwMWFmNDIiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9jb252ZXJzYXRpb25zL3Nlc3Npb25fY29udGV4dC5weSI6ICI1YjQ0M2E4ZTljZjRmYjZkNmNmY2VkMzA4OTc1NjRmNGQ0OTdjMWUwOTM4MjU5NTIyZTVjYTZhYjRlNzc5YWZhIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvY29yZV9kb2N1bWVudF9yZWFkaW5lc3MucHkiOiAiNjk1NTUwZGY0NWJmYzUwZGMzYzIwZDdiZjIzYjk4YjdmYWZjYzkzOWI5YzA4NTcyYzU0NWYwMWFjNjRmMzkzNyIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2RlYnVnX2xvZy5weSI6ICIzOTA4MDEyZjg3Yzc5YzFlN2VhYmJmYjI2MmNhNmFjNGJiMjQ4MjQwNTdhYjQ2M2UwNDJjYWQxNzA1MGYwMzcwIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZGlyZWN0aXZlcy5weSI6ICIwMzI1YjIxMmEyYjkyMWIzOWUxYjk0ZmFmOTQzOTNjMTlkNTdiZTEzYTBjNDRiNTY0NmUwYmFhZjJlNjhkZjcwIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZWRpdG9yaWFsX3Njb3BlLnB5IjogIjI0ZDk1OTdmYzcyNmExODM1MTRiYWFkYWUyMWUxY2I1YmExYjkwZDAyMmY4NjUxODVkZDA3YWJjZWI2ZTVhMzUiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9lZGl0b3JpYWxfc3RhdGUucHkiOiAiOWFhYzJlNjU4OTJiN2EwODZlNTY1OWJhYmQ4MjZlOTZhYzUxOTY1OTNkMTQ0NGYwOTg0NDVkOWQyYWVlY2FmMyIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2Vycm9ycy5weSI6ICIyZGM0Y2RmMWJiNDljZjQ2NzI3MjA1MWY4YmJmNzE5MzU0YmIyYjMyOTY1MTdjZTk0ZTA5NWEyNDBjMTUzNWQxIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZ2VuZXJpY19yYWdfYWRhcHRlci5weSI6ICJjM2Y4MjI0M2NlZmE2MDJmMDA5YjAyZWVhYjE5ZWFhZDE2ZmE2YWMwZDQ3M2QyZDczOTVkMGRmZTliZTUxODk1IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZ2l0L19faW5pdF9fLnB5IjogImFiYmQ1OWYwMzgyZTQxNWRhZjRjMTFiZmVlMzRjZTI2ZWRjN2JjMTE5YThhODY2ODNjOTg2MjU2MzQwZTAwOTQiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9naXQvYWRhcHRlci5weSI6ICI3YjgyNWM1OWQ1YjcyMjc0NWQ5YTIwODI0OWUyMGVjYTBjNmNlYWFkYjY5MDY1YTY0NjMzZjU2N2E2MGRjZmM5IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZ2l0L2NvbnRyYWN0cy5weSI6ICJiMDZhODk4Yzc4MmQ0NDRiY2Q1NTYyNjYzYjczYWRlNTE0ZjAwZDRkMGIwNDk2NTVkZGJhN2Y3NTM4NTNkNzEwIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZ2l0L2luc3BlY3Rpb25fb2JqZWN0cy5weSI6ICI0NmY1MjhjOWQ5ODFkMjFmZmIwNTRkMjY0ZGQ5MWFkZjgzNTc2NTNjZTk5MmUyNzc0M2FiYWJjMmZkYmU0ZThmIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZ2l0L3Byb2Nlc3MucHkiOiAiNTM2MTJlNTE2ZTc4NjZlOWJiNzkwOTEzNWVlY2NiMTYyM2Q1ZDAwNWFlNmRlOGY4ODYxZjA1MzlmM2ZiZTg5NCIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2dpdC9yZXBvc2l0b3J5X2xvY2sucHkiOiAiZmFiMjMyMGFmMTE0OGJkY2MzMDk5Y2NmMTQ4NmZiNTdmZDkxYjQzMDA5YjYwM2JlODk0ZDU5ZjI0OGNiYWQzYiIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2dpdC9zZXNzaW9uX2NoZWNrcG9pbnRfY29udHJhY3RzLnB5IjogImMzYjgyOWU0ZGYxNjlhNzc4YjRkZGU4NjdlOWI2NDE2MGQzNGNlN2NmNGM4MjY0NmU5MDUyYmIyNTE2Njg1MDQiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9naXQvc2Vzc2lvbl9jaGVja3BvaW50cy5weSI6ICJmMjBlZjQxNzZmODM5NjE1MzhiZTNmM2EzNWYwN2FiZTIxYjUwZDRlODNkODU1Y2JjZTNkOWY5NDdjZWVmODlhIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZ2l0L3Nlc3Npb25fY29udHJhY3RzLnB5IjogIjJhM2M5MWQwZTFjYzczZDk0YjEzOWYzODRjZDA5ODUwZmIyMzJkMTYzM2QzZDJlNjY3ZDM1YWZkZjM5Y2VkMzAiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9naXQvc2Vzc2lvbl9oaXN0b3J5LnB5IjogImI4OGJkNzZiNDc4NzM5MzI3Y2VhNWQ4NDFjZTU5NGMwZDFmYjE2Y2JjZTJlN2I5NWMxZDM4NWVjMTU2ZjlhN2QiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9naXQvc2Vzc2lvbl9oaXN0b3J5X2NvbnRyYWN0cy5weSI6ICJkNWMzZDc0YTY2YmVmMjI2YmU1NjA0ZmVkNTA5YzhmMTIwNzcyMjMyZWJhZWFkNDk1MzYwZTNmNDIwNzdiZjJkIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvZ2l0L3Nlc3Npb25fcmVzb3VyY2VzLnB5IjogIjU3MGFhOWM0MmM1OGUxYTNhYmJkNTRkMjY0YzQ3MWI1NjFlZjUzODYwMWJhMzZjZGM1OThkNGRjNjk2ZTcxYWIiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9naXQvc3RvcnlfY29tbWl0X2NhbmRpZGF0ZXMucHkiOiAiNzVkMWM4NmU2N2FlMmY1NmM4NzBmMGJkZTIzYTA3NDU1NzNmOGVlNjEwMzJiMmU3NjRhMTAzYTZlZjExNTdjNyIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2dpdC9zdG9yeV9jb21taXRfY29udHJhY3RzLnB5IjogIjgzMzY5MjRkMzVlYjAyZTcxYWM5NGQ4ODU0OWVmZjA4YTEwYTA4ZTBmM2VkZTJkNDA1MTIyMmIyNmUyMjQ3ZGQiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9naXQvc3RvcnlfY29tbWl0cy5weSI6ICI5NWMzNDQyMGQ4N2VjZTQ4YzY3ZTUzN2ZkNTg4ZjdlYjhjZmRkNjkzMWNhMTdkODc1YWUxOGVlMWJkYzU4OGNkIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfYXV0aC5weSI6ICJkNTIzZjc4ZjUwMWQzY2EzMGY0OTdmMjMwMWY3N2Y5ZWZkOGQxNzIyNDQwN2EzOTI3NGRkOTY4YjU5YmUwNmZiIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfY29tbWFuZHMucHkiOiAiY2Y0M2ZiOGI1MjE0ZGU1ODQ4MGE1OThjN2M4MWIyY2IwODU3MzVkMDc5NjA3NmRmYmE5ZjA1ZTBiNjM2M2Q0MiIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX2NvbnRyb2xsZXIvX19pbml0X18ucHkiOiAiNjdmZDJkNGIyYjI5YTIwMTFkNWRkYTNlYTcwNmI2YTViMDIyMDY1OWI4ODkzY2I0N2U0ZmRhYWIyOWZhZjlhOCIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX2NvbnRyb2xsZXIvX2NvbnZlcnNhdGlvbl9wb2xpY3kucHkiOiAiMGVjNjZlY2MzZTEzNDliMTgxZDQ3ZjUyNTgwOGNkMmYwZDFmOGM5ZWMzZjk1ODFkYzg5ZmQ0NmQ5YTEzZmI5MiIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX2NvbnRyb2xsZXIvX2NvcmUucHkiOiAiOTE4OWUzYzFlOWYxMTZkMzEwMjAwODAzN2QxODc0ZmY2ZDgzNzcyZjQ2OGY0NTJjYjQyMWE3ZjQxYzJmM2JkMyIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX2NvbnRyb2xsZXIvX2V4Y2hhbmdlX3BvbGljeS5weSI6ICJlMDhlNzk3ZTZmZTkwNTZjOTQ0Y2RkOTQwMGQ0YzNiOTAyZjYyMzg0NmZkYWVjMjBhYTQzMzZmZDE1NTZiZGYxIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfY29udHJvbGxlci9fZXhjaGFuZ2Vfdmlld2VyLnB5IjogIjgxNjRlMGEwODVhMWJkNTk5MWEwMTJjMzU3NDZlOTNlODI3MGNhOGEyZDYxNGRjZGUyMmU3OWU3OTg0MjdkNzAiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV9jb250cm9sbGVyL19sZWFkX3BvbGljeS5weSI6ICI0YmRkM2QzZmU2ODZiNjdlZDg2NTE3Mjk5ZGViZDQxODE5N2IwYTY3YTQ0OTk3YzY2YTU2MDMwN2Q2ODMxMzdkIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfY29udHJvbGxlci9fcnVudGltZV9wb2xpY3kucHkiOiAiNmRmYTgwOTNiOTc5NGZmNzk0YmY0N2VkMTA0NjQ5ZGUzMjc1ZTAxMGFiNjk0ZWRjODVmMzUyZmNkZTQ2NDlhMSIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX2NvbnRyb2xsZXIvX3Nlc3Npb25fcG9saWN5LnB5IjogIjU0MzdiMTQ1OTA0MTE3Y2RkNmRmZWJiODUyN2I4MDZmZGY0YTgwMTA3ODAwN2ViYjkwMDc2YTAwM2IyMGNmYWMiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV9saW5lX2VkaXRvci5weSI6ICI2YThlNThjMDNmZjVkNTU4NGE3OWRjOGJlYjk0ZTYxOTgxNWE1MjMwNGYwOGUzNWEyODMwYTk4NmVkYWU0ZWY3IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfc2V0dGluZ3MucHkiOiAiZGNkMzYwMGJjNTRkMThhZWE4OGVhZTRkMGQ3NWRiMjcxYTJhZDBjNmZlZWQ5ZWQyODBiNGYxZmFjNjJmZjg5NiIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX3Rlcm1pbmFsL19faW5pdF9fLnB5IjogImY5MzVlYTkxMGIxYTU5NjllMjM5ZDI5OWNjYWRkOTQyYTYwN2MxOWVkZThiYTdmMGY3MzVkODQwMjdiNzMwMDIiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV90ZXJtaW5hbC9fYWR2aXNvcnlfcHJvZ3Jlc3MucHkiOiAiMmYyZDkwZTc3ZmE4YWYzY2IyNDNkMDE2ZTIxNjUxZDFmZTFlMGUwYjlmZmQzZTFmM2FmMWMyMTg3YzE1MTBmNCIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX3Rlcm1pbmFsL19ib3gucHkiOiAiZTJlMjMwZjdhNjFhMjM5M2FkYTZmNDFmODI4M2QxODFiOWMzODBkNDAyNzkzZDhhZWE3Y2NiOThiZjRjMDQ0YyIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX3Rlcm1pbmFsL19jb2xsYWJvcmF0aW9uX3ZpZXcucHkiOiAiYjhjMDRkOGMxOTJjYzNhNGI4NWE3MDc2NzMzMDJmYzQxYTdjMjZjZDVlYzA0MmMxMjg0NjAxZTEyOWQyZGRiMCIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX3Rlcm1pbmFsL19jb250cm9scy5weSI6ICI5ODhjMmQ1NzU5ZDI0ZWY4ODRhODc3YmRlZTRlYzc5ZTI0MjlhYTg1NTllZjMwYTAxY2EyZWUxOGQwOTgyZmNhIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfdGVybWluYWwvX2NvcmUucHkiOiAiMDhmNGFiYjVhMTdiMjM0NTMyMGQzNGNiZTdlMzQwNmQ1NTIzYjJlNTAwY2VjOWMzMGI2OGY4ODgzZDk1OGNkYyIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX3Rlcm1pbmFsL19kcml2ZXIucHkiOiAiMDEzOGI4N2Y0NzcyZWVmODQzNzVhNTIzZjZhZWJmNDQ4N2FkOWRiYTg0MDEyN2M2NWZhNjU3MGFiZjdiMjQ2ZSIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX3Rlcm1pbmFsL19leHRlcm5hbF92aWV3LnB5IjogImEwMDYzN2Q4YzEzMDY0NDFiZGE5MDFlZjAyYmM3NjA0MzRkNDk4ZjUwN2Y4NGFiZGE5OWY3OWU5ODYyOTM0ZmQiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV90ZXJtaW5hbC9faW5wdXRfbGlmZWN5Y2xlLnB5IjogIjlkY2I1ZDI1NGIyMGYzZjZjZmU2NjIzM2E4NjgxNTQ5ZWFhMDViOTBhNDJmZDRiNTZmYTMyNjlkZDE0NzY4ZWYiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV90ZXJtaW5hbC9fbGl2ZV9jb21wb3Nlci5weSI6ICIxZWM0NjQxNzQ3NmY0ODljNjc2MTEwN2VlNzZjOGM3NjMyMzdkMTk4YjllYmI5Nzk2NDc1NDEwYmFkZDY3MGM4IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfdGVybWluYWwvX21hcmtkb3duLnB5IjogIjUzNjM2N2M3YTZhZTI5ODkwMDkwZWEzYTU4Zjk5NTg5OTQzMzRlNzM0ZDViM2M2N2FkOGFjZWU0MTg1MDcyZjMiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV90ZXJtaW5hbC9fbW9kZWwucHkiOiAiYzllNDU0OGYwZWRhNjlmNzk2YzFiMmRmZjk2NjE1YTBkYzRmNjdkNzljY2U4YzMwOWQyODUyNmJlODVkOTkxYyIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX3Rlcm1pbmFsL19vdXRwdXRfaGlzdG9yeS5weSI6ICJhMGNjMjhjYjE4ZDNlN2Y4OTlhNzhmNjM5ZTNjNGJmMmU5ODUxMzY0MmU1YzM3YzI1NzJlYzIyODZmY2NiMzdhIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfdGVybWluYWwvX3BvaW50ZXIucHkiOiAiMjBhMDQwZDdjZjU4YjExNjAwNDhmMTcwYjk4N2I1OGYzYjkzZmRiNmIxNmY5ZWRmMDQ3OTMzYTkxYjdkNmZkZiIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2ludGVyYWN0aXZlX3Rlcm1pbmFsL19yZWZlcmVuY2VfYWN0aXZhdGlvbi5weSI6ICIyM2Q0M2NjNDYxOTU1ZDcyZjVhZjhjNWU5OTZkNTNkNzE1NzQ0NjgzNzc5MDFhZTUzMjJkYjM4OGZlNDY3NjM0IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfdGVybWluYWwvX3JlbmRlci5weSI6ICJhOTg4YjUzNGM3ZWNhNTI3ZjkwNDcxOWI0YTczMmVjNDZiNDQ4OWU5MThmMDdiNjUxMjNhMjEzMTk4MTA2N2EzIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvaW50ZXJhY3RpdmVfdGVybWluYWwvX3Jlc3BvbnNlX3VzYWdlLnB5IjogIjAyZjIyODBlODgwNmE0OTM1MmQwYjYyNDE3Y2Y1YmM0ZTFkZjExNjI2YzVhZTAxMDViMzAyZjA5YzFmYTExZGQiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV90ZXJtaW5hbC9fdHJhbnNjcmlwdF92aWV3LnB5IjogIjUzODY1MjkwZTliYWZmMmQ3ODY2NjBmMWY1MjI4YThhYzBiNTMyN2NjMGJkMGE1MDVmYjlhY2E1ZTMzYjE5NDIiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV90ZXJtaW5hbC9fdmlld2VyX2NvbnRyb2xzLnB5IjogImE1N2Y1MTM0YzFjNTA5NDNiNDdjM2Q5ODZlNzcyNmEwMzEyZWMxMzQyY2E3ZDYzN2VlNDEyZTJjYjYwNDljMTMiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV90ZXJtaW5hbC9fdmlld2VyX21vZGVsLnB5IjogIjY1MmExNjk0MWMyZTM5NzBjYmU0YTU0ZGYxMDY0NzFmN2EzODc3YjQxYTQyMjViZTI4ZWJlZTc1NmE3YWY3YTIiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9pbnRlcmFjdGl2ZV90ZXJtaW5hbC9fdmlld2VyX3JlbmRlci5weSI6ICIxMzJlODBkNTkwYTg5ZjllZjNjMDBhMmRlMmE4NGE5ZjJlNTc4MjQ1MmI4ZmUwZDUwYzU0NjcwMDU5NTZkNTYzIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvbGVhZF9leHBsb3JhdGlvbi5weSI6ICJmZDY5NjQyZjAyOTI5YjcyNDgzNzljZGUyMDYyMTI3NzczMTdlYjNmZWNlZDgzY2MxNWJhOTg4ZjA5NDdkYTkxIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvbGVhZF9wcmVtaXNlX2RlY2lzaW9ucy5weSI6ICJkNTJhZGRjZTUxYjhkOTRkNzY3OGM2MDQzMjBkM2RlYzVmMmFjZDVhYjFkZjBhZDVhZTRjNzBhMGQwYWJkMGExIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvbGVhZF9wcm92aWRlcl9jb250cmFjdHMucHkiOiAiYzdmNjE4NmVmZjAwZWQ2ZDVmZGVkYjZmMzI0NjAyMTUxZDEzZDFjYmVhZTdiNzM5MzFmOTliYzdkNjU3OTFjNSIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL2xlYWRfdGFza190cmFuc2l0aW9ucy5weSI6ICI1YTZkOTQwOTk4Mzg3NjE3ZDJlODNiNGI1ZjkxNDdkYmZjYjYyZGQwYjE2MDUwNTc0MzQ3ZWE1MTVhOWZmNjFiIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvbW9kZWxzLnB5IjogIjgwZDkxZjc0N2I5NmYyNWVmMDc4NTYzOWM5MDhhZmRmZjY3YzgxNTRiMDVmYzBiNDczMjBhNWRmZjQ1OTcyZDYiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9vcmNoZXN0cmF0b3IucHkiOiAiNDJhNDRjZTYxMzZkNjQxYmY0NTM1ZGFhOGE1NjBjOGI3OTgyOTkyYmE5NDU3MDJjZWM5NjhmYjcyYzRjNjk3MiIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3Byb21wdHMucHkiOiAiZDQyY2RkZTYxY2U1MmMwYjFmNmFmZGExMmI0ZTFjM2JiNDRjZjkyZjliMTg5MzE1NGFhYTY1NTExZjBiODAzMSIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3Byb3ZpZGVyX2FkYXB0ZXIucHkiOiAiMGQwNmUxNzZkM2M5NjE4MzY2YWRhNjc0OTM0ODFhMDI4YmIyODE1ODAxMTUyMWUyYmY2NWQyOTU3NmFhZmY2MyIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3Byb3ZpZGVyX2F1dGgucHkiOiAiMWM5YTI4MGViOWNlZjE5MmI0YTYxYjhlNzRjYmU1NjQ4OGMxZmU3M2FlYmNmNTMzNjBhOTgxOWEwN2ZiZTBiMCIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3Byb3ZpZGVyX2F1dGhfcmVjb3ZlcnkucHkiOiAiOTI2MGZiZGNiZjU3MTA2NWU5N2YyZWRhZTIyMTBjMmY1MzlhYjg0NjcwMzk1ZDQ3YTg0ZmEyNjZlYzE0NzllZiIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3Byb3ZpZGVyX2NhdGFsb2cucHkiOiAiODYyYjI5ZDU0ZDdlMDhhZTgwNDJmY2IxZTI4NGFhMTVlZjhkYzMxZjczMDYyYTc4Mjk5MzU4M2FjODQyYjg3OCIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3Byb3ZpZGVyX2Vycm9yX2FydGlmYWN0cy5weSI6ICI1MjE5MWYyNGY1MWYzNzVkZmZjMjY1MzM3ZGI2MjI1OTIzNjhmYzk5OWVmMDUwMmE0ZGMzNjM0MWU0YWU4OTQyIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvcHJvdmlkZXJfZXhlY3V0aW9uX3dvcmtzcGFjZS5weSI6ICIzZWZjODBiN2RiMGFmNWVjYWVlMmY5ODZjMGUyOTIxYjJkOGYzNDQwYjA4NGE3OGI0N2RlNWUyZTE0M2I1YzJjIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvcHJvdmlkZXJfcHJvY2Vzcy5weSI6ICIyOGYzNmE4MTBiN2UzZmZhMGI4ZWNkZjRhMzY3M2RkOTdkNGExZTg4MjkyZmE1YThjMjUzNTQ3YjBhODk3YjNiIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvcHJvdmlkZXJfd2lyZS5weSI6ICJjNzkyZGVhYmRhMzQ3YzJlNmZjODdjMTBiZDJjNjU5YWU3N2U3NTkyN2UyYWU1ZjgzNGNmNWY0ZmM0MzQzOTE4IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvcmVwbHlfdHJhY2UucHkiOiAiNDVhNjRhZTAzNjM0YjIwMTRlYjA1NjQ4ZjcwNDE0OWQwMzczYmQ4YTA2MjcxODNhMjNkN2U5YzMzYjE4YTUzZSIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3J1bl9pbnB1dHMucHkiOiAiZmJkMDY4NWNhZGEyZGRhMjZkMTlhNWMzMDk4ZTgwNWI1OTcwYmFjZGUwYjdhNjJhZDZlYTc3MDQzYmU0YWQ4MCIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3J1bnRpbWVfc3RhdGVfcGF0aHMucHkiOiAiNzdkNjYxYWM3ZjdkYWNkZmYxYWExMDVmZjQ0OTU2NTRlZTUxY2VmNjNlMzFkYTlmYjg5MTdiOWRiMzVlMGM1ZCIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3Nlc3Npb25fbGlmZWN5Y2xlLnB5IjogIjIzMTI4YzE2YmNiMzIwMDBjMmZiM2QyMTIwZTZhN2M4YTQ2MmU5ZWI4ZjRmMDc3ODcwYTk1Nzg5NGQ5ZTU4MzkiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9zZXNzaW9uX3JlY292ZXJ5L19faW5pdF9fLnB5IjogIjM3NzcxZWVlMmMxZGU2NjExNzE2MzdhYzhjNWU5NWNkMDI5NDVlNTBiZTcxNTcyNmRjMThhMzcxYjY1NmQ2ZDQiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9zZXNzaW9uX3JlY292ZXJ5L2NvbnRyYWN0cy5weSI6ICI1ZjAwNWI4OGFiMzFjZDRmZWNmYWI5YWI0NzM3OTc3Y2Y1OWUxMmFlMGY3OGExYWJmOTJlNDkzYWU0MDc3YzE1IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvc2Vzc2lvbl9yZWNvdmVyeS9yZWNvbmNpbGlhdGlvbi5weSI6ICJlMzI5Y2Q2N2Y2ODcwZDllOTZkNDFjNmQ3MjY5Y2ExN2E1MDUwODExOTQ0YzRlMmUxZmFkNzM0Y2FmMWU1MzcyIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvc2Vzc2lvbl9yZWNvdmVyeS90cmFuc2l0aW9uX2Fzc2Vzc21lbnQucHkiOiAiMWU3YTk3OTg0MWY2NTlmYjQxN2E2ZjBlYzc4OTNhYTNmMmIyMzFkMWRiOWFmODcwZWFlZjkyODhmMTM2ODlhMiIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3Ntb2tlLnB5IjogImJhNDliNGM5ZTZkMmIyOGZiZjAxOTQ3MjAzMDM4NzJhYTdkYWQyY2FmNWY4YmM3NzcyYTQ0ZmRiZjc4ZTA5NDMiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy9zcGVjaWFsaXN0X3JvdXRpbmcucHkiOiAiYzhiZGIwNmNhNzExMjJiZTNjNGNhNWRlMWViMWJiMTQzMTQwN2Y1YTVmZmYzZGJiYjEwY2YxYjk4NzZkYmIyMCIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3N0cnVjdHVyZWRfb3V0cHV0X3ZhbGlkYXRpb24ucHkiOiAiZGY1MzA2YTM2NGM5OTUyYWU1ZWI4OWIxN2Q3NjgyMDYzZDRjMTZkMmU3MzU2YjI4YzUyOGIzY2YwMzEzNDc2ZCIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dvcmtzcGFjZS9fX2luaXRfXy5weSI6ICJhMzA2M2E5NmZiOTdlMDhiNmFlZWM5ZTRiOGJhNWJhZTY2ZjBhYTQ5MmE4MGM2ZTc0MzZiMzBhNmVkNjQxNjIwIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvd29ya3NwYWNlL19wb2xpY3lfYmFzZWxpbmVzLnB5IjogIjhiYTZiZTliOWNmMDQ1ODA4MTg2ZmU5NmRmNzc3N2ZjNWEzZDAwNGJmYWFjMGUxZjg2ZWMyZGE2Njc0MDM4OTIiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy93b3Jrc3BhY2UvY29yZS5weSI6ICJiZWE0NTRmNjljZjBlYzE3YmI1YmQ1MGYyNTYwOWQwZWY1NGY5MmJjMWUyNWJiZjk1ZWRjMzIzMjhlNGE0NmRjIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvd29ya3NwYWNlL2luaXRpYWxpemF0aW9uLnB5IjogImRhYmUzNjYwMTE2NjM5ZDBhMzM0MGM0N2U4MWFiNTFhM2NjNWFiZjEwNWJmOWUxZjI2ZmE1OWQ2MDAzNzVjYjYiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy93b3Jrc3BhY2Uvc2NoZW1hLnB5IjogIjIzYjIyZWZmOTJhYTAxMTRlMzc0YTRlNmEyYzc2Mjg2ZjNmM2RiNjVkOTVjY2MyOWY2MDcwNTZmZjc3Mjg2MmYiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy93b3Jrc3BhY2Uvc2Vzc2lvbl9yb2xlX3Byb2plY3Rpb24ucHkiOiAiZWUxNDkyMjA4OTBhYzJkOGZiOGQyOGRkNDJlNzUwMDMyM2NjYThmNDhlMDMwOWZlNDE2NGU4ODYwYzkzZjRkYSIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dyaXRpbmdfYXJ0aWZhY3RzL19faW5pdF9fLnB5IjogImVhMDZjZWNkMDRlMjIyNWUyZjI2NjA4MjhiOTI3YjZiYmE0NDUyNzY0Mzg5ZGJjYzAxOTU1NGMwNWYzNDYxMWMiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy93cml0aW5nX2FydGlmYWN0cy9fYXBwbGljYXRpb25fc3RvcmUucHkiOiAiY2ZlY2FhOTU1MGEzMzY2MDc5NmFhNTMxZjA3YThmYWUxMGIxZjUzN2VhZjUxMTFiMTIzM2M0ODljMDM2NjdiMSIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dyaXRpbmdfYXJ0aWZhY3RzL19yZWZlcmVuY2VfZXZpZGVuY2UucHkiOiAiOThiNTJiNzU1NjBkM2ZkZDg0NzRiZWUwYzQxNjc3YjNiNmNiNDQ2NWE5ZDViYmQ4ZmQ4MjhlOTI1NTAzNGJhMSIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dyaXRpbmdfYXJ0aWZhY3RzL19zdG9yYWdlLnB5IjogIjJhNWQ2ODNjMTM5MjMzZjI2YWE1Yjc3NjBlNDI5NTk3YzZjZDU1MTQyNDRjNzc1MzdiZDY2ODMzNWEzMzYwMDEiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy93cml0aW5nX2FydGlmYWN0cy9hcHBsaWNhdGlvbl9jb250cmFjdHMucHkiOiAiNGYxYzY2MmFkMmM5MGUyYWZhNTlhZTA0MTFmYWQxMDRhODM2ZWUyZTBiZjg5OWYwZTI0NWY1MGYyMTFkMTA0OCIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dyaXRpbmdfYXJ0aWZhY3RzL2F1dGhvcml6YXRpb24ucHkiOiAiM2ZlOWRhMTllMjJkODI4Yjg2OTA5NDI4ZGY4ZDUyODIxNzUzZTk3OGZlYThiYWM5MjljZWJjYWM1OTk4ZDIzYSIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dyaXRpbmdfYXJ0aWZhY3RzL2NhdGFsb2cucHkiOiAiZGEwOTJkZTI4MGQ5MDU0OTUyNjUzZWE5NjFiM2YxYzllYWIwYWVkNjU3ZGYyODZmMDU5ZDI4YWIxNTFkOTMyOSIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dyaXRpbmdfYXJ0aWZhY3RzL2NoYW5nZV9zZXRzLnB5IjogIjExNWU5ZjcxZDBjYjM0MmU5Nzk1NjVmODEyNjU1MDRiZjJhNzdlZmE2NzJmZDdiZGE5ODJmNTg0M2E5ZmY4NDAiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy93cml0aW5nX2FydGlmYWN0cy9kaXJlY3RpdmVzLnB5IjogIjAxMmU2M2U1NWZlMzRjNmM4YjVhYjI4MjhjYWJhNDg1MTIxMjllZTk1MjQ0MmVhYzk4OGEwMDEzODM0OWI2MTIiLAogICAgInNyYy9zdG9yeV93cml0aW5nX2FnZW50cy93cml0aW5nX2FydGlmYWN0cy9maWxlc3lzdGVtX3NvdXJjZXMucHkiOiAiNjJiNmRhYTFhZGZiYzNmZmM1Y2MyNzY5Y2UxYzhmOGY0M2NkNjg1YThmNTI5MTYxMTVmMGE4YmE4ZmVmNzBlNiIsCiAgICAic3JjL3N0b3J5X3dyaXRpbmdfYWdlbnRzL3dyaXRpbmdfYXJ0aWZhY3RzL3JlYWRfYWN0aW9ucy5weSI6ICJkOTNiODFlMDUxZDllZDZlOTMxMGQ5ODllNGY2NTk4YWE3Yjc3NjdjODg5YWU4NzQ1MWVjMDI4YWNhMWI4MGE1IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvd3JpdGluZ19hcnRpZmFjdHMvcmVmZXJlbmNlcy5weSI6ICJjMjRkOWQ5MjQyNGNkYWVjY2Q2MTkzMmE3MjA1ZmVjOTJhMDM5NTFmNzk4NjEyNTNjMWE5OTQzNWZiNzhmNjE2IiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvd3JpdGluZ19hcnRpZmFjdHMvcmVsYXRpb25zaGlwX3BvbGljeS5weSI6ICI3MzE4NjQ2NWFhY2IwY2VlZmJjYTMxNjM4ZWEzYzgxNTg2NjFkYjc2ZjdiYmRiZmJjYmZjZDk4YzQwOTZkMDkyIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvd3JpdGluZ19hcnRpZmFjdHMvcmVwb3NpdG9yeS5weSI6ICJmZjJjNTQ4ZTkwODFkZTBkZWQyOWJkNGU4ZDAzNmNlNmFlYmI2Zjc0MzAzNzY4MWY2NGI0MDIwNTNkOGQ2NWQwIiwKICAgICJzcmMvc3Rvcnlfd3JpdGluZ19hZ2VudHMvd3JpdGluZ19hcnRpZmFjdHMvcnVudGltZV9yZWZlcmVuY2VzLnB5IjogImFjOWUzNzIzOTBjM2FhODU0NjhmYTc0YTk1OWM2MmU1MzhiNzMwZGE2OTNhMzdjMjBjYWU3NzQzZDg4NjhmNDEiLAogICAgInRlc3RzL19faW5pdF9fLnB5IjogIjZhZGM0MjE0YzVlMzYzMGNiNDY3MjJjZDllMTkzYjRhYWViNmY2OWZlN2MzMTE1Y2MyYmIzMGRkNWJmODk2NTgiLAogICAgInRlc3RzL19leHRlcm5hbF92aWV3X3N1cHBvcnQucHkiOiAiMTI4Yzc3NWZlOTNhYzg5ODgyNzM2ZWFkNjE3OTM2MzViYjI0M2Y5OGU3MTQ3NTUyYThjNjY5YTAzODE0MjQzZiIsCiAgICAidGVzdHMvYW50aWdyYXZpdHlfbGl2ZV9oYXJuZXNzLnB5IjogIjQwN2YxZDAyMGYyMGJiZTA2MThkNTBiZGFlMWJlZjkyNTk5NmZkYzkxMWEwODA0ZTkyZDQ2MzRmZmUyNTUwZmEiLAogICAgInRlc3RzL2NvbGxhYm9yYXRpb25fY29udHJhY3RfZml4dHVyZS5weSI6ICI1YjExZjcxYjBlMWVkNmIxMDhiNThlNGM0ZDc2NjI1MjgzNTY0ZTY3NTc1OWU3NWQ1M2ZjY2YyYmQxOGQ4ODk1IiwKICAgICJ0ZXN0cy9jb252ZXJzYXRpb25fYXJjaGl2ZV9maXh0dXJlLnB5IjogIjMyMmM3MjNlODcwYjY1MjA0NGU2MjA5OGUzMzg5M2E2MjQyMGE5OTM3OWYzZmE4Zjc3YmU1NDczYWFjMjYxMzkiLAogICAgInRlc3RzL2NvbnZlcnNhdGlvbl9jYXRhbG9nX2NvbnRyYWN0LnB5IjogIjNkMWYwYWFhYTZjZTNmOTcxNTRkMDY1MmJmODhlZmQxYTJlOTE1ZDg0M2YzYTY4Yzc0ZDgxZmMyMTliMGJjNzkiLAogICAgInRlc3RzL2NvbnZlcnNhdGlvbl9zZWFyY2hfY29udHJhY3QucHkiOiAiNzlhOTZkODNlYWNlMGFlZjIxZjI5NDc3MDMxNWVmY2Q3Y2JjMzYwZDFjOWMzYTk4ZWZmNTBkMTFjMDQ0MzIwNiIsCiAgICAidGVzdHMvY29udmVyc2F0aW9uX3N0b3JhZ2VfbWlncmF0aW9uX2ZpeHR1cmUucHkiOiAiZTQ2OWE2ZDI2OTM2MzA4MGRlZGJhZjhmZWJkNGUxYzVmOTBkMzgwMGQ3M2VhOWNiNmZjMDdiYmM3NjY1NDkzMCIsCiAgICAidGVzdHMvZml4dHVyZXMvYWdlbnRfY29udGV4dC9wcm92aWRlcl9jb250ZXh0X2Jhc2VsaW5lX3YxLmpzb24iOiAiYzhiMzczN2I5N2UzM2ZhOTBkODI1YjRjYTQxY2ZkYTZiM2IzNDhkNjI0MDE2ODliZGZkOTBkYmJkN2IyMTRmNCIsCiAgICAidGVzdHMvZml4dHVyZXMvYWdlbnRfY29udGV4dC9wcm92aWRlcl9jb250ZXh0X29wdGltaXplZF92MS5qc29uIjogIjIwYjJhMmExMTAyOGExN2ZiMzVlNmJlMGNlOGU4MTA3ZjUxNjZhNDA5MTIyMzRiMzY3ODU3ZjlmZTYzYjFhNWIiLAogICAgInRlc3RzL2ZpeHR1cmVzL2FudGlncmF2aXR5X2xpdmVfY2FzZXMuanNvbiI6ICIzNzFlOTU0MTg4MDkyMWEwOWQyNzc1YzIxZGRiYzdhMGMzMjY0YWQwYTg3OTZhYjJjNzg2OWI4N2M2Yjc3OTAyIiwKICAgICJ0ZXN0cy9maXh0dXJlcy9hbnRpZ3Jhdml0eV9yZWNvdmVyZWRfZmluaXNoL21ldGFkYXRhLmpzb24iOiAiMDY4Nzc3NjE1NDA1MWJkNWE5NjI2MDU2MzkxNjRjMDRhMDEwMWU2ZWIyZjQ3MGM3NzdhNmMwZjkyNTg2NTgzMSIsCiAgICAidGVzdHMvZml4dHVyZXMvYW50aWdyYXZpdHlfcmVjb3ZlcmVkX2ZpbmlzaC9yZXF1ZXN0Lmpzb24iOiAiNGRlZDJhNjI1YmQwNTgwODQzMWRlZWMxZGQ0NzMzMWU4NjE4YTUyN2UyYWVjZTg5ZGFkOTlkNTRiYTI5MmI3YSIsCiAgICAidGVzdHMvZml4dHVyZXMvYW50aWdyYXZpdHlfcmVjb3ZlcmVkX2ZpbmlzaC90ZXJtaW5hbC5qc29uIjogIjdkNDU5MWU4ODgwOWEwNzFkNGFiYWNjOWVkODMyNmY4ZGI1NTZiMmJkYTU3Yzg5NGZhZGIwNzdiNDNhNWQwNGUiLAogICAgInRlc3RzL2ZpeHR1cmVzL2FudGlncmF2aXR5X3JlY292ZXJlZF9maW5pc2gvdHJhbnNjcmlwdC5qc29ubCI6ICJiMzkxYmM2NGI3NWViMTdhZjVkMmQ3MDVjOTA5MzlmZmE0MGIxOTA2ZGZjZDgwYTc3Mzk1Yzg3N2JiNzg2MzI4IiwKICAgICJ0ZXN0cy9maXh0dXJlcy9hdXRob3Jpbmdfc2NvcGVfY29tcGF0aWJpbGl0eS9vcmRpbmFyeV92MV9jMjBkYzQwLmpzb24iOiAiYjBmMmMyMGQ4ODgyMjJlMTZhZGRmYTA1ODA3ZGY2M2RmYjNmZThlMDM3OWFkZGRiMmQ3NWYxMzdiNWMwY2ExZCIsCiAgICAidGVzdHMvZml4dHVyZXMvYXV0aG9yaW5nX3Njb3BlX2NvbXBhdGliaWxpdHkvb3JkaW5hcnlfdjFfYzIwZGM0MC5tYW5pZmVzdC5qc29uIjogIjc0ZDk3NTgzNzE1MjdkZGEwNDJmNzI5YTYxYTVhZjIyZGMyZGY0Yjg2MTk5Njc5ZjgyN2ZlOTQwMGY1Nzk3YTIiLAogICAgInRlc3RzL2ZpeHR1cmVzL2F1dGhvcmluZ19zY29wZV9jb21wYXRpYmlsaXR5L3Njb3BlX3YyX2Jhc2lzX3YxXzc2YTgwZjcuanNvbiI6ICI2MTc4OTZmNDRlZDE1N2JhNzkwMzRlZmFmMjk5MTBjOGFjY2VkOGI3OWIxMTUzZTA1MGI0MTM2NzNkMzU1YzE1IiwKICAgICJ0ZXN0cy9maXh0dXJlcy9hdXRob3Jpbmdfc2NvcGVfY29tcGF0aWJpbGl0eS9zY29wZV92Ml9iYXNpc192MV83NmE4MGY3Lm1hbmlmZXN0Lmpzb24iOiAiNzE5MTJkZjQxNDY0MDU4ODU5ZWVlZjJkMTZhNjRiZTFlZTk1M2MwZTY2NzAxYzBiN2RlNDg0ZjFiODE4Nzg5ZCIsCiAgICAidGVzdHMvZml4dHVyZXMvY29uc2Vuc3VzX2NvbXBhdGliaWxpdHkvYXV0aG9yaW5nX3YzX2MyMGRjNDAuanNvbiI6ICIxNzMwMjNkNTQ4NGM5ZTg1YzNkZGYyZmIyYTA4YmNmMzI5NGM4NWU5YTM5YzBkZWQ1MWRjNGJiOTZkNTU0ZDJjIiwKICAgICJ0ZXN0cy9maXh0dXJlcy9jb25zZW5zdXNfY29tcGF0aWJpbGl0eS9hdXRob3JpbmdfdjNfYzIwZGM0MC5tYW5pZmVzdC5qc29uIjogImVkM2JlOTg2ZTdhMTM3OTdlMTU5Yjg2ZGUyZjY4OTNmOWVlY2VhYWRmZDQwZWM1YjFmNmQxZTNhNDE0YjUwODMiLAogICAgInRlc3RzL2ZpeHR1cmVzL2xlYWRfZWRpdG9yaWFsX2NvbXBhcmlzb24vY2FwdHVyZXMuanNvbiI6ICJlYmZjYTgwYmZlZTgzZjQ5Y2U2N2FlMzkxZTI1NjZhOGMzNThkNjM2OTkwZDJiODE1YTk5MzkwMWFlMjM3ZGJiIiwKICAgICJ0ZXN0cy9maXh0dXJlcy9sZWFkX2VkaXRvcmlhbF9jb21wYXJpc29uL2luY29tcGF0aWJsZS1yZWNvbW1lbmRhdGlvbnMudHh0IjogImU2YTQwMmU2Y2Q5ZWIxMzRmNDZkMmIwYzIwNDUzM2NhZmQxZWQ2M2Y5YTc5OWRjYTE1NWI4NzE5YmU3YmU3N2IiLAogICAgInRlc3RzL2ZpeHR1cmVzL2xlYWRfZWRpdG9yaWFsX2NvbXBhcmlzb24vcmVjb3JkLnR4dCI6ICI0ZGFmYjM5Y2VjODkyNmViZGI5NzA3MTYyYWY0MDYwYWY0ZjUwZTg2MTM4MGNjOTQyN2E3YWMyYzk0ZjJlNzExIiwKICAgICJ0ZXN0cy9maXh0dXJlcy9sZWFkX2VkaXRvcmlhbF9jb21wYXJpc29uL3Jldmlld3MuanNvbiI6ICI4ZTYwYzlkMmZiYTVlYzlkODU0NzgyYWJlZTM0M2FmYzBlNzliOWFjMGE3ZjY1YWJkY2E5MjQ3YmJiNmJkMjU3IiwKICAgICJ0ZXN0cy9maXh0dXJlcy9sZWFkX2VkaXRvcmlhbF9jb21wYXJpc29uL3N0cm9uZ2VyLWVmZmVjdC50eHQiOiAiYmRjYTJmMTMzM2MxNmQ2OTIxZjAwYjNhNjg1MmUwODYwOWQ3Nzc2ZmQ3MmU1OGMwZDY0Mzc3OGEzM2UzMzlmYiIsCiAgICAidGVzdHMvZml4dHVyZXMvdGVzdF9idWRnZXRfdjEuanNvbiI6ICJkZTRmOTg0ZTQ1OTVkNjJkZmE4NmZmMzkyOGU5ODE3YWEzNDE2NzdlNjU4ZGNkN2IyZDZlMDA1OGZlNDUxMTdjIiwKICAgICJ0ZXN0cy9maXh0dXJlcy90ZXN0X3RpbWluZ193ZWlnaHRzX3YxLmpzb24iOiAiN2MzNTIxZTAyYmQxYzA0ODEwZjQxZTcwN2M0ZTJjY2NkODE4MWNmZGUxNzFkNmEzMzQxMDUwM2U2NDdlNTRhOSIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvY2hhcmFjdGVyX2N1c3RvZGlhbi5tZCI6ICIxOGIzZWY0NjUyNzk0NDUzOGNmMzYxNzkxOTBiODIyMTQ4MDlmOWRiNTY1ODJhZmE0N2UyMTg1MWNkN2Q3OTdhIiwKICAgICJ0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9jb21tb24ubWQiOiAiOTA5NDAyZWFlMzJhMGIxYWU0Zjk3OGJlYTE0YTAzZjc1MmQ4NDUwMDQwYWU1ZTUwZmNmNTkyYTI2YzNkMDcwMyIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvZXhlY3V0aW9uX3NwZWNpYWxpc3QubWQiOiAiZDYzOGNkYTRlZTI3MzA2YjhjODczNzliZjlmZWU1ZTc2NjUyODMyYmJkNjNhNTliNDM3MmFhYmZiZmMyYjQ1OCIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvaW50ZWdyYXRlZF83OTRfMDlkYjY1Yy9jaGFyYWN0ZXJfY3VzdG9kaWFuLm1kIjogIjgwNmRiMGJhZTE0NWUyYmE1MGU5MjAxNzQyOTlkZTA2YzIwYzA4M2U0NWJiYTA0Yjc2ZmZlOWMyZDU1MGU5MjMiLAogICAgInRlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL2ludGVncmF0ZWRfNzk0XzA5ZGI2NWMvY29tbW9uLm1kIjogImViNzhhN2QzYTVhM2Q4MzI5MWIxODhmNTEwOWYzYjMxMzI1ODIxMDllMTIxMWUzMGJhYzdlMzNhOWVhYjE4YTUiLAogICAgInRlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL2ludGVncmF0ZWRfNzk0XzA5ZGI2NWMvZXhlY3V0aW9uX3NwZWNpYWxpc3QubWQiOiAiNGEzZWFkM2UyMzg5YmRhOTY2Mjk4OWQwMmJiODgxN2FkMWVjMmQ3YjRkNGYzMjJiMjQ2Yjg5MjU0NWQzOTc5YiIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvaW50ZWdyYXRlZF83OTRfMDlkYjY1Yy9sZWFkX29yY2hlc3RyYXRvci5tZCI6ICI0OTdjMDkyN2E3NzMzZmMzN2M1NTNhZWZkMDU2NzUzMjQ2YmZkMDU1NDMzMWJmZDY0ZGQ2ZjZjY2Q2Y2YxMTYwIiwKICAgICJ0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9pbnRlZ3JhdGVkXzc5NF8wOWRiNjVjL21hbmlmZXN0Lmpzb24iOiAiYTE2Y2Y3MTQzMjE5ZGNjNjIyZTBlZDQ2NDBjMWUyYzAyYmVlODk3OWM4YTRkNWE1NjcyMDU3ZjgwZTc5MWFlNiIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvaW50ZWdyYXRlZF83OTRfMDlkYjY1Yy9wbG90X2FyY2hpdGVjdC5tZCI6ICJlNTlhYmEyYjJlNzUwYzdiOWVmMDBiMmMzZjFlYTRlN2U5YjI4ODlmN2FiZjI1YTg0MGQ3ZGI3ODFkNWQ5M2U3IiwKICAgICJ0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9pbnRlZ3JhdGVkXzc5NF8wOWRiNjVjL3NwZWNpYWxpc3RfY29sbGFib3JhdGlvbi5tZCI6ICI0YWI4M2YzNzkyYTI1OThhMTc0ZTZiZmIwMjUxMTE2MmUyNmY5NjNiNWZlNzNjNjYxYWZjZmRhYTNhNWFmY2MzIiwKICAgICJ0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9pbnRlZ3JhdGVkXzc5Nl83NmE4MGY3L21hbmlmZXN0Lmpzb24iOiAiZmZhODVhZjI5MTFkYTJjYjc2M2IyYmUyOWNmOWQwMjA1M2M4NDUxNmRmODA5Y2ZlNTI4MzQ2NWRhNGVmMjg4MCIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvaW50ZWdyYXRlZF83OTZfNzZhODBmNy9wb2xpY2llcy9jaGFyYWN0ZXJfY3VzdG9kaWFuLm1kIjogIjgwNmRiMGJhZTE0NWUyYmE1MGU5MjAxNzQyOTlkZTA2YzIwYzA4M2U0NWJiYTA0Yjc2ZmZlOWMyZDU1MGU5MjMiLAogICAgInRlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL2ludGVncmF0ZWRfNzk2Xzc2YTgwZjcvcG9saWNpZXMvY29tbW9uLm1kIjogImViNzhhN2QzYTVhM2Q4MzI5MWIxODhmNTEwOWYzYjMxMzI1ODIxMDllMTIxMWUzMGJhYzdlMzNhOWVhYjE4YTUiLAogICAgInRlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL2ludGVncmF0ZWRfNzk2Xzc2YTgwZjcvcG9saWNpZXMvZXhlY3V0aW9uX3NwZWNpYWxpc3QubWQiOiAiNGEzZWFkM2UyMzg5YmRhOTY2Mjk4OWQwMmJiODgxN2FkMWVjMmQ3YjRkNGYzMjJiMjQ2Yjg5MjU0NWQzOTc5YiIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvaW50ZWdyYXRlZF83OTZfNzZhODBmNy9wb2xpY2llcy9sZWFkX29yY2hlc3RyYXRvci5tZCI6ICI5MzE4MTgxOTYzNWRkZDliMWE1YzYzNmNhZTRmZjNlMWE4Yjc4YmYzYmYxNDQyYThiNGZiNzkwYzEzMWMzYTE4IiwKICAgICJ0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9pbnRlZ3JhdGVkXzc5Nl83NmE4MGY3L3BvbGljaWVzL3Bsb3RfYXJjaGl0ZWN0Lm1kIjogImU1OWFiYTJiMmU3NTBjN2I5ZWYwMGIyYzNmMWVhNGU3ZTliMjg4OWY3YWJmMjVhODQwZDdkYjc4MWQ1ZDkzZTciLAogICAgInRlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL2ludGVncmF0ZWRfNzk2Xzc2YTgwZjcvcG9saWNpZXMvc3BlY2lhbGlzdF9jb2xsYWJvcmF0aW9uLm1kIjogIjlmZDYyOWQ1MTU3Mjk5MGM3OWVmZmZjZjY2ZmQ4NTdkZTFiY2U3OTEyZjNlMzA0YWY3ODUyNDhhNjc2Y2NiNGIiLAogICAgInRlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL2xlYWRfb3JjaGVzdHJhdG9yLm1kIjogIjhlMzYwZDE1YjRhOThkNTBjMDI1YTRmYTExNTBiOGM4NDU3ODY5OTZkODM1NjlhZGFhZWIxY2UyNmM3ZGZjNTMiLAogICAgInRlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL21hbmlmZXN0Lmpzb24iOiAiN2YyMDg2YzA0YTYyYTA2OThmOGViOTAwYWZkNmRmZTNmOTZiNzUwOWFjYTk1YTBjZGFhNWQzMWYwMTIyN2ExMiIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcGxvdF9hcmNoaXRlY3QubWQiOiAiNzlmMmYwNzJiZWVhY2I0MjA0NzkwOTg3ODhkZjZiOWNkYTM0ZDViYzViMzNjOWMwMmM1NzdmNDVlZWVmN2YzZCIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHJlX2d1aWRhbmNlXzk3ODc5ZDQvY2hhcmFjdGVyX2N1c3RvZGlhbi5tZCI6ICI4MDZkYjBiYWUxNDVlMmJhNTBlOTIwMTc0Mjk5ZGUwNmMyMGMwODNlNDViYmEwNGI3NmZmZTljMmQ1NTBlOTIzIiwKICAgICJ0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9wcmVfZ3VpZGFuY2VfOTc4NzlkNC9jb21tb24ubWQiOiAiMmJjMGVhMzQzNzczMTk4NDNjM2E5OThjOTVhODczYmQ3YzcwZDc3ZDRmMzEzMDRmNzI1OWI2YTkyOGU2ODhiOCIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHJlX2d1aWRhbmNlXzk3ODc5ZDQvZXhlY3V0aW9uX3NwZWNpYWxpc3QubWQiOiAiNGEzZWFkM2UyMzg5YmRhOTY2Mjk4OWQwMmJiODgxN2FkMWVjMmQ3YjRkNGYzMjJiMjQ2Yjg5MjU0NWQzOTc5YiIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHJlX2d1aWRhbmNlXzk3ODc5ZDQvbGVhZF9ieXRlcy5qc29uIjogIjBiNDkwZTg1NjYxY2EzMTk4ZGE1NmM1MmZmYzk0OTNkMzlhMjI4MGYyY2VkZGViMjMxZmM2ZWE3NmY0YzEyNWUiLAogICAgInRlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL3ByZV9ndWlkYW5jZV85Nzg3OWQ0L2xlYWRfb3JjaGVzdHJhdG9yLm1kIjogIjUyNzhiOTBiYTU5MzlkYjZlZTMxZDRlMmU0ODA4YmE1ODNiNjZlYmIyNTYxNGFjYWY4YTc5MjAwYjllN2VhN2EiLAogICAgInRlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL3ByZV9ndWlkYW5jZV85Nzg3OWQ0L21hbmlmZXN0Lmpzb24iOiAiMDMwZjg4NDdhMTUzNGIxYzdkOTVhMWM0N2FkMTIyNjU2N2RmNjNiMThjYWM3ZGI0MmFhZjllNmI1YmU2NDZhYyIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHJlX2d1aWRhbmNlXzk3ODc5ZDQvcGxvdF9hcmNoaXRlY3QubWQiOiAiZTU5YWJhMmIyZTc1MGM3YjllZjAwYjJjM2YxZWE0ZTdlOWIyODg5ZjdhYmYyNWE4NDBkN2RiNzgxZDVkOTNlNyIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHJlX2d1aWRhbmNlXzk3ODc5ZDQvc3BlY2lhbGlzdF9jb2xsYWJvcmF0aW9uLm1kIjogIjRhYjgzZjM3OTJhMjU5OGExNzRlNmJmYjAyNTExMTYyZTI2Zjk2M2I1ZmU3M2M2NjFhZmNmZGFhM2E1YWZjYzMiLAogICAgInRlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL3B1Ymxpc2hlZF8yZTkvY2hhcmFjdGVyX2N1c3RvZGlhbi5tZCI6ICIxOGIzZWY0NjUyNzk0NDUzOGNmMzYxNzkxOTBiODIyMTQ4MDlmOWRiNTY1ODJhZmE0N2UyMTg1MWNkN2Q3OTdhIiwKICAgICJ0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9wdWJsaXNoZWRfMmU5L2NvbW1vbi5tZCI6ICI5MDk0MDJlYWUzMmEwYjFhZTRmOTc4YmVhMTRhMDNmNzUyZDg0NTAwNDBhZTVlNTBmY2Y1OTJhMjZjM2QwNzAzIiwKICAgICJ0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9wdWJsaXNoZWRfMmU5L2V4ZWN1dGlvbl9zcGVjaWFsaXN0Lm1kIjogImQ2MzhjZGE0ZWUyNzMwNmI4Yzg3Mzc5YmY5ZmVlNWU3NjY1MjgzMmJiZDYzYTU5YjQzNzJhYWJmYmZjMmI0NTgiLAogICAgInRlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL3B1Ymxpc2hlZF8yZTkvbGVhZF9vcmNoZXN0cmF0b3IubWQiOiAiNTVjZDgzODNlZjE5MWRlYTJkMTI5Njc4NTUyZWE0NTlmOGE0MDNiYzQ0ODg0MDJhZjJiMjM0M2YwNmYzYzYyYyIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHVibGlzaGVkXzJlOS9tYW5pZmVzdC5qc29uIjogIjVjZmM3OTQ4MDA2ZGRhMjQ1OGM5NzgwYjEwYTdmZGExMDY0OTljYTMwMjNiMDJiYTAzNDFjZTMzYWFkNTFmZjYiLAogICAgInRlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL3B1Ymxpc2hlZF8yZTkvcGxvdF9hcmNoaXRlY3QubWQiOiAiNzlmMmYwNzJiZWVhY2I0MjA0NzkwOTg3ODhkZjZiOWNkYTM0ZDViYzViMzNjOWMwMmM1NzdmNDVlZWVmN2YzZCIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHVibGlzaGVkXzJlOS9zcGVjaWFsaXN0X2NvbGxhYm9yYXRpb24ubWQiOiAiN2FhZDY1YjA1MTFmZTQwODc1MTNmZjU1Yzk5OWQ5Y2E5NzRjNjAwZDMzOTA4ZWI1YjMyNzcwZTJhN2Q3NjNmMSIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHVibGlzaGVkX21haW5fMWU0ODJmZS9jaGFyYWN0ZXJfY3VzdG9kaWFuLm1kIjogIjE4YjNlZjQ2NTI3OTQ0NTM4Y2YzNjE3OTE5MGI4MjIxNDgwOWY5ZGI1NjU4MmFmYTQ3ZTIxODUxY2Q3ZDc5N2EiLAogICAgInRlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL3B1Ymxpc2hlZF9tYWluXzFlNDgyZmUvY29tbW9uLm1kIjogIjkwOTQwMmVhZTMyYTBiMWFlNGY5NzhiZWExNGEwM2Y3NTJkODQ1MDA0MGFlNWU1MGZjZjU5MmEyNmMzZDA3MDMiLAogICAgInRlc3RzL2ZpeHR1cmVzL3dvcmtzcGFjZV9wb2xpY3lfYmFzZWxpbmVzL3B1Ymxpc2hlZF9tYWluXzFlNDgyZmUvZXhlY3V0aW9uX3NwZWNpYWxpc3QubWQiOiAiZDYzOGNkYTRlZTI3MzA2YjhjODczNzliZjlmZWU1ZTc2NjUyODMyYmJkNjNhNTliNDM3MmFhYmZiZmMyYjQ1OCIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHVibGlzaGVkX21haW5fMWU0ODJmZS9sZWFkX29yY2hlc3RyYXRvci5tZCI6ICI2ZGJmZDY1NjA3YmU2Nzk5NTExYzgzMDAzNzA0NDViNTE5NGMwMWFlNDU1NGU1NDAwZWE1MjFjMWJiN2NlNWViIiwKICAgICJ0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9wdWJsaXNoZWRfbWFpbl8xZTQ4MmZlL21hbmlmZXN0Lmpzb24iOiAiZTMzMTIyZTIxYzRiNThmMjBiNzgyZjRmNTc3Nzc1NjVjYTk5OTIzYTY0ZjMzOGVkMmFlYzU2N2UxOTUyZjE2ZCIsCiAgICAidGVzdHMvZml4dHVyZXMvd29ya3NwYWNlX3BvbGljeV9iYXNlbGluZXMvcHVibGlzaGVkX21haW5fMWU0ODJmZS9wbG90X2FyY2hpdGVjdC5tZCI6ICI3OWYyZjA3MmJlZWFjYjQyMDQ3OTA5ODc4OGRmNmI5Y2RhMzRkNWJjNWIzM2M5YzAyYzU3N2Y0NWVlZWY3ZjNkIiwKICAgICJ0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9wdWJsaXNoZWRfbWFpbl8xZTQ4MmZlL3NwZWNpYWxpc3RfY29sbGFib3JhdGlvbi5tZCI6ICI3YWFkNjViMDUxMWZlNDA4NzUxM2ZmNTVjOTk5ZDljYTk3NGM2MDBkMzM5MDhlYjViMzI3NzBlMmE3ZDc2M2YxIiwKICAgICJ0ZXN0cy9maXh0dXJlcy93b3Jrc3BhY2VfcG9saWN5X2Jhc2VsaW5lcy9zcGVjaWFsaXN0X2NvbGxhYm9yYXRpb24ubWQiOiAiN2FhZDY1YjA1MTFmZTQwODc1MTNmZjU1Yzk5OWQ5Y2E5NzRjNjAwZDMzOTA4ZWI1YjMyNzcwZTJhN2Q3NjNmMSIsCiAgICAidGVzdHMvZ2l0X2NvbnRyYWN0X2ZpeHR1cmUucHkiOiAiNGJiMTBhY2ViZTQzZTk2MzVhMzI5MmQ1MGNjYmQyZWVmMjNkNjQ1M2YyYWMyZGFiMTkxZjA5MGQ1MzI0MTk4NSIsCiAgICAidGVzdHMvaGVscGVycy5weSI6ICJkZDM2NGE3NGVmNDJmMmJlY2VjNTI5ZGE5N2RhYzBiMTAxYTMyNDZjOWJhZDlmNTRkNjAwMzEwN2MzMDRkZjIwIiwKICAgICJ0ZXN0cy9pbnRlcmFjdGl2ZV9jb250cm9sbGVyX2ZpeHR1cmUucHkiOiAiZjhjZTcyOTMyNDg2ZjA3MTEwZTM3YTY2OGFiODc1ZDllODI3OTlhZTFhNWQzYjBmZDhlZWRkZDg2ZDZkY2I3OSIsCiAgICAidGVzdHMvbGVhZF9hY3Rpb25fbGl2ZV9oYXJuZXNzLnB5IjogImE3ODc3OWZlYjFmMjkxZDVjZmVhMzE5NDdkNzcyNDc3M2RmOTE5MWViNWMwMzM0N2YzNjRhNzg5ZTUxMDk1ZGEiLAogICAgInRlc3RzL2xvY2FsX2NpLnB5IjogIjUwNjgxYjA5NDc4OTRmMTRhMzlmZTRjMjRhMWJiNzE3MmE2M2Y5NTIwMjkzZDZlYzhkNzUzNjdkYTcyYjUzYmEiLAogICAgInRlc3RzL2xvY2FsX2NpX2Nvb3JkaW5hdG9yLnB5IjogImIwNDc5ODg0ZTc2MzkxNjdiMWFkMDM0YmY3ZDUwYWM2YWQ1NGRiNDJlYzhlODQ4NjdmMDM1ZmI5YzA4ZGY3NGMiLAogICAgInRlc3RzL2xvY2FsX2NpX3N0YXRlLnB5IjogIjU3ZmJiODBkZTAwYTdlZDRhMmQ3NzhjZThlMGE4ZjJjZDdlZjgzNDMxNDFiNDM4OWNhZGNjZTM4OTNkMzE2NjciLAogICAgInRlc3RzL2xvY2FsX2NpX3dvcmtlci5weSI6ICI4NDA1Njk5NmZkMmE4MTE2MmE3NWY4MTJkZDk3ZTcwODI5NWQwNmM3ZDAxOTgwN2IxOGUzNzBhMGZhZjkyY2NlIiwKICAgICJ0ZXN0cy9wcm92aWRlcl9hdXRoX3JlY292ZXJ5X2xpdmVfaGFybmVzcy5weSI6ICIyZDVjMzM5YmM3YjVmMDUwYjhjY2NmM2IwNGUyMGM2YzQ3MDIwNjAwMDNkNGU4MjcxZDQ0MTlmNDFkZWQxNWM4IiwKICAgICJ0ZXN0cy9wcm92aWRlcl93aXJlX2ZpeHR1cmUucHkiOiAiM2NmODVjZjhhMTA2YjEyYjJiMzQyNjFkYjgwOTBmYzc2OTExODIzM2EzMzJlZmQ2ODNlMGE1MWIyNDE2MzA3MCIsCiAgICAidGVzdHMvcmVjb21tZW5kYXRpb25fZml4dHVyZS5weSI6ICIyOGQzMzhlODRhYTczODhjNjRiNmNlMGI2YzE1MTBiZWI5NDc2ZmM1NzljYTZiMTVmZmE4MmNkZTRmMTIwNTgyIiwKICAgICJ0ZXN0cy9ydW5uZXIucHkiOiAiMDE4YTg1MzRkODM0MjBlY2U3ZDNkZWE2ZjEzNjhiNDQwODQ0NWY1OWFlNmZjMjQ4Nzc1YWM0M2EzZWRhMWU3NiIsCiAgICAidGVzdHMvc3BlY2lhbGlzdF9yb3V0aW5nX2xpdmUucHkiOiAiMzA0M2FmNzY0MDkxYzQ5ZDI4ZmY5NmNlNzVhYzcyMDIyODBmZDBjZmE4YmMwM2E4NDc0NTdjYzlhODg3NTVmZiIsCiAgICAidGVzdHMvc3FsaXRlX2NvbnZlcnNhdGlvbl9zdG9yYWdlX2ZpeHR1cmUucHkiOiAiM2JmNGFmOGJmZDM1MzJiM2NlZjdhNDgwZjFmZmQ2OWIyZjFjOWQwYTJmMjhkMmUyOWNiOWRkZjY4ZWEyNWNkZCIsCiAgICAidGVzdHMvc3VpdGVfYnVkZ2V0LnB5IjogIjY3OGY1YzYzNDllZTNmYTcyOTM2Zjg0MzdkZTNiNWQ4NDEzN2EyMDFhMmI3NGEzMzg3NmM3ODI1OWI3YjIwZDEiLAogICAgInRlc3RzL3N1aXRlX3BvbGljeS5weSI6ICI2MGMwZDU1NWJhM2VjYjEwM2ZjZDQ3MTBiYjIzMzc3Mzk1NWU4MjljNzE5MjY1NmY5ZTYyNjY5NWVmNGNlMjgzIiwKICAgICJ0ZXN0cy90ZXN0X2FkYXB0ZXJfc3RyZWFtaW5nLnB5IjogIjZjOTI0NWEwNTZiYzE4YjM5MGJmNTY4NTVhNjgyM2Y2ODEzMDEyNTJiOTdkNmYyNTNmN2JkZDI4MGYwOWEwZTkiLAogICAgInRlc3RzL3Rlc3RfYWR2aXNvcnlfcHJvZ3Jlc3Nfc3RyZWFtaW5nLnB5IjogImY4YTNkNWQzZDFhNmExMTFlODc1ZTMyNWVlM2QyMTg3YmVlODMzMDkxMWUzMzhmZjA4ZTU2ZmUyOTkzMGUyNDkiLAogICAgInRlc3RzL3Rlc3RfYWdlbnRfY29udGV4dF9hY2NvdW50aW5nLnB5IjogIjcyMDJhZGY0ZmE5MGYzZTFkZDRiN2Q5NDljYzY5ZWE4OWEzMzM2ZjQ5NTY0ODRiZjk5MDBkNzdhZjAxYTg1YjgiLAogICAgInRlc3RzL3Rlc3RfYWdlbnRfY29udGV4dF9hY3Rpb25zLnB5IjogImQ2YWQwMDY3YmUzODZhN2VkNDA3NWJlNzFmODUzNDQxOTM1NGY1MDA2MzJkMmQ0Y2Y4MGRlZWVlNWUyMjM0ZTYiLAogICAgInRlc3RzL3Rlc3RfYWdlbnRfY29udGV4dF9jb25mb3JtYW5jZS5weSI6ICIzZDA4YjgxZDUyYWI3MmZiNmE0MTE4NDZlZWMyNTZiYTc4MDhiMmEyNWE0NzJjMmRkMTA4ZWViYTZmZjNiODUxIiwKICAgICJ0ZXN0cy90ZXN0X2FnZW50X2NvbnRleHRfZXhlY3V0aW9uLnB5IjogIjY0NzhhNzQyMWQwNGI5ZmI5OThjZjkzMWExOWQ4Y2FhYTcyOGQ2ZmZlNjYxOTFmZjM1NWVkM2Y5ZTY5ZDRlYTQiLAogICAgInRlc3RzL3Rlc3RfYWdlbnRfY29udGV4dF9sZWRnZXIucHkiOiAiZDMwMzkyMjhkZTg5ZWU5ZTg3MDA5ZDJkOTQyMTZhYzVlNDI1YmJlOWMzYjFjNGU2NjZlYTBiNTg3NzAwMWZmNSIsCiAgICAidGVzdHMvdGVzdF9hZ2VudF9jb250ZXh0X21hbmlmZXN0LnB5IjogIjBjY2EyMzRhNTI3NDk2MGVhMTUwMWIxNjFjMWM3NWMxNmQ0MGE4Y2YwODY5YzhlODVkY2M0YjYzMDFmM2I4ZmIiLAogICAgInRlc3RzL3Rlc3RfYWdlbnRfY29udGV4dF9wbGFubmluZy5weSI6ICI2MzM1MDI3NDFhNzJhZGMyZGNmMjFkMDVmYWNmZGQ5ZmMxMzc5NjAyYjRjMzM2Y2Y4Yzc1OTFjOTU1YjRhYTg1IiwKICAgICJ0ZXN0cy90ZXN0X2FnZW50X2NvbnRleHRfcnVudGltZV9hZG9wdGlvbi5weSI6ICJkOThiODE5OTY2NDdmNzBmNzI2ZGEzNmNlMTRjMWJlZWE5ZGEwOTE5M2E0OWI2MTI1M2QwOGUwZjVjZDE1YTdiIiwKICAgICJ0ZXN0cy90ZXN0X2FnZW50X2NvbnRleHRfc2VydmljZS5weSI6ICJjYjIzN2NmNDA2YWRmZDk1ZTY0ZWMwOTIyMTJjMGI4YmE0MzgzMDJiMDYyYTFhOTQ0NzA1YzE4M2Y4MTJlOWYxIiwKICAgICJ0ZXN0cy90ZXN0X2FnZW50X2NvbnRleHRfc291cmNlcy5weSI6ICI5NGY0ODExYzdiYTE3ZmYzMGY4NGM5NmEzNjk0ZWMxNmMyYjhiZGZlYjkwYWNkYmE0YWVhOTYyOGFmNDMxYTY4IiwKICAgICJ0ZXN0cy90ZXN0X2FnZW50X2V4Y2hhbmdlX2NhcHR1cmUucHkiOiAiM2NjM2JlZGFhNjc2OWFmY2Q2NWZkYzBjMWZiMTEwZmIzMTViOWJhMDk1ZWY5NzA4OTY1ZWY4OGU5M2JmYmRiOCIsCiAgICAidGVzdHMvdGVzdF9hZ2VudF9leGNoYW5nZV9jb250cmFjdHMucHkiOiAiMDNiYmY4OTlhMWNjYzM4ZTE4NzRiZWQ4OGJkM2FkY2MzZTVlODNmMzNjZWRjOWRmMjQ3NTU4N2E1ZWRhMWQ4ZSIsCiAgICAidGVzdHMvdGVzdF9hZ2VudF9leGNoYW5nZV9zdG9yYWdlLnB5IjogIjVmOWMzZDgyNGJhNTFiZDZiNDQzMTcwODI5ZDkyNGZkMDU3YTQ0ZmU5NmE1MDRhMDYyZWJlNzBjOTViZThhMTQiLAogICAgInRlc3RzL3Rlc3RfYWdlbnRfZXhjaGFuZ2Vfdmlld2VyLnB5IjogIjdlNjhjNWNmMjcxYzc2NGM5YWFkZDNlMTgwNTBjNzZiNzJmODljOTljNmY4OTY2MmNiYjlhNTRkZmI1NzZjZTEiLAogICAgInRlc3RzL3Rlc3RfYWdlbnRfcG9saWN5X2NvbXBvc2l0aW9uLnB5IjogImJmYTRiOWE1MmI4Y2ViYjJiZGNiMjkwMzI3ZTY0ZGZhOWMwOTgwOTgwYWFlYjY4NDJiZDk3ZmE1Zjc4NTUwNDAiLAogICAgInRlc3RzL3Rlc3RfYWdlbnRfc3RhdGUucHkiOiAiNTkzZDczYTFiNmQ5ZTAyZjM4YjViZDk1ODE1YWE3ODg5MTk1ZDRlZDhhNzRiOWIzZTc3ZTNkOTYxNGM5MzVhNCIsCiAgICAidGVzdHMvdGVzdF9hbnRpZ3Jhdml0eV9hZGFwdGVyLnB5IjogIjJmNjQ3YjQyMGQ1MjNlOGJhYmVmMjg5YWE1ZTZiOTljYjI0NDk0OTMxODVkZTMwOTU5NDg5ZjIxMGRkMmJiYmQiLAogICAgInRlc3RzL3Rlc3RfYW50aWdyYXZpdHlfbGl2ZV9jb252ZXJzYXRpb25zLnB5IjogImUwMWE0ZDEzNWE4YmEyMDE0OTY3MDZhZjk0MTNlMThkOGRiZjQwYTkwNjVlN2JmODgxOTBjNWNkMWIxMjgwNDkiLAogICAgInRlc3RzL3Rlc3RfYW50aWdyYXZpdHlfbGl2ZV9oYXJuZXNzX2F1ZGl0LnB5IjogImI3MTM3YWZlMTcxNmMzNWQ0ZTA2ZTgyNDE3MzNiNGE4NGM0ZGQ0MTQ4YjY0ZWY1OTUwZTQ0N2M3MjEyYzljZjUiLAogICAgInRlc3RzL3Rlc3RfYW50aWdyYXZpdHlfcGFyaXR5LnB5IjogImJjZjk3Y2UxNmU5NTA3ZGEzYWQ4NzliZTkxYzBjZmZjOTVhMGYyOGM0MTQ0ZWRkMDZmODg2NjI2YjhiOGRkZGUiLAogICAgInRlc3RzL3Rlc3RfYXJ0aWZhY3RfYXBwbGljYXRpb25fY29udHJhY3RzLnB5IjogIjk2Y2RhMGJlNzExYzU0OTU5NzhkZmNkMzU0ZjY4YTYyYjg2ZTJhMDhkNWRjNTRhM2M3MGQxMTkwMTM4MDY3MzMiLAogICAgInRlc3RzL3Rlc3RfYXJ0aWZhY3RfYXBwbGljYXRpb25faW5zcGVjdGlvbi5weSI6ICIwYmMwMzFmODhjNGU0MWE5N2U3NDBkNmY3NDVmMDljYjE5NDRmNzI3NDk4Mzg0NTViYzEyNjdlNDM2NjkzY2MxIiwKICAgICJ0ZXN0cy90ZXN0X2FydGlmYWN0X2FwcGxpY2F0aW9uX3NlYW0ucHkiOiAiM2E4YTdhZjE0YWI3M2MzMTFhNmI2OWE3NWRlZjIyZTNlMzNmZjg1MTI2ZDhmZjhmYmIyZGViNDhjM2NhNTkwOSIsCiAgICAidGVzdHMvdGVzdF9hcnRpZmFjdF9hcHBsaWNhdGlvbl9zdG9yZV9saWZlY3ljbGUucHkiOiAiYjNlOWY3OTQ4NDQyNGE1YTA4MTU3ZWViOTVhMGEzMTI1YzZjNjEwYjRiMGU3YjMwYzdkMTlmYjRhZDFiZmQzOCIsCiAgICAidGVzdHMvdGVzdF9hcnRpZmFjdF9hcHBsaWNhdGlvbl9zdG9yZV9yZWNvdmVyeS5weSI6ICJjODc1YzZmM2FmOGFiOWU1MThhZWM1YTA1MDRjYzllMzg3MDlmMTk3Y2M5YThiZDM0YTgyODUxZTUyOWZmMDE1IiwKICAgICJ0ZXN0cy90ZXN0X2FydGlmYWN0X2NoYW5nZV9zZXRzLnB5IjogIjRlNzhkYWVkMjYxZTMxMWI5NzcyYjdmNThiOGM3Mjc4YTM2OWExZTA3NjU2ZDI5ODQ5NzU3Y2E0NDVkZDkyNmUiLAogICAgInRlc3RzL3Rlc3RfYXJ0aWZhY3Rfb2JqZWN0aXZlcy5weSI6ICI5NDA5ZjY3ZGE2NGJhZjAwNTc5ZWNlNDI1MDZiMDI4NmU2NWI0ZDY0YTFmYTVhMzQ3NWNlM2ZhYzNmMzA5ZDYxIiwKICAgICJ0ZXN0cy90ZXN0X2FydGlmYWN0X3Byb3Bvc2FsX29yY2hlc3RyYXRpb24ucHkiOiAiYjQ3NjM3YTNiMjY4NTU5M2FjMDk3NzI0ZWI2YmZhNmJkOWVhYjU0Y2Q4MjhlNGQ0ZTY2NGI2NWFkNGNkY2Q4NSIsCiAgICAidGVzdHMvdGVzdF9hcnRpZmFjdF9wcm9wb3NhbHMucHkiOiAiNzRkNmRiODI2YzIzOTRlNjk5YWY0ZGI2YjVjOTU5MjRiYWRlZDg0NjUxMjIwNTQ3YTFkMDgyNmFjMTdhNTMxYyIsCiAgICAidGVzdHMvdGVzdF9hcnRpZmFjdF9yZWZlcmVuY2VfYXV0aG9yaXphdGlvbi5weSI6ICI3YjY0M2VjYjEzNDljN2U4ZjY3MDE3NTIzOTRmZTMzMGE1NmIwZjQ5OWQzODNiNmExMjUxY2VhYzIwMWIxNDU5IiwKICAgICJ0ZXN0cy90ZXN0X2FydGlmYWN0X3JlZmVyZW5jZV9kaXJlY3RpdmVzLnB5IjogIjIxYzAzMTc2YzgxN2Y5MThmYWM2MzRiNWZkN2UzMmIxNTY3OWM3N2U2ZjdjYjQ1M2VmM2YzMGZlZDEyNTE4MWYiLAogICAgInRlc3RzL3Rlc3RfYXJ0aWZhY3RfcmVmZXJlbmNlX2V2aWRlbmNlLnB5IjogImM0MDU4MGMyMTZhZjg0NmQxZWU1ODM1YTQ3YjY5MzU5ZjQzY2IwYWJlYTVmMTg1ZWVjNjQxMGM5MjBlNTkxMDQiLAogICAgInRlc3RzL3Rlc3RfYXJ0aWZhY3RfcmVmZXJlbmNlX3JlYWRfYWN0aW9ucy5weSI6ICI5MTE3ZTliZmQ0Zjk3Y2U2MWUxY2QzNzBlOGY4ZDgwZWUyY2M5YWI4ODM2ODA4NWIwYjE4Mjk0NzVlYzMxN2FjIiwKICAgICJ0ZXN0cy90ZXN0X2FydGlmYWN0X3JlbGF0aW9uc2hpcF9wb2xpY3kucHkiOiAiMDgwZDA4Nzk3NTZlNTZkZTU5MzVjZjE0MzdmYzI4MzhhMjA1ODNlNjgzNWVmODk0MmM1Njg0MzYwNzJiMjViNSIsCiAgICAidGVzdHMvdGVzdF9jbGlfY29udGV4dC5weSI6ICJhNGVmYWM4M2IwNWJjZDk0MjE4ZmQ2ODY2ZmJmYTdhMDBkYTZmMDk3ZTYyZWQzNjMyMmEzODYyYmZiNTY2NzhmIiwKICAgICJ0ZXN0cy90ZXN0X2NvZGV4X2JhY2tlbmQucHkiOiAiZTEzMDU4YWIwN2NjZTg3ZTM4NTk4M2E3ODM4MjgzZjFjYzExYzAwODYyMTA1YThhOWI4YmNjZDBlNGI1NzhmNiIsCiAgICAidGVzdHMvdGVzdF9jb2xsYWJvcmF0aW9uX2NvbnRleHQucHkiOiAiNzUyM2EyMjI1YjdkMTZjMTMwNmUwNWVlMjg2MDQ5MmU4NWQ3MWNiNjQzODBhYzViYzg5YWYyYmU0ZWI5NzhmMSIsCiAgICAidGVzdHMvdGVzdF9jb2xsYWJvcmF0aW9uX2V2ZW50cy5weSI6ICI2MGUwZWYzNjc4NzM5MjlkODljYTAwMTI1ZWJhOGZkODAwYTY3NjE2ZGM1YjJmYzkyYzM3NGM3NjZlNmEzYjRiIiwKICAgICJ0ZXN0cy90ZXN0X2NvbnNlbnN1c19kZWFkbG9ja19jb250aW51YXRpb24ucHkiOiAiYmRhMmMyZjNjNjRkN2NlYWQ2OWVhOTE2MzYxYTY2MjEyNzgzOTc5NjRjOTAyMWFjZjJmN2M5YzI0YmRiM2RlMSIsCiAgICAidGVzdHMvdGVzdF9jb25zZW5zdXNfZXZlbnRfc3RvcmUucHkiOiAiZmMzMWMyN2NhZjI2MzkwOTdmMzkzMmMwZWE2MDBjNjI4M2I4NTc5ZmI0NTZjODY1YjE0NjM2NmY3ODU1ZDZmZiIsCiAgICAidGVzdHMvdGVzdF9jb25zZW5zdXNfZXhlY3V0aW9uLnB5IjogImEwYTI0Njc2MjYwMzM2Zjc2YTViYTE3ZGNiNzM5MzRmNzliODlkYjY2YjM1Y2I2MjcwODI0OTNmMWJkMDUyMzgiLAogICAgInRlc3RzL3Rlc3RfY29uc2Vuc3VzX21hdGVyaWFsX3N0b3JlLnB5IjogIjIwMTM2NWNmYmI2NGVlZWZkYmQwZDIyZDdhYTliNzc4MTQ1MDNjM2EyM2FiZDFmNGJmNGY3YmU2ZGFmYTQ2ZWUiLAogICAgInRlc3RzL3Rlc3RfY29uc2Vuc3VzX3Byb2plY3Rpb24ucHkiOiAiMGQxMzRlNmI1YmYxYjYzZDQ0ZGQ3NDA4NmM1NDgwMGFhMWJmMmYxM2IxMzMxM2IyMDg4MTg5ZjdjZDQ4MmQzYyIsCiAgICAidGVzdHMvdGVzdF9jb25zZW5zdXNfcnVudGltZV9hZGFwdGVyLnB5IjogIjAwOWFhNTU5MzJkYjUyODk1ZWRhZDQxZTMyZjBjYWU2ZDFmOTE4N2QyNzhlMzBmYTM5ZWY0OGNkYzkwYjM5MDAiLAogICAgInRlc3RzL3Rlc3RfY29uc2Vuc3VzX3J1bnRpbWVfY29ycmVsYXRpb24ucHkiOiAiMGM5YTEzZDU1NjFmZmEwYThjZGY2MDY4NWQ4NDc1YTg2OTk0N2FmNWQzMGMzYWEzZjU4ZWJiMjJjZDYyNWFhMCIsCiAgICAidGVzdHMvdGVzdF9jb25zZW5zdXNfc3RvcnlfcnVudGltZV9icmlkZ2UucHkiOiAiNGVjMGY3MDM5OWFhZDhhMjEwNWRkYjVjNzhjMjA3ZmI3YjkwZGNkM2EwNWZmYzE0ZmUzYjMxYjBkZThlMzJmNCIsCiAgICAidGVzdHMvdGVzdF9jb252ZXJzYXRpb25fYXJjaGl2ZS5weSI6ICJlYzA3ZDE4N2E3MDk0NTJkOWY3YTM5NTA4MDJkMjdmZWJmZTZlYjBhM2RiYzc1ZWQ2YTY3Zjk4Mjg4NWRiOTYxIiwKICAgICJ0ZXN0cy90ZXN0X2NvbnZlcnNhdGlvbl9jYXRhbG9nLnB5IjogIjJmMTM5ZDc4NzZhYTI3ZDA4M2MzYzFmMTQyMmMzMjEzODQ5NWEwMzdiNmMwNzA4NjM1NmFlZmUyYmE0ZjE1OWUiLAogICAgInRlc3RzL3Rlc3RfY29udmVyc2F0aW9uX3JhZy5weSI6ICJlOWJjMWUxNjg5NTlkYzU1MjBhN2Y0NjBhYjFjYmY1MTcxYWE2NGYzZDM5NmMzYjk5MDNiYTMwYzI4Y2MzNDAyIiwKICAgICJ0ZXN0cy90ZXN0X2NvbnZlcnNhdGlvbl9yYWdfY2xpLnB5IjogIjNhZDU2YWY0YTk4YzJmZjNmNGRmYzAwMGE4ZGNkMWU3NWU1YjMzYWEwYTY1OTY0Y2QwYTgyNjQzZGFmZjkyOTYiLAogICAgInRlc3RzL3Rlc3RfY29udmVyc2F0aW9uX3JhZ19jb21wb3NpdGlvbi5weSI6ICIzNTFlYmZhY2Y2M2ExZTViM2ZlOGMyNmFlYzVmZTU2MzE5YTg1Zjg2YmFhMWU2ZjFiZTJiMjZjMjdkYTcwM2U3IiwKICAgICJ0ZXN0cy90ZXN0X2NvbnZlcnNhdGlvbl9yYWdfbG9jYWwucHkiOiAiOTUzMzU4YThhMDhhMzJjNzYyZjM0N2FkYjViNGQ3ODRhY2QwNTI4NDU5ZGYzYWZiMzVkOTI2MGY0YzNjZTgwZCIsCiAgICAidGVzdHMvdGVzdF9jb252ZXJzYXRpb25fcmFnX3J1bnRpbWUucHkiOiAiNjA5ZWZmYTRlMmEzMDQzMzMwYWU3NjI1ZjQ0OTYwNmY0MDYxOGMzZjVmYWVhNjA3MmY4NzE4NDZlOGE1NzdkZCIsCiAgICAidGVzdHMvdGVzdF9jb252ZXJzYXRpb25fcmFnX3N0b3JlLnB5IjogImYyMjQ5YmZiN2MwMDAwMmUxODk0MTVhNDQ0YTU3OTYwNjU4ODc1NzlhZDQ4OTE2MTU2MjI4Nzk2OTE5ZjY5NzciLAogICAgInRlc3RzL3Rlc3RfY29udmVyc2F0aW9uX3JldHJpZXZhbC5weSI6ICJiYmQ0OTFkNmIxMTRhZGQxZTZkZjFmOGFlZjgyOTJiN2UzYWI2YzFhNGM1NGM5MmFjZGEyODc5OTZiNTI2YmUyIiwKICAgICJ0ZXN0cy90ZXN0X2NvbnZlcnNhdGlvbl9ydW50aW1lLnB5IjogIjg1ODdkNmQ1ODk3ZjljODc5OTk2YWYwNzFiNjAwZTk4OTc5Yzc0MTNiYmUyZTFiZjgyNTFkZTc4MzAyNmM5MDgiLAogICAgInRlc3RzL3Rlc3RfY29udmVyc2F0aW9uX3NlYXJjaC5weSI6ICI0MjZiYzYwYmVlYWQyNmQ0YTIzZTg3NDljM2M4NGFhMmZmZjlmMWRjZGQxMDJhNTQ0M2U1MWNmMTYzNzhjNDMwIiwKICAgICJ0ZXN0cy90ZXN0X2NvbnZlcnNhdGlvbl9zdG9yYWdlLnB5IjogImZlZjc1MzljOTQyZmQzMjI5OWE5YjVmZDYwMzZlMGIwMDE0ZDZhNGU1NGUzODE0ZWU2OGZkZGQ3ODAzMmEyMzIiLAogICAgInRlc3RzL3Rlc3RfY29udmVyc2F0aW9uX3N0b3JhZ2VfbWlncmF0aW9uLnB5IjogImU0OTIyYjYyZWJlOWJhOGIwZmM3ODY3ODZhZjVhMjYyMTNkYjIyMjc1MTg1MDhiOWEwZWFmMmE5NGE2Nzg2NzAiLAogICAgInRlc3RzL3Rlc3RfY29udmVyc2F0aW9uX3N0b3JhZ2VfbWlncmF0aW9uX2NsaS5weSI6ICIyMWYzMTc5ZDI5ZjEwYzlmZTIzYjM5ZDhhMzM3YmYzYTM4NzJiNzJkYWQ3ZDJkYzUyMTk3Yjc3ODkzNTA4NmUyIiwKICAgICJ0ZXN0cy90ZXN0X2NvbnZlcnNhdGlvbl9zdG9yYWdlX3Byb3Zpc2lvbmluZy5weSI6ICI2YjZlY2VlMzVkNWUxYWM2OTcyMWEwMjUxNDY1MTkzMmJiMDRmZTZlNGI0N2JhM2JjMTdmM2M1NDA2ZjZiZTE2IiwKICAgICJ0ZXN0cy90ZXN0X2NvbnZlcnNhdGlvbl9zdG9yYWdlX3NlbGVjdGlvbi5weSI6ICI3MjUxNzgyZDI1MDA5MjY4ODQ1YjFiMjI3Nzk0ZGVhZDFmZjQzYjkxNjhhMzhmZmExZDU5YWI4OGUwMDBiOTliIiwKICAgICJ0ZXN0cy90ZXN0X2NvbnZlcnNhdGlvbl9zdG9yYWdlX3NlbGVjdGlvbl9jbGkucHkiOiAiMWQ2OGE3NTBlOGU2OThjNTM5Y2ViY2U5YTE2Zjk3OWM0M2IzNzM0MGM0MDUwNzY4OGYzOTlkM2FiNmVmMDYzZSIsCiAgICAidGVzdHMvdGVzdF9kZWJ1Z19sb2cucHkiOiAiYzUwYzA5Njk4Yjc2YjZjZWNlZmYzNDM5NjhiZDFhMGIyNTZhNTdiYzVjMzA4YmU1ZDg5ODQ5N2NmOTRkOTczZiIsCiAgICAidGVzdHMvdGVzdF9maWxlc3lzdGVtX2NvbGxhYm9yYXRpb25fZXZlbnRfc3RvcmUucHkiOiAiNDE5MDRkOWU3N2ZkOTRlNzE5YWE4Y2Y0YzIxMzU3MzlkYjdhNjE1MzNmZTcxZjE0ZWY2NzZmYmRkNTJkNjRkNyIsCiAgICAidGVzdHMvdGVzdF9maWxlc3lzdGVtX2NvbnZlcnNhdGlvbl9hcmNoaXZlLnB5IjogImNlMTU0YzU3NTEzZDZlYjgzZWRkNWQ4ODgwOGZhYWYzZjc1YmMyN2I1NWEzMzEzZjBmMmNiZjgxYjkzMGU3YTUiLAogICAgInRlc3RzL3Rlc3RfZ2VuZXJpY19yYWdfYWRhcHRlci5weSI6ICI1ZTNjMTc3OTRkZjljZTlmNTljMjQ0YzYxYjczNWJlYTU2ODE2YzZkOWQ2MTViZGYzMDlkNDk1MDU3OThjNDg0IiwKICAgICJ0ZXN0cy90ZXN0X2dpdF9hZGFwdGVyX2ludGVncmF0aW9uLnB5IjogImI1NTEzNGUyOGI4MjUxODM5M2JiOTJlNDU5YWU0YzdlYmM3ZDc1NzgzYmQ3YjRiNjZlNGFlNjdjZDNlOTVkYTciLAogICAgInRlc3RzL3Rlc3RfZ2l0X2FkYXB0ZXJfcHJvY2Vzcy5weSI6ICJlOGMyYWZmZjVmNWM4YTI5MzNjYTcxNjczN2YyMjAyNzFmYjhmNWIyMmRjMTVjZmE2OTkyZDM3NDYwODY0YzNhIiwKICAgICJ0ZXN0cy90ZXN0X2dpdF9jb250cmFjdHMucHkiOiAiODdhYzdlMDRmOTM5MDRmNDVmNTA0ODk2MTA0YmY2OWU4ZTA1NGI0M2Y0OTk5NDhjNjczMTIwM2I3ZDkxYzJhYSIsCiAgICAidGVzdHMvdGVzdF9naXRfZXh0ZXJuYWxfb3BlcmF0aW9uX2luc3BlY3Rpb24ucHkiOiAiNTdlMWJjODdjZTk3MmQyMGVhZTM2ODVkZWJjMzExMzk3Y2EyNDUxYjIxZGVhNTY1Mjk4MGNmYmEyZjJlYjBlNSIsCiAgICAidGVzdHMvdGVzdF9naXRfbGlua2VkX3dvcmt0cmVlX3JlYWRzLnB5IjogIjM4YTkwNGE0NDc4ZTkwOWFjZjI4Njk1YzhhMzEwNGM1NGE5NTBmODM4ZGJkNjc1Njk0MzhmYTJkY2YxNmU3OWQiLAogICAgInRlc3RzL3Rlc3RfZ2l0X3Byb2Nlc3MucHkiOiAiZDBjYzM2MzRlOTVjNDU5ODJjYzQ3OTM0YzJiYTg0OWM4NzRhMjBiMTAxOWNmYzM5N2ZiMjExZDM0OTdiNTg4ZCIsCiAgICAidGVzdHMvdGVzdF9naXRfcHJvY2Vzc19wcm9maWxlcy5weSI6ICI3YmJjMDg3Y2ZhZTk2OGYwMjI4MzE1NmJjMjAwNjI4MGNkNTc2Y2NkNGM2YjlkYTljMGI5NGQ0YmQ1YTQ5NGM4IiwKICAgICJ0ZXN0cy90ZXN0X2dpdF9yZXBvc2l0b3J5X2xvY2sucHkiOiAiNGYzMDQ0ZjU4YzA4MWYwY2VlZWNjYWRiOGM5NzdmMTI2Mjk0ODhkODRhOGI4YTUyYjIzMzY5YzdjYmVjM2NiNyIsCiAgICAidGVzdHMvdGVzdF9naXRfc2Vzc2lvbl9jaGVja3BvaW50X2NsYXNzaWZpZXIucHkiOiAiODkxNDc5MWQ5ZDhmNzAyNWMyMWU4NzVlZWM3OGE0MTA4ZWFlYmM3MzY0NmNiZjI1MzdiZGYwMzBjZWI0MjVhYSIsCiAgICAidGVzdHMvdGVzdF9naXRfc2Vzc2lvbl9jaGVja3BvaW50X2NvbnRyYWN0cy5weSI6ICJjY2Q1OWUyZTFhMGU3ZGQ0YzkwNDlkZjYyNzE5YzA4MThhYmY5ZDcwMzQyMWI3Mjk0MWQ1YmVjOTUzMGY1ZjkxIiwKICAgICJ0ZXN0cy90ZXN0X2dpdF9zZXNzaW9uX2NoZWNrcG9pbnRfcHJvY2Vzcy5weSI6ICI5M2NiNzU2M2JhOTU3NWI1OTc1OGUxYWUyNjNkOTdjZjJmOGRiNDVmMmI4Njk2YWMwNDJlM2E0YjNiZjYzZjk3IiwKICAgICJ0ZXN0cy90ZXN0X2dpdF9zZXNzaW9uX2NoZWNrcG9pbnRzLnB5IjogIjQ3ZDBjYTM3YjY1NGZhZWI2NGJjZWVhMTQ1OTdlNmY4NDUyNWJhZTE5MjI5NmIxYzQ4ZDE4ODgxODVkMjY1NDQiLAogICAgInRlc3RzL3Rlc3RfZ2l0X3Nlc3Npb25fY29udHJhY3RzLnB5IjogImU3MjcwMTZiMzZkODQyZDEzZDAwN2Q5MmUxMDFlOTBkNjRmN2E0ODI2OTRmZTNiNTQ0ZTNkMGQzYjRhYjc5ZDUiLAogICAgInRlc3RzL3Rlc3RfZ2l0X3Nlc3Npb25faGlzdG9yeS5weSI6ICJmM2U1OGE5YmVkMzY4ZWUzNjNlZjIwYzlhZWI0OGVhYjQxZDNhN2I4NDYyYWNiMDFjMmY1MWQ4N2FmY2IzYzQ1IiwKICAgICJ0ZXN0cy90ZXN0X2dpdF9zZXNzaW9uX2hpc3RvcnlfY29udHJhY3RzLnB5IjogImExMWJiYzU1YWE4NjRmZTc5MDI4NDZhZmQyODk4ZjU3NDViM2QxZmYwMTBlMTI0MDY4ZTRkYjMyOTAxY2ViZTciLAogICAgInRlc3RzL3Rlc3RfZ2l0X3Nlc3Npb25fcmVzb3VyY2VzLnB5IjogIjhlYzRiM2M5ZDUxMTAwZWJkY2E1Y2E5MzdkMjAzYjIwZmJmYjAwNGVhMGQxZjc5ZmY5NDc0MjNjOWM2OGQxYzgiLAogICAgInRlc3RzL3Rlc3RfZ2l0X3N0b3J5X2NvbW1pdF9jYW5kaWRhdGVzLnB5IjogIjQwMzY5OWExN2Y3MDZlMTkzZmUzZDdiYzY5NWUxYTgwZDA3YmYwNjRiYjRkY2UxY2VhOWQzOTZkYWQ2YzUyYTMiLAogICAgInRlc3RzL3Rlc3RfZ2l0X3N0b3J5X2NvbW1pdF9jb250cmFjdHMucHkiOiAiNmM3MTI4NzYwYjk2YjY3NTdmNzkzODRkNGYwZGE5ZTE0MGYwMGRjZDdjMDQzMjE4NTFmZDNlZjZkMzUyNWJhOCIsCiAgICAidGVzdHMvdGVzdF9naXRfc3RvcnlfY29tbWl0cy5weSI6ICJhN2I2ZDgwYTVmZmUyNjI1YmU4ZjQzOTJjYzE4M2QwNzdlODkwMjFmZTAwNTBkOWVkOGVlY2Y3NTgyNmE5ZDY3IiwKICAgICJ0ZXN0cy90ZXN0X2ludGVyYWN0aXZlX2F1dGgucHkiOiAiZDUwYTFkMTM4ZTBiZjViMTc3NTFkOWY1YjFkODc2MWE0OWUzYzhjZTU3MzBhOTlmZWIzZDkwZjQzMTRhMzZjZiIsCiAgICAidGVzdHMvdGVzdF9pbnRlcmFjdGl2ZV9jYW5jZWxsYXRpb24ucHkiOiAiNWE2N2Y0MTU1OWRmZDk3Yjc0ODQ0YzJhYzI2MjlmM2RlOTAyYzExYzMwNTFlODcwNzRhNTE4OTkwZThmZWM4NiIsCiAgICAidGVzdHMvdGVzdF9pbnRlcmFjdGl2ZV9jb2xsYWJvcmF0aW9uX3ZpZXcucHkiOiAiMDg1YmVmNjI2ZmMxNTUwOTAxMzUzMWY4NWZiOTczNDU1MDc2YzI4NjM4ZjkzMWFiOThmMDNlOWUwOTkwZTk3OCIsCiAgICAidGVzdHMvdGVzdF9pbnRlcmFjdGl2ZV9jb21tYW5kcy5weSI6ICIzNTI4NzhkZjg1YWFhYTJmN2MwYTdjNmY4NTViZjFlMjQyMGU3YjQxOTM3ZDFlYTcwNzFkOThkYWIyOWUwNWFjIiwKICAgICJ0ZXN0cy90ZXN0X2ludGVyYWN0aXZlX2NvbnRyb2xsZXIucHkiOiAiZjM4YTUzNDMxNjY3ZWQ2MDc0NzFlZTcxZmM2ZDNlMGY1ZDM1MWFiMWU2MzA0YTE1ZmJhNThmMDg5MTA4NTcyMiIsCiAgICAidGVzdHMvdGVzdF9pbnRlcmFjdGl2ZV9saW5lX2VkaXRvci5weSI6ICI1ODQyYmU5OWU0YTc0NTc2OTExMDc5ZGZkMWQ5NTU3OThkYTQ4ZTBiNjAwYWFiNzU0OGE0MDQzMjU0ZTE5NjIyIiwKICAgICJ0ZXN0cy90ZXN0X2ludGVyYWN0aXZlX2xpdmVfY29tcG9zZXIucHkiOiAiYjVlNTBkNzU4YmVmNjc1NzA1MTBkNDlkMzNhMWRhZDhkNmNkNDkyOWFhNTM3M2YwODdiNDFlYjZmZmU5NjViYyIsCiAgICAidGVzdHMvdGVzdF9pbnRlcmFjdGl2ZV9tYW5hZ2VtZW50LnB5IjogImNkMThiY2Y5NWI3NmU2NDM5MjU4MWZlMzcwYWNlZTVkN2E2YTQ1MDI2YzQ1YWJmZjBiNjEzZDJkZWM1OTQ0NDMiLAogICAgInRlc3RzL3Rlc3RfaW50ZXJhY3RpdmVfcHR5LnB5IjogIjA5OTg0OGE1MzYyNGFjMWU1Mjg0YjhmMGM5YTZjNzNmZTQzMDg2NDRlMGFmNzFiOTkyYmEwMzU4Mjg3MGQyZDUiLAogICAgInRlc3RzL3Rlc3RfaW50ZXJhY3RpdmVfc2VhcmNoLnB5IjogIjEwYjc2ZDVhZmMzOGM3ODgzN2Y2OTdmZGNlYjdjMmExNWM2MzgxNGZlMGFhYjkzNTgxNWE4NTk0NDk4YTVmNzMiLAogICAgInRlc3RzL3Rlc3RfaW50ZXJhY3RpdmVfc2V0dGluZ3MucHkiOiAiZGU4YWY4Yzc3ZTAzZGE0ZTlkYzZiYjZmNWEyODlkZGU3NGQzYjBhZTYwMzJlMmY0MDlkYzcwYWM2NzdhZjUyYyIsCiAgICAidGVzdHMvdGVzdF9pbnRlcmFjdGl2ZV90ZXJtaW5hbC5weSI6ICI4ODkyYmYwMTVlZTM4Mjk1MmRiZmViNjdlOWVmY2IwOGVhMDM2YjRjMzg5NGMwODExYmJhYWE3NjQzYjM2M2EzIiwKICAgICJ0ZXN0cy90ZXN0X2ludGVyYWN0aXZlX3Rlcm1pbmFsX2NvbXBsZXRpb24ucHkiOiAiMTExZjRiMGE0M2E3MDQ5YTM1OWY3Mjg2NmY0NDc0YzYyYmRkNjM2OTM4OWI5MWM1NjQ5NTRlMzBiNGUwMzA4ZiIsCiAgICAidGVzdHMvdGVzdF9pbnRlcmFjdGl2ZV90ZXJtaW5hbF9jb21wb3Nlci5weSI6ICJiOGVjOGRhZWM0ZmQwMWZmZmUwZTg1ZWFhNGI2M2FhNmQ3ZjljYTIzZGEzNjU4N2MyZjZlOGMxM2QzZWQ2MDY0IiwKICAgICJ0ZXN0cy90ZXN0X2ludGVyYWN0aXZlX3Rlcm1pbmFsX2V4dGVybmFsX3ZpZXcucHkiOiAiMjMzOGI1ZGVmMGUzYWM4YjQzODk0ZDAyOTBhZGIyOGVhY2M4OWU4ZDA0NWVlNDAzMzU5M2Q0ODBkM2MxYjRiYSIsCiAgICAidGVzdHMvdGVzdF9pbnRlcmFjdGl2ZV90ZXJtaW5hbF9mb3VuZGF0aW9uLnB5IjogIjgxNjZmYWYxNzc5ZjEwYTdiYjRhMzNiMWE1MWZhMDI0OGY1MTBlNTdkNGYzNTQwMjVlNzdhZGJlNDEyODkxMmUiLAogICAgInRlc3RzL3Rlc3RfaW50ZXJhY3RpdmVfdGVybWluYWxfaGlzdG9yeS5weSI6ICJiMWE1MmEwMjMyOTBhMDhiYWQ3NzdmOTI0YjNlZTMxNjEwOTMxZjJlZDY3M2E1MGU0MDY5NjMwNDQyNzg3OTA3IiwKICAgICJ0ZXN0cy90ZXN0X2ludGVyYWN0aXZlX3Rlcm1pbmFsX2lucHV0X2xpZmVjeWNsZS5weSI6ICI5NWYzNmMwYTljMjI3YjUxMzRjNDA2OGFlNGRjNmMxOTYzNjdmYjdkMTE0MjM3NDI0NjZmMTFlNGZkNDY0YjhmIiwKICAgICJ0ZXN0cy90ZXN0X2ludGVyYWN0aXZlX3Rlcm1pbmFsX3BpY2tlci5weSI6ICJkYzJlYTg4YzdmZjI4MWIyZGUzNTMxMmE2ZDM1OTU1OThjMzg5NzYyZDFkYzVmZTQyZGZjYTM5Y2Y3ZmY2MDAzIiwKICAgICJ0ZXN0cy90ZXN0X2ludGVyYWN0aXZlX3Rlcm1pbmFsX3JlZmVyZW5jZV9hY3RpdmF0aW9uLnB5IjogIjJlZWVlODM3MTM1MDc5OGFkNzFjNDRjMjVhNTRjZDVjNGNiZDk3MWE1ZDA5YmI5NmY5OWRiOTBlNmJiZjdmNGIiLAogICAgInRlc3RzL3Rlc3RfaW50ZXJhY3RpdmVfdGVybWluYWxfdmlld2VyLnB5IjogIjkzODU2M2VhZDg5NzYxZGIwNGM5NGFiNThmNzkwYjM5YTdhYjQzNmE2OTg0Zjc4MTdkNjAwNGY3OGYxM2U0ZDMiLAogICAgInRlc3RzL3Rlc3RfaW50ZXJhY3RpdmVfdGVybWluYWxfdmlld3MucHkiOiAiZDJhY2FmNmFmNDdkYTJjZDI0OWIzZTExZWVkZjQ1ZDViOTY4MjQyYzYyZDFjNDk2MmQxYjViOGFhNDFjNTM2ZCIsCiAgICAidGVzdHMvdGVzdF9sZWFkX2FjdGlvbl9saXZlX2hhcm5lc3MucHkiOiAiN2ExYWIzN2I4NTcxNjAyMjhkZThmY2U4YmIzYmIxNjhjOTA3YzAyYzQyYzMxMTU5ZmU0ZGQ1ZmUzNTgzYTAxNyIsCiAgICAidGVzdHMvdGVzdF9sZWFkX2FydGlmYWN0X2FwcGxpY2F0aW9uLnB5IjogIjA0OGE1M2QxMTM4YWIzNGZiMWRkYTYxMzk3YzY3MDIyZDcxOGM5Y2JlZTJlMDk0ZDU2NWNmN2QzYjVhYmQyYjkiLAogICAgInRlc3RzL3Rlc3RfbGVhZF9hcnRpZmFjdF9vYmplY3RpdmVzLnB5IjogIjkzOTgyZTI0NGZmN2I5OTM5NGViMmIzYTNkNmExOWU1NDU3M2U4NjFlZDE0OWY2NDJhMGUyOTZmNWQzYzJhZTEiLAogICAgInRlc3RzL3Rlc3RfbGVhZF9ldmlkZW5jZV9ncm91bmRpbmcucHkiOiAiZmEwMTg1MWZiOWMxZTNiOWE4NmZhNjE4Nzk1MzE4NTI4NjE5OTNiMzA1NzcxMWFmZTliMzUzZDMwNzdjODA4YSIsCiAgICAidGVzdHMvdGVzdF9sZWFkX29yY2hlc3RyYXRpb24ucHkiOiAiODEzOTViMDlkNTVhNTkxOTZkM2RhYWNiYTMwMjZlY2FkNDMyYzNjZmRmYzFhYWYzYzYzMWRmMmY5NDM1ODJhNiIsCiAgICAidGVzdHMvdGVzdF9sZWFkX3JlY29tbWVuZGF0aW9ucy5weSI6ICJjNDA2MTMyYjg5NWZhYmI3MTg2MGM1OGI4NjRkYzUzMTljYjZkOWNjNDExMmFlZWFlZjBlN2IyNzRjNDBhODhlIiwKICAgICJ0ZXN0cy90ZXN0X2xlYWRfc2Vzc2lvbl9jb250aW51aXR5LnB5IjogIjRmYzc5MTQ3Y2QxYTk1ZTZhZTBkMDk0ZGZkOWU5N2Y1OTA4Njk1MDZmOGY2M2ViNThiZGQ5ZDgwMWVmZWYwZmIiLAogICAgInRlc3RzL3Rlc3RfbGVhZF9zdG9yeV9jb21taXQucHkiOiAiOWM4NDcxNWYzMzA4NmI0ODAxYTZiZWQ4YjBkODI5ODZhYmYyNjUwYjFmNDMzODk0ZDYwYTdkMWZiZjEyN2RmYyIsCiAgICAidGVzdHMvdGVzdF9wcm9tcHRzLnB5IjogImFiOTgxNjlkMDU4NWQxOGZkZWZhMTFiNzczMjYyNWVjMTBlMTg5MmMyODM4OWYwMDgyY2VjMTNlYTIxYTgxOTkiLAogICAgInRlc3RzL3Rlc3RfcHJvdmlkZXJfYXV0aC5weSI6ICJjNzJkNjEwYWJlNjgyZWNhN2FhZjVhMThmZGNmYTI2MzY4YjRkM2JmMDIxMzY2MDY4ODAyM2IxM2RjMmYwMDdhIiwKICAgICJ0ZXN0cy90ZXN0X3Byb3ZpZGVyX2F1dGhfcmVjb3ZlcnkucHkiOiAiOWQyY2RmZDdlMjkzNWVmODEzZTM4YzlkYzI2MGE1YTMwOGFjMDRkMjdmZWRmZTRiMjlmZTA0NTVhMTQxODhjMiIsCiAgICAidGVzdHMvdGVzdF9wcm92aWRlcl9hdXRoX3JlY292ZXJ5X2xpdmUucHkiOiAiNzE4NGNhM2YxNGQ0NzRkNThjNTQ1YWI3ODUzYTQ3NmEyNTI5ZDhmMDU5OWIyYTc5ZDA3NjhlNTJiYjg2MmViYSIsCiAgICAidGVzdHMvdGVzdF9wcm92aWRlcl9jYXRhbG9nLnB5IjogIjZlOTU0ZDZkZTZkZTdiM2U0N2ViNDdiMTU1OTI0NWUwNDMyY2QxOGVmYTNiZTkzNDIxNjg5ZDIwZmY0ODk5ZjAiLAogICAgInRlc3RzL3Rlc3RfcHJvdmlkZXJfZXJyb3JfYXJ0aWZhY3RzLnB5IjogImZlMWJjNDNjMmVkZjMyYzc1Y2Q5ZTJiYzg3NThjZjk2ODFkYTFlMGVhOGJmYmJiMDE3OWMyNThjZGQzZjdkNDAiLAogICAgInRlc3RzL3Rlc3RfcHJvdmlkZXJfcHJvY2Vzc19zdHJlYW1pbmcucHkiOiAiYmU2YWUwZGUxYWMyNDY5OTYwMmVhNDdkZjljZTlmYmQxMTU4Y2NkNmUxNTVmMzc1NGNkMzhiNTBjMjZmZmU3MSIsCiAgICAidGVzdHMvdGVzdF9wcm92aWRlcl90aW1lb3V0X3JlY292ZXJ5LnB5IjogIjA5NDFhNmU2MDkyMzFlNzMxMzhlOGIzNzU1MTA2ZTRkNTBjNTFjNWIxZDMyY2VkY2YzYzAxZjQ2NThlODAxYTIiLAogICAgInRlc3RzL3Rlc3RfcHVibGljX2FwaV9hbmRfY2xpLnB5IjogIjc3NTQyNjYxYzU1MzI4NGYzMjkzNzgyZjEzOTgxOWZhOTMyNGM2MmUwYTU2MTQyYzQxYWRiZDJhMmY0N2Q1N2QiLAogICAgInRlc3RzL3Rlc3RfcmFnX21vZHVsZV9hbmRfcGFja2FnaW5nX2JvdW5kYXJ5LnB5IjogIjdhZjQ2YTk3N2ZlMTc0YTU1NGZhZDM0ZmEzYTRmYzA2Y2VmNjViYzE4MjFkNjEzNzM5ZDFkMjA1MGZmNzJkYzkiLAogICAgInRlc3RzL3Rlc3RfcmVjb21tZW5kYXRpb25fYWN0aW9ucy5weSI6ICIzOTg0NzQwOGFlYzA4ZTdmMzdiYjc1MjYyNDY0OTdjYmFmNDYxN2EwMjlhODhmMGExZjk3ZGUxZTRjNjg5NmQ1IiwKICAgICJ0ZXN0cy90ZXN0X3JlcGx5X3RyYWNlLnB5IjogIjg3Zjg2NDg1ZDhmNWY4ZmQzMjA2Y2I2Y2FlOGM2YTYyNTY2YzExN2JjZTM1ZTdiNGIzOTA0YzUwMDE1MTNkNzEiLAogICAgInRlc3RzL3Rlc3RfcnVudGltZV9yZWZlcmVuY2VfaW50ZWdyYXRpb24ucHkiOiAiMzcxYTBiNDdkNmYzODYzMGJiNjQ3ZDk4Y2UzNmVjMjc4ODc3NmU5YjM5MmJhNDFmODVkM2E0YjQ0NmVkMmY4NiIsCiAgICAidGVzdHMvdGVzdF9zZXNzaW9uX2xpZmVjeWNsZS5weSI6ICJlNzNhOWU1YTllYjk1ZDUyMzI2Nzc5NzgyNWM0NjkwYzM2ZWVkNjFmNTE5MWQ4YmNiZTE5MGI4NDk1ZmYyMzA1IiwKICAgICJ0ZXN0cy90ZXN0X3Nlc3Npb25fcmVjb3ZlcnlfY29udHJhY3RzLnB5IjogIjJkODAzNzY1ZTRmNjhmYTNjYzJjOTI2OGNjMmQ5MGNmZjFlNTcyOGNjYTAzN2ExNTA5Y2MwMjA3N2IwZjljNmEiLAogICAgInRlc3RzL3Rlc3Rfc2Vzc2lvbl9yZWNvdmVyeV9yZWNvbmNpbGlhdGlvbi5weSI6ICIzNzMxYTExMDMwYjBiZWJiYjk4YjU3MDRhZDg2MmU2M2M5NTAzYjgyYWY4MjRmMjNmYjkzYzg2OTkwZGI0M2FhIiwKICAgICJ0ZXN0cy90ZXN0X3Nlc3Npb25fdHJhbnNpdGlvbl9hc3Nlc3NtZW50LnB5IjogImFkYTFhNGE3YWY0YjBiZTY1OTc0NmIyYmE0YTRmNWQ3ZDNiZjM2MDZiMTEyOTQ2ODkxODY4MjlmNTg0NDVlODUiLAogICAgInRlc3RzL3Rlc3Rfc21va2VfY2xpLnB5IjogIjU1YWMzNmQ1MWFlZGZhYTBiMjJiMTcwMTg1MjJkMWJiYzE4YjAyOTA5NjY5ZTA2N2QwZDI5NTY0YjE5M2FjMWQiLAogICAgInRlc3RzL3Rlc3Rfc3BlY2lhbGlzdF9vcmNoZXN0cmF0aW9uLnB5IjogImI4MzcwYjBkNGI3ZGRmZGY4MjAxZDNhYjZlZTIxODY0YjA4MWM2ZDU0ZWY1MmMzM2E3MWM3YzZmOTllMGRlMTYiLAogICAgInRlc3RzL3Rlc3Rfc3BlY2lhbGlzdF9yb3V0aW5nLnB5IjogIjY5ZjM4NjkyMmE4YmRkNDU2YzY4NDgwZmM2YTllODczMDg2NGIzYjg1OWYyZjliYWZjNGFjMWQwNjgxNGQ2ZDQiLAogICAgInRlc3RzL3Rlc3Rfc3BlY2lhbGlzdF9yb3V0aW5nX3J1bnRpbWUucHkiOiAiMDAyZjY5NDcxNjRmODRkYzQ3MzVlZWQxNDhkOTEzNmYxNWNkMTM2N2M1MWUxZDFlYjkxN2UwNGU2NzRkNWUxMyIsCiAgICAidGVzdHMvdGVzdF9zcWxpdGVfY29sbGFib3JhdGlvbl9ldmVudF9zdG9yZS5weSI6ICJhNDhlZjFmODFlN2I3MzQ1Y2RmODUzZTQ2MjBjY2Q5MzQ0OTA5YjNjMWFkNDU5YmQ5NDY1NmYwNjYzNDg0ODRjIiwKICAgICJ0ZXN0cy90ZXN0X3NxbGl0ZV9jb252ZXJzYXRpb25fc3RvcmFnZS5weSI6ICI4ZGUwOWY0YjU2ZGMwM2ViYTA0NGFmMjBjZjUwMTQ1YTVkYTdmNWYzYzFhODRlNmUyYzU2YTBmZmU0Y2FlZWE1IiwKICAgICJ0ZXN0cy90ZXN0X3NxbGl0ZV9kYXRhYmFzZS5weSI6ICJlNGE3MzFlYTI5NjRhYTEwMDZlZjJmODUwYWYzNzE2NzVlMDI3YTgzM2E5NDFkMzc3Nzk2MzU3OGFmZTk5ZDNlIiwKICAgICJ0ZXN0cy90ZXN0X3N1aXRlX2J1ZGdldC5weSI6ICJiMWY2MDk4ZWNkYzE0NzdmMTZjMzRiNDk1OWZkMDU2YWExMGM1YTRhZWYxMGUyYzRjOWUxNzQ0Y2FjMzU5M2VkIiwKICAgICJ0ZXN0cy90ZXN0X3dvcmtzcGFjZV9hbmRfY29uZmlnLnB5IjogImFhOWE3YjE5OWQ0MTk2ZWUzNjZmOWQwZjc0OTA1ZTI5ODMwMDBhYmQ3ZGNmNDcwMjcxOWQzM2Q0N2IzODgzYTEiLAogICAgInRlc3RzL3Rlc3Rfd29ya3NwYWNlX2ZpeHR1cmVzLnB5IjogIjM0NjUwZDgwNDZhNWI4MjA2MTQzM2YzZjYzZDA5ODkwMWYyMDI5MThiZDJkMzAzOWNjZThkYjA2MzE1OWFmZTgiLAogICAgInRlc3RzL3Rlc3Rfd29ya3NwYWNlX3BvbGljeV9jb21wYXRpYmlsaXR5LnB5IjogIjNmMDM3NDhkZWYzZDE5ZGM2NGMyMDRjZmE2MjczNzBkYzY0MWMzZDUxZGY3MjE5MTBhMmY4Y2RmZDc1ZmI1ZDkiLAogICAgInRlc3RzL3Rlc3Rfd29ya3NwYWNlX3Nlc3Npb25faGlzdG9yeS5weSI6ICIyYjk2OWZhOWJiNDk3ZGM2ZWJiMTliYzk0ZTNiNmVmMDBkMjIwOTZjZWJmYWVhZjBkZjIyZTA1NzY3YmUzMzZjIiwKICAgICJ0ZXN0cy90ZXN0X3dvcmtzcGFjZV9zZXNzaW9uX3Jlc291cmNlcy5weSI6ICIxYjY0Y2MwZmE0OWRkYzg4NDAwMTM1MmQ0NDJiOGQwNTRmNDY1YTFmNDg4NDMwNjgyYWE0MDM1NmZjNjFmMzEyIiwKICAgICJ0ZXN0cy90ZXN0X3dvcmtzcGFjZV92Ml9pbml0aWFsaXphdGlvbi5weSI6ICIwN2U0M2Y5NTE1Mzc3ODg4ZDk0ZjI2Y2M4YjY1NDJlYWUxOTJjZTMzYjQ4NjVhZDliNmM2NGEyMTY0NzYzYjllIiwKICAgICJ0ZXN0cy90ZXN0X3dyaXRpbmdfYXJ0aWZhY3RzLnB5IjogIjQ0NWZhNGYyZjljYWY1N2VlNTc5YTdkYzA5N2Q3Zjc2ZDA4M2Q4NjcxMzhlOWQ3MDJhNTVhMDZiYmE4MzYwZDQiLAogICAgInV2LmxvY2siOiAiZjhkM2ViYjRiYzdiMDY5ZDI2Njk5MDdlODJkOTNhNWEwZDNiNTVkNDA1Njg5Nzk0NGE1MWUzMjMxNTAzMGI5MSIKICB9Cn0K'))\nPY"
+        },
+        {
+          "name": "Run bounded matched check",
+          "timeout-minutes": 11,
+          "run": "set -euo pipefail\ntimeout --signal=TERM --kill-after=30s 570s .venv/bin/python \"$RUNNER_TEMP/bound-query-check/probe.py\" --config \"$RUNNER_TEMP/bound-query-check/config.json\" --checkout \"$GITHUB_WORKSPACE\" --output \"$RUNNER_TEMP/bound-query-check/result.json\" 2>&1 | tee \"$RUNNER_TEMP/bound-query-check/probe.log\"\n"
+        },
+        {
+          "name": "Upload bounded diagnostic evidence",
+          "if": "always()",
+          "timeout-minutes": 1,
+          "uses": "actions/upload-artifact@v4",
+          "with": {
+            "name": "bound-query-matched-check",
+            "path": "${{ runner.temp }}/bound-query-check",
+            "retention-days": 7,
+            "if-no-files-found": "error"
+          }
+        }
+      ]
+    },
+    "validation-complete": {
+      "name": "Validation jobs complete",
+      "needs": [
+        "matched-check"
+      ],
+      "if": "${{ !cancelled() }}",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "permissions": {},
+      "steps": [
+        {
+          "name": "Mark validation jobs terminal",
+          "timeout-minutes": 1,
+          "run": "echo \"Validation jobs are terminal; their individual results remain authoritative.\""
+        }
+      ]
+    }
+  }
+}
