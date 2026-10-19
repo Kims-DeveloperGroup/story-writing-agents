@@ -4,7 +4,7 @@ The canonical suite is a bounded regression sample. Its checked-in inventory is
 [`tests/fixtures/test_budget_v1.json`](tests/fixtures/test_budget_v1.json).
 The accepted ceilings are **1,080 seconds** of sequential-equivalent wall time
 for all four complete shards and **540 seconds** for each shard. CI also stops a
-shard job after 15 minutes, including setup.
+job after 30 minutes, including setup.
 
 ## Scope rule
 
@@ -68,35 +68,48 @@ the existing 1,080/540-second ceilings; aim for 900/450 seconds to leave margin.
 
 A maintainer may authorize extra validation time for a specific PR and record the
 reason and authorization in its owning Issue and PR. The root then applies
-`test:wall-time-exception`. On that PR, CI allows each full shard up to 25 minutes
-including setup, and passes `--allow-wall-time-overage` to the budget checker.
-The checker still reports actual durations; only the measured sequential and
-per-shard time comparisons are waived. Local validation may use the same option
-under the recorded authorization.
+`test:wall-time-exception`. On that PR, CI passes `--allow-wall-time-overage` to
+the budget checker. Every job retains the same 30-minute native timeout,
+including setup, whether or not the exception applies. The checker still reports
+actual durations; only the measured sequential and per-shard time comparisons
+are waived. Local validation may use the same option under the recorded
+authorization. The checked-in ceilings and strict default remain unchanged.
 
-The checked-in ceilings and strict default remain unchanged. Merge-group runs
-and PRs without the label retain the 15-minute job limit and both time checks.
-This exception never permits failed or incomplete reports, inventory expansion,
+Merge-group runs and PRs without the label retain both measured time checks.
+The exception never permits failed or incomplete reports, inventory expansion,
 increased subtest counts or test source, budget-file increases, skipped required
-checks, or bypassed approvals or branch protection.
+checks, or bypassed approvals and branch protection.
 
-PR and merge-group jobs share one absolute 40-minute deadline recorded before
-classification work. Test workers and both reconciliation gates consume the
-remaining allowance instead of starting a new run budget. Native job limits also
-bound the longest active path: classification 2 minutes, exception-full 25,
-reconciliation 3, and automatic diagnostics 10. Parallel fast validation has 38
-minutes and static validation 30; ordinary full shards retain 15 minutes. A worker
-reserves 330 seconds for termination and evidence upload. Reconciliation reserves
-90 seconds for termination and its one-minute artifact upload. Missing or exhausted
-shared budgets fail verification. Queue delay and cancellation latency are recorded
-separately from this active-path bound; acceptance requires the observed complete
-workflow to finish within 40 minutes, with all required reports and checks complete.
+Every `pr-validation` job declares native `timeout-minutes: 30`, including
+classification, static validation, fast validation, each full shard,
+reconciliation, automatic or manually dispatched diagnostics, and deadline
+control. Every event shares one absolute 30-minute deadline derived from the
+workflow run's GitHub `created_at`, including queue, setup, dependency waits,
+cancellation, and uploads. Classification records that deadline before selecting
+lanes. A rerun cannot extend the original run's window. Test and reconciliation
+workers clamp their 30-minute job clock to the shared deadline. Each test worker
+reserves 330 seconds for termination and evidence upload, allowing at most 1,470
+execution seconds minus setup and shared-clock consumption. Reconciliation
+reserves 90 seconds for termination and its one-minute artifact upload. Missing
+or exhausted shared budgets fail verification.
 
-Explicitly dispatched diagnostic jobs also allow up to 40 minutes. Test execution
-has a separate earlier deadline to leave time for termination and evidence upload.
-Diagnostics preserve progress and available partial evidence on interruption;
-partial or timed-out execution never counts as a passing test. Their reports
-remain diagnostic evidence and never replace the required complete full-suite gate.
+An independent deadline job starts alongside classification and monitors a
+completion marker that depends on every validation job. It requests cancellation
+with 90 seconds remaining and force-cancellation with 60 seconds remaining. Only
+that guard has `actions: write`; each cancellation verifies the current run and
+attempt identity. Its polling and API requests are bounded, and unavailable
+deadline enforcement fails visibly. The marker does not replace any validation
+result. Native job timeouts remain a separate limit. Runner scheduling or an
+unavailable GitHub control API can delay cancellation, so acceptance also checks
+the observed complete workflow duration: it must finish within 30 minutes with
+all required reports and checks complete.
+
+Explicitly dispatched diagnostic jobs also stop after 30 minutes. Test execution
+has a separate earlier deadline to leave time for termination and evidence
+upload. Diagnostics preserve progress and available partial evidence on
+interruption; a partial or timed-out execution never counts as a passing test.
+These reports remain diagnostic evidence and never replace the required
+complete full-suite gate.
 
 ## Initial calibration
 

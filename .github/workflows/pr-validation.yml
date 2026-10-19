@@ -36,11 +36,112 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  classify:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - classification skipped' || 'Classify changed paths' }}
-    if: github.event_name != 'workflow_dispatch'
+  workflow-deadline:
+    name: Enforce 30-minute workflow limit
+    # Cover classification, setup and dependency waits independently.
+    # Survive normal cancellation long enough to force-cancel stalled jobs.
+    if: always()
     runs-on: ubuntu-24.04
-    timeout-minutes: 2
+    timeout-minutes: 30
+    permissions:
+      actions: write
+    steps:
+      - name: Enforce total workflow deadline
+        uses: actions/github-script@v7
+        with:
+          retries: 0
+          script: |
+            const parameters = () => ({
+              ...context.repo,
+              run_id: context.runId,
+              request: {signal: AbortSignal.timeout(5000)},
+            });
+            const attempt = Number(process.env.GITHUB_RUN_ATTEMPT);
+            if (!Number.isSafeInteger(attempt) || attempt < 1) {
+              core.setFailed("Missing workflow attempt identity.");
+              return;
+            }
+            // Metadata retries never grant a new test budget.
+            const metadataDeadline = Date.now() + 30_000;
+            let deadline;
+            let cancellationRequested = false;
+            async function currentRun() {
+              const {data: run} = await github.rest.actions.getWorkflowRun(parameters());
+              if (run.id !== context.runId || run.run_attempt !== attempt) {
+                core.setFailed("Workflow attempt changed; the stale guard cannot cancel it.");
+                return null;
+              }
+              if (run.status === "completed") return null;
+              const created = Date.parse(run.created_at);
+              if (!Number.isFinite(created)) throw new Error("Missing workflow creation time.");
+              const runDeadline = created + 30 * 60 * 1000;
+              deadline = deadline === undefined ? runDeadline : Math.min(deadline, runDeadline);
+              return run;
+            }
+            while (Date.now() < (deadline ?? metadataDeadline)) {
+              try {
+                if (!await currentRun()) return;
+                let complete;
+                try {
+                  const {data: page} = await github.rest.actions.listJobsForWorkflowRunAttempt({
+                    ...parameters(), attempt_number: attempt, per_page: 100,
+                  });
+                  if (!Number.isSafeInteger(page.total_count) || page.total_count > 100 ||
+                      !Array.isArray(page.jobs) || page.total_count !== page.jobs.length) {
+                    throw new Error("Cannot establish the complete validation job list.");
+                  }
+                  // A marker covers downstream jobs absent from an earlier API snapshot.
+                  complete = page.jobs.find(job => job.name === "Validation jobs complete");
+                } catch (error) {
+                  // Job-list failures cannot prevent cancellation at the deadline.
+                  core.warning(`Completion lookup failed: ${error.message}`);
+                }
+                if (Date.now() < deadline && complete?.status === "completed" &&
+                    ["success", "failure"].includes(complete.conclusion)) {
+                  core.info("All validation jobs finished within the workflow deadline.");
+                  return;
+                }
+                if (Date.now() >= deadline - 60_000) {
+                  core.setFailed("Workflow shutdown reserve reached; force-cancelling this run.");
+                  if (!await currentRun()) return;
+                  await github.request("POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel", parameters());
+                  return;
+                }
+                if (!cancellationRequested && Date.now() >= deadline - 90_000) {
+                  core.setFailed("Workflow shutdown reserve reached; cancelling this run.");
+                  if (!await currentRun()) return;
+                  await github.rest.actions.cancelWorkflowRun(parameters());
+                  cancellationRequested = true;
+                }
+              } catch (error) {
+                core.warning(`Deadline control request failed: ${error.message}`);
+              }
+              const remaining = (deadline ?? metadataDeadline) - Date.now();
+              const poll = deadline !== undefined && remaining > 90_000 ? 30_000 : 5000;
+              if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(poll, remaining)));
+            }
+            core.setFailed("Workflow deadline enforcement could not complete within its bounded window.");
+
+  validation-complete:
+    name: Validation jobs complete
+    needs: [classify, static, fast, full, reconcile-full, diagnose-full-budget]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions: {}
+    steps:
+      - name: Mark validation jobs terminal
+        timeout-minutes: 1
+        run: echo "Validation jobs are terminal; their individual results remain authoritative."
+
+  classify:
+    name: ${{ github.event_name == 'workflow_dispatch' && 'Initialize diagnostic deadline' || 'Classify changed paths' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     outputs:
       test_run_deadline: ${{ steps.paths.outputs.test_run_deadline }}
       runtime: ${{ steps.paths.outputs.runtime }}
@@ -54,10 +155,33 @@ jobs:
       - name: Classify paths and select runtime evidence
         id: paths
         uses: actions/github-script@v7
+        timeout-minutes: 2
         with:
           script: |
-            core.setOutput("test_run_deadline", String(Math.floor(Date.now() / 1000) + 40 * 60));
             const {owner, repo} = context.repo;
+            const {data: run} = await github.rest.actions.getWorkflowRun({
+              owner, repo, run_id: context.runId, request: {signal: AbortSignal.timeout(5000)},
+            });
+            const created = Date.parse(run.created_at);
+            if (run.id !== context.runId || run.run_attempt !== Number(process.env.GITHUB_RUN_ATTEMPT) ||
+                !Number.isFinite(created)) {
+              core.setFailed("Cannot establish this workflow attempt's creation time.");
+              return;
+            }
+            const deadline = Math.floor(created / 1000) + 30 * 60;
+            core.setOutput("test_run_deadline", String(deadline));
+            if (Date.now() >= deadline * 1000) {
+              core.setFailed("Shared workflow deadline exhausted before classification.");
+              return;
+            }
+            if (context.eventName === "workflow_dispatch") {
+              core.setOutput("runtime", "false");
+              core.setOutput("policy_only", "true");
+              core.setOutput("full", "false");
+              core.setOutput("wall_time_exception", "false");
+              for (const name of ["base_sha", "head_sha", "checkout_sha"]) core.setOutput(name, context.sha);
+              return;
+            }
             let files = [];
             let labels = [];
             let baseSha;
@@ -126,6 +250,7 @@ jobs:
   static:
     name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - static validation skipped' || 'Static validation' }}
     needs: classify
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -302,9 +427,9 @@ jobs:
     needs: classify
     if: needs.classify.outputs.runtime == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 38
+    timeout-minutes: 30
     env:
-      TEST_JOB_MINUTES: '38'
+      TEST_JOB_MINUTES: '30'
       TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
     steps:
       - name: Record shared test deadline before setup
@@ -315,7 +440,7 @@ jobs:
             if (( TEST_RUN_DEADLINE < test_deadline )); then
               test_deadline=$TEST_RUN_DEADLINE
             fi
-          elif [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+          else
             echo "Missing shared test-run deadline."
             exit 2
           fi
@@ -343,7 +468,7 @@ jobs:
       - name: Run fast runtime tests
         run: |
           test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 330 ))
-          if (( test_seconds > 2040 )); then test_seconds=2040; fi
+          if (( test_seconds > 1470 )); then test_seconds=1470; fi
           printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":300}\n' "$test_seconds" > "$RUNNER_TEMP/fast-control.json"
           if (( test_seconds <= 0 )); then exit 124; fi
           set +e
@@ -375,9 +500,9 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       PYTHONDONTWRITEBYTECODE: '1'
-      TEST_JOB_MINUTES: ${{ needs.classify.outputs.wall_time_exception == 'true' && '25' || '15' }}
+      TEST_JOB_MINUTES: '30'
       TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    timeout-minutes: ${{ needs.classify.outputs.wall_time_exception == 'true' && 25 || 15 }}
+    timeout-minutes: 30
     steps:
       - name: Record shared test deadline before setup
         run: |
@@ -387,7 +512,7 @@ jobs:
             if (( TEST_RUN_DEADLINE < test_deadline )); then
               test_deadline=$TEST_RUN_DEADLINE
             fi
-          elif [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+          else
             echo "Missing shared test-run deadline."
             exit 2
           fi
@@ -415,7 +540,7 @@ jobs:
       - name: Run full runtime shard
         run: |
           test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 330 ))
-          if (( test_seconds > 2040 )); then test_seconds=2040; fi
+          if (( test_seconds > 1470 )); then test_seconds=1470; fi
           printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":300}\n' "$test_seconds" > "$RUNNER_TEMP/full-${{ matrix.shard }}-control.json"
           if (( test_seconds <= 0 )); then exit 124; fi
           set +e
@@ -443,9 +568,9 @@ jobs:
       !cancelled() && needs.classify.outputs.full == 'true' &&
       (needs.full.result == 'success' || needs.full.result == 'failure')
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    timeout-minutes: 30
     env:
-      TEST_JOB_MINUTES: '3'
+      TEST_JOB_MINUTES: '30'
       TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
     steps:
       - name: Record shared test deadline before setup
@@ -456,7 +581,7 @@ jobs:
             if (( TEST_RUN_DEADLINE < test_deadline )); then
               test_deadline=$TEST_RUN_DEADLINE
             fi
-          elif [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+          else
             echo "Missing shared test-run deadline."
             exit 2
           fi
@@ -522,9 +647,9 @@ jobs:
       !cancelled() && (github.event_name == 'workflow_dispatch' ||
       (needs.full.result == 'success' && needs.reconcile-full.result == 'failure'))
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 40 || 10 }}
+    timeout-minutes: 30
     env:
-      TEST_JOB_MINUTES: ${{ github.event_name == 'workflow_dispatch' && '40' || '10' }}
+      TEST_JOB_MINUTES: '30'
       TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
     steps:
       - name: Record shared test deadline before setup
@@ -535,7 +660,7 @@ jobs:
             if (( TEST_RUN_DEADLINE < test_deadline )); then
               test_deadline=$TEST_RUN_DEADLINE
             fi
-          elif [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+          else
             echo "Missing shared test-run deadline."
             exit 2
           fi
@@ -610,7 +735,7 @@ jobs:
         run: |
           install -d -m 700 "$RUNNER_TEMP/timing-diagnostic"
           test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 330 ))
-          if (( test_seconds > 2040 )); then test_seconds=2040; fi
+          if (( test_seconds > 1470 )); then test_seconds=1470; fi
           printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":300}\n' "$test_seconds" > "$RUNNER_TEMP/timing-diagnostic/control.json"
           if (( test_seconds <= 0 )); then exit 124; fi
           set +e
