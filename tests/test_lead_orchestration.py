@@ -2700,6 +2700,35 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(replayed.semantic_index.policy.offer_digest, replay_offers.offer_digest)
         (self.assertEqual(tuple((owner.variant.branch_key for owner in replayed.semantic_index.
             owners)), tuple((owner.variant.branch_key for owner in bound.semantic_index.owners))) )
+        certificate_sets = tuple(item._node_fingerprint_proofs for item in (bound, repaired, replayed))
+        self.assertTrue(all(items and all(proof is not None for proof in items) for items in certificate_sets))
+        self.assertEqual(len({id(items) for items in certificate_sets}), 3)
+        certificate_code = validation_module.bound_schema_node_fingerprint.__code__
+        certificate_visits = []
+        def certificate_profile(frame, event, _arg):
+            if event == "call" and frame.f_code is certificate_code: certificate_visits.append(frame.f_locals["proof"])
+        for current_call, records in zip((bound, repaired, replayed), certificate_sets, strict=True):
+            previous_profile = sys.getprofile(); certificate_visits.clear()
+            try:
+                sys.setprofile(certificate_profile)
+                current_call.require_current_offer(current_call.offers)
+            finally:
+                sys.setprofile(previous_profile)
+            self.assertEqual(tuple(map(id, certificate_visits)), tuple(map(id, records)))
+            self.assertIs(current_call._node_fingerprint_proofs, records)
+        original_certificates = certificate_sets[0]
+        for replacement in (tuple(list(original_certificates)), *certificate_sets[1:]):
+            self.assertIsNot(replacement, original_certificates)
+            prior_calls = dict(hook_calls); previous_profile = sys.getprofile()
+            try:
+                object.__setattr__(bound, "_node_fingerprint_proofs", replacement); sys.setprofile(hook_profile)
+                with self.assertRaisesRegex(ValueError, "^frozen bound schema fingerprint proofs changed$"):
+                    bound.decode_response(json.dumps(physical))
+                self.assertEqual(hook_calls, prior_calls)
+            finally:
+                sys.setprofile(previous_profile)
+                object.__setattr__(bound, "_node_fingerprint_proofs", original_certificates)
+        bound.require_current_offer(bound.offers)
         pair_index = bound.semantic_index; pair_contracts = pair_index.contracts; pair_replacement = replace(pair_index)
         self.assertIsNot(pair_replacement, pair_index)
         self.assertEqual(pair_replacement.expected_schema_ids, pair_index.expected_schema_ids)
@@ -2741,6 +2770,28 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.assertTrue(pair_seen[1], pair_mutation)
             self.assertEqual(plain(call.schema), full_schema)
             self.assertEqual(len(self.backend.calls), calls_before)
+        certificate_graph = query_members[0].rule_graph; certificate_source = certificate_graph.canonical_bytes
+        self.assertEqual(certificate_graph.literal_at(("action_type",)), "submit_result")
+        certificate_bad_source = json.loads(certificate_source)
+        certificate_bad_source.setdefault("$defs", {})["unused_proof_regression"] = {"$ref": "#/$defs/missing_proof"}
+        certificate_bad_bytes = json.dumps(certificate_bad_source).encode(); certificate_changed = []
+        def certificate_drift(frame, event, arg):
+            hook_profile(frame, event, arg)
+            if (event == "return" and frame.f_code is pair_action_code
+                    and frame.f_locals.get("self") is bound.action_index and not certificate_changed):
+                certificate_changed.append(True)
+                object.__setattr__(certificate_graph, "canonical_bytes", certificate_bad_bytes)
+        previous_profile = sys.getprofile(); prior_calls = dict(hook_calls)
+        try:
+            sys.setprofile(certificate_drift)
+            with self.assertRaisesRegex(ValueError, "^schema rejected$") as certificate_rejected:
+                bound.decode_response(json.dumps(physical))
+            self.assertEqual(certificate_changed, [True]); self.assertEqual(hook_calls, prior_calls)
+            self.assertEqual(failure_issues(certificate_rejected.exception), ("$: local definition missing",))
+        finally:
+            sys.setprofile(previous_profile)
+            object.__setattr__(certificate_graph, "canonical_bytes", certificate_source)
+        bound.require_current_offer(bound.offers)
         previous_final = bound.factory.authorized_validator
         def different_final(result, authorization):
             return previous_final(result, authorization)

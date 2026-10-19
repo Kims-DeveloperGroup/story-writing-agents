@@ -12,6 +12,7 @@ import math
 import hashlib
 import inspect
 import marshal
+import builtins
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from decimal import Decimal
@@ -866,6 +867,39 @@ def schema_rule_fingerprints(
     return result, definition_fingerprints
 
 
+def _schema_property_node(
+    root: dict[str, object], path: tuple[str, ...], *, resolve_terminal: bool,
+) -> Mapping[str, object]:
+    node: Mapping[str, object] = root
+    for name in (*path, None):
+        if name is None and not resolve_terminal:
+            break
+        seen: set[str] = set()
+        while "$ref" in node:
+            reference = node["$ref"]
+            if type(reference) is not str or reference in seen:
+                raise ValueError("cyclic schema property reference")
+            seen.add(reference)
+            node = _local_rule(root, reference)
+        if name is not None:
+            properties = node.get("properties")
+            if type(properties) is not dict or name not in properties:
+                raise ValueError("schema property is not declared")
+            node = properties[name]
+    return node
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class SchemaNodeFingerprintProof:
+    """Opaque scalar evidence; its physical caller owns the finite proof set."""
+
+    _record: tuple = field(repr=False)
+    _anchor: tuple = field(repr=False)
+
+    def __init_subclass__(cls, **kwargs):
+        raise TypeError("schema node fingerprint proofs cannot be overridden")
+
+
 @dataclass(frozen=True, slots=True)
 class SchemaRules:
     """One immutable owner-declared graph shared by projection and validation."""
@@ -981,23 +1015,7 @@ class SchemaRules:
         if type(path) is not tuple or any(type(name) is not str for name in path):
             raise ValueError("invalid schema property path")
         root = self.schema_value()
-        node: Mapping[str, object] = root
-        for name in (*path, None):
-            if name is None and not resolve_terminal:
-                break
-            seen: set[str] = set()
-            while "$ref" in node:
-                reference = node["$ref"]
-                if type(reference) is not str or reference in seen:
-                    raise ValueError("cyclic schema property reference")
-                seen.add(reference)
-                node = _local_rule(root, reference)
-            if name is not None:
-                properties = node.get("properties")
-                if type(properties) is not dict or name not in properties:
-                    raise ValueError("schema property is not declared")
-                node = properties[name]
-        return root, node
+        return root, _schema_property_node(root, path, resolve_terminal=resolve_terminal)
 
     def property_names(self, path: tuple[str, ...] = ()) -> tuple[str, ...]:
         """Return declared closed-object property names, never instance keys."""
@@ -1768,6 +1786,143 @@ def _hook_guard_matches(steps: tuple, _same=_hook_is, _flatten=_hook_chain.from_
     except (AttributeError, TypeError, ValueError, RuntimeError):
         return False
     return True
+
+
+def _schema_node_query_matches(declaration: tuple, _type=type, _any=any, _str=str, _absent=_ABSENT) -> bool:
+    bindings, modules, steps, matcher_pin, *_ = declaration
+    matcher, code, defaults = matcher_pin
+    if (matcher is not _hook_guard_matches or matcher.__code__ is not code
+            or matcher.__defaults__ is not defaults):
+        return False
+    if _any(_type(module) is not kind for module, kind in modules):
+        return False
+    for namespace, expected in bindings:
+        # Inspect keys before lookup: even an exact dict can contain a custom
+        # key whose equality would otherwise run during a speculative lookup.
+        if _any(_type(key) is not _str for key in namespace):
+            return False
+        if _any(namespace.get(name, _absent) is not value for name, value in expected):
+            return False
+    return matcher(steps, *defaults)
+
+
+def _schema_node_query_declaration() -> tuple | None:
+    """Pin this finite, source-defined query implementation, not graph results."""
+    namespaces = (
+        (globals(), (
+            "SchemaRules", "SchemaNodeFingerprintProof", "_schema_property_node",
+            "strict_json_object", "strict_json_value", "_unique_object",
+            "_reject_constant", "_finite_float", "_local_rule", "validation_failure",
+            "schema_rule_fingerprints", "_schema_rule_fingerprint_context",
+            "_schema_node_query_matches", "_hook_guard_matches", "_ABSENT",
+            "json", "hashlib", "math", "builtins", "Mapping", "Decimal", "_DuplicateKey",
+            "type", "dict", "tuple", "str", "bytes", "object", "set", "any", "isinstance",
+            "id", "sorted", "len", "float", "ValueError", "TypeError", "AttributeError", "RuntimeError",
+        )),
+        (vars(builtins), ("type", "dict", "tuple", "str", "bytes", "object", "set", "any", "isinstance",
+                          "id", "sorted", "len", "float", "ValueError", "TypeError", "AttributeError", "RuntimeError")),
+        (vars(json), ("loads", "dumps", "JSONDecoder", "JSONEncoder", "decoder", "encoder", "scanner")),
+        (vars(json.decoder), ("JSONObject", "JSONArray", "scanstring", "WHITESPACE", "WHITESPACE_STR", "scanner")),
+        (vars(json.encoder), ("_make_iterencode", "c_make_encoder", "encode_basestring", "encode_basestring_ascii", "INFINITY")),
+        (vars(json.scanner), ("make_scanner", "py_make_scanner", "NUMBER_RE")),
+        (vars(hashlib), ("sha256",)),
+        (vars(math), ("isfinite",)),
+    )
+    bindings = tuple((namespace, tuple((name, namespace.get(name, _ABSENT)) for name in names))
+                     for namespace, names in namespaces)
+    functions = tuple(value for _, values in bindings for _, value in values
+                      if type(value) is type(_schema_node_query_matches))
+    functions += tuple(vars(kind)[name] for kind, names in (
+        (SchemaRules, ("node_fingerprint", "_property_rule", "schema_value")),
+        (json.JSONDecoder, ("__init__", "decode", "raw_decode")),
+        (json.JSONEncoder, ("__init__", "encode", "iterencode")),
+    ) for name in names)
+    if any(function.__closure__ is not None for function in functions):
+        return None
+    steps = []
+    for function in functions:
+        # These source-defined defaults contain immutable scalars/builtin
+        # helpers. Replacement is a miss; keyword dictionaries are checked too.
+        steps.extend((
+            ("code", function, function.__code__),
+            ("defaults", function, function.__defaults__, function.__kwdefaults__),
+            ("closure", function, function.__closure__, ()),
+            ("metadata", function, function.__module__, function.__qualname__),
+        ))
+        if function.__kwdefaults__ is not None:
+            steps.append(("mapping", function.__kwdefaults__, tuple(function.__kwdefaults__.items())))
+    layouts = tuple(_capture_hook_layout(kind) for kind in
+                    (SchemaRules, SchemaNodeFingerprintProof, json.JSONDecoder, json.JSONEncoder))
+    if any(layout is None for layout in layouts):
+        return None
+    steps.extend(layouts)
+    matcher = (_hook_guard_matches, _hook_guard_matches.__code__, _hook_guard_matches.__defaults__)
+    checker = (_schema_node_query_matches, _schema_node_query_matches.__code__, _schema_node_query_matches.__defaults__)
+    modules = tuple((module, type(module)) for module in
+                    (json, json.decoder, json.encoder, json.scanner, hashlib, math, builtins))
+    return (bindings, modules, tuple(steps), matcher, checker, SchemaRules,
+            vars(SchemaRules)["canonical_bytes"], SchemaNodeFingerprintProof,
+            vars(SchemaNodeFingerprintProof)["_record"], vars(SchemaNodeFingerprintProof)["_anchor"])
+
+
+def bound_schema_node_fingerprint(
+    graph: SchemaRules, path: tuple[str, ...] = (), *,
+    proof: SchemaNodeFingerprintProof | None | object = _ABSENT,
+    _implementation: tuple | None = _schema_node_query_declaration(), _type=type,
+) -> tuple[str, SchemaNodeFingerprintProof | None]:
+    """Capture/reuse one full node proof; misses run the unchanged public query.
+
+    Omitted proof captures once. None explicitly disables capture. The caller
+    retains a fixed, separately anchored proof set for one physical call.
+    """
+    if _implementation is None:
+        return graph.node_fingerprint(path), None
+    checker, code, defaults = _implementation[4]
+    if (checker is not _schema_node_query_matches or checker.__code__ is not code
+            or checker.__defaults__ is not defaults or not checker(_implementation, *defaults)):
+        return graph.node_fingerprint(path), None
+    _, _, _, _, _, graph_kind, source_slot, proof_kind, record_slot, anchor_slot = _implementation
+    if (_type(graph) is not graph_kind or _type(path) is not tuple
+            or any(_type(name) is not str for name in path)):
+        return graph.node_fingerprint(path), None
+    try:
+        source = source_slot.__get__(graph, graph_kind)
+    except AttributeError:
+        return graph.node_fingerprint(path), None
+    if _type(source) is not bytes or proof is None:
+        return graph.node_fingerprint(path), None
+    if proof is not _ABSENT:
+        if _type(proof) is not proof_kind:
+            raise ValueError("frozen schema node fingerprint proof changed")
+        try:
+            record = record_slot.__get__(proof, proof_kind)
+            if record is not anchor_slot.__get__(proof, proof_kind):
+                raise ValueError("frozen schema node fingerprint proof changed")
+        except AttributeError:
+            raise ValueError("frozen schema node fingerprint proof changed") from None
+        if record[0] is graph and record[1] == path and record[2] is source:
+            return record[3], proof
+        return graph.node_fingerprint(path), None
+    # The source read above is the source parsed below. No second receiver read
+    # supplies the admitted bytes, and the full plural traversal is unchanged.
+    root = strict_json_object(source.decode("utf-8"))
+    selected = _schema_property_node(root, path, resolve_terminal=False)
+    value = schema_rule_fingerprints(root, selected=selected)[0]
+    if (_type(value) is not str or _type(graph) is not graph_kind
+            or checker is not _schema_node_query_matches or checker.__code__ is not code
+            or checker.__defaults__ is not defaults or not checker(_implementation, *defaults)):
+        return value, None
+    try:
+        current_source = source_slot.__get__(graph, graph_kind)
+    except AttributeError:
+        return value, None
+    if current_source is not source:
+        return value, None
+    captured = object.__new__(proof_kind)
+    record = (graph, path, source, value)
+    object.__setattr__(captured, "_record", record)
+    object.__setattr__(captured, "_anchor", record)
+    return value, captured
 
 
 def _compact_hook_metadata(steps: list[tuple | None]) -> tuple | None:

@@ -19,7 +19,8 @@ from ..structured_output_validation import (
     ContractOwner,
     ContractRejection, BoundContract, NamedHostCheck, TypedDecoder, HostCheckContext,
     SelectedHostContext, SelectedContract, ValidatedValue, closed_rule, strict_json_member_text, failure_findings,
-    SchemaRules, finite_subset_rule, finite_selection_rule, decode_finite_selection,
+    SchemaRules, SchemaNodeFingerprintProof, bound_schema_node_fingerprint,
+    finite_subset_rule, finite_selection_rule, decode_finite_selection,
     canonical_schema_rules, diagnose_value, schema_accepts_only_objects, strict_json_object,
     validation_failure,
     validation_call,
@@ -592,6 +593,8 @@ class BoundCallContract:
     _factory_guard: tuple[object, object] = field(init=False, repr=False, compare=False)
     _semantic_anchor: LeadContractIndex[LeadDecodedResult] = field(init=False, repr=False, compare=False)
     _action_anchor: LeadContractIndex[ContextActionValue] = field(init=False, repr=False, compare=False)
+    _node_fingerprint_proofs: tuple[SchemaNodeFingerprintProof | None, ...] | list = field(init=False, repr=False, compare=False)
+    _node_fingerprint_anchor: object = field(init=False, repr=False, compare=False)
 
     def __init_subclass__(cls, **kwargs):
         raise TypeError("bound call relationships cannot be overridden")
@@ -658,7 +661,15 @@ class BoundCallContract:
         object.__setattr__(self, "_factory_method", method)
         object.__setattr__(self, "_semantic_anchor", semantic)
         object.__setattr__(self, "_action_anchor", outer)
+        pending: list[SchemaNodeFingerprintProof | None] = []
+        object.__setattr__(self, "_node_fingerprint_proofs", pending)
+        object.__setattr__(self, "_node_fingerprint_anchor", pending)
         self.require_current_offer(self.offers)
+        if self._node_fingerprint_proofs is not pending or self._node_fingerprint_anchor is not pending:
+            raise ValueError("frozen bound schema fingerprint proofs changed")
+        proofs = tuple(pending)
+        object.__setattr__(self, "_node_fingerprint_proofs", proofs)
+        object.__setattr__(self, "_node_fingerprint_anchor", proofs)
 
     @classmethod
     def bind(cls, factory: BoundCallFactory, offers: ContextCallOffers,
@@ -677,12 +688,38 @@ class BoundCallContract:
                    methods, _BOUND_CALL_STRUCTURE_DECLARATIONS, strict=True,
                )):
             raise ValueError("frozen bound structural query implementation changed")
+        proofs = self._node_fingerprint_proofs
+        if proofs is not self._node_fingerprint_anchor or type(proofs) not in (tuple, list):
+            raise ValueError("frozen bound schema fingerprint proofs changed")
+        query_index = 0
+
+        def fingerprint(graph: SchemaRules, path: tuple[str, ...] = ()) -> str:
+            nonlocal query_index
+            if self._node_fingerprint_proofs is not proofs or self._node_fingerprint_anchor is not proofs:
+                raise ValueError("frozen bound schema fingerprint proofs changed")
+            helper, code, defaults, keywords, keyword_edges, closure = _BOUND_SCHEMA_NODE_FINGERPRINT
+            if (helper is not bound_schema_node_fingerprint or helper.__code__ is not code
+                    or helper.__defaults__ is not defaults or helper.__kwdefaults__ is not keywords
+                    or helper.__closure__ is not closure or len(keywords) != len(keyword_edges)
+                    or any(key is not old_key or value is not old_value
+                           for (key, value), (old_key, old_value) in zip(keywords.items(), keyword_edges))):
+                value, captured = graph.node_fingerprint(path), None
+            elif type(proofs) is list:
+                value, captured = helper(graph, path)
+            else:
+                proof = proofs[query_index] if query_index < len(proofs) else None
+                value, captured = helper(graph, path, proof=proof)
+            if type(proofs) is list:
+                proofs.append(captured)
+            query_index += 1
+            return value
+
         if (type(offers) is not ContextCallOffers or offers != self.offers
                 or offers.offer_digest != self.offers.offer_digest
                 or type(self.factory).declare_result_owners is not self._factory_method
                 or self.semantic_index is not self._semantic_anchor or self.action_index is not self._action_anchor
                 or type(self.rule_graph) is not SchemaRules
-                or self.rule_graph.node_fingerprint(("agent_action",)) != self.action_index.rule_graph.node_fingerprint()):
+                or fingerprint(self.rule_graph, ("agent_action",)) != fingerprint(self.action_index.rule_graph)):
             raise ValueError("actual call/graph/frozen owner provenance changed")
         semantic_index = self.semantic_index
         semantic_contracts = semantic_index.contracts
@@ -719,7 +756,7 @@ class BoundCallContract:
                 if inner is None:
                     inner = semantic_index.select(inner_id)
                 if (owner.semantic_member is not inner
-                        or member.rule_graph.node_fingerprint(("task_result",)) != inner.rule_graph.node_fingerprint()):
+                        or fingerprint(member.rule_graph, ("task_result",)) != fingerprint(inner.rule_graph)):
                     raise ValueError("outer offered ID differs from exact paired semantic member")
                 pairs.append((member.schema_id, inner_id))
             elif kind in {"search_context", "read_context"} and owner.semantic_member is None:
@@ -736,6 +773,9 @@ class BoundCallContract:
         if (self.semantic_index is not semantic_index
                 or semantic_index.contracts is not semantic_contracts):
             raise ValueError('frozen bound structural query implementation changed')
+        if (self._node_fingerprint_proofs is not proofs or self._node_fingerprint_anchor is not proofs
+                or query_index != len(proofs)):
+            raise ValueError("frozen bound schema fingerprint proofs changed")
 
     def schema_value(self) -> dict[str, object]:
         self.require_current_offer(self.offers)
@@ -930,6 +970,12 @@ class BoundCallContract:
 _BOUND_CALL_CURRENT_OFFER_DECLARATION = (
     BoundCallContract.require_current_offer,
     BoundCallContract.require_current_offer.__code__,
+)
+
+_BOUND_SCHEMA_NODE_FINGERPRINT = (
+    bound_schema_node_fingerprint, bound_schema_node_fingerprint.__code__,
+    bound_schema_node_fingerprint.__defaults__, bound_schema_node_fingerprint.__kwdefaults__,
+    tuple(bound_schema_node_fingerprint.__kwdefaults__.items()), bound_schema_node_fingerprint.__closure__,
 )
 
 _BOUND_CALL_STRUCTURE_DECLARATIONS = tuple(
