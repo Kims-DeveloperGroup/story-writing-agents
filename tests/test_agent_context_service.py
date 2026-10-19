@@ -498,6 +498,64 @@ class StructuredOutputValidationTests(unittest.TestCase):
             self.assertIs(observed, expected, (base, kind, hook_observations))
             self.assertEqual(events, ("numeric_exception",) if kind == "direct" else ("barrier", "numeric_exception"))
             self.assertEqual(bodies, ())
+
+        # Per-instance Field state and unsupported descriptors retain original public behavior.
+        from dataclasses import Field, dataclass
+        @dataclass(frozen=True, slots=True)
+        class FieldCapture:
+            left: str
+            right: str
+        field_value = FieldCapture("left-value", "right-value")
+        def field_decode(value, captured=field_value): return value
+        field_decoder = TypedDecoder("fixture.field.layout", "1", field_decode)
+        self.assertIsNone(field_decoder.require_provenance())
+        try:
+            object.__setattr__(field_value, "right", "changed-value")
+            with self.assertRaisesRegex(ValueError, "^frozen typed decoder hook provenance changed$"):
+                field_decoder.require_provenance()
+        finally: object.__setattr__(field_value, "right", "right-value")
+        self.assertIsNone(field_decoder.require_provenance())
+        field_records = fields(FieldCapture); later_field = field_records[1]
+        try:
+            later_field.name = "undeclared-slot"
+            with self.assertRaisesRegex(
+                    TypeError, "^typed decoder dataclass captures require only declared slot fields$"):
+                field_decoder.require_provenance()
+        finally: later_field.name = "right"
+        self.assertIsNone(field_decoder.require_provenance())
+        field_map = FieldCapture.__dataclass_fields__
+        try:
+            FieldCapture.__dataclass_fields__ = dict(field_map)
+            self.assertIsNot(FieldCapture.__dataclass_fields__, field_map)
+            self.assertIsNone(field_decoder.require_provenance())
+            FieldCapture.__dataclass_fields__ = dict(reversed(tuple(field_map.items())))
+            with self.assertRaisesRegex(ValueError, "^frozen typed decoder hook provenance changed$"):
+                field_decoder.require_provenance()
+        finally: FieldCapture.__dataclass_fields__ = field_map
+        self.assertIsNone(field_decoder.require_provenance())
+        field_name_slot, field_reads, field_armed = Field.name, [], [False]
+        field_error = RuntimeError("fixture Field.name access")
+        def observed_field_name(record):
+            name = field_name_slot.__get__(record, Field); field_reads.append(name)
+            if field_armed[0] and record is later_field: raise field_error
+            return name
+        try:
+            Field.name = property(observed_field_name)
+            fallback_decoder = TypedDecoder("fixture.field.fallback", "1", field_decode)
+            field_reads.clear(); self.assertIsNone(fallback_decoder.require_provenance())
+            self.assertEqual(field_reads, ["left", "right", "left", "right"])
+            field_armed[0] = True; field_reads.clear()
+            with self.assertRaises(RuntimeError) as field_failure: fallback_decoder.require_provenance()
+            self.assertIs(field_failure.exception, field_error)
+            self.assertEqual(field_reads, ["left", "right"])
+            field_armed[0] = False; field_reads.clear()
+            self.assertIsNone(fallback_decoder.require_provenance())
+            self.assertEqual(field_reads, ["left", "right", "left", "right"])
+        finally: Field.name = field_name_slot; field_armed[0] = False
+        self.assertIsNone(field_decoder.require_provenance())
+        self.assertIsNone(fallback_decoder.require_provenance())
+        # End Field-layout public oracles.
+
         # End public original-source oracle.
 
 
@@ -952,27 +1010,19 @@ class CompactWireDecoderTests(unittest.TestCase):
                 query = ContextSearchQuery("needle", (ContextSourceKind.WRITING_ARTIFACT,), prefix, )
                 self.assertEqual(query.artifact_path_prefix, prefix)
 
-        invalid = ("", "/manuscript/", "manuscript",
-            "manuscript\\part-01/", "manuscript//part-01/",
-            "manuscript/./", "manuscript/../",
-            "discussion_logs/", "core_documents/nested/",
-            "manuscript/part-01/chapter.md", "manuscript/}/",
-            "manuscript/\u2028/", "manuscript/\u2029/",
-            "manuscript/new\nline/", "manuscript/joiner-\u200d/",
-            "manuscript/surrogate-\ud800/", )
+        invalid = ("", "/manuscript/", "manuscript", "manuscript\\part-01/", "manuscript//part-01/",
+            "manuscript/./", "manuscript/../", "discussion_logs/", "core_documents/nested/",
+            "manuscript/part-01/chapter.md", "manuscript/}/", "manuscript/\u2028/", "manuscript/\u2029/",
+            "manuscript/new\nline/", "manuscript/joiner-\u200d/", "manuscript/surrogate-\ud800/", )
         for prefix in invalid:
-            with (self.subTest(invalid=repr(prefix)),
-                self.assertRaises(ContextActionError),):
+            with (self.subTest(invalid=repr(prefix)), self.assertRaises(ContextActionError),):
                 ContextSearchQuery( "needle", (ContextSourceKind.WRITING_ARTIFACT,), prefix, )
 
         with self.assertRaises(ContextActionError):
             ContextSearchQuery("needle", (ContextSourceKind.CONVERSATION,), "manuscript/", )
         with self.assertRaises(ContextActionError):
-            ContextSearchAction(self.correlation,
-                (
-                    ContextSearchQuery("one",
-                        (ContextSourceKind.WRITING_ARTIFACT,), "manuscript/part-01/", ),
-                    ContextSearchQuery("two",
+            ContextSearchAction(self.correlation, ( ContextSearchQuery("one",
+                        (ContextSourceKind.WRITING_ARTIFACT,), "manuscript/part-01/", ), ContextSearchQuery("two",
                         (ContextSourceKind.WRITING_ARTIFACT,), "manuscript/part-02/", ), ), )
 
     def test_malformed_exact_shape_types_routes_duplicates_and_limits_reject(self) -> None:
@@ -993,8 +1043,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assert_malformed(_search_wire(self.token, [("x", ["writing_artifact"]), ("Ｘ", ["writing_artifact"])]))
         distinct = self.decode(_search_wire(self.token, [("x", ["writing_artifact"]), ("Ｘ", ["conversation"])]))
         self.assertEqual(len(distinct.queries), 2)
-        for path_prefix, queries, path, rule in (
-            (None, [], "queries", "expected a nonempty array; got array"),
+        for path_prefix, queries, path, rule in ( (None, [], "queries", "expected a nonempty array; got array"),
             (None, True, "queries", "expected a nonempty array of search query objects"),
             (None, [{"search_text": "x"}], "queries[0]", "expected object containing exactly"),
             (None, [{"search_text": "x", "source_types": []}], "queries[0].source_types", "expected at least one source kind"),
@@ -1030,16 +1079,14 @@ class CompactWireDecoderTests(unittest.TestCase):
 
         failure = caught.exception
         self.assertIs( failure.code, service_module.ContextExecutionErrorCode.MALFORMED_ACTION, )
-        self.assertEqual(str(failure),
-            "contextual provider read action is invalid: `handles` must contain "
+        self.assertEqual(str(failure), "contextual provider read action is invalid: `handles` must contain "
             "source handles returned by the preceding context search", )
         self.assertIsNone(failure.__cause__)
         rendered = "\n".join( ( str(failure), repr(failure), repr(failure.__cause__), repr(failure.__context__), ) )
         for private in private_values:
             self.assertNotIn(private, rendered)
 
-    def test_provider_correlation_echo_is_rejected_as_an_extra_field(self,
-    ) -> None:
+    def test_provider_correlation_echo_is_rejected_as_an_extra_field(self, ) -> None:
         actual_correlation = "PRIVATE critique prose\x1b]unsafe\x07"
         with self.assertRaises(service_module.ContextExecutionError) as caught:
             value = _read_wire(actual_correlation, []); value["correlation"] = actual_correlation
@@ -1049,23 +1096,16 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assertIs( failure.code, service_module.ContextExecutionErrorCode.MALFORMED_ACTION, )
         self.assertEqual(str(failure), "contextual provider action is malformed"); self.assertIsNone(failure.__cause__)
         rendered = "\n".join( ( str(failure), repr(failure), repr(failure.__cause__), repr(failure.__context__), ) )
-        for private in (self.token,
-            actual_correlation, "PRIVATE critique prose",
-            "\x1b", "\x07",
-        ):
+        for private in (self.token, actual_correlation, "PRIVATE critique prose", "\x1b", "\x07", ):
             self.assertNotIn(private, rendered)
 
     def test_unrelated_malformed_actions_keep_generic_diagnostic(self) -> None:
-        cases = ("{",
-            {
-                "correlation": self.token,
+        cases = ("{", { "correlation": self.token,
                 'agent_action': {'action_type': 'submit_result', "used_handles": []}, }, {
-                "correlation": self.token, 'agent_action': {
-                    'action_type': 'read_context', 'read_handles': ["h1"],
+                "correlation": self.token, 'agent_action': { 'action_type': 'read_context', 'read_handles': ["h1"],
                     "used_handles": ["h1"], }, }, )
         for value in cases:
-            with (self.subTest(value=value),
-                self.assertRaises(service_module.ContextExecutionError) as caught,):
+            with (self.subTest(value=value), self.assertRaises(service_module.ContextExecutionError) as caught,):
                 self.decode(value)
             self.assertIs(caught.exception.code, service_module.ContextExecutionErrorCode.MALFORMED_ACTION, )
             self.assertEqual(str(caught.exception), "contextual provider action is malformed", )
@@ -1074,8 +1114,7 @@ class CompactWireDecoderTests(unittest.TestCase):
     def test_double_encoded_or_invalid_structured_results_reject(self) -> None:
         valid = {"kind": "answer", "message": "Visible.", "proposal": None}
         cases = (json.dumps(valid, separators=(",", ":")), {"kind": "answer", "message": "Visible."},
-                 {**valid, "extra": True}, {**valid, "kind": "unknown"}, [],
-                 {**valid, "message": "\ud800"}, None)
+                 {**valid, "extra": True}, {**valid, "kind": "unknown"}, [], {**valid, "message": "\ud800"}, None)
         for result in cases:
             with self.subTest(result=result):
                 failure = self.assert_malformed(json.dumps(_answer_wire(self.token, result)), allowed=("answer",))
@@ -1090,12 +1129,10 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.manifest, self.snapshots = _manifest_fixture(); self.binding = _binding(self.manifest)
 
-    def test_initial_read_is_impossible_and_search_handles_are_canonical_opaque(self,
-    ) -> None:
+    def test_initial_read_is_impossible_and_search_handles_are_canonical_opaque(self, ) -> None:
         registry = _registry(_SCOPE, self.snapshots); session = _session(self.binding, registry)
         with self.assertRaises(ContextActionError) as initial_read:
-            session.read(
-                ContextReadAction(_correlation(self.binding, 1),
+            session.read( ContextReadAction(_correlation(self.binding, 1),
                     (ContextSourceHandle("ctxh_v1_" + "0" * 64),), ) )
         self.assertEqual(initial_read.exception.code, ContextActionErrorCode.HANDLE_INVALID, )
         self.assertEqual(session.state, ContextInvocationState.FAILED)
@@ -1108,8 +1145,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
             self.assertRegex(handle.value, r"\Actxh_v1_[0-9a-f]{64}\Z"); self.assertNotIn(handle.value, repr(handle))
             self.assertNotIn(entry.provenance.locator, repr(handle))
 
-    def test_handles_are_invocation_bound_unforgeable_and_terminal_on_reuse(self,
-    ) -> None:
+    def test_handles_are_invocation_bound_unforgeable_and_terminal_on_reuse(self, ) -> None:
         first_registry = _registry(_SCOPE, self.snapshots); second_registry = _registry(_SCOPE, self.snapshots)
         first = _session(self.binding, first_registry, secret=b"a" * 32)
         second = _session(self.binding, second_registry, secret=b"b" * 32)
@@ -1138,8 +1174,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         private_values = (_PRIVATE_BODY_A, _PRIVATE_BODY_B, "core_documents/global_outline.md", )
 
         def assert_failure(session: ContextInvocationSession,
-            action: ContextReadAction, expected: ContextActionErrorCode,
-            *, next_action_index: int,
+            action: ContextReadAction, expected: ContextActionErrorCode, *, next_action_index: int,
             extra_private: tuple[str, ...] = (),) -> ContextActionError:
             with self.assertRaises(ContextActionError) as caught:
                 session.read(action)
@@ -1154,25 +1189,20 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         fresh_handle = _mint_handles(fresh, fresh_registry, self.snapshots, )[0][1]
         _observation, receipt = fresh.read(ContextReadAction( _correlation(self.binding, 2), (fresh_handle,), ) )
         fresh.complete_read(receipt)
-        authorization = fresh.authorize_answer(ContextAnswerAction(
-                _correlation(self.binding, 3), _PRIVATE_ANSWER,
+        authorization = fresh.authorize_answer(ContextAnswerAction( _correlation(self.binding, 3), _PRIVATE_ANSWER,
                 (fresh_handle,), ) )
         self.assertEqual( tuple(item.handle for item in authorization.used_evidence), (fresh_handle,), )
         self.assertEqual(fresh.state, ContextInvocationState.ANSWER_AUTHORIZED)
 
         guessed = ContextSourceHandle("ctxh_v1_" + "0" * 64)
         guessed_session = _session(self.binding, _registry(_SCOPE, self.snapshots))
-        assert_failure(guessed_session,
-            ContextReadAction(_correlation(self.binding, 1),
+        assert_failure(guessed_session, ContextReadAction(_correlation(self.binding, 1),
                 (guessed,), ), ContextActionErrorCode.HANDLE_INVALID,
             next_action_index=1, extra_private=(guessed.value,), )
 
-        foreign_scopes = (("stale_operation", _SCOPE, "stale_operation", "stale_result"),
-            ("cross_scope",
-                replace(_SCOPE, session_id="other_session"), "operation",
-                "result", ), (
-                "cross_agent", replace(_SCOPE, agent_id="plot_architect"),
-                "operation", "result", ), )
+        foreign_scopes = (("stale_operation", _SCOPE, "stale_operation", "stale_result"), ("cross_scope",
+                replace(_SCOPE, session_id="other_session"), "operation", "result", ), (
+                "cross_agent", replace(_SCOPE, agent_id="plot_architect"), "operation", "result", ), )
         for label, foreign_scope, operation_id, result_id in foreign_scopes:
             with self.subTest(handle_origin=label):
                 foreign_manifest, foreign_snapshots = _manifest_fixture(foreign_scope)
@@ -1181,28 +1211,17 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
                 foreign = _session(foreign_binding, foreign_registry, secret=b'z' * 32)
                 foreign_handle = _mint_handles(foreign, foreign_registry, foreign_snapshots, )[0][1]
                 current = _session(self.binding, _registry(_SCOPE, self.snapshots), secret=b'z' * 32)
-                assert_failure(
-                    current, ContextReadAction(
-                        _correlation(self.binding, 1), (foreign_handle,), ),
-                    ContextActionErrorCode.HANDLE_INVALID, next_action_index=1,
-                    extra_private=(foreign_handle.value,), )
+                assert_failure( current, ContextReadAction( _correlation(self.binding, 1), (foreign_handle,), ),
+                    ContextActionErrorCode.HANDLE_INVALID, next_action_index=1, extra_private=(foreign_handle.value,), )
 
-        for label, correlation in ((
-                "cross_scope_correlation", replace(
-                    _correlation(self.binding, 2),
-                    scope=replace(_SCOPE, session_id="other_session"), ), ), (
-                "cross_agent_correlation", replace(
-                    _correlation(self.binding, 2),
-                    scope=replace(_SCOPE, agent_id="plot_architect"), ),),
-        ):
+        for label, correlation in (( "cross_scope_correlation", replace( _correlation(self.binding, 2),
+                    scope=replace(_SCOPE, session_id="other_session"), ), ), ( "cross_agent_correlation", replace(
+                    _correlation(self.binding, 2), scope=replace(_SCOPE, agent_id="plot_architect"), ),), ):
             with self.subTest(failure_order=label):
                 registry = _registry(_SCOPE, self.snapshots); current = _session(self.binding, registry)
                 valid_handle = _mint_handles(current, registry, self.snapshots, )[0][1]
-                assert_failure(
-                    current,
-                    ContextReadAction(correlation, (valid_handle, guessed)),
-                    ContextActionErrorCode.CORRELATION_MISMATCH,
-                    next_action_index=2,
+                assert_failure( current, ContextReadAction(correlation, (valid_handle, guessed)),
+                    ContextActionErrorCode.CORRELATION_MISMATCH, next_action_index=2,
                     extra_private=(valid_handle.value, guessed.value), )
                 registry.capture.assert_not_called()
 
@@ -1210,38 +1229,23 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         consumed_handle = _mint_handles(consumed, consumed_registry, self.snapshots, )[0][1]
         _observation, receipt = consumed.read( ContextReadAction( _correlation(self.binding, 2), (consumed_handle,), ) )
         consumed.complete_read(receipt)
-        assert_failure(consumed,
-            ContextReadAction(_correlation(self.binding, 3),
-                (consumed_handle,),),
-            ContextActionErrorCode.HANDLE_INVALID,
-            next_action_index=3,
-            extra_private=(consumed_handle.value,),)
+        assert_failure(consumed, ContextReadAction(_correlation(self.binding, 3), (consumed_handle,),),
+            ContextActionErrorCode.HANDLE_INVALID, next_action_index=3, extra_private=(consumed_handle.value,),)
 
         drift_entry = self.manifest.entries[0]; stable = self.snapshots[drift_entry.source_id]
-        drifted = _snapshot(
-            _SCOPE,
-            drift_entry.provenance.locator,
-            "changed private body needle\n",
+        drifted = _snapshot( _SCOPE, drift_entry.provenance.locator, "changed private body needle\n",
             revision_seed=b"changed-release-revision", )
         drift_registry = _registry(_SCOPE, self.snapshots); drift = _session(self.binding, drift_registry)
         drift_handle = _mint_handles(drift, drift_registry, self.snapshots, )[0][1]
         drift_registry.capture = mock.Mock(side_effect=(stable, drifted))
-        assert_failure(drift,
-            ContextReadAction(
-                _correlation(self.binding, 2),
-                (drift_handle,),),
-            ContextActionErrorCode.HANDLE_INVALID,
-            next_action_index=3,
+        assert_failure(drift, ContextReadAction( _correlation(self.binding, 2), (drift_handle,),),
+            ContextActionErrorCode.HANDLE_INVALID, next_action_index=3,
             extra_private=(drift_handle.value, "changed private body"),)
 
         terminal = _session( self.binding, _registry(_SCOPE, self.snapshots), )
         terminal.authorize_answer( ContextAnswerAction( _correlation(self.binding, 1), _PRIVATE_ANSWER, ) )
-        assert_failure(terminal,
-            ContextReadAction(
-                _correlation(self.binding, 2),
-                (guessed,),),
-            ContextActionErrorCode.INVALID_TRANSITION, next_action_index=2,
-            extra_private=(guessed.value,),)
+        assert_failure(terminal, ContextReadAction( _correlation(self.binding, 2), (guessed,),),
+            ContextActionErrorCode.INVALID_TRANSITION, next_action_index=2, extra_private=(guessed.value,),)
 
     def test_read_captures_canonical_sources_twice_but_returns_requested_order(self,
     ) -> None:
