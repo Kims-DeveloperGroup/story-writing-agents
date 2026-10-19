@@ -1400,10 +1400,24 @@ def _diagnostic_plain(value: object, root: object, _type=type, _dict=dict, _list
         leaving = children is not None and not children
         if children is None or leaving:
             pending.pop()
+            virtual_pending -= 1
+            kind = _type(node)
         else:
-            node = children.pop()
-        virtual_pending -= 1
-        kind = _type(node)
+            # Drain scalar siblings without reloading the unchanged parent cursor.
+            while children:
+                node = children.pop()
+                virtual_pending -= 1
+                kind = _type(node)
+                if kind is _dict or kind is _list:
+                    break
+                if not (node is None or kind is _str or kind is _int or kind is _bool
+                        or kind is _float and _finite(node)):
+                    return False
+                remaining -= 1
+                if remaining < 0:
+                    return False
+            else:
+                continue
         if kind is _dict or kind is _list:
             key = (_id(node), schema)
             if leaving:
