@@ -2155,13 +2155,16 @@ def _require_hook_guards(callbacks: tuple[Callable, ...], identities: tuple[str,
 def _hook_default_identity(
     value: object, seen: set[int], *,
     _digests: tuple[dict[int, tuple[object, str]], dict[int, tuple[object, str]],
-                    dict[int, tuple[object, object]]] | None = None,
+                    dict[int, tuple[object, object, bool]]] | None = None,
     _attest_captures: bool = False,
     _guard: list[tuple | None] | None = None,
 ) -> object:
     if _digests is None:
         _digests = ({}, {}, {})
-    if value is None or type(value) in {str, int, bool}:
+    if value is None or (kind := type(value)) in {str, int, bool}:
+        if (_guard is not None and value is not None
+                and kind is not str and kind is not int and kind is not bool):
+            _guard.append(None)
         return (type(value).__name__, value)
     if type(value) is bytes:
         cached_bytes = _digests[1].get(id(value))
@@ -2169,8 +2172,10 @@ def _hook_default_identity(
             cached_bytes = (value, hashlib.sha256(value).hexdigest())
             _digests[1][id(value)] = cached_bytes
         return ("bytes", cached_bytes[1])
-    if type(value) in {float, Decimal}:
+    if (kind := type(value)) in {float, Decimal}:
         if type(value) is Decimal and _guard is not None:
+            _guard.append(None)
+        elif _guard is not None and kind is not float and kind is not Decimal:
             _guard.append(None)
         if not (value.is_finite() if type(value) is Decimal else math.isfinite(value)):
             raise TypeError("hook defaults cannot contain nonfinite values")
@@ -2193,6 +2198,8 @@ def _hook_default_identity(
     if type(value) is tuple:
         cached_tuple = _digests[2].get(id(value))
         if cached_tuple is not None and cached_tuple[0] is value:
+            if _guard is not None and not cached_tuple[2]:
+                _guard.append(None)
             return cached_tuple[1]
     seen.add(id(value))
     try:
@@ -2213,15 +2220,36 @@ def _hook_default_identity(
                 _guard[guard_start] = ("sequence", value, type(value), tuple(edges))
             # Reuse only immutable values whose complete identities were checked
             # in this operation. Decimal spelling can depend on live context.
-            if type(value) is tuple and all(
-                item is None or type(item) in {str, int, bool, bytes, float}
-                or (type(item) is tuple and (child := _digests[2].get(id(item))) is not None
-                    and child[0] is item)
-                for item in value
-            ):
-                _digests[2][id(value)] = (value, identity)
-                if _guard is not None:
-                    del _guard[guard_start:]
+            if type(value) is tuple:
+                memo_safe = True
+
+                def immutable_members():
+                    nonlocal memo_safe
+                    for item in value:
+                        if item is None:
+                            yield True
+                        elif (item_kind := type(item)) in {str, int, bool, bytes, float}:
+                            memo_safe = memo_safe and (
+                                item_kind is str or item_kind is int or item_kind is bool
+                                or item_kind is bytes or item_kind is float
+                            )
+                            yield True
+                        elif (type(item) is tuple
+                              and (child := _digests[2].get(id(item))) is not None
+                              and child[0] is item):
+                            memo_safe = memo_safe and child[2]
+                            yield True
+                        else:
+                            yield False
+
+                if all(immutable_members()):
+                    # Cache the canonical identity even for generic membership hits;
+                    # only exact immutable types can erase the proof's unsafe marker.
+                    _digests[2][id(value)] = (value, identity, memo_safe)
+                    if _guard is not None:
+                        del _guard[guard_start:]
+                        if not memo_safe:
+                            _guard.append(None)
             return identity
         if isinstance(value, Mapping):
             guard_start = len(_guard) if _guard is not None else 0
@@ -2333,7 +2361,7 @@ def _hook_default_identity(
 def _permitted_hook_identity(
     callback: Callable, seen: set[int] | None = None, *,
     _digests: tuple[dict[int, tuple[object, str]], dict[int, tuple[object, str]],
-                    dict[int, tuple[object, object]]] | None = None,
+                    dict[int, tuple[object, object, bool]]] | None = None,
     _attest_captures: bool = False,
     _guard: list[tuple | None] | None = None,
 ) -> str:
