@@ -5,8 +5,7 @@ from __future__ import annotations
 import hashlib; import json; import re; import unittest
 from dataclasses import FrozenInstanceError, fields, replace; from unittest import mock
 
-import story_writing_agents
-from story_writing_agents import agent_context as agent_context_package
+import story_writing_agents; from story_writing_agents import agent_context as agent_context_package
 from story_writing_agents.agent_context import service as service_module
 from story_writing_agents.agent_context.accounting import (ProviderCallAccounting, ProviderCallKind, ProviderCallState,
     account_provider_payload, canonical_provider_json)
@@ -84,8 +83,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
         references = {"type": "object", "properties": {
             "left": {"$ref": "#/$defs/text"}, "right": {"$ref": "#/$defs/text"}},
             "required": ["left", "right"], "$defs": {"text": text_rule}}
-        supplied = {"left": "ok", "right": "ok"}
-        self.assertEqual(diagnose_value(supplied, references), ())
+        supplied = {"left": "ok", "right": "ok"}; self.assertEqual(diagnose_value(supplied, references), ())
         supplied["right"] = 7
         self.assertEqual(diagnose_value(supplied, references), ("$.right: expected string, got integer",))
         supplied["left"] = None
@@ -117,6 +115,19 @@ class StructuredOutputValidationTests(unittest.TestCase):
         repeated_rule = {"anyOf": [repeated_ref, repeated_ref], "$defs": {"shared": {"type": "integer"}}}
         self.assertEqual(diagnose_value(1, repeated_rule),
                          ("$: expected one unambiguous schema alternative",))
+        self.assertEqual(diagnose_value("wrong", repeated_rule), ("$: expected integer, got string",))
+        from story_writing_agents import structured_output_validation as diagnostics
+        original_match, matched = diagnostics._matches_type, []
+        def observed_match(value, expected):
+            matched.append((value, expected)); return original_match(value, expected)
+        try:
+            diagnostics._matches_type = observed_match
+            self.assertEqual(diagnose_value(1, repeated_rule),
+                             ("$: expected one unambiguous schema alternative",))
+        finally:
+            diagnostics._matches_type = original_match
+        self.assertEqual(diagnose_value(1, repeated_rule), ("$: expected one unambiguous schema alternative",))
+        self.assertEqual(matched, [(1, "integer"), (1, "integer")])
         repeated_rule["anyOf"] = [object_alternative("shared", name) for name in ("left", "right")]
         for alternative in repeated_rule["anyOf"]:
             alternative["properties"]["shared"] = repeated_ref
@@ -161,8 +172,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
         # End independent diagnostic oracles.
         from story_writing_agents.structured_output_validation import (
             SchemaRules, schema_rule_fingerprint as single, schema_rule_fingerprints as plural)
-        from story_writing_agents.lead_provider_contracts import _compile_closed_choices
-        import sys
+        from story_writing_agents.lead_provider_contracts import _compile_closed_choices; import sys
         leaf = {"type": "string", "enum": ["draft"]}
         graph = {"type": "integer", "enum": [1], "$defs": {"choice": leaf}}
         draft_id = hashlib.sha256(b'{"enum":["draft"],"type":"string"}').hexdigest()
@@ -221,8 +231,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
             if event == "call" and frame.f_code is SchemaRules.node_fingerprint.__code__: query_calls.append("public")
         previous_profile = sys.getprofile()
         try:
-            sys.setprofile(query_profile)
-            value, proof = bound_fingerprint(query_graph, ("kind",))
+            sys.setprofile(query_profile); value, proof = bound_fingerprint(query_graph, ("kind",))
             self.assertEqual(value, draft_id); self.assertIsNotNone(proof); self.assertEqual(query_calls, ["plural"])
             for _ in range(2):
                 query_calls.clear(); value, reused = bound_fingerprint(query_graph, ("kind",), proof=proof)
@@ -350,8 +359,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
                                                for name, text in descriptions.items()}}
         expected = {**original, 'properties': {name: {'$ref': '#/$defs/a', 'description': text}
                                               for name, text in descriptions.items()}, '$defs': {'a': body}}
-        self.assertEqual(factored(original), expected)
-        names = [f'quoted"한\\{number}' for number in range(53)]
+        self.assertEqual(factored(original), expected); names = [f'quoted"한\\{number}' for number in range(53)]
         definitions = {name: {'type': 'integer', 'enum': [number]} for number, name in enumerate(names)}
         properties = {f'p{number}': {'$ref': '#/$defs/' + names[number]} for number in range(52)}
         properties['again'] = {'$ref': '#/$defs/' + names[0]}
@@ -367,8 +375,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
                     '$defs': {aliases[name]: value for name, value in definitions.items()}}
         actual = factored(original); self.assertEqual(actual, expected)
         self.assertEqual(actual['$defs']['a'], definitions[names[0]])
-        self.assertEqual(actual['$defs']['aa'], definitions[names[52]])
-        from collections.abc import Mapping
+        self.assertEqual(actual['$defs']['aa'], definitions[names[52]]); from collections.abc import Mapping
         class Source(Mapping):
             def __iter__(self):
                 events.append('iterate'); return iter(original)
@@ -1127,8 +1134,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
                 session.read(action)
             self.assertEqual(caught.exception.code, expected)
             self.assertEqual(session.state, ContextInvocationState.FAILED)
-            self.assertEqual(session.next_action_index, next_action_index)
-            encoded = repr(caught.exception)
+            self.assertEqual(session.next_action_index, next_action_index); encoded = repr(caught.exception)
             for value in (*private_values, *extra_private):
                 self.assertNotIn(value, encoded)
             return caught.exception
@@ -1247,8 +1253,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
                 _correlation(self.binding, 2),
                 tuple(handles[source_id] for source_id in requested_ids),
             ) )
-        canonical = [entry.source_id for entry in self.manifest.entries]
-        self.assertEqual(seen, canonical + canonical)
+        canonical = [entry.source_id for entry in self.manifest.entries]; self.assertEqual(seen, canonical + canonical)
         self.assertEqual( tuple(item.receipt.source_id for item in observation.evidence), requested_ids, )
         self.assertEqual(tuple((item.source_id for item in receipt.evidence)), requested_ids)
         self.assertEqual(session.state, ContextInvocationState.READING)
@@ -1370,8 +1375,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         self.assertEqual(session.next_action_index, 2); registry.search.assert_called_once()
 
     def test_prefixed_search_filters_before_one_capture_revalidation_pair(self) -> None:
-        scoped_body = "needle" + "x" * 979 + "\n"
-        self.assertEqual(len(scoped_body.encode("utf-8")), 986)
+        scoped_body = "needle" + "x" * 979 + "\n"; self.assertEqual(len(scoped_body.encode("utf-8")), 986)
         snapshots_tuple = (_snapshot(
                 _SCOPE, "manuscript/part_01/chapter.md",
                 scoped_body,),
@@ -1637,8 +1641,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 with self.assertRaises(ContextActionError) as caught:
                     session.search(ContextSearchAction(correlation, (query,)))
                 self.assertEqual( caught.exception.code, ContextActionErrorCode.CORRELATION_MISMATCH, )
-                self.assertEqual(session.next_action_index, 1)
-                registry.search.assert_not_called()
+                self.assertEqual(session.next_action_index, 1); registry.search.assert_not_called()
 
     def test_nonterminal_and_provider_call_caps_leave_the_terminal_slot_exact(self,
     ) -> None:
@@ -1679,8 +1682,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 _correlation(self.binding, 1),
                 (ContextSearchQuery("needle", (ContextSourceKind.WRITING_ARTIFACT,)),),
             ) )
-        self.assertTrue(observation.truncated)
-        self.assertLess(len(observation.hits), len(matches))
+        self.assertTrue(observation.truncated); self.assertLess(len(observation.hits), len(matches))
         tiny = replace(CONTEXT_ACTION_POLICY,
             max_snippet_characters=1, max_snippet_utf8_bytes=1,
             max_excerpt_utf8_bytes=1, max_source_read_utf8_bytes=1,
@@ -1709,12 +1711,10 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         self.assertEqual(authorization.answer_digest, _digest(_PRIVATE_ANSWER.encode('utf-8')))
         self.assertRegex(authorization.manifest_digest, r"\Asha256:[0-9a-f]{64}\Z")
         self.assertRegex(authorization.completed_read_digest, '\\Asha256:[0-9a-f]{64}\\Z')
-        self.assertEqual(authorization.completed_evidence, ())
-        self.assertEqual(authorization.used_evidence, ())
+        self.assertEqual(authorization.completed_evidence, ()); self.assertEqual(authorization.used_evidence, ())
         self.assertIs(authorization.mandatory_references, references)
         self.assertEqual( tuple(item.ordinal for item in authorization.mandatory_references), (1, 2, 3), )
-        self.assertEqual(session.state, ContextInvocationState.ANSWER_AUTHORIZED)
-        registry.capture.assert_not_called()
+        self.assertEqual(session.state, ContextInvocationState.ANSWER_AUTHORIZED); registry.capture.assert_not_called()
         rendered = repr(authorization)
         for canary in (_PRIVATE_ANSWER, _PRIVATE_BODY_A, "ctxh_v1_"):
             self.assertNotIn(canary, rendered)
