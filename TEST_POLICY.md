@@ -99,6 +99,15 @@ a one-minute step timeout. Control metadata distinguishes the 60-second cleanup
 allowance from the 360-second cancellation reserve. These allowances do not
 guarantee the duration of queued jobs or checkout and other post-actions.
 
+After diagnostic artifact upload, disk-scratch cleanup may remove only the exact
+owned temporary directory recorded at creation. It validates the path and directory
+identity, rejects symlink roots and mounted scratch trees, and uses symlink-resistant
+standard-library deletion. Its small execution cap includes termination grace and
+is clamped to the existing shared deadline minus the 360-second cancellation
+reserve. Upload and cleanup share the existing allowance; cleanup adds no time.
+Missing identity, an exhausted budget, or failed removal stays a visible failure.
+Published evidence outside scratch is preserved. Memory-scratch handling is unchanged.
+
 An independent deadline job starts alongside classification and monitors a
 completion marker that depends on every validation job. Its normal-cancellation
 threshold is 360 seconds remaining and its force-cancellation threshold is 330

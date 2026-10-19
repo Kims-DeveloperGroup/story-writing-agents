@@ -722,9 +722,35 @@ jobs:
           MEMORY: ${{ inputs.scratch == 'memory' }}
         run: |
           scratch="$(mktemp -d "${TMPDIR:-/tmp}/story-timing.XXXXXXXX")"
-          echo "directory=$scratch" >> "$GITHUB_OUTPUT"
           if [[ "$MEMORY" == "true" ]]; then
+            echo "directory=$scratch" >> "$GITHUB_OUTPUT"
             sudo mount -t tmpfs -o "size=2G,mode=0700,uid=$(id -u),gid=$(id -g)" tmpfs "$scratch"
+          else
+            SCRATCH="$scratch" python - <<'PY'
+          import json, os, re, stat
+          raw = os.environ["SCRATCH"]
+          parent = os.path.realpath(os.path.dirname(os.path.abspath(raw)))
+          name = os.path.basename(raw)
+          path = os.path.join(parent, name)
+          if not re.fullmatch(r"story-timing\.[A-Za-z0-9]{8}", name) or any(c in path for c in "\r\n"):
+              raise RuntimeError("Unexpected diagnostic scratch path")
+          flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+          fd = os.open(parent, flags)
+          try:
+              outer = os.fstat(fd)
+              inner = os.stat(name, dir_fd=fd, follow_symlinks=False)
+              if not stat.S_ISDIR(inner.st_mode) or inner.st_uid != os.geteuid() or inner.st_dev != outer.st_dev:
+                  raise RuntimeError("Diagnostic scratch creation identity is unsafe")
+              record = {"path": path, "parent": parent,
+                        "root": [inner.st_dev, inner.st_ino, inner.st_uid],
+                        "parent_identity": [outer.st_dev, outer.st_ino, outer.st_uid]}
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                  output.write("directory=" + path + "\n")
+                  output.write("identity=" + json.dumps(record, separators=(",", ":")) + "\n")
+              print(json.dumps({"diagnostic_scratch_created": record}, sort_keys=True))
+          finally:
+              os.close(fd)
+          PY
           fi
       - name: Run one existing canonical scenario with optional profiling
         if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
@@ -885,9 +911,69 @@ jobs:
         if: always() && steps.scratch.outputs.directory != ''
         env:
           SCRATCH: ${{ steps.scratch.outputs.directory }}
+          SCRATCH_IDENTITY: ${{ steps.scratch.outputs.identity }}
           MEMORY: ${{ inputs.scratch == 'memory' }}
         run: |
-          if [[ "$MEMORY" == "true" ]] && mountpoint -q "$SCRATCH"; then
-            sudo umount "$SCRATCH"
+          if [[ "$MEMORY" == "true" ]]; then
+            if mountpoint -q "$SCRATCH"; then
+              sudo umount "$SCRATCH"
+            fi
+            rmdir "$SCRATCH"
+          else
+            printf 'Diagnostic scratch cleanup path=%s identity=%s\n' "$SCRATCH" "$SCRATCH_IDENTITY"
+            cleanup_seconds="$(python - <<'PY'
+          import os, time
+          remaining = int(os.environ["TEST_JOB_DEADLINE"]) - 360 - time.time()
+          work_ms = min(28000, int((remaining - 2) * 1000))
+          if work_ms <= 0:
+              raise SystemExit("No diagnostic scratch cleanup budget remains before cancellation reserve")
+          print(f"{work_ms / 1000:.3f}")
+          PY
+            )"
+            timeout --signal=TERM --kill-after=2s "${cleanup_seconds}s" python -u - <<'PY'
+          import json, os, re, shutil, stat, time
+          record = json.loads(os.environ["SCRATCH_IDENTITY"])
+          path = os.environ["SCRATCH"]
+          parent = record["parent"]
+          name = os.path.basename(path)
+          stop = int(os.environ["TEST_JOB_DEADLINE"]) - 360
+          if time.time() >= stop - 2:
+              raise RuntimeError("Diagnostic scratch cleanup window expired")
+          if (not os.path.isabs(path) or path != record["path"]
+                  or os.path.dirname(path) != parent or os.path.realpath(parent) != parent
+                  or not re.fullmatch(r"story-timing\.[A-Za-z0-9]{8}", name)):
+              raise RuntimeError("Diagnostic scratch path identity changed")
+          if not shutil.rmtree.avoids_symlink_attacks:
+              raise RuntimeError("Symlink-resistant diagnostic cleanup is unavailable")
+          fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+          try:
+              outer = os.fstat(fd)
+              if [outer.st_dev, outer.st_ino, outer.st_uid] != record["parent_identity"]:
+                  raise RuntimeError("Diagnostic scratch parent identity changed")
+              inner = os.stat(name, dir_fd=fd, follow_symlinks=False)
+              if (not stat.S_ISDIR(inner.st_mode) or inner.st_uid != os.geteuid()
+                      or inner.st_dev != outer.st_dev
+                      or [inner.st_dev, inner.st_ino, inner.st_uid] != record["root"]):
+                  raise RuntimeError("Diagnostic scratch directory identity changed")
+              with open("/proc/self/mountinfo", encoding="utf-8") as mounts:
+                  for line in mounts:
+                      mount = line.split()[4]
+                      for escaped, decoded in ((r"\040", " "), (r"\011", "\t"), (r"\012", "\n"), (r"\134", chr(92))):
+                          mount = mount.replace(escaped, decoded)
+                      if mount == path or mount.startswith(path + os.sep):
+                          raise RuntimeError("Mounted diagnostic scratch storage cannot be recursively removed")
+              current = os.stat(name, dir_fd=fd, follow_symlinks=False)
+              if ([current.st_dev, current.st_ino, current.st_uid] != record["root"]
+                      or not stat.S_ISDIR(current.st_mode) or time.time() >= stop - 2):
+                  raise RuntimeError("Diagnostic scratch identity or cleanup window changed")
+              shutil.rmtree(name, dir_fd=fd)
+              try:
+                  os.stat(name, dir_fd=fd, follow_symlinks=False)
+              except FileNotFoundError:
+                  print(json.dumps({"diagnostic_scratch_removed": record}, sort_keys=True), flush=True)
+              else:
+                  raise RuntimeError("Diagnostic scratch path remains after cleanup")
+          finally:
+              os.close(fd)
+          PY
           fi
-          rmdir "$SCRATCH"
