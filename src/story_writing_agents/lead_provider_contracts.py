@@ -1072,6 +1072,23 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
             result["items"] = render(result["items"])
         return result
 
+    def symbol_aliases(reference_counts: Mapping[str, int]) -> dict[str, str]:
+        alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+        def short_name(number: int) -> str:
+            name = ""
+            while True:
+                number, digit = divmod(number, len(alphabet))
+                name = alphabet[digit] + name
+                if not number:
+                    return name
+                number -= 1
+
+        return {
+            name: short_name(number)
+            for number, name in enumerate(sorted(reference_counts, key=lambda name: (-reference_counts[name], name)))
+        }
+
     def compact_symbols(graph: dict[str, object]) -> tuple[dict[str, object], dict[str, str]]:
         """Use the same local-symbol layout for every cost trial and final graph."""
         if not graph.get("$defs"):
@@ -1090,21 +1107,7 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
         count_references(graph)
         for node in graph["$defs"].values():
             count_references(node)
-        alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-
-        def short_name(number: int) -> str:
-            name = ""
-            while True:
-                number, digit = divmod(number, len(alphabet))
-                name = alphabet[digit] + name
-                if not number:
-                    return name
-                number -= 1
-
-        aliases = {
-            name: short_name(number)
-            for number, name in enumerate(sorted(reference_counts, key=lambda name: (-reference_counts[name], name)))
-        }
+        aliases = symbol_aliases(reference_counts)
         compact = rename(graph, aliases)
         compact["$defs"] = {aliases[name]: rename(node, aliases) for name, node in graph["$defs"].items()}
         return compact, aliases
@@ -1119,6 +1122,70 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
         if declarations:
             result["$defs"] = declarations
         return compact_symbols(result)
+
+    quoted_sizes: dict[str, int] = {}
+    fixed_sizes: dict[int, int] = {}
+
+    def quoted_size(value: str) -> int:
+        if value not in quoted_sizes:
+            quoted_sizes[value] = len(key(value).encode("utf-8"))
+        return quoted_sizes[value]
+
+    def fixed_size(node: dict[str, object]) -> int:
+        """Count unchanged bytes; the detached source keeps every node alive."""
+        identity = id(node)
+        if identity not in fixed_sizes:
+            size = 2 + max(0, len(node) - 1)
+            for name, value in node.items():
+                size += quoted_size(name) + 1
+                if name == "properties" and type(value) is dict:
+                    size += 2 + max(0, len(value) - 1)
+                    size += sum(quoted_size(field) + 1 for field in value)
+                elif name == "anyOf" and type(value) is list:
+                    size += 2 + max(0, len(value) - 1)
+                elif name != "items":
+                    size += len(key(value).encode("utf-8"))
+            fixed_sizes[identity] = size
+        return fixed_sizes[identity]
+
+    def measure(node: object, reference_counts: dict[str, int], *,
+                own: str | None = None, count_refs: bool = True) -> int:
+        if type(node) is not dict:
+            return len(key(node).encode("utf-8"))
+        identity = source_key(node)
+        if identity in shared and identity != own:
+            name = shared[identity]
+            if count_refs:
+                reference_counts[name] += 1
+            return 2 + quoted_size("$ref") + 1 + quoted_size("#/$defs/" + name)
+        size = fixed_size(node)
+        if "$ref" in node:
+            if count_refs:
+                reference_counts[node["$ref"][len("#/$defs/"):]] += 1
+            count_refs = False
+        for child in children(node):
+            size += measure(child, reference_counts, count_refs=count_refs)
+        return size
+
+    def trial_size() -> tuple[int, dict[str, str]]:
+        """Measure the exact rendered/renamed trial without materializing it."""
+        declarations = {name: (node, source_key(node)) for name, node in definitions.items()}
+        for identity, name in shared.items():
+            if name not in declarations:
+                declarations[name] = (nodes[identity], identity)
+        reference_counts = dict.fromkeys(declarations, 0)
+        size = measure(root, reference_counts, own=source_key(root))
+        if declarations:
+            size += (1 if root else 0) + quoted_size("$defs") + 1
+            size += 2 + max(0, len(declarations) - 1)
+            for name, (node, own) in declarations.items():
+                size += quoted_size(name) + 1 + measure(node, reference_counts, own=own)
+        aliases = symbol_aliases(reference_counts)
+        for name, alias in aliases.items():
+            size += quoted_size(alias) - quoted_size(name)
+            size += reference_counts[name] * (
+                quoted_size("#/$defs/" + alias) - quoted_size("#/$defs/" + name))
+        return size, aliases
 
     def share_annotations(graph: dict[str, object]) -> dict[str, object]:
         literal_ids: dict[tuple[object, ...], int] = {}
@@ -1221,24 +1288,24 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
     shared.clear()
     baseline, baseline_aliases = assemble()
     baseline_bytes = len(key(baseline).encode("utf-8"))
-    shared.update(seeded)
-    result, final_aliases = assemble()
-    current_bytes = len(key(result).encode("utf-8"))
-    if current_bytes >= baseline_bytes:
-        shared.clear()
-        result, final_aliases = baseline, baseline_aliases
-        current_bytes = baseline_bytes
+    current_bytes, expected_aliases = baseline_bytes, baseline_aliases
+    if seeded:
+        shared.update(seeded)
+        current_bytes, expected_aliases = trial_size()
+        if current_bytes >= baseline_bytes:
+            shared.clear()
+            current_bytes, expected_aliases = baseline_bytes, baseline_aliases
     for identity, times in sorted(counts.items(), key=lambda item: source_order[item[0]]):
         if identity in shared or (times <= 1 and identity not in existing):
             continue
         shared[identity] = existing.get(identity, f"n{len(shared)}")
-        candidate, candidate_aliases = assemble()
-        candidate_bytes = len(key(candidate).encode("utf-8"))
+        candidate_bytes, candidate_aliases = trial_size()
         if candidate_bytes < current_bytes:
-            result, current_bytes, final_aliases = candidate, candidate_bytes, candidate_aliases
+            current_bytes, expected_aliases = candidate_bytes, candidate_aliases
         else:
             del shared[identity]
-    if (len(key(result).encode("utf-8")) != current_bytes or current_bytes > baseline_bytes
+    result, final_aliases = assemble() if shared else (baseline, baseline_aliases)
+    if (final_aliases != expected_aliases or len(key(result).encode("utf-8")) != current_bytes or current_bytes > baseline_bytes
             or (shared and current_bytes >= baseline_bytes)):
         raise ValueError("schema sharing does not preserve its complete UTF-8 cost guard")
     candidate, candidate_aliases = compact_symbols(share_annotations(result))
