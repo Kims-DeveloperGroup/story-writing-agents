@@ -289,7 +289,12 @@ jobs:
     needs: classify
     if: needs.classify.outputs.runtime == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      TEST_JOB_MINUTES: '40'
     steps:
+      - name: Record test job deadline before setup
+        run: echo "TEST_JOB_DEADLINE=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -307,12 +312,27 @@ jobs:
           git config --global user.name "Story Tests"
           git config --global user.email "story-tests@example.invalid"
       - name: Run fast runtime tests
-        run: PYTHONPATH=src .venv/bin/python -m tests.runner run --tier fast --json "$RUNNER_TEMP/fast.json"
+        run: |
+          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 330 ))
+          if (( test_seconds > 2040 )); then test_seconds=2040; fi
+          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":300}\n' "$test_seconds" > "$RUNNER_TEMP/fast-control.json"
+          if (( test_seconds <= 0 )); then exit 124; fi
+          set +e
+          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --tier fast --json "$RUNNER_TEMP/fast.json" 2>&1 | tee "$RUNNER_TEMP/fast.log"
+          test_statuses=("${PIPESTATUS[@]}")
+          test_status=${test_statuses[0]}
+          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
+          printf '%s\n' "$test_status" > "$RUNNER_TEMP/fast-exit-code.txt"
+          exit "$test_status"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: runtime-fast
-          path: ${{ runner.temp }}/fast.json
+          path: |
+            ${{ runner.temp }}/fast.json
+            ${{ runner.temp }}/fast.log
+            ${{ runner.temp }}/fast-control.json
+            ${{ runner.temp }}/fast-exit-code.txt
           if-no-files-found: warn
 
   full:
@@ -326,8 +346,11 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       PYTHONDONTWRITEBYTECODE: '1'
-    timeout-minutes: ${{ needs.classify.outputs.wall_time_exception == 'true' && 360 || 15 }}
+      TEST_JOB_MINUTES: ${{ needs.classify.outputs.wall_time_exception == 'true' && '40' || '15' }}
+    timeout-minutes: ${{ needs.classify.outputs.wall_time_exception == 'true' && 40 || 15 }}
     steps:
+      - name: Record test job deadline before setup
+        run: echo "TEST_JOB_DEADLINE=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -345,12 +368,27 @@ jobs:
           git config --global user.name "Story Tests"
           git config --global user.email "story-tests@example.invalid"
       - name: Run full runtime shard
-        run: PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "${{ matrix.shard }}/4" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json"
+        run: |
+          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 330 ))
+          if (( test_seconds > 2040 )); then test_seconds=2040; fi
+          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":300}\n' "$test_seconds" > "$RUNNER_TEMP/full-${{ matrix.shard }}-control.json"
+          if (( test_seconds <= 0 )); then exit 124; fi
+          set +e
+          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "${{ matrix.shard }}/4" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json" 2>&1 | tee "$RUNNER_TEMP/full-${{ matrix.shard }}.log"
+          test_statuses=("${PIPESTATUS[@]}")
+          test_status=${test_statuses[0]}
+          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
+          printf '%s\n' "$test_status" > "$RUNNER_TEMP/full-${{ matrix.shard }}-exit-code.txt"
+          exit "$test_status"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: full-${{ matrix.shard }}
-          path: ${{ runner.temp }}/full-${{ matrix.shard }}.json
+          path: |
+            ${{ runner.temp }}/full-${{ matrix.shard }}.json
+            ${{ runner.temp }}/full-${{ matrix.shard }}.log
+            ${{ runner.temp }}/full-${{ matrix.shard }}-control.json
+            ${{ runner.temp }}/full-${{ matrix.shard }}-exit-code.txt
           if-no-files-found: error
 
   reconcile-full:
@@ -404,11 +442,15 @@ jobs:
     name: ${{ github.event_name == 'workflow_dispatch' && format('Diagnostic only ({0}, {1})', inputs.arch, inputs.scratch) || 'Diagnose full-suite timing failure' }}
     needs: [classify, full, reconcile-full]
     if: >-
-      always() && (github.event_name == 'workflow_dispatch' ||
+      !cancelled() && (github.event_name == 'workflow_dispatch' ||
       (needs.full.result == 'success' && needs.reconcile-full.result == 'failure'))
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 360 || 10 }}
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 40 || 10 }}
+    env:
+      TEST_JOB_MINUTES: ${{ github.event_name == 'workflow_dispatch' && '40' || '10' }}
     steps:
+      - name: Record test job deadline before setup
+        run: echo "TEST_JOB_DEADLINE=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -473,17 +515,35 @@ jobs:
           DIAGNOSTIC_PROFILE_MODE: ${{ inputs.profile_mode || 'cprofile' }}
           TMPDIR: ${{ steps.scratch.outputs.directory || '/tmp' }}
         run: |
-          .venv/bin/python - <<'PY'
-          import collections, cProfile, functools, hashlib, json, os, platform, pstats, re, subprocess, sysconfig, tempfile, time
+          install -d -m 700 "$RUNNER_TEMP/timing-diagnostic"
+          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 330 ))
+          if (( test_seconds > 2040 )); then test_seconds=2040; fi
+          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":300}\n' "$test_seconds" > "$RUNNER_TEMP/timing-diagnostic/control.json"
+          if (( test_seconds <= 0 )); then exit 124; fi
+          set +e
+          timeout --signal=INT --kill-after=30s "${test_seconds}s" .venv/bin/python - <<'PY' 2>&1 | tee "$RUNNER_TEMP/timing-diagnostic/worker.log"
+          import collections, cProfile, functools, hashlib, json, os, platform, pstats, re, resource, subprocess, sys, sysconfig, tempfile, threading, time
           from pathlib import Path
-          from story_writing_agents.git import process, session_resources
-          from tests import runner
           output = Path(os.environ["RUNNER_TEMP"]) / "timing-diagnostic"
-          output.mkdir(mode=0o700)
+          output.mkdir(mode=0o700, exist_ok=True)
           paths = subprocess.check_output(["git", "ls-files", "-z", "src", "tests", "config", "pyproject.toml", "uv.lock"]).decode().split("\0")
           def hashes():
               return {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in paths if path}
           before = hashes()
+          environment = {"platform": platform.platform(), "python": platform.python_version(),
+                         "cpu_count": os.cpu_count(), "python_compiler": platform.python_compiler(),
+                         "python_enable_optimizations_flag": "--enable-optimizations" in (sysconfig.get_config_var("CONFIG_ARGS") or ""),
+                         "git": subprocess.check_output(["git", "--version"], text=True, timeout=10).strip(),
+                         "temporary_filesystem": subprocess.check_output(["stat", "-f", "-c", "%T", tempfile.gettempdir()], text=True, timeout=10).strip()}
+          prepared = {"diagnostic_only": True, "acceptance_credit": False, "phase": "prepared",
+                      "selection": {"requested_canonical_id": os.environ["DIAGNOSTIC_TEST_ID"], "validated_by_runner": False},
+                      "profile_mode": os.environ["DIAGNOSTIC_PROFILE_MODE"], "source_before": before,
+                      "checkout_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, timeout=10).strip(),
+                      "checkout_tree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True, timeout=10).strip(),
+                      "environment": environment, "observer_thread": True}
+          (output / "prepared.json").write_text(json.dumps(prepared, indent=2))
+          from story_writing_agents.git import process, session_resources
+          from tests import runner
           counts = collections.defaultdict(lambda: {"calls": 0, "seconds": 0.0})
           def record(key, elapsed):
               counts[key]["calls"] += 1
@@ -511,26 +571,85 @@ jobs:
                   samples.append({"fallback": value is None, "config_sha256": hashlib.sha256(config).hexdigest(), "format_lines": [line.decode("ascii").strip() for line in safe], "packed_refs": (self.common_git / "packed-refs").exists(), "reftable": (self.common_git / "reftable").exists()})
               return value
           session_resources._Repository._loose_ref_output = refs
+          observer_stop = threading.Event()
+          observer_errors = []
+          main_thread = threading.main_thread().ident
+          def observe():
+              try:
+                  with (output / "progress.jsonl").open("a", buffering=1) as stream:
+                      while not observer_stop.is_set():
+                          frame = sys._current_frames().get(main_thread)
+                          frames, test_frame, depth = [], None, 0
+                          while frame is not None and depth < 64:
+                              code = frame.f_code
+                              location = {"file": code.co_filename, "function": code.co_name, "line": frame.f_lineno}
+                              if depth < 12:
+                                  frames.append(location)
+                              if code.co_name.startswith("test_"):
+                                  test_frame = location
+                              frame = frame.f_back
+                              depth += 1
+                          truncated = frame is not None
+                          frame = None
+                          row = {"diagnostic_only": True, "wall_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                 "elapsed_seconds": time.perf_counter() - started, "process_cpu_seconds": time.process_time(),
+                                 "max_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+                                 "main_thread_stack": frames, "test_frame": test_frame, "walk_truncated": truncated}
+                          stream.write(json.dumps(row, separators=(",", ":")) + "\n")
+                          if observer_stop.wait(60):
+                              break
+              except Exception as error:
+                  observer_errors.append(type(error).__name__)
           profile = cProfile.Profile() if os.environ["DIAGNOSTIC_PROFILE_MODE"] == "cprofile" else None
           started = time.perf_counter()
-          if profile is not None:
-              profile.enable()
+          observer = threading.Thread(target=observe, name="diagnostic-progress", daemon=True)
+          observer_started = False
+          code, interrupted, finalization_errors = None, None, []
           try:
+              try:
+                  observer.start()
+                  observer_started = True
+              except Exception as error:
+                  observer_errors.append(type(error).__name__)
+              if profile is not None:
+                  profile.enable()
               code = runner.main(["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")])
+          except BaseException as error:
+              interrupted = type(error).__name__
+              raise
           finally:
               if profile is not None:
                   profile.disable()
-                  profile.dump_stats(str(output / "profile.pstats"))
-                  with (output / "profile.txt").open("w") as stream:
-                      pstats.Stats(profile, stream=stream).strip_dirs().sort_stats("cumulative").print_stats(100)
-              else:
-                  (output / "profile.txt").write_text("cProfile disabled by diagnostic input profile_mode=none.\n")
-              after = hashes()
-              evidence = {"diagnostic_only": True, "source_valid": before == after, "source_before": before, "source_after": after, "instrumented_seconds": time.perf_counter() - started, "counts": dict(counts), "fixture_samples": samples, "platform": platform.platform(), "python": platform.python_version(), "cpu_count": os.cpu_count(), "git": subprocess.check_output(["git", "--version"], text=True).strip()}
-              evidence.update(python_compiler=platform.python_compiler(), python_enable_optimizations_flag="--enable-optimizations" in (sysconfig.get_config_var("CONFIG_ARGS") or ""), temporary_filesystem=subprocess.check_output(["stat", "-f", "-c", "%T", tempfile.gettempdir()], text=True).strip())
+              observer_stop.set()
+              if observer_started:
+                  observer.join(timeout=2)
+              try:
+                  if profile is not None:
+                      profile.dump_stats(str(output / "profile.pstats"))
+                      with (output / "profile.txt").open("w") as stream:
+                          pstats.Stats(profile, stream=stream).strip_dirs().sort_stats("cumulative").print_stats(100)
+                  else:
+                      (output / "profile.txt").write_text("cProfile disabled by diagnostic input profile_mode=none.\n")
+              except Exception as error:
+                  finalization_errors.append({"stage": "profile", "error_type": type(error).__name__})
+              after = None
+              try:
+                  after = hashes()
+              except Exception as error:
+                  finalization_errors.append({"stage": "source", "error_type": type(error).__name__})
+              evidence = {"diagnostic_only": True, "acceptance_credit": False,
+                          "partial": code not in (0, 1), "runner_exit_code": code, "interruption": interrupted,
+                          "source_valid": after is not None and before == after, "source_before": before, "source_after": after,
+                          "instrumented_seconds": time.perf_counter() - started, "counts": dict(counts), "fixture_samples": samples,
+                          "observer_thread": observer_started, "observer_errors": observer_errors, "finalization_errors": finalization_errors, **environment}
               (output / "counters.json").write_text(json.dumps(evidence, indent=2))
-          raise SystemExit(code if before == after else 2)
+          raise SystemExit(code if before == after and not finalization_errors else 2)
           PY
+          test_statuses=("${PIPESTATUS[@]}")
+          test_status=${test_statuses[0]}
+          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
+          printf '%s\n' "$test_status" > "$RUNNER_TEMP/timing-diagnostic/exit-code.txt"
+          exit "$test_status"
       - uses: actions/upload-artifact@v4
         if: always() && (github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true')
         with:

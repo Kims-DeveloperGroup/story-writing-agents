@@ -68,7 +68,7 @@ the existing 1,080/540-second ceilings; aim for 900/450 seconds to leave margin.
 
 A maintainer may authorize extra validation time for a specific PR and record the
 reason and authorization in its owning Issue and PR. The root then applies
-`test:wall-time-exception`. On that PR, CI allows each full shard up to 360 minutes
+`test:wall-time-exception`. On that PR, CI allows each full shard up to 40 minutes
 including setup, and passes `--allow-wall-time-overage` to the budget checker.
 The checker still reports actual durations; only the measured sequential and
 per-shard time comparisons are waived. Local validation may use the same option
@@ -80,7 +80,10 @@ This exception never permits failed or incomplete reports, inventory expansion,
 increased subtest counts or test source, budget-file increases, skipped required
 checks, or bypassed approvals or branch protection.
 
-Explicitly dispatched diagnostic jobs also allow up to 360 minutes. Their reports
+Explicitly dispatched diagnostic jobs also allow up to 40 minutes. Test execution
+has a separate earlier deadline to leave time for termination and evidence upload.
+Diagnostics preserve progress and available partial evidence on interruption;
+partial or timed-out execution never counts as a passing test. Their reports
 remain diagnostic evidence and never replace the required complete full-suite gate.
 
 ## Initial calibration

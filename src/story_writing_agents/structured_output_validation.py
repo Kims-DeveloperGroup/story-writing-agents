@@ -1757,14 +1757,23 @@ def _hook_guard_matches(steps: tuple, _same=_hook_is, _flatten=_hook_chain.from_
 
 
 def _compact_hook_metadata(steps: list[tuple | None]) -> tuple | None:
-    """Retain each exact metadata observation once, within this hook only."""
+    """Retain exact observations once between this hook's declaration barriers."""
     if any(step is None for step in steps):
         return None
     observed: set[tuple] = set()
     compact = []
     for step in steps:
         tag = step[0]
-        if tag == "layout":
+        if tag in {"code", "defaults", "metadata"}:
+            key = (tag, *(id(value) for value in step[1:]))
+        elif tag == "closure":
+            function, closure, edges = step[1:]
+            key = (tag, id(function), id(closure),
+                   tuple((id(cell), id(value)) for cell, value in edges))
+        elif tag == "sequence":
+            value, kind, edges = step[1:]
+            key = (tag, id(value), id(kind), tuple(id(item) for item in edges))
+        elif tag == "layout":
             kind, module, name, bases, layouts, metaclass, meta_layout, accessors = step[1:]
             key = (tag, id(kind), id(module), id(name), id(bases),
                    tuple((id(base), id(base_meta),
@@ -1773,15 +1782,16 @@ def _compact_hook_metadata(steps: list[tuple | None]) -> tuple | None:
                    id(metaclass), tuple((id(member), id(value))
                                         for member, value in meta_layout),
                    tuple(id(accessor) for accessor in accessors))
-        elif tag == "metadata_mapping":
+        elif tag in {"mapping", "metadata_mapping"}:
             value, edges = step[1:]
             key = (tag, id(value), tuple((id(member), id(item)) for member, item in edges))
-        elif tag == "metadata_slots":
+        elif tag in {"slots", "metadata_slots"}:
             value, kind, edges = step[1:]
             key = (tag, id(value), id(kind),
                    tuple((id(descriptor), id(item)) for descriptor, item in edges))
         else:
             compact.append(step)
+            observed.clear()
             continue
         # The retained record anchors every object represented by an identity.
         # A different snapshot of the same target therefore remains a check.
