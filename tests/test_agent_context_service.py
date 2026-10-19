@@ -85,8 +85,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
             '$.right: expected one of ["changed"] (string), got string'))
         text_rule["enum"] = ["ok"]; self.assertEqual(diagnose_value(supplied, references), ())
         alternatives = {"anyOf": [{"type": "integer"}, {"type": "string", "minLength": 2}]}
-        for value in (3, "ok"):
-            self.assertEqual(diagnose_value(value, alternatives), ())
+        for value in (3, "ok"): self.assertEqual(diagnose_value(value, alternatives), ())
         self.assertEqual(diagnose_value("q", alternatives), ("$: expected at least 2 characters, got 1",))
         self.assertEqual(diagnose_value([], alternatives), (
             "$: allowed alternative 1 requires expected integer, got array",
@@ -107,24 +106,20 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertEqual(diagnose_value("wrong", repeated_rule), ("$: expected integer, got string",))
         from story_writing_agents import structured_output_validation as diagnostics
         original_match, matched = diagnostics._matches_type, []
-        def observed_match(value, expected):
-            matched.append((value, expected)); return original_match(value, expected)
+        def observed_match(value, expected): matched.append((value, expected)); return original_match(value, expected)
         try:
             diagnostics._matches_type = observed_match
             self.assertEqual(diagnose_value(1, repeated_rule), ("$: expected one unambiguous schema alternative",))
-        finally:
-            diagnostics._matches_type = original_match
+        finally: diagnostics._matches_type = original_match
         self.assertEqual(diagnose_value(1, repeated_rule), ("$: expected one unambiguous schema alternative",))
         self.assertEqual(matched, [(1, "integer"), (1, "integer")])
         repeated_rule["anyOf"] = [object_alternative("shared", name) for name in ("left", "right")]
-        for alternative in repeated_rule["anyOf"]:
-            alternative["properties"]["shared"] = repeated_ref
+        for alternative in repeated_rule["anyOf"]: alternative["properties"]["shared"] = repeated_ref
         self.assertEqual(diagnose_value({"shared": 1}, repeated_rule), (
             "$.left: allowed alternative 1 requires required property is missing",
             "$.right: allowed alternative 2 requires required property is missing"))
         nullable = {"type": ["integer", "null"], "enum": [1, None]}
-        for value in (1, Decimal("1"), None):
-            self.assertEqual(diagnose_value(value, nullable), ())
+        for value in (1, Decimal("1"), None): self.assertEqual(diagnose_value(value, nullable), ())
         class IntegerSubclass(int): pass
         for value, finding in ((True, "$: expected integer or null, got boolean"),
                 (IntegerSubclass(1), "$: expected integer or null, got non-JSON value"),
@@ -149,8 +144,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertEqual(events, accesses * 2)
         text_rule["enum"] = ["ok"]; trace_options["error"] = RuntimeError("fixture mapping interruption")
         events.clear()
-        with self.assertRaises(RuntimeError) as interrupted:
-            diagnose_value(supplied, references)
+        with self.assertRaises(RuntimeError) as interrupted: diagnose_value(supplied, references)
         self.assertIs(interrupted.exception, trace_options["error"])
         self.assertEqual(events, accesses[:4]); trace_options["error"] = None; events.clear()
         self.assertEqual(diagnose_value(supplied, references), ()); self.assertEqual(events, accesses * 2)
@@ -174,8 +168,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
         graph["$defs"]["unused"] = {"$ref": "#/$defs/missing"}
         self.assertEqual(single(graph, selected=leaf), draft_id)
         for operation in (plural, SchemaRules.declare, _compile_closed_choices):
-            with self.assertRaisesRegex(ValueError, "^schema rejected$") as rejected:
-                operation(graph)
+            with self.assertRaisesRegex(ValueError, "^schema rejected$") as rejected: operation(graph)
             self.assertEqual(failure_issues(rejected.exception), ("$: local definition missing",))
         events = []
         class Observed(dict):
@@ -276,8 +269,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "^frozen schema node fingerprint proof changed$"):
                     bound_fingerprint(query_graph, ("kind",), proof=proof)
                 self.assertEqual(query_calls, [])
-            finally:
-                object.__setattr__(proof, "_record", original_record)
+            finally: object.__setattr__(proof, "_record", original_record)
             query_calls.clear(); value, reused = bound_fingerprint(query_graph, ("kind",), proof=proof)
             self.assertEqual(value, draft_id); self.assertIs(reused, proof); self.assertEqual(query_calls, [])
         finally:
@@ -299,16 +291,13 @@ class StructuredOutputValidationTests(unittest.TestCase):
                               before == tuple(source['shared'].items())))
         def factored(value):
             first_cost = len(costs); previous = sys.getprofile(); sys.setprofile(observe_cost)
-            try:
-                result = factor_rule_schema(value)
-            finally:
-                sys.setprofile(previous)
+            try: result = factor_rule_schema(value)
+            finally: sys.setprofile(previous)
             for actual, aliases, original, original_aliases, untouched in costs[first_cost:]:
                 self.assertEqual(actual, original); self.assertEqual(aliases, original_aliases)
                 self.assertTrue(untouched)
             return result
-        def pair(leaf):
-            return {'type': 'object', 'properties': {'left': leaf, 'right': leaf},
+        def pair(leaf): return {'type': 'object', 'properties': {'left': leaf, 'right': leaf},
                     'required': ['left', 'right'], 'additionalProperties': False}
         def shared_pair(leaf): return {**pair({'$ref': '#/$defs/a'}), '$defs': {'a': leaf}}
         for width, inline_size, shared_size, wins in ((25, 214, 215, False), (26, 216, 216, False),
@@ -318,8 +307,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
             first_cost = len(costs); self.assertEqual(factored(original), shared if wins else original)
             self.assertEqual(len(costs) - first_cost, 1); self.assertEqual(costs[-1][0], shared_size)
         leaf = {'type': 'string', 'enum': ['x' * 51]}; nested = leaf; supplied = 'x' * 51
-        for _ in range(64):
-            nested = {'type': 'array', 'items': nested}; supplied = [supplied]
+        for _ in range(64): nested = {'type': 'array', 'items': nested}; supplied = [supplied]
         original = pair(nested); first_cost = len(costs); actual = factored(original)
         self.assertEqual(len(encode(original)), 3466); self.assertEqual(costs[first_cost][0], 3467)
         self.assertLess(len(encode(actual)), len(encode(original)))
@@ -362,11 +350,9 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertEqual(actual['$defs']['a'], definitions[names[0]])
         self.assertEqual(actual['$defs']['aa'], definitions[names[52]]); from collections.abc import Mapping
         class Source(Mapping):
-            def __iter__(self):
-                events.append('iterate'); return iter(original)
+            def __iter__(self): events.append('iterate'); return iter(original)
             def __len__(self): events.append('length'); return len(original)
-            def __getitem__(self, name):
-                events.append(('read', name)); return original[name]
+            def __getitem__(self, name): events.append(('read', name)); return original[name]
         events.clear(); dict(Source()); access_order = list(events); events.clear()
         self.assertEqual(factored(Source()), actual); self.assertEqual(events, access_order)
         for invalid, issue in (({'$ref': '#/$defs/missing'}, '$: local definition missing'),
@@ -375,8 +361,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
             for operation in (SchemaRules.declare, factored):
                 cycle = operation is factored and invalid['$ref'] == '#/$defs/unused'
                 message = 'cyclic schema rule graph' if cycle else 'schema rejected'
-                with self.assertRaisesRegex(ValueError, f'^{message}$') as caught:
-                    operation(malformed)
+                with self.assertRaisesRegex(ValueError, f'^{message}$') as caught: operation(malformed)
                 self.assertEqual(failure_issues(caught.exception), () if cycle else (issue,))
 
         # Admission is separate from validation; zero remaining work is permitted.
@@ -393,11 +378,9 @@ class StructuredOutputValidationTests(unittest.TestCase):
         key_events = []
         class ForeignKey(str):
             __hash__ = str.__hash__
-            def __eq__(self, other):
-                key_events.append(other); raise RuntimeError("fixture admission key lookup")
+            def __eq__(self, other): key_events.append(other); raise RuntimeError("fixture admission key lookup")
         for root in ({ForeignKey("$defs"): {}}, {"metadata": {ForeignKey("$ref"): "x"}},
-                     {"$defs": {ForeignKey("name"): {}}}):
-            self.assertFalse(plain(None, root))
+                     {"$defs": {ForeignKey("name"): {}}}): self.assertFalse(plain(None, root))
         self.assertEqual(key_events, [])
         literal = {"$ref": "not-a-schema-ref"}; shared = {}
         self.assertTrue(plain(literal, {})); self.assertFalse(plain(None, literal))
@@ -438,10 +421,8 @@ class StructuredOutputValidationTests(unittest.TestCase):
                     if raise_equality: raise equality_failure
                     return True
             foreign = ForeignMeta("Foreign", (), {})()
-            try:
-                result = diagnose_value(foreign, {"type": "string"})
-            except RuntimeError as failure:
-                result = failure
+            try: result = diagnose_value(foreign, {"type": "string"})
+            except RuntimeError as failure: result = failure
             metaclass_observations.append((result, tuple(metaclass_events))); metaclass_events.clear()
         self.assertEqual(metaclass_observations, [
             (("$: expected string, got non-JSON value",), ()), (("$: expected string, got non-JSON value",), ())])
@@ -454,6 +435,71 @@ class StructuredOutputValidationTests(unittest.TestCase):
         # This direct private assertion is J/candidate-only; the H public probe excludes it.
         self.assertFalse(plain(ForeignMeta("FreshForeign", (), {})(), {}))
         self.assertEqual(metaclass_events, [])
+
+        # Public original-source oracle: unsafe numeric equality must remain a fresh boundary.
+        from collections.abc import Mapping
+        from story_writing_agents.structured_output_validation import TypedDecoder
+        hook_observations = []
+        for numeric_base in (int, float):
+            hook_flags, hook_events, hook_bodies = [False, False], [], []
+            equality_failure = RuntimeError("fixture hook default equality")
+            class NumericMeta(type):
+                def __hash__(cls): return hash(numeric_base)
+                def __eq__(cls, other):
+                    if hook_flags[0]:
+                        hook_events.append("numeric_exception"); raise equality_failure
+                    return other is numeric_base
+            class NumericValue(numeric_base, metaclass=NumericMeta): pass
+            numeric = NumericValue(7)
+            def direct(value, captured=numeric):
+                hook_bodies.append("direct"); return value
+            sealed = TypedDecoder("fixture.numeric.default", "1", direct)
+            self.assertIsNone(sealed.require_provenance()); hook_flags[0] = True; observed = None
+            try:
+                try: sealed.require_provenance()
+                except RuntimeError as error: observed = error
+            finally: hook_flags[0] = False
+            hook_observations.append((numeric_base.__name__, "direct", observed, equality_failure,
+                                      tuple(hook_events), tuple(hook_bodies)))
+            self.assertIsNone(sealed.require_provenance()); hook_events.clear()
+            shared = (numeric,); captured = (shared, shared)
+            initial = (frozenset((shared,)), captured)
+            def first(value, capture=initial):
+                hook_bodies.append("first"); return value
+            class Barrier(Mapping):
+                def __iter__(self): return iter(())
+                def __len__(self): return 0
+                def __getitem__(self, key): raise KeyError(key)
+                def items(self):
+                    if hook_flags[1]:
+                        hook_events.append("barrier"); hook_flags[0] = True
+                    return ()
+            def boundary(value, capture=Barrier()):
+                hook_bodies.append("boundary"); return value
+            def later(value, capture=captured):
+                hook_bodies.append("later"); return value
+            sealed = TypedDecoder("fixture.numeric.shared", "1", first, dependencies=(boundary, later))
+            self.assertIsNone(sealed.require_provenance()); original_defaults = first.__defaults__
+            fresh = (NumericValue(7),); replacement = (frozenset((fresh,)), (fresh, fresh))
+            self.assertIsNot(replacement, initial); self.assertIsNot(fresh, shared)
+            self.assertEqual(replacement, initial); first.__defaults__ = (replacement,)
+            hook_flags[1] = True; observed = None
+            try:
+                try: sealed.require_provenance()
+                except RuntimeError as error: observed = error
+            finally:
+                first.__defaults__ = original_defaults; hook_flags[:] = [False, False]
+            hook_observations.append((numeric_base.__name__, "shared", observed, equality_failure,
+                                      tuple(hook_events), tuple(hook_bodies)))
+            self.assertIsNone(sealed.require_provenance())
+        self.assertEqual([(base, kind) for base, kind, *_ in hook_observations],
+                         [("int", "direct"), ("int", "shared"), ("float", "direct"), ("float", "shared")])
+        for base, kind, observed, expected, events, bodies in hook_observations:
+            self.assertIs(observed, expected, (base, kind, hook_observations))
+            self.assertEqual(events, ("numeric_exception",) if kind == "direct" else ("barrier", "numeric_exception"))
+            self.assertEqual(bodies, ())
+        # End public original-source oracle.
+
 
     def test_malformed_and_duplicate_json_have_value_free_diagnostics(self) -> None:
         schema = {"type": "object", "properties": {}, "additionalProperties": False}
@@ -469,16 +515,14 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertEqual(failure_issues(wrapper, path="$.action"),
                          ("$.action.result.message: expected nonempty text; got string",))
         self.assertNotIn(private, repr(failure_issues(wrapper)))
-        with self.assertRaises(FrozenInstanceError):
-            failure.provider_validation_findings[0].requirement = private
+        with self.assertRaises(FrozenInstanceError): failure.provider_validation_findings[0].requirement = private
         self.assertEqual(failure_issues(ValueError(private)), ()); failure.provider_validation_findings = (private,)
         self.assertEqual(failure_issues(failure), ())
         self.assertEqual(diagnose_value(float("inf"), {"type": "number"}), ("$: expected a finite number, got number",))
         self.assertEqual(diagnose_value(True, {"type": "integer"}), ("$: expected integer, got boolean",))
 
     def test_properties_omitted_from_required_remain_optional(self) -> None:
-        schema = { "type": "object",
-            "properties": {"message": {"type": "string"},
+        schema = { "type": "object", "properties": {"message": {"type": "string"},
                 "optional_count": {"type": "integer"}, }, "required": ["message"], "additionalProperties": False, }
         self.assertEqual(diagnose_json_text('{"message":"ok"}', schema), ())
         self.assertEqual(diagnose_json_text('{"message":"ok","optional_count":"bad"}', schema),
@@ -506,20 +550,17 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertNotIn("PRIVATE", "\n".join(chunks))
 
 
-def _digest(body: bytes) -> str:
-    return f"sha256:{hashlib.sha256(body).hexdigest()}"
+def _digest(body: bytes) -> str: return f"sha256:{hashlib.sha256(body).hexdigest()}"
 
 
-def _artifact_id(path: str) -> str:
-    return "writing_artifact:sha256:" + hashlib.sha256(path.encode()).hexdigest()
+def _artifact_id(path: str) -> str: return "writing_artifact:sha256:" + hashlib.sha256(path.encode()).hexdigest()
 
 
 def _closed_result_schema(properties: dict[str, object]) -> dict[str, object]:
     return {'additionalProperties': False, 'properties': properties, 'required': list(properties), 'type': 'object'}
 
 
-def _answer_wire(correlation: str, result: object, *,
-    used_handles: tuple[str, ...] = (),) -> dict[str, object]:
+def _answer_wire(correlation: str, result: object, *, used_handles: tuple[str, ...] = (),) -> dict[str, object]:
     del correlation, used_handles
     return {'agent_action': {'action_type': 'submit_result', 'task_result': result}}
 
@@ -531,8 +572,7 @@ def _search_wire(correlation: str, queries: list[tuple[str, list[str]]], *,
             {"writing_artifact": "story_document", "conversation": "conversation_history",
              "active_debate": "current_consensus_run", "own_agent_state": "agent_work_history"}.get(kind, kind)
             for kind in kinds]} for text, kinds in queries], }
-    if path_prefix is not None:
-        action["artifact_directory_prefix"] = path_prefix
+    if path_prefix is not None: action["artifact_directory_prefix"] = path_prefix
     return {'agent_action': action}
 
 
@@ -541,16 +581,14 @@ def _read_wire(correlation: str, handles: list[object]) -> dict[str, object]:
     return {'agent_action': {'action_type': 'read_context', 'read_handles': handles}}
 
 
-def _snapshot(scope: ContextScope, path: str,
-    body: str, *,
+def _snapshot(scope: ContextScope, path: str, body: str, *,
     revision_seed: bytes | None = None,) -> ContextSourceSnapshot:
     encoded = body.encode("utf-8")
     record = ContextSourceRecord("line_1", ContextSourceBoundary.artifact_lines(1, 1), body,
         body, _digest(encoded), len(encoded), )
     descriptor = ContextSourceDescriptor(scope, _artifact_id(path), ContextSourceKind.WRITING_ARTIFACT,
         _digest(revision_seed or (path + "-revision").encode()), ContextProvenance(
-            ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY, path, ), _digest(encoded), len(encoded),
-        1, )
+            ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY, path, ), _digest(encoded), len(encoded), 1, )
     return ContextSourceSnapshot(descriptor, (record,), encoded)
 
 
@@ -599,19 +637,16 @@ def _binding(manifest: ContextManifest, *, operation_id: str = "operation",
         manifest, reference_operation_id, references, )
 
 
-def _correlation(binding: ContextInvocationBinding, index: int, **overrides: object,
-) -> ContextActionCorrelation:
+def _correlation(binding: ContextInvocationBinding, index: int, **overrides: object, ) -> ContextActionCorrelation:
     values: dict[str, object] = {"scope": binding.scope, "operation_id": binding.operation_id,
         "result_correlation_id": binding.result_correlation_id, "action_index": index, }
     values.update(overrides)
     return ContextActionCorrelation(**values)  # type: ignore[arg-type]
 
 
-def _reference( ordinal: int,
-    *, reference_id: str | None = None,
+def _reference( ordinal: int, *, reference_id: str | None = None,
     source_id: str = "same-artifact", locator: str = "core_documents/global_outline.md",
-    digest_character: str = "4",) -> MandatoryReferenceReservation:
-    return MandatoryReferenceReservation( ordinal,
+    digest_character: str = "4",) -> MandatoryReferenceReservation: return MandatoryReferenceReservation( ordinal,
         reference_id or f"range-{ordinal}", source_id,
         "revision-1", ContextProvenance(ContextAuthorityKind.REFERENCE_AUTHORIZATION, locator),
         "sha256:" + digest_character * 64, ordinal * 7, )
@@ -657,8 +692,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             "operation", selected_source_count=2, selected_source_utf8_bytes=128, omitted_searchable_source_count=1,
             omitted_searchable_source_utf8_bytes=64, mandatory_reference_count=0, mandatory_reference_utf8_bytes=0, )
         self.assertFalse(hasattr(progress, "__dict__"))
-        for private in (_PRIVATE_ANSWER, _PRIVATE_BODY_A, _PRIVATE_BODY_B):
-            self.assertNotIn(private, repr(progress))
+        for private in (_PRIVATE_ANSWER, _PRIVATE_BODY_A, _PRIVATE_BODY_B): self.assertNotIn(private, repr(progress))
         with self.assertRaises((FrozenInstanceError, TypeError)):
             progress.operation_id = "changed"  # type: ignore[misc]
         self.assertEqual(tuple(item.value for item in ContextInvocationState),
@@ -702,8 +736,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             lambda: _binding(manifest, references=references), lambda: _binding(
                 manifest, reference_operation_id="reference-operation", references=references[::-1], ), )
         for case in cases:
-            with self.assertRaises(ContextActionError):
-                case()
+            with self.assertRaises(ContextActionError): case()
 
     def test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls(self, ) -> None:
         encoded, payload = account_provider_payload({"type": "object"},
@@ -738,41 +771,32 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
                 service_module.record_context_provider_failure(failure, facts)
                 self.assertIs(service_module.context_provider_failure_facts( failure).response_rejection_code, code, )
 
-        invalid = (lambda: service_module.ContextProviderFailureFacts(
-                submitted_accountings=(submitted,),
-                response_rejection_code=(
-                    service_module.ContextProviderTerminalCode.REFERENCE_RUNTIME_FAILED ), ),
-            lambda: service_module.ContextProviderFailureFacts(
-                submitted_accountings=(submitted,),
-                response_rejection_code=(
-                    service_module.ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED ), ),
+        invalid = (lambda: service_module.ContextProviderFailureFacts( submitted_accountings=(submitted,),
+                response_rejection_code=( service_module.ContextProviderTerminalCode.REFERENCE_RUNTIME_FAILED ), ),
+            lambda: service_module.ContextProviderFailureFacts( submitted_accountings=(submitted,),
+                response_rejection_code=( service_module.ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED ), ),
             lambda: service_module.ContextProviderFailureFacts(response_rejection_code=(
                     service_module.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE ), ),
             lambda: service_module.ContextProviderFailureFacts(submitted_accountings=(prepared,),
-                response_rejection_code=(
-                    service_module.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE ), ),
-            lambda: service_module.ContextProviderFailureFacts(
-                submitted_accountings=(submitted,),
+                response_rejection_code=( service_module.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE ), ),
+            lambda: service_module.ContextProviderFailureFacts( submitted_accountings=(submitted,),
                 response_rejection_code="malformed_structured_response",  # type: ignore[arg-type]
             ), )
         for case in invalid:
             with self.subTest(case=case):
-                with self.assertRaises(service_module.ContextExecutionError) as caught:
-                    case()
+                with self.assertRaises(service_module.ContextExecutionError) as caught: case()
                 self.assertIs(caught.exception.code, service_module.ContextExecutionErrorCode.INVALID_VALUE, )
 
     def test_entropy_failure_and_registry_scope_mismatch_are_content_free(self) -> None:
         manifest, snapshots = _manifest_fixture(); binding = _binding(manifest)
         registry = _registry(_SCOPE, snapshots); registry.scope = replace(_SCOPE, session_id="other")
-        with self.assertRaises(ContextActionError):
-            _session(binding, registry)
+        with self.assertRaises(ContextActionError): _session(binding, registry)
         registry.scope = _SCOPE
         for entropy in (b"short", None):
             with self.subTest(entropy=entropy):
                 with mock.patch("story_writing_agents.agent_context.service.secrets.token_bytes",
                     return_value=entropy,):
-                    with self.assertRaises(ContextActionError) as caught:
-                        ContextInvocationSession(binding, registry)
+                    with self.assertRaises(ContextActionError) as caught: ContextInvocationSession(binding, registry)
                 self.assertNotIn("PRIVATE", repr(caught.exception))
 
 
@@ -793,27 +817,18 @@ class CompactWireDecoderTests(unittest.TestCase):
             return ContextSourceHandle(value)  # type: ignore[arg-type]
         digest = hashlib.sha256(value.encode("utf-8")).hexdigest(); return ContextSourceHandle(f"ctxh_v1_{digest}")
 
-    def decode(self,
-        action: object,
-        *,
-        allowed: tuple[str, ...] = ("search", "read", "answer"),
-        contract: ContextJsonObjectResultContract | None = None,
-        source_kinds: tuple[ContextSourceKind, ...] = (
+    def decode(self, action: object, *, allowed: tuple[str, ...] = ("search", "read", "answer"),
+        contract: ContextJsonObjectResultContract | None = None, source_kinds: tuple[ContextSourceKind, ...] = (
             service_module._SEARCH_SOURCE_KIND_ORDER ),
     ) -> ContextSearchAction | ContextReadAction | ContextAnswerAction:
         response = (action if type(action) is str else json.dumps(action, ensure_ascii=False, separators=(",", ":")) )
         assert isinstance(response, str)
-        return service_module._decode_context_action(response,
-            correlation=self.correlation, allowed_actions=allowed,
+        return service_module._decode_context_action(response, correlation=self.correlation, allowed_actions=allowed,
             result_contract=contract or self.result_contract,
             allowed_search_source_kinds=source_kinds, resolve_handle=self._resolve_handle, )
 
-    def assert_malformed(self,
-        action: object,
-        *,
-        allowed: tuple[str, ...] = ("search", "read", "answer"),
-        contract: ContextJsonObjectResultContract | None = None,
-        source_kinds: tuple[ContextSourceKind, ...] = (
+    def assert_malformed(self, action: object, *, allowed: tuple[str, ...] = ("search", "read", "answer"),
+        contract: ContextJsonObjectResultContract | None = None, source_kinds: tuple[ContextSourceKind, ...] = (
             service_module._SEARCH_SOURCE_KIND_ORDER ),) -> service_module.ContextExecutionError:
         with self.assertRaises(service_module.ContextExecutionError) as caught:
             self.decode(action, allowed=allowed, contract=contract, source_kinds=source_kinds, )
@@ -823,14 +838,12 @@ class CompactWireDecoderTests(unittest.TestCase):
     def test_schema_is_action_only_and_runtime_correlation_is_exact(self) -> None:
         limits = [4, 2, 2, 4, 8, 8, 16, 200]
         schema = service_module._context_action_schema(allowed_actions=("search", "read", "answer"),
-            result_contract=self.result_contract,
-            allowed_search_source_kinds=service_module._SEARCH_SOURCE_KIND_ORDER,
+            result_contract=self.result_contract, allowed_search_source_kinds=service_module._SEARCH_SOURCE_KIND_ORDER,
             action_limits=limits, )
         self.assertIs(schema["additionalProperties"], False); self.assertEqual(schema["required"], ["agent_action"])
         self.assertEqual(set(schema["properties"]), {"agent_action"})
         action_variants = schema["properties"]["agent_action"]["anyOf"]
-        self.assertEqual(
-            tuple(variant["properties"]["action_type"]["enum"][0] for variant in action_variants),
+        self.assertEqual( tuple(variant["properties"]["action_type"]["enum"][0] for variant in action_variants),
             ("search_context", "search_context", "read_context", "submit_result"), )
         for variant in action_variants:
             self.assertIs(variant["additionalProperties"], False)
@@ -858,23 +871,17 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assertEqual(answer["properties"]["task_result"], self.result_schema)
         self.assertEqual(set(answer["properties"]), {"action_type", "task_result"}); canonical_provider_json(schema)
         self.assertRegex(self.token, r"\A[A-Za-z0-9_-]{43}\Z")
-        variants = (replace(
-                self.correlation, scope=replace(self.correlation.scope, session_id="other"), ),
-            replace(self.correlation, operation_id="other"),
-            replace(self.correlation, result_correlation_id="other"),
+        variants = (replace( self.correlation, scope=replace(self.correlation.scope, session_id="other"), ),
+            replace(self.correlation, operation_id="other"), replace(self.correlation, result_correlation_id="other"),
             replace(self.correlation, action_index=2), )
         tokens = (self.token,) + tuple( service_module._correlation_token(value) for value in variants )
         self.assertEqual(len(set(tokens)), len(tokens))
-        self.assertIsInstance(self.decode(
-                _answer_wire(self.token,
+        self.assertIsInstance(self.decode( _answer_wire(self.token,
                     {"kind": "answer", "message": "answer", "proposal": None}, ),
                 allowed=("answer",), ), ContextAnswerAction, )
 
     def test_valid_search_read_and_natural_result_shapes_decode_exactly(self) -> None:
-        search = self.decode(_search_wire(
-                self.token, [
-                    ("Needle",
-                        ["writing_artifact",
+        search = self.decode(_search_wire( self.token, [ ("Needle", ["writing_artifact",
                             "conversation", "active_debate",
                             "own_agent_state", ], ) ], ), allowed=("search", "answer"), )
         self.assertIsInstance(search, ContextSearchAction)
@@ -937,18 +944,15 @@ class CompactWireDecoderTests(unittest.TestCase):
                 self.assertEqual(action.queries[0].source_kinds, (kind,))
 
     def test_artifact_prefix_validation_is_exact_and_one_scope_per_search(self) -> None:
-        valid = ("core_documents/",
-            "manuscript/", "manuscript/part-01/",
+        valid = ("core_documents/", "manuscript/", "manuscript/part-01/",
             "manuscript/part-01/scene.md/", "manuscript/space dir/",
-            "manuscript/.hidden%25/", "manuscript/private-\ue000/",
-            "manuscript/unassigned-\u0378/", )
+            "manuscript/.hidden%25/", "manuscript/private-\ue000/", "manuscript/unassigned-\u0378/", )
         for prefix in valid:
             with self.subTest(valid=prefix):
                 query = ContextSearchQuery("needle", (ContextSourceKind.WRITING_ARTIFACT,), prefix, )
                 self.assertEqual(query.artifact_path_prefix, prefix)
 
-        invalid = ("",
-            "/manuscript/", "manuscript",
+        invalid = ("", "/manuscript/", "manuscript",
             "manuscript\\part-01/", "manuscript//part-01/",
             "manuscript/./", "manuscript/../",
             "discussion_logs/", "core_documents/nested/",
