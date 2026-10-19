@@ -1743,15 +1743,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertEqual(set(schema['required']),
                              {'schema_id', 'response_type', 'response_text', 'response_details'})
             self.assertEqual(set(schema['properties']), set(schema['required']))
-            details = fixture_schema_node(self.backend.calls[-1].schema, schema['properties']['response_details'])
+            details = fixture_schema_node(full_schema, schema['properties']['response_details'])
             for branch in details.get('anyOf', (details,)):
-                branch = fixture_schema_node(self.backend.calls[-1].schema, branch)
+                branch = fixture_schema_node(full_schema, branch)
                 self.assertIn(scope_field, branch['required'])
-                scope_schema = fixture_schema_node(self.backend.calls[-1].schema, branch['properties'][scope_field])
+                scope_schema = fixture_schema_node(full_schema, branch['properties'][scope_field])
                 self.assertTrue(scope_schema.get('anyOf', (scope_schema,)))
                 for scope_choice in scope_schema.get('anyOf', (scope_schema,)):
                     self.assertEqual(fixture_schema_node(
-                        self.backend.calls[-1].schema, scope_choice)['type'], scope_type)
+                        full_schema, scope_choice)['type'], scope_type)
         result_index = self.backend.calls[-1].contract.semantic_index
         logical_schema = plain(result_index.schema_value()); encoded = json.dumps(logical_schema, separators=(",", ":"))
         self.assertIn("concrete deliverable and success criteria", encoded)
