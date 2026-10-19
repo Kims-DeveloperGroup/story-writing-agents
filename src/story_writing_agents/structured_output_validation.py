@@ -1389,10 +1389,20 @@ def _diagnostic_plain(value: object, root: object, _type=type, _dict=dict, _list
         return False
     active: set[tuple[int, bool]] = set()
     completed: set[tuple[int, bool]] = set()
-    pending = [(value, False, False), (root, True, False)]
+    # A cursor keeps the original child-edge snapshot without one work tuple per
+    # child. None marks a pending root/ref action; an empty child list means leave.
+    pending = [[value, False, None], [root, True, None]]
+    virtual_pending = 2
     remaining = 262_144
     while pending:
-        node, schema, leaving = pending.pop()
+        frame = pending[-1]
+        node, schema, children = frame
+        leaving = children is not None and not children
+        if children is None or leaving:
+            pending.pop()
+        else:
+            node = children.pop()
+        virtual_pending -= 1
         kind = _type(node)
         if kind is _dict or kind is _list:
             key = (_id(node), schema)
@@ -1404,26 +1414,33 @@ def _diagnostic_plain(value: object, root: object, _type=type, _dict=dict, _list
                 return False
             if key in completed:
                 continue
-            if len(node) > remaining or len(pending) + len(node) + 2 > 262_144:
+            size = len(node)
+            # Count the original logical stack, including unvisited scalars and
+            # leave events, so compact storage cannot widen the admission caps.
+            if size > remaining or virtual_pending + size + 2 > 262_144:
                 return False
             active.add(key)
-            pending.append((node, schema, True))
+            virtual_pending += 1
             if kind is _dict:
-                if any(_type(name) is not _str for name in node):
-                    return False
-                pending.extend((child, schema, False) for child in node.values())
-                if schema and "$ref" in node:
-                    reference = node["$ref"]
-                    if (_type(reference) is not _str or not reference.startswith("#/$defs/")
-                            or _type(definitions) is not _dict):
+                for name in node:
+                    if _type(name) is not _str:
                         return False
-                    name = reference[len("#/$defs/"):]
-                    if not name or "/" in name or "~" in name or _type(definitions.get(name)) is not _dict:
-                        return False
-                    pending.append((definitions[name], True, False))
+                children = _list(node.values())
             else:
-                pending.extend((child, schema, False) for child in node)
-        elif not (node is None or kind in (_str, _int, _bool)
+                children = _list(node)
+            pending.append([node, schema, children])
+            virtual_pending += size
+            if kind is _dict and schema and "$ref" in node:
+                reference = node["$ref"]
+                if (_type(reference) is not _str or not reference.startswith("#/$defs/")
+                        or _type(definitions) is not _dict):
+                    return False
+                name = reference[len("#/$defs/"):]
+                if not name or "/" in name or "~" in name or _type(definitions.get(name)) is not _dict:
+                    return False
+                pending.append([definitions[name], True, None])
+                virtual_pending += 1
+        elif not (node is None or kind is _str or kind is _int or kind is _bool
                   or kind is _float and _finite(node)):
             return False
         remaining -= 1
