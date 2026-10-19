@@ -950,6 +950,7 @@ def _compile_closed_choices(
         raise ValueError("closed-choice compiler changes an input definition")
     if final_cost(working) != size or (trace and size >= initial_size):
         raise ValueError("closed-choice compiler does not decrease complete final UTF-8 bytes")
+    del collect_original_rules, paths
     return working
 
 
@@ -1320,6 +1321,7 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
         result_definitions.get(final_aliases[aliases[name]]) != identity for name, identity in definition_fingerprints.items()
     ):
         raise ValueError("schema factoring changed the declared rule graph")
+    del rename, collect_fingerprint_nodes, count, render, measure
     return result
 
 
