@@ -20,7 +20,9 @@ import unicodedata
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import Field as _DataclassField, dataclass, field, fields, is_dataclass
 from enum import Enum, StrEnum
+from itertools import chain as _hook_chain
 from itertools import islice, combinations
+from operator import is_ as _hook_is
 from typing import Callable, Generic, NoReturn, TypeVar
 
 
@@ -1682,7 +1684,8 @@ def _capture_hook_dataclass(value: object) -> tuple | None:
             (layout[2], layout[3], declared_fields, field_names))
 
 
-def _hook_guard_matches(steps: tuple) -> bool:
+def _hook_guard_matches(steps: tuple, _same=_hook_is, _flatten=_hook_chain.from_iterable,
+                        _map=map, _all=all) -> bool:
     """Fresh ordered edge checks; a miss always returns to full derivation."""
     try:
         for step in steps:
@@ -1707,14 +1710,12 @@ def _hook_guard_matches(steps: tuple) -> bool:
             elif tag == "sequence":
                 value, kind, edges = step[1:]
                 if (type(value) is not kind or len(value) != len(edges)
-                        or any(item is not expected for item, expected in zip(value, edges))):
+                        or not _all(_map(_same, value, edges))):
                     return False
             elif tag in {"mapping", "metadata_mapping"}:
                 value, edges = step[1:]
                 if (type(value) is not dict or len(value) != len(edges)
-                        or any(key is not old_key or item is not old_item
-                               for (key, item), (old_key, old_item)
-                               in zip(value.items(), edges))):
+                        or not _all(_map(_same, _flatten(value.items()), _flatten(edges)))):
                     return False
             elif tag == "layout":
                 kind, module, name, bases, layouts, metaclass, meta_layout, accessors = step[1:]
@@ -1724,9 +1725,7 @@ def _hook_guard_matches(steps: tuple) -> bool:
                 if meta_layout:
                     current = dict_slot.__get__(metaclass, type)
                     if (len(current) != len(meta_layout)
-                            or any(key is not old_key or item is not old_item
-                                   for (key, item), (old_key, old_item)
-                                   in zip(current.items(), meta_layout))):
+                            or not _all(_map(_same, _flatten(current.items()), _flatten(meta_layout)))):
                         return False
                 if (module_slot.__get__(kind, metaclass) is not module
                         or name_slot.__get__(kind, metaclass) is not name
@@ -1737,9 +1736,7 @@ def _hook_guard_matches(steps: tuple) -> bool:
                         return False
                     current = dict_slot.__get__(base, base_meta)
                     if (len(current) != len(edges)
-                            or any(key is not old_key or item is not old_item
-                                   for (key, item), (old_key, old_item)
-                                   in zip(current.items(), edges))):
+                            or not _all(_map(_same, _flatten(current.items()), _flatten(edges)))):
                         return False
             elif tag in {"slots", "metadata_slots"}:
                 value, kind, edges = step[1:]
@@ -1810,6 +1807,7 @@ def _require_hook_guards(callbacks: tuple[Callable, ...], identities: tuple[str,
                          message: str) -> None:
     if (guards is not anchor[0] or anchor[1] is not _hook_guard_matches
             or anchor[2] is not _hook_guard_matches.__code__
+            or anchor[5] is not _hook_guard_matches.__defaults__
             or len(callbacks) != len(guards) or len(identities) != len(guards)):
         raise ValueError(message)
     digests = ({}, {}, {})
@@ -1819,10 +1817,15 @@ def _require_hook_guards(callbacks: tuple[Callable, ...], identities: tuple[str,
         receiver = callback.__self__ if inspect.ismethod(callback) else None
         if guard[2] is not _attest_captures or guard[3] != identity:
             raise ValueError(message)
-        if (function is guard[0] and receiver is guard[1]
-                and guard[4] is not None and _hook_guard_matches(guard[4])):
-            current.append(identity)
-            continue
+        if function is guard[0] and receiver is guard[1] and guard[4] is not None:
+            # An earlier fallback may have changed the matcher or its helpers.
+            matcher = anchor[1]
+            if (matcher is not _hook_guard_matches or matcher.__code__ is not anchor[2]
+                    or matcher.__defaults__ is not anchor[5]):
+                raise ValueError(message)
+            if matcher(guard[4], *anchor[5]):
+                current.append(identity)
+                continue
         current.append(_permitted_hook_identity(
             callback, _digests=digests, _attest_captures=_attest_captures,
         ))
@@ -1941,7 +1944,8 @@ def _hook_default_identity(
                 if (guards is not anchor[0] or anchor[1] is not _hook_guard_matches
                         or anchor[2] is not _hook_guard_matches.__code__
                         or anchor[3] is not _require_hook_guards
-                        or anchor[4] is not _require_hook_guards.__code__):
+                        or anchor[4] is not _require_hook_guards.__code__
+                        or anchor[5] is not _hook_guard_matches.__defaults__):
                     message = ("frozen typed decoder hook provenance changed"
                                if type(value) is TypedDecoder
                                else "frozen named owner hook provenance changed")
@@ -2154,6 +2158,7 @@ class TypedDecoder(Generic[_ContractValue]):
         object.__setattr__(self, "_hook_guard_anchor", (
             guards, _hook_guard_matches, _hook_guard_matches.__code__,
             _require_hook_guards, _require_hook_guards.__code__,
+            _hook_guard_matches.__defaults__,
         ))
         object.__setattr__(self, "binding_fingerprint", fingerprint)
 
@@ -2222,6 +2227,7 @@ class NamedHostCheck(Generic[_ContractValue]):
         object.__setattr__(self, "_hook_guard_anchor", (
             guards, _hook_guard_matches, _hook_guard_matches.__code__,
             _require_hook_guards, _require_hook_guards.__code__,
+            _hook_guard_matches.__defaults__,
         ))
         object.__setattr__(self, "binding_fingerprint", hashlib.sha256(json.dumps(identities, separators=(",", ":")).encode("utf-8")).hexdigest())
         value = strict_json_object(self.corrective_facts.decode("utf-8", "strict"))

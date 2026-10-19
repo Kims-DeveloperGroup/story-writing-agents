@@ -1203,8 +1203,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(bool(findings(changed, not association)), not association,
                                      (path, key, 'missing'))
                     if association and not projection:
-                        self.assertTrue(bound.decode_response(
-                            json.dumps(changed)).belongs_to(bound))
+                        self.assertTrue(bound.decode_response(json.dumps(changed)).belongs_to(bound))
                 changed = copy.deepcopy(packet)
                 node = changed
                 for part in path:
@@ -1223,8 +1222,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                             details_path + ('authoring_assessment', 'creative_scope')):
                         self.assertFalse(bound.rule_graph.findings(changed), path)
                         if not projection:
-                            self.assertTrue(bound.decode_response(
-                                json.dumps(changed)).belongs_to(bound))
+                            self.assertTrue(bound.decode_response(json.dumps(changed)).belongs_to(bound))
                     else:
                         self.assertTrue(findings(changed),
                                         (path, type(replacement)))
@@ -1729,8 +1727,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             front_results.append(result)
             return result
         with mock.patch.object(AgentContextService, 'invoke', retain_front_authority):
-            outcome = await self.runtime.lead_turn(
-                self.session_id, conversation_id, "Explain collaboration workflow.")
+            outcome = await self.runtime.lead_turn( self.session_id, conversation_id, "Explain collaboration workflow.")
         self.assertTrue(self.backend.calls, outcome)
         def plain(value):
             if isinstance(value, Mapping): return {key: plain(item) for key, item in value.items()}
@@ -1799,8 +1796,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 if node.get("type") == "object":
                     self.assertEqual(set(node["required"]), set(node["properties"]))
                     self.assertIs(node["additionalProperties"], False)
-                if (owner is not None and path in assignment_paths
-                        and node.get("type") == "object"):
+                if (owner is not None and path in assignment_paths and node.get("type") == "object"):
                     properties = node["properties"]
                     self.assertIn("assignment_type", properties)
                     self.assertIn("review_basis", properties)
@@ -1816,8 +1812,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     self.assertEqual(basis_rule.get("type"), basis_types[basis_mode],
                                      ("assignment_basis_type", owner, path, basis_mode))
                     if basis_mode == "review_content":
-                        self.assertEqual(set(basis_rule["properties"]),
-                                         {"candidate_input_ids", "criteria"})
+                        self.assertEqual(set(basis_rule["properties"]), {"candidate_input_ids", "criteria"})
                 if "$ref" in node:
                     ref = node["$ref"]
                     self.assertTrue(isinstance(ref, str) and ref.startswith("#/$defs/"))
@@ -1864,9 +1859,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(call.contract.semantic_index.policy.maximum_schema_bytes, 65536)
         self.assertEqual(call.contract.action_index.policy.maximum_schema_bytes, 262144)
         self.assertEqual(call.contract.rule_graph.maximum_bytes, 524288)
-        for budget_index, index_cap in (
-            (call.contract.semantic_index, 262144),
-            (call.contract.action_index, 524288)):
+        for budget_index, index_cap in ( (call.contract.semantic_index, 262144), (call.contract.action_index, 524288)):
             self.assertEqual(budget_index.policy.maximum_index_schema_bytes, index_cap)
             self.assertEqual(budget_index.rule_graph.maximum_bytes, index_cap)
             budget_index_bytes = len(json.dumps(plain(budget_index.rule_graph.schema_value()), separators=(',', ':'),
@@ -1969,25 +1962,21 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.assertNotEqual(BoundContract.bind(refreshed_owner, member.identity).schema_id, current.schema_id)
                 with self.assertRaises(ValueError):
                     current.require_owner_provenance()
-            finally:
-                changed.__defaults__, changed.__kwdefaults__ = defaults
+            finally: changed.__defaults__, changed.__kwdefaults__ = defaults
             current.require_owner_provenance()
 
         action_member = bound.action_index.select(physical['agent_action']['schema_id'])
-        self.assertEqual(
-            BoundContract.bind(action_member.owner, action_member.identity).schema_id,
+        self.assertEqual( BoundContract.bind(action_member.owner, action_member.identity).schema_id,
             action_member.schema_id)
         action_owner = action_member.owner
-        for field, replacement in (
-                ('rules', replace(action_owner.rules)),
+        for field, replacement in ( ('rules', replace(action_owner.rules)),
                 ('eligibility_offers', replace(action_owner.eligibility_offers, call_id='changed_owner_call'))):
             original = getattr(action_owner, field)
             try:
                 object.__setattr__(action_owner, field, replacement)
                 with self.assertRaisesRegex(ValueError, '^frozen context action owner declaration changed$'):
                     BoundContract.bind(action_owner, action_member.identity)
-            finally:
-                object.__setattr__(action_owner, field, original)
+            finally: object.__setattr__(action_owner, field, original)
             self.assertEqual(BoundContract.bind(action_owner, action_member.identity).schema_id, action_member.schema_id)
 
         from story_writing_agents.lead_provider_contracts import LeadContractRejection
@@ -2011,8 +2000,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     {'path': '$.agent_action', 'rule': 'STRICT_CURRENT_CONTRACT_ENVELOPE',
                      'expected': {'type': 'object'}},
                     {'path': '$.agent_action.schema_id', 'rule': 'CURRENT_OFFERED_SCHEMA_ID',
-                     'expected': {'type': 'string',
-                                  'enum': list(binding.action_index.expected_schema_ids)}}])
+                     'expected': {'type': 'string', 'enum': list(binding.action_index.expected_schema_ids)}}])
                 self.assertNotIn('paired_semantic_requirements', correction)
                 return
             self.assertEqual(dict(binding.outer_inner_schema_ids)[outer_id], inner_id)
@@ -2113,16 +2101,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertEqual(set(allocation), {'task_instructions', 'assignment_type',
                 'review_basis', 'input_anchor_id', 'optional_inputs'})
             valid_basis = {'candidate_input_ids': {'user_input': True}, 'criteria': 'Review supplied material.'}
-            self.assertEqual(allocation['review_basis'],
-                             valid_basis if mode == 'review_content' else None)
+            self.assertEqual(allocation['review_basis'], valid_basis if mode == 'review_content' else None)
             for invalid_basis in (None if mode == 'review_content' else valid_basis,
-                    {'candidate_input_ids': {'user_input': False},
-                     'criteria': 'Review supplied material.'},
+                    {'candidate_input_ids': {'user_input': False}, 'criteria': 'Review supplied material.'},
                     {'candidate_input_ids': {'user_input': True}, 'criteria': ''}):
                 bad_basis = copy.deepcopy(native)
                 bad_basis['agent_action']['task_result']['response_details'][
-                    'specialist_consultation_proposal']['assignments'][PLOT_ARCHITECT][
-                    'review_basis'] = invalid_basis
+                    'specialist_consultation_proposal']['assignments'][PLOT_ARCHITECT][ 'review_basis'] = invalid_basis
                 self.assertTrue(bound.rule_graph.findings(bad_basis))
                 with self.assertRaises(ValueError):
                     bound.decode_response(json.dumps(bad_basis))
@@ -2141,8 +2126,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         pending_modes.extend(node)
                 self.assertNotIn('review_content', available_modes)
                 self.assertIn('draft_content', available_modes)
-                self.assertEqual(dict(empty_bound.semantic_index.policy.choices)[
-                    'review_candidate_ids'], ())
+                self.assertEqual(dict(empty_bound.semantic_index.policy.choices)[ 'review_candidate_ids'], ())
             self._require_fixture_field_neighbors(bound, native)
             self._require_fixture_text_boundaries( bound, native, authorization=front_authorization)
             import sys
@@ -2152,8 +2136,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             query_hooks += [(check.check, check.phase == 'selected')
                             for entry in query_members for check in entry.host_checks]
             def hook_key(hook):
-                return (getattr(hook, '__func__', hook).__code__,
-                        id(getattr(hook, '__self__', None)))
+                return (getattr(hook, '__func__', hook).__code__, id(getattr(hook, '__self__', None)))
             hook_calls = {hook_key(hook): 0 for hook, _active in query_hooks}
             hook_expected = {key: sum(int(active) for hook, active in query_hooks
                                       if hook_key(hook) == key) for key in hook_calls}
@@ -2187,8 +2170,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         bound.decode_response(json.dumps(old_id_frame))
                 self.assertEqual(tuple(hook_calls.values()), (0,) * len(hook_calls))
                 decoded = bound.decode_response(encoded)
-            finally:
-                sys.setprofile(profile_before)
+            finally: sys.setprofile(profile_before)
             self.assertEqual(hook_calls, hook_expected)
             expected_scope = {'intent': intent, 'activity': 'draft' if activity == 'draft_writing' else 'review',
                 'target_paths': [], 'domains': ['plot_structure'], 'task': task['task_id'] + '@1',
@@ -2199,8 +2181,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     'mode': 'draft' if mode == 'draft_content' else 'review',
                     'input_ids': ['user_input']}], 'shared_premises': []}, }
             if mode == 'review_content':
-                expected['proposal']['assignments'][0]['review_basis'] = {
-                    'candidate_input_ids': ['user_input'],
+                expected['proposal']['assignments'][0]['review_basis'] = { 'candidate_input_ids': ['user_input'],
                     'criteria': 'Review supplied material.'}
             if intent == 'authoring':
                 expected['authoring_assessment'] = None
@@ -2350,15 +2331,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 setattr(type(bound), method_name, lambda *_args: None)
                 with self.assertRaises(ValueError):
                     call.schema
-            finally:
-                setattr(type(bound), method_name, method_func)
+            finally: setattr(type(bound), method_name, method_func)
             method_code = method_func.__code__
             try:
                 method_func.__code__ = (lambda *_args: None).__code__
                 with self.assertRaises(ValueError):
                     call.schema
-            finally:
-                method_func.__code__ = method_code
+            finally: method_func.__code__ = method_code
             self.assertEqual(len(self.backend.calls), calls_before)
             self.assertEqual(plain(call.schema), full_schema)
         with self.assertRaises(ValueError):
@@ -2409,8 +2388,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 current.decode_selected(current_value)
             self.assertIs(type(stale.exception), ValueError)
             self.assertEqual(str(stale.exception), "frozen typed decoder hook provenance changed")
-        finally:
-            object.__setattr__(receiver, "marker", "current")
+        finally: object.__setattr__(receiver, "marker", "current")
         self.assertTrue(current.decode_selected(current_value).belongs_to(current))
         # A bound production owner cannot replace the decoder captured by an issued contract.
         owner = replace(member.owner)
@@ -2432,8 +2410,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.assertIn("provenance", str(stale))
             else:
                 self.assertEqual(retained.value, original_value)
-        finally:
-            object.__setattr__(owner, "variant", original_variant)
+        finally: object.__setattr__(owner, "variant", original_variant)
         # Pure decoder captures are frozen, including captures reached through defaults.
         for through_default in (False, True):
             captured = {"choices": ["current"]}
@@ -2534,8 +2511,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 with self.assertRaisesRegex(ValueError, "^" + guard_message + "$") as guard_stale:
                     declaration.require_provenance()
                 self.assertIs(type(guard_stale.exception), ValueError)
-            finally:
-                object.__setattr__(declaration, "_hook_guards", original_guards)
+            finally: object.__setattr__(declaration, "_hook_guards", original_guards)
             declaration.require_provenance()
         # Nested declarations attest excluded proof metadata on both pure and mutable-state paths.
         for nested_state in ((), []):
@@ -2543,11 +2519,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 return inner.decode(value)
             nested_decoder = TypedDecoder("nested", "guard-v1", nested_decode)
             nested_decoder.require_provenance()
-            for nested_target, nested_field, nested_replacement in (
-                (stable_decoder, "_hook_guards",
+            for nested_target, nested_field, nested_replacement in ( (stable_decoder, "_hook_guards",
                  TypedDecoder("nested-foreign", "guard-v1", forbidden_hook)._hook_guards),
-                (stable_decoder, "revision", "changed-revision"),
-                (stable_decode, "__defaults__", ("changed",))):
+                (stable_decoder, "revision", "changed-revision"), (stable_decode, "__defaults__", ("changed",))):
                 nested_original = getattr(nested_target, nested_field)
                 try:
                     object.__setattr__(nested_target, nested_field, nested_replacement)
@@ -2555,8 +2529,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         nested_decoder.require_provenance()
                     self.assertIs(type(nested_error.exception), ValueError)
                     self.assertEqual(str(nested_error.exception), "frozen typed decoder hook provenance changed")
-                finally:
-                    object.__setattr__(nested_target, nested_field, nested_original)
+                finally: object.__setattr__(nested_target, nested_field, nested_original)
                 nested_decoder.require_provenance()
         # Dependency defaults are first read by guard capture, after the top-level arity check.
         from enum import Enum
@@ -2584,8 +2557,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 enum_decoder.require_provenance()
             self.assertIs(type(enum_error.exception), ValueError)
             self.assertEqual(str(enum_error.exception), "frozen typed decoder hook provenance changed")
-            TypedDecoder("restored-enum", "guard-v1", enum_decode,
-                         dependencies=(enum_dependency,)).require_provenance()
+            TypedDecoder("restored-enum", "guard-v1", enum_decode, dependencies=(enum_dependency,)).require_provenance()
         # Repeated public hook identities share one guard operation, not a cross-call cache.
         import marshal
         for memo_kind in ('flat', 'tuple', 'nested_code', 'immutable'):
@@ -2607,8 +2579,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             try:
                 memo_decode.__code__ = memo_code.replace(co_consts=memo_code.co_consts + (memo_constant,))
                 memo_decode.__defaults__ = (memo_trigger,)
-                memo_decoder = TypedDecoder('memo-' + memo_kind, 'memo-v1', memo_decode,
-                                            dependencies=(memo_decode,))
+                memo_decoder = TypedDecoder('memo-' + memo_kind, 'memo-v1', memo_decode, dependencies=(memo_decode,))
                 memo_decoder.require_provenance()
                 memo_before = hashlib.sha256(marshal.dumps(memo_decode.__code__, 2)).digest()
                 memo_trigger.armed = True
@@ -2622,6 +2593,63 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             finally:
                 memo_decode.__code__, memo_decode.__defaults__ = memo_code, memo_defaults
                 memo_trigger.armed = False
+
+        from story_writing_agents import structured_output_validation as validation_module
+        matcher = validation_module._hook_guard_matches
+        matcher_defaults, matcher_calls = matcher.__defaults__, []
+        def matcher_callback(*_args):
+            matcher_calls.append(True)
+        for declaration, args, message in (
+            (TypedDecoder("matcher-defaults", "guard-v1", matcher_callback), (None,),
+             "frozen typed decoder hook provenance changed"),
+            (replace(current.host_checks[0], check=matcher_callback), (None, None),
+             "frozen named owner hook provenance changed")):
+            try:
+                matcher.__defaults__ = tuple(list(matcher_defaults))
+                self.assertIsNot(matcher.__defaults__, matcher_defaults)
+                with self.assertRaisesRegex(ValueError, "^" + message + "$") as changed_matcher:
+                    declaration.require_provenance()
+                    matcher_callback(*args)
+                self.assertIs(type(changed_matcher.exception), ValueError)
+                self.assertEqual(matcher_calls, [])
+            finally:
+                matcher.__defaults__ = matcher_defaults
+            declaration.require_provenance()
+        dependency_state = ["current"]
+        def matcher_dependency(value, choices=dependency_state):
+            return value if choices == ["current"] else None
+        class MatcherMutation(dict):
+            armed = False
+            def items(self):
+                if self.armed:
+                    self.armed = False
+                    matcher.__defaults__ = (lambda *_: True, *matcher_defaults[1:])
+                    dependency_state[0] = "changed"
+                return ()
+        matcher_trigger = MatcherMutation()
+        def fallback_decode(value, trigger=matcher_trigger):
+            return value
+        for nested_fallback in (False, True):
+            fallback_capture = (TypedDecoder("nested-matcher", "guard-v1", fallback_decode)
+                                if nested_fallback else matcher_trigger)
+            def guarded_decode(value, capture=fallback_capture):
+                return value
+            guarded = TypedDecoder("matcher-fallback", "guard-v1", guarded_decode,
+                                   dependencies=(matcher_dependency,))
+            guarded.require_provenance()
+            matcher_trigger.armed = True
+            try:
+                with self.assertRaisesRegex(ValueError,
+                        "^frozen typed decoder hook provenance changed$") as changed_matcher:
+                    guarded.require_provenance()
+                self.assertIs(type(changed_matcher.exception), ValueError)
+                self.assertFalse(matcher_trigger.armed)
+                self.assertEqual(dependency_state, ["changed"])
+                self.assertIsNot(matcher.__defaults__, matcher_defaults)
+            finally:
+                matcher.__defaults__ = matcher_defaults
+                dependency_state[0], matcher_trigger.armed = "current", False
+            guarded.require_provenance()
 
         repaired_offers = replace(bound.offers, call_id='fixture_repair_physical',
             action_index=bound.offers.action_index + 1, action_limits=tuple((name, min(limit, 1))
@@ -2668,11 +2696,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     elif pair_mutation == "tuple":
                         object.__setattr__(pair_index, "contracts", tuple(list(pair_contracts)))
                     elif pair_mutation == "code":
-                        pair_decoder.__code__ = pair_code.replace(
-                            co_name=pair_code.co_name + "_drift")
+                        pair_decoder.__code__ = pair_code.replace( co_name=pair_code.co_name + "_drift")
                     else:
-                        pair_decoder.__defaults__ = (
-                            *(pair_defaults or ()), "fixture-default-drift")
+                        pair_decoder.__defaults__ = ( *(pair_defaults or ()), "fixture-default-drift")
                 elif (event == "call" and frame.f_code is pair_semantic_code
                       and frame.f_locals.get("self") is pair_index and pair_seen[0]):
                     pair_seen[1] = True
@@ -2974,8 +3000,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 bound.require_current_offer(bound.offers)
             with self.assertRaisesRegex(ValueError, 'frozen Lead index provenance changed'):
                 bound.require_submission(call.payload, call.schema)
-        finally:
-            object.__setattr__(budget_policy, 'maximum_index_schema_bytes', budget_original_limit)
+        finally: object.__setattr__(budget_policy, 'maximum_index_schema_bytes', budget_original_limit)
         self.assertEqual(budget_policy.maximum_index_schema_bytes, 262144)
         self.assertEqual(budget_policy.identity_for(budget_owner_id), budget_identity)
         bound.require_submission(call.payload, call.schema)
@@ -3000,8 +3025,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             review_candidate_ids=offered_choices['input_ids']))
         fixed_review = fixed_owner.for_offer(call.contract.offers)
         fixed_choices = dict(fixed_review.semantic_index.policy.choices)
-        self.assertEqual(offered_choices['review_candidate_ids'],
-                         fixed_choices['review_candidate_ids'])
+        self.assertEqual(offered_choices['review_candidate_ids'], fixed_choices['review_candidate_ids'])
         self.assertEqual(offered_choices['review_candidate_binding'], ('offered',))
         self.assertEqual(fixed_choices['review_candidate_binding'], ('bound',))
         owner_id = offered_review.semantic_index.owners[0].owner_id
@@ -3013,20 +3037,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             reviewer_inputs=(), review_candidate_ids=('draft_reply',))
         front_choices = dict(ordered_facts.choice_snapshot())
         continuation_choices = dict(replace(ordered_facts, continuation=True).choice_snapshot())
-        self.assertEqual(front_choices['allocation_input_ids'],
-                         ('user_input', 'outline', 'draft_reply'))
-        self.assertEqual(continuation_choices['allocation_input_ids'],
-                         ('user_input', 'draft_reply'))
-        self.assertEqual(continuation_choices['required_input_ids'],
-                         ('draft_reply', 'user_input'))
+        self.assertEqual(front_choices['allocation_input_ids'], ('user_input', 'outline', 'draft_reply'))
+        self.assertEqual(continuation_choices['allocation_input_ids'], ('user_input', 'draft_reply'))
+        self.assertEqual(continuation_choices['required_input_ids'], ('draft_reply', 'user_input'))
         self.assertEqual(continuation_choices['review_candidate_ids'], ('draft_reply',))
         self.assertEqual(continuation_choices['input_ids'], front_choices['input_ids'])
         with self.assertRaises(ValueError):
-            replace(ordered_facts, continuation=True,
-                    review_candidate_ids=('outline',)).choice_snapshot()
+            replace(ordered_facts, continuation=True, review_candidate_ids=('outline',)).choice_snapshot()
         with self.assertRaises(ValueError):
-            replace(ordered_facts, continuation=True,
-                    per_assignment_input_ids=('outline',)).choice_snapshot()
+            replace(ordered_facts, continuation=True, per_assignment_input_ids=('outline',)).choice_snapshot()
         with self.assertRaisesRegex(ValueError, 'assignment obligations exceed current allocation'):
             replace(factory, constraints=replace(ordered_facts, continuation=True,
                 reviewer_inputs=((PLOT_ARCHITECT, 'outline'),))).for_offer(call.contract.offers)
@@ -3110,12 +3129,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             for field, wrong in (('task_instructions', ''), ('task_instructions', ' '),
                                  ('action_type', 'unoffered_recommendation_kind')):
                 bad = copy.deepcopy(selected_packet)
-                bad['agent_action']['task_result']['response_details'][
-                    'proposal_drafting_request'][field] = wrong
+                bad['agent_action']['task_result']['response_details'][ 'proposal_drafting_request'][field] = wrong
                 self.assertEqual(bool(selected_bound.rule_graph.findings(bad)), wrong != ' ')
                 if wrong == ' ':
-                    self.assertTrue(selected_bound.decode_response(json.dumps(bad)).belongs_to(
-                        selected_bound))
+                    self.assertTrue(selected_bound.decode_response(json.dumps(bad)).belongs_to( selected_bound))
                 else:
                     self.assertRaises(ValueError, selected_bound.decode_response, json.dumps(bad))
             for field in ('paths', 'slots'):
@@ -3184,8 +3201,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     operation()
             self.assertEqual(replacement_calls, [])
             self.assertEqual(len(self.backend.calls), before_authorization_calls)
-        finally:
-            object.__setattr__(bound.factory, 'authorized_validator', original_authorization)
+        finally: object.__setattr__(bound.factory, 'authorized_validator', original_authorization)
         bound.require_submission(call.payload, call.schema)
         bound.require_authorized_answer(actual_decoded, front_authorization)
         workflow_record = {**profile_record, 'activity': 'workflow', 'domains': [],
@@ -3204,14 +3220,12 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 helper.__code__ = (lambda *_args, **_kwargs: None).__code__
                 with self.assertRaises(ValueError):
                     bound.require_current_offer(bound.offers)
-            finally:
-                helper.__code__ = original_code
+            finally: helper.__code__ = original_code
             try:
                 helper.__defaults__ = (original_defaults or ()) + (None,)
                 with self.assertRaises(ValueError):
                     bound.require_current_offer(bound.offers)
-            finally:
-                helper.__defaults__ = original_defaults
+            finally: helper.__defaults__ = original_defaults
             bound.require_current_offer(bound.offers)
         objective_seed = orchestrator_module._lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=workflow_facts)
@@ -3269,6 +3283,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         profile_schema = profile_binding.schema_value()
         profile_projections = (('codex', profile_schema),
             ('antigravity', AntigravityAdapter.native_output_schema(profile_schema)))
+        profile_projection_rules = tuple(SchemaRules.declare(schema,
+            maximum_bytes=profile_binding.rule_graph.maximum_bytes) for _provider, schema in profile_projections)
         stem = free_seed.contract_id
         free_reads = profile_binding.offers.completed_read_facts + profile_binding.offers.delivery_read_facts
         free_inputs = tuple(dict.fromkeys(free_facts.input_ids + tuple(row.evidence_id for row in free_reads)))
@@ -3414,8 +3430,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                             'contributions': duties, 'dependency_slots': []}
                         decoded_profile = profile_binding.decode_response(json.dumps(complete))
                         self.assertEqual(json.loads(decoded_profile.answer_json),
-                            {'kind': 'question', 'message': base['response_text'],
-                             'authoring_scope': expected_scope})
+                            {'kind': 'question', 'message': base['response_text'], 'authoring_scope': expected_scope})
                         self._require_fixture_field_neighbors(profile_binding, complete, native_projections=profile_projections)
                         required_agents = tuple(agent for domain, agent in profile_roster.items() if domain in domains)
                         selected_agents = tuple(agent for agent in profile_roster.values()
@@ -3473,8 +3488,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                 extra['authoring_assessment'] = native_assessment
                                 semantic_extra['authoring_assessment'] = incomplete_assessment
                             if active != required_agents:
-                                if (required_reviewers.issubset(required_agents)
-                                        and (not preparation_specialists
+                                if (required_reviewers.issubset(required_agents) and (not preparation_specialists
                                              or required_agents == preparation_specialists)):
                                     invalid = json.loads(lead_fixture_response(fixture_call, {**base,
                                         'response_type': 'specialist_consultation_proposal',
@@ -3548,11 +3562,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                         review_basis_control = (copy.deepcopy(packet),
                                             copy.deepcopy(assignment["review_basis"]))
                                     elif mode in ("draft_content", "assess_constraints"):
-                                        nonreview_basis_controls.setdefault(
-                                            mode, (copy.deepcopy(packet), agent))
+                                        nonreview_basis_controls.setdefault( mode, (copy.deepcopy(packet), agent))
                             if (semantic_kind == 'proposal' and 'artifact_intent' in semantic_extra
-                                    and semantic_extra['artifact_intent']['operations'][0]['kind']
-                                    == 'rename'):
+                                    and semantic_extra['artifact_intent']['operations'][0]['kind'] == 'rename'):
                                 wrong_kind = copy.deepcopy(packet)
                                 wrong_kind['agent_action']['task_result']['response_details'][
                                     'artifact_change_proposal']['artifact_changes'][0][
@@ -3570,10 +3582,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                     self.assertTrue(profile_binding.rule_graph.findings(missing_specialist))
                                     with self.assertRaises(ValueError):
                                         profile_binding.decode_response(json.dumps(missing_specialist))
-                                    for _provider, schema in profile_projections:
-                                        self.assertTrue(SchemaRules.declare(schema, maximum_bytes=profile_binding.rule_graph.maximum_bytes).findings(missing_specialist))
-                        self.assertEqual(checked_profile_cases,
-                            [(case[0], case[1]) for case in profile_cases])
+                                    for projected_rules in profile_projection_rules:
+                                        self.assertTrue(projected_rules.findings(missing_specialist))
+                        self.assertEqual(checked_profile_cases, [(case[0], case[1]) for case in profile_cases])
                         if intent == 'authoring':
                             for identity, locator, whole in artifact_receipts:
                                 if artifact_domains.get(locator) not in domains or not whole:
@@ -3602,8 +3613,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             positive, agent = nonreview_basis_controls[mode]
             for control in (review_packet, positive):
                 self.assertFalse(profile_binding.rule_graph.findings(control))
-                self.assertTrue(profile_binding.decode_response(
-                    json.dumps(control)).belongs_to(profile_binding))
+                self.assertTrue(profile_binding.decode_response( json.dumps(control)).belongs_to(profile_binding))
             invalid_basis = copy.deepcopy(positive)
             assignment = invalid_basis["agent_action"]["task_result"]["response_details"][
                 "specialist_consultation_proposal"]["assignments"][agent]
@@ -3658,8 +3668,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             unit_paired = {inner for _outer, inner in unit_bound.outer_inner_schema_ids}
             unit_answer_members = []
             for member in unit_bound.semantic_index.contracts:
-                if (member.schema_id not in unit_paired or
-                    member.owner.variant.branch_key.split(':partition:', 1)[0] !=
+                if (member.schema_id not in unit_paired or member.owner.variant.branch_key.split(':partition:', 1)[0] !=
                         unit_seed.contract_id + ':family:0'):
                     continue
                 member_schema = member.rule_graph.schema_value()
@@ -3680,8 +3689,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 {'message': 'The canonical READ supports inspection.', 'authoring_scope': {
                     'intent': 'authoring', 'activity': 'review', 'target_paths': [],
                     'domains': ['plot_structure'], 'task': task['task_id'] + '@1',
-                    'contributions': [{'domain': 'plot_structure', 'role': 'draft_owner'}],
-                    'dependency_slots': []}})
+                    'contributions': [{'domain': 'plot_structure', 'role': 'draft_owner'}], 'dependency_slots': []}})
             for schema in unit_native_schemas:
                 self.assertFalse(diagnose_json_text(json.dumps(unit_answer), schema))
             for authority in ('proposal_drafting_request', 'assignments',
@@ -3753,18 +3761,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         assessment_values = {'allowed_creative_actions': ['bounded description'],
          'missing_information': ['The ending choice is missing.'], 'protected_constraints': ['preserve supplied facts'],
          'rationale': 'Literal mixed-row selection fixture.', 'status': 'needs_information'}
-        mixed_rows = (('Supplied setting', 'supplied',
-          {'user_input': True},
-          ['user_input'], 'The user supplied this choice.'),
-         ('Delegated voice', 'delegated',
-          {'user_input': True},
-          ['user_input'], 'The user delegated this bounded choice.'),
-         ('Missing ending', 'missing',
-          {'user_input': False},
-          [], 'The required choice remains missing.'),
-         ('Missing choice identified', 'missing',
-          {'user_input': True},
-          ['user_input'], 'The supplied request identifies an unresolved choice.'))
+        mixed_rows = (('Supplied setting', 'supplied', {'user_input': True},
+          ['user_input'], 'The user supplied this choice.'), ('Delegated voice', 'delegated', {'user_input': True},
+          ['user_input'], 'The user delegated this bounded choice.'), ('Missing ending', 'missing',
+          {'user_input': False}, [], 'The required choice remains missing.'), ('Missing choice identified', 'missing',
+          {'user_input': True}, ['user_input'], 'The supplied request identifies an unresolved choice.'))
         wire_decisions = [{'decision': decision, 'coverage': coverage, 'source_ids': wire, 'explanation': explanation}
                           for decision, coverage, wire, typed, explanation in mixed_rows]
         typed_decisions = [{'decision': decision, 'coverage': coverage, 'source_ids': typed, 'explanation': explanation}
