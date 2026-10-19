@@ -1157,265 +1157,386 @@ def _discriminator_schema(
     return _diagnostic_schema_node(properties.get(discriminator), root_schema)
 
 
-def _diagnose(
-    value: object, schema: Mapping[str, object], path: str,
-    root_schema: Mapping[str, object] | None = None,
-) -> Iterator[str]:
+def _diagnose(value: object, schema: Mapping[str, object], path: str, root_schema: Mapping[str, object] | None=None, *, _memo=None) -> Iterator[str]:
     root_schema = schema if root_schema is None else root_schema
-    if "$ref" in schema:
-        yield from _diagnose(value, _local_rule(root_schema, schema["$ref"]), path, root_schema)
-        return
-    variants = schema.get("anyOf")
-    if type(variants) is list and variants:
+    # Retain only naturally exhausted zero-finding traversals, within this call.
+    _memo_key = None
+    _successful = True
+    _completed = False
+    if _memo is not None:
+        if not _memo[4] or root_schema is not _memo[0]:
+            _memo = None
+        else:
+            _memo_key = (id(schema), id(value), path)
+            if _memo_key in _memo[2]:
+                evaluator, code, defaults, keywords = _memo[5]
+                if evaluator is _diagnose and evaluator.__code__ is code and (evaluator.__defaults__ is defaults) and (evaluator.__kwdefaults__ is keywords):
+                    return True
+                _memo[4] = False
+                _memo[2].clear()
+                _memo = None
+                _memo_key = None
+    try:
+        if '$ref' in schema:
+            if (yield from (_diagnose(value, _local_rule(root_schema, schema['$ref']), path, root_schema) if _memo is None else _diagnose(value, _local_rule(root_schema, schema['$ref']), path, root_schema, _memo=_memo))) is not True:
+                _successful = False
+            _completed = True
+            return _successful if _memo is not None else None
+        variants = schema.get('anyOf')
+        if type(variants) is list and variants:
+            if type(value) is dict:
+                for discriminator in (*_WIRE_DISCRIMINATORS, 'kind', 'action', 'decision', 'operation'):
+                    if discriminator not in value:
+                        continue
+                    supplied = value[discriminator]
+                    candidates = [child for variant in variants if (child := _discriminator_schema(variant, discriminator, root_schema)) is not None and type(child.get('enum')) is list]
+                    if len(candidates) != len(variants):
+                        continue
+                    matches = [variant for variant in variants if (child := _discriminator_schema(variant, discriminator, root_schema)) is not None and supplied in child.get('enum', ())] if type(supplied) is str else []
+                    if len(matches) == 1:
+                        if (yield from (_diagnose(value, matches[0], path, root_schema) if _memo is None else _diagnose(value, matches[0], path, root_schema, _memo=_memo))) is not True:
+                            _successful = False
+                        _completed = True
+                        return _successful if _memo is not None else None
+                    if len(matches) > 1 and all(('$ref' not in variant for variant in matches)):
+                        exact_shapes = [variant for variant in matches if isinstance(variant, Mapping) and isinstance(variant.get('properties'), Mapping) and (value.keys() == variant['properties'].keys())]
+                        if len(exact_shapes) == 1:
+                            if (yield from (_diagnose(value, exact_shapes[0], path, root_schema) if _memo is None else _diagnose(value, exact_shapes[0], path, root_schema, _memo=_memo))) is not True:
+                                _successful = False
+                            _completed = True
+                            return _successful if _memo is not None else None
+                    if candidates and (not matches):
+                        _successful = False
+                        yield _issue(_path(path, discriminator), 'expected one of [' + allowed_values(tuple(dict.fromkeys((item for candidate in candidates for item in candidate['enum'])))) + f'], got {json_type(supplied)}')
+                        resolved_variants = tuple((_diagnostic_schema_node(variant, root_schema) for variant in variants))
+                        properties = [variant.get('properties') for variant in resolved_variants if isinstance(variant, Mapping) and isinstance(variant.get('properties'), Mapping)]
+                        if len(properties) == len(variants):
+                            common = set.intersection(*(set(item) for item in properties))
+                            # Current wire names must not change the established
+                            # missing-context-before-invalid-value diagnostic order.
+                            # Keep domain-schema ordering unchanged.
+                            names = sorted(common, key=lambda name: (name in value, name)) if discriminator in _WIRE_DISCRIMINATORS else sorted(common)
+                            for name in names:
+                                if name == discriminator:
+                                    continue
+                                child = properties[0][name]
+                                if any((item[name] != child for item in properties[1:])):
+                                    if name in value and all((isinstance(item[name], Mapping) for item in properties)):
+                                        field_path = _path(path, name)
+                                        findings = tuple(islice(_diagnose(value[name], child, field_path, root_schema) if _memo is None else _diagnose(value[name], child, field_path, root_schema, _memo=_memo), _MAX_ISSUES + 1))
+                                        overflow = len(findings) > _MAX_ISSUES or _OMITTED_ISSUES_NOTICE in findings
+                                        for item in properties[1:]:
+                                            other = tuple(islice(_diagnose(value[name], item[name], field_path, root_schema) if _memo is None else _diagnose(value[name], item[name], field_path, root_schema, _memo=_memo), _MAX_ISSUES + 1))
+                                            overflow |= len(other) > _MAX_ISSUES or _OMITTED_ISSUES_NOTICE in other
+                                            common_findings = set(other)
+                                            findings = tuple((finding for finding in findings if finding in common_findings))
+                                        if _memo is not None and findings:
+                                            _successful = False
+                                        yield from findings
+                                        if overflow and _OMITTED_ISSUES_NOTICE not in findings:
+                                            _successful = False
+                                            yield _OMITTED_ISSUES_NOTICE
+                                    continue
+                                required_everywhere = all((name in variant.get('required', ()) for variant in resolved_variants))
+                                if name not in value and required_everywhere:
+                                    _successful = False
+                                    yield _issue(_path(path, name), 'required property is missing')
+                                elif name in value and isinstance(child, Mapping):
+                                    if (yield from (_diagnose(value[name], child, _path(path, name), root_schema) if _memo is None else _diagnose(value[name], child, _path(path, name), root_schema, _memo=_memo))) is not True:
+                                        _successful = False
+                        _completed = True
+                        return _successful if _memo is not None else None
+            compatible_variants = [variant for variant in variants if isinstance(variant, Mapping) and ('type' not in variant or (type(variant['type']) is str and _matches_type(value, variant['type'])) or (type(variant['type']) is list and any((type(item) is str and _matches_type(value, item) for item in variant['type']))))]
+            alternatives = []
+            for variant in compatible_variants or variants:
+                if isinstance(variant, Mapping):
+                    findings = tuple(islice(_diagnose(value, variant, path, root_schema) if _memo is None else _diagnose(value, variant, path, root_schema, _memo=_memo), _MAX_ISSUES + 1))
+                    alternatives.append((findings, len(findings) > _MAX_ISSUES or _OMITTED_ISSUES_NOTICE in findings))
+            if alternatives:
+                fewest = min((len(findings) for findings, _overflow in alternatives))
+                closest = [item for item in alternatives if len(item[0]) == fewest]
+                if len(closest) == 1:
+                    findings, overflow = closest[0]
+                    if _memo is not None and findings:
+                        _successful = False
+                    yield from findings
+                    if overflow and _OMITTED_ISSUES_NOTICE not in findings:
+                        _successful = False
+                        yield _OMITTED_ISSUES_NOTICE
+                    _completed = True
+                    return _successful if _memo is not None else None
+                common = set(closest[0][0]).intersection(*(set(findings) for findings, _overflow in closest[1:]))
+                if common:
+                    shared = tuple((item for item in closest[0][0] if item in common))
+                    if _memo is not None and shared:
+                        _successful = False
+                    yield from shared
+                    if any((overflow for _findings, overflow in closest)) and _OMITTED_ISSUES_NOTICE not in shared:
+                        _successful = False
+                        yield _OMITTED_ISSUES_NOTICE
+                    _completed = True
+                    return _successful if _memo is not None else None
+                if not any((findings for findings, _overflow in closest)):
+                    _successful = False
+                    yield _issue(path, 'expected one unambiguous schema alternative')
+                for index, (findings, _overflow) in enumerate(closest, 1):
+                    for finding in findings:
+                        finding_path, separator, requirement = finding.partition(': ')
+                        _successful = False
+                        yield _issue(finding_path if separator else path, f'allowed alternative {index} requires {(requirement if separator else finding)}')
+                if any((overflow for _findings, overflow in closest)):
+                    _successful = False
+                    yield _OMITTED_ISSUES_NOTICE
+                _completed = True
+                return _successful if _memo is not None else None
+            _successful = False
+            yield _issue(path, 'does not match the required schema')
+            _completed = True
+            return _successful if _memo is not None else None
+        raw_type = schema.get('type')
+        expected = (raw_type,) if type(raw_type) is str else tuple((item for item in raw_type if type(item) is str)) if type(raw_type) is list else ()
+        if type(value) in {float, Decimal} and (not _finite_number(value)) and (not expected or any((item in {'integer', 'number'} for item in expected))):
+            _successful = False
+            yield _issue(path, 'expected a finite number, got number')
+            _completed = True
+            return _successful if _memo is not None else None
+        if expected and (not any((_matches_type(value, item) for item in expected))):
+            _successful = False
+            yield _issue(path, f"expected {' or '.join(expected)}, got {json_type(value)}")
+            _completed = True
+            return _successful if _memo is not None else None
+        allowed = schema.get('enum')
+        if type(allowed) is list and (not any((_same_json_scalar(value, item) for item in allowed))):
+            enum_types = tuple(dict.fromkeys((json_type(item) for item in allowed)))
+            expected_type = ' or '.join(enum_types) if enum_types else 'JSON'
+            _successful = False
+            yield _issue(path, f'expected one of [{allowed_values(allowed)}] ({expected_type}), got {json_type(value)}')
         if type(value) is dict:
-            for discriminator in (*_WIRE_DISCRIMINATORS, "kind", "action", "decision", "operation"):
-                if discriminator not in value:
-                    continue
-                supplied = value[discriminator]
-                candidates = [
-                    child
-                    for variant in variants
-                    if (child := _discriminator_schema(variant, discriminator, root_schema)) is not None
-                    and type(child.get("enum")) is list
-                ]
-                if len(candidates) != len(variants):
-                    continue
-                matches = (
-                    [
-                        variant for variant in variants
-                        if (child := _discriminator_schema(variant, discriminator, root_schema)) is not None
-                        and supplied in child.get("enum", ())
-                    ]
-                    if type(supplied) is str else []
-                )
-                if len(matches) == 1:
-                    yield from _diagnose(value, matches[0], path, root_schema)
-                    return
-                if len(matches) > 1 and all("$ref" not in variant for variant in matches):
-                    exact_shapes = [
-                        variant for variant in matches
-                        if isinstance(variant, Mapping)
-                        and isinstance(variant.get("properties"), Mapping)
-                        and value.keys() == variant["properties"].keys()
-                    ]
-                    if len(exact_shapes) == 1:
-                        yield from _diagnose(value, exact_shapes[0], path, root_schema)
-                        return
-                if candidates and not matches:
-                    yield _issue(
-                        _path(path, discriminator),
-                        "expected one of [" + allowed_values(tuple(dict.fromkeys(
-                            item for candidate in candidates for item in candidate["enum"]
-                        ))) + f"], got {json_type(supplied)}",
-                    )
-                    resolved_variants = tuple(
-                        _diagnostic_schema_node(variant, root_schema) for variant in variants
-                    )
-                    properties = [
-                        variant.get("properties")
-                        for variant in resolved_variants
-                        if isinstance(variant, Mapping)
-                        and isinstance(variant.get("properties"), Mapping)
-                    ]
-                    if len(properties) == len(variants):
-                        common = set.intersection(*(set(item) for item in properties))
-                        # Current wire names must not change the established
-                        # missing-context-before-invalid-value diagnostic order.
-                        # Keep domain-schema ordering unchanged.
-                        names = (
-                            sorted(common, key=lambda name: (name in value, name))
-                            if discriminator in _WIRE_DISCRIMINATORS
-                            else sorted(common)
-                        )
-                        for name in names:
-                            if name == discriminator:
-                                continue
-                            child = properties[0][name]
-                            if any(item[name] != child for item in properties[1:]):
-                                if name in value and all(
-                                    isinstance(item[name], Mapping) for item in properties
-                                ):
-                                    field_path = _path(path, name)
-                                    findings = tuple(islice(
-                                        _diagnose(value[name], child, field_path, root_schema),
-                                        _MAX_ISSUES + 1,
-                                    ))
-                                    overflow = (
-                                        len(findings) > _MAX_ISSUES
-                                        or _OMITTED_ISSUES_NOTICE in findings
-                                    )
-                                    for item in properties[1:]:
-                                        other = tuple(islice(
-                                            _diagnose(
-                                                value[name], item[name], field_path, root_schema,
-                                            ),
-                                            _MAX_ISSUES + 1,
-                                        ))
-                                        overflow |= (
-                                            len(other) > _MAX_ISSUES
-                                            or _OMITTED_ISSUES_NOTICE in other
-                                        )
-                                        common_findings = set(other)
-                                        findings = tuple(
-                                            finding for finding in findings
-                                            if finding in common_findings
-                                        )
-                                    yield from findings
-                                    if overflow and _OMITTED_ISSUES_NOTICE not in findings:
-                                        yield _OMITTED_ISSUES_NOTICE
-                                continue
-                            required_everywhere = all(
-                                name in variant.get("required", ())
-                                for variant in resolved_variants
-                            )
-                            if name not in value and required_everywhere:
-                                yield _issue(
-                                    _path(path, name), "required property is missing",
-                                )
-                            elif name in value and isinstance(child, Mapping):
-                                yield from _diagnose(
-                                    value[name], child, _path(path, name),
-                                root_schema, )
-                    return
-        compatible_variants = [
-            variant for variant in variants
-            if isinstance(variant, Mapping) and (
-                "type" not in variant
-                or (
-                    type(variant["type"]) is str
-                    and _matches_type(value, variant["type"])
-                )
-                or (
-                    type(variant["type"]) is list
-                    and any(
-                        type(item) is str and _matches_type(value, item)
-                        for item in variant["type"]
-                    )
-                )
-            )
-        ]
-        alternatives = []
-        for variant in compatible_variants or variants:
-            if isinstance(variant, Mapping):
-                findings = tuple(islice(
-                    _diagnose(value, variant, path, root_schema), _MAX_ISSUES + 1,
-                ))
-                alternatives.append((
-                    findings,
-                    len(findings) > _MAX_ISSUES
-                    or _OMITTED_ISSUES_NOTICE in findings,
-                ))
-        if alternatives:
-            fewest = min(len(findings) for findings, _overflow in alternatives)
-            closest = [
-                item for item in alternatives if len(item[0]) == fewest
-            ]
-            if len(closest) == 1:
-                findings, overflow = closest[0]
-                yield from findings
-                if overflow and _OMITTED_ISSUES_NOTICE not in findings:
-                    yield _OMITTED_ISSUES_NOTICE
-                return
-            common = set(closest[0][0]).intersection(
-                *(set(findings) for findings, _overflow in closest[1:])
-            )
-            if common:
-                shared = tuple(item for item in closest[0][0] if item in common)
-                yield from shared
-                if (any(overflow for _findings, overflow in closest)
-                    and _OMITTED_ISSUES_NOTICE not in shared):
-                    yield _OMITTED_ISSUES_NOTICE
-                return
-            if not any(findings for findings, _overflow in closest):
-                yield _issue(path, "expected one unambiguous schema alternative")
-            for index, (findings, _overflow) in enumerate(closest, 1):
-                for finding in findings:
-                    finding_path, separator, requirement = finding.partition(": ")
-                    yield _issue(
-                        finding_path if separator else path,
-                        f"allowed alternative {index} requires {requirement if separator else finding}",
-                    )
-            if any(overflow for _findings, overflow in closest):
-                yield _OMITTED_ISSUES_NOTICE
-            return
-        yield _issue(path, "does not match the required schema")
-        return
+            properties = schema.get('properties')
+            if isinstance(properties, Mapping):
+                required = schema.get('required')
+                names = tuple((item for item in required if type(item) is str)) if type(required) is list else ()
+                for name in names:
+                    if name not in value:
+                        _successful = False
+                        yield _issue(_path(path, name), 'required property is missing')
+                if schema.get('additionalProperties') is False:
+                    unknown_count = len(value.keys() - properties.keys())
+                    if unknown_count:
+                        _successful = False
+                        yield _issue(path, f'contains {unknown_count} unexpected properties (names withheld)')
+                for name, child in properties.items():
+                    if name in value and type(name) is str and isinstance(child, Mapping):
+                        if (yield from (_diagnose(value[name], child, _path(path, name), root_schema) if _memo is None else _diagnose(value[name], child, _path(path, name), root_schema, _memo=_memo))) is not True:
+                            _successful = False
+        elif type(value) is list:
+            minimum = schema.get('minItems')
+            maximum = schema.get('maxItems')
+            if type(minimum) is int and len(value) < minimum:
+                _successful = False
+                yield _issue(path, f'expected at least {minimum} items, got {len(value)}')
+            if type(maximum) is int and len(value) > maximum:
+                _successful = False
+                yield _issue(path, f'expected at most {maximum} items, got {len(value)}')
+            item_schema = schema.get('items')
+            if isinstance(item_schema, Mapping):
+                for index, item in enumerate(value):
+                    if (yield from (_diagnose(item, item_schema, f'{path}[{index}]', root_schema) if _memo is None else _diagnose(item, item_schema, f'{path}[{index}]', root_schema, _memo=_memo))) is not True:
+                        _successful = False
+        elif type(value) is str:
+            pattern = schema.get('pattern')
+            if type(pattern) is str and re.search(pattern, value) is None:
+                _successful = False
+                yield _issue(path, f'expected pattern {json.dumps(pattern, ensure_ascii=True)}')
+            minimum = schema.get('minLength')
+            maximum = schema.get('maxLength')
+            if type(minimum) is int and len(value) < minimum:
+                _successful = False
+                yield _issue(path, f'expected at least {minimum} characters, got {len(value)}')
+            if type(maximum) is int and len(value) > maximum:
+                _successful = False
+                yield _issue(path, f'expected at most {maximum} characters, got {len(value)}')
+        elif type(value) in {int, float, Decimal}:
+            minimum = schema.get('minimum')
+            maximum = schema.get('maximum')
+            if type(minimum) in {int, float} and Decimal(str(value)) < Decimal(str(minimum)):
+                _successful = False
+                yield _issue(path, f'expected at least {minimum}, got {json_type(value)}')
+            if type(maximum) in {int, float} and Decimal(str(value)) > Decimal(str(maximum)):
+                _successful = False
+                yield _issue(path, f'expected at most {maximum}, got {json_type(value)}')
+        _completed = True
+        return _successful if _memo is not None else None
+    finally:
+        if _completed and _successful and (_memo_key is not None) and (_memo is not None) and _memo[4] and (len(_memo[2]) < 8192) and (_memo[3] + len(path) <= 1048576):
+            evaluator, code, defaults, keywords = _memo[5]
+            if evaluator is _diagnose and evaluator.__code__ is code and (evaluator.__defaults__ is defaults) and (evaluator.__kwdefaults__ is keywords):
+                _memo[2][_memo_key] = (schema, value, path)
+                _memo[3] += len(path)
+            else:
+                _memo[4] = False
+                _memo[2].clear()
 
-    raw_type = schema.get("type")
-    expected = (
-        (raw_type,) if type(raw_type) is str else
-        tuple(item for item in raw_type if type(item) is str)
-        if type(raw_type) is list else ()
+
+def _diagnostic_plain(value: object, root: object, _type=type, _dict=dict, _list=list,
+                      _str=str, _int=int, _bool=bool, _float=float,
+                      _finite=math.isfinite, _id=id) -> bool:
+    """Classify without invoking a supplied accessor or validating new rules."""
+    if _type(root) is not _dict or any(_type(key) is not _str for key in root):
+        return False
+    definitions = root.get("$defs", {})
+    if _type(definitions) is not _dict or any(_type(key) is not _str for key in definitions):
+        return False
+    active: set[tuple[int, bool]] = set()
+    completed: set[tuple[int, bool]] = set()
+    pending = [(value, False, False), (root, True, False)]
+    remaining = 262_144
+    while pending:
+        node, schema, leaving = pending.pop()
+        kind = _type(node)
+        if kind is _dict or kind is _list:
+            key = (_id(node), schema)
+            if leaving:
+                active.remove(key)
+                completed.add(key)
+                continue
+            if key in active:
+                return False
+            if key in completed:
+                continue
+            if len(node) > remaining or len(pending) + len(node) + 2 > 262_144:
+                return False
+            active.add(key)
+            pending.append((node, schema, True))
+            if kind is _dict:
+                if any(_type(name) is not _str for name in node):
+                    return False
+                pending.extend((child, schema, False) for child in node.values())
+                if schema and "$ref" in node:
+                    reference = node["$ref"]
+                    if (_type(reference) is not _str or not reference.startswith("#/$defs/")
+                            or _type(definitions) is not _dict):
+                        return False
+                    name = reference[len("#/$defs/"):]
+                    if not name or "/" in name or "~" in name or _type(definitions.get(name)) is not _dict:
+                        return False
+                    pending.append((definitions[name], True, False))
+            else:
+                pending.extend((child, schema, False) for child in node)
+        elif not (node is None or kind in (_str, _int, _bool)
+                  or kind is _float and _finite(node)):
+            return False
+        remaining -= 1
+        if remaining < 0:
+            return False
+    return True
+
+
+def _diagnostic_pins_match(pins: tuple, _type=type, _dict=dict, _tuple=tuple,
+                           _len=len, _all=all, _map=map, _is=_hook_is,
+                           _chain=_hook_chain.from_iterable, _object=object, _any=any, _absent=_ABSENT) -> bool:
+    """Flat entry checks; no recursive identity derivation or per-node table walk."""
+    bindings, functions, layouts, instance, modules = pins
+    if _any(_type(module) is not kind for module, kind in modules):
+        return False
+    for namespace, expected in bindings:
+        if _any(namespace.get(name, _absent) is not value for name, value in expected):
+            return False
+    for callback, kind, code, defaults, keywords, edges, closure in functions:
+        if (_type(callback) is not kind or callback.__code__ is not code
+                or callback.__defaults__ is not defaults or callback.__closure__ is not closure
+                or callback.__kwdefaults__ is not keywords):
+            return False
+        if keywords is not None and (_type(keywords) is not _dict or _len(keywords) != _len(edges)
+                or not _all(_map(_is, _chain(keywords.items()), _chain(edges)))):
+            return False
+    for kind, meta, expected in layouts:
+        if _type(kind) is not meta:
+            return False
+        namespace = _type.__getattribute__(kind, "__dict__")
+        if (_len(namespace) != _len(expected)
+                or not _all(_map(_is, _chain(namespace.items()), _chain(expected)))):
+            return False
+    encoder, kind, namespace, expected = instance
+    if _type(encoder) is not kind or _object.__getattribute__(encoder, "__dict__") is not namespace:
+        return False
+    return (_len(namespace) == _len(expected)
+            and _all(_map(_is, _chain(namespace.items()), _chain(expected))))
+
+
+def _diagnostic_source_pins() -> tuple:
+    # Immutable implementation anchors, never schema/value/results from a diagnosis.
+    own = ("_diagnose", "_local_rule", "_diagnostic_schema_node", "_discriminator_schema",
+           "_finite_number", "_matches_type", "json_type", "_same_json_scalar", "_path",
+           "_issue", "allowed_values", "_diagnostic_plain", "_diagnostic_pins_match",
+           "_PATH_MEMBER", "_MAX_ISSUES", "_OMITTED_ISSUES_NOTICE", "_WIRE_DISCRIMINATORS",
+           "Mapping", "Decimal", "json", "re", "math", "islice", "_ABSENT")
+    builtin_names = ("type", "dict", "list", "tuple", "str", "int", "bool", "float", "set", "bytes",
+                     "len", "any", "all", "min", "sorted", "enumerate", "isinstance",
+                     "id", "vars")
+    declarations = (
+        (globals(), (*own, *builtin_names)), (vars(builtins), builtin_names),
+        (vars(math), ("isfinite",)),
+        (vars(json), ("dumps", "JSONEncoder", "_default_encoder", "encoder")),
+        (vars(json.encoder), ("encode_basestring", "encode_basestring_ascii", "c_make_encoder",
+                              "_make_iterencode", "INFINITY")),
+        (vars(re), ("search", "_compile", "_compiler", "_cache", "_cache2", "_MAXCACHE", "Pattern", "RegexFlag")),
+        (vars(re._compiler), ("compile",)),
     )
-    if (type(value) in {float, Decimal} and not _finite_number(value)
-            and (not expected or any(item in {"integer", "number"} for item in expected))):
-        yield _issue(path, "expected a finite number, got number")
-        return
-    if expected and not any(_matches_type(value, item) for item in expected):
-        yield _issue(path, f"expected {' or '.join(expected)}, got {json_type(value)}")
-        return
+    bindings = tuple((namespace, tuple((name, namespace.get(name, _ABSENT)) for name in names))
+                     for namespace, names in declarations)
+    function_kind = type(_diagnose)
+    callbacks = tuple(dict.fromkeys(value for _, values in bindings for _, value in values
+                                    if type(value) is function_kind))
+    callbacks += tuple(value for value in vars(json.JSONEncoder).values() if type(value) is function_kind)
+    functions = tuple((callback, function_kind, callback.__code__, callback.__defaults__,
+                       callback.__kwdefaults__, tuple((callback.__kwdefaults__ or {}).items()),
+                       callback.__closure__) for callback in callbacks)
+    kind = json.JSONEncoder
+    encoder = json._default_encoder
+    layouts = ((kind, type(kind), tuple(vars(kind).items())),)
+    instance = (encoder, kind, vars(encoder), tuple(vars(encoder).items()))
+    modules = tuple((module, type(module)) for module in (json, json.encoder, re, re._compiler, math, builtins))
+    return bindings, functions, layouts, instance, modules
 
-    allowed = schema.get("enum")
-    if type(allowed) is list and not any(
-        _same_json_scalar(value, item) for item in allowed
-    ):
-        enum_types = tuple(dict.fromkeys(json_type(item) for item in allowed))
-        expected_type = " or ".join(enum_types) if enum_types else "JSON"
-        yield _issue(
-            path, f"expected one of [{allowed_values(allowed)}] ({expected_type}), got {json_type(value)}",
-        )
-    if type(value) is dict:
-        properties = schema.get("properties")
-        if isinstance(properties, Mapping):
-            required = schema.get("required")
-            names = (
-                tuple(item for item in required if type(item) is str)
-                if type(required) is list else ()
-            )
-            for name in names:
-                if name not in value:
-                    yield _issue(_path(path, name), "required property is missing")
-            if schema.get("additionalProperties") is False:
-                unknown_count = len(value.keys() - properties.keys())
-                if unknown_count:
-                    yield _issue(path, f"contains {unknown_count} unexpected properties (names withheld)")
-            for name, child in properties.items():
-                if name in value and type(name) is str and isinstance(child, Mapping):
-                    yield from _diagnose(value[name], child, _path(path, name), root_schema)
-    elif type(value) is list:
-        minimum = schema.get("minItems")
-        maximum = schema.get("maxItems")
-        if type(minimum) is int and len(value) < minimum:
-            yield _issue(path, f"expected at least {minimum} items, got {len(value)}")
-        if type(maximum) is int and len(value) > maximum:
-            yield _issue(path, f"expected at most {maximum} items, got {len(value)}")
-        item_schema = schema.get("items")
-        if isinstance(item_schema, Mapping):
-            for index, item in enumerate(value):
-                yield from _diagnose(item, item_schema, f"{path}[{index}]", root_schema)
-    elif type(value) is str:
-        pattern = schema.get("pattern")
-        if type(pattern) is str and re.search(pattern, value) is None:
-            yield _issue(path, f"expected pattern {json.dumps(pattern, ensure_ascii=True)}")
-        minimum = schema.get("minLength")
-        maximum = schema.get("maxLength")
-        if type(minimum) is int and len(value) < minimum:
-            yield _issue(path, f"expected at least {minimum} characters, got {len(value)}")
-        if type(maximum) is int and len(value) > maximum:
-            yield _issue(path, f"expected at most {maximum} characters, got {len(value)}")
-    elif type(value) in {int, float, Decimal}:
-        minimum = schema.get("minimum")
-        maximum = schema.get("maximum")
-        if type(minimum) in {int, float} and Decimal(str(value)) < Decimal(str(minimum)):
-            yield _issue(path, f"expected at least {minimum}, got {json_type(value)}")
-        if type(maximum) in {int, float} and Decimal(str(value)) > Decimal(str(maximum)):
-            yield _issue(path, f"expected at most {maximum}, got {json_type(value)}")
+
+_DIAGNOSIS_SOURCE_PINS = _diagnostic_source_pins()
+
+
+def _diagnostic_context(value: object, schema: object, _pins=_DIAGNOSIS_SOURCE_PINS,
+                        _checker=_diagnostic_pins_match,
+                        _code=_diagnostic_pins_match.__code__,
+                        _defaults=_diagnostic_pins_match.__defaults__, _type=type, _str=str):
+    # The admitted traversal invokes no supplied Python callback. Check source once
+    # per entry; concurrent/signal/profiler mutation is not a new guarantee here.
+    if (_pins is not _DIAGNOSIS_SOURCE_PINS or _checker is not _diagnostic_pins_match
+            or _checker.__code__ is not _code or _checker.__defaults__ is not _defaults):
+        return None
+    # Reject speculative dictionary lookups that could call a non-string key.
+    if any(any(_type(name) is not _str for name in namespace) for namespace, _ in _pins[0]):
+        return None
+    if not _checker(_pins, *_defaults) or not _diagnostic_plain(value, schema):
+        return None
+    # Canonical regex entry points only add builtin compiled patterns to this cache.
+    for cache in (re._cache, vars(re).get("_cache2", {})):
+        if type(cache) is not dict:
+            return None
+        for key, item in cache.items():
+            if (type(key) is not tuple or len(key) != 3
+                    or not (key[0] is str or key[0] is bytes)
+                    or type(key[1]) is not key[0] or type(key[2]) is not int
+                    or type(item) is not re.Pattern):
+                return None
+    return [schema, value, {}, 0, True,
+            (_diagnose, _diagnose.__code__, _diagnose.__defaults__, _diagnose.__kwdefaults__)]
 
 
 def diagnose_value(value: object, schema: Mapping[str, object]) -> tuple[str, ...]:
     """Collect a bounded ordered prefix of independently detectable issues."""
 
-    issues = tuple(islice(_diagnose(value, schema, "$"), _MAX_ISSUES + 1))
+    memo = _diagnostic_context(value, schema)
+    issues = tuple(islice((_diagnose(value, schema, "$") if memo is None else
+                           _diagnose(value, schema, "$", _memo=memo)), _MAX_ISSUES + 1))
     if len(issues) > _MAX_ISSUES:
         return (*issues[:_MAX_ISSUES], _OMITTED_ISSUES_NOTICE)
     return issues
@@ -1433,7 +1554,9 @@ def schema_fragment_findings(
         schema = schema[part]
     if type(schema) is not dict:
         raise TypeError("schema path does not identify a declared rule")
-    issues = tuple(islice(_diagnose(value, schema, "$", root_schema), _MAX_ISSUES + 1))
+    memo = _diagnostic_context(value, root_schema)
+    issues = tuple(islice((_diagnose(value, schema, "$", root_schema) if memo is None else
+                           _diagnose(value, schema, "$", root_schema, _memo=memo)), _MAX_ISSUES + 1))
     if len(issues) > _MAX_ISSUES:
         return (*issues[:_MAX_ISSUES], _OMITTED_ISSUES_NOTICE)
     return issues
