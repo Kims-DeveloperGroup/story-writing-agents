@@ -52,17 +52,19 @@ when recalibrating weights.
 
 ## Hosted full-shard method scheduling
 
-Only hosted full shards opt into the fixed `audited-116-v2` profile: 116
-fixture-audited existing methods across 14 classes. Each shard keeps its
-canonical class assignment and selected ID order. Noneligible tests run once
+Only hosted full shards opt into the fixed `audited-147-v3` profile: 147
+fixture-audited existing methods across 17 classes. The profile includes the eight
+provider-timeout recovery, ten context-recovery and thirteen interactive Lead
+adapter methods audited after v40's measured serial bottlenecks. Each shard keeps
+its canonical class assignment and selected ID order. Noneligible tests run once
 in their original serial suite; then eligible whole methods run in fresh
-interpreters, with at most four active method processes. A frozen launch order
-starts whole-front and the two unfinished v38 methods first, then the other
-nine unmeasured outcome methods, then the 104 completed methods by descending
-v38 observed duration with canonical ID tie-breaks. The checked-in tuple sets
-this order; runtime history cannot change it. Final report rows retain canonical
-order. Fast, affected, default and local runs stay serial. Eligibility does not
-expand automatically when a class gains a method.
+interpreters, with at most four active method processes. The frozen launch order
+starts whole-front, then seven other v40 failed or unexecuted methods in canonical
+order, then 139 passed methods by descending v40 observed duration with canonical
+ID tie-breaks. The checked-in tuple sets this order; runtime history cannot change
+it. Final report rows retain canonical order. Fast, affected, default and local
+runs stay serial. Eligibility does not expand automatically when a class gains a
+method.
 
 All discovery, serial work, method startup, execution and merge share the
 original 3,600-second work cutoff. Children cannot restart that hour. A separate

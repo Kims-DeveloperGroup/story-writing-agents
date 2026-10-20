@@ -618,15 +618,16 @@ x64 runners. They retain the same locked dependencies and test inventory.
 Full-suite selection includes test-only changes. The fixed timing limits still apply to every
 selected full shard; a diagnostic run never replaces this evidence.
 
-Hosted full shards use the fixed `audited-116-v2` profile of 116 fixture-audited
-methods across 14 classes to run at most four fresh test processes after their
-original noneligible serial suite. A frozen launch order starts whole-front and
-the two unfinished v38 methods first, then other unmeasured outcome methods and
-completed methods by descending v38 observed duration. It does not read runtime
-history or change canonical report order. Every process shares the shard's original
-one-hour work cutoff; shutdown has a separate 30-second bound. Fast, affected
-and local runs remain serial. See [TEST_POLICY.md](TEST_POLICY.md) for eligibility,
-source reconciliation and cleanup requirements.
+Hosted full shards use the fixed `audited-147-v3` profile of 147 fixture-audited
+methods across 17 classes to run at most four fresh test processes after their
+original noneligible serial suite. The frozen launch order starts whole-front,
+then seven other v40 failed or unexecuted methods in canonical order, then 139
+passed methods by descending v40 observed duration with canonical tie-breaks.
+Runtime history cannot change this order, and final report rows stay canonical.
+Every process shares the shard's original one-hour work cutoff; shutdown has a
+separate 30-second bound. Fast, affected and local runs remain serial. See
+[TEST_POLICY.md](TEST_POLICY.md) for eligibility, source reconciliation and cleanup
+requirements.
 
 Independent task threads share a host queue with four executing test processes;
 a campaign still runs only four full shards. Local `tests.runner run` commands

@@ -657,9 +657,9 @@ jobs:
             exit 124
           fi
           test_work_deadline=$(.venv/bin/python -c 'import os,sys,time; w=time.time()+3600; cutoff=min(int(os.environ["TEST_JOB_DEADLINE"]),int(os.environ["TEST_RUN_DEADLINE"]))-450; sys.exit("Insufficient remaining time for a full test hour") if w > cutoff else print(w)')
-          .venv/bin/python -c 'import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); w=float(sys.argv[2]); d.update(work_deadline_epoch=w,hard_cleanup_deadline_epoch=w+30,execution_profile="audited-116-v2",maximum_method_workers=4); p.write_text(json.dumps(d,allow_nan=False)+"\n")' "$RUNNER_TEMP/full-${{ matrix.shard }}-control.json" "$test_work_deadline"
+          .venv/bin/python -c 'import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); w=float(sys.argv[2]); d.update(work_deadline_epoch=w,hard_cleanup_deadline_epoch=w+30,execution_profile="audited-147-v3",maximum_method_workers=4); p.write_text(json.dumps(d,allow_nan=False)+"\n")' "$RUNNER_TEMP/full-${{ matrix.shard }}-control.json" "$test_work_deadline"
           set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "${{ matrix.shard }}/4" --hosted-methods audited-116-v2 --hosted-deadline-epoch "$test_work_deadline" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json" 2>&1 | tee "$RUNNER_TEMP/full-${{ matrix.shard }}.log"
+          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "${{ matrix.shard }}/4" --hosted-methods audited-147-v3 --hosted-deadline-epoch "$test_work_deadline" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json" 2>&1 | tee "$RUNNER_TEMP/full-${{ matrix.shard }}.log"
           test_statuses=("${PIPESTATUS[@]}")
           test_status=${test_statuses[0]}
           if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi

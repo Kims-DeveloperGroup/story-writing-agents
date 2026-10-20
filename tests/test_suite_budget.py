@@ -71,19 +71,19 @@ class SuiteBudgetTests(unittest.TestCase):
         import os, sys, time
         ids = runner._HOSTED_METHOD_IDS
         self.assertEqual(runner._manifest(ids)["digest"],
-                         "sha256:7944c1d47a4ee4e2ff9568efa167c686e956e4cfa66ae6e80da99a4cf3bf5d78")
-        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (116, 14))
+                         "sha256:131866173146033667a64af8c3dc6017a78671eb501bf4db4d97cc5e722521d7")
+        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (147, 17))
         cases = tuple(Mock(id=Mock(return_value=value)) for value in (*ids, "unreviewed.test"))
         canonical = runner.CanonicalCollection(cases, (*ids, "unreviewed.test"))
         serial, scheduled = runner._hosted_partition(canonical, canonical)
         self.assertEqual((serial.tests, scheduled), ((cases[-1],), ids))
-        launch_digest = "sha256:59fce3155ac3c7af38b7d611e5f7c87d71a613be8236056f3c99384656aaf033"
+        launch_digest = "sha256:1c8347ab95d8eb9a217a64542af45db5a82a278ce56c427fa5f6e8b0ce86a4f1"
         self.assertEqual(runner._manifest(runner._hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner._hosted_launch_order(ids[::-1]), runner._hosted_launch_order(ids))
         self.assertEqual(runner._hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
         drift = runner.CanonicalCollection(cases, (*ids, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
         self.assertRaises(runner.RunnerError, runner._hosted_partition, drift, drift)
-        args = SimpleNamespace(command="run", hosted_methods="audited-116-v2", hosted_deadline_epoch=time.time()+3500,
+        args = SimpleNamespace(command="run", hosted_methods="audited-147-v3", hosted_deadline_epoch=time.time()+3500,
                                shard="1/4", id=[], module=[], tier=[], failfast=False, json="report.json")
         env = dict(GITHUB_ACTIONS="true", TEST_RUN_DEADLINE=str(time.time()+4500),
                    TEST_JOB_DEADLINE=str(time.time()+4500))
@@ -137,7 +137,7 @@ class SuiteBudgetTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             paths = self._reports(directory, (0, 0)); rows = self.report_data
-            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": "audited-116-v2",
+            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": "audited-147-v3",
                         "profile_manifest": runner._manifest(runner._HOSTED_METHOD_IDS),
                         "capacity": 2, "peak_children": 0, "work_deadline_epoch": 10000.0,
                         "cleanup_deadline_epoch": 10030.0, "launch_manifest": runner._manifest(()),
