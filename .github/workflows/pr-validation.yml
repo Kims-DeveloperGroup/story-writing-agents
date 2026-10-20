@@ -1,1135 +1,406 @@
-name: PR validation
-
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
-  merge_group:
-    types: [checks_requested]
-  workflow_dispatch:
-    inputs:
-      arch:
-        description: Diagnostic-only standard runner architecture
-        type: choice
-        options: [x64, arm64]
-        default: arm64
-      scratch:
-        description: Diagnostic-only temporary filesystem
-        type: choice
-        options: [disk, memory]
-        default: disk
-      profile_mode:
-        description: Optional cProfile instrumentation for the exact diagnostic
-        type: choice
-        options: [cprofile, none]
-        default: cprofile
-      test_id:
-        description: Diagnostic-only exact canonical test ID
-        type: string
-        default: tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles
-
-permissions:
-  contents: read
-  pull-requests: read
-
-concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-diagnostic-{1}-{2}-{3}', github.workflow, github.ref, inputs.arch, inputs.scratch) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.event.merge_group.head_ref || github.ref) }}
-  cancel-in-progress: true
-
-jobs:
-  workflow-deadline:
-    name: Enforce 30-minute workflow limit
-    # Cover classification, setup and dependency waits independently.
-    # Survive normal cancellation long enough to force-cancel stalled jobs.
-    if: always()
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      actions: write
-    steps:
-      - name: Enforce total workflow deadline
-        uses: actions/github-script@v7
-        with:
-          retries: 0
-          script: |
-            const parameters = () => ({
-              ...context.repo,
-              run_id: context.runId,
-              request: {signal: AbortSignal.timeout(5000)},
-            });
-            const attempt = Number(process.env.GITHUB_RUN_ATTEMPT);
-            if (!Number.isSafeInteger(attempt) || attempt < 1) {
-              core.setFailed("Missing workflow attempt identity.");
-              return;
-            }
-            // Metadata retries never grant a new test budget.
-            const metadataDeadline = Date.now() + 30_000;
-            let deadline;
-            let cancellationRequested = false;
-            async function currentRun() {
-              const {data: run} = await github.rest.actions.getWorkflowRun(parameters());
-              if (run.id !== context.runId || run.run_attempt !== attempt) {
-                core.setFailed("Workflow attempt changed; the stale guard cannot cancel it.");
-                return null;
-              }
-              if (run.status === "completed") return null;
-              const created = Date.parse(run.created_at);
-              if (!Number.isFinite(created)) throw new Error("Missing workflow creation time.");
-              const runDeadline = created + 30 * 60 * 1000;
-              deadline = deadline === undefined ? runDeadline : Math.min(deadline, runDeadline);
-              if (Date.now() >= deadline - 30_000) {
-                core.setFailed("Workflow guard shutdown margin reached; no safe control window remains.");
-                return null;
-              }
-              return run;
-            }
-            while (Date.now() < (deadline === undefined ? metadataDeadline : deadline - 30_000)) {
-              try {
-                if (!await currentRun()) return;
-                let complete;
-                try {
-                  const {data: page} = await github.rest.actions.listJobsForWorkflowRunAttempt({
-                    ...parameters(), attempt_number: attempt, per_page: 100,
-                  });
-                  if (!Number.isSafeInteger(page.total_count) || page.total_count > 100 ||
-                      !Array.isArray(page.jobs) || page.total_count !== page.jobs.length) {
-                    throw new Error("Cannot establish the complete validation job list.");
-                  }
-                  // A marker covers downstream jobs absent from an earlier API snapshot.
-                  complete = page.jobs.find(job => job.name === "Validation jobs complete");
-                } catch (error) {
-                  // Job-list failures cannot prevent cancellation at the deadline.
-                  core.warning(`Completion lookup failed: ${error.message}`);
-                }
-                if (Date.now() < deadline && complete?.status === "completed" &&
-                    ["success", "failure"].includes(complete.conclusion)) {
-                  core.info("All validation jobs finished within the workflow deadline.");
-                  return;
-                }
-                if (Date.now() >= deadline - 330_000) {
-                  core.setFailed("Workflow shutdown reserve reached; force-cancelling this run.");
-                  if (!await currentRun()) return;
-                  await github.request("POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel", parameters());
-                  return;
-                }
-                if (!cancellationRequested && Date.now() >= deadline - 360_000) {
-                  core.setFailed("Workflow shutdown reserve reached; cancelling this run.");
-                  if (!await currentRun()) return;
-                  await github.rest.actions.cancelWorkflowRun(parameters());
-                  cancellationRequested = true;
-                }
-              } catch (error) {
-                core.warning(`Deadline control request failed: ${error.message}`);
-              }
-              const remaining = (deadline === undefined ? metadataDeadline : deadline - 30_000) - Date.now();
-              const poll = deadline !== undefined && deadline - Date.now() > 390_000 ? 30_000 : 5000;
-              if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(poll, remaining)));
-            }
-            core.setFailed("Workflow deadline enforcement could not complete within its bounded window.");
-
-  validation-complete:
-    name: Validation jobs complete
-    needs: [classify, static, fast, full, reconcile-full, diagnose-full-budget]
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions: {}
-    steps:
-      - name: Mark validation jobs terminal
-        timeout-minutes: 1
-        run: echo "Validation jobs are terminal; their individual results remain authoritative."
-
-  classify:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Initialize diagnostic deadline' || 'Classify changed paths' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      pull-requests: read
-      actions: read
-    outputs:
-      test_run_deadline: ${{ steps.paths.outputs.test_run_deadline }}
-      runtime: ${{ steps.paths.outputs.runtime }}
-      policy_only: ${{ steps.paths.outputs.policy_only }}
-      full: ${{ steps.paths.outputs.full }}
-      wall_time_exception: ${{ steps.paths.outputs.wall_time_exception }}
-      base_sha: ${{ steps.paths.outputs.base_sha }}
-      head_sha: ${{ steps.paths.outputs.head_sha }}
-      checkout_sha: ${{ steps.paths.outputs.checkout_sha }}
-    steps:
-      - name: Classify paths and select runtime evidence
-        id: paths
-        uses: actions/github-script@v7
-        timeout-minutes: 2
-        with:
-          script: |
-            const {owner, repo} = context.repo;
-            const {data: run} = await github.rest.actions.getWorkflowRun({
-              owner, repo, run_id: context.runId, request: {signal: AbortSignal.timeout(5000)},
-            });
-            const created = Date.parse(run.created_at);
-            if (run.id !== context.runId || run.run_attempt !== Number(process.env.GITHUB_RUN_ATTEMPT) ||
-                !Number.isFinite(created)) {
-              core.setFailed("Cannot establish this workflow attempt's creation time.");
-              return;
-            }
-            const deadline = Math.floor(created / 1000) + 30 * 60;
-            core.setOutput("test_run_deadline", String(deadline));
-            if (Date.now() >= deadline * 1000) {
-              core.setFailed("Shared workflow deadline exhausted before classification.");
-              return;
-            }
-            if (context.eventName === "workflow_dispatch") {
-              core.setOutput("runtime", "false");
-              core.setOutput("policy_only", "true");
-              core.setOutput("full", "false");
-              core.setOutput("wall_time_exception", "false");
-              for (const name of ["base_sha", "head_sha", "checkout_sha"]) core.setOutput(name, context.sha);
-              return;
-            }
-            let files = [];
-            let labels = [];
-            let baseSha;
-            let headSha;
-            let truncated = false;
-
-            if (context.eventName === "pull_request") {
-              const pr = context.payload.pull_request;
-              baseSha = pr.base.sha;
-              headSha = pr.head.sha;
-              labels = pr.labels.map(label => label.name);
-              files = await github.paginate(github.rest.pulls.listFiles, {
-                owner, repo, pull_number: pr.number, per_page: 100,
-              });
-              truncated = files.length >= 3000;
-            } else {
-              const group = context.payload.merge_group;
-              baseSha = group.base_sha;
-              headSha = group.head_sha;
-              const comparison = await github.rest.repos.compareCommitsWithBasehead({
-                owner, repo, basehead: `${baseSha}...${headSha}`, per_page: 100,
-              });
-              files = comparison.data.files || [];
-              // A full page may hide later files. Fail closed rather than infer a partial diff.
-              truncated = !Array.isArray(comparison.data.files) || files.length >= 100;
-            }
-
-            const paths = files.flatMap(file =>
-              [file.filename, file.previous_filename].filter(Boolean));
-            const isRuntime = path =>
-              path.startsWith("src/") ||
-              path.startsWith("config/") ||
-              path === "pyproject.toml" ||
-              path === "uv.lock" ||
-              path === "MANIFEST.in" ||
-              path === ".gitmodules" ||
-              path === "vendor/generic-rag" ||
-              path === "vendor/jsonl-viewer";
-            const runtimePaths = truncated || paths.some(isRuntime);
-            const isTest = path => path.startsWith("tests/") ||
-              path === ".github/workflows/pr-validation.yml" || path === "TEST_POLICY.md";
-            const testPaths = truncated || paths.some(isTest);
-            const fullRequested = labels.includes("test:full");
-            const wallTimeException = context.eventName === "pull_request" && labels.includes("test:wall-time-exception");
-            const runtime = runtimePaths || testPaths || fullRequested;
-            const full = runtime;
-            core.setOutput("runtime", String(runtime));
-            core.setOutput("policy_only", String(!runtimePaths && !testPaths));
-            core.setOutput("full", String(full));
-            core.setOutput("wall_time_exception", String(wallTimeException));
-            core.setOutput("base_sha", baseSha);
-            core.setOutput("head_sha", headSha);
-            // Event SHA is the PR test merge or merge-group commit, pinned across jobs.
-            core.setOutput("checkout_sha", context.sha);
-            core.summary
-              .addHeading("Validation selection")
-              .addTable([
-                [{data: "Runtime paths", header: true}, String(runtimePaths)],
-                [{data: "Policy/config only", header: true}, String(!runtimePaths)],
-                [{data: "Run runtime lanes", header: true}, String(runtime)],
-                [{data: "Full suite", header: true}, String(full)],
-                [{data: "Wall-time exception", header: true}, String(wallTimeException)],
-              ])
-              .write();
-
-  static:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - static validation skipped' || 'Static validation' }}
-    needs: classify
-    if: github.event_name != 'workflow_dispatch'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Check shared deadline before static work
-        run: |
-          [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-          if (( TEST_RUN_DEADLINE <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before static work."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Check patch whitespace
-        env:
-          BASE_SHA: ${{ needs.classify.outputs.base_sha }}
-          HEAD_SHA: ${{ needs.classify.outputs.head_sha }}
-        run: git diff --check "$BASE_SHA...$HEAD_SHA"
-      - name: Parse repository configuration
-        run: |
-          python - <<'PY'
-          import json
-          import pathlib
-          import tomllib
-
-          for path in pathlib.Path(".").glob("**/*.toml"):
-              if ".git" not in path.parts:
-                  data = tomllib.loads(path.read_text(encoding="utf-8"))
-                  if path.parent == pathlib.Path(".codex/agents"):
-                      if data.get("name") != path.stem:
-                          raise SystemExit(f"{path}: agent name must match filename")
-                      for field in ("description", "developer_instructions"):
-                          value = data.get(field)
-                          if not isinstance(value, str) or not value.strip():
-                              raise SystemExit(f"{path}: missing {field}")
-          for path in pathlib.Path(".").glob("**/*.json"):
-              if ".git" not in path.parts:
-                  json.loads(path.read_text(encoding="utf-8"))
-          for path in (*pathlib.Path("src").rglob("*.py"), *pathlib.Path("tests").rglob("*.py")):
-              compile(path.read_text(encoding="utf-8"), str(path), "exec", dont_inherit=True)
-          PY
-          ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |path| YAML.parse_file(path) }'
-          ruby -ryaml -ropen3 <<'RB'
-          Dir[".agents/skills/*/SKILL.md"].each do |path|
-            source = File.read(path)
-            match = source.match(/\A---\r?\n(.*?)\r?\n---(?:\r?\n|\z)/m)
-            abort "#{path}: missing YAML frontmatter" unless match
-            data = YAML.safe_load(match[1], aliases: false)
-            abort "#{path}: name must match directory and description must be nonempty" unless
-              data.is_a?(Hash) && data["name"] == File.basename(File.dirname(path)) &&
-              data["description"].is_a?(String) && !data["description"].strip.empty?
-          end
-          issue_path = ".github/ISSUE_TEMPLATE/work_item.md"
-          issue_source = File.read(issue_path)
-          issue_match = issue_source.match(/\A---\r?\n(.*?)\r?\n---(?:\r?\n|\z)/m)
-          abort "#{issue_path}: missing YAML frontmatter" unless issue_match
-          issue = YAML.safe_load(issue_match[1], aliases: false)
-          abort "#{issue_path}: invalid frontmatter mapping" unless issue.is_a?(Hash)
-          %w[name about title labels assignees].each do |field|
-            value = issue[field]
-            abort "#{issue_path}: missing or non-string #{field}" unless value.is_a?(String)
-          end
-          %w[name about].each do |field|
-            abort "#{issue_path}: empty #{field}" if issue[field].strip.empty?
-          end
-          Dir[".github/workflows/*.{yml,yaml}"].each do |path|
-            document = YAML.safe_load(File.read(path), aliases: false)
-            document.fetch("jobs").each do |job_name, job|
-              job.fetch("steps", []).each do |step|
-                script = step["with"]&.fetch("script", nil)
-                next unless script
-                _, error, status = Open3.capture3(
-                  "node", "--input-type=module", "--check",
-                  stdin_data: "async function main() {\n#{script}\n}")
-                abort "#{path} #{job_name}: #{error}" unless status.success?
-              end
-            end
-          end
-          RB
-      - name: Validate runner metadata
-        run: |
-          python -B - <<'PY'
-          from tests import suite_policy
-
-          suite_policy.load_timing_weights()
-          ids = suite_policy.FAST_TEST_IDS
-          if not ids or len(ids) != len(set(ids)):
-              raise SystemExit("fast tier must contain unique test IDs")
-          if any(not identifier.rsplit(".", 1)[-1].startswith("test") for identifier in ids):
-              raise SystemExit("fast tier contains a non-test method ID")
-          PY
-      - name: Validate locked vendor pins
-        run: |
-          python - <<'PY'
-          import subprocess
-          import tomllib
-          from pathlib import Path
-
-          if Path("MANIFEST.in").read_text(encoding="utf-8") != "prune vendor/jsonl-viewer\n":
-              raise SystemExit("MANIFEST.in must exclude vendored jsonl-viewer source")
-
-          with open("uv.lock", "rb") as source:
-              packages = {package["name"]: package for package in tomllib.load(source)["package"]}
-          for name in ("generic-rag", "jsonl-viewer"):
-              pinned = packages[name]["source"]["git"].rsplit("#", 1)[-1]
-              gitlink = subprocess.check_output(
-                  ["git", "rev-parse", f"HEAD:vendor/{name}"], text=True
-              ).strip()
-              if pinned != gitlink:
-                  raise SystemExit(f"{name}: uv.lock pin {pinned} differs from gitlink {gitlink}")
-          PY
-      - name: Validate policy artifacts
-        run: |
-          python - <<'PY'
-          import pathlib
-
-          root = pathlib.Path.cwd()
-          templates = {
-              ".github/ISSUE_TEMPLATE/work_item.md": [
-                  "## Objective", "## Use cases and expected results",
-                  "## Implementation summary", "## Acceptance criteria",
-                  "## Boundaries and dependencies",
-                  "## Related work and verification plan", "## Implementation plan",
-              ],
-              ".github/pull_request_template.md": [
-                  "## What changed", "## Before and after", "## Implementation",
-                  "## Verification", "## Limitations and follow-ups",
-                  "## Related Issue",
-              ],
-              ".github/templates/evidence.md": [
-                  "## What this demonstrates", "## Scenario results",
-                  "## Reproduction and environment", "## Failures and coverage gaps",
-                  "## Technical provenance and artifacts", "## Assessment",
-              ],
-              ".github/templates/working-status-comment.md": [
-                  "## Current status", "## What works now", "## What remains",
-                  "## Blocker or decision", "## Next step", "## Evidence links",
-              ],
+{
+  "name": "Template reuse v32 full CI",
+  "permissions": {
+    "contents": "read",
+    "pull-requests": "read"
+  },
+  "concurrency": {
+    "group": "template-reuse-v32-${{ github.ref }}",
+    "cancel-in-progress": false
+  },
+  "jobs": {
+    "workflow-deadline": {
+      "name": "Enforce 30-minute workflow limit",
+      "if": "always()",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "permissions": {
+        "actions": "write"
+      },
+      "steps": [
+        {
+          "name": "Enforce total workflow deadline",
+          "uses": "actions/github-script@v7",
+          "with": {
+            "retries": 0,
+            "script": "const parameters = () => ({\n  ...context.repo,\n  run_id: context.runId,\n  request: {signal: AbortSignal.timeout(5000)},\n});\nconst attempt = Number(process.env.GITHUB_RUN_ATTEMPT);\nif (!Number.isSafeInteger(attempt) || attempt < 1) {\n  core.setFailed(\"Missing workflow attempt identity.\");\n  return;\n}\n// Metadata retries never grant a new test budget.\nconst metadataDeadline = Date.now() + 30_000;\nlet deadline;\nlet cancellationRequested = false;\nasync function currentRun() {\n  const {data: run} = await github.rest.actions.getWorkflowRun(parameters());\n  if (run.id !== context.runId || run.run_attempt !== attempt) {\n    core.setFailed(\"Workflow attempt changed; the stale guard cannot cancel it.\");\n    return null;\n  }\n  if (run.status === \"completed\") return null;\n  const created = Date.parse(run.created_at);\n  if (!Number.isFinite(created)) throw new Error(\"Missing workflow creation time.\");\n  const runDeadline = created + 30 * 60 * 1000;\n  deadline = deadline === undefined ? runDeadline : Math.min(deadline, runDeadline);\n  if (Date.now() >= deadline - 30_000) {\n    core.setFailed(\"Workflow guard shutdown margin reached; no safe control window remains.\");\n    return null;\n  }\n  return run;\n}\nwhile (Date.now() < (deadline === undefined ? metadataDeadline : deadline - 30_000)) {\n  try {\n    if (!await currentRun()) return;\n    let complete;\n    try {\n      const {data: page} = await github.rest.actions.listJobsForWorkflowRunAttempt({\n        ...parameters(), attempt_number: attempt, per_page: 100,\n      });\n      if (!Number.isSafeInteger(page.total_count) || page.total_count > 100 ||\n          !Array.isArray(page.jobs) || page.total_count !== page.jobs.length) {\n        throw new Error(\"Cannot establish the complete validation job list.\");\n      }\n      // A marker covers downstream jobs absent from an earlier API snapshot.\n      complete = page.jobs.find(job => job.name === \"Validation jobs complete\");\n    } catch (error) {\n      // Job-list failures cannot prevent cancellation at the deadline.\n      core.warning(`Completion lookup failed: ${error.message}`);\n    }\n    if (Date.now() < deadline && complete?.status === \"completed\" &&\n        [\"success\", \"failure\"].includes(complete.conclusion)) {\n      core.info(\"All validation jobs finished within the workflow deadline.\");\n      return;\n    }\n    if (Date.now() >= deadline - 330_000) {\n      core.setFailed(\"Workflow shutdown reserve reached; force-cancelling this run.\");\n      if (!await currentRun()) return;\n      await github.request(\"POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel\", parameters());\n      return;\n    }\n    if (!cancellationRequested && Date.now() >= deadline - 360_000) {\n      core.setFailed(\"Workflow shutdown reserve reached; cancelling this run.\");\n      if (!await currentRun()) return;\n      await github.rest.actions.cancelWorkflowRun(parameters());\n      cancellationRequested = true;\n    }\n  } catch (error) {\n    core.warning(`Deadline control request failed: ${error.message}`);\n  }\n  const remaining = (deadline === undefined ? metadataDeadline : deadline - 30_000) - Date.now();\n  const poll = deadline !== undefined && deadline - Date.now() > 390_000 ? 30_000 : 5000;\n  if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(poll, remaining)));\n}\ncore.setFailed(\"Workflow deadline enforcement could not complete within its bounded window.\");\n"
           }
-          for relative, expected in templates.items():
-              text = (root / relative).read_text(encoding="utf-8")
-              actual = [line for line in text.splitlines() if line.startswith("## ")]
-              if actual != expected:
-                  raise SystemExit(f"{relative}: template headings changed: {actual!r}")
-
-          agents = {path.name for path in (root / ".codex/agents").glob("*.toml")}
-          if agents != {"runtime_implementer.toml", "test_engineer.toml"}:
-              raise SystemExit(f"unexpected development agents: {sorted(agents)!r}")
-          required = [
-              root / ".agents/skills/project-workflow/SKILL.md",
-              root / ".codex/agents/runtime_implementer/PYTHON_MODULARITY_POLICY.md",
+        }
+      ]
+    },
+    "validation-complete": {
+      "name": "Validation jobs complete",
+      "needs": [
+        "classify",
+        "static",
+        "fast",
+        "affected",
+        "full",
+        "reconcile-full"
+      ],
+      "if": "${{ !cancelled() }}",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "permissions": {},
+      "steps": [
+        {
+          "name": "Mark validation jobs terminal",
+          "timeout-minutes": 1,
+          "run": "echo \"Validation jobs are terminal; their individual results remain authoritative.\""
+        }
+      ]
+    },
+    "classify": {
+      "name": "Pin implemented source and 30-minute deadline",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "permissions": {
+        "contents": "read",
+        "pull-requests": "read",
+        "actions": "read"
+      },
+      "outputs": {
+        "test_run_deadline": "${{ steps.paths.outputs.test_run_deadline }}",
+        "runtime": "${{ steps.paths.outputs.runtime }}",
+        "policy_only": "${{ steps.paths.outputs.policy_only }}",
+        "full": "${{ steps.paths.outputs.full }}",
+        "wall_time_exception": "${{ steps.paths.outputs.wall_time_exception }}",
+        "base_sha": "${{ steps.paths.outputs.base_sha }}",
+        "head_sha": "${{ steps.paths.outputs.head_sha }}",
+        "checkout_sha": "${{ steps.paths.outputs.checkout_sha }}"
+      },
+      "steps": [
+        {
+          "name": "Classify paths and select runtime evidence",
+          "id": "paths",
+          "uses": "actions/github-script@v7",
+          "timeout-minutes": 2,
+          "with": {
+            "script": "const {owner, repo} = context.repo;\nconst {data: run} = await github.rest.actions.getWorkflowRun({\n  owner, repo, run_id: context.runId, request: {signal: AbortSignal.timeout(5000)},\n});\nconst created = Date.parse(run.created_at);\nif (run.id !== context.runId || run.run_attempt !== Number(process.env.GITHUB_RUN_ATTEMPT) ||\n    !Number.isFinite(created)) {\n  core.setFailed(\"Cannot establish this workflow attempt's creation time.\");\n  return;\n}\nconst deadline = Math.floor(created / 1000) + 30 * 60;\ncore.setOutput(\"test_run_deadline\", String(deadline));\nif (Date.now() >= deadline * 1000) {\n  core.setFailed(\"Shared workflow deadline exhausted before classification.\");\n  return;\n}\nif (context.eventName !== \"workflow_dispatch\") { core.setFailed(\"Validation-only dispatch required\"); return; }\ncore.setOutput(\"runtime\", \"true\");\ncore.setOutput(\"policy_only\", \"false\");\ncore.setOutput(\"full\", \"true\");\ncore.setOutput(\"wall_time_exception\", \"false\");\ncore.setOutput(\"base_sha\", \"a3434d104f0afdc3ebc47cdd526617fe124e9bbd\");\ncore.setOutput(\"head_sha\", \"379e2758e8bb892430759f115c729e917b6e143b\");\ncore.setOutput(\"checkout_sha\", \"379e2758e8bb892430759f115c729e917b6e143b\");\nreturn;\nlet files = [];\nlet labels = [];\nlet baseSha;\nlet headSha;\nlet truncated = false;\n\nif (context.eventName === \"pull_request\") {\n  const pr = context.payload.pull_request;\n  baseSha = pr.base.sha;\n  headSha = pr.head.sha;\n  labels = pr.labels.map(label => label.name);\n  files = await github.paginate(github.rest.pulls.listFiles, {\n    owner, repo, pull_number: pr.number, per_page: 100,\n  });\n  truncated = files.length >= 3000;\n} else {\n  const group = context.payload.merge_group;\n  baseSha = group.base_sha;\n  headSha = group.head_sha;\n  const comparison = await github.rest.repos.compareCommitsWithBasehead({\n    owner, repo, basehead: `${baseSha}...${headSha}`, per_page: 100,\n  });\n  files = comparison.data.files || [];\n  // A full page may hide later files. Fail closed rather than infer a partial diff.\n  truncated = !Array.isArray(comparison.data.files) || files.length >= 100;\n}\n\nconst paths = files.flatMap(file =>\n  [file.filename, file.previous_filename].filter(Boolean));\nconst isRuntime = path =>\n  path.startsWith(\"src/\") ||\n  path.startsWith(\"config/\") ||\n  path === \"pyproject.toml\" ||\n  path === \"uv.lock\" ||\n  path === \"MANIFEST.in\" ||\n  path === \".gitmodules\" ||\n  path === \"vendor/generic-rag\" ||\n  path === \"vendor/jsonl-viewer\";\nconst runtimePaths = truncated || paths.some(isRuntime);\nconst isTest = path => path.startsWith(\"tests/\") ||\n  path === \".github/workflows/pr-validation.yml\" || path === \"TEST_POLICY.md\";\nconst testPaths = truncated || paths.some(isTest);\nconst fullRequested = labels.includes(\"test:full\");\nconst wallTimeException = context.eventName === \"pull_request\" && labels.includes(\"test:wall-time-exception\");\nconst runtime = runtimePaths || testPaths || fullRequested;\nconst full = runtime;\ncore.setOutput(\"runtime\", String(runtime));\ncore.setOutput(\"policy_only\", String(!runtimePaths && !testPaths));\ncore.setOutput(\"full\", String(full));\ncore.setOutput(\"wall_time_exception\", String(wallTimeException));\ncore.setOutput(\"base_sha\", baseSha);\ncore.setOutput(\"head_sha\", headSha);\n// Event SHA is the PR test merge or merge-group commit, pinned across jobs.\ncore.setOutput(\"checkout_sha\", context.sha);\ncore.summary\n  .addHeading(\"Validation selection\")\n  .addTable([\n    [{data: \"Runtime paths\", header: true}, String(runtimePaths)],\n    [{data: \"Policy/config only\", header: true}, String(!runtimePaths)],\n    [{data: \"Run runtime lanes\", header: true}, String(runtime)],\n    [{data: \"Full suite\", header: true}, String(full)],\n    [{data: \"Wall-time exception\", header: true}, String(wallTimeException)],\n  ])\n  .write();\n"
+          }
+        }
+      ]
+    },
+    "static": {
+      "name": "Static validation",
+      "needs": "classify",
+      "if": "needs.classify.result == 'success'",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "env": {
+        "TEST_RUN_DEADLINE": "${{ needs.classify.outputs.test_run_deadline }}"
+      },
+      "steps": [
+        {
+          "name": "Check shared deadline before static work",
+          "run": "[[ \"$TEST_RUN_DEADLINE\" =~ ^[0-9]+$ ]] || exit 2\nif (( TEST_RUN_DEADLINE <= $(date +%s) )); then\n  echo \"Shared test-run deadline exhausted before static work.\"\n  exit 124\nfi\n"
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 0,
+            "ref": "${{ needs.classify.outputs.checkout_sha }}"
+          }
+        },
+        {
+          "uses": "actions/setup-python@v5",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "name": "Check patch whitespace",
+          "env": {
+            "BASE_SHA": "${{ needs.classify.outputs.base_sha }}",
+            "HEAD_SHA": "${{ needs.classify.outputs.head_sha }}"
+          },
+          "run": "git diff --check \"$BASE_SHA...$HEAD_SHA\""
+        },
+        {
+          "name": "Parse repository configuration",
+          "run": "python - <<'PY'\nimport json\nimport pathlib\nimport tomllib\n\nfor path in pathlib.Path(\".\").glob(\"**/*.toml\"):\n    if \".git\" not in path.parts:\n        data = tomllib.loads(path.read_text(encoding=\"utf-8\"))\n        if path.parent == pathlib.Path(\".codex/agents\"):\n            if data.get(\"name\") != path.stem:\n                raise SystemExit(f\"{path}: agent name must match filename\")\n            for field in (\"description\", \"developer_instructions\"):\n                value = data.get(field)\n                if not isinstance(value, str) or not value.strip():\n                    raise SystemExit(f\"{path}: missing {field}\")\nfor path in pathlib.Path(\".\").glob(\"**/*.json\"):\n    if \".git\" not in path.parts:\n        json.loads(path.read_text(encoding=\"utf-8\"))\nfor path in (*pathlib.Path(\"src\").rglob(\"*.py\"), *pathlib.Path(\"tests\").rglob(\"*.py\")):\n    compile(path.read_text(encoding=\"utf-8\"), str(path), \"exec\", dont_inherit=True)\nPY\nruby -e 'require \"yaml\"; Dir[\".github/workflows/*.{yml,yaml}\"].each { |path| YAML.parse_file(path) }'\nruby -ryaml -ropen3 <<'RB'\nDir[\".agents/skills/*/SKILL.md\"].each do |path|\n  source = File.read(path)\n  match = source.match(/\\A---\\r?\\n(.*?)\\r?\\n---(?:\\r?\\n|\\z)/m)\n  abort \"#{path}: missing YAML frontmatter\" unless match\n  data = YAML.safe_load(match[1], aliases: false)\n  abort \"#{path}: name must match directory and description must be nonempty\" unless\n    data.is_a?(Hash) && data[\"name\"] == File.basename(File.dirname(path)) &&\n    data[\"description\"].is_a?(String) && !data[\"description\"].strip.empty?\nend\nissue_path = \".github/ISSUE_TEMPLATE/work_item.md\"\nissue_source = File.read(issue_path)\nissue_match = issue_source.match(/\\A---\\r?\\n(.*?)\\r?\\n---(?:\\r?\\n|\\z)/m)\nabort \"#{issue_path}: missing YAML frontmatter\" unless issue_match\nissue = YAML.safe_load(issue_match[1], aliases: false)\nabort \"#{issue_path}: invalid frontmatter mapping\" unless issue.is_a?(Hash)\n%w[name about title labels assignees].each do |field|\n  value = issue[field]\n  abort \"#{issue_path}: missing or non-string #{field}\" unless value.is_a?(String)\nend\n%w[name about].each do |field|\n  abort \"#{issue_path}: empty #{field}\" if issue[field].strip.empty?\nend\nDir[\".github/workflows/*.{yml,yaml}\"].each do |path|\n  document = YAML.safe_load(File.read(path), aliases: false)\n  document.fetch(\"jobs\").each do |job_name, job|\n    job.fetch(\"steps\", []).each do |step|\n      script = step[\"with\"]&.fetch(\"script\", nil)\n      next unless script\n      _, error, status = Open3.capture3(\n        \"node\", \"--input-type=module\", \"--check\",\n        stdin_data: \"async function main() {\\n#{script}\\n}\")\n      abort \"#{path} #{job_name}: #{error}\" unless status.success?\n    end\n  end\nend\nRB\n"
+        },
+        {
+          "name": "Validate runner metadata",
+          "run": "python -B - <<'PY'\nfrom tests import suite_policy\n\nsuite_policy.load_timing_weights()\nids = suite_policy.FAST_TEST_IDS\nif not ids or len(ids) != len(set(ids)):\n    raise SystemExit(\"fast tier must contain unique test IDs\")\nif any(not identifier.rsplit(\".\", 1)[-1].startswith(\"test\") for identifier in ids):\n    raise SystemExit(\"fast tier contains a non-test method ID\")\nPY\n"
+        },
+        {
+          "name": "Validate locked vendor pins",
+          "run": "python - <<'PY'\nimport subprocess\nimport tomllib\nfrom pathlib import Path\n\nif Path(\"MANIFEST.in\").read_text(encoding=\"utf-8\") != \"prune vendor/jsonl-viewer\\n\":\n    raise SystemExit(\"MANIFEST.in must exclude vendored jsonl-viewer source\")\n\nwith open(\"uv.lock\", \"rb\") as source:\n    packages = {package[\"name\"]: package for package in tomllib.load(source)[\"package\"]}\nfor name in (\"generic-rag\", \"jsonl-viewer\"):\n    pinned = packages[name][\"source\"][\"git\"].rsplit(\"#\", 1)[-1]\n    gitlink = subprocess.check_output(\n        [\"git\", \"rev-parse\", f\"HEAD:vendor/{name}\"], text=True\n    ).strip()\n    if pinned != gitlink:\n        raise SystemExit(f\"{name}: uv.lock pin {pinned} differs from gitlink {gitlink}\")\nPY\n"
+        },
+        {
+          "name": "Validate policy artifacts",
+          "run": "python - <<'PY'\nimport pathlib\n\nroot = pathlib.Path.cwd()\ntemplates = {\n    \".github/ISSUE_TEMPLATE/work_item.md\": [\n        \"## Objective\", \"## Use cases and expected results\",\n        \"## Implementation summary\", \"## Acceptance criteria\",\n        \"## Boundaries and dependencies\",\n        \"## Related work and verification plan\", \"## Implementation plan\",\n    ],\n    \".github/pull_request_template.md\": [\n        \"## What changed\", \"## Before and after\", \"## Implementation\",\n        \"## Verification\", \"## Limitations and follow-ups\",\n        \"## Related Issue\",\n    ],\n    \".github/templates/evidence.md\": [\n        \"## What this demonstrates\", \"## Scenario results\",\n        \"## Reproduction and environment\", \"## Failures and coverage gaps\",\n        \"## Technical provenance and artifacts\", \"## Assessment\",\n    ],\n    \".github/templates/working-status-comment.md\": [\n        \"## Current status\", \"## What works now\", \"## What remains\",\n        \"## Blocker or decision\", \"## Next step\", \"## Evidence links\",\n    ],\n}\nfor relative, expected in templates.items():\n    text = (root / relative).read_text(encoding=\"utf-8\")\n    actual = [line for line in text.splitlines() if line.startswith(\"## \")]\n    if actual != expected:\n        raise SystemExit(f\"{relative}: template headings changed: {actual!r}\")\n\nagents = {path.name for path in (root / \".codex/agents\").glob(\"*.toml\")}\nif agents != {\"runtime_implementer.toml\", \"test_engineer.toml\"}:\n    raise SystemExit(f\"unexpected development agents: {sorted(agents)!r}\")\nrequired = [\n    root / \".agents/skills/project-workflow/SKILL.md\",\n    root / \".codex/agents/runtime_implementer/PYTHON_MODULARITY_POLICY.md\",\n]\nif any(not path.is_file() for path in required):\n    raise SystemExit(\"required simplified workflow artifact is missing\")\nforbidden = [\n    root / \".agents/skills/adaptive-verification/SKILL.md\",\n    root / \".agents/skills/subagent-model-selection/SKILL.md\",\n    root / \"tests/test_repository_agent_policy.py\",\n]\nif any(path.exists() for path in forbidden):\n    raise SystemExit(\"retired policy artifact still exists\")\nif len((root / \"PYTHON_MODULE_INDEX.md\").read_text(encoding=\"utf-8\").splitlines()) > 300:\n    raise SystemExit(\"PYTHON_MODULE_INDEX.md exceeds 300 lines\")\nPY\n"
+        }
+      ]
+    },
+    "fast": {
+      "name": "Fast runtime tests",
+      "needs": [
+        "classify",
+        "affected"
+      ],
+      "if": "needs.classify.outputs.runtime == 'true'",
+      "runs-on": "ubuntu-24.04-arm",
+      "timeout-minutes": 30,
+      "env": {
+        "TEST_JOB_MINUTES": "30",
+        "TEST_RUN_DEADLINE": "${{ needs.classify.outputs.test_run_deadline }}"
+      },
+      "steps": [
+        {
+          "name": "Record shared test deadline before setup",
+          "run": "test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))\nif [[ -n \"$TEST_RUN_DEADLINE\" ]]; then\n  [[ \"$TEST_RUN_DEADLINE\" =~ ^[0-9]+$ ]] || exit 2\n  if (( TEST_RUN_DEADLINE < test_deadline )); then\n    test_deadline=$TEST_RUN_DEADLINE\n  fi\nelse\n  echo \"Missing shared test-run deadline.\"\n  exit 2\nfi\necho \"TEST_JOB_DEADLINE=$test_deadline\" >> \"$GITHUB_ENV\"\nif (( test_deadline <= $(date +%s) )); then\n  echo \"Shared test-run deadline exhausted before setup.\"\n  exit 124\nfi\n"
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "submodules": "recursive",
+            "ref": "${{ needs.classify.outputs.checkout_sha }}"
+          }
+        },
+        {
+          "uses": "actions/setup-python@v5",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "uses": "astral-sh/setup-uv@v10.2.0",
+          "with": {
+            "version": "0.12.17"
+          }
+        },
+        {
+          "name": "Install runtime test dependencies",
+          "run": "uv sync --locked --all-extras --python 3.11 --no-progress"
+        },
+        {
+          "name": "Configure deterministic test Git identity",
+          "env": {
+            "TEST_HARDWARE_ARCH": "arm64",
+            "TEST_HARDWARE_PATH": "${{ runner.temp }}/runner-hardware-fast.json",
+            "TEST_HARDWARE_SELECTION": "tier:fast"
+          },
+          "run": "git config --global user.name \"Story Tests\"\ngit config --global user.email \"story-tests@example.invalid\"\n.venv/bin/python - <<'PY_HARDWARE'\nimport datetime, gc, hashlib, json, os, platform, sys\nfrom pathlib import Path\n\noutput = Path(os.environ['TEST_HARDWARE_PATH'])\nroot = Path(os.environ['GITHUB_WORKSPACE'])\narch = os.environ['TEST_HARDWARE_ARCH']\nexpected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}\ndata = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,\n        'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],\n        'selection': os.environ['TEST_HARDWARE_SELECTION'],\n        'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,\n        'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}\ntry:\n    assert arch in expected, 'unsupported selected runner architecture'\n    affinity = sorted(os.sched_getaffinity(0))\n    data.update(system=platform.system(), machine=platform.machine(),\n                cpu_count=os.cpu_count(), cpu_affinity=affinity,\n                available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],\n                runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],\n                python_version=platform.python_version(), python_implementation=platform.python_implementation(),\n                python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],\n                run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),\n                native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],\n                native_ref=os.environ['GITHUB_REF'],\n                source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()\n                                   for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},\n                hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),\n                                     'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})\n    assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'\n    assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'\n    assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'\n    assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)\n    assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'\n    assert data['run_id'].isdigit() and data['run_attempt'] > 0\n    assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])\n    assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}\n    data['status'] = 'passed'\nexcept BaseException as error:\n    data['error'] = {'type': type(error).__name__, 'message': str(error)}\n    raise\nfinally:\n    output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n    with output.open('x', encoding='utf-8') as stream:\n        stream.write(json.dumps(data, indent=2, allow_nan=False) + '\\n')\n    print(json.dumps(data, sort_keys=True, allow_nan=False))\nPY_HARDWARE\n"
+        },
+        {
+          "name": "Run fast runtime tests",
+          "run": "test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds > 1350 )); then test_seconds=1350; fi\nprintf '{\"worker_limit_seconds\":%s,\"kill_grace_seconds\":30,\"cleanup_reserve_seconds\":60,\"cancellation_reserve_seconds\":360}\\n' \"$test_seconds\" > \"$RUNNER_TEMP/fast-control.json\"\nif (( test_seconds <= 0 )); then exit 124; fi\nset +e\ntimeout --signal=INT --kill-after=30s \"${test_seconds}s\" env PYTHONPATH=src .venv/bin/python -m tests.runner run --tier fast --json \"$RUNNER_TEMP/fast.json\" 2>&1 | tee \"$RUNNER_TEMP/fast.log\"\ntest_statuses=(\"${PIPESTATUS[@]}\")\ntest_status=${test_statuses[0]}\nif (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi\nprintf '%s\\n' \"$test_status\" > \"$RUNNER_TEMP/fast-exit-code.txt\"\nexit \"$test_status\"\n"
+        },
+        {
+          "uses": "actions/upload-artifact@v4",
+          "timeout-minutes": 1,
+          "if": "always()",
+          "with": {
+            "name": "runtime-fast",
+            "path": "${{ runner.temp }}/fast.json\n${{ runner.temp }}/fast.log\n${{ runner.temp }}/fast-control.json\n${{ runner.temp }}/fast-exit-code.txt\n${{ runner.temp }}/runner-hardware-fast.json\n",
+            "if-no-files-found": "warn"
+          }
+        }
+      ]
+    },
+    "full": {
+      "name": "Full runtime shard ${{ matrix.shard }}/4",
+      "needs": [
+        "classify",
+        "affected"
+      ],
+      "if": "needs.classify.outputs.full == 'true'",
+      "strategy": {
+        "fail-fast": false,
+        "matrix": {
+          "shard": [
+            1,
+            2,
+            3,
+            4
           ]
-          if any(not path.is_file() for path in required):
-              raise SystemExit("required simplified workflow artifact is missing")
-          forbidden = [
-              root / ".agents/skills/adaptive-verification/SKILL.md",
-              root / ".agents/skills/subagent-model-selection/SKILL.md",
-              root / "tests/test_repository_agent_policy.py",
-          ]
-          if any(path.exists() for path in forbidden):
-              raise SystemExit("retired policy artifact still exists")
-          if len((root / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8").splitlines()) > 300:
-              raise SystemExit("PYTHON_MODULE_INDEX.md exceeds 300 lines")
-          PY
-
-  fast:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - fast tier skipped' || 'Runtime fast tier' }}
-    needs: classify
-    if: needs.classify.outputs.runtime == 'true'
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
-    env:
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: '0.12.17'
-      - name: Install runtime test dependencies
-        run: uv sync --locked --all-extras --python 3.11 --no-progress
-      - name: Configure deterministic test Git identity
-        env:
-          TEST_HARDWARE_ARCH: "arm64"
-          TEST_HARDWARE_PATH: "${{ runner.temp }}/runner-hardware-fast.json"
-          TEST_HARDWARE_SELECTION: "tier:fast"
-        run: |
-          git config --global user.name "Story Tests"
-          git config --global user.email "story-tests@example.invalid"
-          .venv/bin/python - <<'PY_HARDWARE'
-          import datetime, gc, hashlib, json, os, platform, sys
-          from pathlib import Path
-
-          output = Path(os.environ['TEST_HARDWARE_PATH'])
-          root = Path(os.environ['GITHUB_WORKSPACE'])
-          arch = os.environ['TEST_HARDWARE_ARCH']
-          expected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}
-          data = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,
-                  'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],
-                  'selection': os.environ['TEST_HARDWARE_SELECTION'],
-                  'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,
-                  'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
-          try:
-              assert arch in expected, 'unsupported selected runner architecture'
-              affinity = sorted(os.sched_getaffinity(0))
-              data.update(system=platform.system(), machine=platform.machine(),
-                          cpu_count=os.cpu_count(), cpu_affinity=affinity,
-                          available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],
-                          runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],
-                          python_version=platform.python_version(), python_implementation=platform.python_implementation(),
-                          python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],
-                          run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
-                          native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],
-                          native_ref=os.environ['GITHUB_REF'],
-                          source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()
-                                             for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},
-                          hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),
-                                               'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})
-              assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'
-              assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'
-              assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'
-              assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)
-              assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'
-              assert data['run_id'].isdigit() and data['run_attempt'] > 0
-              assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])
-              assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}
-              data['status'] = 'passed'
-          except BaseException as error:
-              data['error'] = {'type': type(error).__name__, 'message': str(error)}
-              raise
-          finally:
-              output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-              with output.open('x', encoding='utf-8') as stream:
-                  stream.write(json.dumps(data, indent=2, allow_nan=False) + '\n')
-              print(json.dumps(data, sort_keys=True, allow_nan=False))
-          PY_HARDWARE
-      - name: Run fast runtime tests
-        run: |
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds > 1350 )); then test_seconds=1350; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/fast-control.json"
-          if (( test_seconds <= 0 )); then exit 124; fi
-          set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --tier fast --json "$RUNNER_TEMP/fast.json" 2>&1 | tee "$RUNNER_TEMP/fast.log"
-          test_statuses=("${PIPESTATUS[@]}")
-          test_status=${test_statuses[0]}
-          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
-          printf '%s\n' "$test_status" > "$RUNNER_TEMP/fast-exit-code.txt"
-          exit "$test_status"
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 1
-        if: always()
-        with:
-          name: runtime-fast
-          path: |
-            ${{ runner.temp }}/fast.json
-            ${{ runner.temp }}/fast.log
-            ${{ runner.temp }}/fast-control.json
-            ${{ runner.temp }}/fast-exit-code.txt
-            ${{ runner.temp }}/runner-hardware-fast.json
-          if-no-files-found: warn
-
-  full:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - full suite skipped' || format('Full runtime shard {0}/4', matrix.shard) }}
-    needs: classify
-    if: needs.classify.outputs.full == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    runs-on: ubuntu-24.04-arm
-    env:
-      PYTHONDONTWRITEBYTECODE: '1'
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    timeout-minutes: 30
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: '0.12.17'
-      - name: Install runtime test dependencies
-        run: uv sync --locked --all-extras --python 3.11 --no-progress
-      - name: Configure deterministic test Git identity
-        env:
-          TEST_HARDWARE_ARCH: "arm64"
-          TEST_HARDWARE_PATH: "${{ runner.temp }}/runner-hardware-full-${{ matrix.shard }}.json"
-          TEST_HARDWARE_SELECTION: "shard:${{ matrix.shard }}/4"
-          TEST_HARDWARE_SHARD: "${{ matrix.shard }}/4"
-        run: |
-          git config --global user.name "Story Tests"
-          git config --global user.email "story-tests@example.invalid"
-          .venv/bin/python - <<'PY_HARDWARE'
-          import datetime, gc, hashlib, json, os, platform, sys
-          from pathlib import Path
-
-          output = Path(os.environ['TEST_HARDWARE_PATH'])
-          root = Path(os.environ['GITHUB_WORKSPACE'])
-          arch = os.environ['TEST_HARDWARE_ARCH']
-          expected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}
-          data = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,
-                  'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],
-                  'selection': os.environ['TEST_HARDWARE_SELECTION'],
-                  'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,
-                  'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
-          try:
-              assert arch in expected, 'unsupported selected runner architecture'
-              affinity = sorted(os.sched_getaffinity(0))
-              data.update(system=platform.system(), machine=platform.machine(),
-                          cpu_count=os.cpu_count(), cpu_affinity=affinity,
-                          available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],
-                          runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],
-                          python_version=platform.python_version(), python_implementation=platform.python_implementation(),
-                          python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],
-                          run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
-                          native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],
-                          native_ref=os.environ['GITHUB_REF'],
-                          source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()
-                                             for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},
-                          hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),
-                                               'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})
-              assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'
-              assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'
-              assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'
-              assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)
-              assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'
-              assert data['run_id'].isdigit() and data['run_attempt'] > 0
-              assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])
-              assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}
-              data['status'] = 'passed'
-          except BaseException as error:
-              data['error'] = {'type': type(error).__name__, 'message': str(error)}
-              raise
-          finally:
-              output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-              with output.open('x', encoding='utf-8') as stream:
-                  stream.write(json.dumps(data, indent=2, allow_nan=False) + '\n')
-              print(json.dumps(data, sort_keys=True, allow_nan=False))
-          PY_HARDWARE
-      - name: Run full runtime shard
-        run: |
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds > 1350 )); then test_seconds=1350; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/full-${{ matrix.shard }}-control.json"
-          if (( test_seconds <= 0 )); then exit 124; fi
-          set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "${{ matrix.shard }}/4" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json" 2>&1 | tee "$RUNNER_TEMP/full-${{ matrix.shard }}.log"
-          test_statuses=("${PIPESTATUS[@]}")
-          test_status=${test_statuses[0]}
-          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
-          printf '%s\n' "$test_status" > "$RUNNER_TEMP/full-${{ matrix.shard }}-exit-code.txt"
-          exit "$test_status"
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 1
-        if: always()
-        with:
-          name: full-${{ matrix.shard }}
-          path: |
-            ${{ runner.temp }}/full-${{ matrix.shard }}.json
-            ${{ runner.temp }}/full-${{ matrix.shard }}.log
-            ${{ runner.temp }}/full-${{ matrix.shard }}-control.json
-            ${{ runner.temp }}/full-${{ matrix.shard }}-exit-code.txt
-            ${{ runner.temp }}/runner-hardware-full-${{ matrix.shard }}.json
-          if-no-files-found: error
-
-  reconcile-full:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - reconciliation skipped' || 'Reconcile full runtime suite' }}
-    needs: [classify, full]
-    if: >-
-      !cancelled() && needs.classify.outputs.full == 'true' &&
-      (needs.full.result == 'success' || needs.full.result == 'failure')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: full-*
-          path: full-reports
-      - name: Reconcile shard evidence
-        run: |
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds <= 0 )); then
-            echo "Reconciliation deadline exhausted; preserve 30s termination, 60s upload, and 360s cancellation reserve."
-            exit 124
-          fi
-          PYTHONPATH=src timeout --signal=INT --kill-after=30s "${test_seconds}s" \
-            python -m tests.runner reconcile \
-            full-reports/full-1/full-1.json full-reports/full-2/full-2.json \
-            full-reports/full-3/full-3.json full-reports/full-4/full-4.json \
-            --json "$RUNNER_TEMP/full-reconciled.json"
-      - name: Enforce frozen suite inventory and wall-time budget
-        env:
-          BASE_SHA: ${{ needs.classify.outputs.base_sha }}
-          WALL_TIME_EXCEPTION: ${{ needs.classify.outputs.wall_time_exception }}
-        run: |
-          budget_args=(--base-ref "$BASE_SHA"
-            --report full-reports/full-1/full-1.json
-            --report full-reports/full-2/full-2.json
-            --report full-reports/full-3/full-3.json
-            --report full-reports/full-4/full-4.json)
-          if [[ "$WALL_TIME_EXCEPTION" == "true" ]]; then
-            echo "Maintainer-authorized wall-time exception: measured durations remain visible."
-            budget_args+=(--allow-wall-time-overage)
-          fi
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds <= 0 )); then
-            echo "Reconciliation deadline exhausted before inventory and wall-time checks."
-            exit 124
-          fi
-          PYTHONPATH=src timeout --signal=INT --kill-after=30s "${test_seconds}s" \
-            python -m tests.suite_budget "${budget_args[@]}"
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 1
-        if: always()
-        with:
-          name: runtime-full-reconciled
-          path: ${{ runner.temp }}/full-reconciled.json
-          if-no-files-found: warn
-
-  diagnose-full-budget:
-    name: ${{ github.event_name == 'workflow_dispatch' && format('Diagnostic only ({0}, {1})', inputs.arch, inputs.scratch) || 'Diagnose full-suite timing failure' }}
-    needs: [classify, full, reconcile-full]
-    if: >-
-      !cancelled() && (github.event_name == 'workflow_dispatch' ||
-      (needs.full.result == 'success' && needs.reconcile-full.result == 'failure'))
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    timeout-minutes: 30
-    env:
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: '0.12.17'
-      - uses: actions/download-artifact@v4
-        if: github.event_name != 'workflow_dispatch'
-        with:
-          pattern: full-*
-          path: ${{ runner.temp }}/diagnostic-inputs
-      - name: Select actual timing failures
-        if: github.event_name != 'workflow_dispatch'
-        id: timing
-        run: |
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          from tests.suite_budget import load_budget
-          root = Path(os.environ["RUNNER_TEMP"]) / "diagnostic-inputs"
-          reports = [json.loads((root / f"full-{i}" / f"full-{i}.json").read_text()) for i in (1, 2, 3, 4)]
-          budget = load_budget()
-          seconds = [report["durations"]["wall_seconds"] for report in reports]
-          over = sum(seconds) > budget["max_sequential_wall_seconds"] or max(seconds) > budget["max_shard_wall_seconds"]
-          selected = over and all(report["outcome"] == "success" for report in reports)
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"selected={str(selected).lower()}\n")
-          PY
-      - name: Install diagnostic dependencies
-        if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
-        run: uv sync --locked --all-extras --python 3.11 --no-progress
-      - name: Configure diagnostic test Git identity
-        if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
-        env:
-          TEST_HARDWARE_ARCH: "${{ github.event_name == 'workflow_dispatch' && inputs.arch || 'x64' }}"
-          TEST_HARDWARE_PATH: "${{ runner.temp }}/timing-diagnostic/runner-hardware.json"
-          TEST_HARDWARE_SELECTION: "${{ inputs.test_id || 'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles' }}"
-        run: |
-          git config --global user.name "Story Tests"
-          git config --global user.email "story-tests@example.invalid"
-          .venv/bin/python - <<'PY_HARDWARE'
-          import datetime, gc, hashlib, json, os, platform, sys
-          from pathlib import Path
-
-          output = Path(os.environ['TEST_HARDWARE_PATH'])
-          root = Path(os.environ['GITHUB_WORKSPACE'])
-          arch = os.environ['TEST_HARDWARE_ARCH']
-          expected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}
-          data = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,
-                  'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],
-                  'selection': os.environ['TEST_HARDWARE_SELECTION'],
-                  'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,
-                  'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
-          try:
-              assert arch in expected, 'unsupported selected runner architecture'
-              affinity = sorted(os.sched_getaffinity(0))
-              data.update(system=platform.system(), machine=platform.machine(),
-                          cpu_count=os.cpu_count(), cpu_affinity=affinity,
-                          available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],
-                          runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],
-                          python_version=platform.python_version(), python_implementation=platform.python_implementation(),
-                          python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],
-                          run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
-                          native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],
-                          native_ref=os.environ['GITHUB_REF'],
-                          source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()
-                                             for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},
-                          hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),
-                                               'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})
-              assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'
-              assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'
-              assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'
-              assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)
-              assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'
-              assert data['run_id'].isdigit() and data['run_attempt'] > 0
-              assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])
-              assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}
-              data['status'] = 'passed'
-          except BaseException as error:
-              data['error'] = {'type': type(error).__name__, 'message': str(error)}
-              raise
-          finally:
-              output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-              with output.open('x', encoding='utf-8') as stream:
-                  stream.write(json.dumps(data, indent=2, allow_nan=False) + '\n')
-              print(json.dumps(data, sort_keys=True, allow_nan=False))
-          PY_HARDWARE
-      - name: Prepare diagnostic scratch storage
-        if: github.event_name == 'workflow_dispatch'
-        id: scratch
-        env:
-          MEMORY: ${{ inputs.scratch == 'memory' }}
-        run: |
-          scratch="$(mktemp -d "${TMPDIR:-/tmp}/story-timing.XXXXXXXX")"
-          if [[ "$MEMORY" == "true" ]]; then
-            echo "directory=$scratch" >> "$GITHUB_OUTPUT"
-            sudo mount -t tmpfs -o "size=2G,mode=0700,uid=$(id -u),gid=$(id -g)" tmpfs "$scratch"
-          else
-            SCRATCH="$scratch" python - <<'PY'
-          import json, os, re, stat
-          raw = os.environ["SCRATCH"]
-          parent = os.path.realpath(os.path.dirname(os.path.abspath(raw)))
-          name = os.path.basename(raw)
-          path = os.path.join(parent, name)
-          if not re.fullmatch(r"story-timing\.[A-Za-z0-9]{8}", name) or any(c in path for c in "\r\n"):
-              raise RuntimeError("Unexpected diagnostic scratch path")
-          flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-          fd = os.open(parent, flags)
-          try:
-              outer = os.fstat(fd)
-              inner = os.stat(name, dir_fd=fd, follow_symlinks=False)
-              if not stat.S_ISDIR(inner.st_mode) or inner.st_uid != os.geteuid() or inner.st_dev != outer.st_dev:
-                  raise RuntimeError("Diagnostic scratch creation identity is unsafe")
-              record = {"path": path, "parent": parent,
-                        "root": [inner.st_dev, inner.st_ino, inner.st_uid],
-                        "parent_identity": [outer.st_dev, outer.st_ino, outer.st_uid]}
-              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                  output.write("directory=" + path + "\n")
-                  output.write("identity=" + json.dumps(record, separators=(",", ":")) + "\n")
-              print(json.dumps({"diagnostic_scratch_created": record}, sort_keys=True))
-          finally:
-              os.close(fd)
-          PY
-          fi
-      - name: Run one existing canonical scenario with optional profiling
-        if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
-        env:
-          GIT_AUTHOR_NAME: Story Tests
-          GIT_AUTHOR_EMAIL: story-tests@example.invalid
-          GIT_COMMITTER_NAME: Story Tests
-          GIT_COMMITTER_EMAIL: story-tests@example.invalid
-          PYTHONPATH: src
-          PYTHONDONTWRITEBYTECODE: '1'
-          DIAGNOSTIC_TEST_ID: ${{ inputs.test_id || 'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles' }}
-          DIAGNOSTIC_PROFILE_MODE: ${{ inputs.profile_mode || 'cprofile' }}
-          TMPDIR: ${{ steps.scratch.outputs.directory || '/tmp' }}
-        run: |
-          install -d -m 700 "$RUNNER_TEMP/timing-diagnostic"
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds > 1350 )); then test_seconds=1350; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/timing-diagnostic/control.json"
-          if (( test_seconds <= 0 )); then exit 124; fi
-          set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" .venv/bin/python - <<'PY' 2>&1 | tee "$RUNNER_TEMP/timing-diagnostic/worker.log"
-          import collections, cProfile, functools, hashlib, json, os, platform, pstats, re, resource, subprocess, sys, sysconfig, tempfile, threading, time
-          from pathlib import Path
-          output = Path(os.environ["RUNNER_TEMP"]) / "timing-diagnostic"
-          output.mkdir(mode=0o700, exist_ok=True)
-          paths = subprocess.check_output(["git", "ls-files", "-z", "src", "tests", "config", "pyproject.toml", "uv.lock"]).decode().split("\0")
-          def hashes():
-              return {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in paths if path}
-          before = hashes()
-          environment = {"platform": platform.platform(), "python": platform.python_version(),
-                         "cpu_count": os.cpu_count(), "python_compiler": platform.python_compiler(),
-                         "python_enable_optimizations_flag": "--enable-optimizations" in (sysconfig.get_config_var("CONFIG_ARGS") or ""),
-                         "git": subprocess.check_output(["git", "--version"], text=True, timeout=10).strip(),
-                         "temporary_filesystem": subprocess.check_output(["stat", "-f", "-c", "%T", tempfile.gettempdir()], text=True, timeout=10).strip()}
-          prepared = {"diagnostic_only": True, "acceptance_credit": False, "phase": "prepared",
-                      "selection": {"requested_canonical_id": os.environ["DIAGNOSTIC_TEST_ID"], "validated_by_runner": False},
-                      "profile_mode": os.environ["DIAGNOSTIC_PROFILE_MODE"], "source_before": before,
-                      "checkout_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, timeout=10).strip(),
-                      "checkout_tree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True, timeout=10).strip(),
-                      "environment": environment, "observer_thread": True}
-          (output / "prepared.json").write_text(json.dumps(prepared, indent=2))
-          from story_writing_agents.git import process, session_resources
-          from tests import runner
-          counts = collections.defaultdict(lambda: {"calls": 0, "seconds": 0.0})
-          def record(key, elapsed):
-              counts[key]["calls"] += 1
-              counts[key]["seconds"] += elapsed
-          original_git = process.GitProcessRunner.run
-          @functools.wraps(original_git)
-          def git(self, args, **kwargs):
-              started = time.perf_counter()
-              try:
-                  return original_git(self, args, **kwargs)
-              finally:
-                  record("git:" + args[0], time.perf_counter() - started)
-          process.GitProcessRunner.run = git
-          original_refs = session_resources._Repository._loose_ref_output
-          samples = []
-          @functools.wraps(original_refs)
-          def refs(self):
-              started = time.perf_counter()
-              value = original_refs(self)
-              record("loose_refs:" + ("fallback" if value is None else "bytes"), time.perf_counter() - started)
-              if len(samples) < 8:
-                  with (self.common_git / "config").open("rb") as source:
-                      config = source.read(65536)
-                  safe = re.findall(rb"(?m)^\s*(?:repositoryformatversion|filemode|bare|logallrefupdates|objectformat|submodulepathconfig|relativeworktrees|worktreeconfig)\s*=\s*(?:true|false|0|1|sha1|sha256)\s*$", config)
-                  samples.append({"fallback": value is None, "config_sha256": hashlib.sha256(config).hexdigest(), "format_lines": [line.decode("ascii").strip() for line in safe], "packed_refs": (self.common_git / "packed-refs").exists(), "reftable": (self.common_git / "reftable").exists()})
-              return value
-          session_resources._Repository._loose_ref_output = refs
-          observer_stop = threading.Event()
-          observer_errors = []
-          main_thread = threading.main_thread().ident
-          def observe():
-              try:
-                  with (output / "progress.jsonl").open("a", buffering=1) as stream:
-                      while not observer_stop.is_set():
-                          frame = sys._current_frames().get(main_thread)
-                          frames, test_frame, depth = [], None, 0
-                          while frame is not None and depth < 64:
-                              code = frame.f_code
-                              location = {"file": code.co_filename, "function": code.co_name, "line": frame.f_lineno}
-                              if depth < 12:
-                                  frames.append(location)
-                              if code.co_name.startswith("test_"):
-                                  test_frame = location
-                              frame = frame.f_back
-                              depth += 1
-                          truncated = frame is not None
-                          frame = None
-                          row = {"diagnostic_only": True, "wall_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                 "elapsed_seconds": time.perf_counter() - started, "process_cpu_seconds": time.process_time(),
-                                 "max_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-                                 "main_thread_stack": frames, "test_frame": test_frame, "walk_truncated": truncated}
-                          stream.write(json.dumps(row, separators=(",", ":")) + "\n")
-                          if observer_stop.wait(60):
-                              break
-              except Exception as error:
-                  observer_errors.append(type(error).__name__)
-          profile = cProfile.Profile() if os.environ["DIAGNOSTIC_PROFILE_MODE"] == "cprofile" else None
-          started = time.perf_counter()
-          observer = threading.Thread(target=observe, name="diagnostic-progress", daemon=True)
-          observer_started = False
-          code, interrupted, finalization_errors = None, None, []
-          try:
-              try:
-                  observer.start()
-                  observer_started = True
-              except Exception as error:
-                  observer_errors.append(type(error).__name__)
-              if profile is not None:
-                  profile.enable()
-              code = runner.main(["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")])
-          except BaseException as error:
-              interrupted = type(error).__name__
-              raise
-          finally:
-              if profile is not None:
-                  profile.disable()
-              observer_stop.set()
-              if observer_started:
-                  observer.join(timeout=2)
-              try:
-                  if profile is not None:
-                      profile.dump_stats(str(output / "profile.pstats"))
-                      with (output / "profile.txt").open("w") as stream:
-                          pstats.Stats(profile, stream=stream).strip_dirs().sort_stats("cumulative").print_stats(100)
-                  else:
-                      (output / "profile.txt").write_text("cProfile disabled by diagnostic input profile_mode=none.\n")
-              except Exception as error:
-                  finalization_errors.append({"stage": "profile", "error_type": type(error).__name__})
-              after = None
-              try:
-                  after = hashes()
-              except Exception as error:
-                  finalization_errors.append({"stage": "source", "error_type": type(error).__name__})
-              evidence = {"diagnostic_only": True, "acceptance_credit": False,
-                          "partial": code not in (0, 1), "runner_exit_code": code, "interruption": interrupted,
-                          "source_valid": after is not None and before == after, "source_before": before, "source_after": after,
-                          "instrumented_seconds": time.perf_counter() - started, "counts": dict(counts), "fixture_samples": samples,
-                          "observer_thread": observer_started, "observer_errors": observer_errors, "finalization_errors": finalization_errors, **environment}
-              (output / "counters.json").write_text(json.dumps(evidence, indent=2))
-          raise SystemExit(code if before == after and not finalization_errors else 2)
-          PY
-          test_statuses=("${PIPESTATUS[@]}")
-          test_status=${test_statuses[0]}
-          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
-          printf '%s\n' "$test_status" > "$RUNNER_TEMP/timing-diagnostic/exit-code.txt"
-          exit "$test_status"
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 1
-        if: always() && (github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true')
-        with:
-          name: ${{ github.event_name == 'workflow_dispatch' && format('timing-diagnostic-{0}-{1}', inputs.arch, inputs.scratch) || 'timing-diagnostic' }}
-          path: ${{ runner.temp }}/timing-diagnostic
-          if-no-files-found: error
-      - name: Remove diagnostic scratch storage
-        if: always() && steps.scratch.outputs.directory != ''
-        env:
-          SCRATCH: ${{ steps.scratch.outputs.directory }}
-          SCRATCH_IDENTITY: ${{ steps.scratch.outputs.identity }}
-          MEMORY: ${{ inputs.scratch == 'memory' }}
-        run: |
-          if [[ "$MEMORY" == "true" ]]; then
-            if mountpoint -q "$SCRATCH"; then
-              sudo umount "$SCRATCH"
-            fi
-            rmdir "$SCRATCH"
-          else
-            printf 'Diagnostic scratch cleanup path=%s identity=%s\n' "$SCRATCH" "$SCRATCH_IDENTITY"
-            cleanup_seconds="$(python - <<'PY'
-          import os, time
-          remaining = int(os.environ["TEST_JOB_DEADLINE"]) - 360 - time.time()
-          work_ms = min(28000, int((remaining - 2) * 1000))
-          if work_ms <= 0:
-              raise SystemExit("No diagnostic scratch cleanup budget remains before cancellation reserve")
-          print(f"{work_ms / 1000:.3f}")
-          PY
-            )"
-            timeout --signal=TERM --kill-after=2s "${cleanup_seconds}s" python -u - <<'PY'
-          import json, os, re, shutil, stat, time
-          record = json.loads(os.environ["SCRATCH_IDENTITY"])
-          path = os.environ["SCRATCH"]
-          parent = record["parent"]
-          name = os.path.basename(path)
-          stop = int(os.environ["TEST_JOB_DEADLINE"]) - 360
-          if time.time() >= stop - 2:
-              raise RuntimeError("Diagnostic scratch cleanup window expired")
-          if (not os.path.isabs(path) or path != record["path"]
-                  or os.path.dirname(path) != parent or os.path.realpath(parent) != parent
-                  or not re.fullmatch(r"story-timing\.[A-Za-z0-9]{8}", name)):
-              raise RuntimeError("Diagnostic scratch path identity changed")
-          if not shutil.rmtree.avoids_symlink_attacks:
-              raise RuntimeError("Symlink-resistant diagnostic cleanup is unavailable")
-          fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-          try:
-              outer = os.fstat(fd)
-              if [outer.st_dev, outer.st_ino, outer.st_uid] != record["parent_identity"]:
-                  raise RuntimeError("Diagnostic scratch parent identity changed")
-              inner = os.stat(name, dir_fd=fd, follow_symlinks=False)
-              if (not stat.S_ISDIR(inner.st_mode) or inner.st_uid != os.geteuid()
-                      or inner.st_dev != outer.st_dev
-                      or [inner.st_dev, inner.st_ino, inner.st_uid] != record["root"]):
-                  raise RuntimeError("Diagnostic scratch directory identity changed")
-              with open("/proc/self/mountinfo", encoding="utf-8") as mounts:
-                  for line in mounts:
-                      mount = line.split()[4]
-                      for escaped, decoded in ((r"\040", " "), (r"\011", "\t"), (r"\012", "\n"), (r"\134", chr(92))):
-                          mount = mount.replace(escaped, decoded)
-                      if mount == path or mount.startswith(path + os.sep):
-                          raise RuntimeError("Mounted diagnostic scratch storage cannot be recursively removed")
-              current = os.stat(name, dir_fd=fd, follow_symlinks=False)
-              if ([current.st_dev, current.st_ino, current.st_uid] != record["root"]
-                      or not stat.S_ISDIR(current.st_mode) or time.time() >= stop - 2):
-                  raise RuntimeError("Diagnostic scratch identity or cleanup window changed")
-              shutil.rmtree(name, dir_fd=fd)
-              try:
-                  os.stat(name, dir_fd=fd, follow_symlinks=False)
-              except FileNotFoundError:
-                  print(json.dumps({"diagnostic_scratch_removed": record}, sort_keys=True), flush=True)
-              else:
-                  raise RuntimeError("Diagnostic scratch path remains after cleanup")
-          finally:
-              os.close(fd)
-          PY
-          fi
+        }
+      },
+      "runs-on": "ubuntu-24.04-arm",
+      "env": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TEST_JOB_MINUTES": "30",
+        "TEST_RUN_DEADLINE": "${{ needs.classify.outputs.test_run_deadline }}"
+      },
+      "timeout-minutes": 30,
+      "steps": [
+        {
+          "name": "Record shared test deadline before setup",
+          "run": "test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))\nif [[ -n \"$TEST_RUN_DEADLINE\" ]]; then\n  [[ \"$TEST_RUN_DEADLINE\" =~ ^[0-9]+$ ]] || exit 2\n  if (( TEST_RUN_DEADLINE < test_deadline )); then\n    test_deadline=$TEST_RUN_DEADLINE\n  fi\nelse\n  echo \"Missing shared test-run deadline.\"\n  exit 2\nfi\necho \"TEST_JOB_DEADLINE=$test_deadline\" >> \"$GITHUB_ENV\"\nif (( test_deadline <= $(date +%s) )); then\n  echo \"Shared test-run deadline exhausted before setup.\"\n  exit 124\nfi\n"
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "submodules": "recursive",
+            "ref": "${{ needs.classify.outputs.checkout_sha }}"
+          }
+        },
+        {
+          "uses": "actions/setup-python@v5",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "uses": "astral-sh/setup-uv@v10.2.0",
+          "with": {
+            "version": "0.12.17"
+          }
+        },
+        {
+          "name": "Install runtime test dependencies",
+          "run": "uv sync --locked --all-extras --python 3.11 --no-progress"
+        },
+        {
+          "name": "Configure deterministic test Git identity",
+          "env": {
+            "TEST_HARDWARE_ARCH": "arm64",
+            "TEST_HARDWARE_PATH": "${{ runner.temp }}/runner-hardware-full-${{ matrix.shard }}.json",
+            "TEST_HARDWARE_SELECTION": "shard:${{ matrix.shard }}/4",
+            "TEST_HARDWARE_SHARD": "${{ matrix.shard }}/4"
+          },
+          "run": "git config --global user.name \"Story Tests\"\ngit config --global user.email \"story-tests@example.invalid\"\n.venv/bin/python - <<'PY_HARDWARE'\nimport datetime, gc, hashlib, json, os, platform, sys\nfrom pathlib import Path\n\noutput = Path(os.environ['TEST_HARDWARE_PATH'])\nroot = Path(os.environ['GITHUB_WORKSPACE'])\narch = os.environ['TEST_HARDWARE_ARCH']\nexpected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}\ndata = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,\n        'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],\n        'selection': os.environ['TEST_HARDWARE_SELECTION'],\n        'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,\n        'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}\ntry:\n    assert arch in expected, 'unsupported selected runner architecture'\n    affinity = sorted(os.sched_getaffinity(0))\n    data.update(system=platform.system(), machine=platform.machine(),\n                cpu_count=os.cpu_count(), cpu_affinity=affinity,\n                available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],\n                runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],\n                python_version=platform.python_version(), python_implementation=platform.python_implementation(),\n                python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],\n                run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),\n                native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],\n                native_ref=os.environ['GITHUB_REF'],\n                source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()\n                                   for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},\n                hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),\n                                     'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})\n    assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'\n    assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'\n    assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'\n    assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)\n    assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'\n    assert data['run_id'].isdigit() and data['run_attempt'] > 0\n    assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])\n    assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}\n    data['status'] = 'passed'\nexcept BaseException as error:\n    data['error'] = {'type': type(error).__name__, 'message': str(error)}\n    raise\nfinally:\n    output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n    with output.open('x', encoding='utf-8') as stream:\n        stream.write(json.dumps(data, indent=2, allow_nan=False) + '\\n')\n    print(json.dumps(data, sort_keys=True, allow_nan=False))\nPY_HARDWARE\n"
+        },
+        {
+          "name": "Run full runtime shard",
+          "run": "test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds > 1350 )); then test_seconds=1350; fi\nprintf '{\"worker_limit_seconds\":%s,\"kill_grace_seconds\":30,\"cleanup_reserve_seconds\":60,\"cancellation_reserve_seconds\":360}\\n' \"$test_seconds\" > \"$RUNNER_TEMP/full-${{ matrix.shard }}-control.json\"\nif (( test_seconds <= 0 )); then exit 124; fi\nset +e\ntimeout --signal=INT --kill-after=30s \"${test_seconds}s\" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard \"${{ matrix.shard }}/4\" --json \"$RUNNER_TEMP/full-${{ matrix.shard }}.json\" 2>&1 | tee \"$RUNNER_TEMP/full-${{ matrix.shard }}.log\"\ntest_statuses=(\"${PIPESTATUS[@]}\")\ntest_status=${test_statuses[0]}\nif (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi\nprintf '%s\\n' \"$test_status\" > \"$RUNNER_TEMP/full-${{ matrix.shard }}-exit-code.txt\"\nexit \"$test_status\"\n"
+        },
+        {
+          "uses": "actions/upload-artifact@v4",
+          "timeout-minutes": 1,
+          "if": "always()",
+          "with": {
+            "name": "full-${{ matrix.shard }}",
+            "path": "${{ runner.temp }}/full-${{ matrix.shard }}.json\n${{ runner.temp }}/full-${{ matrix.shard }}.log\n${{ runner.temp }}/full-${{ matrix.shard }}-control.json\n${{ runner.temp }}/full-${{ matrix.shard }}-exit-code.txt\n${{ runner.temp }}/runner-hardware-full-${{ matrix.shard }}.json\n",
+            "if-no-files-found": "error"
+          }
+        }
+      ]
+    },
+    "reconcile-full": {
+      "name": "Reconcile four canonical shards and strict budgets",
+      "needs": [
+        "classify",
+        "full"
+      ],
+      "if": "!cancelled() && needs.classify.outputs.full == 'true' && (needs.full.result == 'success' || needs.full.result == 'failure')",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "env": {
+        "TEST_JOB_MINUTES": "30",
+        "TEST_RUN_DEADLINE": "${{ needs.classify.outputs.test_run_deadline }}"
+      },
+      "steps": [
+        {
+          "name": "Record shared test deadline before setup",
+          "run": "test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))\nif [[ -n \"$TEST_RUN_DEADLINE\" ]]; then\n  [[ \"$TEST_RUN_DEADLINE\" =~ ^[0-9]+$ ]] || exit 2\n  if (( TEST_RUN_DEADLINE < test_deadline )); then\n    test_deadline=$TEST_RUN_DEADLINE\n  fi\nelse\n  echo \"Missing shared test-run deadline.\"\n  exit 2\nfi\necho \"TEST_JOB_DEADLINE=$test_deadline\" >> \"$GITHUB_ENV\"\nif (( test_deadline <= $(date +%s) )); then\n  echo \"Shared test-run deadline exhausted before setup.\"\n  exit 124\nfi\n"
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 0,
+            "submodules": "recursive",
+            "ref": "${{ needs.classify.outputs.checkout_sha }}"
+          }
+        },
+        {
+          "uses": "actions/download-artifact@v4",
+          "with": {
+            "pattern": "full-*",
+            "path": "full-reports"
+          }
+        },
+        {
+          "name": "Reconcile shard evidence",
+          "run": "test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds <= 0 )); then\n  echo \"Reconciliation deadline exhausted; preserve 30s termination, 60s upload, and 360s cancellation reserve.\"\n  exit 124\nfi\nPYTHONPATH=src timeout --signal=INT --kill-after=30s \"${test_seconds}s\" \\\n  python -m tests.runner reconcile \\\n  full-reports/full-1/full-1.json full-reports/full-2/full-2.json \\\n  full-reports/full-3/full-3.json full-reports/full-4/full-4.json \\\n  --json \"$RUNNER_TEMP/full-reconciled.json\"\n"
+        },
+        {
+          "name": "Enforce frozen suite inventory and wall-time budget",
+          "env": {
+            "BASE_SHA": "${{ needs.classify.outputs.base_sha }}",
+            "WALL_TIME_EXCEPTION": "${{ needs.classify.outputs.wall_time_exception }}"
+          },
+          "run": "budget_args=(--base-ref \"$BASE_SHA\"\n  --report full-reports/full-1/full-1.json\n  --report full-reports/full-2/full-2.json\n  --report full-reports/full-3/full-3.json\n  --report full-reports/full-4/full-4.json)\nif [[ \"$WALL_TIME_EXCEPTION\" == \"true\" ]]; then\n  echo \"Maintainer-authorized wall-time exception: measured durations remain visible.\"\n  budget_args+=(--allow-wall-time-overage)\nfi\ntest_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds <= 0 )); then\n  echo \"Reconciliation deadline exhausted before inventory and wall-time checks.\"\n  exit 124\nfi\nPYTHONPATH=src timeout --signal=INT --kill-after=30s \"${test_seconds}s\" \\\n  python -m tests.suite_budget \"${budget_args[@]}\"\n"
+        },
+        {
+          "uses": "actions/upload-artifact@v4",
+          "timeout-minutes": 1,
+          "if": "always()",
+          "with": {
+            "name": "runtime-full-reconciled",
+            "path": "${{ runner.temp }}/full-reconciled.json",
+            "if-no-files-found": "warn"
+          }
+        }
+      ]
+    },
+    "affected": {
+      "name": "Affected template and provenance regressions",
+      "needs": "classify",
+      "if": "needs.classify.outputs.runtime == 'true'",
+      "runs-on": "ubuntu-24.04-arm",
+      "timeout-minutes": 30,
+      "env": {
+        "TEST_JOB_MINUTES": "30",
+        "TEST_RUN_DEADLINE": "${{ needs.classify.outputs.test_run_deadline }}"
+      },
+      "steps": [
+        {
+          "name": "Record shared test deadline before setup",
+          "run": "test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))\nif [[ -n \"$TEST_RUN_DEADLINE\" ]]; then\n  [[ \"$TEST_RUN_DEADLINE\" =~ ^[0-9]+$ ]] || exit 2\n  if (( TEST_RUN_DEADLINE < test_deadline )); then\n    test_deadline=$TEST_RUN_DEADLINE\n  fi\nelse\n  echo \"Missing shared test-run deadline.\"\n  exit 2\nfi\necho \"TEST_JOB_DEADLINE=$test_deadline\" >> \"$GITHUB_ENV\"\nif (( test_deadline <= $(date +%s) )); then\n  echo \"Shared test-run deadline exhausted before setup.\"\n  exit 124\nfi\n"
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "submodules": "recursive",
+            "ref": "${{ needs.classify.outputs.checkout_sha }}"
+          }
+        },
+        {
+          "uses": "actions/setup-python@v5",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "uses": "astral-sh/setup-uv@v10.2.0",
+          "with": {
+            "version": "0.12.17"
+          }
+        },
+        {
+          "name": "Install runtime test dependencies",
+          "run": "uv sync --locked --all-extras --python 3.11 --no-progress"
+        },
+        {
+          "name": "Configure deterministic test Git identity",
+          "env": {
+            "TEST_HARDWARE_ARCH": "arm64",
+            "TEST_HARDWARE_PATH": "${{ runner.temp }}/runner-hardware-affected.json",
+            "TEST_HARDWARE_SELECTION": "affected-template-regressions"
+          },
+          "run": "git config --global user.name \"Story Tests\"\ngit config --global user.email \"story-tests@example.invalid\"\n.venv/bin/python - <<'PY_HARDWARE'\nimport datetime, gc, hashlib, json, os, platform, sys\nfrom pathlib import Path\n\noutput = Path(os.environ['TEST_HARDWARE_PATH'])\nroot = Path(os.environ['GITHUB_WORKSPACE'])\narch = os.environ['TEST_HARDWARE_ARCH']\nexpected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}\ndata = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,\n        'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],\n        'selection': os.environ['TEST_HARDWARE_SELECTION'],\n        'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,\n        'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}\ntry:\n    assert arch in expected, 'unsupported selected runner architecture'\n    affinity = sorted(os.sched_getaffinity(0))\n    data.update(system=platform.system(), machine=platform.machine(),\n                cpu_count=os.cpu_count(), cpu_affinity=affinity,\n                available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],\n                runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],\n                python_version=platform.python_version(), python_implementation=platform.python_implementation(),\n                python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],\n                run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),\n                native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],\n                native_ref=os.environ['GITHUB_REF'],\n                source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()\n                                   for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},\n                hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),\n                                     'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})\n    assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'\n    assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'\n    assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'\n    assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)\n    assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'\n    assert data['run_id'].isdigit() and data['run_attempt'] > 0\n    assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])\n    assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}\n    data['status'] = 'passed'\nexcept BaseException as error:\n    data['error'] = {'type': type(error).__name__, 'message': str(error)}\n    raise\nfinally:\n    output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n    with output.open('x', encoding='utf-8') as stream:\n        stream.write(json.dumps(data, indent=2, allow_nan=False) + '\\n')\n    print(json.dumps(data, sort_keys=True, allow_nan=False))\nPY_HARDWARE\n"
+        },
+        {
+          "name": "Run affected regressions",
+          "run": "test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds > 1350 )); then test_seconds=1350; fi\nprintf '{\"worker_limit_seconds\":%s,\"kill_grace_seconds\":30,\"cleanup_reserve_seconds\":60,\"cancellation_reserve_seconds\":360}\\n' \"$test_seconds\" > \"$RUNNER_TEMP/affected-control.json\"\nif (( test_seconds <= 0 )); then exit 124; fi\nset +e\ntimeout --signal=INT --kill-after=30s \"${test_seconds}s\" env PYTHONPATH=src .venv/bin/python -m tests.runner run --id tests.test_agent_context_service.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise --id tests.test_agent_context_service.StructuredOutputValidationTests.test_bounded_chunks_preserve_order_and_over_32k_content --id tests.test_agent_context_service.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues --id tests.test_agent_context_service.StructuredOutputValidationTests.test_malformed_and_duplicate_json_have_value_free_diagnostics --id tests.test_agent_context_service.StructuredOutputValidationTests.test_properties_omitted_from_required_remain_optional --id tests.test_codex_backend.CodexBackendTestCase.test_retrieval_non_string_kind_reports_exact_type_and_common_issues --id tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence --json \"$RUNNER_TEMP/affected.json\" 2>&1 | tee \"$RUNNER_TEMP/affected.log\"\ntest_statuses=(\"${PIPESTATUS[@]}\")\ntest_status=${test_statuses[0]}\nif (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi\nprintf '%s\\n' \"$test_status\" > \"$RUNNER_TEMP/affected-exit-code.txt\"\nexit \"$test_status\"\n"
+        },
+        {
+          "uses": "actions/upload-artifact@v4",
+          "timeout-minutes": 1,
+          "if": "always()",
+          "with": {
+            "name": "runtime-affected-template",
+            "path": "${{ runner.temp }}/affected.json\n${{ runner.temp }}/affected.log\n${{ runner.temp }}/affected-control.json\n${{ runner.temp }}/affected-exit-code.txt\n${{ runner.temp }}/runner-hardware-affected.json\n",
+            "if-no-files-found": "warn"
+          }
+        }
+      ]
+    }
+  },
+  "on": {
+    "workflow_dispatch": {}
+  }
+}
