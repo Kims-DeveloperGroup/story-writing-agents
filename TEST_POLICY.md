@@ -134,6 +134,24 @@ interruption; a partial or timed-out execution never counts as a passing test.
 These reports remain diagnostic evidence and never replace the required
 complete full-suite gate.
 
+## Hosted runtime baseline
+
+Runtime fast and full jobs use the standard GitHub-hosted Linux ARM64 runner
+`ubuntu-24.04-arm`. In this public repository its standard allocation is four
+vCPUs and 16 GB RAM. [Runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+Explicit runtime diagnostics default to ARM64 and retain an x64 selection.
+
+Before application tests, record and verify Linux, the requested architecture
+and four available CPUs, with CPU affinity and native run/attempt/workflow
+identity in the uploaded hardware receipt. Use the locked Python 3.11 environment
+natively. The runner change preserves the existing test selections, assertions,
+subTest caps, GC settings, process cleanup and all 30-minute job/shared deadlines.
+
+Compatibility, complete-method fit and performance evidence belongs to its
+recorded source and execution environment. Refresh those results on ARM64 before
+claiming acceptance. The runner rollout and remaining gates are tracked in
+[the #872 runner plan](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/872#issuecomment-6284422415).
+
 ## Runtime optimization evidence
 
 Before changing a validation shortcut, add independent compatibility oracles to
