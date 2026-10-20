@@ -37,12 +37,12 @@ concurrency:
 
 jobs:
   workflow-deadline:
-    name: Enforce 60-minute workflow limit
+    name: Enforce 75-minute workflow limit
     # Cover classification, setup and dependency waits independently.
     # Survive normal cancellation long enough to force-cancel stalled jobs.
     if: always()
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 75
     permissions:
       actions: write
     steps:
@@ -74,7 +74,7 @@ jobs:
               if (run.status === "completed") return null;
               const created = Date.parse(run.created_at);
               if (!Number.isFinite(created)) throw new Error("Missing workflow creation time.");
-              const runDeadline = created + 60 * 60 * 1000;
+              const runDeadline = created + 75 * 60 * 1000;
               deadline = deadline === undefined ? runDeadline : Math.min(deadline, runDeadline);
               if (Date.now() >= deadline - 30_000) {
                 core.setFailed("Workflow guard shutdown margin reached; no safe control window remains.");
@@ -172,7 +172,7 @@ jobs:
               core.setFailed("Cannot establish this workflow attempt's creation time.");
               return;
             }
-            const deadline = Math.floor(created / 1000) + 60 * 60;
+            const deadline = Math.floor(created / 1000) + 75 * 60;
             core.setOutput("test_run_deadline", String(deadline));
             if (Date.now() >= deadline * 1000) {
               core.setFailed("Shared workflow deadline exhausted before classification.");
@@ -557,9 +557,9 @@ jobs:
     runs-on: ubuntu-24.04-arm
     env:
       PYTHONDONTWRITEBYTECODE: '1'
-      TEST_JOB_MINUTES: '60'
+      TEST_JOB_MINUTES: '75'
       TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - name: Record shared test deadline before setup
         run: |
@@ -649,9 +649,13 @@ jobs:
       - name: Run full runtime shard
         run: |
           test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds > 3150 )); then test_seconds=3150; fi
+          if (( test_seconds > 3600 )); then test_seconds=3600; fi
           printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/full-${{ matrix.shard }}-control.json"
-          if (( test_seconds <= 0 )); then exit 124; fi
+          if (( test_seconds < 3600 )); then
+            printf 'Full shard requires 3600 seconds of execution plus shutdown reserve; available: %s seconds\n' "$test_seconds" >&2
+            printf '124\n' > "$RUNNER_TEMP/full-${{ matrix.shard }}-exit-code.txt"
+            exit 124
+          fi
           set +e
           timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "${{ matrix.shard }}/4" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json" 2>&1 | tee "$RUNNER_TEMP/full-${{ matrix.shard }}.log"
           test_statuses=("${PIPESTATUS[@]}")

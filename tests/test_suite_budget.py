@@ -28,8 +28,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self.enterContext(patch.object(suite_policy, "load_timing_weights", return_value=self.weights))
 
         class Control(unittest.FunctionTestCase):
-            def id(self):
-                return self._description
+            def id(self): return self._description
 
         cases = tuple(Control(lambda: None, description=identifier) for identifier in ids)
         canonical = runner.CanonicalCollection(cases, ids)
@@ -39,7 +38,9 @@ class SuiteBudgetTests(unittest.TestCase):
             report = runner._run_report(canonical, selected, runner._execute(selected, stream=io.StringIO()), slowest=0,
                                         policy_metadata={"suite_policy": runner._suite_policy_metadata(self.weights, self.plan),
                                                          "selection": {"tiers": [], "shard": f"{index + 1}/4"}})
-            report["durations"].update(wall_seconds=540 if index == 0 else 180, cumulative_test_seconds=1)
+            maximum = self.budget["max_shard_wall_seconds"]
+            report["durations"].update(wall_seconds=maximum if index == 0 else (
+                self.budget["max_sequential_wall_seconds"] - maximum) / 3, cumulative_test_seconds=1)
             report["tests"][0].update(duration_seconds=1, subtest_count=(*counts, 0, 0)[index])
             self.report_data.append(report)
         paths = [str(Path(directory) / f"{index}.json") for index in range(1, 5)]
@@ -48,36 +49,45 @@ class SuiteBudgetTests(unittest.TestCase):
         return paths
 
     def test_new_id_increased_subtests_and_relaxed_time_are_rejected(self) -> None:
-        for change in ( lambda value: value["subtest_caps"].update({"c.test": 0}),
-            lambda value: value["subtest_caps"].update({"a.test": 3}),
-            lambda value: value.update(max_shard_wall_seconds=541),
-            lambda value: value.update(max_sequential_wall_seconds=1081), ):
+        hourly = dict(self.budget, max_sequential_wall_seconds=14400, max_shard_wall_seconds=3600)
+        self.assertIsNone(suite_budget.check_monotonic(hourly, self.budget))
+        for change in [lambda value: value["subtest_caps"].update({"c.test": 0}),
+                lambda value: value["subtest_caps"].update({"a.test": 3}),
+                lambda value: value.update(max_shard_wall_seconds=value["max_shard_wall_seconds"] + 1),
+                lambda value: value.update(max_sequential_wall_seconds=value["max_sequential_wall_seconds"] + 1)]:
             with self.subTest(change=change):
-                candidate = json.loads(json.dumps(self.budget))
-                change(candidate)
-                with self.assertRaises(suite_budget.BudgetError):
-                    suite_budget.check_monotonic(candidate, self.budget)
-        candidate = json.loads(json.dumps(self.budget))
-        candidate["max_test_source_lines"] += 1
-        with self.assertRaises(suite_budget.BudgetError):
-            suite_budget.check_monotonic(candidate, self.budget)
+                for base, origin in ((self.budget, self.budget), (self.budget, hourly), (hourly, hourly)):
+                    candidate = json.loads(json.dumps(origin))
+                    change(candidate)
+                    with self.assertRaises(suite_budget.BudgetError):
+                        suite_budget.check_monotonic(candidate, base)
+        for base, field, value in [
+            (self.budget, "max_test_source_lines", 1001),
+            (self.budget, "max_shard_wall_seconds", 540),
+            (self.budget, "max_sequential_wall_seconds", 1080),
+            ({**self.budget, "max_shard_wall_seconds": 539}, "max_shard_wall_seconds", 3600),
+        ]:
+            with self.assertRaises(suite_budget.BudgetError):
+                suite_budget.check_monotonic({**hourly, field: value}, base)
 
     def test_exact_duration_boundary_passes_and_excess_fails(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            paths = self._reports(directory, (2, 0))
-            reconciliation = suite_budget.runner.reconcile_reports(paths)
-            with patch.object(suite_budget.runner, "reconcile_reports", return_value=reconciliation), patch(
-                "builtins.open", side_effect=AssertionError("budget reopened validated reports") ):
-                self.assertIs(suite_budget.check_reports(self.budget, paths), reconciliation)
-                reconciliation["shards"][0]["durations"]["wall_seconds"] = 540.001
-                with self.assertRaisesRegex(suite_budget.BudgetError, "shard 1/4"):
-                    suite_budget.check_reports(self.budget, paths)
-                self.assertIs( suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=True), reconciliation)
-                reconciliation["shards"][0]["durations"]["wall_seconds"] = 540
-                reconciliation["durations"]["sequential_equivalent_wall_seconds"] = 1080.001
-                with self.assertRaisesRegex(suite_budget.BudgetError, "sequential"):
-                    suite_budget.check_reports(self.budget, paths)
-                self.assertIs( suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=True), reconciliation)
+        for total, maximum in ((1080, 540), (14400, 3600)):
+            self.budget.update(max_sequential_wall_seconds=total, max_shard_wall_seconds=maximum)
+            with tempfile.TemporaryDirectory() as directory:
+                paths = self._reports(directory, (2, 0))
+                reconciliation = suite_budget.runner.reconcile_reports(paths)
+                with patch.object(suite_budget.runner, "reconcile_reports", return_value=reconciliation), patch(
+                    "builtins.open", side_effect=AssertionError("budget reopened validated reports") ):
+                    self.assertIs(suite_budget.check_reports(self.budget, paths), reconciliation)
+                    reconciliation["shards"][0]["durations"]["wall_seconds"] = maximum + .001
+                    with self.assertRaisesRegex(suite_budget.BudgetError, "shard 1/4"):
+                        suite_budget.check_reports(self.budget, paths)
+                    self.assertIs( suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=True), reconciliation)
+                    reconciliation["shards"][0]["durations"]["wall_seconds"] = maximum
+                    reconciliation["durations"]["sequential_equivalent_wall_seconds"] = total + .001
+                    with self.assertRaisesRegex(suite_budget.BudgetError, "sequential"):
+                        suite_budget.check_reports(self.budget, paths)
+                    self.assertIs( suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=True), reconciliation)
 
     def test_subtest_expansion_and_incomplete_shards_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -89,8 +99,7 @@ class SuiteBudgetTests(unittest.TestCase):
             def write(change=lambda values: None):
                 values = json.loads(json.dumps(self.report_data))
                 change(values)
-                for path, value in zip(paths, values):
-                    Path(path).write_text(json.dumps(value), encoding="utf-8")
+                for path, value in zip(paths, values): Path(path).write_text(json.dumps(value), encoding="utf-8")
             def reject(change, message):
                 write(change)
                 self.assertRaisesRegex(runner.RunnerError, message, runner.reconcile_reports, paths)
@@ -100,8 +109,7 @@ class SuiteBudgetTests(unittest.TestCase):
                 row["totals"].update(passed=0, failures=1)
                 row.update(details=[{"canonical_id": "a.test", "kind": kind, "reason": reason}], outcome="failure")
             def omit_case(values):
-                for row in values:
-                    row["canonical_manifest"] = runner._manifest(("a.test", "b.test", "c.control"))
+                for row in values: row["canonical_manifest"] = runner._manifest(("a.test", "b.test", "c.control"))
             def selection_change(values, identifier):
                 values[0]["selection_manifest"] = runner._manifest((identifier,))
                 values[0]["tests"][0]["canonical_id"] = identifier
@@ -139,8 +147,7 @@ class SuiteBudgetTests(unittest.TestCase):
             def runTest(self) -> None:
                 for value in (1, 2):
                     with self.subTest(value=value):
-                        if value == 2:
-                            self.skipTest("synthetic platform skip")
+                        if value == 2: self.skipTest("synthetic platform skip")
                         self.assertGreater(value, 0)
 
         case = Synthetic()
@@ -154,11 +161,9 @@ class SuiteBudgetTests(unittest.TestCase):
         from types import SimpleNamespace
 
         def invoke(function, error=None, message=""):
-            with self.assertRaisesRegex(error, message) if error else nullcontext():
-                return function()
+            with self.assertRaisesRegex(error, message) if error else nullcontext(): return function()
 
-        def assert_fields(record, **expected):
-            self.assertEqual({key: record[key] for key in expected}, expected)
+        def assert_fields(record, **expected): self.assertEqual({key: record[key] for key in expected}, expected)
 
         ci_identity_values = {"NAME": "Story Tests", "EMAIL": "story-tests@example.invalid"}
         caller_identity = { "GIT_AUTHOR_NAME": "Caller Author", "GIT_AUTHOR_EMAIL": "author@example.invalid",
@@ -188,8 +193,7 @@ class SuiteBudgetTests(unittest.TestCase):
         for invalid_config in invalid_configurations:
             invalid_environment = {**caller_environment, **invalid_config}
             with patch.dict(worker.os.environ, invalid_environment, clear=True):
-                with self.assertRaises(LocalCIError):
-                    worker.test_environment({"ci_identity": True})
+                with self.assertRaises(LocalCIError): worker.test_environment({"ci_identity": True})
                 unchanged = worker.test_environment({"ci_identity": False})
                 self.assertEqual({key: value for key, value in unchanged.items() if key.startswith("GIT_")},
                                  {key: value for key, value in invalid_environment.items() if key.startswith("GIT_")})
@@ -231,8 +235,7 @@ class SuiteBudgetTests(unittest.TestCase):
                 inherited.assert_called_once_with()
                 self.assertEqual(wait.call_args_list, [call("owned")] if expected == 17 else [])
                 self.assertEqual(submit.call_count, int(expected == 17))
-                if expected == 17:
-                    self.assertEqual(submit.call_args.args[1], arguments)
+                if expected == 17: self.assertEqual(submit.call_args.args[1], arguments)
                 state_root.assert_not_called()
 
         launched = []
@@ -348,8 +351,7 @@ class SuiteBudgetTests(unittest.TestCase):
                 self.assertEqual(len(refresh.active()), int(expected != "finished"))
                 if expected == "finished":
                     self.assertEqual((tracked_job["exit_code"], tracked_job["source_valid"]), (0, True))
-                if uncertain_before:
-                    self.assertTrue(tracked_job["descendant_death_uncertain"])
+                if uncertain_before: self.assertTrue(tracked_job["descendant_death_uncertain"])
             boot.return_value = "sysctl:101:2"
             rebooted = queue.Coordinator(root)
             self.assertEqual(rebooted.active(), [])
@@ -449,11 +451,9 @@ class SuiteBudgetTests(unittest.TestCase):
                         claim=lambda *args: "reservation", submit=lambda *args, **kwargs: "fast-job",
                     ), patch.object(local_ci, "wait_job", side_effect=waits), patch.object( local_ci, "control", side_effect=cleanup_error ) as cleanup:
                         if primary_failure:
-                            with self.assertRaises(LocalCIError) as caught:
-                                local_ci.campaign(cleanup_args)
+                            with self.assertRaises(LocalCIError) as caught: local_ci.campaign(cleanup_args)
                             self.assertIs(caught.exception, original)
-                        else:
-                            self.assertEqual(local_ci.campaign(cleanup_args), exit_code)
+                        else: self.assertEqual(local_ci.campaign(cleanup_args), exit_code)
                     operations = [("cancel", "fast-job"), ("cancel", "reservation"), ("release", "reservation")] if primary_failure else [("release", "reservation")]
                     self.assertEqual([(call.args, call.kwargs) for call in cleanup.call_args_list], [(operation, {}) for operation in operations])
                     metadata = json.loads((cleanup_report / "campaign.json").read_text())
