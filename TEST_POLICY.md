@@ -50,6 +50,28 @@ time. The budget gate uses the wall time in the current Python 3.11 runner
 reports. Report the observed full and shard times and any platform limitation
 when recalibrating weights.
 
+## Hosted full-shard method scheduling
+
+Only hosted full shards opt into the fixed `audited-77-v1` profile. Each shard
+keeps its canonical class assignment and selected ID order. Noneligible tests
+run once in their original serial suite; then eligible whole methods run in
+fresh interpreters, with at most four active method processes. Whole-front runs
+first within that fixed set. Fast, affected, default and local runs stay serial.
+This does not expand eligibility automatically when a class gains a method.
+
+All discovery, serial work, method startup, execution and merge share the
+original 3,600-second work cutoff. Children cannot restart that hour. A separate
+30-second cleanup cutoff bounds supervised shutdown; it adds no passing-test
+time. Missing process-group absence/reaping proof fails the run. Reports retain
+canonical row order and exact source/environment/subTest checks. Parent wall
+time includes scheduling and cleanup; summed method durations may exceed wall
+time. Reconciliation rejects unknown or mixed execution modes and still needs
+four complete reports within the 3,600/14,400-second limits.
+
+Hosted fanout rejects local queue/guest admission and any shared wire-capture
+directory. Local workers continue using the existing four-slot host queue;
+nested local method pools are not enabled by this profile.
+
 ## Parallel local validation
 
 Independent task threads share one host-wide queue with four executing top-level

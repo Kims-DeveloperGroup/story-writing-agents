@@ -618,6 +618,13 @@ x64 runners. They retain the same locked dependencies and test inventory.
 Full-suite selection includes test-only changes. The fixed timing limits still apply to every
 selected full shard; a diagnostic run never replaces this evidence.
 
+Hosted full shards use a fixed audited whole-method profile to run at most four
+fresh test processes after their original noneligible serial suite. Whole-front
+runs first within the eligible set. Every process shares the shard's original
+one-hour work cutoff; shutdown has a separate 30-second bound. Fast, affected
+and local runs remain serial. See [TEST_POLICY.md](TEST_POLICY.md) for eligibility,
+source reconciliation and cleanup requirements.
+
 Independent task threads share a host queue with four executing test processes;
 a campaign still runs only four full shards. Local `tests.runner run` commands
 enter this queue automatically. Queue waiting is separate from test wall time.

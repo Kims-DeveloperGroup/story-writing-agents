@@ -61,14 +61,57 @@ class SuiteBudgetTests(unittest.TestCase):
                     change(candidate)
                     with self.assertRaises(suite_budget.BudgetError):
                         suite_budget.check_monotonic(candidate, base)
-        for base, field, value in [
-            (self.budget, "max_test_source_lines", 1001),
-            (self.budget, "max_shard_wall_seconds", 540),
-            (self.budget, "max_sequential_wall_seconds", 1080),
-            ({**self.budget, "max_shard_wall_seconds": 539}, "max_shard_wall_seconds", 3600),
-        ]:
+        for base, field, value in [ (self.budget, "max_test_source_lines", 1001),
+            (self.budget, "max_shard_wall_seconds", 540), (self.budget, "max_sequential_wall_seconds", 1080),
+            ({**self.budget, "max_shard_wall_seconds": 539}, "max_shard_wall_seconds", 3600), ]:
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
+
+        from types import SimpleNamespace
+        import os, sys, time
+        ids = runner._HOSTED_METHOD_IDS
+        self.assertEqual(runner._manifest(ids)["digest"],
+                         "sha256:7353813b99401a8ec414f9a7c647c5ec0c42176f751ed82596cd511f8229f051")
+        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (77, 7))
+        cases = tuple(Mock(id=Mock(return_value=value)) for value in (*ids, "unreviewed.test"))
+        canonical = runner.CanonicalCollection(cases, (*ids, "unreviewed.test"))
+        serial, scheduled = runner._hosted_partition(canonical, canonical)
+        self.assertEqual((serial.tests, scheduled), ((cases[-1],), ids))
+        front = runner._HOSTED_PRIORITY_ID
+        self.assertEqual(runner._hosted_launch_order(ids), (front, *(value for value in ids if value != front)))
+        drift = runner.CanonicalCollection(cases, (*ids, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
+        self.assertRaises(runner.RunnerError, runner._hosted_partition, drift, drift)
+        args = SimpleNamespace(command="run", hosted_methods="audited-77-v1", hosted_deadline_epoch=time.time()+3500,
+                               shard="1/4", id=[], module=[], tier=[], failfast=False, json="report.json")
+        env = dict(GITHUB_ACTIONS="true", TEST_RUN_DEADLINE=str(time.time()+4500),
+                   TEST_JOB_DEADLINE=str(time.time()+4500))
+        with patch.dict(os.environ, env, clear=True), patch.object(sys, "platform", "linux"):
+            options = runner._hosted_options(args)
+            self.assertEqual(options["cleanup_deadline_epoch"], args.hosted_deadline_epoch + 30)
+            self.assertEqual([options[k] - options["work_deadline"] for k in ("deadline", "started")], [30, -3600])
+            for cpu, expected in ((1, 1), (2, 2), (4, 4), (8, 4)):
+                with (patch.object(os, "cpu_count", return_value=cpu),
+                      patch.object(os, "sched_getaffinity", return_value=set(range(cpu)), create=True)):
+                    self.assertEqual(runner._hosted_options(args)["capacity"], expected)
+            for key, value in (("id", [ids[0]]), ("module", ["tests"]), ("tier", ["fast"]), ("failfast", True),
+                               ("shard", None), ("json", None), ("hosted_methods", "unknown"),
+                               ("hosted_deadline_epoch", time.time()), ("hosted_deadline_epoch", time.time()+3601),
+                               ("hosted_deadline_epoch", float("nan"))):
+                self.assertRaises(runner.RunnerError, runner._hosted_options,
+                                  SimpleNamespace(**{**vars(args), key: value}))
+            for forbidden in ("STORY_WIRE_TEST_CAPTURE_DIR", "STORY_LOCAL_CI_TOKEN"):
+                with patch.dict(os.environ, {forbidden: ""}):
+                    self.assertRaises(runner.RunnerError, runner._hosted_options, args)
+            with patch.dict(os.environ, GITHUB_ACTIONS="false"):
+                self.assertRaises(runner.RunnerError, runner._hosted_options, args)
+        self.assertIsNone(runner._hosted_options(SimpleNamespace(hosted_methods=None, hosted_deadline_epoch=None)))
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = str(Path(directory) / "result.json")
+            owned = runner._hosted_artifacts(report_path)
+            self.assertEqual((owned.name, owned.stat().st_mode & 0o777), ("result.json.methods", 0o700))
+            marker = owned / "worker.log"; marker.write_text("retained")
+            self.assertRaises(FileExistsError, runner._hosted_artifacts, report_path)
+            self.assertEqual(marker.read_text(), "retained")
 
     def test_exact_duration_boundary_passes_and_excess_fails(self) -> None:
         for total, maximum in ((1080, 540), (14400, 3600)):
@@ -88,6 +131,30 @@ class SuiteBudgetTests(unittest.TestCase):
                     with self.assertRaisesRegex(suite_budget.BudgetError, "sequential"):
                         suite_budget.check_reports(self.budget, paths)
                     self.assertIs( suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=True), reconciliation)
+
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self._reports(directory, (0, 0)); rows = self.report_data
+            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": "audited-77-v1",
+                        "profile_manifest": runner._manifest(runner._HOSTED_METHOD_IDS),
+                        "capacity": 2, "peak_children": 0, "work_deadline_epoch": 10000.0,
+                        "cleanup_deadline_epoch": 10030.0, "launch_manifest": runner._manifest(()),
+                        "launched": 0, "completed": 0, "cleanup_complete": True, "infrastructure_errors": [],
+                        "timing_basis": "observed-parent-wall-and-test-sum", "scheduled_manifest": runner._manifest(())}
+            for path, row in zip(paths, rows):
+                row["execution"] = {**metadata, "serial_manifest": row["selection_manifest"]}
+                Path(path).write_text(json.dumps(row))
+            result = runner.reconcile_reports(paths)
+            self.assertEqual(result["durations"], {"sequential_equivalent_wall_seconds": 14400,
+                             "concurrent_wall_seconds": 3600, "cumulative_test_seconds": 4})
+            self.assertEqual(result["execution"]["timing_basis"], "sum-observed-shard-walls")
+            for key, value in (("capacity", True), ("cleanup_complete", False), ("profile", "unknown"),
+                               ("timing_basis", "serial_prediction"), ("extra", 1), ("completed", 1),
+                               ("cleanup_deadline_epoch", 10031), ("work_deadline_epoch", True),
+                               ("launch_manifest", runner._manifest((runner._HOSTED_PRIORITY_ID,)))):
+                self.assertRaises(runner.RunnerError, runner._execution_metadata,
+                                  {**rows[0], "execution": {**rows[0]["execution"], key: value}})
+            rows[0].pop("execution"); Path(paths[0]).write_text(json.dumps(rows[0]))
+            self.assertRaisesRegex(runner.RunnerError, "mixed execution", runner.reconcile_reports, paths)
 
     def test_subtest_expansion_and_incomplete_shards_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -141,6 +208,34 @@ class SuiteBudgetTests(unittest.TestCase):
                 with patch.object(suite_budget.runner, "reconcile_reports", side_effect=suite_budget.runner.RunnerError("incomplete")):
                     with self.assertRaisesRegex(suite_budget.runner.RunnerError, "incomplete"):
                         suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=allowed)
+
+        with tempfile.TemporaryDirectory() as directory:
+            self._reports(directory, (0, 0)); rows = self.report_data; ids = tuple(self.budget["subtest_caps"])
+            canonical = runner.CanonicalCollection((), ids); first = rows[0]
+            inputs = [(row, tuple(row["selection_manifest"]["ordered_ids"]), 0) for row in reversed(rows)]
+            options = dict(binding=first["source_binding"], environment=first["environment"],
+                           caps=self.budget["subtest_caps"], wall=3.5, metadata={}, errors=[], slowest=0)
+            merged = runner._merge_method_reports(canonical, canonical, inputs, **options)
+            self.assertEqual([row["canonical_id"] for row in merged["tests"]], list(ids))
+            self.assertEqual(merged["durations"], {"wall_seconds": 3.5, "cumulative_test_seconds": 4})
+            partial = runner._merge_method_reports(canonical, canonical, inputs[:1], **options)
+            self.assertEqual((partial["outcome"], partial["totals"]["completed"],
+                              len(partial["unexecuted_ids"])), ("failure", 1, 3))
+            self.assertRaises(runner.RunnerError, runner._merge_method_reports,
+                              canonical, canonical, inputs+inputs, **options)
+            for change in (lambda r: r["tests"][0].update(subtest_count=True),
+                           lambda r: r["tests"][0].update(subtest_count=99),
+                           lambda r: r.update(unexecuted_ids=[ids[0]]),
+                           lambda r: r["tests"][0].update(canonical_id=ids[1]),
+                           lambda r: r["environment"].update(executable="foreign"),
+                           lambda r: r["totals"].update(errors=1),
+                           lambda r: r["source_binding"].update(checkout_sha="0"*40),
+                           lambda r: r.update(outcome="interrupted")):
+                bad = json.loads(json.dumps(first)); change(bad)
+                self.assertRaises(runner.RunnerError, runner._validate_method_report, bad, (ids[0],), ids,
+                                  options["binding"], options["environment"], options["caps"], 0)
+            self.assertRaises(runner.RunnerError, runner._validate_method_report, first, (ids[0],), ids,
+                              options["binding"], options["environment"], options["caps"], 1)
 
     def test_runner_counts_successful_subtests_in_parent_record(self) -> None:
         class Synthetic(unittest.TestCase):
@@ -223,8 +318,7 @@ class SuiteBudgetTests(unittest.TestCase):
         host_exists = Path.exists
         lima_markers = {"/run/lima-ssh-ready", "/var/run/lima-ssh-ready", "/run/lima-guestagent.pid"}
         for guest_marker, managed, hosted, expected, error in ( (False, False, "", 17, None),
-            (False, True, "", None, None),
-            (False, False, "true", None, None),
+            (False, True, "", None, None), (False, False, "true", None, None),
             (True, False, "", None, LocalCIError),
             (True, True, "", None, None), ):
             with patch.object(Path, "exists", new=lambda path: guest_marker and path == Path("/run/lima-ssh-ready") or str(path) not in lima_markers and host_exists(path)), patch.dict(
@@ -303,8 +397,7 @@ class SuiteBudgetTests(unittest.TestCase):
             ) as observed, patch.object(queue, "group_members", return_value=[]), patch.object(
                 queue, "live_owned", side_effect=lambda records: [uncertain["pid"] + 1] if records else [] ), patch.object(queue, "signal_owned") as signals:
                 for identity, raced, expected_state, expected_owned in ( ("replacement", False, "quarantined", {}),
-                    (None, False, "quarantined", {}),
-                    ("live", True, "quarantined", {}),
+                    (None, False, "quarantined", {}), ("live", True, "quarantined", {}),
                     ("live", False, "cancelling", child), ):
                     leader.return_value = identity
                     leader.side_effect = ("live", "replacement") if raced else None
@@ -530,3 +623,58 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertTrue(state.verified_boot_change(old_boot, "sysctl:101:2"))
             for unsuitable in (None, "unparseable", "sysctl:100:1000000", "linux:12345678-1234-1234-1234-123456789abc"):
                 self.assertFalse(state.verified_boot_change(old_boot, unsuitable))
+
+        import os, signal, subprocess, sys, time
+        events = []
+        class Ordered(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls): events.append("class start")
+            @classmethod
+            def tearDownClass(cls): events.append("class end")
+            def runTest(self): events.append("method")
+        ordered = (Ordered(), Ordered())
+        runner._execute(runner.CanonicalCollection(ordered, tuple(case.id() for case in ordered)), stream=io.StringIO())
+        self.assertEqual(events, ["class start", "method", "method", "class end"])
+        if sys.platform != "linux" or os.environ.get("GITHUB_ACTIONS") != "true": return
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); worker_pids = []
+            for index in range(2):
+                work = root / str(index); work.mkdir()
+                process, pipe, config = runner._launch_method(
+                    [sys.executable, "-c", "pass"], work, work_deadline=time.monotonic()+15)
+                try:
+                    self.assertEqual(process.wait(timeout=8), 0)
+                    receipt = runner._method_receipt(config, process); worker_pids.append(receipt["worker_pid"])
+                    self.assertEqual((receipt["worker_exit"], receipt["reason"]), (0, "completed"))
+                    for field, bad in (("reaped", False), ("group_absent", False), ("deadline", config["deadline"]+1)):
+                        with patch.object(runner, "_load_json_object", return_value={**receipt, field: bad}):
+                            self.assertRaises(runner.RunnerError, runner._method_receipt, config, process)
+                finally:
+                    os.close(pipe)
+                    if process.poll() is None: process.terminate(); process.wait(timeout=8)
+            self.assertEqual(len(set(worker_pids + [os.getpid()])), 3)
+            with patch("subprocess.Popen") as launch:
+                self.assertRaises(runner.RunnerError, runner._launch_method, [sys.executable], root, work_deadline=0)
+                launch.assert_not_called()
+            work = root / "orphan"; work.mkdir(); ready = work / "ready"
+            body = ("import subprocess,sys,time; from pathlib import Path; "
+                    "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+                    "Path(" + repr(str(ready)) + ").write_text(str(p.pid)); time.sleep(60)")
+            controller = ("from tests import runner; import sys,time; from pathlib import Path; "
+                          "runner._launch_method([sys.executable,'-c'," + repr(body) + "],Path(" + repr(str(work)) +
+                          "),work_deadline=time.monotonic()+15); time.sleep(60)")
+            parent = subprocess.Popen([sys.executable, "-c", controller], start_new_session=True)
+            try:
+                until = time.monotonic()+8
+                while not ready.exists() and time.monotonic()<until: time.sleep(.02)
+                self.assertTrue(ready.exists())
+                parent.kill(); parent.wait(timeout=2)
+                until = time.monotonic()+8
+                while not (work/"supervisor.json").exists() and time.monotonic()<until: time.sleep(.02)
+                receipt = json.loads((work/"supervisor.json").read_text())
+                self.assertEqual((receipt["reason"], receipt["complete"], receipt["reaped"], receipt["group_absent"]),
+                                 ("parent_closed", True, True, True))
+                self.assertTrue(runner._method_group_absent(receipt["worker_pid"]))
+            finally:
+                if parent.poll() is None: parent.kill()
+                parent.wait(timeout=2)
