@@ -1153,6 +1153,53 @@ def _freeze_diagnostic_schema(root: dict[str, object]) -> Mapping[str, object]:
     return completed[id(root)]
 
 
+def _prepare_diagnostic_template(root: object) -> tuple | None:
+    """Prepare only immutable schema facts; never retain a query or its findings."""
+    prefix: list[int] = []
+    if not _diagnostic_plain(None, root, _prepared=True, _capture=prefix):
+        return None
+    nodes: dict[int, tuple] = {}
+    pending = [root]
+    try:
+        while pending:
+            node = pending.pop()
+            if type(node) is tuple:
+                pending.extend(node)
+                continue
+            if type(node) is not MappingProxyType or id(node) in nodes:
+                continue
+            target = _local_rule(root, node["$ref"]) if "$ref" in node else None
+            variants = node.get("anyOf")
+            discriminators, common = MappingProxyType({}), None
+            if type(variants) is tuple and variants:
+                rows = []
+                for name in (*_WIRE_DISCRIMINATORS, "kind", "action", "decision", "operation"):
+                    candidates = tuple(_discriminator_schema(variant, name, root) for variant in variants)
+                    if all(child is not None and type(child.get("enum")) is tuple for child in candidates):
+                        enums = tuple(child["enum"] for child in candidates)
+                        rows.append((name, (enums, tuple(dict.fromkeys(item for values in enums for item in values)))))
+                discriminators = MappingProxyType(dict(rows))
+                resolved = tuple(_diagnostic_schema_node(variant, root) for variant in variants)
+                properties = tuple(variant.get("properties") for variant in resolved
+                                   if isinstance(variant, Mapping) and isinstance(variant.get("properties"), Mapping))
+                if len(properties) == len(variants):
+                    names = sorted(set.intersection(*(set(item) for item in properties)))
+                    common = MappingProxyType({
+                        name: (properties[0][name],
+                               not any(item[name] != properties[0][name] for item in properties[1:]),
+                               all(isinstance(item[name], Mapping) for item in properties),
+                               tuple(item[name] for item in properties[1:]),
+                               all(name in variant.get("required", ()) for variant in resolved))
+                        for name in names
+                    })
+            nodes[id(node)] = (node, target, discriminators, common)
+            pending.extend(node.values())
+    except (TypeError, ValueError, RecursionError):
+        # A new preparation must not surface an error from an unvisited branch.
+        return None
+    return (root, prefix[0], MappingProxyType(nodes))
+
+
 def _schema_template_findings(graph: SchemaRules, value: object) -> tuple[str, ...]:
     try:
         source = graph._diagnostic_source
@@ -1170,7 +1217,8 @@ def _schema_template_findings(graph: SchemaRules, value: object) -> tuple[str, .
         if memo is None:
             return diagnose_value(value, schema)
         root = _freeze_diagnostic_schema(schema)
-        record = (source[0], source[1], root)
+        plan = _prepare_diagnostic_template(root)
+        record = (source[0], source[1], root, plan)
         # The independent source seal rejects fabrication of both hint fields.
         # Publish complete immutable objects only. Racing first readers can
         # duplicate preparation or fall back; no partially built graph escapes.
@@ -1178,13 +1226,13 @@ def _schema_template_findings(graph: SchemaRules, value: object) -> tuple[str, .
         object.__setattr__(graph, "_diagnostic_template", record)
         object.__setattr__(graph, "_diagnostic_anchor", record)
         memo[0] = root
-        memo.append(True)
+        memo.append(plan if plan is not None else True)
     elif (record is source[2] and record is anchor
-            and type(record) is tuple and len(record) == 3
+            and type(record) is tuple and len(record) == 4
             and record[0] is source[0] and record[1] is source[1]
             and type(record[2]) is MappingProxyType):
         root = record[2]
-        memo = _diagnostic_context(value, root, _prepared=True)
+        memo = _diagnostic_context(value, root, _prepared=True, _certificate=record[3])
         if memo is None:
             return diagnose_value(value, graph.schema_value())
     else:
@@ -1245,21 +1293,39 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str, root_schem
                 _memo_key = None
     try:
         if '$ref' in schema:
-            if (yield from (_diagnose(value, _local_rule(root_schema, schema['$ref']), path, root_schema) if _memo is None else _diagnose(value, _local_rule(root_schema, schema['$ref']), path, root_schema, _memo=_memo))) is not True:
+            prepared = (_memo[6][2].get(id(schema)) if _memo is not None and len(_memo) == 7 and type(_memo[6]) is tuple else None)
+            if prepared is not None and prepared[0] is not schema:
+                prepared = None
+            if prepared is not None and prepared[1] is not None:
+                if (yield from _diagnose(value, prepared[1], path, root_schema, _memo=_memo)) is not True:
+                    _successful = False
+            elif (yield from (_diagnose(value, _local_rule(root_schema, schema['$ref']), path, root_schema) if _memo is None else _diagnose(value, _local_rule(root_schema, schema['$ref']), path, root_schema, _memo=_memo))) is not True:
                 _successful = False
             _completed = True
             return _successful if _memo is not None else None
         variants = schema.get('anyOf')
         if type(variants) is schema_sequence and variants:
+            prepared = (_memo[6][2].get(id(schema)) if _memo is not None and len(_memo) == 7 and type(_memo[6]) is tuple else None)
+            if prepared is not None and prepared[0] is not schema:
+                prepared = None
             if type(value) is dict:
                 for discriminator in (*_WIRE_DISCRIMINATORS, 'kind', 'action', 'decision', 'operation'):
                     if discriminator not in value:
                         continue
                     supplied = value[discriminator]
-                    candidates = [child for variant in variants if (child := _discriminator_schema(variant, discriminator, root_schema)) is not None and type(child.get('enum')) is schema_sequence]
-                    if len(candidates) != len(variants):
-                        continue
-                    matches = [variant for variant in variants if (child := _discriminator_schema(variant, discriminator, root_schema)) is not None and supplied in child.get('enum', ())] if type(supplied) is str else []
+                    prepared_discriminator = None
+                    if prepared is not None:
+                        prepared_discriminator = prepared[2].get(discriminator)
+                        if prepared_discriminator is None:
+                            continue
+                        candidates = prepared_discriminator[0]
+                        # Membership yields one match per variant, including duplicate enum items.
+                        matches = [variant for variant, values in zip(variants, candidates) if supplied in values] if type(supplied) is str else []
+                    else:
+                        candidates = [child for variant in variants if (child := _discriminator_schema(variant, discriminator, root_schema)) is not None and type(child.get('enum')) is schema_sequence]
+                        if len(candidates) != len(variants):
+                            continue
+                        matches = [variant for variant in variants if (child := _discriminator_schema(variant, discriminator, root_schema)) is not None and supplied in child.get('enum', ())] if type(supplied) is str else []
                     if len(matches) == 1:
                         if (yield from (_diagnose(value, matches[0], path, root_schema) if _memo is None else _diagnose(value, matches[0], path, root_schema, _memo=_memo))) is not True:
                             _successful = False
@@ -1274,11 +1340,15 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str, root_schem
                             return _successful if _memo is not None else None
                     if candidates and (not matches):
                         _successful = False
-                        yield _issue(_path(path, discriminator), 'expected one of [' + allowed_values(tuple(dict.fromkeys((item for candidate in candidates for item in candidate['enum'])))) + f'], got {json_type(supplied)}')
-                        resolved_variants = tuple((_diagnostic_schema_node(variant, root_schema) for variant in variants))
-                        properties = [variant.get('properties') for variant in resolved_variants if isinstance(variant, Mapping) and isinstance(variant.get('properties'), Mapping)]
-                        if len(properties) == len(variants):
-                            common = set.intersection(*(set(item) for item in properties))
+                        yield _issue(_path(path, discriminator), 'expected one of [' + allowed_values(prepared_discriminator[1] if prepared_discriminator is not None else tuple(dict.fromkeys((item for candidate in candidates for item in candidate['enum'])))) + f'], got {json_type(supplied)}')
+                        common_plan = prepared[3] if prepared is not None else None
+                        if common_plan is None:
+                            resolved_variants = tuple((_diagnostic_schema_node(variant, root_schema) for variant in variants))
+                            properties = [variant.get('properties') for variant in resolved_variants if isinstance(variant, Mapping) and isinstance(variant.get('properties'), Mapping)]
+                        else:
+                            properties = ()
+                        if common_plan is not None or len(properties) == len(variants):
+                            common = common_plan if common_plan is not None else set.intersection(*(set(item) for item in properties))
                             # Current wire names must not change the established
                             # missing-context-before-invalid-value diagnostic order.
                             # Keep domain-schema ordering unchanged.
@@ -1286,14 +1356,14 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str, root_schem
                             for name in names:
                                 if name == discriminator:
                                     continue
-                                child = properties[0][name]
-                                if any((item[name] != child for item in properties[1:])):
-                                    if name in value and all((isinstance(item[name], Mapping) for item in properties)):
+                                child = common_plan[name][0] if common_plan is not None else properties[0][name]
+                                if (not common_plan[name][1] if common_plan is not None else any((item[name] != child for item in properties[1:]))):
+                                    if name in value and (common_plan[name][2] if common_plan is not None else all((isinstance(item[name], Mapping) for item in properties))):
                                         field_path = _path(path, name)
                                         findings = tuple(islice(_diagnose(value[name], child, field_path, root_schema) if _memo is None else _diagnose(value[name], child, field_path, root_schema, _memo=_memo), _MAX_ISSUES + 1))
                                         overflow = len(findings) > _MAX_ISSUES or _OMITTED_ISSUES_NOTICE in findings
-                                        for item in properties[1:]:
-                                            other = tuple(islice(_diagnose(value[name], item[name], field_path, root_schema) if _memo is None else _diagnose(value[name], item[name], field_path, root_schema, _memo=_memo), _MAX_ISSUES + 1))
+                                        for item in (common_plan[name][3] if common_plan is not None else properties[1:]):
+                                            other = tuple(islice(_diagnose(value[name], item if common_plan is not None else item[name], field_path, root_schema) if _memo is None else _diagnose(value[name], item if common_plan is not None else item[name], field_path, root_schema, _memo=_memo), _MAX_ISSUES + 1))
                                             overflow |= len(other) > _MAX_ISSUES or _OMITTED_ISSUES_NOTICE in other
                                             common_findings = set(other)
                                             findings = tuple((finding for finding in findings if finding in common_findings))
@@ -1304,7 +1374,7 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str, root_schem
                                             _successful = False
                                             yield _OMITTED_ISSUES_NOTICE
                                     continue
-                                required_everywhere = all((name in variant.get('required', ()) for variant in resolved_variants))
+                                required_everywhere = common_plan[name][4] if common_plan is not None else all((name in variant.get('required', ()) for variant in resolved_variants))
                                 if name not in value and required_everywhere:
                                     _successful = False
                                     yield _issue(_path(path, name), 'required property is missing')
@@ -1448,13 +1518,21 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str, root_schem
 def _diagnostic_plain(value: object, root: object, _type=type, _dict=dict, _list=list,
                       _str=str, _int=int, _bool=bool, _float=float,
                       _finite=math.isfinite, _id=id, *, _prepared=False,
-                      _mapping=MappingProxyType, _tuple=tuple) -> bool:
+                      _mapping=MappingProxyType, _tuple=tuple,
+                      _certificate=None, _capture=None) -> bool:
     """Classify without invoking a supplied accessor or validating new rules."""
     root_mapping = _mapping if _prepared else _dict
-    if _type(root) is not root_mapping or any(_type(key) is not _str for key in root):
+    if _type(root) is not root_mapping:
         return False
-    definitions = root.get("$defs", _mapping({}) if _prepared else {})
-    if _type(definitions) is not root_mapping or any(_type(key) is not _str for key in definitions):
+    if _certificate is None:
+        if any(_type(key) is not _str for key in root):
+            return False
+        definitions = root.get("$defs", _mapping({}) if _prepared else {})
+        if _type(definitions) is not root_mapping or any(_type(key) is not _str for key in definitions):
+            return False
+    elif (not _prepared or _type(_certificate) is not _tuple or len(_certificate) != 3
+            or _certificate[0] is not root or _type(_certificate[1]) is not _int
+            or not 0 <= _certificate[1] <= 262_144 or _type(_certificate[2]) is not _mapping):
         return False
     active: set[tuple[int, bool]] = set()
     completed: set[tuple[int, bool]] = set()
@@ -1463,8 +1541,16 @@ def _diagnostic_plain(value: object, root: object, _type=type, _dict=dict, _list
     pending = [[value, False, None], [root, True, None]]
     virtual_pending = 2
     remaining = 262_144
+    if _certificate is not None:
+        # The certified schema prefix finishes with just the payload action.
+        # Schema-role completed keys cannot affect a payload-role traversal.
+        pending.pop()
+        virtual_pending, remaining = 1, _certificate[1]
     while pending:
         frame = pending[-1]
+        if _capture is not None and not frame[1]:
+            _capture.append(remaining)
+            _capture = None
         node, schema, children = frame
         leaving = children is not None and not children
         if children is None or leaving:
@@ -1554,13 +1640,13 @@ def _diagnostic_pins_match(pins: tuple, _type=type, _dict=dict, _tuple=tuple,
 
 def _diagnostic_source_pins() -> tuple:
     # Immutable implementation anchors, never schema/value/results from a diagnosis.
-    own = ("_diagnose", "_local_rule", "_diagnostic_schema_node", "_discriminator_schema",
+    own = ("_prepare_diagnostic_template", "MappingProxyType", "_diagnose", "_local_rule", "_diagnostic_schema_node", "_discriminator_schema",
            "_finite_number", "_matches_type", "json_type", "_same_json_scalar", "_path",
            "_issue", "allowed_values", "_diagnostic_plain", "_diagnostic_pins_match",
            "_PATH_MEMBER", "_MAX_ISSUES", "_OMITTED_ISSUES_NOTICE", "_WIRE_DISCRIMINATORS",
            "Mapping", "Decimal", "json", "re", "math", "islice", "_ABSENT")
-    builtin_names = ("type", "dict", "list", "tuple", "str", "int", "bool", "float", "set", "bytes",
-                     "len", "any", "all", "min", "sorted", "enumerate", "isinstance",
+    builtin_names = ("TypeError", "ValueError", "RecursionError", "type", "dict", "list", "tuple", "str", "int", "bool", "float", "set", "bytes",
+                     "len", "any", "all", "min", "sorted", "enumerate", "zip", "isinstance",
                      "id", "vars")
     declarations = (
         (globals(), (*own, *builtin_names)), (vars(builtins), builtin_names),
@@ -1594,7 +1680,8 @@ _DIAGNOSIS_SOURCE_PINS = _diagnostic_source_pins()
 def _diagnostic_context(value: object, schema: object, _pins=_DIAGNOSIS_SOURCE_PINS,
                         _checker=_diagnostic_pins_match,
                         _code=_diagnostic_pins_match.__code__,
-                        _defaults=_diagnostic_pins_match.__defaults__, _type=type, _str=str, *, _prepared=False):
+                        _defaults=_diagnostic_pins_match.__defaults__, _type=type, _str=str, *,
+                        _prepared=False, _certificate=None):
     # The admitted traversal invokes no supplied Python callback. Check source once
     # per entry; concurrent/signal/profiler mutation is not a new guarantee here.
     if (_pins is not _DIAGNOSIS_SOURCE_PINS or _checker is not _diagnostic_pins_match
@@ -1603,7 +1690,8 @@ def _diagnostic_context(value: object, schema: object, _pins=_DIAGNOSIS_SOURCE_P
     # Reject speculative dictionary lookups that could call a non-string key.
     if any(any(_type(name) is not _str for name in namespace) for namespace, _ in _pins[0]):
         return None
-    if not _checker(_pins, *_defaults) or not _diagnostic_plain(value, schema, _prepared=_prepared):
+    if not _checker(_pins, *_defaults) or not _diagnostic_plain(
+            value, schema, _prepared=_prepared, _certificate=_certificate):
         return None
     # Canonical regex entry points only add builtin compiled patterns to this cache.
     for cache in (re._cache, vars(re).get("_cache2", {})):
@@ -1618,7 +1706,7 @@ def _diagnostic_context(value: object, schema: object, _pins=_DIAGNOSIS_SOURCE_P
     result = [schema, value, {}, 0, True,
             (_diagnose, _diagnose.__code__, _diagnose.__defaults__, _diagnose.__kwdefaults__)]
     if _prepared:
-        result.append(True)
+        result.append(_certificate if _certificate is not None else True)
     return result
 
 
@@ -2043,7 +2131,7 @@ def _schema_node_query_declaration(*, diagnostic: bool = False) -> tuple | None:
         (vars(math), ("isfinite",)),
     )
     if diagnostic:
-        namespaces += ((globals(), ("MappingProxyType", "_schema_template_findings", "_freeze_diagnostic_schema",
+        namespaces += ((globals(), ("MappingProxyType", "_schema_template_findings", "_freeze_diagnostic_schema", "_prepare_diagnostic_template",
                                    "_diagnostic_context", "diagnose_value", "_DIAGNOSIS_SOURCE_PINS")),)
     bindings = tuple((namespace, tuple((name, namespace.get(name, _ABSENT)) for name in names))
                      for namespace, names in namespaces)

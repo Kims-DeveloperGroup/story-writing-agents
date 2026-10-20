@@ -612,10 +612,10 @@ PYTHONPATH=src python -m tests.runner run \
 ```
 
 For runtime or test changes, CI requires four complementary full-suite shards.
-Hosted full shards, static validation, the runtime fast lane, and reconciliation
-use standard Ubuntu 24.04 x64 runners with the same locked dependencies and test
-inventory. Full-suite selection
-includes test-only changes. The fixed timing limits still apply to every
+Hosted runtime fast and full jobs use the standard four-core Ubuntu 24.04 ARM64
+runner. Static validation, reconciliation and deadline control use Ubuntu 24.04
+x64 runners. They retain the same locked dependencies and test inventory.
+Full-suite selection includes test-only changes. The fixed timing limits still apply to every
 selected full shard; a diagnostic run never replaces this evidence.
 
 Independent task threads share a host queue with four executing test processes;
@@ -645,7 +645,7 @@ active executions and reserves the host for the campaign; use it for performance
 measurements. Isolated campaigns run the four full shards sequentially on their
 executor by default; shared campaigns permit four concurrently. Set
 `--full-concurrency 1`, `2`, `3`, or `4` to choose explicitly. Campaign metadata records the
-resolved value. The strict 1,080/540-second limits still apply in either mode.
+resolved value. The strict 14,400/3,600-second limits apply in either mode.
 Run status and capability-authorized cancellation from a checkout containing
 the queue utilities; campaigns can target older prepared checkouts with
 `--checkout`:
@@ -692,9 +692,13 @@ classes use the manifest's deterministic fallback, so the weights are a
 partitioning input rather than proof of current performance.
 
 The frozen suite scope and measured limits are in [TEST_POLICY.md](TEST_POLICY.md):
-1,080 seconds sequential equivalent and 540 seconds per shard. The checked-in
-budget contains exact canonical IDs and per-ID subtest caps; the CI gate compares
-it with the base commit and current Python 3.11 reports. Class timing weights
+14,400 seconds sequential equivalent and 3,600 seconds per full shard. Hosted
+full workers receive one hour of test execution. Full-shard jobs, the deadline
+guardian and the shared workflow have 75-minute limits for setup and shutdown;
+other jobs retain 60-minute native limits. The checked-in budget contains exact canonical IDs and per-ID
+subtest caps. The gate compares it with the base commit, allowing only the
+explicitly approved paired duration-policy transition, and current Python 3.11
+reports. Class timing weights
 only balance the four shards; they do not prove the run is under budget.
 
 <a id="contribution-guidelines"></a>

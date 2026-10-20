@@ -34,13 +34,12 @@ from tests.provider_wire_fixture import assert_schema_descriptions
 
 class StructuredOutputValidationTests(unittest.TestCase):
     def test_diagnose_json_text_reports_all_independent_safe_issues(self) -> None:
-        schema = { "type": "object",
-            "properties": {"message": {"type": "string", "minLength": 1}, "count": {"type": "integer", "minimum": 1},
-                "maximum": {"type": "number", "maximum": 2}, "short": {"type": "string", "maxLength": 2},
-                "few": {"type": "array", "minItems": 1}, "many": {"type": "array", "maxItems": 1},
-                "mode": {"type": "string", "enum": ["draft", "review"]}, "items": {
-                    "type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 0, },
-                "required_note": {"type": "string"}, }, "required": ["message", "count", "items", "required_note"],
+        schema = { "type": "object", "properties": {"message": {"type": "string", "minLength": 1},
+            "count": {"type": "integer", "minimum": 1}, "maximum": {"type": "number", "maximum": 2},
+            "short": {"type": "string", "maxLength": 2}, "few": {"type": "array", "minItems": 1},
+            "many": {"type": "array", "maxItems": 1}, "mode": {"type": "string", "enum": ["draft", "review"]},
+            "items": { "type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 0, },
+            "required_note": {"type": "string"}, }, "required": ["message", "count", "items", "required_note"],
             "additionalProperties": False, }
         secret = "PRIVATE_PROVIDER_VALUE_한🙂"
         body = json.dumps({"message": "", "count": 0, "maximum": 3, "short": secret,
@@ -56,12 +55,11 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertNotIn(secret, repr(issues))
 
     def test_union_selects_matching_branch_without_other_branch_noise(self) -> None:
-        schema = {"anyOf": [{"type": "object", "properties": {
-                "kind": {"type": "string", "enum": ["search"]}, "query": {"type": "string"},
-            }, "required": ["kind", "query"], "additionalProperties": False},
+        schema = {"anyOf": [{"type": "object", "properties": { "kind": {"type": "string", "enum": ["search"]},
+            "query": {"type": "string"}, }, "required": ["kind", "query"], "additionalProperties": False},
             {"type": "object", "properties": {"kind": {"type": "string", "enum": ["answer"]},
-                "message": {"type": "string", "minLength": 1}, "citation_ids": {"type": "array", "minItems": 0},
-            }, "required": ["kind", "message", "citation_ids"], "additionalProperties": False}, ]}
+            "message": {"type": "string", "minLength": 1}, "citation_ids": {"type": "array", "minItems": 0}, },
+            "required": ["kind", "message", "citation_ids"], "additionalProperties": False}, ]}
         issues = diagnose_json_text( '{"kind":"answer","message":0,"PRIVATE_UNKNOWN":"secret"}', schema, )
         self.assertEqual(issues, ("$.citation_ids: required property is missing",
             "$: contains 1 unexpected properties (names withheld)", "$.message: expected string, got integer", ))
@@ -70,9 +68,8 @@ class StructuredOutputValidationTests(unittest.TestCase):
         # Literal diagnostic oracles remain independent of evaluation reuse.
         from collections.abc import Mapping; from decimal import Decimal
         text_rule = {"type": "string", "enum": ["ok"]}
-        references = {"type": "object", "properties": {
-            "left": {"$ref": "#/$defs/text"}, "right": {"$ref": "#/$defs/text"}},
-            "required": ["left", "right"], "$defs": {"text": text_rule}}
+        references = {"type": "object", "properties": { "left": {"$ref": "#/$defs/text"},
+            "right": {"$ref": "#/$defs/text"}}, "required": ["left", "right"], "$defs": {"text": text_rule}}
         supplied = {"left": "ok", "right": "ok"}; self.assertEqual(diagnose_value(supplied, references), ())
         supplied["right"] = 7
         self.assertEqual(diagnose_value(supplied, references), ("$.right: expected string, got integer",))
@@ -314,12 +311,10 @@ class StructuredOutputValidationTests(unittest.TestCase):
         for rules in (SchemaRules.declare(original), SchemaRules.declare(actual)):
             self.assertFalse(rules.findings({'left': supplied, 'right': supplied}))
             self.assertTrue(rules.findings({'left': supplied}))
-        for leaf, supplied in (({'type': 'string', 'enum': ['한🙂' * 4]}, '한🙂' * 4),
-                               ({'type': 'string', 'enum': ['"\\\n' * 5]}, '"\\\n' * 5),
-                               ({'type': 'number', 'enum': [-0.0, 1e-6, 1e20]}, -0.0),
-                               ({'type': 'object', 'properties': {}, 'required': [],
-                                 'additionalProperties': False}, {}),
-                               ({'type': 'array', 'items': {'type': 'null'}, 'minItems': 0, 'maxItems': 0}, [])):
+        for leaf, supplied in (({'type': 'string', 'enum': ['한🙂' * 4]}, '한🙂' * 4), ({'type': 'string',
+            'enum': ['"\\\n' * 5]}, '"\\\n' * 5), ({'type': 'number', 'enum': [-0.0, 1e-6, 1e20]}, -0.0),
+            ({'type': 'object', 'properties': {}, 'required': [], 'additionalProperties': False}, {}),
+            ({'type': 'array', 'items': {'type': 'null'}, 'minItems': 0, 'maxItems': 0}, [])):
             original, shared = pair(leaf), shared_pair(leaf)
             expected = shared if len(encode(shared)) < len(encode(original)) else original
             actual = factored(original); self.assertEqual(encode(actual), encode(expected))
@@ -343,9 +338,8 @@ class StructuredOutputValidationTests(unittest.TestCase):
         counts = {name: 0 if number == 52 else 2 if number == 0 else 1 for number, name in enumerate(names)}
         alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
         aliases = dict(zip(sorted(names, key=lambda name: (-counts[name], internal[name])), (*alphabet, 'aa')))
-        expected = {**original, 'properties': {name: {'$ref': '#/$defs/' + aliases[ref['$ref'][8:]]}
-                                              for name, ref in properties.items()},
-                    '$defs': {aliases[name]: value for name, value in definitions.items()}}
+        expected = {**original, 'properties': {name: {'$ref': '#/$defs/' + aliases[ref['$ref'][8:]]} for name,
+            ref in properties.items()}, '$defs': {aliases[name]: value for name, value in definitions.items()}}
         actual = factored(original); self.assertEqual(actual, expected)
         self.assertEqual(actual['$defs']['a'], definitions[names[0]])
         self.assertEqual(actual['$defs']['aa'], definitions[names[52]]); from collections.abc import Mapping
@@ -569,18 +563,21 @@ class StructuredOutputValidationTests(unittest.TestCase):
         def template_decode(value, captured=cached): return value
         template_decoder = TypedDecoder('fixture.template.owner', '1', template_decode)
         self.assertIsNone(template_decoder.require_provenance())
-        parses = []
+        parses, preparations, admissions = [], [], []
         def template_profile(frame, event, _result):
-            if event == 'call' and frame.f_code is diagnostics.strict_json_object.__code__:
-                parses.append('parse')
+            if event == 'call' and frame.f_code is diagnostics.strict_json_object.__code__: parses.append('parse')
+            if event == 'call' and frame.f_code is diagnostics._prepare_diagnostic_template.__code__:
+                preparations.append(frame.f_locals['root'])
+            if event == 'return' and frame.f_code is diagnostics._diagnostic_plain.__code__:
+                if frame.f_locals['_certificate'] is not None:
+                    admissions.append((len(frame.f_locals['value']), _result))
         previous_profile = sys.getprofile()
         sys.setprofile(template_profile)
-        try:
-            self.assertEqual((cached.findings(packet), cached.findings(packet), independent.findings(packet)),
+        try: self.assertEqual((cached.findings(packet), cached.findings(packet), independent.findings(packet)),
                              ((), (), ()))
-        finally:
-            sys.setprofile(previous_profile)
+        finally: sys.setprofile(previous_profile)
         self.assertEqual(parses, ['parse', 'parse'])
+        self.assertEqual(len(preparations), 2); self.assertIsNot(preparations[0], preparations[1])
         self.assertIsNone(template_decoder.require_provenance())
         first_export, second_export = cached.schema_value(), cached.schema_value()
         self.assertIsNot(first_export, second_export)
@@ -597,7 +594,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
         foreign = SchemaRules.declare({'type': 'integer'})
         self.assertEqual(foreign.findings(0), ())
         template, anchor = cached._diagnostic_template, cached._diagnostic_anchor
-        forged = (cached.canonical_bytes, cached.maximum_bytes, foreign._diagnostic_template[2])
+        forged = (cached.canonical_bytes, cached.maximum_bytes, *foreign._diagnostic_template[2:])
         for hints in ((None, anchor), (template, None),
                       (foreign._diagnostic_template, foreign._diagnostic_anchor), (forged, forged)):
             try:
@@ -614,17 +611,14 @@ class StructuredOutputValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '^frozen typed decoder hook provenance changed$'):
                 template_decoder.require_provenance()
             object.__setattr__(cached, 'canonical_bytes', b'{')
-            with self.assertRaises(ValueError):
-                cached.findings(packet)
-        finally:
-            object.__setattr__(cached, 'canonical_bytes', source_bytes)
+            with self.assertRaises(ValueError): cached.findings(packet)
+        finally: object.__setattr__(cached, 'canonical_bytes', source_bytes)
         self.assertIsNone(template_decoder.require_provenance())
         export_method = SchemaRules.schema_value
         try:
             SchemaRules.schema_value = lambda owner: {'type': 'integer'}
             self.assertEqual(cached.findings(packet), ('$: expected integer, got object',))
-        finally:
-            SchemaRules.schema_value = export_method
+        finally: SchemaRules.schema_value = export_method
         marker = RuntimeError('fixture dynamic diagnosis')
         class DynamicPayload(dict):
             def __getitem__(self, key): raise marker
@@ -635,19 +629,39 @@ class StructuredOutputValidationTests(unittest.TestCase):
         def replaced_evaluator(*args, **kwargs): raise marker
         try:
             diagnostics._diagnose = replaced_evaluator
-            with self.assertRaises(RuntimeError) as evaluator_failure:
-                cached.findings(packet)
+            with self.assertRaises(RuntimeError) as evaluator_failure: cached.findings(packet)
             self.assertIs(evaluator_failure.exception, marker)
-        finally:
-            diagnostics._diagnose = evaluator
+        finally: diagnostics._diagnose = evaluator
         self.assertEqual(cached.findings(packet), ())
 
 
+        for tag, order in (("kind", ("a", "z")), ("response_type", ("z", "a"))):
+            grammar = {"anyOf": [{"$ref": "#/$defs/" + name} for name in ("left", "right")], "$defs": {
+                name: diagnostics.closed_rule({tag: {"type": "string", "enum": [name]},
+                    "z": {"type": "integer"}, "a": {"type": "integer"}}) for name in ("left", "right")}}
+            rules = SchemaRules.declare(grammar); value = {tag: "unknown", "a": "bad"}
+            tails = {"a": "$.a: expected integer, got string", "z": "$.z: required property is missing"}
+            expected = (f'$.{tag}: expected one of ["left", "right"], got string', *(tails[k] for k in order))
+            self.assertEqual((diagnose_value(value, grammar), rules.findings(value), rules.findings(value)),
+                             (expected, expected, expected))
+        resolver, resolver_code = diagnostics._local_rule, diagnostics._local_rule.__code__
+        def changed_reference(*_args): raise RuntimeError("fixture changed reference")
+        with self.assertRaisesRegex(RuntimeError, "^fixture changed reference$"):
+            try: resolver.__code__ = changed_reference.__code__; cached.findings(packet)
+            finally: resolver.__code__ = resolver_code
+        self.assertEqual(cached.findings(packet), ())
+        budget_owner = SchemaRules.declare({"type": "array", "items": {"type": "integer"}})
+        self.assertEqual(budget_owner.findings([]), ()); admissions.clear()
+        try:
+            sys.setprofile(template_profile)
+            for length in (262_139, 262_140, 0): self.assertEqual(budget_owner.findings([0] * length), ())
+        finally: sys.setprofile(previous_profile)
+        self.assertEqual(admissions, [(262_139, True), (262_140, False), (0, True)])
+
     def test_malformed_and_duplicate_json_have_value_free_diagnostics(self) -> None:
         schema = {"type": "object", "properties": {}, "additionalProperties": False}
-        for text, expected in (("{", ("$: malformed JSON",)),
-                               ('{"private":1,"private":2}', ("$: duplicate object key",)),
-                               ("NaN", ("$: malformed JSON",)), ("{}", ())):
+        for text, expected in (("{", ("$: malformed JSON",)), ('{"private":1,"private":2}',
+            ("$: duplicate object key",)), ("NaN", ("$: malformed JSON",)), ("{}", ())):
             self.assertEqual(diagnose_json_text(text, schema), expected)
         private = "PRIVATE_EXCEPTION_AND_VALUE_한🙂"
         failure = validation_failure(ValueError(private), "$.message", "expected nonempty text", value=private)
@@ -680,9 +694,8 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertTrue(all(len(chunk.encode()) < 32_768 for chunk in chunks))
         self.assertEqual(tuple(line for chunk in chunks for line in chunk.splitlines()[1:]), issues)
         properties = {f"field_{index:04d}": {"anyOf": [{"type": "string"}] * 2} for index in range(2050)}
-        failure = encoding_failure(ValueError("PRIVATE_ERROR"),
-            {**dict.fromkeys(properties, "PRIVATE_VALUE\ud800"), "PRIVATE_KEY": "\ud800"},
-            {"type": "object", "properties": properties})
+        failure = encoding_failure(ValueError("PRIVATE_ERROR"), {**dict.fromkeys(properties,
+            "PRIVATE_VALUE\ud800"), "PRIVATE_KEY": "\ud800"}, {"type": "object", "properties": properties})
         chunks = bounded_chunks(failure_issues(failure))
         lines = tuple(line for chunk in chunks for line in chunk.splitlines()[1:]); self.assertEqual(len(lines), 2049)
         self.assertEqual(len(set(lines)), len(lines))
@@ -770,9 +783,8 @@ def _search_matches(manifest: ContextManifest,
         if entry.source_id in snapshots )
 
 
-def _mint_handles(session: ContextInvocationSession,
-    registry: ContextSourceRegistry, snapshots: dict[str, ContextSourceSnapshot],
-) -> tuple[tuple[ContextManifestEntry, ContextSourceHandle], ...]:
+def _mint_handles(session: ContextInvocationSession, registry: ContextSourceRegistry, snapshots: dict[str,
+    ContextSourceSnapshot], ) -> tuple[tuple[ContextManifestEntry, ContextSourceHandle], ...]:
     matches = _search_matches(session.binding.manifest, snapshots)
     registry.search = mock.Mock(return_value=(matches, False, sum((match.descriptor.utf8_bytes for match in matches))))
     observation = session.search(ContextSearchAction( _correlation(session.binding, session.next_action_index), (
@@ -818,27 +830,22 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
     """Verify the direct surface, immutable binding, and construction boundary."""
 
     def test_exact_surface_states_fields_and_no_content_in_repr(self) -> None:
-        self.assertEqual(tuple(service_module.__all__), ("AgentContextService",
-                "ContextExecutionError", "ContextExecutionErrorCode",
-                "ContextExecutionEvent", "ContextExecutionEventKind",
-                "ContextExecutionEventSink", "ContextInvocationBinding",
-                "ContextInvocationKind", "ContextInvocationRequest",
-                "ContextInvocationResult", "ContextInvocationSession",
-                "ContextInvocationState", "ContextJsonObjectResultContract",
-                "ContextProvider", "ContextProviderCallFinalizer",
-                "ContextProviderCallRequest", "ContextProviderCallResult",
-                "ContextProviderFailureFacts", "ContextContinuationRejection",
-                "ContextProviderTerminalCode", "ContextReferencePreludeRequest",
-                "ContextReferencePreludeResult", "ContextReadReceipt", "ContextScope", "ContextSourceClassification",
-                "context_provider_failure_facts", "record_context_provider_failure", ), )
-        self.assertEqual( tuple(field.name for field in fields(service_module.ContextExecutionEvent)), (
-                "kind", "scope", "operation_id", "phase",
-                "round_number", "action_index", "selected_source_count", "selected_source_utf8_bytes",
-                "omitted_searchable_source_count", "omitted_searchable_source_utf8_bytes",
-                "search_hit_count", "retrieved_source_count",
-                "retrieved_source_utf8_bytes", "mandatory_reference_count",
-                "mandatory_reference_utf8_bytes", "provider_input_tokens",
-                "history_record_count", "observation_utf8_bytes", "truncated", ), )
+        self.assertEqual(tuple(service_module.__all__), ("AgentContextService", "ContextExecutionError",
+            "ContextExecutionErrorCode", "ContextExecutionEvent", "ContextExecutionEventKind",
+            "ContextExecutionEventSink", "ContextInvocationBinding", "ContextInvocationKind",
+            "ContextInvocationRequest", "ContextInvocationResult", "ContextInvocationSession",
+            "ContextInvocationState", "ContextJsonObjectResultContract", "ContextProvider",
+            "ContextProviderCallFinalizer", "ContextProviderCallRequest", "ContextProviderCallResult",
+            "ContextProviderFailureFacts", "ContextContinuationRejection", "ContextProviderTerminalCode",
+            "ContextReferencePreludeRequest", "ContextReferencePreludeResult", "ContextReadReceipt",
+            "ContextScope", "ContextSourceClassification", "context_provider_failure_facts",
+            "record_context_provider_failure", ), )
+        self.assertEqual( tuple(field.name for field in fields(service_module.ContextExecutionEvent)), ( "kind",
+            "scope", "operation_id", "phase", "round_number", "action_index", "selected_source_count",
+            "selected_source_utf8_bytes", "omitted_searchable_source_count",
+            "omitted_searchable_source_utf8_bytes", "search_hit_count", "retrieved_source_count",
+            "retrieved_source_utf8_bytes", "mandatory_reference_count", "mandatory_reference_utf8_bytes",
+            "provider_input_tokens", "history_record_count", "observation_utf8_bytes", "truncated", ), )
         progress = service_module.ContextExecutionEvent( service_module.ContextExecutionEventKind.BOOTSTRAP, _SCOPE,
             "operation", selected_source_count=2, selected_source_utf8_bytes=128, omitted_searchable_source_count=1,
             omitted_searchable_source_utf8_bytes=64, mandatory_reference_count=0, mandatory_reference_utf8_bytes=0, )
@@ -910,10 +917,9 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             service_module.ContextProviderTerminalCode.RESPONSE_SEMANTIC_REJECTED,
             service_module.ContextProviderTerminalCode.ACTION_EXHAUSTED,
             service_module.ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED, )
-        self.assertEqual( tuple(field.name
-                for field in fields(service_module.ContextProviderFailureFacts) ), ( "accounting", "timed_out",
-                "taint_existing_thread", "submitted_accountings", "submission_uncertain", "response_rejection_code",
-                "continuation_rejection", ), )
+        self.assertEqual( tuple(field.name for field in fields(service_module.ContextProviderFailureFacts) ),
+            ( "accounting", "timed_out", "taint_existing_thread", "submitted_accountings",
+            "submission_uncertain", "response_rejection_code", "continuation_rejection", ), )
         for code in rejection_codes:
             with self.subTest(code=code):
                 facts = service_module.ContextProviderFailureFacts(
@@ -957,9 +963,8 @@ class CompactWireDecoderTests(unittest.TestCase):
     def setUp(self) -> None:
         manifest, _snapshots = _manifest_fixture(); self.correlation = _correlation(_binding(manifest), 1)
         self.token = service_module._correlation_token(self.correlation)
-        self.result_schema = _closed_result_schema({
-                "kind": {"enum": ["answer"], "type": "string"}, "message": {"type": "string"},
-                "proposal": {"type": "null"}, } )
+        self.result_schema = _closed_result_schema({ "kind": {"enum": ["answer"], "type": "string"},
+            "message": {"type": "string"}, "proposal": {"type": "null"}, } )
         self.result_contract = ContextJsonObjectResultContract("outcome-v1", self.result_schema, )
 
     @staticmethod
@@ -1027,14 +1032,12 @@ class CompactWireDecoderTests(unittest.TestCase):
             replace(self.correlation, action_index=2), )
         tokens = (self.token,) + tuple( service_module._correlation_token(value) for value in variants )
         self.assertEqual(len(set(tokens)), len(tokens))
-        self.assertIsInstance(self.decode( _answer_wire(self.token,
-                    {"kind": "answer", "message": "answer", "proposal": None}, ),
-                allowed=("answer",), ), ContextAnswerAction, )
+        self.assertIsInstance(self.decode( _answer_wire(self.token, {"kind": "answer", "message": "answer",
+            "proposal": None}, ), allowed=("answer",), ), ContextAnswerAction, )
 
     def test_valid_search_read_and_natural_result_shapes_decode_exactly(self) -> None:
-        search = self.decode(_search_wire( self.token, [ ("Needle", ["writing_artifact",
-                            "conversation", "active_debate",
-                            "own_agent_state", ], ) ], ), allowed=("search", "answer"), )
+        search = self.decode(_search_wire( self.token, [ ("Needle", ["writing_artifact", "conversation",
+            "active_debate", "own_agent_state", ], ) ], ), allowed=("search", "answer"), )
         self.assertIsInstance(search, ContextSearchAction)
         assert isinstance(search, ContextSearchAction)
         self.assertEqual(search.queries[0].normalized_text, "needle")
@@ -1191,10 +1194,9 @@ class CompactWireDecoderTests(unittest.TestCase):
             self.assertNotIn(private, rendered)
 
     def test_unrelated_malformed_actions_keep_generic_diagnostic(self) -> None:
-        cases = ("{", { "correlation": self.token,
-                'agent_action': {'action_type': 'submit_result', "used_handles": []}, }, {
-                "correlation": self.token, 'agent_action': { 'action_type': 'read_context', 'read_handles': ["h1"],
-                    "used_handles": ["h1"], }, }, )
+        cases = ("{", { "correlation": self.token, 'agent_action': {'action_type': 'submit_result',
+            "used_handles": []}, }, { "correlation": self.token, 'agent_action': { 'action_type': 'read_context',
+            'read_handles': ["h1"], "used_handles": ["h1"], }, }, )
         for value in cases:
             with (self.subTest(value=value), self.assertRaises(service_module.ContextExecutionError) as caught,):
                 self.decode(value)
@@ -1285,9 +1287,8 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
 
         guessed = ContextSourceHandle("ctxh_v1_" + "0" * 64)
         guessed_session = _session(self.binding, _registry(_SCOPE, self.snapshots))
-        assert_failure(guessed_session, ContextReadAction(_correlation(self.binding, 1),
-                (guessed,), ), ContextActionErrorCode.HANDLE_INVALID,
-            next_action_index=1, extra_private=(guessed.value,), )
+        assert_failure(guessed_session, ContextReadAction(_correlation(self.binding, 1), (guessed,), ),
+            ContextActionErrorCode.HANDLE_INVALID, next_action_index=1, extra_private=(guessed.value,), )
 
         foreign_scopes = (("stale_operation", _SCOPE, "stale_operation", "stale_result"), ("cross_scope",
                 replace(_SCOPE, session_id="other_session"), "operation", "result", ), (
