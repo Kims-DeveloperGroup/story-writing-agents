@@ -1482,8 +1482,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             "core_documents/narrative_rules.md", )
         internal_path = "discussion_logs/private_context.md"
         snapshots_tuple = tuple(_snapshot( _SCOPE, path, ("part one release needle\n" if path in eligible_paths
-                    else "part one release needle " * 20 + "decoy\n"),)
-            for path in (*eligible_paths, *decoy_paths))
+            else "part one release needle " * 20 + "decoy\n"),) for path in (*eligible_paths, *decoy_paths))
         manifest = ContextManifest( _SCOPE, tuple( _entry(snapshot, index)
                 for index, snapshot in enumerate(snapshots_tuple)),)
         snapshots = { snapshot.descriptor.source_id: snapshot for snapshot in snapshots_tuple }
@@ -1511,26 +1510,22 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         self.assertIn( observation.hits[0].source_id, {_artifact_id(path) for path in eligible_paths}, )
 
         invalid_matrix = (( "unsafe_parent", lambda: ContextSearchQuery( "needle",
-                    (ContextSourceKind.WRITING_ARTIFACT,), "manuscript/part_01/../",),),
-            ("lookalike_without_separator", lambda: ContextSearchQuery( "needle",
-                    (ContextSourceKind.WRITING_ARTIFACT,), "manuscript/part_01",),), ("incompatible_source",
-                lambda: ContextSearchQuery( "needle", (ContextSourceKind.CONVERSATION,), prefix,),),
-            ("mixed_prefixes", lambda: ContextSearchAction(_correlation(self.binding, 1), (
+            (ContextSourceKind.WRITING_ARTIFACT,), "manuscript/part_01/../",),), ("lookalike_without_separator",
+            lambda: ContextSearchQuery( "needle", (ContextSourceKind.WRITING_ARTIFACT,), "manuscript/part_01",),),
+            ("incompatible_source", lambda: ContextSearchQuery( "needle", (ContextSourceKind.CONVERSATION,),
+            prefix,),), ("mixed_prefixes", lambda: ContextSearchAction(_correlation(self.binding, 1), (
                         ContextSearchQuery("one", (ContextSourceKind.WRITING_ARTIFACT,), prefix,
-                        ), ContextSearchQuery( "two", (ContextSourceKind.WRITING_ARTIFACT,),
-                            "manuscript/part_02/",),),),),)
+            ), ContextSearchQuery( "two", (ContextSourceKind.WRITING_ARTIFACT,), "manuscript/part_02/",),),),),)
         for label, construct in invalid_matrix:
             with self.subTest(rejected=label), self.assertRaises(ContextActionError): construct()
 
     def test_compact_search_read_evidence_retains_all_authoritative_facts(self) -> None:
         scope = replace( _SCOPE, subject_kind=ContextSubjectKind.DEBATE, subject_id="debate-one", )
-        cases = ( ( ContextSourceKind.WRITING_ARTIFACT,
-                ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY, "manuscript/part-01/chapter.md",
-                ContextSourceBoundary.artifact_lines(1, 1), "artifact needle\n",),
-            (ContextSourceKind.CONVERSATION,
-                ContextAuthorityKind.CONVERSATION_STORAGE, "conversation/conversation-one",
-                ContextSourceBoundary.records(1, 1), "conversation needle",), (ContextSourceKind.ACTIVE_DEBATE,
-                ContextAuthorityKind.ACTIVE_DEBATE, "debate/debate-one",
+        cases = ( ( ContextSourceKind.WRITING_ARTIFACT, ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY,
+            "manuscript/part-01/chapter.md", ContextSourceBoundary.artifact_lines(1, 1), "artifact needle\n",),
+            (ContextSourceKind.CONVERSATION, ContextAuthorityKind.CONVERSATION_STORAGE,
+            "conversation/conversation-one", ContextSourceBoundary.records(1, 1), "conversation needle",),
+            (ContextSourceKind.ACTIVE_DEBATE, ContextAuthorityKind.ACTIVE_DEBATE, "debate/debate-one",
                 ContextSourceBoundary.records(1, 1), "active debate needle",), (ContextSourceKind.OWN_AGENT_STATE,
                 ContextAuthorityKind.OWN_AGENT_STATE, "agent-state/lead_orchestrator",
                 ContextSourceBoundary.records(1, 1), '{"debate_id":"debate-one","note":"own state needle"}',),)
@@ -1618,9 +1613,8 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
 
     def test_every_correlation_dimension_is_exact_and_preflight_noncharging(self, ) -> None:
         other_scope = replace(_SCOPE, session_id="other")
-        invalid = ( replace(_correlation(self.binding, 1), scope=other_scope),
-            replace(_correlation(self.binding, 1), operation_id="other"),
-            replace(_correlation(self.binding, 1), result_correlation_id="other"),
+        invalid = ( replace(_correlation(self.binding, 1), scope=other_scope), replace(_correlation(self.binding,
+            1), operation_id="other"), replace(_correlation(self.binding, 1), result_correlation_id="other"),
             replace(_correlation(self.binding, 1), action_index=2), )
         query = ContextSearchQuery( "needle", (ContextSourceKind.WRITING_ARTIFACT,), )
         for correlation in invalid:

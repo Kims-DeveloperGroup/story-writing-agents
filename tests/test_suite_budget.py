@@ -88,7 +88,8 @@ class SuiteBudgetTests(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True), patch.object(sys, "platform", "linux"):
             options = runner._hosted_options(args)
             self.assertEqual(options["cleanup_deadline_epoch"], args.hosted_deadline_epoch + 30)
-            self.assertEqual([options[k] - options["work_deadline"] for k in ("deadline", "started")], [30, -3600])
+            self.assertEqual((options["deadline"], options["started"]),
+                             (options["work_deadline"] + 30, options["work_deadline"] - 3600))
             for cpu, expected in ((1, 1), (2, 2), (4, 4), (8, 4)):
                 with (patch.object(os, "cpu_count", return_value=cpu),
                       patch.object(os, "sched_getaffinity", return_value=set(range(cpu)), create=True)):
@@ -319,8 +320,7 @@ class SuiteBudgetTests(unittest.TestCase):
         lima_markers = {"/run/lima-ssh-ready", "/var/run/lima-ssh-ready", "/run/lima-guestagent.pid"}
         for guest_marker, managed, hosted, expected, error in ( (False, False, "", 17, None),
             (False, True, "", None, None), (False, False, "true", None, None),
-            (True, False, "", None, LocalCIError),
-            (True, True, "", None, None), ):
+            (True, False, "", None, LocalCIError), (True, True, "", None, None), ):
             with patch.object(Path, "exists", new=lambda path: guest_marker and path == Path("/run/lima-ssh-ready") or str(path) not in lima_markers and host_exists(path)), patch.dict(
                 local_ci.os.environ, {"GITHUB_ACTIONS": hosted}
             ), patch.object(local_ci, "admitted_worker", return_value=managed) as inherited, patch.object( local_ci, "submit", return_value="owned"
@@ -652,6 +652,12 @@ class SuiteBudgetTests(unittest.TestCase):
                 finally:
                     os.close(pipe)
                     if process.poll() is None: process.terminate(); process.wait(timeout=8)
+            grant = {**config, "work_deadline": float.fromhex("0x1.fffffffffffffp+6"), "deadline": 158.0}
+            with (patch.object(runner, "_load_json_object", return_value=grant),
+                  patch("ctypes.CDLL", side_effect=LookupError("admitted"))):
+                self.assertRaisesRegex(LookupError, "admitted", runner._method_supervisor, work / "config.json")
+                grant["deadline"] = float.fromhex("0x1.3c00000000001p+7")
+                self.assertRaises(runner.RunnerError, runner._method_supervisor, work / "config.json")
             self.assertEqual(len(set(worker_pids + [os.getpid()])), 3)
             with patch("subprocess.Popen") as launch:
                 self.assertRaises(runner.RunnerError, runner._launch_method, [sys.executable], root, work_deadline=0)

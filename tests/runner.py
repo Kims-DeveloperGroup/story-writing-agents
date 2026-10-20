@@ -977,7 +977,7 @@ def _method_supervisor(config_path: str) -> int:
             or type(config["read_fd"]) is not int or config["read_fd"] < 0
             or any(type(value) not in (int, float) or not math.isfinite(value)
                    for value in (work_deadline, deadline))
-            or deadline - work_deadline != _HOSTED_CLEANUP_SECONDS
+            or deadline != work_deadline + _HOSTED_CLEANUP_SECONDS
             or type(config["token"]) is not str or len(config["token"]) != 32
             or set(config["token"]) - set("0123456789abcdef")):
         raise RunnerError("invalid method supervisor grant")
