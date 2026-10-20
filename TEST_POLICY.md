@@ -177,6 +177,22 @@ Refresh shard weights only from complete verified timings, retaining whole
 classes and required fast-tier membership. The active optimization record is
 [child #872](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/872).
 
+Schema-template reuse must preserve cold/warm diagnostic equality, independent
+payloads/results/exports, per-query cap resets, evaluator-drift fallback, and
+sealed-decoder provenance. Cache hints, including simultaneous replacement of
+both hints, must not select an untrusted schema. Preparation belongs to one
+`SchemaRules` owner; fresh owners and generic compiler search remain separate
+costs. A successful cache-reuse check alone demonstrates no whole-suite speedup.
+
+After implementation, run the affected canonical IDs and all four complementary
+shards on one immutable source with the locked four-core ARM64 environment.
+Record each shard's test wall time, native job duration, outcome and completion;
+report the sum of test wall times and workflow creation-to-update elapsed time.
+Reconcile exact coverage, source bindings and the unchanged 1,080/540-second
+ceilings. Partial or timed-out reports remain nonpassing evidence. The
+[implementation plan](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/872#issuecomment-6290851302)
+tracks this gate; the proposed ten-minute attribution diagnostic is parked.
+
 ## Initial calibration
 
 Issue #732 first reduced the 2,872-ID snapshot to 2,530 IDs (342 fewer,

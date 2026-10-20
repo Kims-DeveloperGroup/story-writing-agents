@@ -20,21 +20,17 @@ import story_writing_agents
 from story_writing_agents import Workspace
 from story_writing_agents import agent_context as agent_context_package
 from story_writing_agents.agent_context import service as service_module
-from story_writing_agents.agent_context.accounting import (
-    ContextComponentKind, ProviderCallAccounting, ProviderCallKind, ProviderCallState,
-    ProviderUsage, account_provider_payload, canonical_provider_json,)
+from story_writing_agents.agent_context.accounting import ( ContextComponentKind, ProviderCallAccounting,
+    ProviderCallKind, ProviderCallState, ProviderUsage, account_provider_payload, canonical_provider_json,)
 from story_writing_agents.agent_context.ledger import (
     ContextLedger, ContextLedgerAttemptOutcome, ContextLedgerKey, ContextLedgerRecordState,)
 from story_writing_agents.agent_context.actions import (
     CONTEXT_ACTION_POLICY, ContextActionError, ContextActionPolicy,)
-from story_writing_agents.agent_context.manifest import (
-    ContextAuthorityKind, ContextManifestEntry, ContextPriority, ContextProvenance,
-    ContextSemanticChannel, ContextSourceKind, ContextSubjectKind,)
-from story_writing_agents.agent_context.planning import (
-    DEFAULT_CONTEXT_PLANNING_POLICY, ContextDeliveryMode, ContextMaterial, ContextPlanningPolicy,
-    MandatoryReferenceReservation,)
-from story_writing_agents.agent_context.progress import (
-    ContextActionProgressEvent, ContextActionProgressKind,)
+from story_writing_agents.agent_context.manifest import ( ContextAuthorityKind, ContextManifestEntry,
+    ContextPriority, ContextProvenance, ContextSemanticChannel, ContextSourceKind, ContextSubjectKind,)
+from story_writing_agents.agent_context.planning import ( DEFAULT_CONTEXT_PLANNING_POLICY,
+    ContextDeliveryMode, ContextMaterial, ContextPlanningPolicy, MandatoryReferenceReservation,)
+from story_writing_agents.agent_context.progress import ( ContextActionProgressEvent, ContextActionProgressKind,)
 from story_writing_agents.agent_context.service import (
     AgentContextService, BoundCallContract, BoundContextProviderCallRequest, ContextExecutionEvent,
     ContextExecutionEventKind, ContextExecutionEventSink, ContextExecutionError,
@@ -85,13 +81,11 @@ def _expected_text_answer(content: str = _PRIVATE_ANSWER) -> str:
 def _digest(body: bytes) -> str: return f"sha256:{hashlib.sha256(body).hexdigest()}"
 
 
-def _material(source_id: str, body: str, *, source_kind: ContextSourceKind,
-    channel: ContextSemanticChannel, priority: ContextPriority, authority: ContextAuthorityKind,
-    ordinal: int) -> ContextMaterial:
+def _material(source_id: str, body: str, *, source_kind: ContextSourceKind, channel: ContextSemanticChannel,
+    priority: ContextPriority, authority: ContextAuthorityKind, ordinal: int) -> ContextMaterial:
     encoded = body.encode("utf-8")
-    entry = ContextManifestEntry( source_id, source_kind, channel, priority, ordinal,
-        f"revision-{ordinal}", _digest(encoded),
-        ContextProvenance(authority, f"fixtures/{source_id}"), len(encoded), searchable=False, )
+    entry = ContextManifestEntry( source_id, source_kind, channel, priority, ordinal, f"revision-{ordinal}",
+        _digest(encoded), ContextProvenance(authority, f"fixtures/{source_id}"), len(encoded), searchable=False, )
     return ContextMaterial(entry, encoded)
 
 
@@ -126,8 +120,7 @@ _LEAD_CONSTRAINTS = LeadProviderConstraints(scope=_LEAD_SCOPE, task_revisions=((
 
 def _validate_lead_result(answer: str, _authorization: object) -> None:
     rules = _LEAD_CONSTRAINTS.diagnose(answer)
-    if rules:
-        raise LeadContractError(rules)
+    if rules: raise LeadContractError(rules)
     StoryRuntime._decode_lead_outcome(answer)
 
 
@@ -177,8 +170,7 @@ def _answer_with_read(call: ContextProviderCallRequest, provider: '_ScriptedProv
 
 
 def _lead_answer(call: ContextProviderCallRequest, _provider: '_ScriptedProvider') -> str:
-    if isinstance(call, BoundContextProviderCallRequest):
-        return _lead_answer_frame(call, 'Visible lead answer.')
+    if isinstance(call, BoundContextProviderCallRequest): return _lead_answer_frame(call, 'Visible lead answer.')
     return json.dumps({'agent_action': {'action_type': 'submit_result', 'task_result': {'kind':
         'answer', 'message': 'Visible lead answer.', 'proposal': None}}}, separators=(',', ':'))
 
@@ -199,13 +191,11 @@ _Response = str | BaseException | Callable[[ContextProviderCallRequest, '_Script
 class _RecordingFinalizer:
     """Synchronous provider-call terminal recorder used by the service seam."""
 
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, ContextProviderTerminalCode | None]] = []
+    def __init__(self) -> None: self.calls: list[tuple[str, ContextProviderTerminalCode | None]] = []
 
     def accepted(self) -> None: self.calls.append(("accepted", None))
 
-    def rejected(self, code: ContextProviderTerminalCode) -> None:
-        self.calls.append(("rejected", code))
+    def rejected(self, code: ContextProviderTerminalCode) -> None: self.calls.append(("rejected", code))
 
     def cancelled(self) -> None: self.calls.append(("cancelled", None))
 
@@ -253,15 +243,13 @@ class _ScriptedProvider:
         self.invocation_entries += 1
         self.invocation_depth += 1
         if self.invocation_entries >= 2: self.second_invocation_entered.set()
-        try:
-            yield
+        try: yield
         finally:
             self.invocation_depth -= 1
             self.invocation_exits += 1
 
     @staticmethod
-    def _key(scope: object, policy_fingerprint: str) -> tuple[object, str]:
-        return scope, policy_fingerprint
+    def _key(scope: object, policy_fingerprint: str) -> tuple[object, str]: return scope, policy_fingerprint
 
     def inspect_context_thread(self, scope: object, policy_fingerprint: str):
         value = self.threads.get(self._key(scope, policy_fingerprint))
@@ -269,8 +257,7 @@ class _ScriptedProvider:
         return value
 
     def require_current_execution_workspace(self, _scope: object, _policy_fingerprint: str) -> None:
-        if self.invocation_depth <= 0:
-            raise AssertionError("execution workspace escaped its invocation")
+        if self.invocation_depth <= 0: raise AssertionError("execution workspace escaped its invocation")
         self.currentness_observations.append(tuple((tuple(finalizer.calls) for finalizer in self.finalizers)))
         if self.currentness_hook is not None: self.currentness_hook()
 
@@ -282,8 +269,7 @@ class _ScriptedProvider:
         return ProviderCallAccounting(payload, state=ProviderCallState.SUBMITTED,
             actual_transport_utf8_bytes=len(payload_json), usage=self.usage)
 
-    async def invoke_context(self,
-        request: ContextProviderCallRequest) -> ContextProviderCallResult:
+    async def invoke_context(self, request: ContextProviderCallRequest) -> ContextProviderCallResult:
         if self.before_call is not None:
             observed = self.before_call(request)
             if inspect.isawaitable(observed): await observed
@@ -323,8 +309,7 @@ class _ScriptedProvider:
             self.reference_read = None
         self.completed_references += 1
 
-    def abort_references(self, _scope: object, _policy: str, *, cancelled: bool,
-        provider_failure: bool) -> None:
+    def abort_references(self, _scope: object, _policy: str, *, cancelled: bool, provider_failure: bool) -> None:
         if self.reference_read is not None:
             outcome = (ReferenceAuthorizationErrorCode.CANCELLED if cancelled else
                        ReferenceAuthorizationErrorCode.PROVIDER_FAILURE if provider_failure else
@@ -369,9 +354,8 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
         values.update(overrides)
         return ContextInvocationRequest(**values)  # type: ignore[arg-type]
 
-    def authorities(self, request: ContextInvocationRequest, *,
-        service: AgentContextService | None=None, workspace: Workspace | None=None,
-        repository: WritingArtifactRepository | None=None) -> dict[str, object]:
+    def authorities(self, request: ContextInvocationRequest, *, service: AgentContextService | None=None,
+        workspace: Workspace | None=None, repository: WritingArtifactRepository | None=None) -> dict[str, object]:
         selected_service = service or self.service
         selected_workspace = workspace or self.workspace
         selected_repository = repository or self.repository
@@ -399,12 +383,10 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
             provider.reference_read = self.repository.begin_reference_invocation(provider.reference_authorization,
                 ReferenceInvocationCorrelation(actual_request.reference_operation_id, actual_request.operation_id, 1,
                     actual_request.agent_id, phase or workflow, round_number, 1))
-        return await actual_service.invoke( actual_request,
-            provider,
+        return await actual_service.invoke( actual_request, provider,
             answer_validator=answer_validator,  # type: ignore[arg-type]
             answer_diagnostic=answer_diagnostic,  # type: ignore[arg-type]
-            event_sink=event_sink, progress_sink=progress_sink,
-            phase=phase, round_number=round_number,
+            event_sink=event_sink, progress_sink=progress_sink, phase=phase, round_number=round_number,
             **collaborators,  # type: ignore[arg-type]
         )
 
@@ -412,8 +394,7 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
         scope = self.service.scope(request.session_id, request.subject_kind, request.subject_id, request.agent_id)
         return ContextLedger(self.workspace).inspect(ContextLedgerKey(scope, provider.provider_id))
 
-    def publish(self) -> None:
-        self.repository.commit_consensus(output_path='part-01/chapter-01.md', candidate=
+    def publish(self) -> None: self.repository.commit_consensus(output_path='part-01/chapter-01.md', candidate=
             _PRIVATE_ARTIFACT, core_updates={}, session_id='session', debate_id='publication',
             revision_id='r0', candidate_author_agent_id=EXECUTION_SPECIALIST)
 
@@ -454,10 +435,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
         for overrides in invalid:
             with self.subTest(overrides=overrides):
                 with self.assertRaises(ContextExecutionError) as caught: self.request(**overrides)
-                self.assertIs(
-                    caught.exception.code,
-                    ContextExecutionErrorCode.INVALID_VALUE,
-                )
+                self.assertIs( caught.exception.code, ContextExecutionErrorCode.INVALID_VALUE, )
 
     def test_provider_failure_facts_are_exact_optional_and_chainless(self) -> None:
         failure = RuntimeError("PRIVATE_PROVIDER_EXCEPTION")
@@ -469,8 +447,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
             taint_existing_thread=True, submitted_accountings=(submitted,), submission_uncertain=True)
         record_context_provider_failure(failure, facts)
         self.assertIs(context_provider_failure_facts(failure), facts)
-        self.assertEqual(context_provider_failure_facts(ValueError()), ContextProviderFailureFacts(
-            ))
+        self.assertEqual(context_provider_failure_facts(ValueError()), ContextProviderFailureFacts( ))
         self.assertNotIn("PRIVATE_PROVIDER_EXCEPTION", repr(facts))
         prepared = replace(submitted, state=ProviderCallState.PREPARED, actual_transport_utf8_bytes=None)
         for changes in (({'submitted_accountings': (prepared,)},
@@ -492,10 +469,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
             with (self.subTest(channel=channel, priority=priority, allow_absent=allow_absent)):
                 with self.assertRaises(ContextExecutionError) as caught:
                     ContextSourceClassification("source-invalid", channel, priority, 0, allow_absent=allow_absent)
-                self.assertIs(
-                    caught.exception.code,
-                    ContextExecutionErrorCode.INVALID_VALUE,
-                )
+                self.assertIs( caught.exception.code, ContextExecutionErrorCode.INVALID_VALUE, )
 
     def test_composite_policy_fingerprint_covers_wire_planning_and_every_limit(self) -> None:
         action_names = tuple(field.name for field in fields(ContextActionPolicy))
@@ -538,8 +512,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual((search_start.agent_id, search_start.operation_id, search_start.
             action_index), (LEAD_ORCHESTRATOR, request.operation_id, 1))
         self.assertEqual(search_start.queries[0].text, 'needle')
-        self.assertEqual(search_start.queries[0].source_kinds, (ContextSourceKind.WRITING_ARTIFACT,)
-            )
+        self.assertEqual(search_start.queries[0].source_kinds, (ContextSourceKind.WRITING_ARTIFACT,) )
         source = search_done.sources[0]
         self.assertEqual(source.locator, 'part-01/chapter-01.md')
         self.assertEqual(source.boundary, read_start.sources[0].boundary)
@@ -642,10 +615,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         for invalid in (None, "", " \n", 7, False, {}, []):
             malformed = json.loads(json.dumps(custom_schema))
             branch = malformed["properties"]["owner/path~choice"]["items"]["anyOf"][1]
-            if invalid is None:
-                del branch["description"]
-            else:
-                branch["description"] = invalid
+            if invalid is None: del branch["description"]
+            else: branch["description"] = invalid
             with self.assertRaises(ContextExecutionError) as rejected:
                 ContextJsonObjectResultContract("invalid-owner-v1", malformed)
             self.assertIs(rejected.exception.code, ContextExecutionErrorCode.INVALID_VALUE)
@@ -705,8 +676,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
                    "result_contract_id": "text-v1"}
                   for actions, limits in ((["search_context", "submit_result"], [4, 2, 2, 4, 8, 8, 16, 200]),
                                          (["search_context", "read_context", "submit_result"], [3, 1, 2, 4, 7, 8, 16, 200]),
-                                         (["search_context", "submit_result"], [2, 1, 1, 4, 7, 8, 15, 200]))),
-        )
+                                         (["search_context", "submit_result"], [2, 1, 1, 4, 7, 8, 15, 200]))), )
         schemas = tuple(canonical_provider_json(call.schema) for call in provider.calls)
         self.assertEqual(len(set(schemas)), 2)
         for call in provider.calls:
@@ -724,9 +694,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
             ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION, ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION))
         self.assertEqual(len(result.authorization.completed_evidence), 1)
-        self.assertEqual(
-            result.authorization.used_evidence, result.authorization.completed_evidence
-        )
+        self.assertEqual( result.authorization.used_evidence, result.authorization.completed_evidence )
         self.assertTrue( all( call.accounting.state is ProviderCallState.SUBMITTED
                 for call in result.provider_calls ) )
         self.assertEqual([finalizer.calls for finalizer in provider.finalizers], [[('accepted', None)]] * 3)
@@ -822,8 +790,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             'operation_id': 'debate_draft_scope-2'}, {'subject_id': 'other-subject'}, {'agent_id': 'plot_architect'})
         for index, overrides in enumerate(cases, 1):
             values = { "operation_id": f"scope-{index}",
-                "result_correlation_id": f"scope-result-{index}", **overrides,
-            }
+                "result_correlation_id": f"scope-result-{index}", **overrides, }
             request = self.request(**values)
             result = await self.invoke(provider, request)
             self.assertIs(result.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
@@ -863,8 +830,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
             ContextPriority.P2_WORKING, 0),))
         provider = _ScriptedProvider((_answer,))
 
-        with self.assertRaises(ContextExecutionError) as caught:
-            await self.invoke(provider, request)
+        with self.assertRaises(ContextExecutionError) as caught: await self.invoke(provider, request)
 
         self.assertIs(caught.exception.code, ContextExecutionErrorCode.INVALID_VALUE)
         self.assertEqual(provider.calls, [])
@@ -875,8 +841,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
             result_correlation_id='result-exhausted')
         provider = _ScriptedProvider((_search, _read_search_hit, _search, _read_search_hit, _search, _answer))
 
-        with self.assertRaises(ContextExecutionError) as caught:
-            await self.invoke(provider, request)
+        with self.assertRaises(ContextExecutionError) as caught: await self.invoke(provider, request)
 
         self.assertIs(caught.exception.code, ContextExecutionErrorCode.ACTION_EXHAUSTED)
         self.assertEqual(len(provider.calls), 5)
@@ -904,8 +869,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
             False), ('malformed', '{', ContextLedgerAttemptOutcome.MALFORMED, True))
         for label, response, expected, tainted in cases:
             with self.subTest(label=label):
-                request = self.request( session_id=f"session-{label}",
-                    operation_id=f"operation-{label}",
+                request = self.request( session_id=f"session-{label}", operation_id=f"operation-{label}",
                     result_correlation_id=f"result-{label}",)
                 provider = _ScriptedProvider((response,))
                 with self.assertRaises(BaseException): await self.invoke(provider, request)
@@ -913,8 +877,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
                 self.assertIs(inspection.record.state, ContextLedgerRecordState.TAINTED)
                 self.assertIs(inspection.record.attempt.outcome, expected)
                 self.assertEqual(bool(provider.tainted), tainted)
-                if label == "malformed":
-                    self.assertEqual(provider.finalizers[0].calls, [('rejected',
+                if label == "malformed": self.assertEqual(provider.finalizers[0].calls, [('rejected',
                         ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)])
 
         for (label, failure, expected) in ((('timeout', RuntimeError('PRIVATE_TIMEOUT'),
@@ -953,8 +916,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
 
         failure = caught.exception
         self.assertIs(failure.code, ContextExecutionErrorCode.MALFORMED_ACTION)
-        self.assertEqual( str(failure),
-            "contextual provider read action is invalid: `handles` must contain "
+        self.assertEqual( str(failure), "contextual provider read action is invalid: `handles` must contain "
             "source handles returned by the preceding context search",)
         rendered = '\n'.join((str(failure), repr(failure), repr(failure.__cause__), repr(failure.__context__)))
         for private in private_values: self.assertNotIn(private, rendered)
@@ -1006,8 +968,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
                 self.assertIs(events[-1].kind, ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED)
                 inspection = self.inspect(provider, request)
                 self.assertIs(inspection.record.state, ContextLedgerRecordState.TAINTED)
-                self.assertIs(inspection.record.attempt.outcome,
-                    ContextLedgerAttemptOutcome.MALFORMED)
+                self.assertIs(inspection.record.attempt.outcome, ContextLedgerAttemptOutcome.MALFORMED)
                 self.assertIsNone(inspection.record.ready_checkpoint)
 
     async def test_output_and_source_failures_never_advance_ready(self) -> None:
@@ -1180,9 +1141,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
         self.assertGreater(read_done.observation_utf8_bytes or 0, 0)
         self.assertEqual(answer.action_index, 3)
         self.assertEqual(terminal.provider_input_tokens, 15)
-        self.assertEqual(
-            result.authorization.used_evidence, result.authorization.completed_evidence
-        )
+        self.assertEqual( result.authorization.used_evidence, result.authorization.completed_evidence )
         terminal_indexes = [index for index, event in enumerate(events) if event.kind in {
             ContextExecutionEventKind.CHECKPOINT_ADVANCED, ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED}]
         self.assertEqual(terminal_indexes, [len(events) - 1])
@@ -1192,11 +1151,9 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
             ('missing-answer', None, None))):
             with self.subTest(label=label):
                 reference = self.reference(f'reference-{label}')
-                request = self.request( session_id=f"session-{label}",
-                    operation_id=f"operation-{label}",
+                request = self.request( session_id=f"session-{label}", operation_id=f"operation-{label}",
                     result_correlation_id=f"result-{label}",
-                    reference_operation_id=f"reference-{label}", mandatory_references=(reference,),
-                )
+                    reference_operation_id=f"reference-{label}", mandatory_references=(reference,), )
                 provider = _ScriptedProvider( (_answer,),
                     reference_operation_id=f"reference-{label}", usage=answer_usage, )
                 events: list[ContextExecutionEvent] = []
@@ -1227,14 +1184,12 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
             async def __call__(self, _event: ContextExecutionEvent) -> None: return None
 
         def dynamic_awaitable(_event: ContextExecutionEvent) -> object:
-            async def result() -> None:
-                return None
+            async def result() -> None: return None
 
             return result()
 
         def dynamic_async_generator(_event: ContextExecutionEvent) -> object:
-            async def result():
-                yield None
+            async def result(): yield None
 
             return result()
 
@@ -1250,10 +1205,8 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
             dynamic_async_generator), ('non-none', lambda _event: False))):
             with self.subTest(label=label):
                 provider = _ScriptedProvider((_answer,))
-                with self.assertRaises(ContextExecutionError):
-                    await self.invoke( provider,
-                        self.request( session_id=f"session-{label}",
-                            operation_id=f"operation-{label}",
+                with self.assertRaises(ContextExecutionError): await self.invoke( provider,
+                        self.request( session_id=f"session-{label}", operation_id=f"operation-{label}",
                             result_correlation_id=f"result-{label}",),
                         event_sink=sink,  # type: ignore[arg-type]
                     )
@@ -1265,8 +1218,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
 
         def fail_first(event: ContextExecutionEvent) -> None:
             observed.append(event.kind)
-            if len(observed) == 1:
-                raise failure
+            if len(observed) == 1: raise failure
 
         provider = _ScriptedProvider((_answer,))
         request = self.request()
@@ -1287,11 +1239,9 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
 
         def sink(event: ContextExecutionEvent) -> None:
             observed.append(event.kind)
-            if event.kind is ContextExecutionEventKind.ANSWER_AUTHORIZED:
-                raise failure
+            if event.kind is ContextExecutionEventKind.ANSWER_AUTHORIZED: raise failure
 
-        with self.assertRaises(RuntimeError) as caught:
-            await self.invoke(provider, request, event_sink=sink)
+        with self.assertRaises(RuntimeError) as caught: await self.invoke(provider, request, event_sink=sink)
         self.assertIs(caught.exception, failure)
         self.assertEqual(provider.completed_references, 0)
         self.assertEqual(provider.aborted_references, [(False, False)])
@@ -1308,8 +1258,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
 
         def fail_terminal(event: ContextExecutionEvent) -> None:
             observed.append(event.kind)
-            if event.kind is ContextExecutionEventKind.CHECKPOINT_ADVANCED:
-                raise failure
+            if event.kind is ContextExecutionEventKind.CHECKPOINT_ADVANCED: raise failure
 
         reference = self.reference('reference-terminal-operation')
         provider = _ScriptedProvider((_answer,), reference_operation_id="reference-terminal-operation")
@@ -1343,8 +1292,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
             terminal_failure(event)
 
         provider = _ScriptedProvider((primary,))
-        with self.assertRaises(RuntimeError) as caught:
-            await self.invoke(provider, event_sink=sink)
+        with self.assertRaises(RuntimeError) as caught: await self.invoke(provider, event_sink=sink)
         self.assertIs(caught.exception, primary)
         self.assertEqual(events[-1], ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED)
 
@@ -1402,8 +1350,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
             return _answer(call, active)
 
         source_provider = _ScriptedProvider((drift,))
-        with self.assertRaises(Exception):
-            await self.invoke(source_provider, self.request(session_id='source',
+        with self.assertRaises(Exception): await self.invoke(source_provider, self.request(session_id='source',
                 operation_id='source', result_correlation_id='source'), event_sink=source_events.append)
         source_kinds = [event.kind for event in source_events]
         self.assertIn(ContextExecutionEventKind.INVALIDATED, source_kinds)
@@ -1415,8 +1362,7 @@ class ContextExecutionConcurrencyTests(ContextExecutionTestCase):
         entered = asyncio.Event()
         release = asyncio.Event()
 
-        async def blocked_answer(call: ContextProviderCallRequest,
-            provider: _ScriptedProvider) -> str:
+        async def blocked_answer(call: ContextProviderCallRequest, provider: _ScriptedProvider) -> str:
             entered.set()
             await release.wait()
             return _answer(call, provider)
@@ -1436,5 +1382,4 @@ class ContextExecutionConcurrencyTests(ContextExecutionTestCase):
         self.assertEqual(provider.calls[1].expected_thread_id, first_result.provider_thread_id)
 
 
-if __name__ == "__main__":
-    unittest.main()
+if __name__ == "__main__": unittest.main()

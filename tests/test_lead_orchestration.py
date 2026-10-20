@@ -4093,16 +4093,16 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         scope_value = authoring_scope_from_dict(scope_record)
         synthesis_constraints = replace(
             declared, scope=scope_value, continuation=True, review_candidate_ids=('user_input',))
+        evidence = CollaborationLeadEvidence(LeadOutcomeScope.STORY_SPECIFIC, LeadEvidenceStatus.EMPTY, ())
+        synthesis_seed = _lead_synthesis_result_contract(evidence=evidence, input_ids=('user_input',
+            ), reply_event_ids=(), allow_next_intent=True, artifact_review=False,
+            authoring_scope=scope_value, constraints=synthesis_constraints)
         with self.assertRaisesRegex(ValueError, 'physical continuation requires frozen review'):
             replace(factory,
                     rule_seed=synthesis_seed,
                     constraints=replace(synthesis_constraints, review_candidate_ids=None)
                     ).for_offer(call.contract.offers)
 
-        evidence = CollaborationLeadEvidence(LeadOutcomeScope.STORY_SPECIFIC, LeadEvidenceStatus.EMPTY, ())
-        synthesis_seed = _lead_synthesis_result_contract(evidence=evidence, input_ids=('user_input',
-            ), reply_event_ids=(), allow_next_intent=True, artifact_review=False,
-            authoring_scope=scope_value, constraints=synthesis_constraints)
         require_final_case(synthesis_seed, {'response_type': 'consultation_summary',
             'response_text': 'Literal independent synthesis.', 'response_details': {}},
             {'message': 'Literal independent synthesis.'},
@@ -4267,8 +4267,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(len(self.backend.calls), 2)
         self.assertEqual(result.public_responses[0].response.call_id, self.backend.calls[1].call_id)
         self.assertEqual(result.public_responses[0].response.repair_of_call_id, self.backend.calls[0].call_id)
-        for call in self.backend.calls:
-            assert_guidance(self, dict(call.payload), dict(call.schema))
+        for call in self.backend.calls: assert_guidance(self, dict(call.payload), dict(call.schema))
         repair = _workflow_material(self.backend.calls[-1].payload)
         self.assertIn("response_correction", repair)
         exploration_conversation = self.conversation("Repair provisional exploration")
@@ -4446,8 +4445,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertEqual(notice["state"], None)
             self.assertEqual(notice["language"], "KO")
             self.assertEqual(notice["task_revisions"], notice_tasks)
-            if paths is not None:
-                self.assertEqual(notice["paths"], paths)
+            if paths is not None: self.assertEqual(notice["paths"], paths)
 
         def current_result(value, response_type, family_number):
             def respond(call: ContextProviderCallRequest, _provider: _LeadContextProvider) -> str:
@@ -4476,15 +4474,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         call, invalid_scope['writing_task_scope'])
                     self.assertTrue(member.rule_graph.findings(task_result))
                     response = json.dumps(complete, ensure_ascii=False, separators=(',', ':'))
-                    with self.assertRaises(ValueError):
-                        call.contract.decode_response(response)
+                    with self.assertRaises(ValueError): call.contract.decode_response(response)
                 if 'authoring_scope' not in value:
                     del task_result['response_details']['task_scope']
                     self.assertEqual(member.rule_graph.findings(task_result), (
                         '$.response_details.task_scope: required property is missing',))
                     response = json.dumps(complete, ensure_ascii=False, separators=(',', ':'))
-                    with self.assertRaises(ValueError):
-                        call.contract.decode_response(response)
+                    with self.assertRaises(ValueError): call.contract.decode_response(response)
                 return response
             return respond
 
@@ -4653,8 +4649,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     ), 1))
                 if label == 'duplicate-specialist':
                     field, identity, value = 'assignments', PLOT_ARCHITECT, leaf
-                else:
-                    field, identity, value = ('required_input_recipients', 'user_input', PLOT_ARCHITECT)
+                else: field, identity, value = ('required_input_recipients', 'user_input', PLOT_ARCHITECT)
                 encoded_key = json.dumps(identity, ensure_ascii=False)
                 encoded_value = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
                 pair = encoded_key + ':' + encoded_value
@@ -4683,8 +4678,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 for row in assignments:
                     supplied = tuple(row['input_ids'])
                     selected = {identity: identity in supplied for identity in offered['input_ids']}
-                    for unknown in set(supplied) - set(offered['input_ids']):
-                        selected[unknown] = True
+                    for unknown in set(supplied) - set(offered['input_ids']): selected[unknown] = True
                     wire_assignments[row['agent_id']] = ( {'task_instructions': row['instruction'],
                         'assignment_type': 'review_content', 'input_anchor_id': supplied[0],'optional_inputs': selected}
                     )
@@ -4695,8 +4689,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                             'omitted-user-input' else ('user_input',)),
                         'criteria': control_basis['criteria']}
                     for required in offered['required_input_ids']:
-                        if required in supplied:
-                            recipients[required] = row['agent_id']
+                        if required in supplied: recipients[required] = row['agent_id']
                 frame = lead_fixture_response(call, {'response_type': 'specialist_consultation_proposal',
                     'response_text': 'Specialist review would resolve the open question.',
                     'response_details': {'task_scope': scope,
@@ -4726,8 +4719,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 elif label == 'missing-reviewer':
                     self.assertNotIn(PLOT_ARCHITECT, projected)
                     self.assertEqual(recipients['reference_1'], CHARACTER_CUSTODIAN)
-                else:
-                    self.assertIn(LEAD_ORCHESTRATOR, projected)
+                else: self.assertIn(LEAD_ORCHESTRATOR, projected)
                 if label == 'missing-reviewer':
                     neighbor = json.loads(frame)
                     proposal = neighbor['agent_action']['task_result']['response_details'][
@@ -4757,10 +4749,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             with self.subTest(label=label):
                 conversation_id = self.conversation(label)
                 response = _proposal_outcome(assignments, authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
-                if label in ('duplicate-specialist', 'duplicate-input'):
-                    response = duplicate_control(label)
-                else:
-                    response = value_control(label, assignments)
+                if label in ('duplicate-specialist', 'duplicate-input'): response = duplicate_control(label)
+                else: response = value_control(label, assignments)
                 self.backend.enqueue(response)
                 self.backend.enqueue(response)
                 calls = len(self.backend.calls)
@@ -4783,8 +4773,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     self.assertEqual(result.validation_details, tuple(
                         prefix + "\n$: duplicate object key"
                         for prefix in ("Original response", "Repair response")))
-                if label in rules:
-                    self.assertEqual(result.validation_details, tuple(
+                if label in rules: self.assertEqual(result.validation_details, tuple(
                         prefix + "\n" + "\n".join(rules[label]) for prefix in ("Original response", "Repair response")))
 
 
@@ -4833,8 +4822,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         for changes in (({'confirmation_request_id': 'wrong_request'},
             {'proposal_id': 'wrong_proposal'}, {'proposal_revision': 2},{'proposal_digest': 'sha256:' + '0' * 64})):
             with self.subTest(changes=changes):
-                with self.assertRaises(ValueError):
-                    await self.runtime.decide_lead_step(_decision(mismatch,
+                with self.assertRaises(ValueError): await self.runtime.decide_lead_step(_decision(mismatch,
                         CollaborationConfirmationDecision.CONFIRM, **changes))
                 self.assertEqual(len(self.backend.calls), calls)
 
@@ -5148,8 +5136,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(notices, result.validation_details)
         self.assertEqual(project_collaboration_history(history).physical_calls_spent, 1)
         def rejected(value, path, requirement, error=BackendProtocolError):
-            with self.assertRaises(error) as caught:
-                self.runtime._decode_lead_outcome(json.dumps(value))
+            with self.assertRaises(error) as caught: self.runtime._decode_lead_outcome(json.dumps(value))
             issues = failure_issues(caught.exception, path="$.action.result")
             self.assertEqual(issues, (f"$.action.result{path}: {requirement}",))
             self.assertNotIn("PRIVATE", repr(issues))
@@ -5345,8 +5332,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                         self.assertEqual(result.proposal, proposed.proposal)
                     self.assertEqual(len(self.backend.calls), calls_before)
                     continue
-                else:
-                    proposed = await self.proposal(conversation_id, text=qualified_request,
+                else: proposed = await self.proposal(conversation_id, text=qualified_request,
                         authoring_assessment=assessment)
                 await self._leave_genuine_confirmation_before_dispatch(proposed)
                 calls = len(self.backend.calls)
@@ -5360,8 +5346,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                                       (restored, CollaborationStepState.RECONFIRMATION_REQUIRED)):
                     self.assertIs(result.state, state)
                     self.assertEqual(result.evidence, proposed.proposal.basis.evidence)
-                    if advisory:
-                        self.assertIsNone(replace(result, evidence=None).evidence)
+                    if advisory: self.assertIsNone(replace(result, evidence=None).evidence)
                     else:
                         with self.assertRaisesRegex(ValueError, "requires exact evidence"):
                             replace(result, evidence=None)
@@ -5405,8 +5390,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 record=True)
             self.assertTrue(member.rule_graph.findings(task_result))
             response = json.dumps(complete, ensure_ascii=False, separators=(',', ':'))
-            with self.assertRaises(ValueError):
-                call.contract.decode_response(response)
+            with self.assertRaises(ValueError): call.contract.decode_response(response)
             return response
 
         cases = (
@@ -5947,8 +5931,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 backend = _LeadBackend()
                 runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
                 conversation_id = self.conversation(label)
-                if label == "action_exhausted":
-                    backend.enqueue(malformed)
+                if label == "action_exhausted": backend.enqueue(malformed)
                 backend.enqueue(response)
                 with _object_positional_patch(
                     orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT",2 if label == "action_exhausted" else 1):
@@ -6094,8 +6077,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     self.assertEqual(len(closure), 1)
                     self.assertEqual(closure[0].call_id, submitted[-1].call_id)
                     self.assertEqual(closure[0].invocation_id, submitted[-1].invocation_id)
-                    self.assertIs(closure[0].code, {
-                        "cancelled": CollaborationLeadOutcomeFailureCode.CANCELLED,
+                    self.assertIs(closure[0].code, { "cancelled": CollaborationLeadOutcomeFailureCode.CANCELLED,
                         "timed_out": CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT,
                     }.get(label, CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED))
                     if corrective:
@@ -6361,12 +6343,9 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
                 self.assertEqual(len(message.encode()), byte_count)
                 _, _, decision_result, _, synthesis, _ = await self._budget_consultation(message=message)
                 self.assertEqual(synthesis.payload.message.encode(), message.encode())
-                if byte_count == boundary:
-                    expected = message + suffix
-                elif byte_count == limit:
-                    expected = notice
-                else:
-                    expected = notice
+                if byte_count == boundary: expected = message + suffix
+                elif byte_count == limit: expected = notice
+                else: expected = notice
                 self.assertEqual(decision_result.turn.message, expected)
                 self.assertLessEqual(len(decision_result.turn.message.encode()), limit)
 
@@ -6430,8 +6409,7 @@ class LeadReferenceFailurePrecedenceTests(LeadOrchestrationTestCase):
                 if isinstance(failure, ReferenceAuthorizationError):
                     self.assertIs(raised.exception.__cause__, failure)
                     self.assertIs(raised.exception.code, failure.code)
-                else:
-                    self.assertIs(raised.exception, failure)
+                else: self.assertIs(raised.exception, failure)
                 self.assertEqual((len(backend.reference_calls), len(backend.calls)), (1, 1))
                 self.assertIsNotNone(runtime.inspect_reference_operation(
                     backend.providers[-1].reference_operation_id))
@@ -6462,8 +6440,7 @@ class LeadReferenceFailurePrecedenceTests(LeadOrchestrationTestCase):
         self.assertFalse(any(type(event.payload) is CollaborationLeadOutcomeFailurePayload
                              for event in prefix))
         for value in (result.proposal, result.artifact_proposal,
-                      result.artifact_application_request, result.story_commit_request):
-            self.assertIsNone(value)
+                      result.artifact_application_request, result.story_commit_request): self.assertIsNone(value)
 
 
 if __name__ == "__main__": unittest.main()
