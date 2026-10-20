@@ -562,6 +562,86 @@ class StructuredOutputValidationTests(unittest.TestCase):
 
         # End public original-source oracle.
 
+        # One owner's immutable grammar must never retain a payload, export or query result.
+        template_schema = {**diagnostics.closed_rule(references['properties']),'$defs':{'text':{'type':'string'}}}
+        cached, independent = SchemaRules.declare(template_schema), SchemaRules.declare(template_schema)
+        packet = {'left': 'ok', 'right': 'ok'}
+        def template_decode(value, captured=cached): return value
+        template_decoder = TypedDecoder('fixture.template.owner', '1', template_decode)
+        self.assertIsNone(template_decoder.require_provenance())
+        parses = []
+        def template_profile(frame, event, _result):
+            if event == 'call' and frame.f_code is diagnostics.strict_json_object.__code__:
+                parses.append('parse')
+        previous_profile = sys.getprofile()
+        sys.setprofile(template_profile)
+        try:
+            self.assertEqual((cached.findings(packet), cached.findings(packet), independent.findings(packet)),
+                             ((), (), ()))
+        finally:
+            sys.setprofile(previous_profile)
+        self.assertEqual(parses, ['parse', 'parse'])
+        self.assertIsNone(template_decoder.require_provenance())
+        first_export, second_export = cached.schema_value(), cached.schema_value()
+        self.assertIsNot(first_export, second_export)
+        self.assertIsNot(first_export['$defs']['text'], second_export['$defs']['text'])
+        first_export['$defs']['text']['type'] = 'integer'
+        self.assertEqual(second_export, template_schema)
+        packet['left'] = 0
+        earlier = cached.findings(packet)
+        packet.update(left='ok', right=None)
+        self.assertEqual((earlier, cached.findings(packet)),
+                         (('$.left: expected string, got integer',), ('$.right: expected string, got null',)))
+        packet['right'] = 'ok'
+        self.assertEqual((cached.findings(packet), independent.findings(packet)), ((), ()))
+        foreign = SchemaRules.declare({'type': 'integer'})
+        self.assertEqual(foreign.findings(0), ())
+        template, anchor = cached._diagnostic_template, cached._diagnostic_anchor
+        forged = (cached.canonical_bytes, cached.maximum_bytes, foreign._diagnostic_template[2])
+        for hints in ((None, anchor), (template, None),
+                      (foreign._diagnostic_template, foreign._diagnostic_anchor), (forged, forged)):
+            try:
+                object.__setattr__(cached, '_diagnostic_template', hints[0])
+                object.__setattr__(cached, '_diagnostic_anchor', hints[1])
+                self.assertEqual(cached.findings(packet), ())
+            finally:
+                object.__setattr__(cached, '_diagnostic_template', template)
+                object.__setattr__(cached, '_diagnostic_anchor', anchor)
+        source_bytes = cached.canonical_bytes
+        try:
+            object.__setattr__(cached, 'canonical_bytes', foreign.canonical_bytes)
+            self.assertEqual(cached.findings(packet), ('$: expected integer, got object',))
+            with self.assertRaisesRegex(ValueError, '^frozen typed decoder hook provenance changed$'):
+                template_decoder.require_provenance()
+            object.__setattr__(cached, 'canonical_bytes', b'{')
+            with self.assertRaises(ValueError):
+                cached.findings(packet)
+        finally:
+            object.__setattr__(cached, 'canonical_bytes', source_bytes)
+        self.assertIsNone(template_decoder.require_provenance())
+        export_method = SchemaRules.schema_value
+        try:
+            SchemaRules.schema_value = lambda owner: {'type': 'integer'}
+            self.assertEqual(cached.findings(packet), ('$: expected integer, got object',))
+        finally:
+            SchemaRules.schema_value = export_method
+        marker = RuntimeError('fixture dynamic diagnosis')
+        class DynamicPayload(dict):
+            def __getitem__(self, key): raise marker
+        dynamic = DynamicPayload(packet)
+        self.assertEqual(diagnose_value(dynamic, template_schema), ('$: expected object, got non-JSON value',))
+        self.assertEqual(cached.findings(dynamic), ('$: expected object, got non-JSON value',))
+        evaluator = diagnostics._diagnose
+        def replaced_evaluator(*args, **kwargs): raise marker
+        try:
+            diagnostics._diagnose = replaced_evaluator
+            with self.assertRaises(RuntimeError) as evaluator_failure:
+                cached.findings(packet)
+            self.assertIs(evaluator_failure.exception, marker)
+        finally:
+            diagnostics._diagnose = evaluator
+        self.assertEqual(cached.findings(packet), ())
+
 
     def test_malformed_and_duplicate_json_have_value_free_diagnostics(self) -> None:
         schema = {"type": "object", "properties": {}, "additionalProperties": False}
@@ -610,6 +690,15 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertEqual(lines[-2], "$.field_2047: expected strict UTF-8 text without unpaired surrogates")
         self.assertTrue(all(len(chunk.encode()) < 32_768 for chunk in chunks))
         self.assertNotIn("PRIVATE", "\n".join(chunks))
+
+        from story_writing_agents.structured_output_validation import SchemaRules
+        capped = SchemaRules.declare({'type': 'array', 'items': {'type': 'integer'}})
+        capped_issues = capped.findings(['bad'] * 2050)
+        self.assertEqual((len(capped_issues), capped_issues[0], capped_issues[-2], capped_issues[-1]),
+                         (2049, '$[0]: expected integer, got string',
+                          '$[2047]: expected integer, got string', '$: additional validation issues omitted'))
+        self.assertEqual(capped.findings([]), ())
+        self.assertEqual(capped.findings(['bad']), ('$[0]: expected integer, got string',))
 
 
 def _digest(body: bytes) -> str: return f"sha256:{hashlib.sha256(body).hexdigest()}"
@@ -1039,8 +1128,7 @@ class CompactWireDecoderTests(unittest.TestCase):
             {**base, 'agent_action': {**answer_action, "extra": 1}}, {'agent_action': {'action_type': 'submit_result'}},
             '{"agent_action":%s,"agent_action":%s}' % tuple(json.dumps(answer_action, separators=(",", ":")) for _ in range(2)))
         for value in malformed:
-            with self.subTest(value=value):
-                self.assert_malformed(value)
+            with self.subTest(value=value): self.assert_malformed(value)
         self.assert_malformed(base, allowed=("search",))
         self.assert_malformed(_search_wire(self.token, [("x", ["conversation"])]),
                               source_kinds=(ContextSourceKind.WRITING_ARTIFACT,))
@@ -1087,8 +1175,7 @@ class CompactWireDecoderTests(unittest.TestCase):
             "source handles returned by the preceding context search", )
         self.assertIsNone(failure.__cause__)
         rendered = "\n".join( ( str(failure), repr(failure), repr(failure.__cause__), repr(failure.__context__), ) )
-        for private in private_values:
-            self.assertNotIn(private, rendered)
+        for private in private_values: self.assertNotIn(private, rendered)
 
     def test_provider_correlation_echo_is_rejected_as_an_extra_field(self, ) -> None:
         actual_correlation = "PRIVATE critique prose\x1b]unsafe\x07"
@@ -1180,13 +1267,11 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         def assert_failure(session: ContextInvocationSession,
             action: ContextReadAction, expected: ContextActionErrorCode, *, next_action_index: int,
             extra_private: tuple[str, ...] = (),) -> ContextActionError:
-            with self.assertRaises(ContextActionError) as caught:
-                session.read(action)
+            with self.assertRaises(ContextActionError) as caught: session.read(action)
             self.assertEqual(caught.exception.code, expected)
             self.assertEqual(session.state, ContextInvocationState.FAILED)
             self.assertEqual(session.next_action_index, next_action_index); encoded = repr(caught.exception)
-            for value in (*private_values, *extra_private):
-                self.assertNotIn(value, encoded)
+            for value in (*private_values, *extra_private): self.assertNotIn(value, encoded)
             return caught.exception
 
         fresh_registry = _registry(_SCOPE, self.snapshots); fresh = _session(self.binding, fresh_registry)
@@ -1354,8 +1439,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         handle = _mint_handles(session, registry, self.snapshots)[0][1]
         _, receipt = session.read( ContextReadAction(_correlation(self.binding, 2), (handle,)) )
         wrong = replace(receipt, observation_digest="sha256:" + "f" * 64)
-        with self.assertRaises(ContextActionError) as mismatch:
-            session.complete_read(wrong)
+        with self.assertRaises(ContextActionError) as mismatch: session.complete_read(wrong)
         self.assertEqual(mismatch.exception.code, ContextActionErrorCode.OUTSTANDING_READ)
         self.assertEqual(session.state, ContextInvocationState.FAILED)
 
@@ -1510,8 +1594,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                             "two", (ContextSourceKind.WRITING_ARTIFACT,),
                             "manuscript/part_02/",),),),),)
         for label, construct in invalid_matrix:
-            with self.subTest(rejected=label), self.assertRaises(ContextActionError):
-                construct()
+            with self.subTest(rejected=label), self.assertRaises(ContextActionError): construct()
 
     def test_compact_search_read_evidence_retains_all_authoritative_facts(self) -> None:
         scope = replace( _SCOPE, subject_kind=ContextSubjectKind.DEBATE, subject_id="debate-one", )
@@ -1667,8 +1750,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         policy = replace(CONTEXT_ACTION_POLICY, max_nonterminal_actions=2, max_provider_calls=3, max_search_actions=2)
         registry = _registry(_SCOPE, self.snapshots); session = _session(self.binding, registry, action_policy=policy)
         query = ContextSearchQuery( "absent", (ContextSourceKind.WRITING_ARTIFACT,), )
-        for index in (1, 2):
-            session.search(ContextSearchAction(_correlation(self.binding, index), (query,)))
+        for index in (1, 2): session.search(ContextSearchAction(_correlation(self.binding, index), (query,)))
         self.assertEqual(session.next_action_index, 3)
         authorization = session.authorize_answer(ContextAnswerAction(_correlation(self.binding, 3), _PRIVATE_ANSWER))
         self.assertEqual( authorization.correlation.action_index, policy.max_provider_calls, )
@@ -1731,8 +1813,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         self.assertEqual( tuple(item.ordinal for item in authorization.mandatory_references), (1, 2, 3), )
         self.assertEqual(session.state, ContextInvocationState.ANSWER_AUTHORIZED); registry.capture.assert_not_called()
         rendered = repr(authorization)
-        for canary in (_PRIVATE_ANSWER, _PRIVATE_BODY_A, "ctxh_v1_"):
-            self.assertNotIn(canary, rendered)
+        for canary in (_PRIVATE_ANSWER, _PRIVATE_BODY_A, "ctxh_v1_"): self.assertNotIn(canary, rendered)
         alternate = _session(binding, _registry(_SCOPE, self.snapshots))
         different = alternate.authorize_answer(
             ContextAnswerAction(_correlation(binding, 1), _PRIVATE_ANSWER + " changed") )
