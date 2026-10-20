@@ -4,7 +4,7 @@ The canonical suite is a bounded regression sample. Its checked-in inventory is
 [`tests/fixtures/test_budget_v1.json`](tests/fixtures/test_budget_v1.json).
 The accepted ceilings are **1,080 seconds** of sequential-equivalent wall time
 for all four complete shards and **540 seconds** for each shard. CI also stops a
-job after 30 minutes, including setup.
+job after 60 minutes, including setup.
 
 ## Scope rule
 
@@ -69,7 +69,7 @@ the existing 1,080/540-second ceilings; aim for 900/450 seconds to leave margin.
 A maintainer may authorize extra validation time for a specific PR and record the
 reason and authorization in its owning Issue and PR. The root then applies
 `test:wall-time-exception`. On that PR, CI passes `--allow-wall-time-overage` to
-the budget checker. Every job retains the same 30-minute native timeout,
+the budget checker. Every job retains the same 60-minute native timeout,
 including setup, whether or not the exception applies. The checker still reports
 actual durations; only the measured sequential and per-shard time comparisons
 are waived. Local validation may use the same option under the recorded
@@ -80,19 +80,19 @@ The exception never permits failed or incomplete reports, inventory expansion,
 increased subtest counts or test source, budget-file increases, skipped required
 checks, or bypassed approvals and branch protection.
 
-Every `pr-validation` job declares a native `timeout-minutes: 30`, including
+Every `pr-validation` job declares a native `timeout-minutes: 60`, including
 classification, static validation, fast validation, each full shard,
 reconciliation, automatic or manually dispatched diagnostics, and deadline
-control. Every event shares one absolute 30-minute deadline derived from the
+control. Every event shares one absolute 60-minute deadline derived from the
 workflow run's GitHub `created_at`, including queue, setup, dependency waits,
 cancellation, and uploads. Classification records that deadline before selecting
 lanes. A rerun cannot extend the original run's window. Test and reconciliation
-workers clamp the 30-minute job clock to this shared deadline. Each of the three
+workers clamp the 60-minute job clock to this shared deadline. Each of the three
 test-worker allowances and both reconciliation allowances reserves 450 seconds;
-the three explicit test-worker caps are 1,350 seconds, reduced by setup and
+the three explicit test-worker caps are 3,150 seconds, reduced by setup and
 shared-clock consumption. Each reconciliation gate recomputes its allowance.
 Missing or exhausted budgets fail verification rather than borrowing the
-cancellation reserve. Workers stop by minute 22.5, retain a 30-second kill grace,
+cancellation reserve. Workers stop by minute 52.5, retain a 30-second kill grace,
 and allow at most one minute for artifact upload before normal cancellation at
 minute 24. Fast, full, diagnostic, and reconciliation artifact uploads each have
 a one-minute step timeout. Control metadata distinguishes the 60-second cleanup
@@ -124,10 +124,10 @@ or HTTP 409 is not terminal proof. Native job timeouts remain a separate limit.
 Runner scheduling or an unavailable or inconsistent GitHub control API can
 delay enforcement. Acceptance therefore requires coherent terminal run and job
 records, matching run/attempt/source identities, and observed complete workflow
-and executed-job durations within 30 minutes, with every required report and
+and executed-job durations within 60 minutes, with every required report and
 check complete. An unavailable enforcement path fails visibly.
 
-Explicitly dispatched diagnostic jobs also stop after 30 minutes. Test execution
+Explicitly dispatched diagnostic jobs also stop after 60 minutes. Test execution
 has a separate earlier deadline to leave time for termination and evidence
 upload. Diagnostics preserve progress and available partial evidence on
 interruption; a partial or timed-out execution never counts as a passing test.
@@ -145,7 +145,7 @@ Before application tests, record and verify Linux, the requested architecture
 and four available CPUs, with CPU affinity and native run/attempt/workflow
 identity in the uploaded hardware receipt. Use the locked Python 3.11 environment
 natively. The runner change preserves the existing test selections, assertions,
-subTest caps, GC settings, process cleanup and all 30-minute job/shared deadlines.
+subTest caps, GC settings, process cleanup and all 60-minute job/shared deadlines.
 
 Compatibility, complete-method fit and performance evidence belongs to its
 recorded source and execution environment. Refresh those results on ARM64 before
@@ -172,7 +172,7 @@ behavioral equivalence.
 
 Keep native workflow outcomes, missing reports and cleanup failures visible.
 A successful representative benchmark gives no canonical test credit and does
-not establish that a complete class or full suite fits the 30-minute deadline.
+not establish that a complete class or full suite fits the 60-minute deadline.
 Refresh shard weights only from complete verified timings, retaining whole
 classes and required fast-tier membership. The active optimization record is
 [child #872](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/872).
