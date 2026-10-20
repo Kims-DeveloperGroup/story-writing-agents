@@ -1,1135 +1,487 @@
-name: PR validation
-
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
-  merge_group:
-    types: [checks_requested]
-  workflow_dispatch:
-    inputs:
-      arch:
-        description: Diagnostic-only standard runner architecture
-        type: choice
-        options: [x64, arm64]
-        default: arm64
-      scratch:
-        description: Diagnostic-only temporary filesystem
-        type: choice
-        options: [disk, memory]
-        default: disk
-      profile_mode:
-        description: Optional cProfile instrumentation for the exact diagnostic
-        type: choice
-        options: [cprofile, none]
-        default: cprofile
-      test_id:
-        description: Diagnostic-only exact canonical test ID
-        type: string
-        default: tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles
-
-permissions:
-  contents: read
-  pull-requests: read
-
-concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-diagnostic-{1}-{2}-{3}', github.workflow, github.ref, inputs.arch, inputs.scratch) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.event.merge_group.head_ref || github.ref) }}
-  cancel-in-progress: true
-
-jobs:
-  workflow-deadline:
-    name: Enforce 30-minute workflow limit
-    # Cover classification, setup and dependency waits independently.
-    # Survive normal cancellation long enough to force-cancel stalled jobs.
-    if: always()
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      actions: write
-    steps:
-      - name: Enforce total workflow deadline
-        uses: actions/github-script@v7
-        with:
-          retries: 0
-          script: |
-            const parameters = () => ({
-              ...context.repo,
-              run_id: context.runId,
-              request: {signal: AbortSignal.timeout(5000)},
-            });
-            const attempt = Number(process.env.GITHUB_RUN_ATTEMPT);
-            if (!Number.isSafeInteger(attempt) || attempt < 1) {
-              core.setFailed("Missing workflow attempt identity.");
-              return;
-            }
-            // Metadata retries never grant a new test budget.
-            const metadataDeadline = Date.now() + 30_000;
-            let deadline;
-            let cancellationRequested = false;
-            async function currentRun() {
-              const {data: run} = await github.rest.actions.getWorkflowRun(parameters());
-              if (run.id !== context.runId || run.run_attempt !== attempt) {
-                core.setFailed("Workflow attempt changed; the stale guard cannot cancel it.");
-                return null;
-              }
-              if (run.status === "completed") return null;
-              const created = Date.parse(run.created_at);
-              if (!Number.isFinite(created)) throw new Error("Missing workflow creation time.");
-              const runDeadline = created + 30 * 60 * 1000;
-              deadline = deadline === undefined ? runDeadline : Math.min(deadline, runDeadline);
-              if (Date.now() >= deadline - 30_000) {
-                core.setFailed("Workflow guard shutdown margin reached; no safe control window remains.");
-                return null;
-              }
-              return run;
-            }
-            while (Date.now() < (deadline === undefined ? metadataDeadline : deadline - 30_000)) {
-              try {
-                if (!await currentRun()) return;
-                let complete;
-                try {
-                  const {data: page} = await github.rest.actions.listJobsForWorkflowRunAttempt({
-                    ...parameters(), attempt_number: attempt, per_page: 100,
-                  });
-                  if (!Number.isSafeInteger(page.total_count) || page.total_count > 100 ||
-                      !Array.isArray(page.jobs) || page.total_count !== page.jobs.length) {
-                    throw new Error("Cannot establish the complete validation job list.");
-                  }
-                  // A marker covers downstream jobs absent from an earlier API snapshot.
-                  complete = page.jobs.find(job => job.name === "Validation jobs complete");
-                } catch (error) {
-                  // Job-list failures cannot prevent cancellation at the deadline.
-                  core.warning(`Completion lookup failed: ${error.message}`);
-                }
-                if (Date.now() < deadline && complete?.status === "completed" &&
-                    ["success", "failure"].includes(complete.conclusion)) {
-                  core.info("All validation jobs finished within the workflow deadline.");
-                  return;
-                }
-                if (Date.now() >= deadline - 330_000) {
-                  core.setFailed("Workflow shutdown reserve reached; force-cancelling this run.");
-                  if (!await currentRun()) return;
-                  await github.request("POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel", parameters());
-                  return;
-                }
-                if (!cancellationRequested && Date.now() >= deadline - 360_000) {
-                  core.setFailed("Workflow shutdown reserve reached; cancelling this run.");
-                  if (!await currentRun()) return;
-                  await github.rest.actions.cancelWorkflowRun(parameters());
-                  cancellationRequested = true;
-                }
-              } catch (error) {
-                core.warning(`Deadline control request failed: ${error.message}`);
-              }
-              const remaining = (deadline === undefined ? metadataDeadline : deadline - 30_000) - Date.now();
-              const poll = deadline !== undefined && deadline - Date.now() > 390_000 ? 30_000 : 5000;
-              if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(poll, remaining)));
-            }
-            core.setFailed("Workflow deadline enforcement could not complete within its bounded window.");
-
-  validation-complete:
-    name: Validation jobs complete
-    needs: [classify, static, fast, full, reconcile-full, diagnose-full-budget]
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions: {}
-    steps:
-      - name: Mark validation jobs terminal
-        timeout-minutes: 1
-        run: echo "Validation jobs are terminal; their individual results remain authoritative."
-
-  classify:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Initialize diagnostic deadline' || 'Classify changed paths' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      pull-requests: read
-      actions: read
-    outputs:
-      test_run_deadline: ${{ steps.paths.outputs.test_run_deadline }}
-      runtime: ${{ steps.paths.outputs.runtime }}
-      policy_only: ${{ steps.paths.outputs.policy_only }}
-      full: ${{ steps.paths.outputs.full }}
-      wall_time_exception: ${{ steps.paths.outputs.wall_time_exception }}
-      base_sha: ${{ steps.paths.outputs.base_sha }}
-      head_sha: ${{ steps.paths.outputs.head_sha }}
-      checkout_sha: ${{ steps.paths.outputs.checkout_sha }}
-    steps:
-      - name: Classify paths and select runtime evidence
-        id: paths
-        uses: actions/github-script@v7
-        timeout-minutes: 2
-        with:
-          script: |
-            const {owner, repo} = context.repo;
-            const {data: run} = await github.rest.actions.getWorkflowRun({
-              owner, repo, run_id: context.runId, request: {signal: AbortSignal.timeout(5000)},
-            });
-            const created = Date.parse(run.created_at);
-            if (run.id !== context.runId || run.run_attempt !== Number(process.env.GITHUB_RUN_ATTEMPT) ||
-                !Number.isFinite(created)) {
-              core.setFailed("Cannot establish this workflow attempt's creation time.");
-              return;
-            }
-            const deadline = Math.floor(created / 1000) + 30 * 60;
-            core.setOutput("test_run_deadline", String(deadline));
-            if (Date.now() >= deadline * 1000) {
-              core.setFailed("Shared workflow deadline exhausted before classification.");
-              return;
-            }
-            if (context.eventName === "workflow_dispatch") {
-              core.setOutput("runtime", "false");
-              core.setOutput("policy_only", "true");
-              core.setOutput("full", "false");
-              core.setOutput("wall_time_exception", "false");
-              for (const name of ["base_sha", "head_sha", "checkout_sha"]) core.setOutput(name, context.sha);
-              return;
-            }
-            let files = [];
-            let labels = [];
-            let baseSha;
-            let headSha;
-            let truncated = false;
-
-            if (context.eventName === "pull_request") {
-              const pr = context.payload.pull_request;
-              baseSha = pr.base.sha;
-              headSha = pr.head.sha;
-              labels = pr.labels.map(label => label.name);
-              files = await github.paginate(github.rest.pulls.listFiles, {
-                owner, repo, pull_number: pr.number, per_page: 100,
-              });
-              truncated = files.length >= 3000;
-            } else {
-              const group = context.payload.merge_group;
-              baseSha = group.base_sha;
-              headSha = group.head_sha;
-              const comparison = await github.rest.repos.compareCommitsWithBasehead({
-                owner, repo, basehead: `${baseSha}...${headSha}`, per_page: 100,
-              });
-              files = comparison.data.files || [];
-              // A full page may hide later files. Fail closed rather than infer a partial diff.
-              truncated = !Array.isArray(comparison.data.files) || files.length >= 100;
-            }
-
-            const paths = files.flatMap(file =>
-              [file.filename, file.previous_filename].filter(Boolean));
-            const isRuntime = path =>
-              path.startsWith("src/") ||
-              path.startsWith("config/") ||
-              path === "pyproject.toml" ||
-              path === "uv.lock" ||
-              path === "MANIFEST.in" ||
-              path === ".gitmodules" ||
-              path === "vendor/generic-rag" ||
-              path === "vendor/jsonl-viewer";
-            const runtimePaths = truncated || paths.some(isRuntime);
-            const isTest = path => path.startsWith("tests/") ||
-              path === ".github/workflows/pr-validation.yml" || path === "TEST_POLICY.md";
-            const testPaths = truncated || paths.some(isTest);
-            const fullRequested = labels.includes("test:full");
-            const wallTimeException = context.eventName === "pull_request" && labels.includes("test:wall-time-exception");
-            const runtime = runtimePaths || testPaths || fullRequested;
-            const full = runtime;
-            core.setOutput("runtime", String(runtime));
-            core.setOutput("policy_only", String(!runtimePaths && !testPaths));
-            core.setOutput("full", String(full));
-            core.setOutput("wall_time_exception", String(wallTimeException));
-            core.setOutput("base_sha", baseSha);
-            core.setOutput("head_sha", headSha);
-            // Event SHA is the PR test merge or merge-group commit, pinned across jobs.
-            core.setOutput("checkout_sha", context.sha);
-            core.summary
-              .addHeading("Validation selection")
-              .addTable([
-                [{data: "Runtime paths", header: true}, String(runtimePaths)],
-                [{data: "Policy/config only", header: true}, String(!runtimePaths)],
-                [{data: "Run runtime lanes", header: true}, String(runtime)],
-                [{data: "Full suite", header: true}, String(full)],
-                [{data: "Wall-time exception", header: true}, String(wallTimeException)],
-              ])
-              .write();
-
-  static:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - static validation skipped' || 'Static validation' }}
-    needs: classify
-    if: github.event_name != 'workflow_dispatch'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Check shared deadline before static work
-        run: |
-          [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-          if (( TEST_RUN_DEADLINE <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before static work."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Check patch whitespace
-        env:
-          BASE_SHA: ${{ needs.classify.outputs.base_sha }}
-          HEAD_SHA: ${{ needs.classify.outputs.head_sha }}
-        run: git diff --check "$BASE_SHA...$HEAD_SHA"
-      - name: Parse repository configuration
-        run: |
-          python - <<'PY'
-          import json
-          import pathlib
-          import tomllib
-
-          for path in pathlib.Path(".").glob("**/*.toml"):
-              if ".git" not in path.parts:
-                  data = tomllib.loads(path.read_text(encoding="utf-8"))
-                  if path.parent == pathlib.Path(".codex/agents"):
-                      if data.get("name") != path.stem:
-                          raise SystemExit(f"{path}: agent name must match filename")
-                      for field in ("description", "developer_instructions"):
-                          value = data.get(field)
-                          if not isinstance(value, str) or not value.strip():
-                              raise SystemExit(f"{path}: missing {field}")
-          for path in pathlib.Path(".").glob("**/*.json"):
-              if ".git" not in path.parts:
-                  json.loads(path.read_text(encoding="utf-8"))
-          for path in (*pathlib.Path("src").rglob("*.py"), *pathlib.Path("tests").rglob("*.py")):
-              compile(path.read_text(encoding="utf-8"), str(path), "exec", dont_inherit=True)
-          PY
-          ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |path| YAML.parse_file(path) }'
-          ruby -ryaml -ropen3 <<'RB'
-          Dir[".agents/skills/*/SKILL.md"].each do |path|
-            source = File.read(path)
-            match = source.match(/\A---\r?\n(.*?)\r?\n---(?:\r?\n|\z)/m)
-            abort "#{path}: missing YAML frontmatter" unless match
-            data = YAML.safe_load(match[1], aliases: false)
-            abort "#{path}: name must match directory and description must be nonempty" unless
-              data.is_a?(Hash) && data["name"] == File.basename(File.dirname(path)) &&
-              data["description"].is_a?(String) && !data["description"].strip.empty?
-          end
-          issue_path = ".github/ISSUE_TEMPLATE/work_item.md"
-          issue_source = File.read(issue_path)
-          issue_match = issue_source.match(/\A---\r?\n(.*?)\r?\n---(?:\r?\n|\z)/m)
-          abort "#{issue_path}: missing YAML frontmatter" unless issue_match
-          issue = YAML.safe_load(issue_match[1], aliases: false)
-          abort "#{issue_path}: invalid frontmatter mapping" unless issue.is_a?(Hash)
-          %w[name about title labels assignees].each do |field|
-            value = issue[field]
-            abort "#{issue_path}: missing or non-string #{field}" unless value.is_a?(String)
-          end
-          %w[name about].each do |field|
-            abort "#{issue_path}: empty #{field}" if issue[field].strip.empty?
-          end
-          Dir[".github/workflows/*.{yml,yaml}"].each do |path|
-            document = YAML.safe_load(File.read(path), aliases: false)
-            document.fetch("jobs").each do |job_name, job|
-              job.fetch("steps", []).each do |step|
-                script = step["with"]&.fetch("script", nil)
-                next unless script
-                _, error, status = Open3.capture3(
-                  "node", "--input-type=module", "--check",
-                  stdin_data: "async function main() {\n#{script}\n}")
-                abort "#{path} #{job_name}: #{error}" unless status.success?
-              end
-            end
-          end
-          RB
-      - name: Validate runner metadata
-        run: |
-          python -B - <<'PY'
-          from tests import suite_policy
-
-          suite_policy.load_timing_weights()
-          ids = suite_policy.FAST_TEST_IDS
-          if not ids or len(ids) != len(set(ids)):
-              raise SystemExit("fast tier must contain unique test IDs")
-          if any(not identifier.rsplit(".", 1)[-1].startswith("test") for identifier in ids):
-              raise SystemExit("fast tier contains a non-test method ID")
-          PY
-      - name: Validate locked vendor pins
-        run: |
-          python - <<'PY'
-          import subprocess
-          import tomllib
-          from pathlib import Path
-
-          if Path("MANIFEST.in").read_text(encoding="utf-8") != "prune vendor/jsonl-viewer\n":
-              raise SystemExit("MANIFEST.in must exclude vendored jsonl-viewer source")
-
-          with open("uv.lock", "rb") as source:
-              packages = {package["name"]: package for package in tomllib.load(source)["package"]}
-          for name in ("generic-rag", "jsonl-viewer"):
-              pinned = packages[name]["source"]["git"].rsplit("#", 1)[-1]
-              gitlink = subprocess.check_output(
-                  ["git", "rev-parse", f"HEAD:vendor/{name}"], text=True
-              ).strip()
-              if pinned != gitlink:
-                  raise SystemExit(f"{name}: uv.lock pin {pinned} differs from gitlink {gitlink}")
-          PY
-      - name: Validate policy artifacts
-        run: |
-          python - <<'PY'
-          import pathlib
-
-          root = pathlib.Path.cwd()
-          templates = {
-              ".github/ISSUE_TEMPLATE/work_item.md": [
-                  "## Objective", "## Use cases and expected results",
-                  "## Implementation summary", "## Acceptance criteria",
-                  "## Boundaries and dependencies",
-                  "## Related work and verification plan", "## Implementation plan",
-              ],
-              ".github/pull_request_template.md": [
-                  "## What changed", "## Before and after", "## Implementation",
-                  "## Verification", "## Limitations and follow-ups",
-                  "## Related Issue",
-              ],
-              ".github/templates/evidence.md": [
-                  "## What this demonstrates", "## Scenario results",
-                  "## Reproduction and environment", "## Failures and coverage gaps",
-                  "## Technical provenance and artifacts", "## Assessment",
-              ],
-              ".github/templates/working-status-comment.md": [
-                  "## Current status", "## What works now", "## What remains",
-                  "## Blocker or decision", "## Next step", "## Evidence links",
-              ],
+{
+  "name": "PR validation",
+  "permissions": {
+    "contents": "read",
+    "pull-requests": "read"
+  },
+  "concurrency": {
+    "group": "${{ github.event_name == 'workflow_dispatch' && format('{0}-diagnostic-{1}-{2}-{3}', github.workflow, github.ref, inputs.arch, inputs.scratch) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.event.merge_group.head_ref || github.ref) }}",
+    "cancel-in-progress": true
+  },
+  "jobs": {
+    "workflow-deadline": {
+      "name": "Enforce 30-minute workflow limit",
+      "if": "always()",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "permissions": {
+        "actions": "write"
+      },
+      "steps": [
+        {
+          "name": "Enforce total workflow deadline",
+          "uses": "actions/github-script@v7",
+          "with": {
+            "retries": 0,
+            "script": "const parameters = () => ({\n  ...context.repo,\n  run_id: context.runId,\n  request: {signal: AbortSignal.timeout(5000)},\n});\nconst attempt = Number(process.env.GITHUB_RUN_ATTEMPT);\nif (!Number.isSafeInteger(attempt) || attempt < 1) {\n  core.setFailed(\"Missing workflow attempt identity.\");\n  return;\n}\n// Metadata retries never grant a new test budget.\nconst metadataDeadline = Date.now() + 30_000;\nlet deadline;\nlet cancellationRequested = false;\nasync function currentRun() {\n  const {data: run} = await github.rest.actions.getWorkflowRun(parameters());\n  if (run.id !== context.runId || run.run_attempt !== attempt) {\n    core.setFailed(\"Workflow attempt changed; the stale guard cannot cancel it.\");\n    return null;\n  }\n  if (run.status === \"completed\") return null;\n  const created = Date.parse(run.created_at);\n  if (!Number.isFinite(created)) throw new Error(\"Missing workflow creation time.\");\n  const runDeadline = created + 30 * 60 * 1000;\n  deadline = deadline === undefined ? runDeadline : Math.min(deadline, runDeadline);\n  if (Date.now() >= deadline - 30_000) {\n    core.setFailed(\"Workflow guard shutdown margin reached; no safe control window remains.\");\n    return null;\n  }\n  return run;\n}\nwhile (Date.now() < (deadline === undefined ? metadataDeadline : deadline - 30_000)) {\n  try {\n    if (!await currentRun()) return;\n    let complete;\n    try {\n      const {data: page} = await github.rest.actions.listJobsForWorkflowRunAttempt({\n        ...parameters(), attempt_number: attempt, per_page: 100,\n      });\n      if (!Number.isSafeInteger(page.total_count) || page.total_count > 100 ||\n          !Array.isArray(page.jobs) || page.total_count !== page.jobs.length) {\n        throw new Error(\"Cannot establish the complete validation job list.\");\n      }\n      // A marker covers downstream jobs absent from an earlier API snapshot.\n      complete = page.jobs.find(job => job.name === \"Validation jobs complete\");\n    } catch (error) {\n      // Job-list failures cannot prevent cancellation at the deadline.\n      core.warning(`Completion lookup failed: ${error.message}`);\n    }\n    if (Date.now() < deadline && complete?.status === \"completed\" &&\n        [\"success\", \"failure\"].includes(complete.conclusion)) {\n      core.info(\"All validation jobs finished within the workflow deadline.\");\n      return;\n    }\n    if (Date.now() >= deadline - 330_000) {\n      core.setFailed(\"Workflow shutdown reserve reached; force-cancelling this run.\");\n      if (!await currentRun()) return;\n      await github.request(\"POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel\", parameters());\n      return;\n    }\n    if (!cancellationRequested && Date.now() >= deadline - 360_000) {\n      core.setFailed(\"Workflow shutdown reserve reached; cancelling this run.\");\n      if (!await currentRun()) return;\n      await github.rest.actions.cancelWorkflowRun(parameters());\n      cancellationRequested = true;\n    }\n  } catch (error) {\n    core.warning(`Deadline control request failed: ${error.message}`);\n  }\n  const remaining = (deadline === undefined ? metadataDeadline : deadline - 30_000) - Date.now();\n  const poll = deadline !== undefined && deadline - Date.now() > 390_000 ? 30_000 : 5000;\n  if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(poll, remaining)));\n}\ncore.setFailed(\"Workflow deadline enforcement could not complete within its bounded window.\");\n"
           }
-          for relative, expected in templates.items():
-              text = (root / relative).read_text(encoding="utf-8")
-              actual = [line for line in text.splitlines() if line.startswith("## ")]
-              if actual != expected:
-                  raise SystemExit(f"{relative}: template headings changed: {actual!r}")
-
-          agents = {path.name for path in (root / ".codex/agents").glob("*.toml")}
-          if agents != {"runtime_implementer.toml", "test_engineer.toml"}:
-              raise SystemExit(f"unexpected development agents: {sorted(agents)!r}")
-          required = [
-              root / ".agents/skills/project-workflow/SKILL.md",
-              root / ".codex/agents/runtime_implementer/PYTHON_MODULARITY_POLICY.md",
+        }
+      ]
+    },
+    "validation-complete": {
+      "name": "Validation jobs complete",
+      "needs": [
+        "classify",
+        "static",
+        "fast",
+        "full",
+        "reconcile-full",
+        "diagnose-full-budget"
+      ],
+      "if": "${{ !cancelled() }}",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "permissions": {},
+      "steps": [
+        {
+          "name": "Mark validation jobs terminal",
+          "timeout-minutes": 1,
+          "run": "echo \"Validation jobs are terminal; their individual results remain authoritative.\""
+        }
+      ]
+    },
+    "classify": {
+      "name": "${{ github.event_name == 'workflow_dispatch' && 'Initialize diagnostic deadline' || 'Classify changed paths' }}",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "permissions": {
+        "contents": "read",
+        "pull-requests": "read",
+        "actions": "read"
+      },
+      "outputs": {
+        "test_run_deadline": "${{ steps.paths.outputs.test_run_deadline }}",
+        "runtime": "${{ steps.paths.outputs.runtime }}",
+        "policy_only": "${{ steps.paths.outputs.policy_only }}",
+        "full": "${{ steps.paths.outputs.full }}",
+        "wall_time_exception": "${{ steps.paths.outputs.wall_time_exception }}",
+        "base_sha": "${{ steps.paths.outputs.base_sha }}",
+        "head_sha": "${{ steps.paths.outputs.head_sha }}",
+        "checkout_sha": "${{ steps.paths.outputs.checkout_sha }}"
+      },
+      "steps": [
+        {
+          "name": "Classify paths and select runtime evidence",
+          "id": "paths",
+          "uses": "actions/github-script@v7",
+          "timeout-minutes": 2,
+          "with": {
+            "script": "const {owner, repo} = context.repo;\nconst {data: run} = await github.rest.actions.getWorkflowRun({\n  owner, repo, run_id: context.runId, request: {signal: AbortSignal.timeout(5000)},\n});\nconst created = Date.parse(run.created_at);\nif (run.id !== context.runId || run.run_attempt !== Number(process.env.GITHUB_RUN_ATTEMPT) ||\n    !Number.isFinite(created)) {\n  core.setFailed(\"Cannot establish this workflow attempt's creation time.\");\n  return;\n}\nconst deadline = Math.floor(created / 1000) + 30 * 60;\ncore.setOutput(\"test_run_deadline\", String(deadline));\nif (Date.now() >= deadline * 1000) {\n  core.setFailed(\"Shared workflow deadline exhausted before classification.\");\n  return;\n}\nif (context.eventName === \"workflow_dispatch\") {\n  core.setOutput(\"runtime\", \"false\");\n  core.setOutput(\"policy_only\", \"true\");\n  core.setOutput(\"full\", \"false\");\n  core.setOutput(\"wall_time_exception\", \"false\");\n  for (const name of [\"base_sha\", \"head_sha\", \"checkout_sha\"]) core.setOutput(name, context.sha);\n  return;\n}\nlet files = [];\nlet labels = [];\nlet baseSha;\nlet headSha;\nlet truncated = false;\n\nif (context.eventName === \"pull_request\") {\n  const pr = context.payload.pull_request;\n  baseSha = pr.base.sha;\n  headSha = pr.head.sha;\n  labels = pr.labels.map(label => label.name);\n  files = await github.paginate(github.rest.pulls.listFiles, {\n    owner, repo, pull_number: pr.number, per_page: 100,\n  });\n  truncated = files.length >= 3000;\n} else {\n  const group = context.payload.merge_group;\n  baseSha = group.base_sha;\n  headSha = group.head_sha;\n  const comparison = await github.rest.repos.compareCommitsWithBasehead({\n    owner, repo, basehead: `${baseSha}...${headSha}`, per_page: 100,\n  });\n  files = comparison.data.files || [];\n  // A full page may hide later files. Fail closed rather than infer a partial diff.\n  truncated = !Array.isArray(comparison.data.files) || files.length >= 100;\n}\n\nconst paths = files.flatMap(file =>\n  [file.filename, file.previous_filename].filter(Boolean));\nconst isRuntime = path =>\n  path.startsWith(\"src/\") ||\n  path.startsWith(\"config/\") ||\n  path === \"pyproject.toml\" ||\n  path === \"uv.lock\" ||\n  path === \"MANIFEST.in\" ||\n  path === \".gitmodules\" ||\n  path === \"vendor/generic-rag\" ||\n  path === \"vendor/jsonl-viewer\";\nconst runtimePaths = truncated || paths.some(isRuntime);\nconst isTest = path => path.startsWith(\"tests/\") ||\n  path === \".github/workflows/pr-validation.yml\" || path === \"TEST_POLICY.md\";\nconst testPaths = truncated || paths.some(isTest);\nconst fullRequested = labels.includes(\"test:full\");\nconst wallTimeException = context.eventName === \"pull_request\" && labels.includes(\"test:wall-time-exception\");\nconst runtime = runtimePaths || testPaths || fullRequested;\nconst full = runtime;\ncore.setOutput(\"runtime\", String(runtime));\ncore.setOutput(\"policy_only\", String(!runtimePaths && !testPaths));\ncore.setOutput(\"full\", String(full));\ncore.setOutput(\"wall_time_exception\", String(wallTimeException));\ncore.setOutput(\"base_sha\", baseSha);\ncore.setOutput(\"head_sha\", headSha);\n// Event SHA is the PR test merge or merge-group commit, pinned across jobs.\ncore.setOutput(\"checkout_sha\", context.sha);\ncore.summary\n  .addHeading(\"Validation selection\")\n  .addTable([\n    [{data: \"Runtime paths\", header: true}, String(runtimePaths)],\n    [{data: \"Policy/config only\", header: true}, String(!runtimePaths)],\n    [{data: \"Run runtime lanes\", header: true}, String(runtime)],\n    [{data: \"Full suite\", header: true}, String(full)],\n    [{data: \"Wall-time exception\", header: true}, String(wallTimeException)],\n  ])\n  .write();\n"
+          }
+        }
+      ]
+    },
+    "static": {
+      "name": "${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - static validation skipped' || 'Static validation' }}",
+      "needs": "classify",
+      "if": "github.event_name != 'workflow_dispatch'",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "env": {
+        "TEST_RUN_DEADLINE": "${{ needs.classify.outputs.test_run_deadline }}"
+      },
+      "steps": [
+        {
+          "name": "Check shared deadline before static work",
+          "run": "[[ \"$TEST_RUN_DEADLINE\" =~ ^[0-9]+$ ]] || exit 2\nif (( TEST_RUN_DEADLINE <= $(date +%s) )); then\n  echo \"Shared test-run deadline exhausted before static work.\"\n  exit 124\nfi\n"
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 0,
+            "ref": "${{ needs.classify.outputs.checkout_sha }}"
+          }
+        },
+        {
+          "uses": "actions/setup-python@v5",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "name": "Check patch whitespace",
+          "env": {
+            "BASE_SHA": "${{ needs.classify.outputs.base_sha }}",
+            "HEAD_SHA": "${{ needs.classify.outputs.head_sha }}"
+          },
+          "run": "git diff --check \"$BASE_SHA...$HEAD_SHA\""
+        },
+        {
+          "name": "Parse repository configuration",
+          "run": "python - <<'PY'\nimport json\nimport pathlib\nimport tomllib\n\nfor path in pathlib.Path(\".\").glob(\"**/*.toml\"):\n    if \".git\" not in path.parts:\n        data = tomllib.loads(path.read_text(encoding=\"utf-8\"))\n        if path.parent == pathlib.Path(\".codex/agents\"):\n            if data.get(\"name\") != path.stem:\n                raise SystemExit(f\"{path}: agent name must match filename\")\n            for field in (\"description\", \"developer_instructions\"):\n                value = data.get(field)\n                if not isinstance(value, str) or not value.strip():\n                    raise SystemExit(f\"{path}: missing {field}\")\nfor path in pathlib.Path(\".\").glob(\"**/*.json\"):\n    if \".git\" not in path.parts:\n        json.loads(path.read_text(encoding=\"utf-8\"))\nfor path in (*pathlib.Path(\"src\").rglob(\"*.py\"), *pathlib.Path(\"tests\").rglob(\"*.py\")):\n    compile(path.read_text(encoding=\"utf-8\"), str(path), \"exec\", dont_inherit=True)\nPY\nruby -e 'require \"yaml\"; Dir[\".github/workflows/*.{yml,yaml}\"].each { |path| YAML.parse_file(path) }'\nruby -ryaml -ropen3 <<'RB'\nDir[\".agents/skills/*/SKILL.md\"].each do |path|\n  source = File.read(path)\n  match = source.match(/\\A---\\r?\\n(.*?)\\r?\\n---(?:\\r?\\n|\\z)/m)\n  abort \"#{path}: missing YAML frontmatter\" unless match\n  data = YAML.safe_load(match[1], aliases: false)\n  abort \"#{path}: name must match directory and description must be nonempty\" unless\n    data.is_a?(Hash) && data[\"name\"] == File.basename(File.dirname(path)) &&\n    data[\"description\"].is_a?(String) && !data[\"description\"].strip.empty?\nend\nissue_path = \".github/ISSUE_TEMPLATE/work_item.md\"\nissue_source = File.read(issue_path)\nissue_match = issue_source.match(/\\A---\\r?\\n(.*?)\\r?\\n---(?:\\r?\\n|\\z)/m)\nabort \"#{issue_path}: missing YAML frontmatter\" unless issue_match\nissue = YAML.safe_load(issue_match[1], aliases: false)\nabort \"#{issue_path}: invalid frontmatter mapping\" unless issue.is_a?(Hash)\n%w[name about title labels assignees].each do |field|\n  value = issue[field]\n  abort \"#{issue_path}: missing or non-string #{field}\" unless value.is_a?(String)\nend\n%w[name about].each do |field|\n  abort \"#{issue_path}: empty #{field}\" if issue[field].strip.empty?\nend\nDir[\".github/workflows/*.{yml,yaml}\"].each do |path|\n  document = YAML.safe_load(File.read(path), aliases: false)\n  document.fetch(\"jobs\").each do |job_name, job|\n    job.fetch(\"steps\", []).each do |step|\n      script = step[\"with\"]&.fetch(\"script\", nil)\n      next unless script\n      _, error, status = Open3.capture3(\n        \"node\", \"--input-type=module\", \"--check\",\n        stdin_data: \"async function main() {\\n#{script}\\n}\")\n      abort \"#{path} #{job_name}: #{error}\" unless status.success?\n    end\n  end\nend\nRB\n"
+        },
+        {
+          "name": "Validate runner metadata",
+          "run": "python -B - <<'PY'\nfrom tests import suite_policy\n\nsuite_policy.load_timing_weights()\nids = suite_policy.FAST_TEST_IDS\nif not ids or len(ids) != len(set(ids)):\n    raise SystemExit(\"fast tier must contain unique test IDs\")\nif any(not identifier.rsplit(\".\", 1)[-1].startswith(\"test\") for identifier in ids):\n    raise SystemExit(\"fast tier contains a non-test method ID\")\nPY\n"
+        },
+        {
+          "name": "Validate locked vendor pins",
+          "run": "python - <<'PY'\nimport subprocess\nimport tomllib\nfrom pathlib import Path\n\nif Path(\"MANIFEST.in\").read_text(encoding=\"utf-8\") != \"prune vendor/jsonl-viewer\\n\":\n    raise SystemExit(\"MANIFEST.in must exclude vendored jsonl-viewer source\")\n\nwith open(\"uv.lock\", \"rb\") as source:\n    packages = {package[\"name\"]: package for package in tomllib.load(source)[\"package\"]}\nfor name in (\"generic-rag\", \"jsonl-viewer\"):\n    pinned = packages[name][\"source\"][\"git\"].rsplit(\"#\", 1)[-1]\n    gitlink = subprocess.check_output(\n        [\"git\", \"rev-parse\", f\"HEAD:vendor/{name}\"], text=True\n    ).strip()\n    if pinned != gitlink:\n        raise SystemExit(f\"{name}: uv.lock pin {pinned} differs from gitlink {gitlink}\")\nPY\n"
+        },
+        {
+          "name": "Validate policy artifacts",
+          "run": "python - <<'PY'\nimport pathlib\n\nroot = pathlib.Path.cwd()\ntemplates = {\n    \".github/ISSUE_TEMPLATE/work_item.md\": [\n        \"## Objective\", \"## Use cases and expected results\",\n        \"## Implementation summary\", \"## Acceptance criteria\",\n        \"## Boundaries and dependencies\",\n        \"## Related work and verification plan\", \"## Implementation plan\",\n    ],\n    \".github/pull_request_template.md\": [\n        \"## What changed\", \"## Before and after\", \"## Implementation\",\n        \"## Verification\", \"## Limitations and follow-ups\",\n        \"## Related Issue\",\n    ],\n    \".github/templates/evidence.md\": [\n        \"## What this demonstrates\", \"## Scenario results\",\n        \"## Reproduction and environment\", \"## Failures and coverage gaps\",\n        \"## Technical provenance and artifacts\", \"## Assessment\",\n    ],\n    \".github/templates/working-status-comment.md\": [\n        \"## Current status\", \"## What works now\", \"## What remains\",\n        \"## Blocker or decision\", \"## Next step\", \"## Evidence links\",\n    ],\n}\nfor relative, expected in templates.items():\n    text = (root / relative).read_text(encoding=\"utf-8\")\n    actual = [line for line in text.splitlines() if line.startswith(\"## \")]\n    if actual != expected:\n        raise SystemExit(f\"{relative}: template headings changed: {actual!r}\")\n\nagents = {path.name for path in (root / \".codex/agents\").glob(\"*.toml\")}\nif agents != {\"runtime_implementer.toml\", \"test_engineer.toml\"}:\n    raise SystemExit(f\"unexpected development agents: {sorted(agents)!r}\")\nrequired = [\n    root / \".agents/skills/project-workflow/SKILL.md\",\n    root / \".codex/agents/runtime_implementer/PYTHON_MODULARITY_POLICY.md\",\n]\nif any(not path.is_file() for path in required):\n    raise SystemExit(\"required simplified workflow artifact is missing\")\nforbidden = [\n    root / \".agents/skills/adaptive-verification/SKILL.md\",\n    root / \".agents/skills/subagent-model-selection/SKILL.md\",\n    root / \"tests/test_repository_agent_policy.py\",\n]\nif any(path.exists() for path in forbidden):\n    raise SystemExit(\"retired policy artifact still exists\")\nif len((root / \"PYTHON_MODULE_INDEX.md\").read_text(encoding=\"utf-8\").splitlines()) > 300:\n    raise SystemExit(\"PYTHON_MODULE_INDEX.md exceeds 300 lines\")\nPY\n"
+        }
+      ]
+    },
+    "fast": {
+      "name": "${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - fast tier skipped' || 'Runtime fast tier' }}",
+      "needs": "classify",
+      "if": "needs.classify.outputs.runtime == 'true'",
+      "runs-on": "ubuntu-24.04-arm",
+      "timeout-minutes": 30,
+      "env": {
+        "TEST_JOB_MINUTES": "30",
+        "TEST_RUN_DEADLINE": "${{ needs.classify.outputs.test_run_deadline }}"
+      },
+      "steps": [
+        {
+          "name": "Record shared test deadline before setup",
+          "run": "test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))\nif [[ -n \"$TEST_RUN_DEADLINE\" ]]; then\n  [[ \"$TEST_RUN_DEADLINE\" =~ ^[0-9]+$ ]] || exit 2\n  if (( TEST_RUN_DEADLINE < test_deadline )); then\n    test_deadline=$TEST_RUN_DEADLINE\n  fi\nelse\n  echo \"Missing shared test-run deadline.\"\n  exit 2\nfi\necho \"TEST_JOB_DEADLINE=$test_deadline\" >> \"$GITHUB_ENV\"\nif (( test_deadline <= $(date +%s) )); then\n  echo \"Shared test-run deadline exhausted before setup.\"\n  exit 124\nfi\n"
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "submodules": "recursive",
+            "ref": "${{ needs.classify.outputs.checkout_sha }}"
+          }
+        },
+        {
+          "uses": "actions/setup-python@v5",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "uses": "astral-sh/setup-uv@v10.2.0",
+          "with": {
+            "version": "0.12.17"
+          }
+        },
+        {
+          "name": "Install runtime test dependencies",
+          "run": "uv sync --locked --all-extras --python 3.11 --no-progress"
+        },
+        {
+          "name": "Configure deterministic test Git identity",
+          "env": {
+            "TEST_HARDWARE_ARCH": "arm64",
+            "TEST_HARDWARE_PATH": "${{ runner.temp }}/runner-hardware-fast.json",
+            "TEST_HARDWARE_SELECTION": "tier:fast"
+          },
+          "run": "git config --global user.name \"Story Tests\"\ngit config --global user.email \"story-tests@example.invalid\"\n.venv/bin/python - <<'PY_HARDWARE'\nimport datetime, gc, hashlib, json, os, platform, sys\nfrom pathlib import Path\n\noutput = Path(os.environ['TEST_HARDWARE_PATH'])\nroot = Path(os.environ['GITHUB_WORKSPACE'])\narch = os.environ['TEST_HARDWARE_ARCH']\nexpected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}\ndata = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,\n        'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],\n        'selection': os.environ['TEST_HARDWARE_SELECTION'],\n        'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,\n        'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}\ntry:\n    assert arch in expected, 'unsupported selected runner architecture'\n    affinity = sorted(os.sched_getaffinity(0))\n    data.update(system=platform.system(), machine=platform.machine(),\n                cpu_count=os.cpu_count(), cpu_affinity=affinity,\n                available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],\n                runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],\n                python_version=platform.python_version(), python_implementation=platform.python_implementation(),\n                python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],\n                run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),\n                native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],\n                native_ref=os.environ['GITHUB_REF'],\n                source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()\n                                   for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},\n                hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),\n                                     'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})\n    assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'\n    assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'\n    assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'\n    assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)\n    assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'\n    assert data['run_id'].isdigit() and data['run_attempt'] > 0\n    assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])\n    assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}\n    data['status'] = 'passed'\nexcept BaseException as error:\n    data['error'] = {'type': type(error).__name__, 'message': str(error)}\n    raise\nfinally:\n    output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n    with output.open('x', encoding='utf-8') as stream:\n        stream.write(json.dumps(data, indent=2, allow_nan=False) + '\\n')\n    print(json.dumps(data, sort_keys=True, allow_nan=False))\nPY_HARDWARE\n"
+        },
+        {
+          "name": "Run fast runtime tests",
+          "run": "test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds > 1350 )); then test_seconds=1350; fi\nprintf '{\"worker_limit_seconds\":%s,\"kill_grace_seconds\":30,\"cleanup_reserve_seconds\":60,\"cancellation_reserve_seconds\":360}\\n' \"$test_seconds\" > \"$RUNNER_TEMP/fast-control.json\"\nif (( test_seconds <= 0 )); then exit 124; fi\nset +e\ntimeout --signal=INT --kill-after=30s \"${test_seconds}s\" env PYTHONPATH=src .venv/bin/python -m tests.runner run --tier fast --json \"$RUNNER_TEMP/fast.json\" 2>&1 | tee \"$RUNNER_TEMP/fast.log\"\ntest_statuses=(\"${PIPESTATUS[@]}\")\ntest_status=${test_statuses[0]}\nif (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi\nprintf '%s\\n' \"$test_status\" > \"$RUNNER_TEMP/fast-exit-code.txt\"\nexit \"$test_status\"\n"
+        },
+        {
+          "uses": "actions/upload-artifact@v4",
+          "timeout-minutes": 1,
+          "if": "always()",
+          "with": {
+            "name": "runtime-fast",
+            "path": "${{ runner.temp }}/fast.json\n${{ runner.temp }}/fast.log\n${{ runner.temp }}/fast-control.json\n${{ runner.temp }}/fast-exit-code.txt\n${{ runner.temp }}/runner-hardware-fast.json\n",
+            "if-no-files-found": "warn"
+          }
+        }
+      ]
+    },
+    "full": {
+      "name": "${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - full suite skipped' || format('Full runtime shard {0}/4', matrix.shard) }}",
+      "needs": "classify",
+      "if": "needs.classify.outputs.full == 'true'",
+      "strategy": {
+        "fail-fast": false,
+        "matrix": {
+          "shard": [
+            1,
+            2,
+            3,
+            4
           ]
-          if any(not path.is_file() for path in required):
-              raise SystemExit("required simplified workflow artifact is missing")
-          forbidden = [
-              root / ".agents/skills/adaptive-verification/SKILL.md",
-              root / ".agents/skills/subagent-model-selection/SKILL.md",
-              root / "tests/test_repository_agent_policy.py",
-          ]
-          if any(path.exists() for path in forbidden):
-              raise SystemExit("retired policy artifact still exists")
-          if len((root / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8").splitlines()) > 300:
-              raise SystemExit("PYTHON_MODULE_INDEX.md exceeds 300 lines")
-          PY
-
-  fast:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - fast tier skipped' || 'Runtime fast tier' }}
-    needs: classify
-    if: needs.classify.outputs.runtime == 'true'
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
-    env:
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: '0.12.17'
-      - name: Install runtime test dependencies
-        run: uv sync --locked --all-extras --python 3.11 --no-progress
-      - name: Configure deterministic test Git identity
-        env:
-          TEST_HARDWARE_ARCH: "arm64"
-          TEST_HARDWARE_PATH: "${{ runner.temp }}/runner-hardware-fast.json"
-          TEST_HARDWARE_SELECTION: "tier:fast"
-        run: |
-          git config --global user.name "Story Tests"
-          git config --global user.email "story-tests@example.invalid"
-          .venv/bin/python - <<'PY_HARDWARE'
-          import datetime, gc, hashlib, json, os, platform, sys
-          from pathlib import Path
-
-          output = Path(os.environ['TEST_HARDWARE_PATH'])
-          root = Path(os.environ['GITHUB_WORKSPACE'])
-          arch = os.environ['TEST_HARDWARE_ARCH']
-          expected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}
-          data = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,
-                  'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],
-                  'selection': os.environ['TEST_HARDWARE_SELECTION'],
-                  'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,
-                  'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
-          try:
-              assert arch in expected, 'unsupported selected runner architecture'
-              affinity = sorted(os.sched_getaffinity(0))
-              data.update(system=platform.system(), machine=platform.machine(),
-                          cpu_count=os.cpu_count(), cpu_affinity=affinity,
-                          available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],
-                          runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],
-                          python_version=platform.python_version(), python_implementation=platform.python_implementation(),
-                          python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],
-                          run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
-                          native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],
-                          native_ref=os.environ['GITHUB_REF'],
-                          source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()
-                                             for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},
-                          hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),
-                                               'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})
-              assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'
-              assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'
-              assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'
-              assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)
-              assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'
-              assert data['run_id'].isdigit() and data['run_attempt'] > 0
-              assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])
-              assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}
-              data['status'] = 'passed'
-          except BaseException as error:
-              data['error'] = {'type': type(error).__name__, 'message': str(error)}
-              raise
-          finally:
-              output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-              with output.open('x', encoding='utf-8') as stream:
-                  stream.write(json.dumps(data, indent=2, allow_nan=False) + '\n')
-              print(json.dumps(data, sort_keys=True, allow_nan=False))
-          PY_HARDWARE
-      - name: Run fast runtime tests
-        run: |
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds > 1350 )); then test_seconds=1350; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/fast-control.json"
-          if (( test_seconds <= 0 )); then exit 124; fi
-          set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --tier fast --json "$RUNNER_TEMP/fast.json" 2>&1 | tee "$RUNNER_TEMP/fast.log"
-          test_statuses=("${PIPESTATUS[@]}")
-          test_status=${test_statuses[0]}
-          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
-          printf '%s\n' "$test_status" > "$RUNNER_TEMP/fast-exit-code.txt"
-          exit "$test_status"
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 1
-        if: always()
-        with:
-          name: runtime-fast
-          path: |
-            ${{ runner.temp }}/fast.json
-            ${{ runner.temp }}/fast.log
-            ${{ runner.temp }}/fast-control.json
-            ${{ runner.temp }}/fast-exit-code.txt
-            ${{ runner.temp }}/runner-hardware-fast.json
-          if-no-files-found: warn
-
-  full:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - full suite skipped' || format('Full runtime shard {0}/4', matrix.shard) }}
-    needs: classify
-    if: needs.classify.outputs.full == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    runs-on: ubuntu-24.04-arm
-    env:
-      PYTHONDONTWRITEBYTECODE: '1'
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    timeout-minutes: 30
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: '0.12.17'
-      - name: Install runtime test dependencies
-        run: uv sync --locked --all-extras --python 3.11 --no-progress
-      - name: Configure deterministic test Git identity
-        env:
-          TEST_HARDWARE_ARCH: "arm64"
-          TEST_HARDWARE_PATH: "${{ runner.temp }}/runner-hardware-full-${{ matrix.shard }}.json"
-          TEST_HARDWARE_SELECTION: "shard:${{ matrix.shard }}/4"
-          TEST_HARDWARE_SHARD: "${{ matrix.shard }}/4"
-        run: |
-          git config --global user.name "Story Tests"
-          git config --global user.email "story-tests@example.invalid"
-          .venv/bin/python - <<'PY_HARDWARE'
-          import datetime, gc, hashlib, json, os, platform, sys
-          from pathlib import Path
-
-          output = Path(os.environ['TEST_HARDWARE_PATH'])
-          root = Path(os.environ['GITHUB_WORKSPACE'])
-          arch = os.environ['TEST_HARDWARE_ARCH']
-          expected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}
-          data = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,
-                  'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],
-                  'selection': os.environ['TEST_HARDWARE_SELECTION'],
-                  'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,
-                  'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
-          try:
-              assert arch in expected, 'unsupported selected runner architecture'
-              affinity = sorted(os.sched_getaffinity(0))
-              data.update(system=platform.system(), machine=platform.machine(),
-                          cpu_count=os.cpu_count(), cpu_affinity=affinity,
-                          available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],
-                          runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],
-                          python_version=platform.python_version(), python_implementation=platform.python_implementation(),
-                          python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],
-                          run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
-                          native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],
-                          native_ref=os.environ['GITHUB_REF'],
-                          source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()
-                                             for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},
-                          hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),
-                                               'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})
-              assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'
-              assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'
-              assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'
-              assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)
-              assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'
-              assert data['run_id'].isdigit() and data['run_attempt'] > 0
-              assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])
-              assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}
-              data['status'] = 'passed'
-          except BaseException as error:
-              data['error'] = {'type': type(error).__name__, 'message': str(error)}
-              raise
-          finally:
-              output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-              with output.open('x', encoding='utf-8') as stream:
-                  stream.write(json.dumps(data, indent=2, allow_nan=False) + '\n')
-              print(json.dumps(data, sort_keys=True, allow_nan=False))
-          PY_HARDWARE
-      - name: Run full runtime shard
-        run: |
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds > 1350 )); then test_seconds=1350; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/full-${{ matrix.shard }}-control.json"
-          if (( test_seconds <= 0 )); then exit 124; fi
-          set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "${{ matrix.shard }}/4" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json" 2>&1 | tee "$RUNNER_TEMP/full-${{ matrix.shard }}.log"
-          test_statuses=("${PIPESTATUS[@]}")
-          test_status=${test_statuses[0]}
-          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
-          printf '%s\n' "$test_status" > "$RUNNER_TEMP/full-${{ matrix.shard }}-exit-code.txt"
-          exit "$test_status"
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 1
-        if: always()
-        with:
-          name: full-${{ matrix.shard }}
-          path: |
-            ${{ runner.temp }}/full-${{ matrix.shard }}.json
-            ${{ runner.temp }}/full-${{ matrix.shard }}.log
-            ${{ runner.temp }}/full-${{ matrix.shard }}-control.json
-            ${{ runner.temp }}/full-${{ matrix.shard }}-exit-code.txt
-            ${{ runner.temp }}/runner-hardware-full-${{ matrix.shard }}.json
-          if-no-files-found: error
-
-  reconcile-full:
-    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - reconciliation skipped' || 'Reconcile full runtime suite' }}
-    needs: [classify, full]
-    if: >-
-      !cancelled() && needs.classify.outputs.full == 'true' &&
-      (needs.full.result == 'success' || needs.full.result == 'failure')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
-          ref: ${{ needs.classify.outputs.checkout_sha }}
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: full-*
-          path: full-reports
-      - name: Reconcile shard evidence
-        run: |
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds <= 0 )); then
-            echo "Reconciliation deadline exhausted; preserve 30s termination, 60s upload, and 360s cancellation reserve."
-            exit 124
-          fi
-          PYTHONPATH=src timeout --signal=INT --kill-after=30s "${test_seconds}s" \
-            python -m tests.runner reconcile \
-            full-reports/full-1/full-1.json full-reports/full-2/full-2.json \
-            full-reports/full-3/full-3.json full-reports/full-4/full-4.json \
-            --json "$RUNNER_TEMP/full-reconciled.json"
-      - name: Enforce frozen suite inventory and wall-time budget
-        env:
-          BASE_SHA: ${{ needs.classify.outputs.base_sha }}
-          WALL_TIME_EXCEPTION: ${{ needs.classify.outputs.wall_time_exception }}
-        run: |
-          budget_args=(--base-ref "$BASE_SHA"
-            --report full-reports/full-1/full-1.json
-            --report full-reports/full-2/full-2.json
-            --report full-reports/full-3/full-3.json
-            --report full-reports/full-4/full-4.json)
-          if [[ "$WALL_TIME_EXCEPTION" == "true" ]]; then
-            echo "Maintainer-authorized wall-time exception: measured durations remain visible."
-            budget_args+=(--allow-wall-time-overage)
-          fi
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds <= 0 )); then
-            echo "Reconciliation deadline exhausted before inventory and wall-time checks."
-            exit 124
-          fi
-          PYTHONPATH=src timeout --signal=INT --kill-after=30s "${test_seconds}s" \
-            python -m tests.suite_budget "${budget_args[@]}"
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 1
-        if: always()
-        with:
-          name: runtime-full-reconciled
-          path: ${{ runner.temp }}/full-reconciled.json
-          if-no-files-found: warn
-
-  diagnose-full-budget:
-    name: ${{ github.event_name == 'workflow_dispatch' && format('Diagnostic only ({0}, {1})', inputs.arch, inputs.scratch) || 'Diagnose full-suite timing failure' }}
-    needs: [classify, full, reconcile-full]
-    if: >-
-      !cancelled() && (github.event_name == 'workflow_dispatch' ||
-      (needs.full.result == 'success' && needs.reconcile-full.result == 'failure'))
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    timeout-minutes: 30
-    env:
-      TEST_JOB_MINUTES: '30'
-      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
-    steps:
-      - name: Record shared test deadline before setup
-        run: |
-          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
-          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
-            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
-            if (( TEST_RUN_DEADLINE < test_deadline )); then
-              test_deadline=$TEST_RUN_DEADLINE
-            fi
-          else
-            echo "Missing shared test-run deadline."
-            exit 2
-          fi
-          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
-          if (( test_deadline <= $(date +%s) )); then
-            echo "Shared test-run deadline exhausted before setup."
-            exit 124
-          fi
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || needs.classify.outputs.checkout_sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: '0.12.17'
-      - uses: actions/download-artifact@v4
-        if: github.event_name != 'workflow_dispatch'
-        with:
-          pattern: full-*
-          path: ${{ runner.temp }}/diagnostic-inputs
-      - name: Select actual timing failures
-        if: github.event_name != 'workflow_dispatch'
-        id: timing
-        run: |
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          from tests.suite_budget import load_budget
-          root = Path(os.environ["RUNNER_TEMP"]) / "diagnostic-inputs"
-          reports = [json.loads((root / f"full-{i}" / f"full-{i}.json").read_text()) for i in (1, 2, 3, 4)]
-          budget = load_budget()
-          seconds = [report["durations"]["wall_seconds"] for report in reports]
-          over = sum(seconds) > budget["max_sequential_wall_seconds"] or max(seconds) > budget["max_shard_wall_seconds"]
-          selected = over and all(report["outcome"] == "success" for report in reports)
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"selected={str(selected).lower()}\n")
-          PY
-      - name: Install diagnostic dependencies
-        if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
-        run: uv sync --locked --all-extras --python 3.11 --no-progress
-      - name: Configure diagnostic test Git identity
-        if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
-        env:
-          TEST_HARDWARE_ARCH: "${{ github.event_name == 'workflow_dispatch' && inputs.arch || 'x64' }}"
-          TEST_HARDWARE_PATH: "${{ runner.temp }}/timing-diagnostic/runner-hardware.json"
-          TEST_HARDWARE_SELECTION: "${{ inputs.test_id || 'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles' }}"
-        run: |
-          git config --global user.name "Story Tests"
-          git config --global user.email "story-tests@example.invalid"
-          .venv/bin/python - <<'PY_HARDWARE'
-          import datetime, gc, hashlib, json, os, platform, sys
-          from pathlib import Path
-
-          output = Path(os.environ['TEST_HARDWARE_PATH'])
-          root = Path(os.environ['GITHUB_WORKSPACE'])
-          arch = os.environ['TEST_HARDWARE_ARCH']
-          expected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}
-          data = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,
-                  'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],
-                  'selection': os.environ['TEST_HARDWARE_SELECTION'],
-                  'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,
-                  'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
-          try:
-              assert arch in expected, 'unsupported selected runner architecture'
-              affinity = sorted(os.sched_getaffinity(0))
-              data.update(system=platform.system(), machine=platform.machine(),
-                          cpu_count=os.cpu_count(), cpu_affinity=affinity,
-                          available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],
-                          runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],
-                          python_version=platform.python_version(), python_implementation=platform.python_implementation(),
-                          python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],
-                          run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
-                          native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],
-                          native_ref=os.environ['GITHUB_REF'],
-                          source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()
-                                             for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},
-                          hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),
-                                               'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})
-              assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'
-              assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'
-              assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'
-              assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)
-              assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'
-              assert data['run_id'].isdigit() and data['run_attempt'] > 0
-              assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])
-              assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}
-              data['status'] = 'passed'
-          except BaseException as error:
-              data['error'] = {'type': type(error).__name__, 'message': str(error)}
-              raise
-          finally:
-              output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-              with output.open('x', encoding='utf-8') as stream:
-                  stream.write(json.dumps(data, indent=2, allow_nan=False) + '\n')
-              print(json.dumps(data, sort_keys=True, allow_nan=False))
-          PY_HARDWARE
-      - name: Prepare diagnostic scratch storage
-        if: github.event_name == 'workflow_dispatch'
-        id: scratch
-        env:
-          MEMORY: ${{ inputs.scratch == 'memory' }}
-        run: |
-          scratch="$(mktemp -d "${TMPDIR:-/tmp}/story-timing.XXXXXXXX")"
-          if [[ "$MEMORY" == "true" ]]; then
-            echo "directory=$scratch" >> "$GITHUB_OUTPUT"
-            sudo mount -t tmpfs -o "size=2G,mode=0700,uid=$(id -u),gid=$(id -g)" tmpfs "$scratch"
-          else
-            SCRATCH="$scratch" python - <<'PY'
-          import json, os, re, stat
-          raw = os.environ["SCRATCH"]
-          parent = os.path.realpath(os.path.dirname(os.path.abspath(raw)))
-          name = os.path.basename(raw)
-          path = os.path.join(parent, name)
-          if not re.fullmatch(r"story-timing\.[A-Za-z0-9]{8}", name) or any(c in path for c in "\r\n"):
-              raise RuntimeError("Unexpected diagnostic scratch path")
-          flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-          fd = os.open(parent, flags)
-          try:
-              outer = os.fstat(fd)
-              inner = os.stat(name, dir_fd=fd, follow_symlinks=False)
-              if not stat.S_ISDIR(inner.st_mode) or inner.st_uid != os.geteuid() or inner.st_dev != outer.st_dev:
-                  raise RuntimeError("Diagnostic scratch creation identity is unsafe")
-              record = {"path": path, "parent": parent,
-                        "root": [inner.st_dev, inner.st_ino, inner.st_uid],
-                        "parent_identity": [outer.st_dev, outer.st_ino, outer.st_uid]}
-              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                  output.write("directory=" + path + "\n")
-                  output.write("identity=" + json.dumps(record, separators=(",", ":")) + "\n")
-              print(json.dumps({"diagnostic_scratch_created": record}, sort_keys=True))
-          finally:
-              os.close(fd)
-          PY
-          fi
-      - name: Run one existing canonical scenario with optional profiling
-        if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
-        env:
-          GIT_AUTHOR_NAME: Story Tests
-          GIT_AUTHOR_EMAIL: story-tests@example.invalid
-          GIT_COMMITTER_NAME: Story Tests
-          GIT_COMMITTER_EMAIL: story-tests@example.invalid
-          PYTHONPATH: src
-          PYTHONDONTWRITEBYTECODE: '1'
-          DIAGNOSTIC_TEST_ID: ${{ inputs.test_id || 'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles' }}
-          DIAGNOSTIC_PROFILE_MODE: ${{ inputs.profile_mode || 'cprofile' }}
-          TMPDIR: ${{ steps.scratch.outputs.directory || '/tmp' }}
-        run: |
-          install -d -m 700 "$RUNNER_TEMP/timing-diagnostic"
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds > 1350 )); then test_seconds=1350; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/timing-diagnostic/control.json"
-          if (( test_seconds <= 0 )); then exit 124; fi
-          set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" .venv/bin/python - <<'PY' 2>&1 | tee "$RUNNER_TEMP/timing-diagnostic/worker.log"
-          import collections, cProfile, functools, hashlib, json, os, platform, pstats, re, resource, subprocess, sys, sysconfig, tempfile, threading, time
-          from pathlib import Path
-          output = Path(os.environ["RUNNER_TEMP"]) / "timing-diagnostic"
-          output.mkdir(mode=0o700, exist_ok=True)
-          paths = subprocess.check_output(["git", "ls-files", "-z", "src", "tests", "config", "pyproject.toml", "uv.lock"]).decode().split("\0")
-          def hashes():
-              return {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in paths if path}
-          before = hashes()
-          environment = {"platform": platform.platform(), "python": platform.python_version(),
-                         "cpu_count": os.cpu_count(), "python_compiler": platform.python_compiler(),
-                         "python_enable_optimizations_flag": "--enable-optimizations" in (sysconfig.get_config_var("CONFIG_ARGS") or ""),
-                         "git": subprocess.check_output(["git", "--version"], text=True, timeout=10).strip(),
-                         "temporary_filesystem": subprocess.check_output(["stat", "-f", "-c", "%T", tempfile.gettempdir()], text=True, timeout=10).strip()}
-          prepared = {"diagnostic_only": True, "acceptance_credit": False, "phase": "prepared",
-                      "selection": {"requested_canonical_id": os.environ["DIAGNOSTIC_TEST_ID"], "validated_by_runner": False},
-                      "profile_mode": os.environ["DIAGNOSTIC_PROFILE_MODE"], "source_before": before,
-                      "checkout_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, timeout=10).strip(),
-                      "checkout_tree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True, timeout=10).strip(),
-                      "environment": environment, "observer_thread": True}
-          (output / "prepared.json").write_text(json.dumps(prepared, indent=2))
-          from story_writing_agents.git import process, session_resources
-          from tests import runner
-          counts = collections.defaultdict(lambda: {"calls": 0, "seconds": 0.0})
-          def record(key, elapsed):
-              counts[key]["calls"] += 1
-              counts[key]["seconds"] += elapsed
-          original_git = process.GitProcessRunner.run
-          @functools.wraps(original_git)
-          def git(self, args, **kwargs):
-              started = time.perf_counter()
-              try:
-                  return original_git(self, args, **kwargs)
-              finally:
-                  record("git:" + args[0], time.perf_counter() - started)
-          process.GitProcessRunner.run = git
-          original_refs = session_resources._Repository._loose_ref_output
-          samples = []
-          @functools.wraps(original_refs)
-          def refs(self):
-              started = time.perf_counter()
-              value = original_refs(self)
-              record("loose_refs:" + ("fallback" if value is None else "bytes"), time.perf_counter() - started)
-              if len(samples) < 8:
-                  with (self.common_git / "config").open("rb") as source:
-                      config = source.read(65536)
-                  safe = re.findall(rb"(?m)^\s*(?:repositoryformatversion|filemode|bare|logallrefupdates|objectformat|submodulepathconfig|relativeworktrees|worktreeconfig)\s*=\s*(?:true|false|0|1|sha1|sha256)\s*$", config)
-                  samples.append({"fallback": value is None, "config_sha256": hashlib.sha256(config).hexdigest(), "format_lines": [line.decode("ascii").strip() for line in safe], "packed_refs": (self.common_git / "packed-refs").exists(), "reftable": (self.common_git / "reftable").exists()})
-              return value
-          session_resources._Repository._loose_ref_output = refs
-          observer_stop = threading.Event()
-          observer_errors = []
-          main_thread = threading.main_thread().ident
-          def observe():
-              try:
-                  with (output / "progress.jsonl").open("a", buffering=1) as stream:
-                      while not observer_stop.is_set():
-                          frame = sys._current_frames().get(main_thread)
-                          frames, test_frame, depth = [], None, 0
-                          while frame is not None and depth < 64:
-                              code = frame.f_code
-                              location = {"file": code.co_filename, "function": code.co_name, "line": frame.f_lineno}
-                              if depth < 12:
-                                  frames.append(location)
-                              if code.co_name.startswith("test_"):
-                                  test_frame = location
-                              frame = frame.f_back
-                              depth += 1
-                          truncated = frame is not None
-                          frame = None
-                          row = {"diagnostic_only": True, "wall_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                 "elapsed_seconds": time.perf_counter() - started, "process_cpu_seconds": time.process_time(),
-                                 "max_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-                                 "main_thread_stack": frames, "test_frame": test_frame, "walk_truncated": truncated}
-                          stream.write(json.dumps(row, separators=(",", ":")) + "\n")
-                          if observer_stop.wait(60):
-                              break
-              except Exception as error:
-                  observer_errors.append(type(error).__name__)
-          profile = cProfile.Profile() if os.environ["DIAGNOSTIC_PROFILE_MODE"] == "cprofile" else None
-          started = time.perf_counter()
-          observer = threading.Thread(target=observe, name="diagnostic-progress", daemon=True)
-          observer_started = False
-          code, interrupted, finalization_errors = None, None, []
-          try:
-              try:
-                  observer.start()
-                  observer_started = True
-              except Exception as error:
-                  observer_errors.append(type(error).__name__)
-              if profile is not None:
-                  profile.enable()
-              code = runner.main(["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")])
-          except BaseException as error:
-              interrupted = type(error).__name__
-              raise
-          finally:
-              if profile is not None:
-                  profile.disable()
-              observer_stop.set()
-              if observer_started:
-                  observer.join(timeout=2)
-              try:
-                  if profile is not None:
-                      profile.dump_stats(str(output / "profile.pstats"))
-                      with (output / "profile.txt").open("w") as stream:
-                          pstats.Stats(profile, stream=stream).strip_dirs().sort_stats("cumulative").print_stats(100)
-                  else:
-                      (output / "profile.txt").write_text("cProfile disabled by diagnostic input profile_mode=none.\n")
-              except Exception as error:
-                  finalization_errors.append({"stage": "profile", "error_type": type(error).__name__})
-              after = None
-              try:
-                  after = hashes()
-              except Exception as error:
-                  finalization_errors.append({"stage": "source", "error_type": type(error).__name__})
-              evidence = {"diagnostic_only": True, "acceptance_credit": False,
-                          "partial": code not in (0, 1), "runner_exit_code": code, "interruption": interrupted,
-                          "source_valid": after is not None and before == after, "source_before": before, "source_after": after,
-                          "instrumented_seconds": time.perf_counter() - started, "counts": dict(counts), "fixture_samples": samples,
-                          "observer_thread": observer_started, "observer_errors": observer_errors, "finalization_errors": finalization_errors, **environment}
-              (output / "counters.json").write_text(json.dumps(evidence, indent=2))
-          raise SystemExit(code if before == after and not finalization_errors else 2)
-          PY
-          test_statuses=("${PIPESTATUS[@]}")
-          test_status=${test_statuses[0]}
-          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
-          printf '%s\n' "$test_status" > "$RUNNER_TEMP/timing-diagnostic/exit-code.txt"
-          exit "$test_status"
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 1
-        if: always() && (github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true')
-        with:
-          name: ${{ github.event_name == 'workflow_dispatch' && format('timing-diagnostic-{0}-{1}', inputs.arch, inputs.scratch) || 'timing-diagnostic' }}
-          path: ${{ runner.temp }}/timing-diagnostic
-          if-no-files-found: error
-      - name: Remove diagnostic scratch storage
-        if: always() && steps.scratch.outputs.directory != ''
-        env:
-          SCRATCH: ${{ steps.scratch.outputs.directory }}
-          SCRATCH_IDENTITY: ${{ steps.scratch.outputs.identity }}
-          MEMORY: ${{ inputs.scratch == 'memory' }}
-        run: |
-          if [[ "$MEMORY" == "true" ]]; then
-            if mountpoint -q "$SCRATCH"; then
-              sudo umount "$SCRATCH"
-            fi
-            rmdir "$SCRATCH"
-          else
-            printf 'Diagnostic scratch cleanup path=%s identity=%s\n' "$SCRATCH" "$SCRATCH_IDENTITY"
-            cleanup_seconds="$(python - <<'PY'
-          import os, time
-          remaining = int(os.environ["TEST_JOB_DEADLINE"]) - 360 - time.time()
-          work_ms = min(28000, int((remaining - 2) * 1000))
-          if work_ms <= 0:
-              raise SystemExit("No diagnostic scratch cleanup budget remains before cancellation reserve")
-          print(f"{work_ms / 1000:.3f}")
-          PY
-            )"
-            timeout --signal=TERM --kill-after=2s "${cleanup_seconds}s" python -u - <<'PY'
-          import json, os, re, shutil, stat, time
-          record = json.loads(os.environ["SCRATCH_IDENTITY"])
-          path = os.environ["SCRATCH"]
-          parent = record["parent"]
-          name = os.path.basename(path)
-          stop = int(os.environ["TEST_JOB_DEADLINE"]) - 360
-          if time.time() >= stop - 2:
-              raise RuntimeError("Diagnostic scratch cleanup window expired")
-          if (not os.path.isabs(path) or path != record["path"]
-                  or os.path.dirname(path) != parent or os.path.realpath(parent) != parent
-                  or not re.fullmatch(r"story-timing\.[A-Za-z0-9]{8}", name)):
-              raise RuntimeError("Diagnostic scratch path identity changed")
-          if not shutil.rmtree.avoids_symlink_attacks:
-              raise RuntimeError("Symlink-resistant diagnostic cleanup is unavailable")
-          fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-          try:
-              outer = os.fstat(fd)
-              if [outer.st_dev, outer.st_ino, outer.st_uid] != record["parent_identity"]:
-                  raise RuntimeError("Diagnostic scratch parent identity changed")
-              inner = os.stat(name, dir_fd=fd, follow_symlinks=False)
-              if (not stat.S_ISDIR(inner.st_mode) or inner.st_uid != os.geteuid()
-                      or inner.st_dev != outer.st_dev
-                      or [inner.st_dev, inner.st_ino, inner.st_uid] != record["root"]):
-                  raise RuntimeError("Diagnostic scratch directory identity changed")
-              with open("/proc/self/mountinfo", encoding="utf-8") as mounts:
-                  for line in mounts:
-                      mount = line.split()[4]
-                      for escaped, decoded in ((r"\040", " "), (r"\011", "\t"), (r"\012", "\n"), (r"\134", chr(92))):
-                          mount = mount.replace(escaped, decoded)
-                      if mount == path or mount.startswith(path + os.sep):
-                          raise RuntimeError("Mounted diagnostic scratch storage cannot be recursively removed")
-              current = os.stat(name, dir_fd=fd, follow_symlinks=False)
-              if ([current.st_dev, current.st_ino, current.st_uid] != record["root"]
-                      or not stat.S_ISDIR(current.st_mode) or time.time() >= stop - 2):
-                  raise RuntimeError("Diagnostic scratch identity or cleanup window changed")
-              shutil.rmtree(name, dir_fd=fd)
-              try:
-                  os.stat(name, dir_fd=fd, follow_symlinks=False)
-              except FileNotFoundError:
-                  print(json.dumps({"diagnostic_scratch_removed": record}, sort_keys=True), flush=True)
-              else:
-                  raise RuntimeError("Diagnostic scratch path remains after cleanup")
-          finally:
-              os.close(fd)
-          PY
-          fi
+        }
+      },
+      "runs-on": "ubuntu-24.04-arm",
+      "env": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TEST_JOB_MINUTES": "30",
+        "TEST_RUN_DEADLINE": "${{ needs.classify.outputs.test_run_deadline }}"
+      },
+      "timeout-minutes": 30,
+      "steps": [
+        {
+          "name": "Record shared test deadline before setup",
+          "run": "test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))\nif [[ -n \"$TEST_RUN_DEADLINE\" ]]; then\n  [[ \"$TEST_RUN_DEADLINE\" =~ ^[0-9]+$ ]] || exit 2\n  if (( TEST_RUN_DEADLINE < test_deadline )); then\n    test_deadline=$TEST_RUN_DEADLINE\n  fi\nelse\n  echo \"Missing shared test-run deadline.\"\n  exit 2\nfi\necho \"TEST_JOB_DEADLINE=$test_deadline\" >> \"$GITHUB_ENV\"\nif (( test_deadline <= $(date +%s) )); then\n  echo \"Shared test-run deadline exhausted before setup.\"\n  exit 124\nfi\n"
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "submodules": "recursive",
+            "ref": "${{ needs.classify.outputs.checkout_sha }}"
+          }
+        },
+        {
+          "uses": "actions/setup-python@v5",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "uses": "astral-sh/setup-uv@v10.2.0",
+          "with": {
+            "version": "0.12.17"
+          }
+        },
+        {
+          "name": "Install runtime test dependencies",
+          "run": "uv sync --locked --all-extras --python 3.11 --no-progress"
+        },
+        {
+          "name": "Configure deterministic test Git identity",
+          "env": {
+            "TEST_HARDWARE_ARCH": "arm64",
+            "TEST_HARDWARE_PATH": "${{ runner.temp }}/runner-hardware-full-${{ matrix.shard }}.json",
+            "TEST_HARDWARE_SELECTION": "shard:${{ matrix.shard }}/4",
+            "TEST_HARDWARE_SHARD": "${{ matrix.shard }}/4"
+          },
+          "run": "git config --global user.name \"Story Tests\"\ngit config --global user.email \"story-tests@example.invalid\"\n.venv/bin/python - <<'PY_HARDWARE'\nimport datetime, gc, hashlib, json, os, platform, sys\nfrom pathlib import Path\n\noutput = Path(os.environ['TEST_HARDWARE_PATH'])\nroot = Path(os.environ['GITHUB_WORKSPACE'])\narch = os.environ['TEST_HARDWARE_ARCH']\nexpected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}\ndata = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,\n        'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],\n        'selection': os.environ['TEST_HARDWARE_SELECTION'],\n        'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,\n        'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}\ntry:\n    assert arch in expected, 'unsupported selected runner architecture'\n    affinity = sorted(os.sched_getaffinity(0))\n    data.update(system=platform.system(), machine=platform.machine(),\n                cpu_count=os.cpu_count(), cpu_affinity=affinity,\n                available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],\n                runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],\n                python_version=platform.python_version(), python_implementation=platform.python_implementation(),\n                python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],\n                run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),\n                native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],\n                native_ref=os.environ['GITHUB_REF'],\n                source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()\n                                   for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},\n                hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),\n                                     'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})\n    assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'\n    assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'\n    assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'\n    assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)\n    assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'\n    assert data['run_id'].isdigit() and data['run_attempt'] > 0\n    assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])\n    assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}\n    data['status'] = 'passed'\nexcept BaseException as error:\n    data['error'] = {'type': type(error).__name__, 'message': str(error)}\n    raise\nfinally:\n    output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n    with output.open('x', encoding='utf-8') as stream:\n        stream.write(json.dumps(data, indent=2, allow_nan=False) + '\\n')\n    print(json.dumps(data, sort_keys=True, allow_nan=False))\nPY_HARDWARE\n"
+        },
+        {
+          "name": "Run full runtime shard",
+          "run": "test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds > 1350 )); then test_seconds=1350; fi\nprintf '{\"worker_limit_seconds\":%s,\"kill_grace_seconds\":30,\"cleanup_reserve_seconds\":60,\"cancellation_reserve_seconds\":360}\\n' \"$test_seconds\" > \"$RUNNER_TEMP/full-${{ matrix.shard }}-control.json\"\nif (( test_seconds <= 0 )); then exit 124; fi\nset +e\ntimeout --signal=INT --kill-after=30s \"${test_seconds}s\" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard \"${{ matrix.shard }}/4\" --json \"$RUNNER_TEMP/full-${{ matrix.shard }}.json\" 2>&1 | tee \"$RUNNER_TEMP/full-${{ matrix.shard }}.log\"\ntest_statuses=(\"${PIPESTATUS[@]}\")\ntest_status=${test_statuses[0]}\nif (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi\nprintf '%s\\n' \"$test_status\" > \"$RUNNER_TEMP/full-${{ matrix.shard }}-exit-code.txt\"\nexit \"$test_status\"\n"
+        },
+        {
+          "uses": "actions/upload-artifact@v4",
+          "timeout-minutes": 1,
+          "if": "always()",
+          "with": {
+            "name": "full-${{ matrix.shard }}",
+            "path": "${{ runner.temp }}/full-${{ matrix.shard }}.json\n${{ runner.temp }}/full-${{ matrix.shard }}.log\n${{ runner.temp }}/full-${{ matrix.shard }}-control.json\n${{ runner.temp }}/full-${{ matrix.shard }}-exit-code.txt\n${{ runner.temp }}/runner-hardware-full-${{ matrix.shard }}.json\n",
+            "if-no-files-found": "error"
+          }
+        }
+      ]
+    },
+    "reconcile-full": {
+      "name": "${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - reconciliation skipped' || 'Reconcile full runtime suite' }}",
+      "needs": [
+        "classify",
+        "full"
+      ],
+      "if": "!cancelled() && needs.classify.outputs.full == 'true' && (needs.full.result == 'success' || needs.full.result == 'failure')",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 30,
+      "env": {
+        "TEST_JOB_MINUTES": "30",
+        "TEST_RUN_DEADLINE": "${{ needs.classify.outputs.test_run_deadline }}"
+      },
+      "steps": [
+        {
+          "name": "Record shared test deadline before setup",
+          "run": "test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))\nif [[ -n \"$TEST_RUN_DEADLINE\" ]]; then\n  [[ \"$TEST_RUN_DEADLINE\" =~ ^[0-9]+$ ]] || exit 2\n  if (( TEST_RUN_DEADLINE < test_deadline )); then\n    test_deadline=$TEST_RUN_DEADLINE\n  fi\nelse\n  echo \"Missing shared test-run deadline.\"\n  exit 2\nfi\necho \"TEST_JOB_DEADLINE=$test_deadline\" >> \"$GITHUB_ENV\"\nif (( test_deadline <= $(date +%s) )); then\n  echo \"Shared test-run deadline exhausted before setup.\"\n  exit 124\nfi\n"
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 0,
+            "submodules": "recursive",
+            "ref": "${{ needs.classify.outputs.checkout_sha }}"
+          }
+        },
+        {
+          "uses": "actions/download-artifact@v4",
+          "with": {
+            "pattern": "full-*",
+            "path": "full-reports"
+          }
+        },
+        {
+          "name": "Reconcile shard evidence",
+          "run": "test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds <= 0 )); then\n  echo \"Reconciliation deadline exhausted; preserve 30s termination, 60s upload, and 360s cancellation reserve.\"\n  exit 124\nfi\nPYTHONPATH=src timeout --signal=INT --kill-after=30s \"${test_seconds}s\" \\\n  python -m tests.runner reconcile \\\n  full-reports/full-1/full-1.json full-reports/full-2/full-2.json \\\n  full-reports/full-3/full-3.json full-reports/full-4/full-4.json \\\n  --json \"$RUNNER_TEMP/full-reconciled.json\"\n"
+        },
+        {
+          "name": "Enforce frozen suite inventory and wall-time budget",
+          "env": {
+            "BASE_SHA": "${{ needs.classify.outputs.base_sha }}",
+            "WALL_TIME_EXCEPTION": "${{ needs.classify.outputs.wall_time_exception }}"
+          },
+          "run": "budget_args=(--base-ref \"$BASE_SHA\"\n  --report full-reports/full-1/full-1.json\n  --report full-reports/full-2/full-2.json\n  --report full-reports/full-3/full-3.json\n  --report full-reports/full-4/full-4.json)\nif [[ \"$WALL_TIME_EXCEPTION\" == \"true\" ]]; then\n  echo \"Maintainer-authorized wall-time exception: measured durations remain visible.\"\n  budget_args+=(--allow-wall-time-overage)\nfi\ntest_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds <= 0 )); then\n  echo \"Reconciliation deadline exhausted before inventory and wall-time checks.\"\n  exit 124\nfi\nPYTHONPATH=src timeout --signal=INT --kill-after=30s \"${test_seconds}s\" \\\n  python -m tests.suite_budget \"${budget_args[@]}\"\n"
+        },
+        {
+          "uses": "actions/upload-artifact@v4",
+          "timeout-minutes": 1,
+          "if": "always()",
+          "with": {
+            "name": "runtime-full-reconciled",
+            "path": "${{ runner.temp }}/full-reconciled.json",
+            "if-no-files-found": "warn"
+          }
+        }
+      ]
+    },
+    "diagnose-full-budget": {
+      "name": "${{ github.event_name == 'workflow_dispatch' && format('Diagnostic only ({0}, {1})', inputs.arch, inputs.scratch) || 'Diagnose full-suite timing failure' }}",
+      "needs": [
+        "classify",
+        "full",
+        "reconcile-full"
+      ],
+      "if": "!cancelled() && (github.event_name == 'workflow_dispatch' || (needs.full.result == 'success' && needs.reconcile-full.result == 'failure'))",
+      "runs-on": "${{ github.event_name == 'workflow_dispatch' && inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}",
+      "timeout-minutes": 30,
+      "env": {
+        "TEST_JOB_MINUTES": "30",
+        "TEST_RUN_DEADLINE": "${{ needs.classify.outputs.test_run_deadline }}"
+      },
+      "steps": [
+        {
+          "name": "Record shared test deadline before setup",
+          "run": "test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))\nif [[ -n \"$TEST_RUN_DEADLINE\" ]]; then\n  [[ \"$TEST_RUN_DEADLINE\" =~ ^[0-9]+$ ]] || exit 2\n  if (( TEST_RUN_DEADLINE < test_deadline )); then\n    test_deadline=$TEST_RUN_DEADLINE\n  fi\nelse\n  echo \"Missing shared test-run deadline.\"\n  exit 2\nfi\necho \"TEST_JOB_DEADLINE=$test_deadline\" >> \"$GITHUB_ENV\"\nif (( test_deadline <= $(date +%s) )); then\n  echo \"Shared test-run deadline exhausted before setup.\"\n  exit 124\nfi\n"
+        },
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "submodules": "recursive",
+            "ref": "${{ github.event_name == 'workflow_dispatch' && github.sha || needs.classify.outputs.checkout_sha }}",
+            "fetch-depth": 2
+          }
+        },
+        {
+          "uses": "actions/setup-python@v5",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "uses": "astral-sh/setup-uv@v10.2.0",
+          "with": {
+            "version": "0.12.17"
+          }
+        },
+        {
+          "uses": "actions/download-artifact@v4",
+          "if": "github.event_name != 'workflow_dispatch'",
+          "with": {
+            "pattern": "full-*",
+            "path": "${{ runner.temp }}/diagnostic-inputs"
+          }
+        },
+        {
+          "name": "Select actual timing failures",
+          "if": "github.event_name != 'workflow_dispatch'",
+          "id": "timing",
+          "run": "python - <<'PY'\nimport json, os\nfrom pathlib import Path\nfrom tests.suite_budget import load_budget\nroot = Path(os.environ[\"RUNNER_TEMP\"]) / \"diagnostic-inputs\"\nreports = [json.loads((root / f\"full-{i}\" / f\"full-{i}.json\").read_text()) for i in (1, 2, 3, 4)]\nbudget = load_budget()\nseconds = [report[\"durations\"][\"wall_seconds\"] for report in reports]\nover = sum(seconds) > budget[\"max_sequential_wall_seconds\"] or max(seconds) > budget[\"max_shard_wall_seconds\"]\nselected = over and all(report[\"outcome\"] == \"success\" for report in reports)\nwith open(os.environ[\"GITHUB_OUTPUT\"], \"a\") as output:\n    output.write(f\"selected={str(selected).lower()}\\n\")\nPY\n"
+        },
+        {
+          "name": "Install diagnostic dependencies",
+          "if": "github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'",
+          "run": "uv sync --locked --all-extras --python 3.11 --no-progress"
+        },
+        {
+          "name": "Configure diagnostic test Git identity",
+          "if": "github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'",
+          "env": {
+            "TEST_HARDWARE_ARCH": "${{ github.event_name == 'workflow_dispatch' && inputs.arch || 'x64' }}",
+            "TEST_HARDWARE_PATH": "${{ runner.temp }}/timing-diagnostic/runner-hardware.json",
+            "TEST_HARDWARE_SELECTION": "${{ inputs.test_id || 'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles' }}"
+          },
+          "run": "git config --global user.name \"Story Tests\"\ngit config --global user.email \"story-tests@example.invalid\"\n.venv/bin/python - <<'PY_HARDWARE'\nimport datetime, gc, hashlib, json, os, platform, sys\nfrom pathlib import Path\n\noutput = Path(os.environ['TEST_HARDWARE_PATH'])\nroot = Path(os.environ['GITHUB_WORKSPACE'])\narch = os.environ['TEST_HARDWARE_ARCH']\nexpected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}\ndata = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,\n        'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],\n        'selection': os.environ['TEST_HARDWARE_SELECTION'],\n        'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,\n        'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}\ntry:\n    assert arch in expected, 'unsupported selected runner architecture'\n    affinity = sorted(os.sched_getaffinity(0))\n    data.update(system=platform.system(), machine=platform.machine(),\n                cpu_count=os.cpu_count(), cpu_affinity=affinity,\n                available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],\n                runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],\n                python_version=platform.python_version(), python_implementation=platform.python_implementation(),\n                python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],\n                run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),\n                native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],\n                native_ref=os.environ['GITHUB_REF'],\n                source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()\n                                   for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},\n                hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),\n                                     'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})\n    assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'\n    assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'\n    assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'\n    assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)\n    assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'\n    assert data['run_id'].isdigit() and data['run_attempt'] > 0\n    assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])\n    assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}\n    data['status'] = 'passed'\nexcept BaseException as error:\n    data['error'] = {'type': type(error).__name__, 'message': str(error)}\n    raise\nfinally:\n    output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n    with output.open('x', encoding='utf-8') as stream:\n        stream.write(json.dumps(data, indent=2, allow_nan=False) + '\\n')\n    print(json.dumps(data, sort_keys=True, allow_nan=False))\nPY_HARDWARE\n"
+        },
+        {
+          "name": "Prepare diagnostic scratch storage",
+          "if": "github.event_name == 'workflow_dispatch'",
+          "id": "scratch",
+          "env": {
+            "MEMORY": "${{ inputs.scratch == 'memory' }}"
+          },
+          "run": "scratch=\"$(mktemp -d \"${TMPDIR:-/tmp}/story-timing.XXXXXXXX\")\"\nif [[ \"$MEMORY\" == \"true\" ]]; then\n  echo \"directory=$scratch\" >> \"$GITHUB_OUTPUT\"\n  sudo mount -t tmpfs -o \"size=2G,mode=0700,uid=$(id -u),gid=$(id -g)\" tmpfs \"$scratch\"\nelse\n  SCRATCH=\"$scratch\" python - <<'PY'\nimport json, os, re, stat\nraw = os.environ[\"SCRATCH\"]\nparent = os.path.realpath(os.path.dirname(os.path.abspath(raw)))\nname = os.path.basename(raw)\npath = os.path.join(parent, name)\nif not re.fullmatch(r\"story-timing\\.[A-Za-z0-9]{8}\", name) or any(c in path for c in \"\\r\\n\"):\n    raise RuntimeError(\"Unexpected diagnostic scratch path\")\nflags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW\nfd = os.open(parent, flags)\ntry:\n    outer = os.fstat(fd)\n    inner = os.stat(name, dir_fd=fd, follow_symlinks=False)\n    if not stat.S_ISDIR(inner.st_mode) or inner.st_uid != os.geteuid() or inner.st_dev != outer.st_dev:\n        raise RuntimeError(\"Diagnostic scratch creation identity is unsafe\")\n    record = {\"path\": path, \"parent\": parent,\n              \"root\": [inner.st_dev, inner.st_ino, inner.st_uid],\n              \"parent_identity\": [outer.st_dev, outer.st_ino, outer.st_uid]}\n    with open(os.environ[\"GITHUB_OUTPUT\"], \"a\", encoding=\"utf-8\") as output:\n        output.write(\"directory=\" + path + \"\\n\")\n        output.write(\"identity=\" + json.dumps(record, separators=(\",\", \":\")) + \"\\n\")\n    print(json.dumps({\"diagnostic_scratch_created\": record}, sort_keys=True))\nfinally:\n    os.close(fd)\nPY\nfi\n"
+        },
+        {
+          "name": "Force interrupt a nonempty owned scratch fixture",
+          "if": "github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'",
+          "env": {
+            "GIT_AUTHOR_NAME": "Story Tests",
+            "GIT_AUTHOR_EMAIL": "story-tests@example.invalid",
+            "GIT_COMMITTER_NAME": "Story Tests",
+            "GIT_COMMITTER_EMAIL": "story-tests@example.invalid",
+            "PYTHONPATH": "src",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "DIAGNOSTIC_TEST_ID": "${{ inputs.test_id || 'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles' }}",
+            "DIAGNOSTIC_PROFILE_MODE": "${{ inputs.profile_mode || 'cprofile' }}",
+            "TMPDIR": "${{ steps.scratch.outputs.directory || '/tmp' }}",
+            "SCRATCH_IDENTITY": "${{ steps.scratch.outputs.identity }}",
+            "CONTROL_ARCH": "${{ inputs.arch }}",
+            "CONTROL_SCRATCH": "${{ inputs.scratch }}"
+          },
+          "run": "install -d -m 700 \"$RUNNER_TEMP/timing-diagnostic\"\nout=\"$RUNNER_TEMP/timing-diagnostic\"\ncat > \"$out/source-pins.json\" <<'PINS'\n{\n  \"config/agent_configs.json\": \"3d9637da75305c2e7070afbd7336b1ba87e32dca509e17579185e49bf00ec0a0\",\n  \"config/agents/character_custodian/AGENTS.md\": \"6680b88c21f14dbd4763df736b5d6222f361024de0a0ceb8ffa6642d400f6e8a\",\n  \"config/agents/common/AGENTS.md\": \"8aad29149baff84d740e896aab2118f5a978e9add6ec9b8f3ce55b6e644c5995\",\n  \"config/agents/execution_specialist/AGENTS.md\": \"6a7b792c12dac78cfe902072be9508cbde167e0605c95ef6224fc1a97bdedbc5\",\n  \"config/agents/lead_orchestrator/AGENTS.md\": \"ae3a78bdc4173285505af7de21aa4046bdb362bb434e7b240db8db9aaa5e1d79\",\n  \"config/agents/plot_architect/AGENTS.md\": \"e5a7dfb227b387ceb10a190ac0127f15108ea1e327b0f084554ea6d16f0e86d7\",\n  \"config/agents/specialist_collaboration/AGENTS.md\": \"e29eaf96f385062907304d95b83b1c466f5e9a1226d2ef9cd4e3d4f1704292e4\",\n  \"config/persona_templates/alternative_templates/.gitkeep\": \"01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b\",\n  \"config/persona_templates/default_kim_eun_hee.md\": \"fd1c91425394d07b308b3869c56579a760dc868568b6c6cfc637148a5f3336d1\",\n  \"config/system_defaults.json\": \"41cb49d98a88e4e7036bb666a9d6277230a20e9d87271fafc8fde41c9f119c6f\",\n  \"pyproject.toml\": \"731364c9e4a3329507a6cc22dcad84c395f19469c334b0f55ad0ae4151d15401\",\n  \"src/story_writing_agents/__init__.py\": \"6d24a85155e363a3458cfd35dd86f69c0cff63be18417afabffd9fdbb2f47150\",\n  \"src/story_writing_agents/__main__.py\": \"7e67c47885690bebe4e36ef43de45ab7491cd34b7bf0f972ed821ea943657d82\",\n  \"src/story_writing_agents/agent_context/__init__.py\": \"fc2b6701a6848e44ba05fd886271a2da4551aeb2cba375b66a3a50806afec740\",\n  \"src/story_writing_agents/agent_context/accounting.py\": \"390bf002026b1ca8d7c856576a8faf02dcc276ed9efce7fa17830af00fdf25b0\",\n  \"src/story_writing_agents/agent_context/actions.py\": \"8f35ecf197acb7f2fa88c0bfff03eed053f98aa7cdf39850bd2db9fc3b7048de\",\n  \"src/story_writing_agents/agent_context/continuation.py\": \"d9c9c51dec13f9bedc74d5cab0c0f2d61921206a6f7c106a4ff522b1cd9d233d\",\n  \"src/story_writing_agents/agent_context/ledger.py\": \"e011bb7b32904ec33fe7b256f0a6960ef6009469bbdf751f55ba6e874a6740ca\",\n  \"src/story_writing_agents/agent_context/manifest.py\": \"3e4caf51cbb56429511962ae447e30b8bb2b828b21c1ef52f8e0a266195b88e8\",\n  \"src/story_writing_agents/agent_context/planning.py\": \"bb9cfd58ea6d90176ef8403c0e3368ca88234bc1dbc4f71bfaf7720c63288a45\",\n  \"src/story_writing_agents/agent_context/progress.py\": \"ab83295d4c0be297d46a8855a4a5c487c046de29dffd3a23fa3e069efe1192b2\",\n  \"src/story_writing_agents/agent_context/request_compaction.py\": \"e42a107b4efc89e7dafd16f366caef2fb123899873bec9e274da5bd5f4fc9be1\",\n  \"src/story_writing_agents/agent_context/service.py\": \"8d5219b4721e1d7f8ae4c2f7f96939bb4a97e7dc3d174f327215eb9db956b0de\",\n  \"src/story_writing_agents/agent_context/sources.py\": \"5fee79da095579163190b39f88d90cc1fa4ea1c212a1e47834b84fec5c095628\",\n  \"src/story_writing_agents/agent_exchange_paths.py\": \"2996f42037ba6404a8eec74833d5938548a256e70e0ca6c7befe41083b72532f\",\n  \"src/story_writing_agents/agent_exchanges/__init__.py\": \"7fd3c6e8af1812ba78ea58a4802123d862a8e9e0cb7c28e3e75561a972a7fa50\",\n  \"src/story_writing_agents/agent_exchanges/capture.py\": \"9c8f2585d483edfb7eeb6b0c3b3890336c5f9bd8754dcf5d35c47e5d7b33cd5a\",\n  \"src/story_writing_agents/agent_exchanges/contracts.py\": \"c6db70c606bca47211c41af8deb96a1d159105e59d4dd1f3c1c8f1abf7828a34\",\n  \"src/story_writing_agents/agent_exchanges/storage.py\": \"3b649dbbdf85f3d5e4cfcfcad99fb756e084cd656d4c60c9d5d77409e3aacf4d\",\n  \"src/story_writing_agents/agents.py\": \"f4b1405a59388e4c4503f6b5bc07824baa52fd3af3608883d9bfc9d5b855ebb5\",\n  \"src/story_writing_agents/antigravity_adapter.py\": \"a2da00173befd84e522f30efac0576764863072ebf1b59e94e36ee0fcbddef16\",\n  \"src/story_writing_agents/artifact_proposals.py\": \"06d3d50b1a2b714ed1fd4e520bef88585620bca5ff39dc8b5a46c2de0abc6524\",\n  \"src/story_writing_agents/authoring_admission.py\": \"d577e1a89dddd8d3611842185353ccbaae56da2423eac3397579f4293883cf9a\",\n  \"src/story_writing_agents/backend.py\": \"2a2dfdca71658943fef93b06bae5964264b4ea387c64ea70883ed361df852474\",\n  \"src/story_writing_agents/cli.py\": \"58befd159def985ea27be690e62dc0c87cb4f55c7a5c575e133efdfb3901be64\",\n  \"src/story_writing_agents/cli_context.py\": \"2080525708adba0db167282cfc698c4e0e90516860e112adc65b0540bb490913\",\n  \"src/story_writing_agents/codex_adapter.py\": \"9a753b88c64edab2cf340205665585fbe1144fb02bb458bf0f48fa0874f7eab9\",\n  \"src/story_writing_agents/config.py\": \"680f12ab231987fa615e47bc62f722e6452c56bce2216cc174920638613aae46\",\n  \"src/story_writing_agents/consensus/__init__.py\": \"e5cd9c52460b4913151e609915bd3ef9a3d8eec37a07e974eee9130b4601a985\",\n  \"src/story_writing_agents/consensus/contracts.py\": \"012419f7799ce849390cf99fb44a2e504f83da013ff034da888303a4b685eb26\",\n  \"src/story_writing_agents/consensus/event_store.py\": \"77c47de344f53c0f03b4cc40a481c55b8bc125dc9449c15e3d6181a0c6f75afb\",\n  \"src/story_writing_agents/consensus/execution.py\": \"c0eedb59719d3e3b0a62570ab2e3fa9474e8531ebdcec78e6d8139a4787648fc\",\n  \"src/story_writing_agents/consensus/material_store.py\": \"429fb7c423e73a999d573fe51e3476efde7a77e066131d56938e5af9beded99f\",\n  \"src/story_writing_agents/consensus/projection.py\": \"a53f8209917cf64654756b86705486bdcd32aae8e8c493696bd608e77149a1ba\",\n  \"src/story_writing_agents/consensus/runtime_adapter.py\": \"da1a598cf5c8d1121e25e6b2262f5c1f615029e5237044d84273dd5f6633a4fe\",\n  \"src/story_writing_agents/consensus/serialization.py\": \"1db7356aae0884f7d1d324d2a62750a54b56748a7d8abedd38edf16400cba7c1\",\n  \"src/story_writing_agents/conversation_literal_search.py\": \"52b65debf1e0679be0afb27df8a07afea8b73ad58149d3bdbbac9f3a3d2fa8b1\",\n  \"src/story_writing_agents/conversation_rag.py\": \"5b0721088d84d3b2c7c53aaa42b422a1eedc5635fd2290eda7d0b75be02c2670\",\n  \"src/story_writing_agents/conversation_rag_cli.py\": \"510177dfe17102ec25d5f4803aa4c9cb7c90240fd41b0c9328fb0e7586fbf4e7\",\n  \"src/story_writing_agents/conversation_rag_composition.py\": \"a161e70faaa51e209b1d4f18edba5cecdd476788e661c3e9d0458479115282ed\",\n  \"src/story_writing_agents/conversation_rag_local.py\": \"60fb6de760c9af3fd7b177a65484fe7ee620f282a80449ae4b141429ca5bf0da\",\n  \"src/story_writing_agents/conversation_rag_runtime.py\": \"94dec8231acdfb03053bf573dad8149df566b015300e07bf1663ff81a02321df\",\n  \"src/story_writing_agents/conversation_rag_store.py\": \"f4f961b192a9ba16eeb04d0721d74304a7d7a1166d574e500001134af8899722\",\n  \"src/story_writing_agents/conversation_retrieval.py\": \"923a86219bdba1e48376f8878159ca4bd3941c5ee9c655ec6d98a1e09fc0c064\",\n  \"src/story_writing_agents/conversation_search.py\": \"da8a7ff3faa8630d6f95ce24ed13db4fc4a09b476c976b5db1f26c7663308cea\",\n  \"src/story_writing_agents/conversation_storage/__init__.py\": \"bb56a24a909d161bf355b4a07fa9a14355ee35e9f6ba3e89d9035c9891375609\",\n  \"src/story_writing_agents/conversation_storage/archive.py\": \"0e659682c8235be8f8197da055025061f19af97768570efb0bde7000a88de405\",\n  \"src/story_writing_agents/conversation_storage/composition.py\": \"2a56de09c610dd0f54433ab1474a173446b5f203d8f6b01543ef0f2258cc4a52\",\n  \"src/story_writing_agents/conversation_storage/contracts.py\": \"a32931d01b674a19c469c7ad033ad8f1cb2f3cde633cfb3df3207da1988c244c\",\n  \"src/story_writing_agents/conversation_storage/filesystem.py\": \"a9ad9fa06e1f7a2dfa59f932160329190d8f46dd153145253d9a2adaf39238f6\",\n  \"src/story_writing_agents/conversation_storage/filesystem_archive.py\": \"2a09ce86626c4f5003ab53ddf0af90e400edfce34792087e279a1d4aaedaecbb\",\n  \"src/story_writing_agents/conversation_storage/migration.py\": \"4ce13dc80a1cd69d4218de768c66ce103447ef96b6bfce79fecbebb95ca11bc0\",\n  \"src/story_writing_agents/conversation_storage/provisioning.py\": \"f643ae115fc59360fbf6095a8b02bd537e4e0eefb2e4f67b1832fda9506f1a90\",\n  \"src/story_writing_agents/conversation_storage/selection.py\": \"5181ecc624b4e857b814a518ead5793ec05a636e8b819c8cf196d495fb8bdbda\",\n  \"src/story_writing_agents/conversation_storage/sqlite.py\": \"ef11c442b43f8b9223ca79f43d1ee61b99c20ab1734e58b6e25c05035a033b60\",\n  \"src/story_writing_agents/conversation_storage/sqlite_database.py\": \"4d25a39676d9c90f7150e3cc55bffad8ea0dfc047f05b9c1fae3de3a9f94b519\",\n  \"src/story_writing_agents/conversation_storage/sqlite_search_index.py\": \"f9c61cccbd6bfb10eb667c39f3dc7c22cdb30880d7d32c67578d81fbe92cbbf5\",\n  \"src/story_writing_agents/conversations/__init__.py\": \"5eac30d4156c7533a23f9d9046b4305d0914608d0479e004b20af7cb0c58cd49\",\n  \"src/story_writing_agents/conversations/catalog.py\": \"f6de19f39473cf755bf3d0490c2a1961d13ede93e6fff7455f3c9d3e252041ed\",\n  \"src/story_writing_agents/conversations/context.py\": \"c178f16d88700bd177ca0ef8cecb2a4e552f329c9f37cefc6c54596fbbae2882\",\n  \"src/story_writing_agents/conversations/events.py\": \"8f5929d26f98b840591ff6a65a59787f06533fdc2ff12bbfb8823721a301af42\",\n  \"src/story_writing_agents/conversations/session_context.py\": \"5b443a8e9cf4fb6d6cfced30897564f4d497c1e0938259522e5ca6ab4e779afa\",\n  \"src/story_writing_agents/core_document_readiness.py\": \"695550df45bfc50dc3c20d7bf23b98b7fafcc939b9c08572c545f01ac64f3937\",\n  \"src/story_writing_agents/debug_log.py\": \"3908012f87c79c1e7eabbfb262ca6ac4bb24824057ab463e042cad17050f0370\",\n  \"src/story_writing_agents/directives.py\": \"0325b212a2b921b39e1b94faf94393c19d57be13a0c44b5646e0baaf2e68df70\",\n  \"src/story_writing_agents/editorial_scope.py\": \"24d9597fc726a183514baadae21e1cb5ba1b90d022f865185dd07abceb6e5a35\",\n  \"src/story_writing_agents/editorial_state.py\": \"9aac2e65892b7a086e5659babd826e96ac5196593d1444f098445d9d2aeecaf3\",\n  \"src/story_writing_agents/errors.py\": \"2dc4cdf1bb49cf467272051f8bbf719354bb2b3296517ce94e095a240c1535d1\",\n  \"src/story_writing_agents/generic_rag_adapter.py\": \"c3f82243cefa602f009b02eeab19eaad16fa6ac0d473d2d7395d0dfe9be51895\",\n  \"src/story_writing_agents/git/__init__.py\": \"abbd59f0382e415daf4c11bfee34ce26edc7bc119a8a86683c986256340e0094\",\n  \"src/story_writing_agents/git/adapter.py\": \"7b825c59d5b722745d9a208249e20eca0c6ceaadb69065a64633f567a60dcfc9\",\n  \"src/story_writing_agents/git/contracts.py\": \"b06a898c782d444bcd5562663b73ade514f00d4d0b049655ddba7f753853d710\",\n  \"src/story_writing_agents/git/inspection_objects.py\": \"46f528c9d981d21ffb054d264dd91adf8357653ce992e27743ababc2fdbe4e8f\",\n  \"src/story_writing_agents/git/process.py\": \"53612e516e7866e9bb7909135eeccb1623d5d005ae6de8f8861f0539f3fbe894\",\n  \"src/story_writing_agents/git/repository_lock.py\": \"fab2320af1148bdcc3099ccf1486fb57fd91b43009b603be894d59f248cbad3b\",\n  \"src/story_writing_agents/git/session_checkpoint_contracts.py\": \"c3b829e4df169a778b4dde867e9b64160d34ce7cf4c82646e9052bb251668504\",\n  \"src/story_writing_agents/git/session_checkpoints.py\": \"f20ef4176f83961538be3f3a35f07abe21b50d4e83d855cbce3d9f947ceef89a\",\n  \"src/story_writing_agents/git/session_contracts.py\": \"2a3c91d0e1cc73d94b139f384cd09850fb232d1633d3d2e667d35afdf39ced30\",\n  \"src/story_writing_agents/git/session_history.py\": \"b88bd76b478739327cea5d841ce594c0d1fb16cbce2e7b95c1d385ec156f9a7d\",\n  \"src/story_writing_agents/git/session_history_contracts.py\": \"d5c3d74a66bef226be5604fed509c8f120772232ebaead495360e3f42077bf2d\",\n  \"src/story_writing_agents/git/session_resources.py\": \"570aa9c42c58e1a3abbd54d264c471b561ef538601ba36cdc598d4dc696e71ab\",\n  \"src/story_writing_agents/git/story_commit_candidates.py\": \"75d1c86e67ae2f56c870f0bde23a0745573f8ee61032b2e764a103a6ef1157c7\",\n  \"src/story_writing_agents/git/story_commit_contracts.py\": \"8336924d35eb02e71ac94d88549eff08a10a08e0f3ede2d4051222b26e2247dd\",\n  \"src/story_writing_agents/git/story_commits.py\": \"95c34420d87ece48c67e537fd588f7eb8cfdd6931ca17d875ae18ee1bdc588cd\",\n  \"src/story_writing_agents/interactive_auth.py\": \"d523f78f501d3ca30f497f2301f77f9efd8d17224407a39274dd968b59be06fb\",\n  \"src/story_writing_agents/interactive_commands.py\": \"cf43fb8b5214de58480a598c7c81b2cb085735d0796076dfba9f05e0b6363d42\",\n  \"src/story_writing_agents/interactive_controller/__init__.py\": \"67fd2d4b2b29a2011d5dda3ea706b6a5b0220659b8893cb47e4fdaab29faf9a8\",\n  \"src/story_writing_agents/interactive_controller/_conversation_policy.py\": \"0ec66ecc3e1349b181d47f525808cd2f0d1f8c9ec3f9581dc89fd46d9a13fb92\",\n  \"src/story_writing_agents/interactive_controller/_core.py\": \"9189e3c1e9f116d3102008037d1874ff6d83772f468f452cb421a7f41c2f3bd3\",\n  \"src/story_writing_agents/interactive_controller/_exchange_policy.py\": \"e08e797e6fe9056c944cdd9400d4c3b902f623846fdaec20aa4336fd1556bdf1\",\n  \"src/story_writing_agents/interactive_controller/_exchange_viewer.py\": \"8164e0a085a1bd5991a012c35746e93e8270ca8a2d614dcde22e79e798427d70\",\n  \"src/story_writing_agents/interactive_controller/_lead_policy.py\": \"4bdd3d3fe686b67ed86517299debd418197b0a67a44997c66a560307d683137d\",\n  \"src/story_writing_agents/interactive_controller/_runtime_policy.py\": \"6dfa8093b9794ff794bf47ed104649de3275e010ab694edc85f352fcde4649a1\",\n  \"src/story_writing_agents/interactive_controller/_session_policy.py\": \"5437b145904117cdd6dfebb8527b806fdf4a801078007ebb90076a003b20cfac\",\n  \"src/story_writing_agents/interactive_line_editor.py\": \"6a8e58c03ff5d5584a79dc8beb94e619815a52304f08e35a2830a986edae4ef7\",\n  \"src/story_writing_agents/interactive_settings.py\": \"dcd3600bc54d18aea88eae4d0d75db271a2ad0c6feed9ed280b4f1fac62ff896\",\n  \"src/story_writing_agents/interactive_terminal/__init__.py\": \"f935ea910b1a5969e239d299ccadd942a607c19ede8ba7f0f735d84027b73002\",\n  \"src/story_writing_agents/interactive_terminal/_advisory_progress.py\": \"2f2d90e77fa8af3cb243d016e21651d1fe1e0e0b9ffd3e1f3af1c2187c1510f4\",\n  \"src/story_writing_agents/interactive_terminal/_box.py\": \"e2e230f7a61a2393ada6f41f8283d181b9c380d402793d8aea7ccb98bf4c044c\",\n  \"src/story_writing_agents/interactive_terminal/_collaboration_view.py\": \"b8c04d8c192cc3a4b85a707673302fc41a7c26cd5ec042c1284601e129d2ddb0\",\n  \"src/story_writing_agents/interactive_terminal/_controls.py\": \"988c2d5759d24ef884a877bdee4ec79e2429aa8559ef30a01ca2ee18d0982fca\",\n  \"src/story_writing_agents/interactive_terminal/_core.py\": \"08f4abb5a17b2345320d34cbe7e3406d5523b2e500cec9c30b68f8883d958cdc\",\n  \"src/story_writing_agents/interactive_terminal/_driver.py\": \"0138b87f4772eef84375a523f6aebf4487ad9dba840127c65fa6570abf7b246e\",\n  \"src/story_writing_agents/interactive_terminal/_external_view.py\": \"a00637d8c1306441bda901ef02bc760434d498f507f84abda99f79e9862934fd\",\n  \"src/story_writing_agents/interactive_terminal/_input_lifecycle.py\": \"9dcb5d254b20f3f6cfe66233a8681549eaa05b90a42fd4b56fa3269dd14768ef\",\n  \"src/story_writing_agents/interactive_terminal/_live_composer.py\": \"1ec46417476f489c6761107ee76c8c763237d198b9ebb9796475410badd670c8\",\n  \"src/story_writing_agents/interactive_terminal/_markdown.py\": \"536367c7a6ae29890090ea3a58f9958994334e734d5b3c67ad8acee4185072f3\",\n  \"src/story_writing_agents/interactive_terminal/_model.py\": \"c9e4548f0eda69f796c1b2dff96615a0dc4f67d79cce8c309d28526be85d991c\",\n  \"src/story_writing_agents/interactive_terminal/_output_history.py\": \"a0cc28cb18d3e7f899a78f639e3c4bf2e98513642e5c37c2572ec2286fccb37a\",\n  \"src/story_writing_agents/interactive_terminal/_pointer.py\": \"20a040d7cf58b1160048f170b987b58f3b93fdb6b16f9edf047933a91b7d6fdf\",\n  \"src/story_writing_agents/interactive_terminal/_reference_activation.py\": \"23d43cc461955d72f5af8c5e996d53d71574468377901ae5322db388fe467634\",\n  \"src/story_writing_agents/interactive_terminal/_render.py\": \"a988b534c7eca527f904719b4a732ec46b4489e918f07b65123a2131981067a3\",\n  \"src/story_writing_agents/interactive_terminal/_response_usage.py\": \"02f2280e8806a49352d0b62417cf5bc4e1df11626c5ae0105b302f09c1fa11dd\",\n  \"src/story_writing_agents/interactive_terminal/_transcript_view.py\": \"53865290e9baff2d786660f1f5228a8ac0b5327cc0bd0a505fb9aca5e33b1942\",\n  \"src/story_writing_agents/interactive_terminal/_viewer_controls.py\": \"a57f5134c1c50943b47c3d986e7726a0312ec1342ca7d637ee412e2cb6049c13\",\n  \"src/story_writing_agents/interactive_terminal/_viewer_model.py\": \"652a16941c2e3970cbe4a54df106471f7a3877b41a4225be28ebee756a7af7a2\",\n  \"src/story_writing_agents/interactive_terminal/_viewer_render.py\": \"132e80d590a89f9ef3c00a2de2a84a9f2e5782452b8fe0d50c5467005956d563\",\n  \"src/story_writing_agents/lead_exploration.py\": \"fd69642f02929b7248379cde206212777317eb3feced83cc15ba988f0947da91\",\n  \"src/story_writing_agents/lead_premise_decisions.py\": \"d52addce51b8d94d7678c604320d3dec5f2acd5ab1df0ad5ae4c70a0d0abd0a1\",\n  \"src/story_writing_agents/lead_provider_contracts.py\": \"d24c481affac2c1e9ab559257424cd69d2d0edba6c47dd5ee92d30ebe37dd90e\",\n  \"src/story_writing_agents/lead_task_transitions.py\": \"5a6d940998387617d2e83b4b5f9147dbfcb62dd0b16050574347ea515a9ff61b\",\n  \"src/story_writing_agents/models.py\": \"80d91f747b96f25ef0785639c908afdff67c8154b05fc0b47320a5dff45972d6\",\n  \"src/story_writing_agents/orchestrator.py\": \"42a44ce6136d641bf4535daa8a560c8b7982992ba945702cec968fb72c4c6972\",\n  \"src/story_writing_agents/prompts.py\": \"d42cdde61ce52c0b1f6afda12b4e1c3bb44cf92f9b1893154aaa65511f0b8031\",\n  \"src/story_writing_agents/provider_adapter.py\": \"0d06e176d3c9618366ada67493481a028bb28158011521e2bf65d29576aaff63\",\n  \"src/story_writing_agents/provider_auth.py\": \"1c9a280eb9cef192b4a61b8e74cbe56488c1fe73aebcf53360a9819a07fbe0b0\",\n  \"src/story_writing_agents/provider_auth_recovery.py\": \"9260fbdcbf571065e97f2edae2210c2f539ab84670395d47a84fa266ec1479ef\",\n  \"src/story_writing_agents/provider_catalog.py\": \"862b29d54d7e08ae8042fcb1e284aa15ef8dc31f73062a782993583ac842b878\",\n  \"src/story_writing_agents/provider_error_artifacts.py\": \"52191f24f51f375dffc265337db622592368fc999ef0502a4dc36341e4ae8942\",\n  \"src/story_writing_agents/provider_execution_workspace.py\": \"3efc80b7db0af5ecaee2f986c0e2921b2d8f3440b084a78b47de5e2e143b5c2c\",\n  \"src/story_writing_agents/provider_process.py\": \"28f36a810b7e3ffa0b8ecdf4a3673dd97d4a1e88292fa5a8c253547b0a897b3b\",\n  \"src/story_writing_agents/provider_wire.py\": \"c792deabda347c2e6fc87c10bd2c659ae77e75927e2ae5f834cf5f4fc4343918\",\n  \"src/story_writing_agents/reply_trace.py\": \"45a64ae03634b2014eb05648f704149d0373bd8a0627183a23d7e9c33b18a53e\",\n  \"src/story_writing_agents/run_inputs.py\": \"fbd0685cada2dda26d19a5c3098e805b5970bacde0b7a62ad6ea77043be4ad80\",\n  \"src/story_writing_agents/runtime_state_paths.py\": \"77d661ac7f7dacdff1aa105ff4495654ee51cef63e31da9fb8917b9db35e0c5d\",\n  \"src/story_writing_agents/session_lifecycle.py\": \"23128c16bcb32000c2fb3d2120e6a7c8a462e9eb8f4f077870a957894d9e5839\",\n  \"src/story_writing_agents/session_recovery/__init__.py\": \"37771eee2c1de661171637ac8c5e95cd02945e50be715726dc18a371b656d6d4\",\n  \"src/story_writing_agents/session_recovery/contracts.py\": \"5f005b88ab31cd4fecfab9ab4737977cf59e12ae0f78a1abf92e493ae4077c15\",\n  \"src/story_writing_agents/session_recovery/reconciliation.py\": \"e329cd67f6870d9e96d41c6d7269ca17a5050811944c4e2e1fad734caf1e5372\",\n  \"src/story_writing_agents/session_recovery/transition_assessment.py\": \"1e7a979841f659fb417a6f0ec7893aa3f2b231d1db9af870eaef9288f13689a2\",\n  \"src/story_writing_agents/smoke.py\": \"ba49b4c9e6d2b28fbf0194720303872aa7dad2caf5f8bc7772a44fdbf78e0943\",\n  \"src/story_writing_agents/specialist_routing.py\": \"c8bdb06ca71122be3c4ca5de1eb1bb1431407f5a5fff3dbbb10cf1b9876dbb20\",\n  \"src/story_writing_agents/structured_output_validation.py\": \"7beb41c3bc4d38ae563cecfe09b12bdd87cd2e2c4afcd37dd568e009697dd7bf\",\n  \"src/story_writing_agents/workspace/__init__.py\": \"a3063a96fb97e08b6aeec9e4b8ba5bae66f0aa492a80c6e7436b30a6ed641620\",\n  \"src/story_writing_agents/workspace/_policy_baselines.py\": \"8ba6be9b9cf045808186fe96df7777fc5a3d004bfaac0e1f86ec2da667403892\",\n  \"src/story_writing_agents/workspace/core.py\": \"bea454f69cf0ec17bb5bd50f25609d0ef54f92bc1e25bbf95edc32328e4a46dc\",\n  \"src/story_writing_agents/workspace/initialization.py\": \"dabe3660116639d0a3340c47e81ab51a3cc5abf105bf9e1f26fa59d600375cb6\",\n  \"src/story_writing_agents/workspace/schema.py\": \"23b22eff92aa0114e374a4e6a2c76286f3f3db65d95ccc29f607056ff772862f\",\n  \"src/story_writing_agents/workspace/session_role_projection.py\": \"ee149220890ac2d8fb8d28dd42e7500323cca8f48e0309fe4164e8860c93f4da\",\n  \"src/story_writing_agents/writing_artifacts/__init__.py\": \"ea06cecd04e2225e2f2660828b927b6bba4452764389dbcc019554c05f34611c\",\n  \"src/story_writing_agents/writing_artifacts/_application_store.py\": \"cfecaa9550a33660796aa531f07a8fae10b1f537eaf5111b1233c489c03667b1\",\n  \"src/story_writing_agents/writing_artifacts/_reference_evidence.py\": \"98b52b75560d3fdd8474bee0c41677b3b6cb4465a9d5bbd8fd828e9255034ba1\",\n  \"src/story_writing_agents/writing_artifacts/_storage.py\": \"2a5d683c139233f26aa5b7760e429597c6cd5514244c77537bd668335a336001\",\n  \"src/story_writing_agents/writing_artifacts/application_contracts.py\": \"4f1c662ad2c90e2afa59ae0411fad104a836ee2e0bf899f0e245f50f211d1048\",\n  \"src/story_writing_agents/writing_artifacts/authorization.py\": \"3fe9da19e22d828b86909428df8d52821753e978fea8bac929cebcac5998d23a\",\n  \"src/story_writing_agents/writing_artifacts/catalog.py\": \"da092de280d9054952653ea961b3f1c9eab0aed657df286f059d28ab151d9329\",\n  \"src/story_writing_agents/writing_artifacts/change_sets.py\": \"115e9f71d0cb342e979565f81265504bf2a77efa672fd7bda982f5843a9ff840\",\n  \"src/story_writing_agents/writing_artifacts/directives.py\": \"012e63e55fe34c6c8b5ab2828caba48512129ee952442eac988a00138349b612\",\n  \"src/story_writing_agents/writing_artifacts/filesystem_sources.py\": \"62b6daa1adfbc3ffc5cc2769ce1c8f8f43cd685a8f52916115f0a8ba8fef70e6\",\n  \"src/story_writing_agents/writing_artifacts/read_actions.py\": \"d93b81e051d9ed6e9310d989e4f6598aa7b7767c889ae87451ec028aca1b80a5\",\n  \"src/story_writing_agents/writing_artifacts/references.py\": \"c24d9d92424cdaeccd61932a7205fec92a03951f79861253c1a99435fb78f616\",\n  \"src/story_writing_agents/writing_artifacts/relationship_policy.py\": \"73186465aacb0ceefbca31638ea3c8158661db76f7bbdbfbcbfcd98c4096d092\",\n  \"src/story_writing_agents/writing_artifacts/repository.py\": \"ff2c548e9081de0ded29bd4e8d036ce6aebb6f743037681f64b402053d8d65d0\",\n  \"src/story_writing_agents/writing_artifacts/runtime_references.py\": \"ac9e372390c3aa85468fa74a959c62e538b730da693a37c20cae7743d8868f41\",\n  \"tests/__init__.py\": \"6adc4214c5e3630cb46722cd9e193b4aaeb6f69fe7c3115cc2bb30dd5bf89658\",\n  \"tests/_external_view_support.py\": \"128c775fe93ac89882736ead61793635bb243f98e7147552a8c669a03814243f\",\n  \"tests/antigravity_live_harness.py\": \"407f1d020f20bbe0618d50bdae1bef925996fdc911a0804e92d4634ffe2550fa\",\n  \"tests/collaboration_contract_fixture.py\": \"5b11f71b0e1ed6b108b58e4c4d76625283564e675759e75d53fccf2bd18d8895\",\n  \"tests/conversation_archive_fixture.py\": \"322c723e870b652044e62098e33893a62420a99379f3fa8f77be5473aac26139\",\n  \"tests/conversation_catalog_contract.py\": \"3d1f0aaaa6ce3f97154d0652bf88efd1a2e915d843f3a68c74d81fc219b0bc79\",\n  \"tests/conversation_search_contract.py\": \"79a96d83eace0aef21f294770315efcd7cbc360d1c9c3a98eff50d11c0443206\",\n  \"tests/conversation_storage_migration_fixture.py\": \"e469a6d269363080dedbaf8febd4e1c5f90d3800d73ea9cb6fc07bbc76654930\",\n  \"tests/fixtures/agent_context/provider_context_baseline_v1.json\": \"c8b3737b97e33fa90d825b4ca41cfda6b3b348d62401689bdfd90dbbd7b214f4\",\n  \"tests/fixtures/agent_context/provider_context_optimized_v1.json\": \"20b2a2a11028a17fb35e6be0ce8e8107f5166a40912234b367857f9fe63b1a5b\",\n  \"tests/fixtures/antigravity_live_cases.json\": \"371e9541880921a09d2775c21ddbc7a0c3264ad0a8796ab2c7869b87c6b77902\",\n  \"tests/fixtures/antigravity_recovered_finish/metadata.json\": \"0687776154051bd5a962605639164c04a0101e6eb2f470c777a6c0f925865831\",\n  \"tests/fixtures/antigravity_recovered_finish/request.json\": \"4ded2a625bd05808431deec1dd47331e8618a527e2aece89dad99d54ba292b7a\",\n  \"tests/fixtures/antigravity_recovered_finish/terminal.json\": \"7d4591e88809a071d4abacc9ed8326f8db556b2bda57c894fadb077b43a5d04e\",\n  \"tests/fixtures/antigravity_recovered_finish/transcript.jsonl\": \"b391bc64b75eb17af5d2d705c90939ffa40b1906dfcd80a77395c877bb786328\",\n  \"tests/fixtures/authoring_scope_compatibility/ordinary_v1_c20dc40.json\": \"b0f2c20d888222e16addfa05807df63dfb3fe8e0379adddb2d75f137b5c0ca1d\",\n  \"tests/fixtures/authoring_scope_compatibility/ordinary_v1_c20dc40.manifest.json\": \"74d9758371527dda042f729a61a5af22dc2df4b86199679f827fe9400f5797a2\",\n  \"tests/fixtures/authoring_scope_compatibility/scope_v2_basis_v1_76a80f7.json\": \"617896f44ed157ba79034efaf29910c8acced8b79b1153e050b413673d355c15\",\n  \"tests/fixtures/authoring_scope_compatibility/scope_v2_basis_v1_76a80f7.manifest.json\": \"71912df41464058859eeef2d16a64be1ee953c0e66701c0b7de484f1b818789d\",\n  \"tests/fixtures/consensus_compatibility/authoring_v3_c20dc40.json\": \"173023d5484c9e85c3ddf2fb2a08bcf3294c85e9a39c0ded51dc4bb96d554d2c\",\n  \"tests/fixtures/consensus_compatibility/authoring_v3_c20dc40.manifest.json\": \"ed3be986e7a13797e159b86de2f6893f9eeceaadfd40ec5b1f6d1e3a414b5083\",\n  \"tests/fixtures/lead_editorial_comparison/captures.json\": \"ebfca80bfee83f49ce67ae391e2566a8c358d636990d2b815a993901ae237dbb\",\n  \"tests/fixtures/lead_editorial_comparison/incompatible-recommendations.txt\": \"e6a402e6cd9eb134f46d2b0c204533cafd1ed63f9a799dca155b8719be7be77b\",\n  \"tests/fixtures/lead_editorial_comparison/record.txt\": \"4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711\",\n  \"tests/fixtures/lead_editorial_comparison/reviews.json\": \"8e60c9d2fba5ec9d854782abee343afc0e79b9ac0a7f65abdca9247bbb6bd257\",\n  \"tests/fixtures/lead_editorial_comparison/stronger-effect.txt\": \"bdca2f1333c16d6921f00b3a6852e08609d7776fd72e58c0d643778a33e339fb\",\n  \"tests/fixtures/test_budget_v1.json\": \"de4f984e4595d62dfa86ff3928e9817aa341677e658dcd7b2d6e0058fe45117c\",\n  \"tests/fixtures/test_timing_weights_v1.json\": \"7c3521e02bd1c04810f41e707c4e2cccd8181cfde171d6a33410503e647e54a9\",\n  \"tests/fixtures/workspace_policy_baselines/character_custodian.md\": \"18b3ef46527944538cf36179190b82214809f9db56582afa47e21851cd7d797a\",\n  \"tests/fixtures/workspace_policy_baselines/common.md\": \"909402eae32a0b1ae4f978bea14a03f752d8450040ae5e50fcf592a26c3d0703\",\n  \"tests/fixtures/workspace_policy_baselines/execution_specialist.md\": \"d638cda4ee27306b8c87379bf9fee5e76652832bbd63a59b4372aabfbfc2b458\",\n  \"tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/character_custodian.md\": \"806db0bae145e2ba50e920174299de06c20c083e45bba04b76ffe9c2d550e923\",\n  \"tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/common.md\": \"eb78a7d3a5a3d83291b188f5109f3b3132582109e1211e30bac7e33a9eab18a5\",\n  \"tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/execution_specialist.md\": \"4a3ead3e2389bda9662989d02bb8817ad1ec2d7b4d4f322b246b892545d3979b\",\n  \"tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/lead_orchestrator.md\": \"497c0927a7733fc37c553aefd056753246bfd0554331bfd64dd6f6ccd6cf1160\",\n  \"tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/manifest.json\": \"a16cf7143219dcc622e0ed4640c1e2c02bee8979c8a4d5a5672057f80e791ae6\",\n  \"tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/plot_architect.md\": \"e59aba2b2e750c7b9ef00b2c3f1ea4e7e9b2889f7abf25a840d7db781d5d93e7\",\n  \"tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/specialist_collaboration.md\": \"4ab83f3792a2598a174e6bfb02511162e26f963b5fe73c661afcfdaa3a5afcc3\",\n  \"tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/manifest.json\": \"ffa85af2911da2cb763b2be29cf9d02053c84516df809cfe5283465da4ef2880\",\n  \"tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/character_custodian.md\": \"806db0bae145e2ba50e920174299de06c20c083e45bba04b76ffe9c2d550e923\",\n  \"tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/common.md\": \"eb78a7d3a5a3d83291b188f5109f3b3132582109e1211e30bac7e33a9eab18a5\",\n  \"tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/execution_specialist.md\": \"4a3ead3e2389bda9662989d02bb8817ad1ec2d7b4d4f322b246b892545d3979b\",\n  \"tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/lead_orchestrator.md\": \"93181819635ddd9b1a5c636cae4ff3e1a8b78bf3bf1442a8b4fb790c131c3a18\",\n  \"tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/plot_architect.md\": \"e59aba2b2e750c7b9ef00b2c3f1ea4e7e9b2889f7abf25a840d7db781d5d93e7\",\n  \"tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/specialist_collaboration.md\": \"9fd629d51572990c79efffcf66fd857de1bce7912f3e304af785248a676ccb4b\",\n  \"tests/fixtures/workspace_policy_baselines/lead_orchestrator.md\": \"8e360d15b4a98d50c025a4fa1150b8c845786996d83569adaaeb1ce26c7dfc53\",\n  \"tests/fixtures/workspace_policy_baselines/manifest.json\": \"7f2086c04a62a0698f8eb900afd6dfe3f96b7509aca95a0cdaa5d31f01227a12\",\n  \"tests/fixtures/workspace_policy_baselines/plot_architect.md\": \"79f2f072beeacb420479098788df6b9cda34d5bc5b33c9c02c577f45eeef7f3d\",\n  \"tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/character_custodian.md\": \"806db0bae145e2ba50e920174299de06c20c083e45bba04b76ffe9c2d550e923\",\n  \"tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/common.md\": \"2bc0ea34377319843c3a998c95a873bd7c70d77d4f31304f7259b6a928e688b8\",\n  \"tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/execution_specialist.md\": \"4a3ead3e2389bda9662989d02bb8817ad1ec2d7b4d4f322b246b892545d3979b\",\n  \"tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/lead_bytes.json\": \"0b490e85661ca3198da56c52ffc9493d39a2280f2ceddeb231fc6ea76f4c125e\",\n  \"tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/lead_orchestrator.md\": \"5278b90ba5939db6ee31d4e2e4808ba583b66ebb25614acaf8a79200b9e7ea7a\",\n  \"tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/manifest.json\": \"030f8847a1534b1c7d95a1c47ad1226567df63b18cac7db42aaf9e6b5be646ac\",\n  \"tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/plot_architect.md\": \"e59aba2b2e750c7b9ef00b2c3f1ea4e7e9b2889f7abf25a840d7db781d5d93e7\",\n  \"tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/specialist_collaboration.md\": \"4ab83f3792a2598a174e6bfb02511162e26f963b5fe73c661afcfdaa3a5afcc3\",\n  \"tests/fixtures/workspace_policy_baselines/published_2e9/character_custodian.md\": \"18b3ef46527944538cf36179190b82214809f9db56582afa47e21851cd7d797a\",\n  \"tests/fixtures/workspace_policy_baselines/published_2e9/common.md\": \"909402eae32a0b1ae4f978bea14a03f752d8450040ae5e50fcf592a26c3d0703\",\n  \"tests/fixtures/workspace_policy_baselines/published_2e9/execution_specialist.md\": \"d638cda4ee27306b8c87379bf9fee5e76652832bbd63a59b4372aabfbfc2b458\",\n  \"tests/fixtures/workspace_policy_baselines/published_2e9/lead_orchestrator.md\": \"55cd8383ef191dea2d129678552ea459f8a403bc4488402af2b2343f06f3c62c\",\n  \"tests/fixtures/workspace_policy_baselines/published_2e9/manifest.json\": \"5cfc7948006dda2458c9780b10a7fda106499ca3023b02ba0341ce33aad51ff6\",\n  \"tests/fixtures/workspace_policy_baselines/published_2e9/plot_architect.md\": \"79f2f072beeacb420479098788df6b9cda34d5bc5b33c9c02c577f45eeef7f3d\",\n  \"tests/fixtures/workspace_policy_baselines/published_2e9/specialist_collaboration.md\": \"7aad65b0511fe4087513ff55c999d9ca974c600d33908eb5b32770e2a7d763f1\",\n  \"tests/fixtures/workspace_policy_baselines/published_main_1e482fe/character_custodian.md\": \"18b3ef46527944538cf36179190b82214809f9db56582afa47e21851cd7d797a\",\n  \"tests/fixtures/workspace_policy_baselines/published_main_1e482fe/common.md\": \"909402eae32a0b1ae4f978bea14a03f752d8450040ae5e50fcf592a26c3d0703\",\n  \"tests/fixtures/workspace_policy_baselines/published_main_1e482fe/execution_specialist.md\": \"d638cda4ee27306b8c87379bf9fee5e76652832bbd63a59b4372aabfbfc2b458\",\n  \"tests/fixtures/workspace_policy_baselines/published_main_1e482fe/lead_orchestrator.md\": \"6dbfd65607be6799511c8300370445b5194c01ae4554e5400ea521c1bb7ce5eb\",\n  \"tests/fixtures/workspace_policy_baselines/published_main_1e482fe/manifest.json\": \"e33122e21c4b58f20b782f4f57777565ca99923a64f338ed2aec567e1952f16d\",\n  \"tests/fixtures/workspace_policy_baselines/published_main_1e482fe/plot_architect.md\": \"79f2f072beeacb420479098788df6b9cda34d5bc5b33c9c02c577f45eeef7f3d\",\n  \"tests/fixtures/workspace_policy_baselines/published_main_1e482fe/specialist_collaboration.md\": \"7aad65b0511fe4087513ff55c999d9ca974c600d33908eb5b32770e2a7d763f1\",\n  \"tests/fixtures/workspace_policy_baselines/specialist_collaboration.md\": \"7aad65b0511fe4087513ff55c999d9ca974c600d33908eb5b32770e2a7d763f1\",\n  \"tests/git_contract_fixture.py\": \"4bb10acebe43e9635a3292d50ccbd2eef23d6453f2ac2dab191f090d53241985\",\n  \"tests/helpers.py\": \"dd364a74ef42f2becec529da97dac0b101a3246c9bad9f54d6003107c304df20\",\n  \"tests/interactive_controller_fixture.py\": \"f8ce72932486f07110e37a668ab875d9e82799ae1a5d3b0fd8eeddd86d6dcb79\",\n  \"tests/lead_action_live_harness.py\": \"a78779feb1f291d5cfea31947d7724773df9191eb5c03347f364a789e51095da\",\n  \"tests/local_ci.py\": \"50681b0947894f14a39fe4c24a1bb7172a63f9520293d6ec8d75367da72b53ba\",\n  \"tests/local_ci_coordinator.py\": \"b0479884e7639167b1ad034bf7d50ac6ad54db42ec8e84867f035fb9c08df74c\",\n  \"tests/local_ci_state.py\": \"57fbb80de00a7ed4a2d778ce8e0a8f2cd7ef8343141b4389cadcce3893d31667\",\n  \"tests/local_ci_worker.py\": \"84056996fd2a81162a75f812dd97e708295d06c7d019807b18e370a0faf92cce\",\n  \"tests/provider_auth_recovery_live_harness.py\": \"2d5c339bc7b5f050b8cccf3b04e20c6c4702060003d4e8271d4419f41ded15c8\",\n  \"tests/provider_wire_fixture.py\": \"3cf85cf8a106b12b2b34261db8090fc769118233a332efd683e0a51b24163070\",\n  \"tests/recommendation_fixture.py\": \"28d338e84aa7388c64b6ce0b6c1510beb9476fc579ca6b15ffa82cde4f120582\",\n  \"tests/runner.py\": \"018a8534d83420ece7d3dea6f1368b4408445f59ae6fc248775ac43a3eda1e76\",\n  \"tests/specialist_routing_live.py\": \"3043af764091c49d28ff96ce75ac7202280fd0cfa8bc03a847457cc9a88755ff\",\n  \"tests/sqlite_conversation_storage_fixture.py\": \"3bf4af8bfd3532b3cef7a480f1ffd69b2f1c9d0a2f28d2e29cb9ddf68ea25cdd\",\n  \"tests/suite_budget.py\": \"678f5c6349ee3fa72936f8437de3b5d84137a201a2b74a33876c78259b7b20d1\",\n  \"tests/suite_policy.py\": \"60c0d555ba3ecb103fcd4710bb233773955e829c7192656f9e626695ef4ce283\",\n  \"tests/test_adapter_streaming.py\": \"6c9245a056bc18b390bf56855a6823f681301252b97d6f253f7bdd280f09a0e9\",\n  \"tests/test_advisory_progress_streaming.py\": \"f8a3d5d3d1a6a111e875e325ee3d2187bee8330911e338ff08e56fe29930e249\",\n  \"tests/test_agent_context_accounting.py\": \"7202adf4fa90f3e1dd4b7d949cc69ea89a3336f4956484bf9900d77af01a85b8\",\n  \"tests/test_agent_context_actions.py\": \"d6ad0067be386a7ed4075be71f8534419354f500632d2d4cf80deeee5e2234e6\",\n  \"tests/test_agent_context_conformance.py\": \"3d08b81d52ab72fb6a411846eec256ba7808b2a25a472c2dd108eeba6ff3b851\",\n  \"tests/test_agent_context_execution.py\": \"6478a7421d04b9fb998cf931a19d8caaa728d6ffe66191ff355ed3f9e69d4ea4\",\n  \"tests/test_agent_context_ledger.py\": \"d3039228de89ee9e87009d2d94216ac5e425bbe9c3b1c4e666ea0b5877001ff5\",\n  \"tests/test_agent_context_manifest.py\": \"0cca234a5274960ea1501b161c1c75c16d40a8cf0869c8e85dcc4b6301f3b8fb\",\n  \"tests/test_agent_context_planning.py\": \"633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85\",\n  \"tests/test_agent_context_runtime_adoption.py\": \"d98b81996647f70f726da36ce14c1beea9da09193a49b61253d08e0f5cd15a7b\",\n  \"tests/test_agent_context_service.py\": \"0d20e9e5c03832442f69ea5fbae16b7954df3715929b46008aefad173ce1c488\",\n  \"tests/test_agent_context_sources.py\": \"94f4811c7ba17ff30f84c96a3694ec16c2b8bdfeb90acdba4aea9628af431a68\",\n  \"tests/test_agent_exchange_capture.py\": \"3cc3bedaa6769afcd65fdc0c1fb110fb315b9ba095ef9708965ef88e93bfbdb8\",\n  \"tests/test_agent_exchange_contracts.py\": \"03bbf899a1ccc38e1874bed88bd3adcc3e5e83f33cedc9df2475587a5eda1d8e\",\n  \"tests/test_agent_exchange_storage.py\": \"5f9c3d824ba51bd6b443170829d924fd057a44fe96a504a062ebe70c95be8a14\",\n  \"tests/test_agent_exchange_viewer.py\": \"7e68c5cf271c764c9aadd3e18050c76b72f89c99c6f89662cbb9a54dfb576ce1\",\n  \"tests/test_agent_policy_composition.py\": \"bfa4b9a52b8cebb2bdcb290327e64dfa9c0980980aaeb6842bd97fa5f7855040\",\n  \"tests/test_agent_state.py\": \"593d73a1b6d9e02f38b5bd95815aa7889195d4ed8a74b9b3e77e3d9614c935a4\",\n  \"tests/test_antigravity_adapter.py\": \"2f647b420d523e8babef289aa5e6b99cb2449493185de30959489f210dd2bbbd\",\n  \"tests/test_antigravity_live_conversations.py\": \"e01a4d135a8ba201496706af9413e18d8dbf40a9065e7bf88190c5cd1b128049\",\n  \"tests/test_antigravity_live_harness_audit.py\": \"b7137afe1716c35d4e06e8241733b4a84c4dd4148b64ef5950e447c7212c9cf5\",\n  \"tests/test_antigravity_parity.py\": \"bcf97ce16e9507da3ad879be91c0cffc95a0f28c4144edd06f886626b8b8ddde\",\n  \"tests/test_artifact_application_contracts.py\": \"96cda0be711c5495978dfcd354f68a62b86e2a08d5dc54a3c70d119013806733\",\n  \"tests/test_artifact_application_inspection.py\": \"0bc031f88c4e41a97e740d6f745f09cb1944f72749838455bc1267e436693cc1\",\n  \"tests/test_artifact_application_seam.py\": \"3a8a7af14ab73c311a6b69a75def22e3e33ff85126d8ff8fbb2deb48c3ca5909\",\n  \"tests/test_artifact_application_store_lifecycle.py\": \"b3e9f79484424a5a08157eeb95a0a3125c6c610b4b0e7b30c7d19fb4ad1bfd38\",\n  \"tests/test_artifact_application_store_recovery.py\": \"c875c6f3af8ab9e518aec5a0504cc9e38709f197cc9a8bd34a82851e529ff015\",\n  \"tests/test_artifact_change_sets.py\": \"4e78daed261e311b9772b7f58b8c7278a369a1e07656d29849757ca445dd926e\",\n  \"tests/test_artifact_objectives.py\": \"9409f67da64baf00579ece42506b0286e65b4d64a1fa5a3475ce3fac3f309d61\",\n  \"tests/test_artifact_proposal_orchestration.py\": \"b47637a3b2685593ac097724eb6bfa6bd9eab54cd828e4d4e664b65ad4cdcd85\",\n  \"tests/test_artifact_proposals.py\": \"74d6db826c2394e699af4db6b5c95924baded84651220547a1d0826ac17a531c\",\n  \"tests/test_artifact_reference_authorization.py\": \"7b643ecb1349c7e8f6701752394fe330a56b0f499d383b6a1251ceac201b1459\",\n  \"tests/test_artifact_reference_directives.py\": \"21c03176c817f918fac634b5fd7e32b15679c77e6f7cb453ef3f30fed125181f\",\n  \"tests/test_artifact_reference_evidence.py\": \"c40580c216af846d1ee5835a47b69359f43cb0abea5f185eec6410c920e59104\",\n  \"tests/test_artifact_reference_read_actions.py\": \"9117e9bfd4f97ce61e1cd370e8f8d80ee2cc9ab88368085b0b1829475ec317ac\",\n  \"tests/test_artifact_relationship_policy.py\": \"080d0879756e56de5935cf1437fc2838a20583e6835ef8942c568436072b25b5\",\n  \"tests/test_cli_context.py\": \"a4efac83b05bcd94218fd6866fbfa7a00da6f097e62ed36322a3862bfb56678f\",\n  \"tests/test_codex_backend.py\": \"e13058ab07cce87e385983a7838283f1cc11c00862105a8a9b8bccd0e4b578f6\",\n  \"tests/test_collaboration_context.py\": \"7523a2225b7d16c1306e05ee2860492e85d71cb64380ac5bc89af2be4eb978f1\",\n  \"tests/test_collaboration_events.py\": \"60e0ef367873929d89ca00125eba8fd800a67616dc5b2fc92c374c766e6a3b4b\",\n  \"tests/test_consensus_deadlock_continuation.py\": \"bda2c2f3c64d7cead69ea916361a6621278397964c9021acf2f7c9c24bdb3de1\",\n  \"tests/test_consensus_event_store.py\": \"fc31c27caf2639097f3932c0ea600c6283b8579fb456c865b146366f7855d6ff\",\n  \"tests/test_consensus_execution.py\": \"a0a24676260336f76a5ba17dcb73934f79b89db66b35cb627082493f1bd05238\",\n  \"tests/test_consensus_material_store.py\": \"201365cfbb64eeefdbd0d22d7aa9b77814503c3a23abd1f4bf4f7be6dafa46ee\",\n  \"tests/test_consensus_projection.py\": \"0d134e6b5bf1b63d44dd74086c54800aa1bf2f13b13313b2088189f7cd482d3c\",\n  \"tests/test_consensus_runtime_adapter.py\": \"009aa55932db52895edad41e32f0cae6d1f9187d278e30fa39ef48cdc90b3900\",\n  \"tests/test_consensus_runtime_correlation.py\": \"0c9a13d5561ffa0a8cdf60685d8475a869947af5d30c3aa3f58ebb22cd625aa0\",\n  \"tests/test_consensus_story_runtime_bridge.py\": \"4ec0f70399aad8a2105ddb5c78c207fb7b90dcd3a05ffc14fe3b31b0de8e32f4\",\n  \"tests/test_conversation_archive.py\": \"ec07d187a709452d9f7a3950802d27febfe6eb0a3dbc75ed6a67f982885db961\",\n  \"tests/test_conversation_catalog.py\": \"2f139d7876aa27d083c3c1f1422c32138495a037b6c07086356aefe2ba4f159e\",\n  \"tests/test_conversation_rag.py\": \"e9bc1e168959dc5520a7f460ab1cbf5171aa64f3d396c3b9903ba30c28cc3402\",\n  \"tests/test_conversation_rag_cli.py\": \"3ad56af4a98c2ff3f4dfc000a8dcd1e75e5b33aa0a65964cd0a82643daff9296\",\n  \"tests/test_conversation_rag_composition.py\": \"351ebfacf63a1e5b3fe8c26aec5fe56319a85f86baa1e6f1be2b26c27da703e7\",\n  \"tests/test_conversation_rag_local.py\": \"953358a8a08a32c762f347adb5b4d784acd0528459df3afb35d9260f4c3ce80d\",\n  \"tests/test_conversation_rag_runtime.py\": \"609effa4e2a3043330ae7625f449606f40618c3f5faea6072f871846e8a577dd\",\n  \"tests/test_conversation_rag_store.py\": \"f2249bfb7c00002e189415a444a5796065887579ad48916156228796919f6977\",\n  \"tests/test_conversation_retrieval.py\": \"bbd491d6b114add1e6df1f8aef8292b7e3ab6c1a4c54c92acda287996b526be2\",\n  \"tests/test_conversation_runtime.py\": \"8587d6d5897f9c879996af071b600e98979c7413bbe2e1bf8251de783026c908\",\n  \"tests/test_conversation_search.py\": \"426bc60beead26d4a23e8749c3c84aa2fff9f1dcdd102a5443e51cf16378c430\",\n  \"tests/test_conversation_storage.py\": \"fef7539c942fd32299a9b5fd6036e0b0014d6a4e54e3814ee68fddd78032a232\",\n  \"tests/test_conversation_storage_migration.py\": \"e4922b62ebe9ba8b0fc786786af5a26213db2227518508b9a0eaf2a94a678670\",\n  \"tests/test_conversation_storage_migration_cli.py\": \"21f3179d29f10c9fe23b39d8a337bf3a3872b72dad7d2dc52197b778935086e2\",\n  \"tests/test_conversation_storage_provisioning.py\": \"6b6ecee35d5e1ac69721a02514651932bb04fe6e4b47ba3bc17f3c5406f6be16\",\n  \"tests/test_conversation_storage_selection.py\": \"7251782d25009268845b1b227794dead1ff43b9168a38ffa1d59ab88e000b99b\",\n  \"tests/test_conversation_storage_selection_cli.py\": \"1d68a750e8e698c539cebce9a16f979c43b37340c40507688f399d3ab6ef063e\",\n  \"tests/test_debug_log.py\": \"c50c09698b76b6ceceff343968bd1a0b256a57bc5c308be5d898497cf94d973f\",\n  \"tests/test_filesystem_collaboration_event_store.py\": \"41904d9e77fd94e719aa8cf4c2135739db7a61533fe71f14ef676fbdd52d64d7\",\n  \"tests/test_filesystem_conversation_archive.py\": \"ce154c57513d6eb83edd5d88808faaf3f75bc27b55a3313f0f2cbf81b930e7a5\",\n  \"tests/test_generic_rag_adapter.py\": \"5e3c17794df9ce9f59c244c61b735bea56816c6d9d615bdf309d49505798c484\",\n  \"tests/test_git_adapter_integration.py\": \"b55134e28b82518393bb92e459ae4c7ebc7d75783bd7b4b66e4ae67cd3e95da7\",\n  \"tests/test_git_adapter_process.py\": \"e8c2afff5f5c8a2933ca716737f220271fb8f5b22dc15cfa6992d37460864c3a\",\n  \"tests/test_git_contracts.py\": \"87ac7e04f93904f45f504896104bf69e8e054b43f499948c6731203b7d91c2aa\",\n  \"tests/test_git_external_operation_inspection.py\": \"57e1bc87ce972d20eae3685debc311397ca2451b21dea5652980cfba2f2eb0e5\",\n  \"tests/test_git_linked_worktree_reads.py\": \"38a904a4478e909acf28695c8a3104c54a950f838dbd67569438fa2dcf16e79d\",\n  \"tests/test_git_process.py\": \"d0cc3634e95c45982cc47934c2ba849c874a20b1019cfc397fb211d3497b588d\",\n  \"tests/test_git_process_profiles.py\": \"7bbc087cfae968f02283156bc2006280cd576ccd4c6b9da9c0b94d4bd5a494c8\",\n  \"tests/test_git_repository_lock.py\": \"4f3044f58c081f0ceeeccadb8c977f12629488d84a8b8a52b23369c7cbec3cb7\",\n  \"tests/test_git_session_checkpoint_classifier.py\": \"8914791d9d8f7025c21e875eec78a4108eaebc73646cbf2537bdf030ceb425aa\",\n  \"tests/test_git_session_checkpoint_contracts.py\": \"ccd59e2e1a0e7dd4c9049df62719c0818abf9d703421b72941d5bec9530f5f91\",\n  \"tests/test_git_session_checkpoint_process.py\": \"93cb7563ba9575b59758e1ae263d97cf2f8db45f2b8696ac042e3a4b3bf63f97\",\n  \"tests/test_git_session_checkpoints.py\": \"47d0ca37b654faeb64bceea14597e6f84525bae192296b1c48d1888185d26544\",\n  \"tests/test_git_session_contracts.py\": \"e727016b36d842d13d007d92e101e90d64f7a482694fe3b544e3d0d3b4ab79d5\",\n  \"tests/test_git_session_history.py\": \"f3e58a9bed368ee363ef20c9aeb48eab41d3a7b8462acb01c2f51d87afcb3c45\",\n  \"tests/test_git_session_history_contracts.py\": \"a11bbc55aa864fe7902846afd2898f5745b3d1ff010e124068e4db32901cebe7\",\n  \"tests/test_git_session_resources.py\": \"8ec4b3c9d51100ebdca5ca937d203b20fbfb004ea0d1f79ff947423c9c68d1c8\",\n  \"tests/test_git_story_commit_candidates.py\": \"403699a17f706e193fe3d7bc695e1a80d07bf064bb4dce1cea9d396dad6c52a3\",\n  \"tests/test_git_story_commit_contracts.py\": \"6c7128760b96b6757f79384d4f0da9e140f00dcd7c04321851fd3ef6d3525ba8\",\n  \"tests/test_git_story_commits.py\": \"a7b6d80a5ffe2625be8f4392cc183d077e89021fe0050d9ed8eecf75826a9d67\",\n  \"tests/test_interactive_auth.py\": \"d50a1d138e0bf5b17751d9f5b1d8761a49e3c8ce5730a99feb3d90f4314a36cf\",\n  \"tests/test_interactive_cancellation.py\": \"5a67f41559dfd97b74844c2ac2629f3de902c11c3051e87074a518990e8fec86\",\n  \"tests/test_interactive_collaboration_view.py\": \"085bef626fc15509013531f85fb973455076c28638f931ab98f03e9e0990e978\",\n  \"tests/test_interactive_commands.py\": \"352878df85aaaa2f7c0a7c6f855bf1e2420e7b41937d1ea7071d98dab29e05ac\",\n  \"tests/test_interactive_controller.py\": \"f38a53431667ed607471ee71fc6d3e0f5d351ab1e6304a15fba58f0891085722\",\n  \"tests/test_interactive_line_editor.py\": \"5842be99e4a74576911079dfd1d955798da48e0b600aab7548a4043254e19622\",\n  \"tests/test_interactive_live_composer.py\": \"b5e50d758bef67570510d49d33a1dad8d6cd4929aa5373f087b41eb6ffe965bc\",\n  \"tests/test_interactive_management.py\": \"cd18bcf95b76e64392581fe370acee5d7a6a45026c45abff0b613d2dec594443\",\n  \"tests/test_interactive_pty.py\": \"099848a53624ac1e5284b8f0c9a6c73fe4308644e0af71b992ba03582870d2d5\",\n  \"tests/test_interactive_search.py\": \"10b76d5afc38c78837f697fdceb7c2a15c63814fe0aab935815a8594498a5f73\",\n  \"tests/test_interactive_settings.py\": \"de8af8c77e03da4e9dc6bb6f5a289dde74d3b0ae6032e2f409dc70ac677af52c\",\n  \"tests/test_interactive_terminal.py\": \"8892bf015ee382952dbfeb67e9efcb08ea036b4c3894c0811bbaaa7643b363a3\",\n  \"tests/test_interactive_terminal_completion.py\": \"111f4b0a43a7049a359f72866f4474c62bdd6369389b91c564954e30b4e0308f\",\n  \"tests/test_interactive_terminal_composer.py\": \"b8ec8daec4fd01fffe0e85eaa4b63aa6d7f9ca23da36587c2f6e8c13d3ed6064\",\n  \"tests/test_interactive_terminal_external_view.py\": \"2338b5def0e3ac8b43894d0290adb28eacc89e8d045ee4033593d480d3c1b4ba\",\n  \"tests/test_interactive_terminal_foundation.py\": \"8166faf1779f10a7bb4a33b1a51fa0248f510e57d4f354025e77adbe4128912e\",\n  \"tests/test_interactive_terminal_history.py\": \"b1a52a023290a08bad777f924b3ee31610931f2ed673a50e4069630442787907\",\n  \"tests/test_interactive_terminal_input_lifecycle.py\": \"95f36c0a9c227b5134c4068ae4dc6c196367fb7d11423742466f11e4fd464b8f\",\n  \"tests/test_interactive_terminal_picker.py\": \"dc2ea88c7ff281b2de35312a6d3595598c389762d1dc5fe42dfca39cf7ff6003\",\n  \"tests/test_interactive_terminal_reference_activation.py\": \"2eeee8371350798ad71c44c25a54cd5c4cbd971a5d09bb96f99db90e6bbf7f4b\",\n  \"tests/test_interactive_terminal_viewer.py\": \"938563ead89761db04c94ab58f790b39a7ab436a6984f7817d6004f78f13e4d3\",\n  \"tests/test_interactive_terminal_views.py\": \"d2acaf6af47da2cd249b3e11eedf45d5b968242c62d1c4962d1b5b8aa41c536d\",\n  \"tests/test_lead_action_live_harness.py\": \"7a1ab37b857160228de8fce8bb3bb168c907c02c42c31159fe4dd5fe3583a017\",\n  \"tests/test_lead_artifact_application.py\": \"048a53d1138ab34fb1dda61397c67022d718c9cbee2e094d565cf7d3b5abd2b9\",\n  \"tests/test_lead_artifact_objectives.py\": \"93982e244ff7b99394eb2b3a3d6a19e54573e861ed149f642a0e296f5d3c2ae1\",\n  \"tests/test_lead_evidence_grounding.py\": \"fa01851fb9c1e3b9a86fa61879531852861993b3057711afe9b353d3077c808a\",\n  \"tests/test_lead_orchestration.py\": \"ca41e9c374541871723020b9ea703bc364208e6926badcfabb66670c81cf317e\",\n  \"tests/test_lead_recommendations.py\": \"c406132b895fabb71860c58b864dc5319cb6d9cc4112aeeaef0e7b274c40a88e\",\n  \"tests/test_lead_session_continuity.py\": \"4fc79147cd1a95e6ae0d094dfd9e97f590869506f8f63eb58bdd9d801efef0fb\",\n  \"tests/test_lead_story_commit.py\": \"9c84715f33086b4801a6bed8b0d82986abf2650b1f433894d60a7d1fbf127dfc\",\n  \"tests/test_prompts.py\": \"ab98169d0585d18fdefa11b7732625ec10e1892c28389f0082cec13ea21a8199\",\n  \"tests/test_provider_auth.py\": \"c72d610abe682eca7aaf5a18fdcfa26368b4d3bf0213660688023b13dc2f007a\",\n  \"tests/test_provider_auth_recovery.py\": \"9d2cdfd7e2935ef813e38c9dc260a5a308ac04d27fedfe4b29fe0455a14188c2\",\n  \"tests/test_provider_auth_recovery_live.py\": \"7184ca3f14d474d58c545ab7853a476a2529d8f0599b2a79d0768e52bb862eba\",\n  \"tests/test_provider_catalog.py\": \"6e954d6de6de7b3e47eb47b1559245e0432cd18efa3be93421689d20ff4899f0\",\n  \"tests/test_provider_error_artifacts.py\": \"fe1bc43c2edf32c75cd9e2bc8758cf9681da1e0ea8bfbbb0179c258cdd3f7d40\",\n  \"tests/test_provider_process_streaming.py\": \"be6ae0de1ac24699602ea47df9ce9fbd1158ccd6e155f3754cd38b50c26ffe71\",\n  \"tests/test_provider_timeout_recovery.py\": \"0941a6e609231e73138e8b3755106e4d50c51c5b1d32cedcf3c01f4658e801a2\",\n  \"tests/test_public_api_and_cli.py\": \"77542661c553284f3293782f139819fa9324c62e0a56142c41adbd2a2f47d57d\",\n  \"tests/test_rag_module_and_packaging_boundary.py\": \"7af46a977fe174a554fad34fa3a4fc06cef65bc1821d613739d1d2050ff72dc9\",\n  \"tests/test_recommendation_actions.py\": \"39847408aec08e7f37bb7526246497cbaf4617a029a88f0a1f97de1e4c6896d5\",\n  \"tests/test_reply_trace.py\": \"87f86485d8f5f8fd3206cb6cae8c6a62566c117bce35e7b4b3904c5001513d71\",\n  \"tests/test_runtime_reference_integration.py\": \"371a0b47d6f38630bb647d98ce36ec2788776e9b392ba41f85d3a4b446ed2f86\",\n  \"tests/test_session_lifecycle.py\": \"e73a9e5a9eb95d523267797825c4690c36eed61f5191d8bcbe190b8495ff2305\",\n  \"tests/test_session_recovery_contracts.py\": \"2d803765e4f68fa3cc2c9268cc2d90cff1e5728cca037a1509cc02077b0f9c6a\",\n  \"tests/test_session_recovery_reconciliation.py\": \"3731a11030b0bebbb98b5704ad862e63c9503b82af824f23fb93c86990db43aa\",\n  \"tests/test_session_transition_assessment.py\": \"ada1a4a7af4b0be659746b2ba4a4f5d7d3bf3606b11294689186829f58445e85\",\n  \"tests/test_smoke_cli.py\": \"55ac36d51aedfaa0b22b17018522d1bbc18b02909669e067d0d29564b193ac1d\",\n  \"tests/test_specialist_orchestration.py\": \"b8370b0d4b7ddfdf8201d3ab6ee21864b081c6d54ef52c33a71c7c6f99e0de16\",\n  \"tests/test_specialist_routing.py\": \"69f386922a8bdd456c68480fc6a9e8730864b3b859f2f9bafc4ac1d06814d6d4\",\n  \"tests/test_specialist_routing_runtime.py\": \"002f6947164f84dc4735eed148d9136f15cd1367c51e1d1eb917e04e674d5e13\",\n  \"tests/test_sqlite_collaboration_event_store.py\": \"a48ef1f81e7b7345cdf853e4620ccd9344909b3c1ad459bd94656f066348484c\",\n  \"tests/test_sqlite_conversation_storage.py\": \"8de09f4b56dc03eba044af20cf50145a5da7f5f3c1a84e6e2c56a0ffe4caeea5\",\n  \"tests/test_sqlite_database.py\": \"e4a731ea2964aa1006ef2f850af371675e027a833a941d3777963578afe99d3e\",\n  \"tests/test_suite_budget.py\": \"b1f6098ecdc1477f16c34b4959fd056aa10c5a4aef10e2c4c9e1744cac3593ed\",\n  \"tests/test_workspace_and_config.py\": \"aa9a7b199d4196ee366f9d0f74905e2983000abd7dcf4702719d33d47b3883a1\",\n  \"tests/test_workspace_fixtures.py\": \"34650d8046a5b82061433f3f63d098901f202918bd2d3039cce8db063159afe8\",\n  \"tests/test_workspace_policy_compatibility.py\": \"3f03748def3d19dc64c204cfa627370dc641c3d51df721910a2f8cdfd75fb5d9\",\n  \"tests/test_workspace_session_history.py\": \"2b969fa9bb497dc6ebb19bc94e3b6ef00d22096cebfaeaf0df22e05767be336c\",\n  \"tests/test_workspace_session_resources.py\": \"1b64cc0fa49ddc884001352d442b8d054f465a1f488430682aa40356fc61f312\",\n  \"tests/test_workspace_v2_initialization.py\": \"07e43f9515377888d94f26cc8b6542eae192ce33b4865ad9b6c64a2164763b9e\",\n  \"tests/test_writing_artifacts.py\": \"445fa4f2f9caf57ee579a7dc097d7f76d083d867138e9d702a55a06bba8360d4\",\n  \"uv.lock\": \"f8d3ebb4bc7b069d2669907e82d93a5a0d3b55d4056897944a51e32315030b91\"\n}\nPINS\ncat > \"$out/control.py\" <<'CONTROL'\n\"\"\"Stdlib-only hosted timeout fixture; never imports application or test code.\"\"\"\nimport hashlib\nimport json\nimport os\nfrom pathlib import Path\nimport platform\nimport signal\nimport stat\nimport subprocess\nimport sys\nimport time\n\nSOURCE = \"7336624213e3148ea300124ea9fd0cbd9c5bcbb8\"\nSOURCE_TREE = \"f385df178e1c63b72356dbd64de5c0ebdd12f86e\"\nOUTPUT = Path(os.environ[\"RUNNER_TEMP\"]) / \"timing-diagnostic\"\nPAYLOAD = b\"owned scratch survives worker interruption\\n\" * 128\nSENTINEL = b\"external sentinel must remain outside the owned scratch\\n\"\n\n\ndef write_json(name, value):\n    (OUTPUT / name).write_text(json.dumps(value, indent=2) + \"\\n\")\n\n\ndef git(*args):\n    return subprocess.check_output([\"git\", *args], text=True, timeout=5).strip()\n\n\ndef source_hashes():\n    expected = json.loads((OUTPUT / \"source-pins.json\").read_text())\n    return {name: hashlib.sha256(Path(name).read_bytes()).hexdigest()\n            for name in expected}\n\n\ndef proc_identity(raw):\n    opening, closing = raw.find(\"(\"), raw.rfind(\")\")\n    if opening < 1 or closing < opening:\n        raise ValueError(\"invalid proc stat framing\")\n    tail = raw[closing + 1:].split()\n    if len(tail) < 20:\n        raise ValueError(\"incomplete proc stat\")\n    return {\"pid\": int(raw[:opening].strip()), \"state\": tail[0],\n            \"ppid\": int(tail[1]), \"pgid\": int(tail[2]),\n            \"start_ticks\": int(tail[19])}\n\n\ndef read_proc(pid):\n    with (Path(\"/proc\") / str(pid) / \"stat\").open() as handle:\n        return proc_identity(handle.read(16385))\n\n\ndef scratch_fd():\n    identity = json.loads(os.environ[\"SCRATCH_IDENTITY\"])\n    path = os.environ[\"TMPDIR\"]\n    if path != identity[\"path\"]:\n        raise ValueError(\"scratch path differs from preparation\")\n    parent = os.open(identity[\"parent\"], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)\n    try:\n        current = os.fstat(parent)\n        if [current.st_dev, current.st_ino, current.st_uid] != identity[\"parent_identity\"]:\n            raise ValueError(\"scratch parent identity changed\")\n        root = os.open(os.path.basename(path), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,\n                       dir_fd=parent)\n    finally:\n        os.close(parent)\n    current = os.fstat(root)\n    if ([current.st_dev, current.st_ino, current.st_uid] != identity[\"root\"]\n            or current.st_uid != os.geteuid() or not stat.S_ISDIR(current.st_mode)):\n        os.close(root)\n        raise ValueError(\"scratch root identity changed\")\n    return root, identity\n\n\ndef prepare():\n    expected = json.loads((OUTPUT / \"source-pins.json\").read_text())\n    before = source_hashes()\n    if before != expected or len(before) != 412:\n        raise ValueError(\"O source pins differ\")\n    head, tree, parent = git(\"rev-parse\", \"HEAD\"), git(\"rev-parse\", \"HEAD^{tree}\"), git(\"rev-parse\", \"HEAD^\")\n    if (head != os.environ[\"GITHUB_SHA\"] or parent != SOURCE\n            or git(\"rev-parse\", SOURCE + \"^{tree}\") != SOURCE_TREE\n            or git(\"diff\", \"--name-only\", SOURCE, \"HEAD\") != \".github/workflows/pr-validation.yml\"\n            or git(\"status\", \"--porcelain\")):\n        raise ValueError(\"workflow-only O child binding differs\")\n    sentinel = OUTPUT / \"outside-sentinel.txt\"\n    sentinel.write_bytes(SENTINEL)\n    root, identity = scratch_fd()\n    try:\n        os.mkdir(\"nested\", mode=0o700, dir_fd=root)\n        nested = os.open(\"nested\", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)\n        try:\n            fd = os.open(\"payload.bin\", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,\n                         0o600, dir_fd=nested)\n            with os.fdopen(fd, \"wb\") as handle:\n                handle.write(PAYLOAD)\n            os.symlink(str(sentinel), \"external-link\", dir_fd=nested)\n        finally:\n            os.close(nested)\n    finally:\n        os.close(root)\n    write_json(\"prepared.json\", {\"control_only\": True, \"canonical_credit\": False,\n               \"application_executed\": False, \"source_sha\": SOURCE, \"source_tree\": SOURCE_TREE,\n               \"checkout_sha\": head, \"checkout_tree\": tree, \"parent\": parent,\n               \"workflow_sha256\": hashlib.sha256(Path(\".github/workflows/pr-validation.yml\").read_bytes()).hexdigest(),\n               \"run_id\": int(os.environ[\"GITHUB_RUN_ID\"]),\n               \"run_attempt\": int(os.environ[\"GITHUB_RUN_ATTEMPT\"]),\n               \"event_name\": os.environ[\"GITHUB_EVENT_NAME\"],\n               \"shared_deadline\": int(os.environ[\"TEST_JOB_DEADLINE\"]),\n               \"source_hashes_before\": before, \"scratch_identity\": identity,\n               \"payload_bytes\": len(PAYLOAD), \"payload_sha256\": hashlib.sha256(PAYLOAD).hexdigest(),\n               \"external_sentinel\": str(sentinel),\n               \"sentinel_sha256\": hashlib.sha256(SENTINEL).hexdigest(),\n               \"python\": platform.python_version(), \"platform\": platform.platform(),\n               \"prepared_epoch\": time.time()})\n\n\ndef worker(role):\n    fd = os.open(OUTPUT / (role + \"-events.jsonl\"), os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_CLOEXEC, 0o600)\n    def emit(event):\n        row = {\"event\": event, \"role\": role, \"monotonic_ns\": time.monotonic_ns(),\n               \"epoch_ns\": time.time_ns(), \"identity\": read_proc(os.getpid())}\n        data = (json.dumps(row, separators=(\",\", \":\")) + \"\\n\").encode()\n        if os.write(fd, data) != len(data):\n            raise RuntimeError(\"incomplete event write\")\n    signal.signal(signal.SIGINT, lambda _signal, _frame: emit(\"SIGINT\"))\n    if role == \"parent\":\n        child = subprocess.Popen([sys.executable, \"-u\", __file__, \"child\"], stdin=subprocess.DEVNULL)\n        ready = time.monotonic() + 5\n        while not (OUTPUT / \"child-events.jsonl\").exists():\n            if child.poll() is not None or time.monotonic() >= ready:\n                raise RuntimeError(\"child did not become ready\")\n            time.sleep(0.01)\n    emit(\"ready\")\n    while True:\n        emit(\"heartbeat\")\n        time.sleep(1)\n\n\ndef observe(worker_status, tee_status):\n    result = {\"control_only\": True, \"canonical_credit\": False,\n              \"worker_exit\": worker_status, \"tee_exit\": tee_status, \"errors\": []}\n    try:\n        identities, grace = {}, {}\n        for role in (\"parent\", \"child\"):\n            data = (OUTPUT / (role + \"-events.jsonl\")).read_bytes()\n            if len(data) > 65536:\n                raise ValueError(\"event evidence exceeds bound\")\n            events = [json.loads(line) for line in data.splitlines()]\n            ready = [row for row in events if row[\"event\"] == \"ready\"]\n            signals = [row for row in events if row[\"event\"] == \"SIGINT\"]\n            hearts = [row for row in events if row[\"event\"] == \"heartbeat\"]\n            if len(ready) != 1 or not signals or not hearts:\n                raise ValueError(\"missing readiness, INT, or heartbeat evidence\")\n            identity = ready[0][\"identity\"]\n            for row in events:\n                if any(row[\"identity\"][key] != identity[key] for key in (\"pid\", \"pgid\", \"start_ticks\")):\n                    raise ValueError(\"process identity changed within event stream\")\n            identities[role] = identity\n            grace[role] = (hearts[-1][\"monotonic_ns\"] - signals[0][\"monotonic_ns\"]) / 1e9\n        if (identities[\"parent\"][\"pgid\"] != identities[\"child\"][\"pgid\"]\n                or identities[\"parent\"][\"pid\"] != identities[\"child\"][\"ppid\"]\n                or any(value < 28 for value in grace.values())):\n            raise ValueError(\"same-group parent/child INT grace is not proved\")\n        stop = min(time.monotonic() + 5,\n                   time.monotonic() + int(os.environ[\"TEST_JOB_DEADLINE\"]) - 360 - time.time())\n        remaining = []\n        while True:\n            remaining = []\n            for item in Path(\"/proc\").iterdir():\n                if not item.name.isdecimal():\n                    continue\n                try:\n                    current = read_proc(int(item.name))\n                except FileNotFoundError:\n                    continue\n                if current[\"pgid\"] == identities[\"parent\"][\"pgid\"]:\n                    remaining.append(current)\n            if not remaining or time.monotonic() >= stop:\n                break\n            time.sleep(0.1)\n        result.update(process_identities=identities, post_int_heartbeat_seconds=grace,\n                      remaining_group_members=remaining)\n        if remaining:\n            raise ValueError(\"worker process group remains present\")\n        root, identity = scratch_fd()\n        try:\n            nested = os.open(\"nested\", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)\n            try:\n                fd = os.open(\"payload.bin\", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=nested)\n                with os.fdopen(fd, \"rb\") as handle:\n                    if handle.read(len(PAYLOAD) + 1) != PAYLOAD:\n                        raise ValueError(\"nonempty payload changed\")\n                if os.readlink(\"external-link\", dir_fd=nested) != str(OUTPUT / \"outside-sentinel.txt\"):\n                    raise ValueError(\"internal symlink changed\")\n            finally:\n                os.close(nested)\n        finally:\n            os.close(root)\n        if (OUTPUT / \"outside-sentinel.txt\").read_bytes() != SENTINEL:\n            raise ValueError(\"external sentinel changed\")\n        after = source_hashes()\n        if after != json.loads((OUTPUT / \"source-pins.json\").read_text()):\n            raise ValueError(\"source pins changed\")\n        result.update(scratch_identity=identity, scratch_nonempty_after_worker=True,\n                      sentinel_sha256=hashlib.sha256(SENTINEL).hexdigest(),\n                      source_hashes_after=after, source_valid=True,\n                      observed_epoch=time.time())\n        if worker_status != 137 or tee_status != 0:\n            raise ValueError(\"expected forced timeout 137 with successful tee\")\n    except Exception as exc:\n        result[\"errors\"].append({\"type\": type(exc).__name__, \"message\": str(exc)})\n    write_json(\"pre-cleanup.json\", result)\n    if result[\"errors\"]:\n        raise SystemExit(1)\n\n\nif __name__ == \"__main__\":\n    mode = sys.argv[1]\n    if mode == \"prepare\":\n        prepare()\n    elif mode in (\"parent\", \"child\"):\n        worker(mode)\n    elif mode == \"observe\":\n        observe(int(sys.argv[2]), int(sys.argv[3]))\n    else:\n        raise ValueError(\"unsupported control phase\")\nCONTROL\ntest_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds > 1350 )); then test_seconds=1350; fi\nprintf '{\"available_worker_seconds\":%s,\"worker_limit_seconds\":10,\"kill_grace_seconds\":30,\"shared_reserve_seconds\":450,\"post_observation_limit_seconds\":8,\"post_observation_kill_grace_seconds\":1}\n' \"$test_seconds\" > \"$out/control.json\"\nif (( test_seconds < 10 )); then exit 124; fi\nif [[ \"$GITHUB_EVENT_NAME\" != \"workflow_dispatch\" || \"$DIAGNOSTIC_PROFILE_MODE\" != \"none\" || \"$CONTROL_ARCH\" != \"arm64\" || \"$CONTROL_SCRATCH\" != \"disk\" ]]; then exit 2; fi\nprepare_seconds=$(( test_seconds - 1 ))\nif (( prepare_seconds > 29 )); then prepare_seconds=29; fi\ntimeout --signal=TERM --kill-after=1s \"${prepare_seconds}s\" .venv/bin/python -u \"$out/control.py\" prepare\ntest_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))\nif (( test_seconds < 10 )); then exit 124; fi\nset +e\ntimeout --signal=INT --kill-after=30s 10s .venv/bin/python -u \"$out/control.py\" parent 2>&1 | tee \"$out/worker.log\"\ntest_statuses=(\"${PIPESTATUS[@]}\")\nworker_status=${test_statuses[0]}\ntee_status=${test_statuses[1]}\nprintf '%s\n' \"$worker_status\" > \"$out/worker-exit-code.txt\"\nprintf '%s\n' \"$tee_status\" > \"$out/tee-exit-code.txt\"\ntimeout --signal=TERM --kill-after=1s 8s .venv/bin/python -u \"$out/control.py\" observe \"$worker_status\" \"$tee_status\"\nobserve_status=$?\nprintf '%s\n' \"$observe_status\" > \"$out/observe-exit-code.txt\"\ntest_status=$worker_status\nif (( tee_status != 0 )); then test_status=$tee_status; fi\nif (( observe_status != 0 )); then test_status=$observe_status; fi\nprintf '%s\n' \"$test_status\" > \"$out/exit-code.txt\"\nexit \"$test_status\"\n"
+        },
+        {
+          "uses": "actions/upload-artifact@v4",
+          "timeout-minutes": 1,
+          "if": "always() && (github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true')",
+          "with": {
+            "name": "${{ github.event_name == 'workflow_dispatch' && format('timing-diagnostic-{0}-{1}', inputs.arch, inputs.scratch) || 'timing-diagnostic' }}",
+            "path": "${{ runner.temp }}/timing-diagnostic",
+            "if-no-files-found": "error"
+          }
+        },
+        {
+          "name": "Remove diagnostic scratch storage",
+          "if": "always() && steps.scratch.outputs.directory != ''",
+          "env": {
+            "SCRATCH": "${{ steps.scratch.outputs.directory }}",
+            "SCRATCH_IDENTITY": "${{ steps.scratch.outputs.identity }}",
+            "MEMORY": "${{ inputs.scratch == 'memory' }}"
+          },
+          "run": "if [[ \"$MEMORY\" == \"true\" ]]; then\n  if mountpoint -q \"$SCRATCH\"; then\n    sudo umount \"$SCRATCH\"\n  fi\n  rmdir \"$SCRATCH\"\nelse\n  printf 'Diagnostic scratch cleanup path=%s identity=%s\\n' \"$SCRATCH\" \"$SCRATCH_IDENTITY\"\n  cleanup_seconds=\"$(python - <<'PY'\nimport os, time\nremaining = int(os.environ[\"TEST_JOB_DEADLINE\"]) - 360 - time.time()\nwork_ms = min(28000, int((remaining - 2) * 1000))\nif work_ms <= 0:\n    raise SystemExit(\"No diagnostic scratch cleanup budget remains before cancellation reserve\")\nprint(f\"{work_ms / 1000:.3f}\")\nPY\n  )\"\n  timeout --signal=TERM --kill-after=2s \"${cleanup_seconds}s\" python -u - <<'PY'\nimport json, os, re, shutil, stat, time\nrecord = json.loads(os.environ[\"SCRATCH_IDENTITY\"])\npath = os.environ[\"SCRATCH\"]\nparent = record[\"parent\"]\nname = os.path.basename(path)\nstop = int(os.environ[\"TEST_JOB_DEADLINE\"]) - 360\nif time.time() >= stop - 2:\n    raise RuntimeError(\"Diagnostic scratch cleanup window expired\")\nif (not os.path.isabs(path) or path != record[\"path\"]\n        or os.path.dirname(path) != parent or os.path.realpath(parent) != parent\n        or not re.fullmatch(r\"story-timing\\.[A-Za-z0-9]{8}\", name)):\n    raise RuntimeError(\"Diagnostic scratch path identity changed\")\nif not shutil.rmtree.avoids_symlink_attacks:\n    raise RuntimeError(\"Symlink-resistant diagnostic cleanup is unavailable\")\nfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)\ntry:\n    outer = os.fstat(fd)\n    if [outer.st_dev, outer.st_ino, outer.st_uid] != record[\"parent_identity\"]:\n        raise RuntimeError(\"Diagnostic scratch parent identity changed\")\n    inner = os.stat(name, dir_fd=fd, follow_symlinks=False)\n    if (not stat.S_ISDIR(inner.st_mode) or inner.st_uid != os.geteuid()\n            or inner.st_dev != outer.st_dev\n            or [inner.st_dev, inner.st_ino, inner.st_uid] != record[\"root\"]):\n        raise RuntimeError(\"Diagnostic scratch directory identity changed\")\n    with open(\"/proc/self/mountinfo\", encoding=\"utf-8\") as mounts:\n        for line in mounts:\n            mount = line.split()[4]\n            for escaped, decoded in ((r\"\\040\", \" \"), (r\"\\011\", \"\\t\"), (r\"\\012\", \"\\n\"), (r\"\\134\", chr(92))):\n                mount = mount.replace(escaped, decoded)\n            if mount == path or mount.startswith(path + os.sep):\n                raise RuntimeError(\"Mounted diagnostic scratch storage cannot be recursively removed\")\n    current = os.stat(name, dir_fd=fd, follow_symlinks=False)\n    if ([current.st_dev, current.st_ino, current.st_uid] != record[\"root\"]\n            or not stat.S_ISDIR(current.st_mode) or time.time() >= stop - 2):\n        raise RuntimeError(\"Diagnostic scratch identity or cleanup window changed\")\n    shutil.rmtree(name, dir_fd=fd)\n    try:\n        os.stat(name, dir_fd=fd, follow_symlinks=False)\n    except FileNotFoundError:\n        print(json.dumps({\"diagnostic_scratch_removed\": record}, sort_keys=True), flush=True)\n    else:\n        raise RuntimeError(\"Diagnostic scratch path remains after cleanup\")\nfinally:\n    os.close(fd)\nPY\nfi\n"
+        }
+      ]
+    }
+  },
+  "on": {
+    "workflow_dispatch": {
+      "inputs": {
+        "arch": {
+          "description": "Diagnostic-only standard runner architecture",
+          "type": "choice",
+          "options": [
+            "arm64"
+          ],
+          "default": "arm64"
+        },
+        "scratch": {
+          "description": "Diagnostic-only temporary filesystem",
+          "type": "choice",
+          "options": [
+            "disk"
+          ],
+          "default": "disk"
+        },
+        "profile_mode": {
+          "description": "Optional cProfile instrumentation for the exact diagnostic",
+          "type": "choice",
+          "options": [
+            "none"
+          ],
+          "default": "none"
+        },
+        "test_id": {
+          "description": "Control metadata only; no canonical test is executed",
+          "type": "string",
+          "default": "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict"
+        }
+      }
+    }
+  }
+}
