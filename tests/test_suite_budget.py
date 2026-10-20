@@ -71,17 +71,19 @@ class SuiteBudgetTests(unittest.TestCase):
         import os, sys, time
         ids = runner._HOSTED_METHOD_IDS
         self.assertEqual(runner._manifest(ids)["digest"],
-                         "sha256:7353813b99401a8ec414f9a7c647c5ec0c42176f751ed82596cd511f8229f051")
-        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (77, 7))
+                         "sha256:7944c1d47a4ee4e2ff9568efa167c686e956e4cfa66ae6e80da99a4cf3bf5d78")
+        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (116, 14))
         cases = tuple(Mock(id=Mock(return_value=value)) for value in (*ids, "unreviewed.test"))
         canonical = runner.CanonicalCollection(cases, (*ids, "unreviewed.test"))
         serial, scheduled = runner._hosted_partition(canonical, canonical)
         self.assertEqual((serial.tests, scheduled), ((cases[-1],), ids))
-        front = runner._HOSTED_PRIORITY_ID
-        self.assertEqual(runner._hosted_launch_order(ids), (front, *(value for value in ids if value != front)))
+        launch_digest = "sha256:59fce3155ac3c7af38b7d611e5f7c87d71a613be8236056f3c99384656aaf033"
+        self.assertEqual(runner._manifest(runner._hosted_launch_order(ids))["digest"], launch_digest)
+        self.assertEqual(runner._hosted_launch_order(ids[::-1]), runner._hosted_launch_order(ids))
+        self.assertEqual(runner._hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
         drift = runner.CanonicalCollection(cases, (*ids, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
         self.assertRaises(runner.RunnerError, runner._hosted_partition, drift, drift)
-        args = SimpleNamespace(command="run", hosted_methods="audited-77-v1", hosted_deadline_epoch=time.time()+3500,
+        args = SimpleNamespace(command="run", hosted_methods="audited-116-v2", hosted_deadline_epoch=time.time()+3500,
                                shard="1/4", id=[], module=[], tier=[], failfast=False, json="report.json")
         env = dict(GITHUB_ACTIONS="true", TEST_RUN_DEADLINE=str(time.time()+4500),
                    TEST_JOB_DEADLINE=str(time.time()+4500))
@@ -412,11 +414,9 @@ class SuiteBudgetTests(unittest.TestCase):
                     persisted = next(job for job in json.loads(restarted.path.read_text())["jobs"] if job["id"] == uncertain["id"])
                     self.assertEqual(persisted["owned_processes"], expected_owned)
             for index, (exit_code, replacement, grouped, owned, tracked, uncertain_before, expected) in enumerate((
-                (0, None, False, False, True, False, "finished"),
-                (None, None, False, False, True, False, "running"),
+        (0, None, False, False, True, False, "finished"), (None, None, False, False, True, False, "running"),
                 (-9, None, False, False, True, False, "quarantined"),
-                (0, None, True, False, True, False, "quarantined"),
-                (0, None, False, True, True, False, "quarantined"),
+        (0, None, True, False, True, False, "quarantined"), (0, None, False, True, True, False, "quarantined"),
                 (0, "replacement", False, False, True, False, "quarantined"),
                 (None, None, False, False, False, False, "quarantined"),
                 (0, None, False, False, True, True, "quarantined"), )):
