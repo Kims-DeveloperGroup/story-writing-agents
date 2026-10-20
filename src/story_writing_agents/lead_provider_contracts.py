@@ -1110,6 +1110,7 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
         aliases = symbol_aliases(reference_counts)
         compact = rename(graph, aliases)
         compact["$defs"] = {aliases[name]: rename(node, aliases) for name, node in graph["$defs"].items()}
+        del count_references
         return compact, aliases
 
     def assemble() -> tuple[dict[str, object], dict[str, str]]:
@@ -1282,6 +1283,7 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
         assert type(result) is dict
         if targets:
             result.setdefault("$defs", {}).update(targets)
+        del literal_key, collect, visit
         return result
 
     seeded = dict(shared)
