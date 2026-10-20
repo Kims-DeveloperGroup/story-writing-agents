@@ -11,7 +11,7 @@ on:
         description: Diagnostic-only standard runner architecture
         type: choice
         options: [x64, arm64]
-        default: x64
+        default: arm64
       scratch:
         description: Diagnostic-only temporary filesystem
         type: choice
@@ -430,7 +430,7 @@ jobs:
     name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - fast tier skipped' || 'Runtime fast tier' }}
     needs: classify
     if: needs.classify.outputs.runtime == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     env:
       TEST_JOB_MINUTES: '30'
@@ -466,9 +466,60 @@ jobs:
       - name: Install runtime test dependencies
         run: uv sync --locked --all-extras --python 3.11 --no-progress
       - name: Configure deterministic test Git identity
+        env:
+          TEST_HARDWARE_ARCH: "arm64"
+          TEST_HARDWARE_PATH: "${{ runner.temp }}/runner-hardware-fast.json"
+          TEST_HARDWARE_SELECTION: "tier:fast"
         run: |
           git config --global user.name "Story Tests"
           git config --global user.email "story-tests@example.invalid"
+          .venv/bin/python - <<'PY_HARDWARE'
+          import datetime, gc, hashlib, json, os, platform, sys
+          from pathlib import Path
+          
+          output = Path(os.environ['TEST_HARDWARE_PATH'])
+          root = Path(os.environ['GITHUB_WORKSPACE'])
+          arch = os.environ['TEST_HARDWARE_ARCH']
+          expected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}
+          data = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,
+                  'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],
+                  'selection': os.environ['TEST_HARDWARE_SELECTION'],
+                  'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,
+                  'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+          try:
+              assert arch in expected, 'unsupported selected runner architecture'
+              affinity = sorted(os.sched_getaffinity(0))
+              data.update(system=platform.system(), machine=platform.machine(),
+                          cpu_count=os.cpu_count(), cpu_affinity=affinity,
+                          available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],
+                          runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],
+                          python_version=platform.python_version(), python_implementation=platform.python_implementation(),
+                          python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],
+                          run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
+                          native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],
+                          native_ref=os.environ['GITHUB_REF'],
+                          source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+                                             for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},
+                          hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),
+                                               'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})
+              assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'
+              assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'
+              assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'
+              assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)
+              assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'
+              assert data['run_id'].isdigit() and data['run_attempt'] > 0
+              assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])
+              assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}
+              data['status'] = 'passed'
+          except BaseException as error:
+              data['error'] = {'type': type(error).__name__, 'message': str(error)}
+              raise
+          finally:
+              output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+              with output.open('x', encoding='utf-8') as stream:
+                  stream.write(json.dumps(data, indent=2, allow_nan=False) + '\n')
+              print(json.dumps(data, sort_keys=True, allow_nan=False))
+          PY_HARDWARE
       - name: Run fast runtime tests
         run: |
           test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
@@ -492,6 +543,7 @@ jobs:
             ${{ runner.temp }}/fast.log
             ${{ runner.temp }}/fast-control.json
             ${{ runner.temp }}/fast-exit-code.txt
+            ${{ runner.temp }}/runner-hardware-fast.json
           if-no-files-found: warn
 
   full:
@@ -502,7 +554,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       TEST_JOB_MINUTES: '30'
@@ -539,9 +591,61 @@ jobs:
       - name: Install runtime test dependencies
         run: uv sync --locked --all-extras --python 3.11 --no-progress
       - name: Configure deterministic test Git identity
+        env:
+          TEST_HARDWARE_ARCH: "arm64"
+          TEST_HARDWARE_PATH: "${{ runner.temp }}/runner-hardware-full-${{ matrix.shard }}.json"
+          TEST_HARDWARE_SELECTION: "shard:${{ matrix.shard }}/4"
+          TEST_HARDWARE_SHARD: "${{ matrix.shard }}/4"
         run: |
           git config --global user.name "Story Tests"
           git config --global user.email "story-tests@example.invalid"
+          .venv/bin/python - <<'PY_HARDWARE'
+          import datetime, gc, hashlib, json, os, platform, sys
+          from pathlib import Path
+          
+          output = Path(os.environ['TEST_HARDWARE_PATH'])
+          root = Path(os.environ['GITHUB_WORKSPACE'])
+          arch = os.environ['TEST_HARDWARE_ARCH']
+          expected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}
+          data = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,
+                  'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],
+                  'selection': os.environ['TEST_HARDWARE_SELECTION'],
+                  'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,
+                  'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+          try:
+              assert arch in expected, 'unsupported selected runner architecture'
+              affinity = sorted(os.sched_getaffinity(0))
+              data.update(system=platform.system(), machine=platform.machine(),
+                          cpu_count=os.cpu_count(), cpu_affinity=affinity,
+                          available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],
+                          runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],
+                          python_version=platform.python_version(), python_implementation=platform.python_implementation(),
+                          python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],
+                          run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
+                          native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],
+                          native_ref=os.environ['GITHUB_REF'],
+                          source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+                                             for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},
+                          hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),
+                                               'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})
+              assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'
+              assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'
+              assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'
+              assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)
+              assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'
+              assert data['run_id'].isdigit() and data['run_attempt'] > 0
+              assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])
+              assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}
+              data['status'] = 'passed'
+          except BaseException as error:
+              data['error'] = {'type': type(error).__name__, 'message': str(error)}
+              raise
+          finally:
+              output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+              with output.open('x', encoding='utf-8') as stream:
+                  stream.write(json.dumps(data, indent=2, allow_nan=False) + '\n')
+              print(json.dumps(data, sort_keys=True, allow_nan=False))
+          PY_HARDWARE
       - name: Run full runtime shard
         run: |
           test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
@@ -565,6 +669,7 @@ jobs:
             ${{ runner.temp }}/full-${{ matrix.shard }}.log
             ${{ runner.temp }}/full-${{ matrix.shard }}-control.json
             ${{ runner.temp }}/full-${{ matrix.shard }}-exit-code.txt
+            ${{ runner.temp }}/runner-hardware-full-${{ matrix.shard }}.json
           if-no-files-found: error
 
   reconcile-full:
@@ -712,9 +817,60 @@ jobs:
         run: uv sync --locked --all-extras --python 3.11 --no-progress
       - name: Configure diagnostic test Git identity
         if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
+        env:
+          TEST_HARDWARE_ARCH: "${{ github.event_name == 'workflow_dispatch' && inputs.arch || 'x64' }}"
+          TEST_HARDWARE_PATH: "${{ runner.temp }}/timing-diagnostic/runner-hardware.json"
+          TEST_HARDWARE_SELECTION: "${{ inputs.test_id || 'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles' }}"
         run: |
           git config --global user.name "Story Tests"
           git config --global user.email "story-tests@example.invalid"
+          .venv/bin/python - <<'PY_HARDWARE'
+          import datetime, gc, hashlib, json, os, platform, sys
+          from pathlib import Path
+          
+          output = Path(os.environ['TEST_HARDWARE_PATH'])
+          root = Path(os.environ['GITHUB_WORKSPACE'])
+          arch = os.environ['TEST_HARDWARE_ARCH']
+          expected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}
+          data = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,
+                  'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],
+                  'selection': os.environ['TEST_HARDWARE_SELECTION'],
+                  'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,
+                  'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+          try:
+              assert arch in expected, 'unsupported selected runner architecture'
+              affinity = sorted(os.sched_getaffinity(0))
+              data.update(system=platform.system(), machine=platform.machine(),
+                          cpu_count=os.cpu_count(), cpu_affinity=affinity,
+                          available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],
+                          runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],
+                          python_version=platform.python_version(), python_implementation=platform.python_implementation(),
+                          python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],
+                          run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
+                          native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],
+                          native_ref=os.environ['GITHUB_REF'],
+                          source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+                                             for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},
+                          hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),
+                                               'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})
+              assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'
+              assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'
+              assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'
+              assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)
+              assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'
+              assert data['run_id'].isdigit() and data['run_attempt'] > 0
+              assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])
+              assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}
+              data['status'] = 'passed'
+          except BaseException as error:
+              data['error'] = {'type': type(error).__name__, 'message': str(error)}
+              raise
+          finally:
+              output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+              with output.open('x', encoding='utf-8') as stream:
+                  stream.write(json.dumps(data, indent=2, allow_nan=False) + '\n')
+              print(json.dumps(data, sort_keys=True, allow_nan=False))
+          PY_HARDWARE
       - name: Prepare diagnostic scratch storage
         if: github.event_name == 'workflow_dispatch'
         id: scratch
