@@ -1504,8 +1504,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         changed_sources = tuple( replace(source,
             revision_digest="sha256:" + "0" * 64) if source == character else source for source in basis.sources)
         changed = core_readiness.project_readiness(basis, changed_sources)
-        self.assertIsNone(
-            core_readiness.require_readiness(core_readiness.AuthoringTarget.NARRATIVE_RULES, changed))
+        self.assertIsNone( core_readiness.require_readiness(core_readiness.AuthoringTarget.NARRATIVE_RULES, changed))
         self.assertEqual(core_readiness.require_readiness(core_readiness.AuthoringTarget.MANUSCRIPT,
             changed).required_documents, (character.document_path,))
         rows = basis.assessment.document_judgments
@@ -1586,8 +1585,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual((selected_source.kind.value, selected_source.source_identity),
                          ("read", receipt.operation_id + "/" + receipt.result_correlation_id + "/" + receipt.evidence_id))
         original_plan = next(event for event in services.event_store.read(self.session_id, plan_owner)
-                             if getattr(event.payload, "record", None) is not None
-                             and event.payload.record.ref == selection.record_ref)
+            if getattr(event.payload, "record", None) is not None and event.payload.record.ref == selection.record_ref)
         self.assertLessEqual(receipt.boundary_start, original_plan.sequence)
         self.assertGreaterEqual(receipt.boundary_end, original_plan.sequence)
         selected_ready = restarted.inspect_core_document_readiness(self.session_id)
@@ -1677,8 +1675,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.assertEqual(notice["code"], "LEAD_CONTRACT_REJECTED")
                 self.assertEqual(notice["state"], result.state)
                 self.assertEqual(notice["language"], "KO")
-                self.assertEqual(tuple((row["task_id"], row["task_revision"])
-                          for row in notice["task_revisions"]),
+                self.assertEqual(tuple((row["task_id"], row["task_revision"]) for row in notice["task_revisions"]),
                     self.backend.calls[-1].contract.semantic_index.policy.task_revisions)
                 self.assertNotIn("PRIVATE", result.message)
                 history = self.history(conversation_id)
@@ -1687,8 +1684,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.assertEqual(len(failures), 1)
                 self.assertIs(failures[0].code, CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,)
                 visible = tuple( event.payload for event in history if (
-                        type(event.payload) is CollaborationMessagePayload
-                        and event.sender.agent_id == LEAD_ORCHESTRATOR))
+                    type(event.payload) is CollaborationMessagePayload and event.sender.agent_id == LEAD_ORCHESTRATOR))
                 self.assertEqual(len(visible), 1)
                 self.assertEqual(visible[0].content, result.message)
 
@@ -4517,10 +4513,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertIsNone(ordinary.exploration)
         self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer."))
         await self.runtime.lead_turn(self.session_id, ordinary_conversation, "Explain collaboration workflow.")
-        self.backend.enqueue(lambda call, _provider: lead_fixture_response(call, {
-            "response_type": "lead_exploration", "response_text": "Which ending should we explore?",
-            "response_details": {"status": "clarification"}}, family=0,
-            branch_key="lead-exploration-response-v1:family:2"))
+        self.backend.enqueue(lambda call, _provider: lead_fixture_response(call, { "response_type": "lead_exploration",
+            "response_text": "Which ending should we explore?", "response_details": {"status": "clarification"}},
+            family=0, branch_key="lead-exploration-response-v1:family:2"))
         clarified = await self.runtime.lead_turn(self.session_id, self.conversation("Explicit clarification"), "Explore endings.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         self.assertEqual((clarified.kind, clarified.exploration.status, clarified.exploration.ideas), (LeadOutcomeKind.EXPLORATION, exploration.ExplorationReportStatus.CLARIFICATION, ()))
 
@@ -4808,9 +4803,8 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         revise_id = self.conversation("Revise")
         revised_source = await self.proposal(revise_id, text=qualified_request, authoring_assessment=assessment,)
         revision_fixture = _current_proposal_outcome([{'agent_id': PLOT_ARCHITECT,
-            'instruction': 'Perform the revised plot check.', 'input_ids': ['user_input']}],
-            domains=('plot_structure',), relation='revise_pending', authoring_assessment=assessment,
-                                 author_review_basis=True)
+            'instruction': 'Perform the revised plot check.', 'input_ids': ['user_input']}], domains=('plot_structure',
+            ), relation='revise_pending', authoring_assessment=assessment, author_review_basis=True)
         def checked_revision(call, provider):
             from tests.recommendation_fixture import action, recommendation
             scope = asdict(revised_source.proposal.authoring_scope)
@@ -4911,9 +4905,8 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         ))
         self.assertEqual(len(_submitted_calls(case.history(conversation)[len(unchanged):])), 2)
         self.assertEqual({event.step_id for event in case.history(conversation)[len(unchanged):]
-                          if type(event.payload) is CollaborationProviderCallPayload
-                          and event.payload.state is CollaborationProviderCallState.SUBMITTED},
-                         {receipt.planning_step_id})
+            if type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.state is CollaborationProviderCallState.SUBMITTED}, {receipt.planning_step_id})
         self.assertEqual((resumed.turn.proposal.authoring_scope.task_id, resumed.turn.proposal.authoring_scope.task_revision)
                          if resumed.turn.proposal else None, (original.ref.task_id, original.ref.task_revision + 1),
                          (resumed.turn.kind, resumed.turn.next_action, resumed.turn.state,
@@ -4922,8 +4915,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         view = case.runtime.inspect_lead_collaboration(case.session_id, conversation)
         self.assertEqual(next(item.status for item in view.available_tasks
                               if item.ref.task_id == current.ref.task_id), "active")
-        self.assertIsNone(case.runtime.inspect_lead_collaboration(
-            case.session_id, conversation).discussion_context)
+        self.assertIsNone(case.runtime.inspect_lead_collaboration( case.session_id, conversation).discussion_context)
         self.assertEqual(len(case.backend.calls), spent + 2)
         current_prefix = case.history(conversation)
         with self.assertRaises(ValueError):
@@ -5143,10 +5135,9 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             'expected one of ["draft", "review", "constraint_assessment", "premise_analysis"]; got string'), ):
             rejected({**story, "proposal": {"shared_premises": [], "assignments": [{**assignment, field: value}]}},
                      ".proposal.assignments[0]." + field, requirement)
-        for (operation, field, requirement) in ((({'kind': 'create',
-            'suggested_path': 'manuscript/part/chapter.md', 'new_text': '\ud800'}, 'new_text',
-            'expected strict UTF-8 text'), ({'kind': 'patch', 'evidence_id': 'PRIVATE/id',
-            'replacement_text': 'Draft.'}, 'evidence_id', identifier), ({'kind': 'replace',
+        for (operation, field, requirement) in ((({'kind': 'create', 'suggested_path': 'manuscript/part/chapter.md',
+            'new_text': '\ud800'}, 'new_text', 'expected strict UTF-8 text'), ({'kind': 'patch',
+            'evidence_id': 'PRIVATE/id', 'replacement_text': 'Draft.'}, 'evidence_id', identifier), ({'kind': 'replace',
             'evidence_id': 'reference_1', 'new_text': 4}, 'new_text', 'expected text'), ({'kind': 'rename',
             'evidence_id': 'reference_1', 'suggested_destination': 'PRIVATE.md'}, 'suggested_destination',
             artifact_path), ({'kind': 'delete', 'evidence_id': 'PRIVATE/id'}, 'evidence_id', identifier))):
@@ -5236,8 +5227,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(restart_backend.calls, [])
         restart_backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         restart_backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
-        completed = await restarted.decide_lead_step(_decision(restored,
-            CollaborationConfirmationDecision.CONFIRM))
+        completed = await restarted.decide_lead_step(_decision(restored, CollaborationConfirmationDecision.CONFIRM))
         self.assertIs(completed.turn.state, CollaborationStepState.COMPLETED)
         self.assertEqual(len(restart_backend.calls), 2)
         self.assertEqual({path: path.read_bytes() for path in artifacts}, artifacts)
@@ -5348,8 +5338,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             task_result = complete['agent_action']['task_result']
             member = next(item for item in call.contract.semantic_index.contracts
                           if item.schema_id == task_result['schema_id'])
-            self.assertEqual(member.owner.variant.branch_key.partition(":partition:")[0],
-                "lead-response-v8:family:0")
+            self.assertEqual(member.owner.variant.branch_key.partition(":partition:")[0], "lead-response-v8:family:0")
             self.assertEqual(member.rule_graph.findings(task_result), ())
             call.contract.decode_response(response)
             task_result['response_details']['task_scope'] = lead_fixture_bound_scope(
@@ -5597,8 +5586,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertTrue(result.validation_details[0].startswith("Original response"))
         self.assertTrue(result.validation_details[-1].startswith("Repair response"))
         self.assertIn("$.agent_action.task_result", "\n".join(result.validation_details))
-        self.assertFalse(any(type(event.payload) is CollaborationProposal
-                             for event in self.history(conversation_id)))
+        self.assertFalse(any(type(event.payload) is CollaborationProposal for event in self.history(conversation_id)))
 
         reopened = compose_filesystem_conversation_storage(self.control_workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
@@ -5669,8 +5657,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual((selected.text, selected.acceptance), (original.response.response_text, "rejected"))
         unchanged = case.history(conversation)
         forged = task.LeadTaskDecision.for_conversation(case.session_id, conversation, task.LeadTaskAction.NEW_TASK,
-                                                       text="Use only an exact whole message.",
-                                                       material_refs=(replace(selected.ref, material_digest="0" * 64),))
+            text="Use only an exact whole message.", material_refs=(replace(selected.ref, material_digest="0" * 64),))
         with self.assertRaises(ValueError): await restarted.decide_lead_task(forged)
         self.assertEqual(case.history(conversation), unchanged)
         self.assertEqual(len(case.backend.calls), 2)
@@ -5890,9 +5877,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
             return json.dumps({'action': {'kind': 'answer', 'result': [], 'used_handles': []}}, separators=(',', ':'))
 
-        cases = (('correctable_without_capacity', malformed,
-            ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE), ('action_exhausted',
-            _search_history, ContextProviderTerminalCode.ACTION_EXHAUSTED))
+        cases = (('correctable_without_capacity', malformed, ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE),
+            ('action_exhausted', _search_history, ContextProviderTerminalCode.ACTION_EXHAUSTED))
         for label, response, expected_code in cases:
             with self.subTest(label=label):
                 backend = _LeadBackend()
@@ -6113,9 +6099,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(self.backend.calls, [])
 
     def test_capability_is_private_nonserializable_and_single_use(self) -> None:
-        capability = orchestrator_module._ConfirmedStepCapability(session_id='session',
-            conversation_id='conversation', step_id='step', proposal_id='proposal',
-            proposal_revision=1, proposal_digest='sha256:' + '1' * 64,
+        capability = orchestrator_module._ConfirmedStepCapability(session_id='session', conversation_id='conversation',
+            step_id='step', proposal_id='proposal', proposal_revision=1, proposal_digest='sha256:' + '1' * 64,
             basis_digest='sha256:' + '2' * 64, tail_event_id='tail', tail_sequence=1)
         self.assertNotIn("1" * 64, repr(capability))
         with self.assertRaises(TypeError): pickle.dumps(capability)
@@ -6210,8 +6195,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
                 checking.add(identity)
                 current, packet = native_synthesis[identity]
                 self.assertIs(current, binding)
-                self._require_fixture_text_boundaries(
-                    binding, packet, authorization=authorization, synthesis=True)
+                self._require_fixture_text_boundaries( binding, packet, authorization=authorization, synthesis=True)
             return result
         with mock.patch.object(BoundCallContract, 'require_authorized_answer', retain_authorized_phase):
             if pause_before_finalization:
@@ -6296,9 +6280,8 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
 
     async def test_budget_notice_preserves_maximum_utf8_synthesis(self):
         notice = ("The provider round ended. The requested second specialist "
-                  "round exceeds its remaining call budget. Start a new request "
-                  "with the lead to continue. The completed replies and synthesis "
-                  "remain in the conversation history.")
+            "round exceeds its remaining call budget. Start a new request "
+            "with the lead to continue. The completed replies and synthesis " "remain in the conversation history.")
         limit = COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
         suffix = f"\n\n{notice}"
         boundary = limit - len(suffix.encode())
@@ -6376,8 +6359,7 @@ class LeadReferenceFailurePrecedenceTests(LeadOrchestrationTestCase):
                     self.assertIs(raised.exception.code, failure.code)
                 else: self.assertIs(raised.exception, failure)
                 self.assertEqual((len(backend.reference_calls), len(backend.calls)), (1, 1))
-                self.assertIsNotNone(runtime.inspect_reference_operation(
-                    backend.providers[-1].reference_operation_id))
+                self.assertIsNotNone(runtime.inspect_reference_operation( backend.providers[-1].reference_operation_id))
 
     async def test_reference_failure_with_unwritable_history_stays_recovery_required(self):
         runtime, backend, conversation_id = self.reference_case("Unwritable reference closure")

@@ -16,7 +16,8 @@ from tests import runner, suite_budget, suite_policy
 class SuiteBudgetTests(unittest.TestCase):
     def setUp(self) -> None:
         self.budget = { "schema_version": 1, "max_sequential_wall_seconds": 1080, "max_shard_wall_seconds": 540, "max_test_source_lines": 1000,
-            "subtest_caps": {"a.test": 2, "b.test": 0, "c.control": 0, "d.control": 0}, }
+            "subtest_caps": {"a.test": 2, "b.test": 0, "c.control": 0, "d.control": 0,
+                             suite_policy.ISOLATED_TEST_ID: 0}, }
 
     def _reports(self, directory, counts):
         ids = tuple(self.budget["subtest_caps"])
@@ -37,19 +38,19 @@ class SuiteBudgetTests(unittest.TestCase):
             selected = runner.CanonicalCollection(tuple(cases[ids.index(value)] for value in selected_ids), selected_ids)
             report = runner._run_report(canonical, selected, runner._execute(selected, stream=io.StringIO()), slowest=0,
                                         policy_metadata={"suite_policy": runner._suite_policy_metadata(self.weights, self.plan),
-                                                         "selection": {"tiers": [], "shard": f"{index + 1}/4"}})
+                                                         "selection": {"tiers": [], "shard": f"{index + 1}/5"}})
             maximum = self.budget["max_shard_wall_seconds"]
             report["durations"].update(wall_seconds=maximum if index == 0 else (
-                self.budget["max_sequential_wall_seconds"] - maximum) / 3, cumulative_test_seconds=1)
-            report["tests"][0].update(duration_seconds=1, subtest_count=(*counts, 0, 0)[index])
+                self.budget["max_sequential_wall_seconds"] - maximum) / 4, cumulative_test_seconds=1)
+            report["tests"][0].update(duration_seconds=1, subtest_count=(*counts, 0, 0, 0)[index])
             self.report_data.append(report)
-        paths = [str(Path(directory) / f"{index}.json") for index in range(1, 5)]
+        paths = [str(Path(directory) / f"{index}.json") for index in range(1, 6)]
         for path, value in zip(paths, self.report_data):
             Path(path).write_text(json.dumps(value), encoding="utf-8")
         return paths
 
     def test_new_id_increased_subtests_and_relaxed_time_are_rejected(self) -> None:
-        hourly = dict(self.budget, max_sequential_wall_seconds=14400, max_shard_wall_seconds=3600)
+        hourly = dict(self.budget, max_sequential_wall_seconds=18000, max_shard_wall_seconds=3600)
         self.assertIsNone(suite_budget.check_monotonic(hourly, self.budget))
         for change in [lambda value: value["subtest_caps"].update({"c.test": 0}),
                 lambda value: value["subtest_caps"].update({"a.test": 3}),
@@ -77,6 +78,10 @@ class SuiteBudgetTests(unittest.TestCase):
         canonical = runner.CanonicalCollection(cases, (*ids, "unreviewed.test"))
         serial, scheduled = runner._hosted_partition(canonical, canonical)
         self.assertEqual((serial.tests, scheduled), ((cases[-1],), ids))
+        isolated = runner.CanonicalCollection((cases[ids.index(suite_policy.ISOLATED_TEST_ID)],),
+                                             (suite_policy.ISOLATED_TEST_ID,))
+        serial, scheduled = runner._hosted_partition(canonical, isolated)
+        self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
         launch_digest = "sha256:1c8347ab95d8eb9a217a64542af45db5a82a278ce56c427fa5f6e8b0ce86a4f1"
         self.assertEqual(runner._manifest(runner._hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner._hosted_launch_order(ids[::-1]), runner._hosted_launch_order(ids))
@@ -84,7 +89,7 @@ class SuiteBudgetTests(unittest.TestCase):
         drift = runner.CanonicalCollection(cases, (*ids, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
         self.assertRaises(runner.RunnerError, runner._hosted_partition, drift, drift)
         args = SimpleNamespace(command="run", hosted_methods="audited-147-v3", hosted_deadline_epoch=time.time()+3500,
-                               shard="1/4", id=[], module=[], tier=[], failfast=False, json="report.json")
+                               shard="1/5", id=[], module=[], tier=[], failfast=False, json="report.json")
         env = dict(GITHUB_ACTIONS="true", TEST_RUN_DEADLINE=str(time.time()+4500),
                    TEST_JOB_DEADLINE=str(time.time()+4500))
         with patch.dict(os.environ, env, clear=True), patch.object(sys, "platform", "linux"):
@@ -97,9 +102,8 @@ class SuiteBudgetTests(unittest.TestCase):
                       patch.object(os, "sched_getaffinity", return_value=set(range(cpu)), create=True)):
                     self.assertEqual(runner._hosted_options(args)["capacity"], expected)
             for key, value in (("id", [ids[0]]), ("module", ["tests"]), ("tier", ["fast"]), ("failfast", True),
-                               ("shard", None), ("json", None), ("hosted_methods", "unknown"),
-                               ("hosted_deadline_epoch", time.time()), ("hosted_deadline_epoch", time.time()+3601),
-                               ("hosted_deadline_epoch", float("nan"))):
+                ("shard", None), ("json", None), ("hosted_methods", "unknown"), ("hosted_deadline_epoch", time.time()),
+                ("hosted_deadline_epoch", time.time()+3601), ("hosted_deadline_epoch", float("nan"))):
                 self.assertRaises(runner.RunnerError, runner._hosted_options,
                                   SimpleNamespace(**{**vars(args), key: value}))
             for forbidden in ("STORY_WIRE_TEST_CAPTURE_DIR", "STORY_LOCAL_CI_TOKEN"):
@@ -117,7 +121,7 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertEqual(marker.read_text(), "retained")
 
     def test_exact_duration_boundary_passes_and_excess_fails(self) -> None:
-        for total, maximum in ((1080, 540), (14400, 3600)):
+        for total, maximum in ((1080, 540), (18000, 3600)):
             self.budget.update(max_sequential_wall_seconds=total, max_shard_wall_seconds=maximum)
             with tempfile.TemporaryDirectory() as directory:
                 paths = self._reports(directory, (2, 0))
@@ -126,7 +130,7 @@ class SuiteBudgetTests(unittest.TestCase):
                     "builtins.open", side_effect=AssertionError("budget reopened validated reports") ):
                     self.assertIs(suite_budget.check_reports(self.budget, paths), reconciliation)
                     reconciliation["shards"][0]["durations"]["wall_seconds"] = maximum + .001
-                    with self.assertRaisesRegex(suite_budget.BudgetError, "shard 1/4"):
+                    with self.assertRaisesRegex(suite_budget.BudgetError, "shard 1/5"):
                         suite_budget.check_reports(self.budget, paths)
                     self.assertIs( suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=True), reconciliation)
                     reconciliation["shards"][0]["durations"]["wall_seconds"] = maximum
@@ -145,15 +149,18 @@ class SuiteBudgetTests(unittest.TestCase):
                         "timing_basis": "observed-parent-wall-and-test-sum", "scheduled_manifest": runner._manifest(())}
             for path, row in zip(paths, rows):
                 row["execution"] = {**metadata, "serial_manifest": row["selection_manifest"]}
+                if row["selection"]["shard"] == "5/5":
+                    row["execution"].update(serial_manifest=runner._manifest(()), peak_children=1,
+                        scheduled_manifest=row["selection_manifest"], launch_manifest=row["selection_manifest"],
+                        launched=1, completed=1)
                 Path(path).write_text(json.dumps(row))
             result = runner.reconcile_reports(paths)
-            self.assertEqual(result["durations"], {"sequential_equivalent_wall_seconds": 14400,
-                             "concurrent_wall_seconds": 3600, "cumulative_test_seconds": 4})
+            self.assertEqual(result["durations"], {"sequential_equivalent_wall_seconds": 18000,
+                             "concurrent_wall_seconds": 3600, "cumulative_test_seconds": 5})
             self.assertEqual(result["execution"]["timing_basis"], "sum-observed-shard-walls")
-            for key, value in (("capacity", True), ("cleanup_complete", False), ("profile", "unknown"),
-                               ("timing_basis", "serial_prediction"), ("extra", 1), ("completed", 1),
-                               ("cleanup_deadline_epoch", 10031), ("work_deadline_epoch", True),
-                               ("launch_manifest", runner._manifest((runner._HOSTED_PRIORITY_ID,)))):
+            for key, value in (("capacity", True), ("cleanup_complete", False), ("profile", "unknown"), ("timing_basis",
+                "serial_prediction"), ("extra", 1), ("completed", 1), ("cleanup_deadline_epoch", 10031),
+                ("work_deadline_epoch", True), ("launch_manifest", runner._manifest((runner._HOSTED_PRIORITY_ID,)))):
                 self.assertRaises(runner.RunnerError, runner._execution_metadata,
                                   {**rows[0], "execution": {**rows[0]["execution"], key: value}})
             rows[0].pop("execution"); Path(paths[0]).write_text(json.dumps(rows[0]))
@@ -163,9 +170,18 @@ class SuiteBudgetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             paths = self._reports(directory, (3, 0))
             result = runner.reconcile_reports(list(reversed(paths)))
+            self.assertEqual(runner._parser().parse_args(["reconcile", *paths]).reports, paths)
+            self.assertRaises(SystemExit, runner._parser().parse_args, ["reconcile", *paths[:-1]])
             self.assertEqual(tuple(row["canonical_id"] for row in result["tests"]), tuple(self.budget["subtest_caps"]))
-            self.assertEqual(result["durations"], {"sequential_equivalent_wall_seconds": 1080, "concurrent_wall_seconds": 540, "cumulative_test_seconds": 4})
+            self.assertEqual(result["durations"], {"sequential_equivalent_wall_seconds": 1080, "concurrent_wall_seconds": 540, "cumulative_test_seconds": 5})
             self.assertEqual(suite_policy.partition_full_shards(tuple(reversed(self.budget["subtest_caps"])), self.weights), self.plan)
+            self.assertEqual(self.plan.shard_ids, (("a.test",), ("b.test",), ("c.control",), ("d.control",),
+                                                 (suite_policy.ISOLATED_TEST_ID,)))
+            self.assertEqual(self.plan.shard_weights_microseconds, (9, 5, 3, 2, 2))
+            self.assertRaisesRegex(suite_policy.SuitePolicyError, "missing the isolated test ID",
+                suite_policy.partition_full_shards, tuple(self.budget["subtest_caps"])[:-1], self.weights)
+            self.assertRaisesRegex(suite_policy.SuitePolicyError, "duplicate IDs", suite_policy.partition_full_shards,
+                (*self.budget["subtest_caps"], suite_policy.ISOLATED_TEST_ID), self.weights)
             def write(change=lambda values: None):
                 values = json.loads(json.dumps(self.report_data))
                 change(values)
@@ -183,18 +199,18 @@ class SuiteBudgetTests(unittest.TestCase):
             def selection_change(values, identifier):
                 values[0]["selection_manifest"] = runner._manifest((identifier,))
                 values[0]["tests"][0]["canonical_id"] = identifier
-            with self.assertRaisesRegex(runner.RunnerError, "reconcile requires four distinct shard report paths"):
+            with self.assertRaisesRegex(runner.RunnerError, "reconcile requires five distinct shard report paths"):
                 runner.reconcile_reports(paths[:3])
-            with self.assertRaisesRegex(runner.RunnerError, "reconcile requires four distinct shard report paths"):
+            with self.assertRaisesRegex(runner.RunnerError, "reconcile requires five distinct shard report paths"):
                 runner.reconcile_reports([*paths[:3], paths[0]])
             reject(omit_case, "shard canonical inventory differs from the current frozen inventory")
-            reject(lambda rows: rows[1]["selection"].update(shard="1/4"), "reports must have complementary unique four-shard identities")
-            reject(lambda rows: rows[0]["selection"].update(shard="1/2"), "reports must have complementary unique four-shard identities")
-            reject(lambda rows: rows[0].update(unexecuted_ids=["a.test"]), "shard 1/4 is incomplete")
+            reject(lambda rows: rows[1]["selection"].update(shard="1/5"), "reports must have complementary unique five-shard identities")
+            reject(lambda rows: rows[0]["selection"].update(shard="1/2"), "reports must have complementary unique five-shard identities")
+            reject(lambda rows: rows[0].update(unexecuted_ids=["a.test"]), "shard 1/5 is incomplete")
             reject(lambda rows: rows[0]["environment"].update(installed_distributions_sha256="a" * 64), "shard source or execution environments disagree")
             reject( lambda rows: rows[0]["suite_policy"]["partition"].update(digest="sha256:" + "a" * 64),
                 "shard canonical manifests or policy partition metadata disagree", )
-            reject(lambda rows: selection_change(rows, "b.test"), "shard 1/4 differs from its ordered partition plan")
+            reject(lambda rows: selection_change(rows, "b.test"), "shard 1/5 differs from its ordered partition plan")
             write(lambda rows: status_change(rows, "failure", "retained failure"))
             self.assertEqual(runner.reconcile_reports(paths)["outcome"], "failure")
             with self.assertRaisesRegex(suite_budget.BudgetError, "did not all pass"):
@@ -220,20 +236,17 @@ class SuiteBudgetTests(unittest.TestCase):
                            caps=self.budget["subtest_caps"], wall=3.5, metadata={}, errors=[], slowest=0)
             merged = runner._merge_method_reports(canonical, canonical, inputs, **options)
             self.assertEqual([row["canonical_id"] for row in merged["tests"]], list(ids))
-            self.assertEqual(merged["durations"], {"wall_seconds": 3.5, "cumulative_test_seconds": 4})
+            self.assertEqual(merged["durations"], {"wall_seconds": 3.5, "cumulative_test_seconds": 5})
             partial = runner._merge_method_reports(canonical, canonical, inputs[:1], **options)
             self.assertEqual((partial["outcome"], partial["totals"]["completed"],
-                              len(partial["unexecuted_ids"])), ("failure", 1, 3))
+                              len(partial["unexecuted_ids"])), ("failure", 1, 4))
             self.assertRaises(runner.RunnerError, runner._merge_method_reports,
                               canonical, canonical, inputs+inputs, **options)
             for change in (lambda r: r["tests"][0].update(subtest_count=True),
-                           lambda r: r["tests"][0].update(subtest_count=99),
-                           lambda r: r.update(unexecuted_ids=[ids[0]]),
-                           lambda r: r["tests"][0].update(canonical_id=ids[1]),
-                           lambda r: r["environment"].update(executable="foreign"),
-                           lambda r: r["totals"].update(errors=1),
-                           lambda r: r["source_binding"].update(checkout_sha="0"*40),
-                           lambda r: r.update(outcome="interrupted")):
+                lambda r: r["tests"][0].update(subtest_count=99), lambda r: r.update(unexecuted_ids=[ids[0]]),
+                lambda r: r["tests"][0].update(canonical_id=ids[1]),
+                lambda r: r["environment"].update(executable="foreign"), lambda r: r["totals"].update(errors=1),
+                lambda r: r["source_binding"].update(checkout_sha="0"*40), lambda r: r.update(outcome="interrupted")):
                 bad = json.loads(json.dumps(first)); change(bad)
                 self.assertRaises(runner.RunnerError, runner._validate_method_report, bad, (ids[0],), ids,
                                   options["binding"], options["environment"], options["caps"], 0)
@@ -413,13 +426,12 @@ class SuiteBudgetTests(unittest.TestCase):
                     assert_fields(uncertain, owned_processes=expected_owned, state=expected_state)
                     persisted = next(job for job in json.loads(restarted.path.read_text())["jobs"] if job["id"] == uncertain["id"])
                     self.assertEqual(persisted["owned_processes"], expected_owned)
-            for index, (exit_code, replacement, grouped, owned, tracked, uncertain_before, expected) in enumerate((
-        (0, None, False, False, True, False, "finished"), (None, None, False, False, True, False, "running"),
-                (-9, None, False, False, True, False, "quarantined"),
-        (0, None, True, False, True, False, "quarantined"), (0, None, False, True, True, False, "quarantined"),
-                (0, "replacement", False, False, True, False, "quarantined"),
-                (None, None, False, False, False, False, "quarantined"),
-                (0, None, False, False, True, True, "quarantined"), )):
+            for index, (exit_code, replacement, grouped, owned, tracked, uncertain_before, expected) in enumerate(( (0,
+                None, False, False, True, False, "finished"), (None, None, False, False, True, False, "running"), (-9,
+                None, False, False, True, False, "quarantined"), (0, None, True, False, True, False, "quarantined"), (0,
+                None, False, True, True, False, "quarantined"), (0, "replacement", False, False, True, False,
+                "quarantined"), (None, None, False, False, False, False, "quarantined"), (0, None, False, False, True,
+                True, "quarantined"), )):
                 refresh_root = state.owner_directory(root / f"refresh-{index}", create=True)
                 refresh = queue.Coordinator(refresh_root)
                 old_owned = {"21001": {"pid": 21001, "identity": "owned-child", "pgid": 21001}} if owned else {}
@@ -506,30 +518,37 @@ class SuiteBudgetTests(unittest.TestCase):
                     def wait_full(identifier):
                         events.append(("wait", identifier))
                         start = ((int(identifier[0]) - 1) // concurrency) * 2
-                        return {"id": identifier, "exit_code": int(identifier == "1/4"), "state": "finished",
+                        return {"id": identifier, "exit_code": int(identifier == "1/5"), "state": "finished",
                                 "started_at": start, "finished_at": start + 1, "queue_wait_seconds": 0.25}
                     with patch.object(local_ci, "submit", side_effect=submit_full), patch.object( local_ci, "wait_job", side_effect=wait_full
-                    ), patch.object( local_ci, "rpc", side_effect=lambda message: {"state": "finished", "worker_exit_code": int(message["id"] == "1/4")},
+                    ), patch.object( local_ci, "rpc", side_effect=lambda message: {"state": "finished", "worker_exit_code": int(message["id"] == "1/5")},
                     ), patch.object( local_ci, "control" ) as control_calls:
                         self.assertEqual(local_ci.campaign(campaign_args), 1)
                         control_calls.assert_not_called()
-                    expected_events = { 1: [("submit", "1/4"), ("wait", "1/4"), ("submit", "2/4"), ("wait", "2/4"),
-                            ("submit", "3/4"), ("wait", "3/4"), ("submit", "4/4"), ("wait", "4/4")],
-                        2: [("submit", "1/4"), ("submit", "2/4"), ("wait", "1/4"), ("wait", "2/4"),
-                            ("submit", "3/4"), ("submit", "4/4"), ("wait", "3/4"), ("wait", "4/4")],
-                        3: [("submit", "1/4"), ("submit", "2/4"), ("submit", "3/4"), ("wait", "1/4"),
-                            ("wait", "2/4"), ("wait", "3/4"), ("submit", "4/4"), ("wait", "4/4")],
-                        4: [("submit", "1/4"), ("submit", "2/4"), ("submit", "3/4"), ("submit", "4/4"),
-                            ("wait", "1/4"), ("wait", "2/4"), ("wait", "3/4"), ("wait", "4/4")], }[concurrency]
+                    expected_events = {
+                        1: [("submit", "1/5"), ("wait", "1/5"), ("submit", "2/5"), ("wait", "2/5"),
+                            ("submit", "3/5"), ("wait", "3/5"), ("submit", "4/5"), ("wait", "4/5"),
+                            ("submit", "5/5"), ("wait", "5/5")],
+                        2: [("submit", "1/5"), ("submit", "2/5"), ("wait", "1/5"), ("wait", "2/5"),
+                            ("submit", "3/5"), ("submit", "4/5"), ("wait", "3/5"), ("wait", "4/5"),
+                            ("submit", "5/5"), ("wait", "5/5")],
+                        3: [("submit", "1/5"), ("submit", "2/5"), ("submit", "3/5"), ("wait", "1/5"),
+                            ("wait", "2/5"), ("wait", "3/5"), ("submit", "4/5"), ("submit", "5/5"),
+                            ("wait", "4/5"), ("wait", "5/5")],
+                        4: [("submit", "1/5"), ("submit", "2/5"), ("submit", "3/5"), ("submit", "4/5"),
+                            ("wait", "1/5"), ("wait", "2/5"), ("wait", "3/5"), ("wait", "4/5"),
+                            ("submit", "5/5"), ("wait", "5/5")], }[concurrency]
                     self.assertEqual(events, expected_events)
                     metadata = json.loads((campaign_report / "campaign.json").read_text())
                     self.assertEqual({key: metadata[key] for key in ("timing_mode", "full_concurrency", "exit_code", "source_valid")}, {
                         "timing_mode": timing_mode, "full_concurrency": concurrency, "exit_code": 1, "source_valid": True, })
-                    starts = {1: (0, 2, 4, 6), 2: (0, 0, 2, 2), 3: (0, 0, 0, 2), 4: (0, 0, 0, 0)}[concurrency]
-                    expected_jobs = [{"id": f"{index}/4", "exit_code": int(index == 1), "state": "finished",
+                    starts = {1: (0, 2, 4, 6, 8), 2: (0, 0, 2, 2, 4), 3: (0, 0, 0, 2, 2),
+                              4: (0, 0, 0, 0, 2)}[concurrency]
+                    expected_jobs = [{"id": f"{index}/5", "exit_code": int(index == 1), "state": "finished",
                                       "started_at": start, "finished_at": start + 1, "queue_wait_seconds": 0.25} for index, start in enumerate(starts, 1)]
                     self.assertEqual(metadata["jobs"], expected_jobs)
-                    self.assertEqual(json.loads((campaign_report / "full-exit-status.json").read_text()), {"full-1": 1, "full-2": 0, "full-3": 0, "full-4": 0})
+                    self.assertEqual(json.loads((campaign_report / "full-exit-status.json").read_text()),
+                                     {"full-1": 1, "full-2": 0, "full-3": 0, "full-4": 0, "full-5": 0})
                 classify.return_value = {"runtime": "true", "full": "false", "changed_paths": []}
                 for cleanup_case, primary_failure, body_code, interrupted, exit_code in ( ("original", True, 0, False, 2), ("release", False, 0, False, 2),
                     ("interrupt", False, 0, True, 130), ("original-interrupt", True, 0, True, 2),
@@ -580,15 +599,14 @@ class SuiteBudgetTests(unittest.TestCase):
                           "boot_identity": "sysctl:{ sec = 200, usec = 3 } Wed Oct 7 03:00:00 UTC"}
             with patch.object(worker, "guest_job", return_value=guest), patch.object(worker, "group_members", return_value=[]), patch.object(
                 worker, "live_owned", return_value=[] ), patch.object(worker, "boot_identity") as guest_boot, patch.object(worker, "process_identity") as birth:
-                for record, identities, extra, reboot, finalize, expected in ( (None, (), {}, False, False, quarantined),
-                    (None, (), quarantined, True, False, terminated),
-                    (supervisor, ("supervisor", "supervisor"), {}, False, False, running),
-                    (supervisor, (None, None), {}, False, False, quarantined),
-                    (supervisor, ("replacement", "replacement"), {}, False, False, quarantined),
-                    (supervisor, ("supervisor", None), {}, False, False, quarantined),
-                    (supervisor, ("supervisor", "supervisor"), quarantined, False, False, quarantined),
-                    (supervisor, (None, None), completed, False, False, completed),
-                    (supervisor, (), {"descendant_death_uncertain": True}, False, True, {**quarantined, "exit_code": 0, "source_valid": True}), ):
+                for record, identities, extra, reboot, finalize, expected in ( (None, (), {}, False, False,
+                    quarantined), (None, (), quarantined, True, False, terminated), (supervisor, ("supervisor",
+                    "supervisor"), {}, False, False, running), (supervisor, (None, None), {}, False, False,
+                    quarantined), (supervisor, ("replacement", "replacement"), {}, False, False, quarantined),
+                    (supervisor, ("supervisor", None), {}, False, False, quarantined), (supervisor, ("supervisor",
+                    "supervisor"), quarantined, False, False, quarantined), (supervisor, (None, None), completed, False,
+                    False, completed), (supervisor, (), {"descendant_death_uncertain": True}, False, True,
+                    {**quarantined, "exit_code": 0, "source_valid": True}), ):
                     worker.write_json(guest / "state.json", {**guest_base, **({"supervisor": record} if record else {}), **extra})
                     birth.side_effect = identities
                     guest_boot.return_value = "sysctl:201:3" if reboot else "sysctl:200:3"

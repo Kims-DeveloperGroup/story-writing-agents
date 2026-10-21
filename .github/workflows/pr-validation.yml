@@ -5,6 +5,14 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
   merge_group:
     types: [checks_requested]
+  workflow_dispatch:
+    inputs:
+      validation_scope:
+        description: Run only the dedicated whole-front shard (partial validation)
+        required: true
+        type: choice
+        default: whole-front
+        options: [whole-front]
 permissions:
   contents: read
   pull-requests: read
@@ -106,7 +114,7 @@ jobs:
 
   validation-complete:
     name: Validation jobs complete
-    needs: [classify, static, fast, full, reconcile-full]
+    needs: [classify, static, fast, full, whole-front, reconcile-full]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -114,7 +122,13 @@ jobs:
     steps:
       - name: Mark validation jobs terminal
         timeout-minutes: 1
-        run: echo "Validation jobs are terminal; their individual results remain authoritative."
+        env:
+          WHOLE_FRONT_ONLY: ${{ needs.classify.outputs.whole_front_only }}
+        run: |
+          echo "Validation jobs are terminal; their individual results remain authoritative."
+          if [[ "$WHOLE_FRONT_ONLY" == "true" ]]; then
+            echo "Partial validation: whole-front shard 5/5 only; no complete-suite credit." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
 
   classify:
     name: Classify changed paths
@@ -125,6 +139,7 @@ jobs:
       pull-requests: read
       actions: read
     outputs:
+      whole_front_only: ${{ steps.paths.outputs.whole_front_only }}
       test_run_deadline: ${{ steps.paths.outputs.test_run_deadline }}
       runtime: ${{ steps.paths.outputs.runtime }}
       policy_only: ${{ steps.paths.outputs.policy_only }}
@@ -154,6 +169,39 @@ jobs:
             core.setOutput("test_run_deadline", String(deadline));
             if (Date.now() >= deadline * 1000) {
               core.setFailed("Shared workflow deadline exhausted before classification.");
+              return;
+            }
+            const wholeFrontOnly = context.eventName === "workflow_dispatch";
+            core.setOutput("whole_front_only", String(wholeFrontOnly));
+            if (wholeFrontOnly) {
+              if (context.payload.inputs?.validation_scope !== "whole-front" || run.head_sha !== context.sha) {
+                core.setFailed("Invalid isolated whole-front selection or source identity.");
+                return;
+              }
+              const defaultBranch = context.payload.repository?.default_branch;
+              if (typeof defaultBranch !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(defaultBranch)) {
+                core.setFailed("Cannot identify the repository default branch.");
+                return;
+              }
+              const {data: branch} = await github.rest.repos.getBranch({
+                owner, repo, branch: defaultBranch,
+                request: {signal: AbortSignal.timeout(5000)},
+              });
+              const base = branch.commit?.sha;
+              if (branch.name !== defaultBranch || !/^[0-9a-f]{40}$/.test(base || "") || base === context.sha) {
+                core.setFailed("Cannot bind the default-branch commit for static and budget checks.");
+                return;
+              }
+              core.setOutput("runtime", "false");
+              core.setOutput("policy_only", "false");
+              core.setOutput("full", "false");
+              core.setOutput("wall_time_exception", "false");
+              core.setOutput("base_sha", base);
+              core.setOutput("head_sha", context.sha);
+              core.setOutput("checkout_sha", context.sha);
+              await core.summary.addHeading("Whole-front-only validation")
+                .addRaw("Partial validation: shard 5/5 plus static and policy checks. No complete-suite credit.")
+                .write();
               return;
             }
             let files = [];
@@ -516,7 +564,7 @@ jobs:
           if-no-files-found: warn
 
   full:
-    name: ${{ format('Full runtime shard {0}/4', matrix.shard) }}
+    name: ${{ format('Full runtime shard {0}/5', matrix.shard) }}
     needs: classify
     if: needs.classify.outputs.full == 'true'
     strategy:
@@ -563,8 +611,8 @@ jobs:
         env:
           TEST_HARDWARE_ARCH: "arm64"
           TEST_HARDWARE_PATH: "${{ runner.temp }}/runner-hardware-full-${{ matrix.shard }}.json"
-          TEST_HARDWARE_SELECTION: "shard:${{ matrix.shard }}/4"
-          TEST_HARDWARE_SHARD: "${{ matrix.shard }}/4"
+          TEST_HARDWARE_SELECTION: "shard:${{ matrix.shard }}/5"
+          TEST_HARDWARE_SHARD: "${{ matrix.shard }}/5"
         run: |
           git config --global user.name "Story Tests"
           git config --global user.email "story-tests@example.invalid"
@@ -628,7 +676,7 @@ jobs:
           test_work_deadline=$(.venv/bin/python -c 'import os,sys,time; w=time.time()+3600; cutoff=min(int(os.environ["TEST_JOB_DEADLINE"]),int(os.environ["TEST_RUN_DEADLINE"]))-450; sys.exit("Insufficient remaining time for a full test hour") if w > cutoff else print(w)')
           .venv/bin/python -c 'import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); w=float(sys.argv[2]); d.update(work_deadline_epoch=w,hard_cleanup_deadline_epoch=w+30,execution_profile="audited-147-v3",maximum_method_workers=4); p.write_text(json.dumps(d,allow_nan=False)+"\n")' "$RUNNER_TEMP/full-${{ matrix.shard }}-control.json" "$test_work_deadline"
           set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "${{ matrix.shard }}/4" --hosted-methods audited-147-v3 --hosted-deadline-epoch "$test_work_deadline" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json" 2>&1 | tee "$RUNNER_TEMP/full-${{ matrix.shard }}.log"
+          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "${{ matrix.shard }}/5" --hosted-methods audited-147-v3 --hosted-deadline-epoch "$test_work_deadline" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json" 2>&1 | tee "$RUNNER_TEMP/full-${{ matrix.shard }}.log"
           test_statuses=("${PIPESTATUS[@]}")
           test_status=${test_statuses[0]}
           if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
@@ -648,12 +696,160 @@ jobs:
             ${{ runner.temp }}/runner-hardware-full-${{ matrix.shard }}.json
           if-no-files-found: error
 
+  whole-front:
+    name: Whole-front runtime shard 5/5
+    needs: [classify, static]
+    if: needs.classify.outputs.full == 'true' || needs.classify.outputs.whole_front_only == 'true'
+    runs-on: ubuntu-24.04-arm
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      TEST_JOB_MINUTES: '75'
+      TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
+    timeout-minutes: 75
+    steps:
+      - name: Record shared test deadline before setup
+        run: |
+          test_deadline=$(( $(date +%s) + TEST_JOB_MINUTES * 60 ))
+          if [[ -n "$TEST_RUN_DEADLINE" ]]; then
+            [[ "$TEST_RUN_DEADLINE" =~ ^[0-9]+$ ]] || exit 2
+            if (( TEST_RUN_DEADLINE < test_deadline )); then
+              test_deadline=$TEST_RUN_DEADLINE
+            fi
+          else
+            echo "Missing shared test-run deadline."
+            exit 2
+          fi
+          echo "TEST_JOB_DEADLINE=$test_deadline" >> "$GITHUB_ENV"
+          if (( test_deadline <= $(date +%s) )); then
+            echo "Shared test-run deadline exhausted before setup."
+            exit 124
+          fi
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ needs.classify.outputs.checkout_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: '0.12.17'
+      - name: Install runtime test dependencies
+        run: uv sync --locked --all-extras --python 3.11 --no-progress
+      - name: Configure deterministic test Git identity
+        env:
+          TEST_HARDWARE_ARCH: "arm64"
+          TEST_HARDWARE_PATH: "${{ runner.temp }}/runner-hardware-full-5.json"
+          TEST_HARDWARE_SELECTION: "shard:5/5"
+          TEST_HARDWARE_SHARD: "5/5"
+        run: |
+          git config --global user.name "Story Tests"
+          git config --global user.email "story-tests@example.invalid"
+          .venv/bin/python - <<'PY_HARDWARE'
+          import datetime, gc, hashlib, json, os, platform, sys
+          from pathlib import Path
+
+          output = Path(os.environ['TEST_HARDWARE_PATH'])
+          root = Path(os.environ['GITHUB_WORKSPACE'])
+          arch = os.environ['TEST_HARDWARE_ARCH']
+          expected = {'arm64': ('aarch64', 'ARM64'), 'x64': ('x86_64', 'X64')}
+          data = {'schema_version': 1, 'status': 'failed', 'expected_arch': arch,
+                  'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],
+                  'selection': os.environ['TEST_HARDWARE_SELECTION'],
+                  'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,
+                  'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+          try:
+              assert arch in expected, 'unsupported selected runner architecture'
+              affinity = sorted(os.sched_getaffinity(0))
+              data.update(system=platform.system(), machine=platform.machine(),
+                          cpu_count=os.cpu_count(), cpu_affinity=affinity,
+                          available_cpu_count=len(affinity), runner_os=os.environ['RUNNER_OS'],
+                          runner_arch=os.environ['RUNNER_ARCH'], runner_name=os.environ['RUNNER_NAME'],
+                          python_version=platform.python_version(), python_implementation=platform.python_implementation(),
+                          python_executable=sys.executable, run_id=os.environ['GITHUB_RUN_ID'],
+                          run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
+                          native_workflow_sha=os.environ['GITHUB_SHA'], repository=os.environ['GITHUB_REPOSITORY'],
+                          native_ref=os.environ['GITHUB_REF'],
+                          source_file_sha256={name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+                                             for name in ('.github/workflows/pr-validation.yml', 'pyproject.toml', 'uv.lock')},
+                          hardware_process_gc={'enabled': gc.isenabled(), 'thresholds': list(gc.get_threshold()),
+                                               'callback_count': len(gc.callbacks), 'profiler_none': sys.getprofile() is None})
+              assert data['system'] == data['runner_os'] == 'Linux', 'Linux runner required'
+              assert (data['machine'], data['runner_arch']) == expected[arch], 'runner architecture mismatch'
+              assert data['cpu_count'] == data['available_cpu_count'] == 4, 'four available CPUs required'
+              assert all(type(cpu) is int and cpu >= 0 for cpu in affinity)
+              assert sys.version_info[:2] == (3, 11) and data['python_implementation'] == 'CPython'
+              assert data['run_id'].isdigit() and data['run_attempt'] > 0
+              assert len(data['native_workflow_sha']) == 40 and all(c in '0123456789abcdef' for c in data['native_workflow_sha'])
+              assert data['hardware_process_gc'] == {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}
+              data['status'] = 'passed'
+          except BaseException as error:
+              data['error'] = {'type': type(error).__name__, 'message': str(error)}
+              raise
+          finally:
+              output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+              with output.open('x', encoding='utf-8') as stream:
+                  stream.write(json.dumps(data, indent=2, allow_nan=False) + '\n')
+              print(json.dumps(data, sort_keys=True, allow_nan=False))
+          PY_HARDWARE
+      - name: Verify five-shard policy before the whole-front window
+        timeout-minutes: 3
+        run: |
+          policy_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 - 3600 ))
+          if (( policy_seconds > 120 )); then policy_seconds=120; fi
+          if (( policy_seconds <= 0 )); then
+            echo "Insufficient shared time for policy checks and the complete whole-front hour." >&2
+            exit 124
+          fi
+          timeout --signal=INT --kill-after=30s "${policy_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --module tests.test_suite_budget --json "$RUNNER_TEMP/whole-front-policy.json" 2>&1 | tee "$RUNNER_TEMP/whole-front-policy.log"
+          policy_statuses=("${PIPESTATUS[@]}")
+          policy_status=${policy_statuses[0]}
+          if (( policy_status == 0 && policy_statuses[1] != 0 )); then policy_status=${policy_statuses[1]}; fi
+          printf '%s\n' "$policy_status" > "$RUNNER_TEMP/whole-front-policy-exit-code.txt"
+          exit "$policy_status"
+      - name: Run dedicated whole-front shard
+        run: |
+          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
+          if (( test_seconds > 3600 )); then test_seconds=3600; fi
+          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/full-5-control.json"
+          if (( test_seconds < 3600 )); then
+            printf 'Full shard requires 3600 seconds of execution plus shutdown reserve; available: %s seconds\n' "$test_seconds" >&2
+            printf '124\n' > "$RUNNER_TEMP/full-5-exit-code.txt"
+            exit 124
+          fi
+          test_work_deadline=$(.venv/bin/python -c 'import os,sys,time; w=time.time()+3600; cutoff=min(int(os.environ["TEST_JOB_DEADLINE"]),int(os.environ["TEST_RUN_DEADLINE"]))-450; sys.exit("Insufficient remaining time for a full test hour") if w > cutoff else print(w)')
+          .venv/bin/python -c 'import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); w=float(sys.argv[2]); d.update(work_deadline_epoch=w,hard_cleanup_deadline_epoch=w+30,execution_profile="audited-147-v3",maximum_method_workers=4); p.write_text(json.dumps(d,allow_nan=False)+"\n")' "$RUNNER_TEMP/full-5-control.json" "$test_work_deadline"
+          set +e
+          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "5/5" --hosted-methods audited-147-v3 --hosted-deadline-epoch "$test_work_deadline" --json "$RUNNER_TEMP/full-5.json" 2>&1 | tee "$RUNNER_TEMP/full-5.log"
+          test_statuses=("${PIPESTATUS[@]}")
+          test_status=${test_statuses[0]}
+          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
+          printf '%s\n' "$test_status" > "$RUNNER_TEMP/full-5-exit-code.txt"
+          exit "$test_status"
+      - uses: actions/upload-artifact@v4
+        timeout-minutes: 1
+        if: always()
+        with:
+          name: full-5
+          path: |
+            ${{ runner.temp }}/full-5.json
+            ${{ runner.temp }}/full-5.json.methods/
+            ${{ runner.temp }}/full-5.log
+            ${{ runner.temp }}/full-5-control.json
+            ${{ runner.temp }}/full-5-exit-code.txt
+            ${{ runner.temp }}/runner-hardware-full-5.json
+            ${{ runner.temp }}/whole-front-policy.json
+            ${{ runner.temp }}/whole-front-policy.log
+            ${{ runner.temp }}/whole-front-policy-exit-code.txt
+          if-no-files-found: error
+
   reconcile-full:
     name: Reconcile full runtime suite
-    needs: [classify, full]
+    needs: [classify, full, whole-front]
     if: >-
       !cancelled() && needs.classify.outputs.full == 'true' &&
-      (needs.full.result == 'success' || needs.full.result == 'failure')
+      (needs.full.result == 'success' || needs.full.result == 'failure') &&
+      (needs.whole-front.result == 'success' || needs.whole-front.result == 'failure')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -697,6 +893,7 @@ jobs:
             python -m tests.runner reconcile \
             full-reports/full-1/full-1.json full-reports/full-2/full-2.json \
             full-reports/full-3/full-3.json full-reports/full-4/full-4.json \
+            full-reports/full-5/full-5.json \
             --json "$RUNNER_TEMP/full-reconciled.json"
       - name: Enforce frozen suite inventory and wall-time budget
         env:
@@ -707,7 +904,8 @@ jobs:
             --report full-reports/full-1/full-1.json
             --report full-reports/full-2/full-2.json
             --report full-reports/full-3/full-3.json
-            --report full-reports/full-4/full-4.json)
+            --report full-reports/full-4/full-4.json
+            --report full-reports/full-5/full-5.json)
           if [[ "$WALL_TIME_EXCEPTION" == "true" ]]; then
             echo "Maintainer-authorized wall-time exception: measured durations remain visible."
             budget_args+=(--allow-wall-time-overage)

@@ -149,10 +149,12 @@ def _suite_policy_metadata(weights: suite_policy.TimingWeights,
     if plan is not None:
         policy["partition"] = {
             "algorithm": suite_policy.SHARD_ALGORITHM, "shard_count": suite_policy.SHARD_COUNT,
+            "isolated_test_id": suite_policy.ISOLATED_TEST_ID,
+            "isolated_weight_basis": suite_policy.ISOLATED_WEIGHT_BASIS,
             "digest": plan.digest, "group_count": len(plan.group_weights_microseconds),
             "fallback_group_count": len(plan.fallback_groups),
             "shards": [
-                {"identity": f"{index + 1}/4", "group_count": len(plan.shard_groups[index]),
+                {"identity": f"{index + 1}/{suite_policy.SHARD_COUNT}", "group_count": len(plan.shard_groups[index]),
                  "predicted_weight_microseconds": plan.shard_weights_microseconds[index],
                  "selection_manifest": _manifest(plan.shard_ids[index])}
                 for index in range(suite_policy.SHARD_COUNT)
@@ -184,8 +186,8 @@ def _policy_select(
         raise RunnerError(str(error)) from error
 
     if shard is not None:
-        if shard not in {f"{index}/4" for index in range(1, 5)}:
-            raise RunnerError("--shard must be 1/4, 2/4, 3/4, or 4/4")
+        if shard not in {f"{index}/{suite_policy.SHARD_COUNT}" for index in range(1, suite_policy.SHARD_COUNT + 1)}:
+            raise RunnerError("--shard must be one of 1/5 through 5/5")
         try:
             plan = suite_policy.partition_full_shards(collection.ids, weights)
         except suite_policy.SuitePolicyError as error:
@@ -622,10 +624,10 @@ def _required_report_identity(report: dict[str, object]) -> tuple[dict[str, obje
 
 
 def reconcile_reports(paths: Sequence[str]) -> dict[str, object]:
-    """Validate the complete current four-report contract and retain its records."""
-    identities = tuple(f"{index}/4" for index in range(1, 5))
-    if len(paths) != 4 or len(set(paths)) != 4:
-        raise RunnerError("reconcile requires four distinct shard report paths")
+    """Validate the complete current five-report contract and retain its records."""
+    identities = tuple(f"{index}/{suite_policy.SHARD_COUNT}" for index in range(1, suite_policy.SHARD_COUNT + 1))
+    if len(paths) != suite_policy.SHARD_COUNT or len(set(paths)) != suite_policy.SHARD_COUNT:
+        raise RunnerError("reconcile requires five distinct shard report paths")
     by_shard: dict[str, dict[str, object]] = {}
     durations_by_shard: dict[str, dict[str, float]] = {}
     bindings = []
@@ -641,7 +643,7 @@ def reconcile_reports(paths: Sequence[str]) -> dict[str, object]:
         selection = _required_dict(report, "selection")
         shard = selection.get("shard")
         if shard not in identities or shard in by_shard or selection.get("tiers") != []:
-            raise RunnerError("reports must have complementary unique four-shard identities")
+            raise RunnerError("reports must have complementary unique five-shard identities")
         bindings.append(_required_report_identity(report))
         durations = _required_durations(report)
         totals = _required_dict(report, "totals")
@@ -723,7 +725,7 @@ def reconcile_reports(paths: Sequence[str]) -> dict[str, object]:
     except suite_policy.SuitePolicyError as error:
         raise RunnerError(str(error)) from error
     if json.dumps(policy, sort_keys=True) != json.dumps(_suite_policy_metadata(weights, plan), sort_keys=True):
-        raise RunnerError("shard policy differs from the current deterministic four-partition plan")
+        raise RunnerError("shard policy differs from the current deterministic five-partition plan")
     source = bindings[0][0]
     root = Path(__file__).resolve().parents[1]
     try:
@@ -1469,8 +1471,9 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--id", action="append", default=[])
         command.add_argument("--module", action="append", default=[])
         command.add_argument("--tier", action="append", default=[])
-        command.add_argument("--shard", choices=("1/4", "2/4", "3/4", "4/4"),
-                             help="one complete partition of the four-shard suite")
+        command.add_argument("--shard", choices=tuple(f"{index}/{suite_policy.SHARD_COUNT}"
+                                                    for index in range(1, suite_policy.SHARD_COUNT + 1)),
+                             help="one complete partition of the five-shard suite")
         command.add_argument("--json")
         if name == "run":
             command.add_argument("--slowest", type=int, default=20)
@@ -1478,8 +1481,8 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--hosted-methods")
             command.add_argument("--hosted-deadline-epoch", type=float)
     reconcile = commands.add_parser("reconcile")
-    reconcile.add_argument("reports", nargs=4, metavar="REPORT",
-                           help="one current report for each of 1/4 through 4/4")
+    reconcile.add_argument("reports", nargs=suite_policy.SHARD_COUNT, metavar="REPORT",
+                           help="one current report for each of 1/5 through 5/5")
     reconcile.add_argument("--json")
     return parser
 

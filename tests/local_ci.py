@@ -330,9 +330,9 @@ def campaign(args: argparse.Namespace) -> int:
             full_results: dict[int, dict] = {}
             next_index = 1
             outstanding_peak = 0
-            while active or next_index <= 4:
-                while next_index <= 4 and len(active) < full_concurrency:
-                    identifier = submit(checkout, ["run", "--shard", f"{next_index}/4", "--json", str(report / f"full-{next_index}.json")],
+            while active or next_index <= 5:
+                while next_index <= 5 and len(active) < full_concurrency:
+                    identifier = submit(checkout, ["run", "--shard", f"{next_index}/5", "--json", str(report / f"full-{next_index}.json")],
                                         python=python, task=args.task + f":full-{next_index}", executor=args.executor,
                                         guest_checkout=args.guest_checkout, reservation=reservation, ci_identity=True)
                     identifiers.append(identifier)
@@ -363,18 +363,18 @@ def campaign(args: argparse.Namespace) -> int:
                     peak = max(peak, running)
             metadata["full_phase"] = {
                 "elapsed_seconds": time.monotonic() - full_started,
-                "shard_count": 4, "resolved_concurrency": full_concurrency,
+                "shard_count": 5, "resolved_concurrency": full_concurrency,
                 "outstanding_jobs_peak": outstanding_peak,
                 "worker_peak_from_terminal_intervals": peak,
-                "queue_wait_seconds": {f"full-{index}": full_results[index].get("queue_wait_seconds") for index in range(1, 5)},
-                "terminal_states": {f"full-{index}": full_results[index].get("state") for index in range(1, 5)},
+                "queue_wait_seconds": {f"full-{index}": full_results[index].get("queue_wait_seconds") for index in range(1, 6)},
+                "terminal_states": {f"full-{index}": full_results[index].get("state") for index in range(1, 6)},
             }
             write_json(report / "full-exit-status.json", {
                 f"full-{index}": rpc({"action": "get", "id": identifier}).get("worker_exit_code")
                 for index, identifier in enumerate(identifiers, 1)}, exclusive=True)
             if args.executor != "native":
                 guest_spec["reports"] = {name: base64.b64encode((report / name).read_bytes()).decode("ascii")
-                                         for name in ("full-1.json", "full-2.json", "full-3.json", "full-4.json")}
+                                         for name in ("full-1.json", "full-2.json", "full-3.json", "full-4.json", "full-5.json")}
                 command = lima_command(guest_spec, "finalize-guest", "-")
                 completed = subprocess.run(command, input=json.dumps(guest_spec), capture_output=True, text=True)
                 if completed.returncode:
@@ -387,10 +387,10 @@ def campaign(args: argparse.Namespace) -> int:
                         os.chmod(target.name, 0o600)
                         target.write(base64.b64decode(value["reconciliation"], validate=True))
             for phase, arguments in (() if args.executor != "native" else (
-                ("reconcile", ["-m", "tests.runner", "reconcile", *[str(report / f"full-{index}.json") for index in range(1, 5)],
+                ("reconcile", ["-m", "tests.runner", "reconcile", *[str(report / f"full-{index}.json") for index in range(1, 6)],
                                "--json", str(report / "full-reconciled.json")]),
                 ("budget", ["-m", "tests.suite_budget", "--base-ref", args.base_sha,
-                            *[value for index in range(1, 5) for value in ("--report", str(report / f"full-{index}.json"))]]),
+                            *[value for index in range(1, 6) for value in ("--report", str(report / f"full-{index}.json"))]]),
             )):
                 command = [python, *arguments]
                 from tests.local_ci_worker import test_environment
