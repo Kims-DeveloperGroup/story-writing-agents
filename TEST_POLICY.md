@@ -126,7 +126,7 @@ deadline.
 Full workers reserve 450 seconds and receive a fixed 3,600-second execution
 window. If the remaining job/shared allowance cannot provide the full window
 and reserve, admission fails before test launch instead of shortening execution.
-Fast and diagnostic workers retain their 3,150-second caps, reduced by setup
+Fast workers retain their 3,150-second caps, reduced by setup
 and shared-clock consumption. Each reconciliation gate recomputes its allowance
 and reserves 450 seconds. Missing or exhausted budgets fail verification.
 
@@ -136,15 +136,6 @@ reserved window, no later than minute 67.5, and artifact uploads have one-minute
 step timeouts. Normal cancellation begins with six minutes remaining (minute 69);
 force cancellation begins with five-and-a-half minutes remaining (minute 69.5).
 These controls do not guarantee runner scheduling or external control API timing.
-
-After diagnostic artifact upload, disk-scratch cleanup may remove only the exact
-owned temporary directory recorded at creation. It validates the path and directory
-identity, rejects symlink roots and mounted scratch trees, and uses symlink-resistant
-standard-library deletion. Its small execution cap includes termination grace and
-is clamped to the existing shared deadline minus the 360-second cancellation
-reserve. Upload and cleanup share the existing allowance; cleanup adds no time.
-Missing identity, an exhausted budget, or failed removal stays a visible failure.
-Published evidence outside scratch is preserved. Memory-scratch handling is unchanged.
 
 An independent deadline job starts alongside classification and monitors a
 completion marker that depends on every validation job. Its normal-cancellation
@@ -166,19 +157,11 @@ within the 75-minute shared limit and each executed job
 within its declared native limit, with every required report and
 check complete. An unavailable enforcement path fails visibly.
 
-Explicitly dispatched diagnostic jobs also stop after 60 minutes. Test execution
-has a separate earlier deadline to leave time for termination and evidence
-upload. Diagnostics preserve progress and available partial evidence on
-interruption; a partial or timed-out execution never counts as a passing test.
-These reports remain diagnostic evidence and never replace the required
-complete full-suite gate.
-
 ## Hosted runtime baseline
 
 Runtime fast and full jobs use the standard GitHub-hosted Linux ARM64 runner
 `ubuntu-24.04-arm`. In this public repository its standard allocation is four
 vCPUs and 16 GB RAM. [Runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-Explicit runtime diagnostics default to ARM64 and retain an x64 selection.
 
 Before application tests, record and verify Linux, the requested architecture
 and four available CPUs, with CPU affinity and native run/attempt/workflow
@@ -199,7 +182,7 @@ exact ordered diagnostics, fallback behavior, mutation checks, test inventory,
 and source budgets. Run the same checks against the candidate before expensive
 runtime scenarios.
 
-Measure at least three ordinary fresh-process samples per source on the same
+For separately authorized benchmark studies, measure at least three ordinary fresh-process samples per source on the same
 existing runner, balancing source order and recording setup and workload CPU and
 wall time separately. Run profiling in a separate process; profiled time is not
 an ordinary benchmark sample, and overlapping cumulative costs cannot be added.
@@ -223,14 +206,22 @@ both hints, must not select an untrusted schema. Preparation belongs to one
 `SchemaRules` owner; fresh owners and generic compiler search remain separate
 costs. A successful cache-reuse check alone demonstrates no whole-suite speedup.
 
-After implementation, run the affected canonical IDs and all four complementary
-shards on one immutable source with the locked four-core ARM64 environment.
+After implementation, run affected canonical IDs and all four complementary
+shards on one immutable source and locked four-core ARM64 environment.
 Record each shard's test wall time, native job duration, outcome and completion;
-report the sum of test wall times and workflow creation-to-update elapsed time.
-Reconcile exact coverage, source bindings and the accepted 14,400/3,600-second
-ceilings. Partial or timed-out reports remain nonpassing evidence. The
-[implementation plan](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/872#issuecomment-6295376921)
-tracks this gate; the proposed ten-minute attribution diagnostic is parked.
+report the complete four-shard sum and workflow elapsed time. Reconcile exact
+coverage, source bindings and the accepted 14,400/3,600-second ceilings. Partial
+or timed-out reports remain nonpassing evidence. An affected-test preflight may
+run separately; verify its exact implementation/tree equivalence before delivery,
+then obtain all four canonical reports from one current-head run attempt.
+
+For [child #872](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/872),
+the sole achievement target is successful completion of every full shard within
+one hour. No separate benchmark, profiling campaign or percentage speedup is
+required. The [current implementation plan](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/872#issuecomment-6304833337)
+tracks regression verification and the actual PR-head four-shard gate. The PR
+validation workflow runs canonical checks without a diagnostic job or manual
+profiling dispatch path.
 
 ## Initial calibration
 

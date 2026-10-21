@@ -1257,8 +1257,8 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                 declared = bound.schema_value()
                 native_projections = (('codex', declared),
                     ('antigravity', AntigravityAdapter.native_output_schema(declared)))
-                native_projections = tuple((provider, schema, SchemaRules.declare(schema,
-                    maximum_bytes=bound.rule_graph.maximum_bytes)) for provider, schema in native_projections)
+            native_projections = tuple(row if len(row) == 3 else (*row, SchemaRules.declare(row[1],
+                maximum_bytes=bound.rule_graph.maximum_bytes)) for row in native_projections)
             for provider, schema, owner in native_projections:
                 bound.require_projection(schema, declared_lowering='integer_singleton_bounds' if provider == 'antigravity' else 'identity')
                 self.assertEqual(owner.canonical_bytes, json.dumps(schema, ensure_ascii=False,
