@@ -582,6 +582,14 @@ validation, and source-authored repair requirements together. Check strict
 field/value rules and branch relationships after the final provider projection;
 a successful repair does not establish schema alignment.
 
+For repeated JSON payload checks, `diagnose_value` and `diagnose_json_text` in
+`structured_output_validation` also accept an exact `SchemaRules` owner. Declare
+each final schema once with its existing byte budget and retain that owner for
+the repeated calls. It reuses immutable schema preparation while each payload
+gets fresh validation state. Raw mappings keep their original diagnostic order;
+the JSON entry point retains strict parsing. Native projection checks still use
+the original raw schema with `require_projection`.
+
 Run tests from the repository root in the same Python 3.11+ development
 environment used to install the project. The canonical runner uses only the
 standard library and records the exact selected IDs, results, timings, policy,

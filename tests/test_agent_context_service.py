@@ -601,6 +601,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
                 object.__setattr__(cached, '_diagnostic_template', hints[0])
                 object.__setattr__(cached, '_diagnostic_anchor', hints[1])
                 self.assertEqual(cached.findings(packet), ())
+                self.assertEqual(diagnose_json_text(json.dumps(packet), cached), ())
             finally:
                 object.__setattr__(cached, '_diagnostic_template', template)
                 object.__setattr__(cached, '_diagnostic_anchor', anchor)
@@ -608,16 +609,19 @@ class StructuredOutputValidationTests(unittest.TestCase):
         try:
             object.__setattr__(cached, 'canonical_bytes', foreign.canonical_bytes)
             self.assertEqual(cached.findings(packet), ('$: expected integer, got object',))
+            self.assertEqual(diagnose_value(packet, cached), ('$: expected integer, got object',))
             with self.assertRaisesRegex(ValueError, '^frozen typed decoder hook provenance changed$'):
                 template_decoder.require_provenance()
             object.__setattr__(cached, 'canonical_bytes', b'{')
             with self.assertRaises(ValueError): cached.findings(packet)
+            with self.assertRaises(ValueError): diagnose_json_text(json.dumps(packet), cached)
         finally: object.__setattr__(cached, 'canonical_bytes', source_bytes)
         self.assertIsNone(template_decoder.require_provenance())
         export_method = SchemaRules.schema_value
         try:
             SchemaRules.schema_value = lambda owner: {'type': 'integer'}
             self.assertEqual(cached.findings(packet), ('$: expected integer, got object',))
+            self.assertEqual(diagnose_json_text(json.dumps(packet), cached), ('$: expected integer, got object',))
         finally: SchemaRules.schema_value = export_method
         marker = RuntimeError('fixture dynamic diagnosis')
         class DynamicPayload(dict):
@@ -625,15 +629,37 @@ class StructuredOutputValidationTests(unittest.TestCase):
         dynamic = DynamicPayload(packet)
         self.assertEqual(diagnose_value(dynamic, template_schema), ('$: expected object, got non-JSON value',))
         self.assertEqual(cached.findings(dynamic), ('$: expected object, got non-JSON value',))
+        self.assertEqual(diagnose_value(dynamic, cached), ('$: expected object, got non-JSON value',))
         evaluator = diagnostics._diagnose
         def replaced_evaluator(*args, **kwargs): raise marker
         try:
             diagnostics._diagnose = replaced_evaluator
             with self.assertRaises(RuntimeError) as evaluator_failure: cached.findings(packet)
             self.assertIs(evaluator_failure.exception, marker)
+            with self.assertRaises(RuntimeError) as public_error: diagnose_json_text(json.dumps(packet), cached)
+            self.assertIs(public_error.exception, marker)
         finally: diagnostics._diagnose = evaluator
         self.assertEqual(cached.findings(packet), ())
 
+
+        public_owner = SchemaRules.declare(template_schema)
+        parses.clear(); preparations.clear()
+        sys.setprofile(template_profile)
+        try:
+            self.assertEqual(diagnose_json_text('{', public_owner), ('$: malformed JSON',))
+            self.assertEqual(preparations, [])
+            self.assertEqual((diagnose_value(packet, public_owner),
+                              diagnose_json_text(json.dumps(packet), public_owner)), ((), ()))
+        finally: sys.setprofile(previous_profile)
+        self.assertEqual((parses, len(preparations)), (['parse'], 1))
+        self.assertEqual(diagnose_value({'left': 0, 'right': None}, public_owner),
+                         ('$.left: expected string, got integer', '$.right: expected string, got null'))
+        self.assertEqual(diagnose_json_text(json.dumps(packet), public_owner), ())
+        try:
+            diagnostics.SchemaRules = object
+            self.assertEqual(diagnose_json_text(json.dumps(packet), public_owner), ())
+        finally: diagnostics.SchemaRules = SchemaRules
+        self.assertEqual(diagnose_value(packet, public_owner), ())
 
         for tag, order in (("kind", ("a", "z")), ("response_type", ("z", "a"))):
             grammar = {"anyOf": [{"$ref": "#/$defs/" + name} for name in ("left", "right")], "$defs": {
@@ -642,8 +668,11 @@ class StructuredOutputValidationTests(unittest.TestCase):
             rules = SchemaRules.declare(grammar); value = {tag: "unknown", "a": "bad"}
             tails = {"a": "$.a: expected integer, got string", "z": "$.z: required property is missing"}
             expected = (f'$.{tag}: expected one of ["left", "right"], got string', *(tails[k] for k in order))
+            self.assertEqual(diagnose_json_text(json.dumps(value), rules), expected)
             self.assertEqual((diagnose_value(value, grammar), rules.findings(value), rules.findings(value)),
                              (expected, expected, expected))
+            self.assertEqual((diagnose_json_text(json.dumps(value), rules), diagnose_value(value, rules)),
+                             (expected, expected))
         resolver, resolver_code = diagnostics._local_rule, diagnostics._local_rule.__code__
         def changed_reference(*_args): raise RuntimeError("fixture changed reference")
         with self.assertRaisesRegex(RuntimeError, "^fixture changed reference$"):
@@ -660,9 +689,13 @@ class StructuredOutputValidationTests(unittest.TestCase):
 
     def test_malformed_and_duplicate_json_have_value_free_diagnostics(self) -> None:
         schema = {"type": "object", "properties": {}, "additionalProperties": False}
+        from story_writing_agents.structured_output_validation import SchemaRules
+        owner = SchemaRules.declare({**schema, "required": []})
         for text, expected in (("{", ("$: malformed JSON",)), ('{"private":1,"private":2}',
             ("$: duplicate object key",)), ("NaN", ("$: malformed JSON",)), ("{}", ())):
             self.assertEqual(diagnose_json_text(text, schema), expected)
+            self.assertEqual((diagnose_json_text(text, owner), diagnose_json_text(text, owner)),
+                             (expected, expected))
         private = "PRIVATE_EXCEPTION_AND_VALUE_한🙂"
         failure = validation_failure(ValueError(private), "$.message", "expected nonempty text", value=private)
         with self.assertRaises(ValueError) as caught:
@@ -712,6 +745,9 @@ class StructuredOutputValidationTests(unittest.TestCase):
                           '$[2047]: expected integer, got string', '$: additional validation issues omitted'))
         self.assertEqual(capped.findings([]), ())
         self.assertEqual(capped.findings(['bad']), ('$[0]: expected integer, got string',))
+        self.assertEqual(diagnose_json_text(json.dumps(['bad'] * 2050), capped), capped_issues)
+        self.assertEqual(diagnose_value([], capped), ())
+        self.assertEqual(diagnose_json_text('["bad"]', capped), ('$[0]: expected integer, got string',))
 
 
 def _digest(body: bytes) -> str: return f"sha256:{hashlib.sha256(body).hexdigest()}"

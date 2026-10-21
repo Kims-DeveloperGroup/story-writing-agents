@@ -1710,9 +1710,16 @@ def _diagnostic_context(value: object, schema: object, _pins=_DIAGNOSIS_SOURCE_P
     return result
 
 
-def diagnose_value(value: object, schema: Mapping[str, object]) -> tuple[str, ...]:
+def _is_schema_rules(value: object, *, _type=type, _owner=SchemaRules) -> bool:
+    """Recognize the original exact owner even when its live binding drifts."""
+    return _type(value) is _owner
+
+
+def diagnose_value(value: object, schema: Mapping[str, object] | SchemaRules) -> tuple[str, ...]:
     """Collect a bounded ordered prefix of independently detectable issues."""
 
+    if _is_schema_rules(schema):
+        return _schema_rule_template_query(schema, value)
     memo = _diagnostic_context(value, schema)
     issues = tuple(islice((_diagnose(value, schema, "$") if memo is None else
                            _diagnose(value, schema, "$", _memo=memo)), _MAX_ISSUES + 1))
@@ -1742,7 +1749,7 @@ def schema_fragment_findings(
 
 
 
-def diagnose_json_text(text: str, schema: Mapping[str, object]) -> tuple[str, ...]:
+def diagnose_json_text(text: str, schema: Mapping[str, object] | SchemaRules) -> tuple[str, ...]:
     """Parse strict JSON and report syntax, duplicate-key, and schema issues."""
 
     try:
@@ -2132,7 +2139,7 @@ def _schema_node_query_declaration(*, diagnostic: bool = False) -> tuple | None:
     )
     if diagnostic:
         namespaces += ((globals(), ("MappingProxyType", "_schema_template_findings", "_freeze_diagnostic_schema", "_prepare_diagnostic_template",
-                                   "_diagnostic_context", "diagnose_value", "_DIAGNOSIS_SOURCE_PINS")),)
+                                   "_diagnostic_context", "diagnose_value", "_is_schema_rules", "_DIAGNOSIS_SOURCE_PINS")),)
     bindings = tuple((namespace, tuple((name, namespace.get(name, _ABSENT)) for name in names))
                      for namespace, names in namespaces)
     functions = tuple(value for _, values in bindings for _, value in values
