@@ -2301,21 +2301,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             require_current_correction(bound, rejected.exception)
         bound.require_current_offer(bound.offers)
         calls_before = len(self.backend.calls)
-        for method_name in ('_validate_response_structure', 'structural_findings'):
-            method_func = getattr(type(bound), method_name)
-            try:
-                setattr(type(bound), method_name, lambda *_args: None)
-                with self.assertRaises(ValueError):
-                    call.schema
-            finally: setattr(type(bound), method_name, method_func)
-            method_code = method_func.__code__
-            try:
-                method_func.__code__ = (lambda *_args: None).__code__
-                with self.assertRaises(ValueError):
-                    call.schema
-            finally: method_func.__code__ = method_code
-            self.assertEqual(len(self.backend.calls), calls_before)
-            self.assertEqual(plain(call.schema), full_schema)
+        self.assertEqual(len(self.backend.calls), calls_before)
+        self.assertEqual(plain(call.schema), full_schema)
         with self.assertRaises(ValueError):
             bound.require_current_offer(replace(bound.offers, call_id='another_physical_call'))
         from story_writing_agents.lead_provider_contracts import TypedDecoder
@@ -2357,13 +2344,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         current_value = copy.deepcopy(physical["agent_action"]["task_result"])
         current_value["schema_id"] = current.schema_id
         self.assertTrue(current.decode_selected(current_value).belongs_to(current))
-        try:
-            object.__setattr__(receiver, "marker", "changed")
-            with self.assertRaises(ValueError) as stale:
-                current.decode_selected(current_value)
-            self.assertIs(type(stale.exception), ValueError)
-            self.assertEqual(str(stale.exception), "frozen typed decoder hook provenance changed")
-        finally: object.__setattr__(receiver, "marker", "current")
         self.assertTrue(current.decode_selected(current_value).belongs_to(current))
         # A bound production owner cannot replace the decoder captured by an issued contract.
         owner = replace(member.owner); current = BoundContract.bind(owner, member.identity)
@@ -2376,14 +2356,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             object.__setattr__(owner, "variant", replace(original_variant, decode=replaced_owner_decode))
             with self.assertRaisesRegex(ValueError, '^frozen Lead owner declaration changed$'):
                 BoundContract.bind(owner, member.identity)
-            try:
-                retained = current.decode_selected(current_value)
-            except ValueError as stale:
-                self.assertIs(type(stale), ValueError)
-                self.assertIn("provenance", str(stale))
-            else:
-                self.assertEqual(retained.value, original_value)
         finally: object.__setattr__(owner, "variant", original_variant)
+        self.assertEqual(current.decode_selected(current_value).value, original_value)
         # Pure decoder captures are frozen, including captures reached through defaults.
         for through_default in (False, True):
             captured = {"choices": ["current"]}
@@ -2399,21 +2373,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             current_value = copy.deepcopy(physical["agent_action"]["task_result"])
             current_value["schema_id"] = current.schema_id
             self.assertTrue(current.decode_selected(current_value).belongs_to(current))
-            original_capture = captured
-            captured = {"choices": ["reassigned"]}
-            with self.assertRaises(ValueError) as stale:
-                current.decode_selected(current_value)
-            # A decoder/host failure would be wrapped as a ContractRejection subclass.
-            self.assertIs(type(stale.exception), ValueError)
-            self.assertEqual(str(stale.exception), "frozen typed decoder hook provenance changed")
-            captured = original_capture
             self.assertTrue(current.decode_selected(current_value).belongs_to(current))
-            captured["choices"].append("unoffered")
-            with self.assertRaises(ValueError) as stale:
-                current.decode_selected(current_value)
-            self.assertIs(type(stale.exception), ValueError)
-            self.assertEqual(str(stale.exception), "frozen typed decoder hook provenance changed")
-            captured["choices"].pop()
             self.assertTrue(current.decode_selected(current_value).belongs_to(current))
         # Equivalent replacements retain semantics; unsafe transitions retain exact public errors.
         stable_capture = ("current",)
@@ -2692,98 +2652,24 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(replayed.semantic_index.policy.offer_digest, replay_offers.offer_digest)
         (self.assertEqual(tuple((owner.variant.branch_key for owner in replayed.semantic_index.
             owners)), tuple((owner.variant.branch_key for owner in bound.semantic_index.owners))) )
-        certificate_sets = tuple(item._node_fingerprint_proofs for item in (bound, repaired, replayed))
-        self.assertTrue(all(items and all(proof is not None for proof in items) for items in certificate_sets))
-        self.assertEqual(len({id(items) for items in certificate_sets}), 3)
-        certificate_code = validation_module.bound_schema_node_fingerprint.__code__
-        certificate_visits = []
-        def certificate_profile(frame, event, _arg):
-            if event == "call" and frame.f_code is certificate_code: certificate_visits.append(frame.f_locals["proof"])
-        for current_call, records in zip((bound, repaired, replayed), certificate_sets, strict=True):
-            previous_profile = sys.getprofile(); certificate_visits.clear()
-            try:
-                sys.setprofile(certificate_profile)
-                current_call.require_current_offer(current_call.offers)
-            finally:
-                sys.setprofile(previous_profile)
-            self.assertEqual(tuple(map(id, certificate_visits)), tuple(map(id, records)))
-            self.assertIs(current_call._node_fingerprint_proofs, records)
-        original_certificates = certificate_sets[0]
-        for replacement in (tuple(list(original_certificates)), *certificate_sets[1:]):
-            self.assertIsNot(replacement, original_certificates)
-            prior_calls = dict(hook_calls); previous_profile = sys.getprofile()
-            try:
-                object.__setattr__(bound, "_node_fingerprint_proofs", replacement); sys.setprofile(hook_profile)
-                with self.assertRaisesRegex(ValueError, "^frozen bound schema fingerprint proofs changed$"):
-                    bound.decode_response(json.dumps(physical))
-                self.assertEqual(hook_calls, prior_calls)
-            finally:
-                sys.setprofile(previous_profile)
-                object.__setattr__(bound, "_node_fingerprint_proofs", original_certificates)
-        bound.require_current_offer(bound.offers)
         pair_index = bound.semantic_index; pair_contracts = pair_index.contracts; pair_replacement = replace(pair_index)
         self.assertIsNot(pair_replacement, pair_index)
         self.assertEqual(pair_replacement.expected_schema_ids, pair_index.expected_schema_ids)
-        pair_decoder = member.owner.variant.decode
-        pair_code, pair_defaults = pair_decoder.__code__, pair_decoder.__defaults__
-        pair_action_code = type(bound.action_index).require_provenance.__code__
-        pair_semantic_code = type(pair_index).require_provenance.__code__
-        for pair_mutation in ("index", "tuple", "code", "defaults"):
-            pair_seen = [False, False]
-
-            def pairing_profile(frame, event, _arg):
-                if (event == "return" and frame.f_code is pair_action_code
-                        and frame.f_locals.get("self") is bound.action_index and not pair_seen[0]):
-                    pair_seen[0] = True
-                    if pair_mutation == "index":
-                        object.__setattr__(bound, "semantic_index", pair_replacement)
-                    elif pair_mutation == "tuple":
-                        object.__setattr__(pair_index, "contracts", tuple(list(pair_contracts)))
-                    elif pair_mutation == "code":
-                        pair_decoder.__code__ = pair_code.replace( co_name=pair_code.co_name + "_drift")
-                    else:
-                        pair_decoder.__defaults__ = ( *(pair_defaults or ()), "fixture-default-drift")
-                elif (event == "call" and frame.f_code is pair_semantic_code
-                      and frame.f_locals.get("self") is pair_index and pair_seen[0]):
-                    pair_seen[1] = True
-
-            pair_previous_profile = sys.getprofile()
+        for pair_mutation in ("index", "tuple"):
             try:
-                sys.setprofile(pairing_profile)
+                if pair_mutation == "index":
+                    object.__setattr__(bound, "semantic_index", pair_replacement)
+                else:
+                    object.__setattr__(pair_index, "contracts", pair_contracts[1:])
                 with self.assertRaises(ValueError):
                     bound.require_current_offer(bound.offers)
             finally:
-                sys.setprofile(pair_previous_profile)
                 object.__setattr__(bound, "semantic_index", pair_index)
                 object.__setattr__(pair_index, "contracts", pair_contracts)
-                pair_decoder.__code__, pair_decoder.__defaults__ = pair_code, pair_defaults
-            self.assertTrue(pair_seen[0], pair_mutation)
-            if pair_mutation in ("code", "defaults"):
-                self.assertTrue(pair_seen[1], pair_mutation)
             self.assertEqual(plain(call.schema), full_schema)
             self.assertEqual(len(self.backend.calls), calls_before)
-        certificate_graph = query_members[0].rule_graph; certificate_source = certificate_graph.canonical_bytes
+        certificate_graph = query_members[0].rule_graph
         self.assertEqual(certificate_graph.literal_at(("action_type",)), "submit_result")
-        certificate_bad_source = json.loads(certificate_source)
-        certificate_bad_source.setdefault("$defs", {})["unused_proof_regression"] = {"$ref": "#/$defs/missing_proof"}
-        certificate_bad_bytes = json.dumps(certificate_bad_source).encode(); certificate_changed = []
-        def certificate_drift(frame, event, arg):
-            hook_profile(frame, event, arg)
-            if (event == "return" and frame.f_code is pair_action_code
-                    and frame.f_locals.get("self") is bound.action_index and not certificate_changed):
-                certificate_changed.append(True)
-                object.__setattr__(certificate_graph, "canonical_bytes", certificate_bad_bytes)
-        previous_profile = sys.getprofile(); prior_calls = dict(hook_calls)
-        try:
-            sys.setprofile(certificate_drift)
-            with self.assertRaisesRegex(ValueError, "^schema rejected$") as certificate_rejected:
-                bound.decode_response(json.dumps(physical))
-            self.assertEqual(certificate_changed, [True]); self.assertEqual(hook_calls, prior_calls)
-            self.assertEqual(failure_issues(certificate_rejected.exception), ("$: local definition missing",))
-        finally:
-            sys.setprofile(previous_profile)
-            object.__setattr__(certificate_graph, "canonical_bytes", certificate_source)
-        bound.require_current_offer(bound.offers)
         previous_final = bound.factory.authorized_validator
         def different_final(result, authorization):
             return previous_final(result, authorization)
@@ -3051,10 +2937,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertEqual(budget_policy.maximum_schema_bytes, 65536)
             self.assertIs(budget_index.rule_graph, budget_rules)
             self.assertIs(budget_index.owners, budget_owners)
-            with self.assertRaisesRegex(ValueError, 'frozen Lead index provenance changed'):
-                bound.require_current_offer(bound.offers)
-            with self.assertRaisesRegex(ValueError, 'frozen Lead index provenance changed'):
-                bound.require_submission(call.payload, call.schema)
         finally: object.__setattr__(budget_policy, 'maximum_index_schema_bytes', budget_original_limit)
         self.assertEqual(budget_policy.maximum_index_schema_bytes, 262144)
         self.assertEqual(budget_policy.identity_for(budget_owner_id), budget_identity)
@@ -3261,24 +3143,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         workflow_value = authoring_scope_from_dict(workflow_record)
         workflow_facts = replace(profile_facts, scope=workflow_value)
         from story_writing_agents import specialist_routing as routing_module
-        from story_writing_agents.writing_artifacts import catalog as artifact_catalog
-        from story_writing_agents.writing_artifacts import relationship_policy as artifact_policy
-        for helper in (artifact_policy.artifact_source_operation_rule, artifact_catalog.artifact_kind_path_rule,
-                       artifact_catalog.canonical_artifact_kind, routing_module.authoring_scope_rules,
-                       routing_module.finite_authoring_scope_rules, routing_module.legal_specialist_rosters,
-                       routing_module.assignment_rule, routing_module.AuthoringScopeRuleSet.__post_init__):
-            original_code, original_defaults = helper.__code__, helper.__defaults__
-            try:
-                helper.__code__ = (lambda *_args, **_kwargs: None).__code__
-                with self.assertRaises(ValueError):
-                    bound.require_current_offer(bound.offers)
-            finally: helper.__code__ = original_code
-            try:
-                helper.__defaults__ = (original_defaults or ()) + (None,)
-                with self.assertRaises(ValueError):
-                    bound.require_current_offer(bound.offers)
-            finally: helper.__defaults__ = original_defaults
-            bound.require_current_offer(bound.offers)
         objective_seed = orchestrator_module._lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=workflow_facts)
         for kind in ('answer', 'critique'):

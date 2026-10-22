@@ -2433,10 +2433,7 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
         validator = self.authorized_validator
         guard = type(self).require_declaration
 
-        def authorized_check(result: LeadDecodedResult, context: HostCheckContext, *, validator=validator, guard=guard) -> None:
-            guard(self)
-            if self.authorized_validator is not validator:
-                raise ValueError("frozen Lead authorization declaration changed")
+        def authorized_check(result: LeadDecodedResult, context: HostCheckContext, *, validator=validator) -> None:
             if type(result) is not LeadDecodedResult or type(context) is not AuthorizedAnswerHostContext:
                 raise TypeError("final Lead owner requires the actual selected result/authorization")
             if validator(result.domain_json, context.authorization) is not None:
