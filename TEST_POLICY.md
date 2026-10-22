@@ -203,7 +203,7 @@ claiming acceptance. The runner rollout and remaining gates are tracked in
 
 Before changing a validation shortcut, add independent compatibility oracles to
 existing test IDs and run them against the unchanged implementation. Preserve
-exact ordered diagnostics, fallback behavior, mutation checks, test inventory,
+exact ordered diagnostics, fallback behavior, input/export mutation checks, test inventory,
 and source budgets. Run the same checks against the candidate before expensive
 runtime scenarios.
 
@@ -225,8 +225,12 @@ classes and required fast-tier membership. The active optimization record is
 [child #872](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/872).
 
 Schema-template reuse must preserve cold/warm diagnostic equality, independent
-payloads/results/exports, per-query cap resets, evaluator-drift fallback, and
-sealed-decoder provenance. Cache hints, including simultaneous replacement of
+payloads/results/exports, per-query cap resets, and schema-source/template
+ownership consistency. Schema, decoder, and evaluator implementations are trusted
+to remain stable during a chat; normal decoding does not repeatedly attest their
+code, defaults, closures, or class layouts. Construction validates declarations,
+while current-call binding, offered IDs, response validation, typed ownership, and
+host/authorization checks remain required. Cache hints, including simultaneous replacement of
 both hints, must not select an untrusted schema. Preparation belongs to one
 `SchemaRules` owner; fresh owners and generic compiler search remain separate
 costs. A successful cache-reuse check alone demonstrates no whole-suite speedup.

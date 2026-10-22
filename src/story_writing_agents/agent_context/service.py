@@ -19,7 +19,7 @@ from ..structured_output_validation import (
     ContractOwner,
     ContractRejection, BoundContract, NamedHostCheck, TypedDecoder, HostCheckContext,
     SelectedHostContext, SelectedContract, ValidatedValue, closed_rule, strict_json_member_text, failure_findings,
-    SchemaRules, SchemaNodeFingerprintProof, bound_schema_node_fingerprint,
+    SchemaRules,
     finite_subset_rule, finite_selection_rule, decode_finite_selection,
     canonical_schema_rules, diagnose_value, schema_accepts_only_objects, strict_json_object,
     validation_failure,
@@ -589,12 +589,8 @@ class BoundCallContract:
     outer_inner_schema_ids: tuple[tuple[str, str | None], ...] = field(init=False)
     logical_origin_call_id: str = field(init=False)
     phase: str = field(init=False)
-    _factory_method: object = field(init=False, repr=False, compare=False)
-    _factory_guard: tuple[object, object] = field(init=False, repr=False, compare=False)
     _semantic_anchor: LeadContractIndex[LeadDecodedResult] = field(init=False, repr=False, compare=False)
     _action_anchor: LeadContractIndex[ContextActionValue] = field(init=False, repr=False, compare=False)
-    _node_fingerprint_proofs: tuple[SchemaNodeFingerprintProof | None, ...] | list = field(init=False, repr=False, compare=False)
-    _node_fingerprint_anchor: object = field(init=False, repr=False, compare=False)
 
     def __init_subclass__(cls, **kwargs):
         raise TypeError("bound call relationships cannot be overridden")
@@ -604,10 +600,8 @@ class BoundCallContract:
             raise TypeError("bound call requires typed logical factory and actual physical offers")
         if self.offers.scope.agent_id != LEAD_ORCHESTRATOR:
             raise TypeError("typed Lead call requires actual Lead offers")
-        method = type(self.factory).declare_result_owners
         guard = type(self.factory).require_declaration
         TypedDecoder.require_hook_shape(self.factory.require_declaration, 0)
-        object.__setattr__(self, "_factory_guard", (guard, guard.__code__))
         if guard(self.factory) is not None:
             raise TypeError("frozen owner declaration guard must return None")
         if self.lineage is None:
@@ -658,18 +652,13 @@ class BoundCallContract:
         object.__setattr__(self, "outer_inner_schema_ids", pairs)
         object.__setattr__(self, "logical_origin_call_id", semantic.policy.logical_origin_call_id)
         object.__setattr__(self, "phase", phase)
-        object.__setattr__(self, "_factory_method", method)
         object.__setattr__(self, "_semantic_anchor", semantic)
         object.__setattr__(self, "_action_anchor", outer)
-        pending: list[SchemaNodeFingerprintProof | None] = []
-        object.__setattr__(self, "_node_fingerprint_proofs", pending)
-        object.__setattr__(self, "_node_fingerprint_anchor", pending)
+        semantic.require_provenance()
+        outer.require_provenance()
+        if graph.node_fingerprint(("agent_action",)) != outer.rule_graph.node_fingerprint():
+            raise ValueError("actual call/graph/frozen owner provenance changed")
         self.require_current_offer(self.offers)
-        if self._node_fingerprint_proofs is not pending or self._node_fingerprint_anchor is not pending:
-            raise ValueError("frozen bound schema fingerprint proofs changed")
-        proofs = tuple(pending)
-        object.__setattr__(self, "_node_fingerprint_proofs", proofs)
-        object.__setattr__(self, "_node_fingerprint_anchor", proofs)
 
     @classmethod
     def bind(cls, factory: BoundCallFactory, offers: ContextCallOffers,
@@ -677,59 +666,18 @@ class BoundCallContract:
         return cls(factory, offers, lineage)
 
     def require_current_offer(self, offers: ContextCallOffers) -> None:
-        guard, code = self._factory_guard
-        if type(self.factory).require_declaration is not guard or guard.__code__ is not code:
-            raise ValueError("frozen owner declaration guard changed")
-        if guard(self.factory) is not None:
-            raise TypeError("frozen owner declaration guard must return None")
-        methods = (type(self)._validate_response_structure, type(self).structural_findings)
-        if any(method is not declared or method.__code__ is not code
-               for method, (declared, code) in zip(
-                   methods, _BOUND_CALL_STRUCTURE_DECLARATIONS, strict=True,
-               )):
-            raise ValueError("frozen bound structural query implementation changed")
-        proofs = self._node_fingerprint_proofs
-        if proofs is not self._node_fingerprint_anchor or type(proofs) not in (tuple, list):
-            raise ValueError("frozen bound schema fingerprint proofs changed")
-        query_index = 0
-
-        def fingerprint(graph: SchemaRules, path: tuple[str, ...] = ()) -> str:
-            nonlocal query_index
-            if self._node_fingerprint_proofs is not proofs or self._node_fingerprint_anchor is not proofs:
-                raise ValueError("frozen bound schema fingerprint proofs changed")
-            helper, code, defaults, keywords, keyword_edges, closure = _BOUND_SCHEMA_NODE_FINGERPRINT
-            if (helper is not bound_schema_node_fingerprint or helper.__code__ is not code
-                    or helper.__defaults__ is not defaults or helper.__kwdefaults__ is not keywords
-                    or helper.__closure__ is not closure or len(keywords) != len(keyword_edges)
-                    or any(key is not old_key or value is not old_value
-                           for (key, value), (old_key, old_value) in zip(keywords.items(), keyword_edges))):
-                value, captured = graph.node_fingerprint(path), None
-            elif type(proofs) is list:
-                value, captured = helper(graph, path)
-            else:
-                proof = proofs[query_index] if query_index < len(proofs) else None
-                value, captured = helper(graph, path, proof=proof)
-            if type(proofs) is list:
-                proofs.append(captured)
-            query_index += 1
-            return value
-
         if (type(offers) is not ContextCallOffers or offers != self.offers
                 or offers.offer_digest != self.offers.offer_digest
-                or type(self.factory).declare_result_owners is not self._factory_method
-                or self.semantic_index is not self._semantic_anchor or self.action_index is not self._action_anchor
-                or type(self.rule_graph) is not SchemaRules
-                or fingerprint(self.rule_graph, ("agent_action",)) != fingerprint(self.action_index.rule_graph)):
+                or self.semantic_index is not self._semantic_anchor
+                or self.action_index is not self._action_anchor
+                or type(self.rule_graph) is not SchemaRules):
             raise ValueError("actual call/graph/frozen owner provenance changed")
         semantic_index = self.semantic_index
         semantic_contracts = semantic_index.contracts
-        if type(semantic_contracts) is not tuple:
-            raise ValueError('frozen bound structural query implementation changed')
-        semantic_index.require_provenance()
-        self.action_index.require_provenance()
-        if (self.semantic_index is not semantic_index
-                or semantic_index.contracts is not semantic_contracts):
-            raise ValueError('frozen bound structural query implementation changed')
+        if (type(semantic_contracts) is not tuple
+                or tuple(member.schema_id for member in semantic_contracts)
+                != semantic_index.expected_schema_ids):
+            raise ValueError("current semantic contract identities changed")
         if (self.semantic_index.policy.eligibility_offer_digest != self.eligibility_offers.offer_digest
                 or self.semantic_index.policy.logical_origin_call_id != self.logical_origin_call_id):
             raise ValueError("frozen logical eligibility snapshot changed")
@@ -744,38 +692,29 @@ class BoundCallContract:
             if (origin.factory is not self.factory or self.eligibility_offers is not origin.eligibility_offers
                     or self.semantic_index is not origin.semantic_index or self.action_index is not origin.action_index):
                 raise ValueError("corrective request changed the frozen rejected index")
-        pairs = []
+        for index in (semantic_index, self.action_index):
+            if (index.owners is not index.policy.owner_declarations
+                    or len(index.contracts) != len(index.owners)):
+                raise ValueError("current contract owner binding changed")
+            for member, owner in zip(index.contracts, index.owners, strict=True):
+                if (type(member) is not BoundContract or member.owner is not owner
+                        or member.identity != index.policy.identity_for(owner.owner_id)):
+                    raise ValueError("current contract owner binding changed")
+        pairs: list[tuple[str, str | None]] = []
         for member, owner in zip(self.action_index.contracts, self.action_index.owners, strict=True):
             if type(owner) is not ContextActionContractOwner or owner.eligibility_offers is not self.eligibility_offers:
-                raise ValueError("outer owner differs from frozen eligible call")
-            kind = member.rule_graph.literal_at(("action_type",))
-            if kind == "submit_result":
-                inner_id = member.rule_graph.literal_at(("task_result", "schema_id"))
-                inner = next((item for item in semantic_contracts
-                              if type(inner_id) is str and item.schema_id == inner_id), None)
-                if inner is None:
-                    inner = semantic_index.select(inner_id)
-                if (owner.semantic_member is not inner
-                        or fingerprint(member.rule_graph, ("task_result",)) != fingerprint(inner.rule_graph)):
-                    raise ValueError("outer offered ID differs from exact paired semantic member")
-                pairs.append((member.schema_id, inner_id))
-            elif kind in {"search_context", "read_context"} and owner.semantic_member is None:
-                pairs.append((member.schema_id, None))
+                raise ValueError("outer action lost its frozen eligibility owner")
+            inner = owner.semantic_member
+            if inner is not None:
+                if not any(item is inner for item in semantic_contracts):
+                    raise ValueError("outer ID lost its exact authoritative semantic member")
+                pairs.append((member.schema_id, inner.schema_id))
             else:
-                raise ValueError("invalid outer/semantic family relationship")
-        if (tuple(pairs) != self.outer_inner_schema_ids or
-                tuple(inner for _, inner in pairs if inner is not None) != self.semantic_index.expected_schema_ids):
-            raise ValueError("incomplete/duplicate/current outer-inner pairing")
-        if (self.semantic_index is not semantic_index
-                or semantic_index.contracts is not semantic_contracts):
-            raise ValueError('frozen bound structural query implementation changed')
-        semantic_index.require_provenance()
-        if (self.semantic_index is not semantic_index
-                or semantic_index.contracts is not semantic_contracts):
-            raise ValueError('frozen bound structural query implementation changed')
-        if (self._node_fingerprint_proofs is not proofs or self._node_fingerprint_anchor is not proofs
-                or query_index != len(proofs)):
-            raise ValueError("frozen bound schema fingerprint proofs changed")
+                pairs.append((member.schema_id, None))
+        if (tuple(pairs) != self.outer_inner_schema_ids
+                or tuple(inner for _, inner in pairs if inner is not None)
+                != self.semantic_index.expected_schema_ids):
+            raise ValueError("incomplete/duplicate/current outer-inner relationship")
 
     def schema_value(self) -> dict[str, object]:
         self.require_current_offer(self.offers)
@@ -925,10 +864,6 @@ class BoundCallContract:
         *,
         declared_lowering: str = "identity",
     ) -> None:
-        current_offer = type(self).require_current_offer
-        declared, code = _BOUND_CALL_CURRENT_OFFER_DECLARATION
-        if current_offer is not declared or current_offer.__code__ is not code:
-            raise ValueError("frozen bound current-offer implementation changed")
         self.require_projection(native_schema, declared_lowering=declared_lowering)
         input_json, _ = account_provider_payload(native_schema, payload)
         if len(input_json) > 262_144:
@@ -965,23 +900,6 @@ class BoundCallContract:
         payload["logical_origin_call_id"] = self.logical_origin_call_id
         payload["phase"] = self.phase
         return json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-
-
-_BOUND_CALL_CURRENT_OFFER_DECLARATION = (
-    BoundCallContract.require_current_offer,
-    BoundCallContract.require_current_offer.__code__,
-)
-
-_BOUND_SCHEMA_NODE_FINGERPRINT = (
-    bound_schema_node_fingerprint, bound_schema_node_fingerprint.__code__,
-    bound_schema_node_fingerprint.__defaults__, bound_schema_node_fingerprint.__kwdefaults__,
-    tuple(bound_schema_node_fingerprint.__kwdefaults__.items()), bound_schema_node_fingerprint.__closure__,
-)
-
-_BOUND_CALL_STRUCTURE_DECLARATIONS = tuple(
-    (getattr(BoundCallContract, name), getattr(BoundCallContract, name).__code__)
-    for name in ("_validate_response_structure", "structural_findings")
-)
 
 
 def _bound_call_failure(failure: BaseException) -> tuple[BoundCallContract, LeadContractRejection]:
