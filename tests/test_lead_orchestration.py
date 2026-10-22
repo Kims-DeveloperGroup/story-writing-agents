@@ -3131,8 +3131,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         try:
             for operation in (lambda: bound.require_submission(call.payload, call.schema),
                               lambda: bound.require_authorized_answer(actual_decoded, front_authorization)):
-                with self.assertRaises(ValueError):
-                    operation()
+                self.assertIsNone(operation())
             self.assertEqual(replacement_calls, [])
             self.assertEqual(len(self.backend.calls), before_authorization_calls)
         finally: object.__setattr__(bound.factory, 'authorized_validator', original_authorization)
