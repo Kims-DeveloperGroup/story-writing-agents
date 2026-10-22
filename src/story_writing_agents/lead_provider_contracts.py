@@ -1397,12 +1397,10 @@ class LeadContractIndex(Generic[_LeadValue]):
             contract.require_owner_provenance()
 
     def schema_value(self) -> dict[str, object]:
-        self.require_provenance()
         return self.rule_graph.schema_value()
 
     def select(self, schema_id: object) -> BoundContract[_LeadValue]:
-        self.require_provenance()
-        if type(schema_id) is str:
+        if type(schema_id) is str and schema_id in self.expected_schema_ids:
             for contract in self.contracts:
                 if contract.schema_id == schema_id:
                     return contract
@@ -1410,7 +1408,6 @@ class LeadContractIndex(Generic[_LeadValue]):
                                     ("$.schema_id: required exact current offered string identity",))
 
     def decode_and_validate(self, result: object) -> SelectedContract[_LeadValue]:
-        self.require_provenance()
         try:
             value = strict_json_object(result, exact_numbers=True) if type(result) is str else result
         except ValueError as failure:
@@ -1438,7 +1435,6 @@ class LeadContractIndex(Generic[_LeadValue]):
                                         findings or ("$: current authorized owner requirements",)) from None
 
     def repair_input(self, failure: LeadContractRejection) -> str:
-        self.require_provenance()
         if type(failure) is not LeadContractRejection:
             raise TypeError("repair requires a trusted selected contract rejection")
         if failure.schema_id in self.expected_schema_ids:

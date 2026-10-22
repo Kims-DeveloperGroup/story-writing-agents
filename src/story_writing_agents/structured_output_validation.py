@@ -1273,27 +1273,21 @@ def _discriminator_schema(
 
 def _diagnose(value: object, schema: Mapping[str, object], path: str, root_schema: Mapping[str, object] | None=None, *, _memo=None) -> Iterator[str]:
     root_schema = schema if root_schema is None else root_schema
-    schema_sequence = tuple if _memo is not None and len(_memo) == 7 and _memo[6] else list
+    schema_sequence = tuple if _memo is not None and len(_memo) == 5 and _memo[4] else list
     # Retain only naturally exhausted zero-finding traversals, within this call.
     _memo_key = None
     _successful = True
     _completed = False
     if _memo is not None:
-        if not _memo[4] or root_schema is not _memo[0]:
+        if root_schema is not _memo[0]:
             _memo = None
         else:
             _memo_key = (id(schema), id(value), path)
             if _memo_key in _memo[2]:
-                evaluator, code, defaults, keywords = _memo[5]
-                if evaluator is _diagnose and evaluator.__code__ is code and (evaluator.__defaults__ is defaults) and (evaluator.__kwdefaults__ is keywords):
-                    return True
-                _memo[4] = False
-                _memo[2].clear()
-                _memo = None
-                _memo_key = None
+                return True
     try:
         if '$ref' in schema:
-            prepared = (_memo[6][2].get(id(schema)) if _memo is not None and len(_memo) == 7 and type(_memo[6]) is tuple else None)
+            prepared = (_memo[4][2].get(id(schema)) if _memo is not None and len(_memo) == 5 and type(_memo[4]) is tuple else None)
             if prepared is not None and prepared[0] is not schema:
                 prepared = None
             if prepared is not None and prepared[1] is not None:
@@ -1305,7 +1299,7 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str, root_schem
             return _successful if _memo is not None else None
         variants = schema.get('anyOf')
         if type(variants) is schema_sequence and variants:
-            prepared = (_memo[6][2].get(id(schema)) if _memo is not None and len(_memo) == 7 and type(_memo[6]) is tuple else None)
+            prepared = (_memo[4][2].get(id(schema)) if _memo is not None and len(_memo) == 5 and type(_memo[4]) is tuple else None)
             if prepared is not None and prepared[0] is not schema:
                 prepared = None
             if type(value) is dict:
@@ -1505,14 +1499,10 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str, root_schem
         _completed = True
         return _successful if _memo is not None else None
     finally:
-        if _completed and _successful and (_memo_key is not None) and (_memo is not None) and _memo[4] and (len(_memo[2]) < 8192) and (_memo[3] + len(path) <= 1048576):
-            evaluator, code, defaults, keywords = _memo[5]
-            if evaluator is _diagnose and evaluator.__code__ is code and (evaluator.__defaults__ is defaults) and (evaluator.__kwdefaults__ is keywords):
-                _memo[2][_memo_key] = (schema, value, path)
-                _memo[3] += len(path)
-            else:
-                _memo[4] = False
-                _memo[2].clear()
+        if (_completed and _successful and _memo_key is not None and _memo is not None
+                and len(_memo[2]) < 8192 and _memo[3] + len(path) <= 1_048_576):
+            _memo[2][_memo_key] = (schema, value, path)
+            _memo[3] += len(path)
 
 
 def _diagnostic_plain(value: object, root: object, _type=type, _dict=dict, _list=list,
@@ -1677,34 +1667,11 @@ def _diagnostic_source_pins() -> tuple:
 _DIAGNOSIS_SOURCE_PINS = _diagnostic_source_pins()
 
 
-def _diagnostic_context(value: object, schema: object, _pins=_DIAGNOSIS_SOURCE_PINS,
-                        _checker=_diagnostic_pins_match,
-                        _code=_diagnostic_pins_match.__code__,
-                        _defaults=_diagnostic_pins_match.__defaults__, _type=type, _str=str, *,
-                        _prepared=False, _certificate=None):
-    # The admitted traversal invokes no supplied Python callback. Check source once
-    # per entry; concurrent/signal/profiler mutation is not a new guarantee here.
-    if (_pins is not _DIAGNOSIS_SOURCE_PINS or _checker is not _diagnostic_pins_match
-            or _checker.__code__ is not _code or _checker.__defaults__ is not _defaults):
+def _diagnostic_context(value: object, schema: object, *, _prepared=False, _certificate=None):
+    # Admission concerns the current data and resource bounds, not implementation identity.
+    if not _diagnostic_plain(value, schema, _prepared=_prepared, _certificate=_certificate):
         return None
-    # Reject speculative dictionary lookups that could call a non-string key.
-    if any(any(_type(name) is not _str for name in namespace) for namespace, _ in _pins[0]):
-        return None
-    if not _checker(_pins, *_defaults) or not _diagnostic_plain(
-            value, schema, _prepared=_prepared, _certificate=_certificate):
-        return None
-    # Canonical regex entry points only add builtin compiled patterns to this cache.
-    for cache in (re._cache, vars(re).get("_cache2", {})):
-        if type(cache) is not dict:
-            return None
-        for key, item in cache.items():
-            if (type(key) is not tuple or len(key) != 3
-                    or not (key[0] is str or key[0] is bytes)
-                    or type(key[1]) is not key[0] or type(key[2]) is not int
-                    or type(item) is not re.Pattern):
-                return None
-    result = [schema, value, {}, 0, True,
-            (_diagnose, _diagnose.__code__, _diagnose.__defaults__, _diagnose.__kwdefaults__)]
+    result = [schema, value, {}, 0]
     if _prepared:
         result.append(_certificate if _certificate is not None else True)
     return result
@@ -2249,14 +2216,10 @@ def bound_schema_node_fingerprint(
     return value, captured
 
 
-def _schema_rule_template_query(graph: SchemaRules, value: object, *,
-                                _implementation=_schema_node_query_declaration(diagnostic=True), _type=type) -> tuple[str, ...]:
-    """Reuse only this owner's sealed grammar under the original implementations."""
-    if _implementation is not None and _type(graph) is SchemaRules:
-        checker, code, defaults = _implementation[4]
-        if (checker is _schema_node_query_matches and checker.__code__ is code
-                and checker.__defaults__ is defaults and checker(_implementation, *defaults)):
-            return _schema_template_findings(graph, value)
+def _schema_rule_template_query(graph: SchemaRules, value: object) -> tuple[str, ...]:
+    """Reuse the owner's sealed grammar with fresh payload evaluation state."""
+    if _is_schema_rules(graph):
+        return _schema_template_findings(graph, value)
     return diagnose_value(value, graph.schema_value())
 
 
@@ -2956,11 +2919,9 @@ class BoundContract(Generic[_ContractValue]):
             check.require_provenance()
 
     def schema_value(self) -> dict[str, object]:
-        self.require_owner_provenance()
         return self.rule_graph.schema_value()
 
     def decode_selected(self, raw: object) -> SelectedContract[_ContractValue]:
-        self.require_owner_provenance()
         try:
             value = strict_json_object(raw, exact_numbers=True) if type(raw) is str else raw
         except ValueError as failure:
@@ -2992,7 +2953,6 @@ class BoundContract(Generic[_ContractValue]):
 
     def require_host_checks(self, selected: SelectedContract[_ContractValue], phase: str,
                             context: HostCheckContext) -> None:
-        self.require_owner_provenance()
         if type(selected) is not SelectedContract or not selected.belongs_to(self) or phase not in {"selected", "authorized"}:
             raise TypeError("host checks require the exact selected typed contract")
         for check in self.host_checks:
@@ -3004,7 +2964,6 @@ class BoundContract(Generic[_ContractValue]):
                     raise TypeError("named owner checks must return None")
 
     def corrective_requirements(self, requirements: tuple[str, ...]) -> dict[str, object]:
-        self.require_owner_provenance()
         def physical(fact: dict[str, object]) -> dict[str, object]:
             return dict(fact, path=self.identity.wire_root_path + str(fact["path"])[1:])
         return {"binding_id": "lead.selected_rule_repair", "revision": "848-v3:single-frozen-graph",
