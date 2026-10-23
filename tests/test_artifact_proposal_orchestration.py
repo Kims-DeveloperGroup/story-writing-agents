@@ -1216,6 +1216,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     ) -> None:
         from tests.recommendation_fixture import task_assessment
         conversation_id = self.conversation("Reject provider authority")
+        before = self.artifact_snapshot()
         invalid = _artifact_outcome(
             operations=[ { "apply_authority_granted" : True , "kind" : "create" , "new_text" : "Must not survive.\n" , "suggested_path" : _RULES , } ],
             evidence_status="missing",
@@ -1237,22 +1238,16 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             self.session_id,
             conversation_id,
             "Reject provider-supplied Apply authority.", )
-        self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
-        self.assertIsNone(result.artifact_proposal)
-        self.assertEqual(
-            self.artifact_events(conversation_id, ArtifactReviewCandidatePayload),
-            (), )
-        lead_failure = self.artifact_events(
-            conversation_id,
-            CollaborationLeadOutcomeFailurePayload, )
-        self.assertEqual(len(lead_failure), 1)
-        self.assertIs(
-            lead_failure[0].code,
-            CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED, )
-        artifact_failure = self.artifact_events(
-            conversation_id,
-            ArtifactReviewFailurePayload, )
-        self.assertEqual(artifact_failure, ())
+        self.assertIs(result.next_action, CollaborationNextAction.REPLY_TO_LEAD)
+        self.assertIs(result.artifact_proposal.state, ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION)
+        candidate = result.artifact_proposal.candidate.candidate
+        self.assertNotIn('"apply_authority_granted"', serialize_artifact_review_candidate(candidate))
+        self.assertEqual(self.artifact_snapshot(), before)
+        self.assertEqual(self.artifact_events(conversation_id, ArtifactReviewCandidatePayload),
+                         (result.artifact_proposal.candidate,))
+        self.assertEqual(self.artifact_events(conversation_id, ArtifactReviewedProposal), ())
+        self.assertEqual(self.artifact_events(conversation_id, CollaborationLeadOutcomeFailurePayload), ())
+        self.assertEqual(self.artifact_events(conversation_id, ArtifactReviewFailurePayload), ())
 
 
     async def test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source(self):
