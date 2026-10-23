@@ -538,11 +538,12 @@ def _closed_result_object(
     properties: dict[str, object],
     *,
     description: str | None = None,
+    required: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     schema: dict[str, object] = {
         "additionalProperties": False,
         "properties": properties,
-        "required": list(properties),
+        "required": list(properties if required is None else required),
         "type": "object",
     }
     if description is not None:
@@ -601,27 +602,21 @@ def _proposal_result_schema(
             "basis_input_ids": string_array(None if facts.allow_read_sources else facts.input_ids),
         }), "description": "Bind each declared dependency slot to a disclosed choice and currently available sources; unresolved choices require clarification."}
     if facts.scope and facts.scope.intent is AuthoringIntent.REVIEW_ONLY:
-        return _closed_result_object(assignments, description="Confirm only this exact supplied-material review; no drafting or artifact objective.")
-    objective = facts.objective_schema("consult")
-    with_objective = _closed_result_object({**assignments, "objective_intent": objective},
-        description=(
-            "Propose specialist work that starts or advances a document change request; "
-            "confirmation authorizes the assignments, not document changes."
-        ),
-    )
-    if facts.preparation_kind:
-        return with_objective if facts.preparation_objective_id else _closed_result_object(assignments,
-            description=(
-                "Propose specialist work when no document change request update is needed; "
-                "confirmation authorizes only these disclosed assignments."
-            ),
-        )
-    return {"anyOf": [_closed_result_object(assignments,
-        description=(
+        return _closed_result_object({**assignments, "objective_intent": {"type": "string", "enum": []}},
+            required=tuple(assignments), description="Confirm only this exact supplied-material review; no drafting or artifact objective.")
+    if facts.preparation_kind and facts.preparation_objective_id is None:
+        return _closed_result_object({**assignments, "objective_intent": {"type": "string", "enum": []}},
+            required=tuple(assignments), description=(
             "Propose specialist work when no document change request update is needed; "
             "confirmation authorizes only these disclosed assignments."
+        ))
+    return _closed_result_object({**assignments, "objective_intent": facts.objective_schema("consult")},
+        required=None if facts.preparation_kind else tuple(assignments),
+        description=(
+            "Propose the disclosed specialist assignments, optionally starting or advancing "
+            "a document change request; confirmation does not authorize document changes."
         ),
-    ), with_objective]}
+    )
 
 
 def _artifact_intent_result_schema(
@@ -691,22 +686,13 @@ def _artifact_intent_result_schema(
         },
     }
     facts = constraints or LeadProviderConstraints()
-    with_objective = _closed_result_object({
-        **operations, "objective_intent": facts.objective_schema("prepare"),
-    },
+    return _closed_result_object({**operations, "objective_intent": facts.objective_schema("prepare")},
+        required=None if facts.preparation_kind else tuple(operations),
         description=(
-            "Prepare exact changes while starting or advancing a document change request; review "
-            "and Apply still require separate confirmation."
-        ),
-    )
-    if facts.preparation_kind:
-        return with_objective
-    return {"anyOf": [_closed_result_object(operations,
-        description=(
-            "Prepare exact changes without a document change request update when none is needed; "
+            "Prepare exact changes, optionally starting or advancing a document change request; "
             "review and Apply still require separate confirmation."
         ),
-    ), with_objective]}
+    )
 
 
 def _recommended_action_result_schema(
@@ -890,51 +876,34 @@ def _lead_front_result_contract(
             ),
         ]
     else:
-        variants = [
-            _closed_result_object(scoped,
-                description=(
-                    "Answer workflow or status questions directly, or report facts supported "
-                    "by current writing READs in a REVIEW scope, without requesting "
-                    "specialist or document actions."
-                ),
-            ),
-            _closed_result_object({**scoped, "kind": {"enum": ["question", "critique"], "type": "string"}},
-                description=(
-                    "Ask for missing information with clarification_question, or explain a scoped"
-                    " concern with critique, when no document request update or proposal is "
-                    "needed."
-                ),
-            ),
-            _closed_result_object({**scoped,
-                "kind": {"enum": ["question"], "type": "string"},
-                "objective_intent": facts.objective_schema("clarify")},
-                description=(
-                    "Ask for missing information while starting or continuing the associated "
-                    "document change request; keep that request pending."
-                ),
-            ),
-            recommendation,
-        ]
-        if facts.objective_ids is None or facts.objective_ids:
+        can_track = not (facts.scope and facts.scope.intent is AuthoringIntent.REVIEW_ONLY)
+        cancellation = {"objective_intent": {"type": "string", "enum": []}}
+        if can_track and (facts.objective_ids is None or facts.objective_ids):
             identity: dict[str, object] = {"type": "string"}
             if facts.objective_ids:
                 identity["enum"] = list(facts.objective_ids)
-            variants.append(_closed_result_object({**scoped,
-                "kind": {"enum": [LeadOutcomeKind.ANSWER.value, LeadOutcomeKind.CRITIQUE.value], "type": "string"},
-                "objective_intent": _closed_result_object({
-                    "action": {"enum": ["cancel"], "type": "string"}, "objective_id": identity,
-                },
-                    description=(
-                        "Close only the selected request that the user explicitly cancelled; this"
-                        " performs no document change."
-                    ),
-                ),
-            },
+            cancellation = {"objective_intent": _closed_result_object({
+                "action": {"enum": ["cancel"], "type": "string"}, "objective_id": identity,
+            }, description="Close only the selected request explicitly cancelled by the user; no document change.")}
+        variants = [
+            _closed_result_object({**scoped, **cancellation}, required=tuple(scoped),
                 description=(
-                    "Acknowledge explicit user cancellation with an answer or critique and close "
-                    "the selected pending document change request without applying changes."
-                ),
-            ))
+                    "Answer workflow or status questions or report current READ-supported facts in REVIEW "
+                    "scope. Optionally acknowledge an explicitly cancelled document change request."
+                )),
+            _closed_result_object({**scoped, "kind": {"enum": ["question"], "type": "string"},
+                "objective_intent": facts.objective_schema("clarify") if can_track else {"type": "string", "enum": []}},
+                required=(*scoped, "kind"), description=(
+                    "Ask for missing information, optionally starting or continuing the associated "
+                    "document change request; keep that request pending."
+                )),
+            _closed_result_object({**scoped, "kind": {"enum": ["critique"], "type": "string"}, **cancellation},
+                required=(*scoped, "kind"), description=(
+                    "Explain a scoped concern, optionally acknowledging an explicitly cancelled "
+                    "document change request; this performs no document change."
+                )),
+            recommendation,
+        ]
         for field, intent in (("proposal", _proposal_result_schema(expected_relation, input_ids, facts)),
                               ("artifact_intent", _artifact_intent_result_schema(facts))):
             variants.append(_closed_result_object({**scoped,
@@ -948,7 +917,6 @@ def _lead_front_result_contract(
         variants = [
             variant for variant in variants
             if "artifact_intent" not in variant.get("properties", {})
-            and "objective_intent" not in variant.get("properties", {})
         ]
     if facts.adoption_intent is not None:
         variants = [variant for variant in variants if "proposal" in variant.get("properties", {})]

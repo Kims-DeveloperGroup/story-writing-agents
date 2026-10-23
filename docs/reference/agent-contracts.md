@@ -149,14 +149,27 @@ correlation, action index, attribution, and read receipts itself. No JSON-encode
 result string or alternate-name decoder is accepted. All built-in result schemas
 use explicit `response_type`; custom result contracts retain their declared schema.
 
-Response alternatives use the identifiers offered by the current contract. A
-unique `schema_id`, or `schema_id` with a declared `variant_id` for a shared
-family, selects one alternative; optional-field presence does not select it.
-The runtime prepares these lookups per immutable schema owner and validates the
-selected alternative without trying unrelated alternatives after a failure.
-Multi-member Lead families offer the required `variant_id` inside
-`response_details`; the runtime removes that routing tag when restoring the
-selected typed domain response.
+Logical response records have one predefined contract definition. Every declared
+field appears in `properties`; only mandatory fields appear in `required`.
+Optional-field presence creates no additional logical schema or variant tag.
+Contract compilation produces the validator, typed decode plan, and provider
+encoding from that definition before a response is processed. Current offered
+values can be bound during request construction without rediscovering record
+shapes.
+
+The runtime selects the compiled record by its offered `schema_id`, validates
+supplied optional fields, and retains them in typed input. Absent fields remain
+absent; null is accepted only when declared. An optional identity field stays
+known when no identities are offered: omission is valid and every supplied value
+is rejected. Its unavailable provider field can be omitted from the compiled
+transport encoding. Properties outside the selected record are ignored. Runtime
+and immutable owner preparation do not compare or
+merge optional schemas, and optional-field presence never selects a decoder.
+
+Genuine structural or semantic alternatives retain their offered identities.
+Where a Lead family needs a `variant_id`, it appears inside `response_details`
+and is removed when restoring the typed domain response. Provider-specific
+encodings preserve native constraints without defining another logical record.
 Combined indexes share identical definition bodies through local references,
 preserving definition names and rule fingerprints within the existing byte cap.
 

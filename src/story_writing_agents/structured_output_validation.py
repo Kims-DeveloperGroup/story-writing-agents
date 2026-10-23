@@ -749,12 +749,12 @@ def canonical_schema_rules(schema: Mapping[str, object], *, maximum_bytes: int =
     definitions = root.get("$defs", {})
     if type(definitions) is not dict or any(type(k) is not str or not k or "/" in k or "~" in k for k in definitions):
         raise validation_failure(ValueError("schema rejected"), "$", "invalid local definitions")
-    checked: set[str] = set()
+    checked: set[tuple[str, bool]] = set()
 
     def reject(path: str, requirement: str) -> NoReturn:
         raise validation_failure(ValueError("schema rejected"), path, requirement)
 
-    def visit(node: object, path: str, active: frozenset[str]) -> None:
+    def visit(node: object, path: str, active: frozenset[str], *, optional: bool = False) -> None:
         if type(node) is not dict or set(node) - _RULE_KEYS:
             reject(path, "unsupported structural rule")
         description = node.get("description")
@@ -769,9 +769,9 @@ def canonical_schema_rules(schema: Mapping[str, object], *, maximum_bytes: int =
             target = _local_rule(root, reference)
             if reference in active:
                 reject(path, "cyclic local definition")
-            if reference not in checked:
-                visit(target, path, active | {reference})
-                checked.add(reference)
+            if (reference, optional) not in checked:
+                visit(target, path, active | {reference}, optional=optional)
+                checked.add((reference, optional))
             return
         variants = node.get("anyOf")
         if variants is not None:
@@ -779,7 +779,7 @@ def canonical_schema_rules(schema: Mapping[str, object], *, maximum_bytes: int =
                 reject(path, "expected complete schema alternatives")
             for child in variants:
                 visit(child, path, active)
-            _object_union_dispatch(variants, root)
+            _object_union_dispatch(variants, root, require_unique=True)
             return
         raw_types = node.get("type")
         types = [raw_types] if type(raw_types) is str else raw_types
@@ -790,7 +790,7 @@ def canonical_schema_rules(schema: Mapping[str, object], *, maximum_bytes: int =
         concrete = next((item for item in types if item != "null"), "null")
         enum = node.get("enum")
         if enum is not None:
-            if type(enum) is not list or not enum or any(
+            if type(enum) is not list or (not enum and not (optional and concrete == "string")) or any(
                 type(item) in {dict, list} or not any(_matches_type(item, expected) for expected in types)
                 for item in enum
             ):
@@ -809,7 +809,7 @@ def canonical_schema_rules(schema: Mapping[str, object], *, maximum_bytes: int =
                     or node["additionalProperties"] is not False):
                 reject(path, "expected closed object")
             for name, child in properties.items():
-                visit(child, _path(path, name), active)
+                visit(child, _path(path, name), active, optional=name not in required)
         elif concrete == "array":
             if "items" not in keys or keys - {"items", "minItems", "maxItems"}:
                 reject(path, "expected explicit array item rules")
@@ -846,9 +846,9 @@ def canonical_schema_rules(schema: Mapping[str, object], *, maximum_bytes: int =
     visit(root, "$", frozenset())
     for name, child in definitions.items():
         reference = "#/$defs/" + name
-        if reference not in checked:
+        if (reference, False) not in checked and (reference, True) not in checked:
             visit(child, "$defs", frozenset({reference}))
-            checked.add(reference)
+            checked.add((reference, False))
     return encoded
 
 
@@ -954,6 +954,56 @@ class SchemaNodeFingerprintProof:
         raise TypeError("schema node fingerprint proofs cannot be overridden")
 
 
+def require_native_schema_projection(
+    bound_schema: Mapping, actual_native_schema: Mapping, *,
+    declared_lowering: str = "identity",
+) -> None:
+    """Reject native transport restriction loss before provider submission.
+
+    This pure comparison certifies equivalence to the bound declaration, not
+    opaque native-model keyword support. Only the adapter's proven numeric
+    singleton lowering and an intrinsically-null redundant enum are allowed.
+    """
+    if declared_lowering not in {"identity", "integer_singleton_bounds"}:
+        raise ValueError("undeclared schema lowering")
+    expected = deepcopy(dict(bound_schema))
+
+    def lower(node: object) -> None:
+        if type(node) is not dict:
+            return
+        enum = node.get("enum")
+        if enum == [None] and node.get("type") == "null":
+            node.pop("enum")
+        elif (node.get("type") == "integer"
+              and type(enum) is list and len(enum) == 1 and type(enum[0]) is int
+              and abs(enum[0]) <= (1 << 53) - 1
+              and "minimum" not in node and "maximum" not in node):
+            node.pop("enum")
+            node["minimum"] = node["maximum"] = enum[0]
+        for key in ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies"):
+            children = node.get(key)
+            if type(children) is dict:
+                for child in children.values():
+                    lower(child)
+        for key in ("anyOf", "allOf", "oneOf", "prefixItems"):
+            children = node.get(key)
+            if type(children) is list:
+                for child in children:
+                    lower(child)
+        for key in ("items", "additionalProperties", "additionalItems", "unevaluatedProperties", "contains", "propertyNames", "not", "if", "then", "else", "contentSchema"):
+            lower(node.get(key))
+
+    if declared_lowering == "integer_singleton_bounds":
+        lower(expected)
+    try:
+        original = json.dumps(expected, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        native = json.dumps(dict(actual_native_schema), sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError, UnicodeError):
+        raise ValueError("invalid native schema projection") from None
+    if original != native:
+        raise ValueError("native schema projection changed bound restrictions")
+
+
 @dataclass(frozen=True, slots=True)
 class SchemaRules:
     """One immutable owner-declared graph shared by projection and validation."""
@@ -978,19 +1028,85 @@ class SchemaRules:
     def schema_value(self) -> dict[str, object]:
         return strict_json_object(self.canonical_bytes.decode("utf-8"))
     def provider_schema_value(self) -> dict[str, object]:
-        """Export native JSON Schema without internal property-role annotations."""
-        root = self.schema_value()
-        pending = [root]
-        while pending:
-            node = pending.pop()
-            if type(node) is dict:
-                node.pop("x-swa-property-policy", None)
-                pending.extend(node.get("properties", {}).values())
-                pending.extend(node.get("$defs", {}).values())
-                pending.extend(node.get("anyOf", ()))
-                if "items" in node:
-                    pending.append(node["items"])
+        """Compile strict transport presence encoding from this one logical declaration."""
+        logical = self.schema_value()
+        remaining_nodes = self.maximum_bytes // 2
+
+        def require_capacity(count: int = 1) -> None:
+            nonlocal remaining_nodes
+            remaining_nodes -= count
+            if remaining_nodes < 0:
+                raise validation_failure(ValueError("schema rejected"), "$", "schema byte limit exceeded")
+
+        def unavailable(node: Mapping[str, object]) -> bool:
+            selected = _diagnostic_schema_node(node, logical)
+            return selected is not None and selected.get("enum") == []
+
+        def encoded_size(value: object) -> int:
+            return len(json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+
+        def compile_node(node: dict[str, object]) -> dict[str, object]:
+            require_capacity()
+            node.pop("x-swa-property-policy", None)
+            for keyword in ("properties", "$defs"):
+                if keyword in node:
+                    node[keyword] = {name: compile_node(child) for name, child in node[keyword].items()
+                        if not (unavailable(child) and (keyword == "$defs" or name not in node.get("required", ())))}
+            if "items" in node:
+                node["items"] = compile_node(node["items"])
+            if "anyOf" in node:
+                node["anyOf"] = [compile_node(child) for child in node["anyOf"]]
+            if node.get("type") != "object":
+                return node
+            properties, required = node["properties"], node["required"]
+            optional = tuple(name for name in properties if name not in required)
+            if not optional:
+                return node
+            # Every emitted object needs at least two JSON bytes. Reject an
+            # impossible Cartesian presence encoding before allocating its arms.
+            if len(optional) >= (self.maximum_bytes // 2).bit_length():
+                raise validation_failure(ValueError("schema rejected"), "$", "schema byte limit exceeded")
+            definitions = node.pop("$defs", None)
+            base = {key: item for key, item in node.items() if key not in {"properties", "required"}}
+            variants = [{**base, "properties": {name: rule for name, rule in properties.items() if name in required}, "required": list(required)}]
+            for name in optional:
+                expanded, size = [], 10
+                for variant in variants:
+                    for present in (False, True):
+                        require_capacity()
+                        child_properties = {field: rule for field, rule in properties.items()
+                                            if field in variant["properties"] or (present and field == name)}
+                        child = {**base, "properties": child_properties,
+                                 "required": [*variant["required"], name] if present else list(variant["required"])}
+                        if not isinstance(child.get("description"), str) or not child["description"].strip():
+                            child["description"] = " ".join(
+                                f"{verb} optional fields: {', '.join(json.dumps(field, ensure_ascii=False) for field in fields)}."
+                                for verb, fields in (
+                                    ("Include", [field for field in optional if field in child_properties]),
+                                    ("Omit", [field for field in optional if field not in child_properties]))
+                                if fields)
+                        size += encoded_size(child) + 1
+                        if size > self.maximum_bytes:
+                            raise validation_failure(ValueError("schema rejected"), "$", "schema byte limit exceeded")
+                        expanded.append(child)
+                variants = expanded
+            result = {"anyOf": variants}
+            if "description" in node:
+                result["description"] = node["description"]
+            if definitions is not None:
+                result["$defs"] = definitions
+            return result
+
+        root = compile_node(logical)
+        if encoded_size(root) > self.maximum_bytes:
+            raise validation_failure(ValueError("schema rejected"), "$", "schema byte limit exceeded")
         return root
+
+    def provider_projection(
+        self, schema: Mapping[str, object] | None = None, *, declared_lowering: str = "identity",
+    ) -> ProviderSchemaProjection:
+        """Bind one compiled native projection to this exact logical owner."""
+        return ProviderSchemaProjection(self, schema, declared_lowering=declared_lowering)
 
     def findings(self, value: object) -> tuple[str, ...]:
         return _schema_rule_template_query(self, value)
@@ -1128,6 +1244,40 @@ class SchemaRules:
         """
         root, selected = self._property_rule(path, resolve_terminal=False)
         return schema_rule_fingerprints(root, selected=selected)[0]
+
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ProviderSchemaProjection:
+    """Strict native schema compiled from, and checked against, one logical owner."""
+    owner: SchemaRules
+    canonical_bytes: bytes = field(repr=False)
+    maximum_bytes: int
+    _diagnostic_source: tuple = field(repr=False, compare=False)
+    _diagnostic_template: tuple | None = field(default=None, repr=False, compare=False)
+    _diagnostic_anchor: tuple | None = field(default=None, repr=False, compare=False)
+
+    def __init__(self, owner: SchemaRules, schema: Mapping[str, object] | None = None, *, declared_lowering: str = "identity") -> None:
+        if type(owner) is not SchemaRules:
+            raise TypeError("native projection requires an exact logical schema owner")
+        expected = owner.provider_schema_value()
+        actual = expected if schema is None else dict(schema)
+        require_native_schema_projection(expected, actual, declared_lowering=declared_lowering)
+        encoded = json.dumps(actual, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        if len(encoded) > owner.maximum_bytes:
+            raise validation_failure(ValueError("schema rejected"), "$", "schema byte limit exceeded")
+        object.__setattr__(self, "owner", owner)
+        object.__setattr__(self, "canonical_bytes", encoded)
+        object.__setattr__(self, "maximum_bytes", owner.maximum_bytes)
+        object.__setattr__(self, "_diagnostic_source", (encoded, owner.maximum_bytes, None))
+        object.__setattr__(self, "_diagnostic_template", None)
+        object.__setattr__(self, "_diagnostic_anchor", None)
+
+    def schema_value(self) -> dict[str, object]:
+        return strict_json_object(self.canonical_bytes.decode("utf-8"))
+
+    def findings(self, value: object) -> tuple[str, ...]:
+        return _schema_template_findings(self, value)
 
 
 
@@ -1366,7 +1516,7 @@ def _discriminator_schema(
     return _diagnostic_schema_node(properties.get(discriminator), root_schema)
 
 
-def _object_union_dispatch(variants: Sequence[object], root: Mapping[str, object]) -> tuple | None:
+def _object_union_dispatch(variants: Sequence[object], root: Mapping[str, object], *, require_unique: bool = False) -> tuple | None:
     """Compile required singleton identities; optional fields never select a branch."""
     resolved = tuple(_diagnostic_schema_node(variant, root) for variant in variants)
     if not resolved or any(not isinstance(node, Mapping) or node.get("type") != "object" for node in resolved):
@@ -1391,7 +1541,9 @@ def _object_union_dispatch(variants: Sequence[object], root: Mapping[str, object
                 continue
             tags = tuple(literal(node, "variant_id") for node, _ in group)
             if name == "variant_id" or any(tag is None for tag in tags) or len(set(tags)) != len(tags):
-                raise ValueError("object union requires unique schema_id/variant_id identities")
+                if require_unique:
+                    raise ValueError("object union requires unique schema_id/variant_id identities")
+                return None
             entries[value] = (None, MappingProxyType({tag: variant for tag, (_, variant) in zip(tags, group)}))
         return name, MappingProxyType(entries)
     return None
@@ -1859,12 +2011,12 @@ def _diagnostic_context(value: object, schema: object, *, _prepared=False, _cert
     return result
 
 
-def _is_schema_rules(value: object, *, _type=type, _owner=SchemaRules) -> bool:
+def _is_schema_rules(value: object, *, _type=type, _owners=(SchemaRules, ProviderSchemaProjection)) -> bool:
     """Recognize the original exact owner even when its live binding drifts."""
-    return _type(value) is _owner
+    return _type(value) in _owners
 
 
-def diagnose_value(value: object, schema: Mapping[str, object] | SchemaRules) -> tuple[str, ...]:
+def diagnose_value(value: object, schema: Mapping[str, object] | SchemaRules | ProviderSchemaProjection) -> tuple[str, ...]:
     """Collect a bounded ordered prefix of independently detectable issues."""
 
     if _is_schema_rules(schema):
@@ -1898,7 +2050,7 @@ def schema_fragment_findings(
 
 
 
-def diagnose_json_text(text: str, schema: Mapping[str, object] | SchemaRules) -> tuple[str, ...]:
+def diagnose_json_text(text: str, schema: Mapping[str, object] | SchemaRules | ProviderSchemaProjection) -> tuple[str, ...]:
     """Parse strict JSON and report syntax, duplicate-key, and schema issues."""
 
     try:
