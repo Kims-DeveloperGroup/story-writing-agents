@@ -1992,6 +1992,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                     for fact in paired['schema_requirements']))
         from tests.provider_wire_fixture import lead_fixture_assignments, lead_fixture_response
         self._require_fixture_field_neighbors(bound, physical)
+        physical_decoded = bound.decode_response(json.dumps(physical))
         scope_names = ( {'activity': 'activity_type', 'intent': 'writing_intent',
             'domains': 'specialist_domains', 'paths': 'target_artifact_paths',
             'roles': 'contributions', 'slots': 'dependency_slots', 'task': 'task_reference'} )
@@ -2003,8 +2004,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 if replace_current:
                     del scoped_native[current_name]
                 self.assertTrue(bound.rule_graph.findings(old_native))
-                with self.assertRaises(ValueError):
-                    bound.decode_response(json.dumps(old_native))
+                if replace_current:
+                    with self.assertRaises(ValueError):
+                        bound.decode_response(json.dumps(old_native))
+                else:
+                    scope_extended = bound.decode_response(json.dumps(old_native))
+                    self.assertTrue(scope_extended.belongs_to(bound))
+                    self.assertEqual(scope_extended.domain_value(), physical_decoded.domain_value())
         for current_name, old_name in (('id', 'task_id'), ('revision', 'task_revision')):
             old_native = copy.deepcopy(physical)
             scoped_task = old_native['agent_action']['task_result']['response_details']['task_scope']['task']
@@ -2041,8 +2047,14 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             stale_details['writing_task_scope'] = stale_details['task_scope']
             if not mixed_marker:
                 del stale_details['task_scope']
-            with self.assertRaises(ValueError):
-                bound.decode_response(json.dumps(stale_marker))
+            self.assertTrue(bound.rule_graph.findings(stale_marker))
+            if not mixed_marker:
+                with self.assertRaises(ValueError):
+                    bound.decode_response(json.dumps(stale_marker))
+            else:
+                marker_extended = bound.decode_response(json.dumps(stale_marker))
+                self.assertTrue(marker_extended.belongs_to(bound))
+                self.assertEqual(marker_extended.domain_value(), physical_decoded.domain_value())
         for intent, activity, role, mode in (('authoring', 'review_writing', 'constraint_assessor', 'review_content'),
                 ('review_only', 'review_writing', 'constraint_assessor', 'review_content'),
                 ('authoring', 'draft_writing', 'draft_owner', 'draft_content')):
@@ -3590,8 +3602,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.assertTrue(unit_bound.rule_graph.findings(authority_frame))
                 for schema in unit_native_schemas:
                     self.assertTrue(diagnose_json_text(json.dumps(authority_frame), schema))
-                with self.assertRaises(ValueError):
-                    unit_bound.decode_response(json.dumps(authority_frame))
+                authority_decoded = unit_bound.decode_response(json.dumps(authority_frame))
+                self.assertTrue(authority_decoded.belongs_to(unit_bound))
+                self.assertEqual(authority_decoded.domain_value(), unit_decoded.domain_value())
         preparation_record = {**profile_record, 'activity': 'draft', 'target_paths': [future_path], 'contributions': [
                                   {'domain': 'tone_execution', 'role': 'draft_owner'}]}
         preparation_scope = authoring_scope_from_dict(preparation_record)
