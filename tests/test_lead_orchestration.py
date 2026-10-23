@@ -151,7 +151,7 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
             "alternative_keys": finite_fixture_selection(("knows",), ("knows",)),
             "disposition": "used", "reason": "Retain the actual alternative.",
             "residual_cost": "Reader certainty remains limited."} for item in replies}
-        return lead_fixture_response(call, lead_fixture_result({
+        response = lead_fixture_response(call, lead_fixture_result({
             "response_type": "premise_decision_summary", "status": "options",
             "response_text": "Only USER can select this whole premise.",
             "options": [{"option_key": "knows", "premise_text": literal,
@@ -162,6 +162,16 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
                  "reply_dispositions": {key: {**item, "disposition": "modified",
                      "reason": "Move knowledge to the reader."} for key, item in dispositions.items()}}],
             "recommended_option_key": recommendation}), family=0,branch_key="premise-decision-summary-v1:family:1")
+        unexpected = json.loads(response)
+        reply_map = unexpected['agent_action']['task_result']['response_details']['options'][0][
+            'reply_dispositions']
+        case.assertNotIn('not-offered-reply', reply_map)
+        reply_map['not-offered-reply'] = copy.deepcopy(next(iter(reply_map.values())))
+        case.assertTrue(call.contract.rule_graph.findings(unexpected))
+        case.assertTrue(call.contract.rule_graph.provider_projection().findings(unexpected))
+        with case.assertRaises(ValueError):
+            call.contract.decode_response(json.dumps(unexpected, ensure_ascii=False))
+        return response
     case.backend.enqueue_for(LEAD_ORCHESTRATOR, summarize)
     finished = await case.runtime.decide_lead_step(_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
     turn = finished.turn
@@ -1704,8 +1714,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(diagnose_json_text(json.dumps(selected), result_schema), ())
         selected.update(response_type='unknown_kind', response_text=7)
         issues = diagnose_json_text(json.dumps(selected), result_schema)
-        self.assertEqual(issues, ('$.response_type: expected one of ["answer"] (string), got string',
-            "$.response_text: expected string, got integer",))
+        # schema_id selects one owner; findings follow its canonical property order.
+        self.assertEqual(issues, ("$.response_text: expected string, got integer",
+            '$.response_type: expected one of ["answer"] (string), got string',))
 
     async def test_non_string_lead_kind_reports_exact_type_and_common_issues(self) -> None:
         conversation_id = self.conversation("Non-string Lead result discriminator")
@@ -1720,8 +1731,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(diagnose_json_text(json.dumps(selected), result_schema), ())
         selected.update(response_type={'private': secret}, response_text=7)
         issues = diagnose_json_text(json.dumps(selected), result_schema)
-        self.assertEqual(issues, ('$.response_type: expected string, got object',
-            "$.response_text: expected string, got integer",))
+        self.assertEqual(issues, ("$.response_text: expected string, got integer",
+            '$.response_type: expected string, got object',))
         self.assertNotIn(secret, repr(issues))
         self.assertNotIn("private", repr(issues))
 
@@ -4121,6 +4132,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             replies = bad['agent_action']['task_result']['response_details']['options'][0][ 'reply_dispositions']
             replies['reply-A']['disposition'] = 'unavailable'
             self.assertTrue(selected.rule_graph.findings(bad))
+            unexpected = copy.deepcopy(native)
+            reply_map = unexpected['agent_action']['task_result']['response_details']['options'][0][
+                'reply_dispositions']
+            self.assertNotIn('not-offered-reply', reply_map)
+            reply_map['not-offered-reply'] = copy.deepcopy(reply_map['reply-A'])
+            self.assertTrue(selected.rule_graph.findings(unexpected))
+            self.assertTrue(selected.rule_graph.provider_projection().findings(unexpected))
+            with self.assertRaises(ValueError):
+                selected.decode_response(json.dumps(unexpected, ensure_ascii=False))
         scope_record = {'activity': 'review', 'intent': 'authoring', 'schema_version': 3,
             'target_paths': [], 'domains': ['tone_execution'], 'interpretation': 'Literal test scope.',
             'task_id': task['task_id'], 'task_revision': 1,
@@ -4953,7 +4973,10 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                 conversation_id = self.conversation(f"Direct {kind} revision outcome")
                 proposed = await self.proposal(conversation_id, text=_REVIEW_USER_INPUT,
                     authoring_assessment=assessment)
-                before = len(_submitted_calls(self.history(conversation_id)))
+                prefix, scope = self.history(conversation_id), proposed.proposal.authoring_scope
+                before = len(_submitted_calls(prefix))
+                prior = next(item for item in self.runtime.inspect_lead_collaboration(
+                    self.session_id, conversation_id).available_tasks if item.ref.task_id == scope.task_id)
                 checked = set()
                 def invalid(call, _provider):
                     task = _live_material(call)['authoring_tasks'][-1]
@@ -4985,23 +5008,46 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                         body['response_details']['proposal_drafting_request'] = drafting
                     return json.dumps(packet)
                 self.backend.enqueue(invalid)
-                self.backend.enqueue(invalid)
+                if kind not in ('answer', 'question'):
+                    self.backend.enqueue(invalid)
 
                 revised = await self._decide(proposed, CollaborationConfirmationDecision.REVISE)
 
                 self.assertIs(revised.turn.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD, getattr(self, '_revision_fixture_failure', None))
-                self.assertIs(revised.turn.state, CollaborationStepState.SUPERSEDED,)
-                notice = json.loads(revised.turn.message)
-                self.assertEqual((notice['code'], notice['language'], notice['state'], notice['task_revisions']),
-                    ('LEAD_CONTRACT_REJECTED', 'KO', 'superseded',
-                     [{'task_id': proposed.proposal.authoring_scope.task_id,
-                       'task_revision': proposed.proposal.authoring_scope.task_revision + 1}]))
-                self.assertTrue(notice['paths'])
-                self.assertTrue(all(path.startswith('$.agent_action.task_result') for path in notice['paths']))
-                self.assertEqual(len(_submitted_calls(self.history(conversation_id))) - before, 2)
+                if kind in ('answer', 'question'):
+                    # The undeclared discussion extension cannot change the selected story task or grant authority.
+                    self.assertIs(revised.turn.kind, LeadOutcomeKind.DISCUSSION)
+                    self.assertIsNone(revised.turn.state)
+                    self.assertEqual(revised.turn.discussion.response_kind, kind)
+                    self.assertEqual(revised.turn.discussion.response_text,
+                                     'The revised direction is safe without another consultation.')
+                    self.assertEqual(revised.turn.discussion.associated_task_ref, prior.ref)
+                    saved = next(item for item in self.runtime.inspect_lead_collaboration(
+                        self.session_id, conversation_id).available_tasks if item.ref.task_id == scope.task_id)
+                    self.assertEqual(saved.ref, prior.ref)
+                    self.assertEqual(saved.scope, scope)
+                    self.assertEqual(self.history(conversation_id)[:len(prefix)], prefix)
+                    self.assertEqual(len(_submitted_calls(self.history(conversation_id))) - before, 1)
+                    self.assertIsNone(revised.turn.confirmation_request_id)
+                    self.assertIsNone(revised.turn.artifact_proposal)
+                    self.assertIsNone(revised.turn.artifact_application_request)
+                    self.assertIsNone(revised.turn.story_commit_request)
+                    self.assertIsNone(revised.turn.story_commit_preparation_request)
+                    self.assertFalse(any(isinstance(event.payload, CollaborationAssignmentDispatchPayload)
+                                         for event in self.history(conversation_id)))
+                else:
+                    self.assertIs(revised.turn.state, CollaborationStepState.SUPERSEDED,)
+                    notice = json.loads(revised.turn.message)
+                    self.assertEqual((notice['code'], notice['language'], notice['state'], notice['task_revisions']),
+                        ('LEAD_CONTRACT_REJECTED', 'KO', 'superseded',
+                         [{'task_id': proposed.proposal.authoring_scope.task_id,
+                           'task_revision': proposed.proposal.authoring_scope.task_revision + 1}]))
+                    self.assertTrue(notice['paths'])
+                    self.assertTrue(all(path.startswith('$.agent_action.task_result') for path in notice['paths']))
+                    self.assertEqual(len(_submitted_calls(self.history(conversation_id))) - before, 2)
+                    projection = project_collaboration_history(self.history(conversation_id))
+                    self.assertIs(projection.current_state, CollaborationStepState.SUPERSEDED)
                 self.assertIsNone(revised.turn.proposal)
-                projection = project_collaboration_history(self.history(conversation_id))
-                self.assertIs(projection.current_state, CollaborationStepState.SUPERSEDED)
                 self.assertIsNone(revised.turn.recommendation_request)
 
         case = _task_fixture(self)
