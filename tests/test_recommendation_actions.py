@@ -141,10 +141,17 @@ class RecommendationActionContractTests(RecommendationCase):
                     return text.replace(field, '"source_ids": ' + selected.replace(
                         member, replacement, 1), 1)
             if bad_route:
-                bad = recommendation(recommended_action=action(source_ids=sources, kind="prepare_consultation", specialist_ids=("character_custodian",)),
+                bad = recommendation(recommended_action=action(source_ids=sources, kind="prepare_consultation", specialist_ids=("plot_architect",)),
                     authoring_scope=lambda call: lead._live_scope(
                         call, activity="review", paths=(OUTLINE,), domains=("plot_structure",)),
                     authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation')))
+                def bad(call, provider, encode=bad):
+                    native = json.loads(encode(call, provider))
+                    selection = native['agent_action']['task_result']['response_details'][
+                        'proposal_drafting_request']['specialist_ids']
+                    selection['left']['plot_architect'] = False
+                    selection['right']['left']['character_custodian'] = True
+                    return json.dumps(native)
             self.backend.enqueue(bad)
             self.backend.enqueue(bad)
             result = await self.runtime.lead_turn(self.session_id, cid, ("Finished candidate:\n" + message + "\nYou may make bounded review judgments and prepare a separate proposal; preserve supplied facts.\n" + "Reject undisclosed aliases."))
