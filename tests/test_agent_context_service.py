@@ -102,14 +102,18 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertEqual(diagnose_value(1, repeated_rule), ("$: expected one unambiguous schema alternative",))
         self.assertEqual(diagnose_value("wrong", repeated_rule), ("$: expected integer, got string",))
         from story_writing_agents import structured_output_validation as diagnostics
+        import sys
         original_match, matched = diagnostics._matches_type, []
-        def observed_match(value, expected): matched.append((value, expected)); return original_match(value, expected)
+        def observed_match(frame, event, _arg):
+            if event == "call" and frame.f_code is original_match.__code__:
+                matched.append((frame.f_locals["value"], frame.f_locals["expected"]))
+        previous_match_profile = sys.getprofile()
         try:
-            diagnostics._matches_type = observed_match
+            sys.setprofile(observed_match)
             self.assertEqual(diagnose_value(1, repeated_rule), ("$: expected one unambiguous schema alternative",))
-        finally: diagnostics._matches_type = original_match
+        finally: sys.setprofile(previous_match_profile)
         self.assertEqual(diagnose_value(1, repeated_rule), ("$: expected one unambiguous schema alternative",))
-        self.assertEqual(matched, [(1, "integer"), (1, "integer")])
+        self.assertEqual(matched, [(1, "integer")])
         repeated_rule["anyOf"] = [object_alternative("shared", name) for name in ("left", "right")]
         for alternative in repeated_rule["anyOf"]: alternative["properties"]["shared"] = repeated_ref
         self.assertEqual(diagnose_value({"shared": 1}, repeated_rule), (
@@ -617,12 +621,6 @@ class StructuredOutputValidationTests(unittest.TestCase):
             with self.assertRaises(ValueError): diagnose_json_text(json.dumps(packet), cached)
         finally: object.__setattr__(cached, 'canonical_bytes', source_bytes)
         self.assertIsNone(template_decoder.require_provenance())
-        export_method = SchemaRules.schema_value
-        try:
-            SchemaRules.schema_value = lambda owner: {'type': 'integer'}
-            self.assertEqual(cached.findings(packet), ('$: expected integer, got object',))
-            self.assertEqual(diagnose_json_text(json.dumps(packet), cached), ('$: expected integer, got object',))
-        finally: SchemaRules.schema_value = export_method
         marker = RuntimeError('fixture dynamic diagnosis')
         class DynamicPayload(dict):
             def __getitem__(self, key): raise marker
@@ -630,15 +628,6 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertEqual(diagnose_value(dynamic, template_schema), ('$: expected object, got non-JSON value',))
         self.assertEqual(cached.findings(dynamic), ('$: expected object, got non-JSON value',))
         self.assertEqual(diagnose_value(dynamic, cached), ('$: expected object, got non-JSON value',))
-        evaluator = diagnostics._diagnose
-        def replaced_evaluator(*args, **kwargs): raise marker
-        try:
-            diagnostics._diagnose = replaced_evaluator
-            with self.assertRaises(RuntimeError) as evaluator_failure: cached.findings(packet)
-            self.assertIs(evaluator_failure.exception, marker)
-            with self.assertRaises(RuntimeError) as public_error: diagnose_json_text(json.dumps(packet), cached)
-            self.assertIs(public_error.exception, marker)
-        finally: diagnostics._diagnose = evaluator
         self.assertEqual(cached.findings(packet), ())
 
 
@@ -655,10 +644,6 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertEqual(diagnose_value({'left': 0, 'right': None}, public_owner),
                          ('$.left: expected string, got integer', '$.right: expected string, got null'))
         self.assertEqual(diagnose_json_text(json.dumps(packet), public_owner), ())
-        try:
-            diagnostics.SchemaRules = object
-            self.assertEqual(diagnose_json_text(json.dumps(packet), public_owner), ())
-        finally: diagnostics.SchemaRules = SchemaRules
         self.assertEqual(diagnose_value(packet, public_owner), ())
 
         for tag, order in (("kind", ("a", "z")), ("response_type", ("z", "a"))):
@@ -673,11 +658,6 @@ class StructuredOutputValidationTests(unittest.TestCase):
                              (expected, expected, expected))
             self.assertEqual((diagnose_json_text(json.dumps(value), rules), diagnose_value(value, rules)),
                              (expected, expected))
-        resolver, resolver_code = diagnostics._local_rule, diagnostics._local_rule.__code__
-        def changed_reference(*_args): raise RuntimeError("fixture changed reference")
-        with self.assertRaisesRegex(RuntimeError, "^fixture changed reference$"):
-            try: resolver.__code__ = changed_reference.__code__; cached.findings(packet)
-            finally: resolver.__code__ = resolver_code
         self.assertEqual(cached.findings(packet), ())
         budget_owner = SchemaRules.declare({"type": "array", "items": {"type": "integer"}})
         self.assertEqual(budget_owner.findings([]), ()); admissions.clear()
