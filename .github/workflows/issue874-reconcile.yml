@@ -1,0 +1,71 @@
+{
+  "name": "Issue 874 same-source reconciliation recovery",
+  "on": {
+    "push": {
+      "tags": [
+        "validation/issue-874-reconcile-20261023T214533Z"
+      ]
+    }
+  },
+  "permissions": {
+    "contents": "read",
+    "actions": "read"
+  },
+  "jobs": {
+    "reconcile": {
+      "name": "Reconcile completed same-source shards and frozen budget",
+      "runs-on": "ubuntu-24.04-arm",
+      "timeout-minutes": 15,
+      "env": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": "src"
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "ref": "86e32c2e270e8b69e2527e95ad0c56a2929ffa0b",
+            "fetch-depth": 0,
+            "submodules": "recursive"
+          }
+        },
+        {
+          "uses": "actions/setup-python@v5",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "uses": "astral-sh/setup-uv@v10.2.0",
+          "with": {
+            "version": "0.12.17"
+          }
+        },
+        {
+          "run": "uv sync --locked --all-extras --python 3.11 --no-progress"
+        },
+        {
+          "uses": "actions/download-artifact@v4",
+          "with": {
+            "pattern": "full-*",
+            "path": "${{ runner.temp }}/issue874-recovery/reports",
+            "run-id": 40024457737,
+            "github-token": "${{ github.token }}"
+          }
+        },
+        {
+          "name": "Verify unchanged source; reconcile and check budgets",
+          "run": ".venv/bin/python - <<'CHECKS'\nimport hashlib,json,os,platform,resource,subprocess,sys,time\nfrom pathlib import Path\nfrom tests.local_ci_state import snapshot\nout=Path(os.environ['RUNNER_TEMP'])/'issue874-recovery'\nreports=out/'reports'\nbefore=snapshot(Path.cwd())\n(out/'source-before.json').write_text(json.dumps(before,sort_keys=True,indent=2))\nassert before['checkout_sha']=='86e32c2e270e8b69e2527e95ad0c56a2929ffa0b'\nassert before['checkout_tree']=='36cebcd9305f313bb450c2c342ef1dd29dbf0ad3'\npaths=[reports/('full-'+str(i))/('full-'+str(i)+'.json') for i in range(1,6)]\nbindings=[json.loads(path.read_text())['source_binding'] for path in paths]\nassert all(binding==bindings[0] for binding in bindings)\n(out/'input-binding.json').write_text(json.dumps(dict(current=before['digest'],reports=bindings[0],source_matches=before['digest']==bindings[0]['before_digest']),indent=2))\nprint('SOURCE_BINDING '+json.dumps(dict(current_digest=before['digest'],report_digest=bindings[0]['before_digest'])),flush=True)\ncommands=[('reconcile',[sys.executable,'-m','tests.runner','reconcile',*[str(path) for path in paths],'--json',str(out/'full-reconciled.json')]),('budget',[sys.executable,'-m','tests.suite_budget','--base-ref','802ccbde486f4d70f2f34faef04393e7e5907946',*[arg for path in paths for arg in ('--report',str(path))]])]\nreceipts=[]\nfor name,command in commands:\n start=time.monotonic()\n try: result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=300);status=result.returncode;output=result.stdout\n except subprocess.TimeoutExpired as error:status=124;output=str(error)\n (out/(name+'.log')).write_text(output)\n receipt=dict(name=name,command=command,exit_code=status,wall_seconds=time.monotonic()-start)\n receipts.append(receipt);print(json.dumps(receipt),flush=True);print(output,flush=True)\nafter=snapshot(Path.cwd())\n(out/'source-after.json').write_text(json.dumps(after,sort_keys=True,indent=2))\nreceipt=dict(source_unchanged=before==after,commands=receipts,system=platform.system(),machine=platform.machine(),available_cpus=len(os.sched_getaffinity(0)),python=platform.python_version())\n(out/'execution.json').write_text(json.dumps(receipt,indent=2))\nassert before==after\nassert before['digest']==bindings[0]['before_digest']\nassert all(row['exit_code']==0 for row in receipts)\nCHECKS\n"
+        },
+        {
+          "uses": "actions/upload-artifact@v4",
+          "if": "always()",
+          "with": {
+            "name": "issue874-reconciliation-recovery",
+            "path": "${{ runner.temp }}/issue874-recovery/"
+          }
+        }
+      ]
+    }
+  }
+}
