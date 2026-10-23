@@ -79,7 +79,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             if native_update is not None:
                 return _native_objective_response(call, response_type='clarification_question', message=message,
                     scope={**self.scope(call, intent=intent, activity='draft'), 'domains': ['plot_structure']},
-                    update=native_update, branch='lead-response-v8:family:2')
+                    update=native_update, branch='lead-response-v8:family:1')
             return lead._provider_envelope(call, {"recommended_action": None,
                 "scope": "story_specific", "evidence_status": "empty",
                 "evidence_ids": [artifact._status_id(call, OUTLINE)],
@@ -326,7 +326,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.backend.enqueue(lambda call, _provider: _native_objective_response(call, response_type='answer',
             message='Objective cancelled.', scope=lead._live_scope(call),
             update={'update_type': 'cancel_request', 'document_change_request_id': objective_id},
-            branch='lead-response-v8:family:5'))
+            branch='lead-response-v8:family:0'))
         cancelled = await self.runtime.lead_turn(self.session_id, conversation_id, "Cancel this writing objective.")
         self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.CANCELLED, cancelled)
         before = self.objective(conversation_id)
