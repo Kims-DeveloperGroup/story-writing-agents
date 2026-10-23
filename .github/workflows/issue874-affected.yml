@@ -1,0 +1,95 @@
+{
+  "name": "Issue 874 affected canonical checks",
+  "on": {
+    "push": {
+      "tags": [
+        "validation/issue-874-affected-db700c301258-20261023T201104Z"
+      ]
+    }
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "jobs": {
+    "workflow-deadline": {
+      "name": "Enforce 75-minute workflow limit",
+      "if": "always()",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 75,
+      "permissions": {
+        "actions": "write"
+      },
+      "steps": [
+        {
+          "uses": "actions/github-script@v7",
+          "with": {
+            "retries": 0,
+            "script": "const parameters = () => ({\n  ...context.repo,\n  run_id: context.runId,\n  request: {signal: AbortSignal.timeout(5000)},\n});\nconst attempt = Number(process.env.GITHUB_RUN_ATTEMPT);\nif (!Number.isSafeInteger(attempt) || attempt < 1) {\n  core.setFailed(\"Missing workflow attempt identity.\");\n  return;\n}\n// Metadata retries never grant a new test budget.\nconst metadataDeadline = Date.now() + 30_000;\nlet deadline;\nlet cancellationRequested = false;\nasync function currentRun() {\n  const {data: run} = await github.rest.actions.getWorkflowRun(parameters());\n  if (run.id !== context.runId || run.run_attempt !== attempt) {\n    core.setFailed(\"Workflow attempt changed; the stale guard cannot cancel it.\");\n    return null;\n  }\n  if (run.status === \"completed\") return null;\n  const created = Date.parse(run.created_at);\n  if (!Number.isFinite(created)) throw new Error(\"Missing workflow creation time.\");\n  const runDeadline = created + 75 * 60 * 1000;\n  deadline = deadline === undefined ? runDeadline : Math.min(deadline, runDeadline);\n  if (Date.now() >= deadline - 30_000) {\n    core.setFailed(\"Workflow guard shutdown margin reached; no safe control window remains.\");\n    return null;\n  }\n  return run;\n}\nwhile (Date.now() < (deadline === undefined ? metadataDeadline : deadline - 30_000)) {\n  try {\n    if (!await currentRun()) return;\n    let complete;\n    try {\n      const {data: page} = await github.rest.actions.listJobsForWorkflowRunAttempt({\n        ...parameters(), attempt_number: attempt, per_page: 100,\n      });\n      if (!Number.isSafeInteger(page.total_count) || page.total_count > 100 ||\n          !Array.isArray(page.jobs) || page.total_count !== page.jobs.length) {\n        throw new Error(\"Cannot establish the complete validation job list.\");\n      }\n      // A marker covers downstream jobs absent from an earlier API snapshot.\n      complete = page.jobs.find(job => job.name === \"Validation jobs complete\");\n    } catch (error) {\n      // Job-list failures cannot prevent cancellation at the deadline.\n      core.warning(`Completion lookup failed: ${error.message}`);\n    }\n    if (Date.now() < deadline && complete?.status === \"completed\" &&\n        [\"success\", \"failure\"].includes(complete.conclusion)) {\n      core.info(\"All validation jobs finished within the workflow deadline.\");\n      return;\n    }\n    if (Date.now() >= deadline - 330_000) {\n      core.setFailed(\"Workflow shutdown reserve reached; force-cancelling this run.\");\n      if (!await currentRun()) return;\n      await github.request(\"POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel\", parameters());\n      return;\n    }\n    if (!cancellationRequested && Date.now() >= deadline - 360_000) {\n      core.setFailed(\"Workflow shutdown reserve reached; cancelling this run.\");\n      if (!await currentRun()) return;\n      await github.rest.actions.cancelWorkflowRun(parameters());\n      cancellationRequested = true;\n    }\n  } catch (error) {\n    core.warning(`Deadline control request failed: ${error.message}`);\n  }\n  const remaining = (deadline === undefined ? metadataDeadline : deadline - 30_000) - Date.now();\n  const poll = deadline !== undefined && deadline - Date.now() > 390_000 ? 30_000 : 5000;\n  if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(poll, remaining)));\n}\ncore.setFailed(\"Workflow deadline enforcement could not complete within its bounded window.\");\n"
+          }
+        }
+      ]
+    },
+    "validation-complete": {
+      "name": "Validation jobs complete",
+      "needs": [
+        "affected"
+      ],
+      "if": "${{ !cancelled() }}",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 5,
+      "steps": [
+        {
+          "run": "echo 'Affected validation terminal; individual outcome remains authoritative.'"
+        }
+      ]
+    },
+    "affected": {
+      "name": "Affected existing canonical IDs",
+      "runs-on": "ubuntu-24.04-arm",
+      "timeout-minutes": 60,
+      "env": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": "src",
+        "SOURCE_SHA": "db700c301258ffc80d27621bc485ce6241fe9f03",
+        "SELECTED_IDS": "[\"tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate\"]"
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "ref": "db700c301258ffc80d27621bc485ce6241fe9f03"
+          }
+        },
+        {
+          "uses": "actions/setup-python@v5",
+          "with": {
+            "python-version": "3.11"
+          }
+        },
+        {
+          "uses": "astral-sh/setup-uv@v10.2.0",
+          "with": {
+            "version": "0.12.17"
+          }
+        },
+        {
+          "run": "uv sync --locked --all-extras --python 3.11 --no-progress"
+        },
+        {
+          "name": "Verify source and hardware; run exact IDs",
+          "shell": "bash",
+          "run": "git config --global user.name 'Story Tests'\ngit config --global user.email 'story-tests@example.invalid'\n.venv/bin/python - <<'CHECKS'\nimport gc,hashlib,json,os,platform,resource,subprocess,sys,time\nfrom pathlib import Path\nout=Path(os.environ['RUNNER_TEMP'])/'issue874-affected';out.mkdir()\nsource=os.environ['SOURCE_SHA']\nassert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==source\nassert platform.system()=='Linux' and platform.machine()=='aarch64'\nassert len(os.sched_getaffinity(0))==4 and sys.version_info[:2]==(3,11)\nassert gc.isenabled() and gc.get_threshold()==(700,10,10) and not gc.callbacks and sys.getprofile() is None\npaths=subprocess.check_output(['git','ls-files','-z']).split(bytes([0]))\ndef manifest():\n    return {os.fsdecode(p):hashlib.sha256(Path(os.fsdecode(p)).read_bytes()).hexdigest() for p in paths if p and Path(os.fsdecode(p)).is_file()}\nbefore=manifest();(out/'source-before.json').write_text(json.dumps(before,sort_keys=True))\n(out/'hardware.json').write_text(json.dumps(dict(source_sha=source,workflow_sha=os.environ['GITHUB_SHA'],run_id=os.environ['GITHUB_RUN_ID'],run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],python=platform.python_version(),system=platform.system(),machine=platform.machine(),affinity=sorted(os.sched_getaffinity(0)),gc_thresholds=gc.get_threshold()),indent=2))\nids=json.loads(os.environ['SELECTED_IDS']);(out/'selected-ids.json').write_text(json.dumps(ids,indent=2))\ncommand=[sys.executable,'-m','tests.runner','run']\nfor identifier in ids:command.extend(['--id',identifier])\ncommand.extend(['--json',str(out/'affected.json')])\nstart=time.monotonic();usage=resource.getrusage(resource.RUSAGE_CHILDREN)\nwith (out/'affected.log').open('w') as log:\n    try: status=subprocess.run(command,stdout=log,stderr=subprocess.STDOUT,timeout=2700).returncode\n    except subprocess.TimeoutExpired: status=124\nwall=time.monotonic()-start;end=resource.getrusage(resource.RUSAGE_CHILDREN);after=manifest()\n(out/'source-after.json').write_text(json.dumps(after,sort_keys=True))\nreceipt=dict(command=command,exit_code=status,wall_seconds=wall,cpu_seconds=end.ru_utime+end.ru_stime-usage.ru_utime-usage.ru_stime,source_unchanged=before==after)\n(out/'execution.json').write_text(json.dumps(receipt,indent=2));print(json.dumps(receipt))\nprint((out/'affected.log').read_text()[-20000:])\nassert before==after,'Tracked source changed during verification'\nsys.exit(status)\nCHECKS\n"
+        },
+        {
+          "uses": "actions/upload-artifact@v4",
+          "if": "always()",
+          "timeout-minutes": 1,
+          "with": {
+            "name": "issue874-affected",
+            "path": "${{ runner.temp }}/issue874-affected/"
+          }
+        }
+      ]
+    }
+  }
+}
