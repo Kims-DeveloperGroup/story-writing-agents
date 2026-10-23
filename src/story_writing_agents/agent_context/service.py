@@ -18,7 +18,7 @@ import threading
 from ..structured_output_validation import (
     ContractOwner,
     ContractRejection, BoundContract, NamedHostCheck, TypedDecoder, HostCheckContext,
-    SelectedHostContext, SelectedContract, ValidatedValue, closed_rule, strict_json_member_text, failure_findings,
+    SelectedHostContext, SelectedContract, ValidatedValue, closed_rule, strict_json_member_text, json_value_utf8_size, failure_findings,
     SchemaRules,
     finite_subset_rule, finite_selection_rule, decode_finite_selection,
     canonical_schema_rules, diagnose_value, schema_accepts_only_objects, strict_json_object,
@@ -640,7 +640,7 @@ class BoundCallContract:
                       for member, owner in zip(outer.contracts, outer.owners, strict=True))
         graph = SchemaRules.declare(
             hoist_schema_definitions(closed_rule(
-                {"agent_action": outer.schema_value()},
+                {"agent_action": outer.rule_graph.schema_value()},
                 description=_CONTEXT_ACTION_ROOT_DESCRIPTION,
             )),
             maximum_bytes=MAX_PROVIDER_SCHEMA_UTF8_BYTES,
@@ -718,11 +718,11 @@ class BoundCallContract:
 
     def schema_value(self) -> dict[str, object]:
         self.require_current_offer(self.offers)
-        return self.rule_graph.schema_value()
+        return self.rule_graph.provider_schema_value()
 
     def _validate_response_structure(
         self, response_text: str,
-    ) -> tuple[dict[str, object], str | None]:
+    ) -> tuple:
         self.require_current_offer(self.offers)
         try:
             value = strict_json_object(response_text, exact_numbers=True)
@@ -731,9 +731,12 @@ class BoundCallContract:
                 "LEAD_JSON_REJECTED", None,
                 failure_issues(failure) or ("$: expected strict JSON object",),
             ) from None
-        if set(value) != {"agent_action"} or type(value["agent_action"]) is not dict:
+        return self._validate_response_value(value, response_text=response_text)
+
+    def _validate_response_value(self, value: object, *, response_text: str | None = None) -> tuple:
+        if type(value) is not dict or type(value.get("agent_action")) is not dict:
             raise LeadContractRejection("LEAD_ACTION_ENVELOPE_REJECTED", None,
-                                        ("$: required closed agent_action object envelope",))
+                                        ("$: required agent_action object envelope",))
         action = value["agent_action"]
         action_root = self.action_index.policy.wire_root_path
         semantic_root = action_root + ".task_result"
@@ -742,11 +745,12 @@ class BoundCallContract:
         except ContractRejection as failure:
             raise remap_validation(failure, {"$": action_root}) from None
         try:
-            encoded_response = response_text.encode("utf-8", errors="strict")
-        except UnicodeError:
+            response_size = (len(response_text.encode("utf-8", errors="strict")) if response_text is not None
+                             else json_value_utf8_size(value, maximum_bytes=262_144))
+        except (TypeError, ValueError, UnicodeError):
             raise LeadContractRejection("LEAD_ACTION_UTF8_REJECTED", member.schema_id,
                                         ("$: required strict UTF8 action encoding",)) from None
-        if len(encoded_response) > 262_144:
+        if response_size > 262_144:
             raise LeadContractRejection("LEAD_ACTION_UTF8_LIMIT", member.schema_id,
                                         ("$: full action UTF8 limit 262144",))
         expected_inner = dict(self.outer_inner_schema_ids)[member.schema_id]
@@ -757,30 +761,32 @@ class BoundCallContract:
                         "LEAD_PAIRED_SCHEMA_ID_REJECTED", member.schema_id,
                         ("$.task_result.schema_id: required exact paired semantic ID",)),
                     {"$": action_root})
-            literal = strict_json_member_text(response_text, ("agent_action", "task_result"))
-            if len(literal.encode("utf-8", errors="strict")) > 65_536:
+            if response_text is not None:
+                literal = strict_json_member_text(response_text, ("agent_action", "task_result"))
+                result_size = len(literal.encode("utf-8", errors="strict"))
+            else:
+                try:
+                    result_size = json_value_utf8_size(action["task_result"], maximum_bytes=65_536)
+                except (TypeError, ValueError, UnicodeError):
+                    result_size = 65_537
+            if result_size > 65_536:
                 raise remap_validation(
                     LeadContractRejection(
                         "LEAD_RESULT_UTF8_LIMIT", member.schema_id,
                         ("$.task_result: semantic result UTF8 limit 65536",)),
                     {"$": action_root})
-        requirements = member.rule_graph.findings(action)
-        if requirements:
-            raise remap_validation(
-                LeadContractRejection("LEAD_SCHEMA_RULE_REJECTED", member.schema_id, requirements),
-                {"$": action_root},
-            ) from None
+        try:
+            action_value = member.validate_value(action)
+        except ContractRejection as failure:
+            raise remap_validation(failure, {"$": action_root}) from None
+        inner, result_value = None, None
         if expected_inner is not None:
             inner = self.semantic_index.select(expected_inner)
-            requirements = inner.rule_graph.findings(action["task_result"])
-            if requirements:
-                raise remap_validation(
-                    LeadContractRejection(
-                        "LEAD_SCHEMA_RULE_REJECTED", inner.schema_id, requirements,
-                    ),
-                    {"$": semantic_root},
-                ) from None
-        return action, expected_inner
+            try:
+                result_value = inner.validate_value(action_value.as_object()["task_result"])
+            except ContractRejection as failure:
+                raise remap_validation(failure, {"$": semantic_root}) from None
+        return member, action_value, inner, result_value
 
     def structural_findings(self, response_text: str) -> tuple[str, ...]:
         """Return selected pure rule findings without decoding or host checks."""
@@ -791,17 +797,25 @@ class BoundCallContract:
         return ()
 
     def decode_response(self, response_text: str) -> BoundCallDecodedAction:
-        action, expected_inner = self._validate_response_structure(response_text)
+        return self._decode_values(self._validate_response_structure(response_text))
+
+    def decode_value(self, value: object) -> BoundCallDecodedAction:
+        """Decode an existing JSON value with the same live binding and owner checks."""
+        self.require_current_offer(self.offers)
+        return self._decode_values(self._validate_response_value(value))
+
+    def _decode_values(self, values: tuple) -> BoundCallDecodedAction:
+        member, action_value, inner, result_value = values
         action_root = self.action_index.policy.wire_root_path
         semantic_root = action_root + ".task_result"
         try:
-            selected = self.action_index.decode_and_validate(action)
+            selected = member.decode_validated(action_value)
         except ContractRejection as failure:
             raise remap_validation(failure, {"$": action_root}) from None
         result = None
-        if expected_inner is not None:
+        if inner is not None:
             try:
-                result = self.semantic_index.decode_and_validate(action["task_result"])
+                result = inner.decode_validated(result_value)
             except ContractRejection as failure:
                 raise remap_validation(failure, {"$": semantic_root}) from None
         decoded = object.__new__(BoundCallDecodedAction)

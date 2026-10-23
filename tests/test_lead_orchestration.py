@@ -606,7 +606,7 @@ def _current_exploration_outcome(text="A provisional alternative.", *, observati
             branch_key='lead-exploration-response-v1:family:0')
         respond.original_values = native
         return indexed_response({'action_type': 'submit_result', 'task_result': lead_fixture_result(native)},
-            outer_schema_id=outer, inner_schema_id=inner)
+            outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
     return respond
 
 
@@ -647,7 +647,7 @@ def _bind_legacy_fixture_ids(request, response, encoded):
         return encoded
     if action_type == "submit_result" and type(body) is dict and "response_details" not in body:
         action["task_result"] = lead_fixture_result(body)
-    return indexed_response(action, outer_schema_id=outer, inner_schema_id=inner)
+    return indexed_response(action, outer_schema_id=outer, inner_schema_id=inner, contract=request.contract)
 
 
 def _provider_envelope(call, value, *, used_handles=()):
@@ -659,7 +659,7 @@ def _bound_rejection_envelope(call, value):
     """Bind explicitly intended answer IDs while retaining the supplied violation."""
     outer, inner = offered_fixture_bindings(call, action_type='submit_result', response_type='answer', family=0)
     return indexed_response({'action_type': 'submit_result', 'task_result': value},
-                            outer_schema_id=outer, inner_schema_id=inner)
+                            outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
 
 def _visible_outcome(kind: str, message: str = "Visible lead response.", *, recommended_action=None):
     def respond(
@@ -681,7 +681,7 @@ def _visible_outcome(kind: str, message: str = "Visible lead response.", *, reco
                 call, action_type='submit_result', response_type=response_type, family=0)
             return indexed_response(
                 {'action_type': 'submit_result', 'task_result': lead_fixture_result(native)},
-                outer_schema_id=outer, inner_schema_id=inner)
+                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         return _provider_envelope(call, {'recommended_action': recommended_action, 'kind': kind,
             'message': message, 'scope': 'workflow_meta', 'evidence_status': 'not_applicable',
             'evidence_ids': [], 'artifact_intent': None, 'objective_intent': None,'proposal': None})
@@ -821,13 +821,13 @@ def _synthesis_outcome(*, message: str = "The specialist evidence supports proce
                 branch_key=f'consultation-summary-v4:family:{recommendation_family}')
             return indexed_response(
                 {'action_type': 'submit_result', 'task_result': lead_fixture_result(native)},
-                outer_schema_id=outer, inner_schema_id=inner)
+                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         if (getattr(call, 'contract', None) is not None and next_intent is None and recommended_action is None):
             outer, inner = offered_fixture_bindings(call, action_type='submit_result',
                 response_type='consultation_summary', family=0,branch_key='consultation-summary-v4:family:0')
             native = {'response_type': 'consultation_summary', 'response_text': message, 'response_details': {}}
             return indexed_response({'action_type': 'submit_result', 'task_result': native},
-                outer_schema_id=outer, inner_schema_id=inner)
+                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         return _provider_envelope(call, value)
 
     return respond
@@ -936,7 +936,7 @@ def _whole_book_assessment(call, answer, *, offered_inputs, logical_transform: C
             'response_text': answer['agent_action']['task_result']['response_text'],
             'response_details': {'writing_task_scope': None, 'core_document_assessment': native_assessment}}
         return indexed_response({'action_type': 'submit_result', 'task_result': value},
-            outer_schema_id=outer, inner_schema_id=inner)
+            outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
     answer["action"]["result"] = { "response_type": "core_document_readiness_assessment",
         "response_text": answer["action"]["result"]["message"], "writing_task_scope": None, "core_document_assessment": core_readiness.assessment_to_dict(assessment), }
     return json.dumps(answer, ensure_ascii=False)
@@ -1169,110 +1169,90 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                 bound.require_authorized_answer(decoded_purpose, authorization)
 
 
-    def _require_fixture_field_neighbors(self, bound, packet, *, projection=False, native_projections=None):
-        details_path = ('agent_action', 'task_result', 'response_details')
-        def findings(changed, invalid=True):
-            if invalid and not projection:
-                with self.assertRaisesRegex(ValueError,
-                        r'^LEAD_(ACTION_ENVELOPE|SCHEMA_ID|PAIRED_SCHEMA_ID|'
-                        r'SCHEMA_RULE)_REJECTED$'):
-                    bound.decode_response(json.dumps(changed))
-            return bound.rule_graph.findings(changed)
-        self.assertFalse(bound.rule_graph.findings(packet))
-        def nodes(value, path=()):
-            yield path, value
+    def _require_fixture_projections(self, bound, native_projections=None):
+        from story_writing_agents.antigravity_adapter import AntigravityAdapter
+        from story_writing_agents.structured_output_validation import SchemaRules
+        if native_projections is None:
+            declared = bound.schema_value()
+            native_projections = (('codex', declared),
+                ('antigravity', AntigravityAdapter.native_output_schema(declared)))
+        native_projections = tuple(row if len(row) == 3 else (*row, SchemaRules.declare(row[1],
+            maximum_bytes=bound.rule_graph.maximum_bytes)) for row in native_projections)
+        def property_orders(value, path=()):
             if type(value) is dict:
-                for key, child in value.items():
-                    yield from nodes(child, path + (key,))
+                if type(value.get('properties')) is dict: yield path, tuple(value['properties'])
+                for key, child in value.items(): yield from property_orders(child, path + (key,))
             elif type(value) is list:
-                for index, child in enumerate(value):
-                    yield from nodes(child, path + (index,))
-        def parent(value, path):
-            for key in path[:-1]:
-                value = value[key]
-            return value
-        for path, value in nodes(packet):
-            if type(value) is dict:
-                for key in value:
-                    changed = copy.deepcopy(packet)
-                    node = changed
-                    for part in path:
-                        node = node[part]
-                    del node[key]
-                    association = key == 'document_change_request_id' and path[-1:] == ('proposal_drafting_request',)
-                    self.assertEqual(bool(findings(changed, not association)), not association,
-                                     (path, key, 'missing'))
-                    if association and not projection:
-                        self.assertTrue(bound.decode_response(json.dumps(changed)).belongs_to(bound))
-                changed = copy.deepcopy(packet)
-                node = changed
-                for part in path:
-                    node = node[part]
-                node['foreign_branch_field'] = None
-                self.assertTrue(findings(changed), (path, 'foreign'))
-            if path:
-                wrong = '' if type(value) in (dict, list) else {} if type(value) is str else 'wrong'
-                for replacement in ((wrong, None) if value is not None else ('wrong', {})):
-                    changed = copy.deepcopy(packet)
-                    parent(changed, path)[path[-1]] = replacement
-                    if replacement is None and path in (
-                            details_path + ('recommended_option_key',),
-                        details_path + ('authoring_assessment',),
-                            details_path + ('authoring_assessment', 'direction'),
-                            details_path + ('authoring_assessment', 'creative_scope')):
-                        self.assertFalse(bound.rule_graph.findings(changed), path)
-                        if not projection:
-                            self.assertTrue(bound.decode_response(json.dumps(changed)).belongs_to(bound))
+                for index, child in enumerate(value): yield from property_orders(child, path + (index,))
+        for provider, schema, owner in native_projections:
+            bound.require_projection(schema, declared_lowering='integer_singleton_bounds'
+                                     if provider == 'antigravity' else 'identity')
+            self.assertEqual(owner.canonical_bytes, json.dumps(schema, ensure_ascii=False,
+                separators=(",", ":"), sort_keys=True, allow_nan=False).encode("utf-8", "strict"))
+            self.assertEqual(dict(property_orders(schema)), dict(property_orders(owner.schema_value())))
+        return bound, native_projections
+
+    def _require_fixture_field_neighbors(self, bound, packet, *, native_projections=None, prepared_projections=None):
+        from contextlib import contextmanager
+        import time
+        from tests.provider_wire_fixture import field_neighbor_cases, field_neighbor_value, fixture_property_policies
+        from story_writing_agents.structured_output_validation import diagnose_value
+        action = packet['agent_action']; result = action.get('task_result', {})
+        scope = result.get('response_details', {}).get('task_scope', {})
+        identity = {'outer': action.get('schema_id'), 'inner': result.get('schema_id'),
+                    'family': result.get('response_type'),
+                    'profile': {key: scope.get(key) for key in ('intent', 'activity', 'domains', 'roles')}}
+        totals, case_count, finished = {}, 0, False
+        invocation = getattr(self, '_neighbor_invocation', 0) + 1; self._neighbor_invocation = invocation
+        def checkpoint(name, status):
+            print('WHOLE_FRONT_NEIGHBORS ' + json.dumps({'invocation': invocation, 'packet': identity, 'phase': name, 'status': status,
+                'totals_kind': 'cumulative', 'final': status in ('complete', 'partial'),
+                'case_count': case_count, 'counts_wall_cpu': totals[name]}, separators=(',', ':')), flush=True)
+        @contextmanager
+        def phase(name):
+            started, cpu, complete = time.perf_counter(), time.process_time(), False
+            try:
+                yield
+                complete = True
+            finally:
+                row = totals.setdefault(name, [0, 0, 0.0, 0.0]); row[0] += 1; row[1] += int(complete)
+                row[2] += time.perf_counter() - started; row[3] += time.process_time() - cpu
+                if not complete or row[0] % 64 == 0: checkpoint(name, 'checkpoint' if complete else 'interrupted')
+        try:
+            with phase('preparation'):
+                prepared = (self._require_fixture_projections(bound, native_projections)
+                            if prepared_projections is None else prepared_projections)
+                self.assertIs(prepared[0], bound)
+                native_projections = prepared[1]
+                self.assertFalse(bound.rule_graph.findings(packet))
+                baseline = bound.decode_response(json.dumps(packet))
+                self.assertEqual(bound.decode_value(packet).domain_value(), baseline.domain_value())
+                policies, required_fields = fixture_property_policies(packet, bound.rule_graph.schema_value())
+                for provider, schema, owner in native_projections:
+                    self.assertEqual(diagnose_value(packet, schema), owner.findings(packet), provider)
+                    self.assertFalse(owner.findings(packet), provider)
+                cases = field_neighbor_cases(packet, policies, required_fields); case_count = len(cases)
+            for case in cases:
+                coordinate, _path, _operation, _replacement, native_valid, foreign_path = case
+                changed = field_neighbor_value(packet, case)
+                with phase('production-value-and-strict-findings'):
+                    self.assertEqual(not bool(bound.rule_graph.findings(changed)), native_valid, coordinate)
+                    production_valid = native_valid or foreign_path is not None and not policies[foreign_path]
+                    if production_valid:
+                        decoded = bound.decode_value(changed)
+                        self.assertTrue(decoded.belongs_to(bound), coordinate)
+                        if foreign_path is not None:
+                            self.assertEqual(decoded.domain_value(), baseline.domain_value(), coordinate)
                     else:
-                        self.assertTrue(findings(changed),
-                                        (path, type(replacement)))
-            if path and isinstance(value, str) and path[-1] in (
-                    'schema_id', 'action_type', 'response_type', 'activity', 'intent', 'role',
-                    'assignment_type', 'update_type', 'change_type', 'status', 'idea_kind',
-                    'book_scope_status', 'book_unit_coverage', 'author_decision_coverage',
-                    'criterion_judgment', 'author_fact_coverage', 'document_path', 'criterion_id',
-                    'objective_id', 'agent_id', 'input_anchor_id', 'requested_workflow_step',
-                    'document_change_request_id'):
-                changed = copy.deepcopy(packet)
-                parent(changed, path)[path[-1]] = 'unoffered-closed-enum-or-literal'
-                self.assertTrue(findings(changed), path)
-            if path and isinstance(value, str) and (path[-1] in (
-                    'path_prefix', 'artifact_directory_prefix') or path[-2:-1] == ('paths',)):
-                changed = copy.deepcopy(packet)
-                parent(changed, path)[path[-1]] = value + '\n'
-                self.assertTrue(findings(changed),
-                                (path, 'forbidden final newline'))
-            if path == details_path + ('task_scope', 'paths') and type(value) is dict:
-                for key in value:
-                    changed = copy.deepcopy(packet)
-                    node = parent(changed, path)[path[-1]]
-                    node[key + '\n'] = node.pop(key)
-                    self.assertTrue(findings(changed), (path, 'path-key-newline'))
-        if not projection:
-            from types import SimpleNamespace
-            from story_writing_agents.antigravity_adapter import AntigravityAdapter
-            from story_writing_agents.structured_output_validation import diagnose_json_text, SchemaRules
-            # Codex publishes the literal bound schema; Antigravity uses this native projector.
-            if native_projections is None:
-                declared = bound.schema_value()
-                native_projections = (('codex', declared),
-                    ('antigravity', AntigravityAdapter.native_output_schema(declared)))
-            native_projections = tuple(row if len(row) == 3 else (*row, SchemaRules.declare(row[1],
-                maximum_bytes=bound.rule_graph.maximum_bytes)) for row in native_projections)
-            for provider, schema, owner in native_projections:
-                bound.require_projection(schema, declared_lowering='integer_singleton_bounds' if provider == 'antigravity' else 'identity')
-                self.assertEqual(owner.canonical_bytes, json.dumps(schema, ensure_ascii=False,
-                    separators=(",", ":"), sort_keys=True, allow_nan=False).encode("utf-8", "strict"))
-                self.assertEqual({path: tuple(node['properties']) for path, node in nodes(schema)
-                    if type(node) is dict and type(node.get('properties')) is dict},
-                    {path: tuple(node['properties']) for path, node in nodes(owner.schema_value())
-                    if type(node) is dict and type(node.get('properties')) is dict})
-                self.assertEqual(diagnose_json_text(json.dumps(packet, ensure_ascii=True), schema),
-                                 diagnose_json_text(json.dumps(packet, ensure_ascii=True), owner))
-                matcher = SimpleNamespace(rule_graph=SimpleNamespace(findings=lambda value:
-                    diagnose_json_text(json.dumps(value, ensure_ascii=True), owner)))
-                self.assertFalse(matcher.rule_graph.findings(packet), provider)
-                self._require_fixture_field_neighbors(matcher, packet, projection=True)
+                        with self.assertRaisesRegex(ValueError,
+                                r'^LEAD_(ACTION_ENVELOPE|SCHEMA_ID|PAIRED_SCHEMA_ID|SCHEMA_RULE)_REJECTED$'):
+                            bound.decode_value(changed)
+                for provider, _schema, owner in native_projections:
+                    with phase(provider + '-strict-projection'):
+                        self.assertEqual(not bool(owner.findings(changed)), native_valid, (provider, coordinate))
+            finished = True
+        finally:
+            for name in totals: checkpoint(name, 'complete' if finished else 'partial')
 
 
 
@@ -3199,6 +3179,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             maximum_bytes=profile_binding.rule_graph.maximum_bytes) for _provider, schema in profile_projections)
         profile_projections = tuple((*row, owner) for row, owner
                                     in zip(profile_projections, profile_projection_rules))
+        prepared_profile_projections = self._require_fixture_projections(profile_binding, profile_projections)
         stem = free_seed.contract_id
         free_reads = profile_binding.offers.completed_read_facts + profile_binding.offers.delivery_read_facts
         free_inputs = tuple(dict.fromkeys(free_facts.input_ids + tuple(row.evidence_id for row in free_reads)))
@@ -3341,7 +3322,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         decoded_profile = profile_binding.decode_response(json.dumps(complete))
                         self.assertEqual(json.loads(decoded_profile.answer_json),
                             {'kind': 'question', 'message': base['response_text'], 'authoring_scope': expected_scope})
-                        self._require_fixture_field_neighbors(profile_binding, complete, native_projections=profile_projections)
+                        self._require_fixture_field_neighbors(profile_binding, complete,
+                            prepared_projections=prepared_profile_projections)
                         required_agents = tuple(agent for domain, agent in profile_roster.items() if domain in domains)
                         selected_agents = tuple(agent for agent in profile_roster.values()
                                                 if agent == 'execution_specialist' or agent in required_agents)
@@ -3481,7 +3463,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                 with self.assertRaises(ValueError):
                                     profile_binding.decode_response(json.dumps(wrong_kind))
                             if family in (6, 7, 8):
-                                self._require_fixture_field_neighbors(profile_binding, packet, native_projections=profile_projections)
+                                self._require_fixture_field_neighbors(profile_binding, packet,
+                            prepared_projections=prepared_profile_projections)
                             if family in (3, 4) and required_agents == tuple(profile_roster.values()):
                                 for required_agent in required_agents:
                                     missing_specialist = copy.deepcopy(packet)
@@ -4298,7 +4281,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 scope = wire_result(dict(authoring_scope=scope), None, native_types={})
                 native['task_scope'] = lead_fixture_bound_scope(call, scope['writing_task_scope'])
                 response = indexed_response( {'action_type': 'submit_result',
-                    'task_result': lead_fixture_result(native)}, outer_schema_id=outer, inner_schema_id=inner)
+                    'task_result': lead_fixture_result(native)}, outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
                 complete = json.loads(response)
                 task_result = complete['agent_action']['task_result']
                 self.assertEqual(member.rule_graph.findings(task_result), ())
@@ -5488,7 +5471,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             body['response_details']['used_evidence_ids'] = {}
             outer, inner = offered_fixture_bindings(call, action_type='submit_result', response_type='answer', family=0)
             return indexed_response({'action_type': 'submit_result', 'task_result': body},
-                                    outer_schema_id=outer, inner_schema_id=inner)
+                                    outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         case.backend.enqueue(current_discussion)
         decision = task.LeadTaskDecision.for_conversation(case.session_id, conversation, task.LeadTaskAction.DISCUSS,
                                                          text="Discuss the role boundaries without authoring.")
@@ -5772,7 +5755,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             outer, inner = offered_fixture_bindings(
                 _call, action_type="submit_result", response_type="answer", family=0)
             return indexed_response({"action_type": "submit_result", "task_result": [private]},
-                outer_schema_id=outer, inner_schema_id=inner)
+                outer_schema_id=outer, inner_schema_id=inner, contract=_call.contract)
 
         self.backend.enqueue(malformed)
         with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 1):
