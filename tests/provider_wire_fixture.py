@@ -702,7 +702,8 @@ def field_neighbor_cases(packet, property_policies, required_fields):
     """Describe each original mutation once; no case shares a changed payload."""
     details = ('agent_action', 'task_result', 'response_details')
     nullable = (details + ('recommended_option_key',), details + ('authoring_assessment',),
-                details + ('authoring_assessment', 'direction'), details + ('authoring_assessment', 'creative_scope'))
+                details + ('authoring_assessment', 'direction'), details + ('authoring_assessment', 'creative_scope'),
+                details + ('specialist_consultation_proposal', 'shared_premises', '*', 'selected_premise'))
     closed_literals = {'schema_id', 'variant_id', 'action_type', 'response_type', 'activity', 'intent', 'role',
         'assignment_type', 'update_type', 'change_type', 'status', 'idea_kind', 'book_scope_status',
         'book_unit_coverage', 'author_decision_coverage', 'criterion_judgment', 'author_fact_coverage',
@@ -718,14 +719,16 @@ def field_neighbor_cases(packet, property_policies, required_fields):
     for path, value in nodes(packet):
         if type(value) is dict:
             for key in value:
-                optional = not property_policies[path] and key not in required_fields[path]
+                association = key == 'document_change_request_id' and path[-1:] == ('proposal_drafting_request',)
+                optional = association or (not property_policies[path] and key not in required_fields[path])
                 cases.append(((path, key, 'missing'), path + (key,), 'delete', None, optional, None))
             cases.append(((path, 'foreign'), path + ('foreign_branch_field',), 'set', None, False, path))
         if path:
             wrong = '' if type(value) in (dict, list) else {} if type(value) is str else 'wrong'
             for replacement in ((wrong, None) if value is not None else ('wrong', {})):
                 cases.append(((path, type(replacement)), path, 'set', replacement,
-                              replacement is None and path in nullable, None))
+                              replacement is None and tuple('*' if type(part) is int else part
+                                                            for part in path) in nullable, None))
         if path and isinstance(value, str) and path[-1] in closed_literals:
             cases.append((path, path, 'set', 'unoffered-closed-enum-or-literal', False, None))
         if path and isinstance(value, str) and (path[-1] in ('path_prefix', 'artifact_directory_prefix')

@@ -24,13 +24,17 @@ native rendering through `--json-schema`. The runtime records the actual
 payload and schema in the exchange request. Transport metadata is not part of
 the agent's semantic answer.
 
-Copy the exact alternative identifiers supplied by the current schema. A unique
-`schema_id` identifies an alternative directly. Where the schema declares a
-shared family and a `variant_id`, both identify the selected alternative.
-In a multi-member Lead family, copy the offered `response_details.variant_id`
-literal alongside that branch's other detail fields.
-Optional properties may be absent without changing that selection; do not infer
-an identifier from which optional fields happen to be present.
+Copy the exact alternative identifiers supplied by the current schema. A
+`schema_id` selects one predefined logical record with required and optional
+fields. Optional fields do not create another logical schema or variant tag.
+They are validated and retained when supplied; absence does not imply null.
+Provider-specific syntax is compiled from the same contract before decoding.
+
+Where genuinely different structural or semantic alternatives require a
+`variant_id`, copy both offered identifiers. Lead families expose that tag as
+`response_details.variant_id` when required by the declared alternative.
+Optional-field presence never selects another schema or decoder, and runtime
+does not infer or merge record shapes.
 
 The provider schema requests only declared properties. The runtime consumer
 ignores extra response-record properties and removes them before typed decoding,

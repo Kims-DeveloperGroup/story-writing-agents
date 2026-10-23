@@ -970,7 +970,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((caught.exception.wire_path, caught.exception.wire_requirement),
                              ('$', 'native schema projection changed bound restrictions'))
         expected = canonical_provider_json(projected)
-        self.assertLessEqual(len(canonical_provider_json(declared)), 262144)
+        self.assertLessEqual(len(canonical_provider_json(declared)), 524288)
         backend = AgentBackend(case.control_workspace,
                                executable=str(Path(sys.executable).resolve(strict=True)),
                                antigravity_executable=str(self.executable), timeout_seconds=4,

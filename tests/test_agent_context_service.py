@@ -717,7 +717,11 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertEqual(unique_owner.findings({'schema_id': 'second', 'second': 'bad'}),
                          ('$.second: expected integer, got string',))
         from story_writing_agents.structured_output_validation import ContractOwner, ContractIdentity, BoundContract
-        def normalized(value): return value.as_object()
+        decoded_values = []
+        def normalized(value):
+            result = value.as_object()
+            decoded_values.append(result)
+            return result
         @dataclass(frozen=True)
         class DispatchOwner(ContractOwner):
             rules: SchemaRules
@@ -750,6 +754,55 @@ class StructuredOutputValidationTests(unittest.TestCase):
             map_bound.decode_selected({**selected_map, 'selection': {'offered': True, 'unoffered': True}})
         self.assertNotIn('x-swa-property-policy', repr(map_bound.schema_value()))
         self.assertEqual(map_bound.rule_graph.schema_value()['properties']['selection']['x-swa-property-policy'], 'closed-map')
+        question = diagnostics.closed_rule({'schema_id': {'type': 'string', 'enum': ['questions.v1']},
+            'question': {'type': 'string'}, 'hint': {'type': 'string'},
+            'unavailable_id': {'type': 'string', 'enum': []}})
+        question['required'] = ['schema_id', 'question']
+        question_rules = SchemaRules.declare(diagnostics.closed_rule({'prompt': question}))
+        self.assertEqual(question_rules.schema_value()['properties']['prompt'], question)
+        question_bound = BoundContract.bind(DispatchOwner(question_rules), ContractIdentity(b'{}', 65536, '$'))
+        prompt = {'schema_id': 'questions.v1', 'question': 'Why?', 'hint': 'One clue'}
+        offered = {'schema_id': question_bound.schema_id, 'prompt': {**prompt, 'vendor_extension': True}}
+        unchanged = copy.deepcopy(offered); prior_decodes = len(decoded_values)
+        self.assertEqual(question_bound.decode_selected(offered).value, {'prompt': prompt})
+        self.assertEqual(len(decoded_values) - prior_decodes, 1)
+        self.assertEqual(offered, unchanged)
+        absent = {'schema_id': 'questions.v1', 'question': 'Why?'}
+        self.assertEqual(question_bound.decode_selected({**offered, 'prompt': absent}).value, {'prompt': absent})
+        for hint in (7, None):
+            with self.assertRaises(ValueError):
+                question_bound.decode_selected({**offered, 'prompt': {**prompt, 'hint': hint}})
+        with self.assertRaises(ValueError):
+            question_bound.decode_selected({**offered, 'prompt': {'schema_id': 'questions.v1', 'hint': 'Clue'}})
+        projection = question_bound.rule_graph.provider_projection()
+        self.assertIs(projection.owner, question_bound.rule_graph)
+        native = projection.schema_value()
+        self.assertEqual(native, question_bound.schema_value())
+        detached = projection.schema_value()
+        for exported in (question_bound.schema_value(), detached):
+            arms = exported['properties']['prompt']['anyOf']
+            self.assertEqual(tuple(tuple(arm['properties']) for arm in arms),
+                             (('question', 'schema_id'), ('hint', 'question', 'schema_id')))
+            self.assertEqual(tuple(tuple(arm['required']) for arm in arms),
+                             (('schema_id', 'question'), ('schema_id', 'question', 'hint')))
+        detached['properties']['prompt']['anyOf'][0]['properties'].clear()
+        self.assertEqual(projection.schema_value(), native)
+        for hint in (7, None):
+            self.assertTrue(diagnose_value({**offered, 'prompt': {**prompt, 'hint': hint}}, projection))
+        self.assertNotIn('"unavailable_id"', json.dumps(native))
+        for unavailable in ('invented', None, 7):
+            rejected = {**offered, 'prompt': {**offered['prompt'], 'unavailable_id': unavailable}}
+            with self.assertRaises(ValueError): question_bound.decode_selected(rejected)
+            self.assertTrue(diagnose_value(rejected, projection))
+        with self.assertRaises(ValueError):
+            SchemaRules.declare(diagnostics.closed_rule({'unavailable_id': {'type': 'string', 'enum': []}}))
+        self.assertEqual(diagnose_value({**offered, 'prompt': prompt}, native), ())
+        self.assertEqual(diagnose_value({**offered, 'prompt': absent}, projection), ())
+        self.assertEqual(diagnose_json_text(json.dumps({**offered, 'prompt': prompt}), projection), ())
+        self.assertTrue(diagnose_value(offered, projection))
+        with self.assertRaises(ValueError):
+            question_bound.rule_graph.provider_projection({**native, 'additionalProperties': True})
+        self.assertEqual(question_bound.decode_selected(offered).value, {'prompt': prompt})
         exported = bound.schema_value(); exported['properties'].clear()
         self.assertEqual(bound.decode_selected(supplied).value, expected)
 
