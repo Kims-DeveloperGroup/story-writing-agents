@@ -162,7 +162,7 @@ def response(text, result_contract):
     return json.dumps(body, ensure_ascii=False, separators=(",", ":"))
 
 
-def indexed_response(action, *, outer_schema_id, inner_schema_id):
+def indexed_response(action, *, outer_schema_id, inner_schema_id, contract=None):
     """Write explicit fixture bindings without choosing or repairing action values."""
     value = copy.deepcopy(action)
     if "schema_id" in value:
@@ -171,6 +171,9 @@ def indexed_response(action, *, outer_schema_id, inner_schema_id):
     if inner_schema_id is not None and type(value.get("task_result")) is dict:
         if "schema_id" in value["task_result"]:
             raise ValueError("Supply the inner ID through its explicit fixture binding")
+        if contract is not None:
+            owner = next(row for row in contract.semantic_index.contracts if row.schema_id == inner_schema_id)
+            value["task_result"] = fixture_variant_value(owner.rule_graph.schema_value(), value["task_result"])
         value["task_result"]["schema_id"] = inner_schema_id
     return json.dumps({"agent_action": value}, ensure_ascii=False, separators=(",", ":"))
 
@@ -391,6 +394,45 @@ def _fixture_partition_matches(schema, value):
                 continue
             return True
     return False
+
+
+def fixture_variant_value(schema, value):
+    """Copy one offered routing literal during construction, never during mutation replay."""
+    result = copy.deepcopy(value)
+    details = result.get('response_details')
+    if not isinstance(details, dict) or 'variant_id' in details:
+        return result
+
+    def choices(node):
+        node = fixture_schema_node(schema, node)
+        return tuple(arm for child in node['anyOf'] for arm in choices(child)) if 'anyOf' in node else (node,)
+
+    def matches(node, supplied):
+        node = fixture_schema_node(schema, node)
+        if 'anyOf' in node:
+            return any(matches(arm, supplied) for arm in node['anyOf'])
+        if 'enum' in node and supplied not in node['enum']:
+            return False
+        if isinstance(supplied, dict) and isinstance(node.get('properties'), dict):
+            props = node['properties']
+            if node.get('x-swa-property-policy') == 'closed-map' and set(supplied) != set(props):
+                return False
+            return all(matches(props[key], item) for key, item in supplied.items() if key in props)
+        if isinstance(supplied, list) and isinstance(node.get('items'), dict):
+            return all(matches(node['items'], item) for item in supplied)
+        return True
+
+    root = fixture_schema_node(schema, schema)
+    arms = tuple(arm for arm in choices(root.get('properties', {}).get('response_details', {}))
+                 if 'variant_id' in arm.get('properties', {}))
+    if arms:
+        # Malformed fixtures keep their authored values; only the offered route is supplied.
+        arm = next((arm for arm in arms if matches(arm, details)), arms[0])
+        literals = fixture_schema_node(schema, arm['properties']['variant_id']).get('enum', ())
+        if len(literals) != 1 or type(literals[0]) is not str:
+            raise ValueError('Fixture variant requires one offered routing literal')
+        details['variant_id'] = literals[0]
+    return result
 
 
 def offered_fixture_bindings(
@@ -646,7 +688,7 @@ def lead_fixture_response(request, value, *, family, branch_key=None, response_t
         response_type=value['response_type'] if response_type is None else response_type,
         family=family, branch_key=branch_key, value=value)
     return indexed_response({'action_type': 'submit_result', 'task_result': value},
-                            outer_schema_id=outer, inner_schema_id=inner)
+                            outer_schema_id=outer, inner_schema_id=inner, contract=request.contract)
 
 
 def finite_fixture_read_selection(choices, selected):
@@ -654,3 +696,100 @@ def finite_fixture_read_selection(choices, selected):
     if not choices:
         raise ValueError('READ fixtures require actual offered handles')
     return finite_fixture_selection(choices, selected)
+
+
+def field_neighbor_cases(packet, property_policies, required_fields):
+    """Describe each original mutation once; no case shares a changed payload."""
+    details = ('agent_action', 'task_result', 'response_details')
+    nullable = (details + ('recommended_option_key',), details + ('authoring_assessment',),
+                details + ('authoring_assessment', 'direction'), details + ('authoring_assessment', 'creative_scope'),
+                details + ('specialist_consultation_proposal', 'shared_premises', '*', 'selected_premise'))
+    closed_literals = {'schema_id', 'variant_id', 'action_type', 'response_type', 'activity', 'intent', 'role',
+        'assignment_type', 'update_type', 'change_type', 'status', 'idea_kind', 'book_scope_status',
+        'book_unit_coverage', 'author_decision_coverage', 'criterion_judgment', 'author_fact_coverage',
+        'document_path', 'criterion_id', 'objective_id', 'agent_id', 'input_anchor_id',
+        'requested_workflow_step', 'document_change_request_id'}
+    def nodes(value, path=()):
+        yield path, value
+        if type(value) is dict:
+            for key, child in value.items(): yield from nodes(child, path + (key,))
+        elif type(value) is list:
+            for index, child in enumerate(value): yield from nodes(child, path + (index,))
+    cases = []
+    for path, value in nodes(packet):
+        if type(value) is dict:
+            for key in value:
+                association = key == 'document_change_request_id' and path[-1:] == ('proposal_drafting_request',)
+                optional = association or (not property_policies[path] and key not in required_fields[path])
+                cases.append(((path, key, 'missing'), path + (key,), 'delete', None, optional, None))
+            cases.append(((path, 'foreign'), path + ('foreign_branch_field',), 'set', None, False, path))
+        if path:
+            wrong = '' if type(value) in (dict, list) else {} if type(value) is str else 'wrong'
+            for replacement in ((wrong, None) if value is not None else ('wrong', {})):
+                cases.append(((path, type(replacement)), path, 'set', replacement,
+                              replacement is None and tuple('*' if type(part) is int else part
+                                                            for part in path) in nullable, None))
+        if path and isinstance(value, str) and path[-1] in closed_literals:
+            cases.append((path, path, 'set', 'unoffered-closed-enum-or-literal', False, None))
+        if path and isinstance(value, str) and (path[-1] in ('path_prefix', 'artifact_directory_prefix')
+                                               or path[-2:-1] == ('paths',)):
+            cases.append(((path, 'forbidden final newline'), path, 'set', value + '\n', False, None))
+        if path == details + ('task_scope', 'paths') and type(value) is dict:
+            for key in value:
+                cases.append(((path, 'path-key-newline'), path + (key,), 'rename', key + '\n', False, None))
+    return tuple(cases)
+
+
+
+def field_neighbor_value(packet, case):
+    """Materialize one independent value, shared by the three validation passes."""
+    _coordinate, path, operation, replacement, _native_valid, _foreign_path = case
+    changed = copy.deepcopy(packet); node = changed
+    for key in path[:-1]: node = node[key]
+    if operation == 'delete': del node[path[-1]]
+    elif operation == 'rename': node[replacement] = node.pop(path[-1])
+    else: node[path[-1]] = copy.deepcopy(replacement)
+    return changed
+
+
+def fixture_property_policies(packet, schema):
+    """Locate declared map policies in the valid packet without runtime-private tables."""
+    policies, required, seen = {}, {}, set()
+    def resolved(rule):
+        refs = set()
+        while '$ref' in rule:
+            ref = rule['$ref']
+            if ref in refs or not ref.startswith('#/'):
+                raise AssertionError('fixture requires an acyclic local reference')
+            refs.add(ref); rule = schema
+            for part in ref[2:].split('/'): rule = rule[part.replace('~1', '/').replace('~0', '~')]
+        return rule
+    def literals_match(rule, value):
+        rule = resolved(rule)
+        if type(value) is dict:
+            for key, child in rule.get('properties', {}).items():
+                child = resolved(child)
+                if key in value and 'enum' in child and value[key] not in child['enum']: return False
+        return True
+    def visit(rule, value, path):
+        rule = resolved(rule)
+        key = (id(rule), id(value), path)
+        if key in seen: return
+        seen.add(key)
+        if 'anyOf' in rule:
+            for alternative in rule['anyOf']:
+                if literals_match(alternative, value): visit(alternative, value, path)
+        if type(value) is dict and rule.get('type') == 'object':
+            policy = rule.get('x-swa-property-policy') == 'closed-map'
+            if path in policies and policies[path] != policy:
+                raise AssertionError(('ambiguous fixture property policy', path))
+            policies[path] = policy
+            required.setdefault(path, set()).update(rule.get('required', ()))
+            for name, child in value.items():
+                if name in rule.get('properties', {}): visit(rule['properties'][name], child, path + (name,))
+                elif type(rule.get('additionalProperties')) is dict:
+                    visit(rule['additionalProperties'], child, path + (name,))
+        elif type(value) is list and type(rule.get('items')) is dict:
+            for index, child in enumerate(value): visit(rule['items'], child, path + (index,))
+    visit(schema, packet, ())
+    return policies, required

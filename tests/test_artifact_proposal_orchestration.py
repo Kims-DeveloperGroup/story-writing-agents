@@ -131,7 +131,7 @@ def _artifact_outcome(
                 return indexed_response({'action_type': 'search_context',
                     'artifact_directory_prefix': read_prefix,
                     'queries': [{'search_text': query, 'source_types': {'story_document': True}}
-                                for _path, query in read_queries]}, outer_schema_id=outer, inner_schema_id=inner)
+                                for _path, query in read_queries]}, outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
             read_phase = 2
             hits = call.payload['context_observation']['search_results']
             try:
@@ -149,7 +149,7 @@ def _artifact_outcome(
             outer, inner = offered_fixture_bindings(call, action_type='read_context', response_type=None, family=0)
             return indexed_response({'action_type': 'read_context', 'read_handles': finite_fixture_read_selection(
                     call.contract.offers.issued_handle_aliases, selected_handles)},
-                outer_schema_id=outer, inner_schema_id=inner)
+                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         material = _live_material(call)
         if read_queries:
             reads = call.payload['context_observation']['read_results']
@@ -1197,12 +1197,16 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 native_schema, native_answer["properties"]["schema_id"])["enum"][0]
             native_details = fixture_schema_node(
                 native_schema, native_answer["properties"]["response_details"])
-            native_options = (
-                native_details["anyOf"] if "anyOf" in native_details else (native_details,))
+            native_options, native_records = [native_details], []
+            while native_options:
+                option = fixture_schema_node(native_schema, native_options.pop())
+                if "anyOf" in option:
+                    native_options.extend(option["anyOf"])
+                else:
+                    native_records.append(option["properties"])
             artifact_capabilities.append(
                 inner_id == issued_answers[outer_id]
-                and any("artifact_change_proposal" in fixture_schema_node(
-                    native_schema, option)["properties"] for option in native_options))
+                and any("artifact_change_proposal" in properties for properties in native_records))
         self.assertTrue(any(artifact_capabilities))
         read_evidence_id = self.backend.calls[-1].payload["context_observation"]["read_results"][0]["evidence_id"]
         self.assertIn(
@@ -1215,7 +1219,10 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         from tests.recommendation_fixture import task_assessment
+        await self.record_book_readiness()
+        self.workspace.path(_RULES).unlink(missing_ok=True)
         conversation_id = self.conversation("Reject provider authority")
+        before = self.artifact_snapshot()
         invalid = _artifact_outcome(
             operations=[ { "apply_authority_granted" : True , "kind" : "create" , "new_text" : "Must not survive.\n" , "suggested_path" : _RULES , } ],
             evidence_status="missing",
@@ -1237,22 +1244,16 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             self.session_id,
             conversation_id,
             "Reject provider-supplied Apply authority.", )
-        self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
-        self.assertIsNone(result.artifact_proposal)
-        self.assertEqual(
-            self.artifact_events(conversation_id, ArtifactReviewCandidatePayload),
-            (), )
-        lead_failure = self.artifact_events(
-            conversation_id,
-            CollaborationLeadOutcomeFailurePayload, )
-        self.assertEqual(len(lead_failure), 1)
-        self.assertIs(
-            lead_failure[0].code,
-            CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED, )
-        artifact_failure = self.artifact_events(
-            conversation_id,
-            ArtifactReviewFailurePayload, )
-        self.assertEqual(artifact_failure, ())
+        self.assertIs(result.next_action, CollaborationNextAction.SUBMIT_CONFIRMATION)
+        self.assertIs(result.artifact_proposal.state, ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION)
+        candidate = result.artifact_proposal.candidate.candidate
+        self.assertNotIn(b'"apply_authority_granted"', serialize_artifact_review_candidate(candidate))
+        self.assertEqual(self.artifact_snapshot(), before)
+        self.assertEqual(self.artifact_events(conversation_id, ArtifactReviewCandidatePayload),
+                         (result.artifact_proposal.candidate,))
+        self.assertEqual(self.artifact_events(conversation_id, ArtifactReviewedProposal), ())
+        self.assertEqual(self.artifact_events(conversation_id, CollaborationLeadOutcomeFailurePayload), ())
+        self.assertEqual(self.artifact_events(conversation_id, ArtifactReviewFailurePayload), ())
 
 
     async def test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source(self):
@@ -1316,7 +1317,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             outer, inner = offered_fixture_bindings(call, action_type='search_context', response_type=None, family=1)
             return indexed_response({'action_type': 'search_context', 'artifact_directory_prefix': 'core_documents/',
                 'queries': [{'search_text': 'needle', 'source_types': {'story_document': True}}]},
-                outer_schema_id=outer, inner_schema_id=inner)
+                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         def answer(call, provider):
             scope = lead_fixture_bound_scope(call, _live_scope(call,
                 activity="review", domains=("plot_structure",), paths=(_OUTLINE,)), record=True)

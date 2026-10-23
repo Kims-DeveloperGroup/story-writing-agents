@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 
-from .structured_output_validation import schema_rule_fingerprints
+from .structured_output_validation import require_native_schema_projection, schema_rule_fingerprints
 
 WIRE_VERSION = "agent-provider-wire-v10"
 BUILTIN_RESULT_CONTRACT_IDS = frozenset({
@@ -429,50 +429,11 @@ def require_schema_projection(
     bound_schema: Mapping, actual_native_schema: Mapping, *,
     declared_lowering: str = "identity",
 ) -> None:
-    """Reject native transport restriction loss before provider submission.
-
-    This pure comparison certifies equivalence to the bound declaration, not
-    opaque native-model keyword support. Only the adapter's proven numeric
-    singleton lowering and an intrinsically-null redundant enum are allowed.
-    """
-    if declared_lowering not in {"identity", "integer_singleton_bounds"}:
-        raise WireShapeError("$", "undeclared schema lowering")
-    expected = deepcopy(dict(bound_schema))
-
-    def lower(node: object) -> None:
-        if type(node) is not dict:
-            return
-        enum = node.get("enum")
-        if enum == [None] and node.get("type") == "null":
-            node.pop("enum")
-        elif (node.get("type") == "integer"
-              and type(enum) is list and len(enum) == 1 and type(enum[0]) is int
-              and abs(enum[0]) <= (1 << 53) - 1
-              and "minimum" not in node and "maximum" not in node):
-            node.pop("enum")
-            node["minimum"] = node["maximum"] = enum[0]
-        for key in ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies"):
-            children = node.get(key)
-            if type(children) is dict:
-                for child in children.values():
-                    lower(child)
-        for key in ("anyOf", "allOf", "oneOf", "prefixItems"):
-            children = node.get(key)
-            if type(children) is list:
-                for child in children:
-                    lower(child)
-        for key in ("items", "additionalProperties", "additionalItems", "unevaluatedProperties", "contains", "propertyNames", "not", "if", "then", "else", "contentSchema"):
-            lower(node.get(key))
-
-    if declared_lowering == "integer_singleton_bounds":
-        lower(expected)
+    """Preserve the provider adapter's projection error boundary."""
     try:
-        original = json.dumps(expected, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-        native = json.dumps(dict(actual_native_schema), sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-    except (TypeError, ValueError, UnicodeError):
-        raise WireShapeError("$", "invalid native schema projection") from None
-    if original != native:
-        raise WireShapeError("$", "native schema projection changed bound restrictions")
+        require_native_schema_projection(bound_schema, actual_native_schema, declared_lowering=declared_lowering)
+    except ValueError as failure:
+        raise WireShapeError("$", str(failure)) from None
 
 
 def _closed(properties: dict) -> dict:
@@ -550,7 +511,10 @@ def project_result_schema(schema: Mapping, contract_id: str) -> dict:
                 types = [{"lead-exploration-response-v1": "lead_exploration", "specialist-assignment-response-v3": "specialist_assignment_result", "consultation-summary-v4": "consultation_summary", "artifact-review-summary-v4": "artifact_review_summary", "premise-analysis-response-v1": "premise_analysis_result", "premise-decision-summary-v1": "premise_decision_summary"}[family]]
             properties = {"response_type": {"type": "string", "enum": types}, **properties}
         result["properties"] = properties
-        result["required"] = list(properties)
+        result["required"] = (["response_type"] if root and known else []) + [
+            _result_field(name, shape) for name in node.get("required", ())
+            if not (root and known and name == "kind")
+        ]
         return result
 
     projected = describe_schema(visit(schema, root=True))
@@ -1731,7 +1695,7 @@ _catalog("start_character end_character", "Paired null means whole idea. Otherwi
 _catalog("source_event_digest selected_material_digest", "Host-pinned bare SHA-256 of the exact source report event and exact selected UTF-8 text; neither grants artifact evidence or workflow authority.")
 _catalog("adoption_intent adoption_targets adoption_rule", "Explicit USER authoring/review_only intent and exact targets constrain fresh task@1 proposal work; every assignment retains the selected input.")
 
-DYNAMIC_CHOICE_FIELDS = frozenset({"task_id", "task_revision", "agent_id", "input_source_ids", "source_ids", "evidence_id", "document_change_request_id", "target_artifact_paths", "specialist_ids", "reviewed_proposal_id", "reviewed_proposal_digest", "slot_id", "basis_input_ids"})
+DYNAMIC_CHOICE_FIELDS = frozenset({"variant_id", "task_id", "task_revision", "agent_id", "input_source_ids", "source_ids", "evidence_id", "document_change_request_id", "target_artifact_paths", "specialist_ids", "reviewed_proposal_id", "reviewed_proposal_digest", "slot_id", "basis_input_ids"})
 
 
 _catalog("authoring_assessment authoring_admission", "Structured semantic assessment and host-bound source/task admission respectively. Neither grants READ, confirmation, review, artifact-write or budget authority.")
@@ -1757,6 +1721,7 @@ ENUM_MEANINGS.update({
 # Source-owned nested objects are deliberately literal. Only these protocol
 # containers have runtime-owned child fields that the guide may enumerate.
 _catalog("schema_id", "Echo one complete contract identity offered for this exact physical request; the outer action identity pins its corresponding inner result identity.")
+_catalog("variant_id", "Required offered variant within this response family. Copy its exact declared literal; optional-field presence and unknown fields do not select an alternative.")
 _catalog("response_details", "All remaining fields of the selected response family; copy its closed required shape without legacy aliases or extra fields.")
 _catalog("input_anchor_id", "One offered input actually selected for this specialist; it establishes a nonempty selection without source priority.")
 _catalog("required_input_recipients", "For each required offered source, name an active specialist actually receiving it.")
@@ -2121,7 +2086,7 @@ class WireShapeError(ValueError):
 
 
 def normalize_context_action(value: object, *, finite_source_kinds: bool = False) -> dict:
-    if type(value) is not dict or set(value) != {"agent_action"}:
+    if type(value) is not dict or "agent_action" not in value:
         raise WireShapeError("$", "expected object containing exactly agent_action")
     action = value["agent_action"]
     if type(action) is not dict:
@@ -2131,7 +2096,7 @@ def normalize_context_action(value: object, *, finite_source_kinds: bool = False
         raise WireShapeError("$.action_type", "expected one of search_context, read_context, submit_result")
     kind = {v: k for k, v in ACTION_TYPES.items()}[selected]
     required = {"search": {"action_type", "queries"}, "read": {"action_type", "read_handles"}, "answer": {"action_type", "task_result"}}[kind]
-    if set(action) != required and not (kind == "search" and set(action) == required | {"artifact_directory_prefix"}):
+    if not required.issubset(action):
         raise WireShapeError("$", "expected exact required action properties for " + selected)
     result = {"kind": kind}
     if kind == "search":
@@ -2141,7 +2106,7 @@ def normalize_context_action(value: object, *, finite_source_kinds: bool = False
         result["queries"] = []
         for index, query in enumerate(queries):
             path = f"$.queries[{index}]"
-            if type(query) is not dict or set(query) != {"search_text", "source_types"}:
+            if type(query) is not dict or not {"search_text", "source_types"}.issubset(query):
                 raise WireShapeError(path, "expected object containing exactly search_text, source_types")
             if finite_source_kinds and type(query["source_types"]) is dict:
                 selected = query["source_types"]
@@ -2184,11 +2149,11 @@ def project_direct_schema(schema: Mapping, phase: str) -> dict:
 
 def normalize_direct_result(value: object, phase: str) -> dict:
     fields = {"conversation": {"response_text"}, "draft": {"response_text"}, "propose_revision": {"response_text"}, "audit": {"candidate_review_status", "response_text"}, "synthesize": {"next_consensus_step", "response_text"}, "finalize": {"reviewed_proposal_id", "reviewed_proposal_digest"}}[phase]
-    if type(value) is not dict or set(value) != fields | {"response_type"} or value["response_type"] != DIRECT_RESPONSE_TYPES[phase]:
+    if type(value) is not dict or not (fields | {"response_type"}).issubset(value) or value["response_type"] != DIRECT_RESPONSE_TYPES[phase]:
         raise ValueError("invalid current direct response contract")
     result = {}
     for name, item in value.items():
-        if name == "response_type":
+        if name not in fields:
             continue
         target = {"response_text": "message", "candidate_review_status": "verdict", "next_consensus_step": "next"}.get(name, name)
         if name in {"candidate_review_status", "next_consensus_step"}:

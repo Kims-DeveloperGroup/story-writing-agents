@@ -371,7 +371,9 @@ class StructuredOutputValidationTests(unittest.TestCase):
         class ListSubclass(list): pass
         class FloatSubclass(float): pass
         events.clear()
-        for value in (Decimal(1), IntegerSubclass(1), DictSubclass(), ListSubclass(), FloatSubclass(1),
+        self.assertTrue(plain(Decimal(1), {})); self.assertTrue(plain([Decimal("1.25"), {"n": Decimal(2)}], {}))
+        self.assertFalse(plain(None, {"metadata": Decimal(1)}))
+        for value in (Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity"), IntegerSubclass(1), DictSubclass(), ListSubclass(), FloatSubclass(1),
                       TracedSchema(), float("nan"), float("inf"), float("-inf")):
             self.assertFalse(plain(value, {})); self.assertFalse(plain(None, {"metadata": value}))
             for late_scalar in ([value, {}, None, 1.25], [{"nested": value}, None, 1.25]):
@@ -667,6 +669,143 @@ class StructuredOutputValidationTests(unittest.TestCase):
         finally: sys.setprofile(previous_profile)
         self.assertEqual(admissions, [(262_139, True), (262_140, False), (0, True)])
 
+        # Dispatch identities, optional fields, and normalization are independent contracts.
+        import copy
+        def tagged(identity, variant, field, *, optional_hint=False):
+            properties = {'schema_id': {'type': 'string', 'enum': [identity]},
+                          'variant_id': {'type': 'string', 'enum': [variant]}, field: {'type': 'string'}}
+            required = list(properties)
+            if optional_hint: properties['hint'] = {'type': 'string'}
+            return {'type': 'object', 'properties': properties, 'required': required, 'additionalProperties': False}
+        variants = [tagged('questions.v1', 'plain', 'message'),
+                    tagged('questions.v1', 'hint', 'message', optional_hint=True),
+                    tagged('other.v1', 'hint', 'other_message')]
+        choices = {'anyOf': variants}; dispatch_owner = SchemaRules.declare(choices)
+        packets = [{'schema_id': 'questions.v1', 'variant_id': 'plain', 'message': 'plain'},
+                   {'schema_id': 'questions.v1', 'variant_id': 'hint', 'message': 'hint'},
+                   {'schema_id': 'other.v1', 'variant_id': 'hint', 'other_message': 'other'}]
+        dispatched = []
+        def observe_dispatch(frame, event, _result):
+            if event == 'call' and frame.f_code is diagnostics._diagnose.__code__ and frame.f_locals['path'] == '$':
+                fields = frame.f_locals['schema'].get('properties', {})
+                if 'schema_id' in fields and 'variant_id' in fields:
+                    dispatched.append((fields['schema_id']['enum'][0], fields['variant_id']['enum'][0]))
+        previous = sys.getprofile()
+        try:
+            sys.setprofile(observe_dispatch)
+            for value in packets: self.assertEqual(dispatch_owner.findings(value), ())
+            for value in ({**packets[0], 'variant_id': 'unknown'}, {**packets[0], 'schema_id': 'unknown'},
+                          {**packets[0], 'variant_id': 1}, {k: v for k, v in packets[0].items() if k != 'variant_id'}):
+                self.assertTrue(dispatch_owner.findings(value))
+        finally: sys.setprofile(previous)
+        self.assertEqual(dispatched, [('questions.v1', 'plain'), ('questions.v1', 'hint'), ('other.v1', 'hint')])
+        for value in packets:
+            self.assertEqual((diagnose_value(value, choices), dispatch_owner.findings(value)), ((), ()))
+        foreign = {**packets[0], 'hint': 7}
+        self.assertEqual(dispatch_owner.findings(foreign), ('$: contains 1 unexpected properties (names withheld)',))
+        self.assertEqual(dispatch_owner.findings({**packets[1], 'hint': None}), ('$.hint: expected string, got null',))
+        self.assertEqual(dispatch_owner.findings({**packets[1], 'hint': 'present'}), ())
+        nested = SchemaRules.declare(diagnostics.closed_rule({'left': choices, 'right': choices}))
+        pair_value = {'left': packets[1], 'right': packets[2]}
+        self.assertEqual((nested.findings(pair_value), nested.findings(pair_value)), ((), ()))
+        self.assertEqual(nested.findings({'left': packets[1], 'right': {**packets[2], 'other_message': None}}),
+                         ('$.right.other_message: expected string, got null',))
+        unique = {'anyOf': [diagnostics.closed_rule({'schema_id': {'type': 'string', 'enum': [name]},
+                            name: {'type': 'integer'}}) for name in ('first', 'second')]}
+        unique_owner = SchemaRules.declare(unique)
+        self.assertEqual(unique_owner.findings({'schema_id': 'second', 'second': 1}), ())
+        self.assertEqual(unique_owner.findings({'schema_id': 'second', 'second': 'bad'}),
+                         ('$.second: expected integer, got string',))
+        from story_writing_agents.structured_output_validation import ContractOwner, ContractIdentity, BoundContract
+        decoded_values = []
+        def normalized(value):
+            result = value.as_object()
+            decoded_values.append(result)
+            return result
+        @dataclass(frozen=True)
+        class DispatchOwner(ContractOwner):
+            rules: SchemaRules
+            owner_id = 'fixture.dispatch'; owner_revision = '1'
+            def declare_rules(self): return self.rules
+            def typed_decoder(self): return TypedDecoder('fixture.dispatch.value', '1', normalized)
+            def named_host_checks(self): return ()
+        bound = BoundContract.bind(DispatchOwner(nested), ContractIdentity(b'{}', 65536, '$'))
+        supplied = {'schema_id': bound.schema_id, 'left': foreign, 'right': packets[2], 'extension': {'private': True}}
+        untouched = copy.deepcopy(supplied)
+        expected = {'left': packets[0], 'right': packets[2]}
+        self.assertEqual(bound.decode_selected(supplied).value, expected)
+        self.assertEqual(bound.decode_selected(json.dumps(supplied)).value, expected)
+        self.assertEqual(supplied, untouched)
+        with self.assertRaises(ValueError): bound.decode_selected({**supplied, 'left': {**foreign, 'message': 7}})
+        with self.assertRaises(ValueError): bound.decode_selected({**supplied, 'left': {**foreign, 'variant_id': 'unknown'}})
+        self.assertEqual(bound.decode_selected(supplied).value, expected)
+        token = bound.validate_value(supplied)
+        returned = token.as_object(); returned['left']['message'] = 'changed return'
+        self.assertEqual(bound.decode_validated(token).value, expected)
+        another = BoundContract.bind(DispatchOwner(nested), ContractIdentity(b'{"other":true}', 65536, '$'))
+        with self.assertRaises(TypeError): another.decode_validated(token)
+        self.assertEqual(bound.decode_validated(token).value, expected)
+        map_rule = {**diagnostics.closed_rule({'offered': {'type': 'boolean'}}), 'x-swa-property-policy': 'closed-map'}
+        map_bound = BoundContract.bind(DispatchOwner(SchemaRules.declare(diagnostics.closed_rule({'selection': map_rule}))),
+                                       ContractIdentity(b'{}', 65536, '$'))
+        selected_map = {'schema_id': map_bound.schema_id, 'selection': {'offered': True}}
+        self.assertEqual(map_bound.decode_selected(selected_map).value, {'selection': {'offered': True}})
+        with self.assertRaises(ValueError):
+            map_bound.decode_selected({**selected_map, 'selection': {'offered': True, 'unoffered': True}})
+        self.assertNotIn('x-swa-property-policy', repr(map_bound.schema_value()))
+        self.assertEqual(map_bound.rule_graph.schema_value()['properties']['selection']['x-swa-property-policy'], 'closed-map')
+        question = diagnostics.closed_rule({'schema_id': {'type': 'string', 'enum': ['questions.v1']},
+            'question': {'type': 'string'}, 'hint': {'type': 'string'},
+            'unavailable_id': {'type': 'string', 'enum': []}})
+        question['required'] = ['schema_id', 'question']
+        question_rules = SchemaRules.declare(diagnostics.closed_rule({'prompt': question}))
+        self.assertEqual(question_rules.schema_value()['properties']['prompt'], question)
+        question_bound = BoundContract.bind(DispatchOwner(question_rules), ContractIdentity(b'{}', 65536, '$'))
+        prompt = {'schema_id': 'questions.v1', 'question': 'Why?', 'hint': 'One clue'}
+        offered = {'schema_id': question_bound.schema_id, 'prompt': {**prompt, 'vendor_extension': True}}
+        unchanged = copy.deepcopy(offered); prior_decodes = len(decoded_values)
+        self.assertEqual(question_bound.decode_selected(offered).value, {'prompt': prompt})
+        self.assertEqual(len(decoded_values) - prior_decodes, 1)
+        self.assertEqual(offered, unchanged)
+        absent = {'schema_id': 'questions.v1', 'question': 'Why?'}
+        self.assertEqual(question_bound.decode_selected({**offered, 'prompt': absent}).value, {'prompt': absent})
+        for hint in (7, None):
+            with self.assertRaises(ValueError):
+                question_bound.decode_selected({**offered, 'prompt': {**prompt, 'hint': hint}})
+        with self.assertRaises(ValueError):
+            question_bound.decode_selected({**offered, 'prompt': {'schema_id': 'questions.v1', 'hint': 'Clue'}})
+        projection = question_bound.rule_graph.provider_projection()
+        self.assertIs(projection.owner, question_bound.rule_graph)
+        native = projection.schema_value()
+        self.assertEqual(native, question_bound.schema_value())
+        detached = projection.schema_value()
+        for exported in (question_bound.schema_value(), detached):
+            arms = exported['properties']['prompt']['anyOf']
+            self.assertEqual(tuple(tuple(arm['properties']) for arm in arms),
+                             (('question', 'schema_id'), ('hint', 'question', 'schema_id')))
+            self.assertEqual(tuple(tuple(arm['required']) for arm in arms),
+                             (('schema_id', 'question'), ('schema_id', 'question', 'hint')))
+        detached['properties']['prompt']['anyOf'][0]['properties'].clear()
+        self.assertEqual(projection.schema_value(), native)
+        for hint in (7, None):
+            self.assertTrue(diagnose_value({**offered, 'prompt': {**prompt, 'hint': hint}}, projection))
+        self.assertNotIn('"unavailable_id"', json.dumps(native))
+        for unavailable in ('invented', None, 7):
+            rejected = {**offered, 'prompt': {**offered['prompt'], 'unavailable_id': unavailable}}
+            with self.assertRaises(ValueError): question_bound.decode_selected(rejected)
+            self.assertTrue(diagnose_value(rejected, projection))
+        with self.assertRaises(ValueError):
+            SchemaRules.declare(diagnostics.closed_rule({'unavailable_id': {'type': 'string', 'enum': []}}))
+        self.assertEqual(diagnose_value({**offered, 'prompt': prompt}, native), ())
+        self.assertEqual(diagnose_value({**offered, 'prompt': absent}, projection), ())
+        self.assertEqual(diagnose_json_text(json.dumps({**offered, 'prompt': prompt}), projection), ())
+        self.assertTrue(diagnose_value(offered, projection))
+        with self.assertRaises(ValueError):
+            question_bound.rule_graph.provider_projection({**native, 'additionalProperties': True})
+        self.assertEqual(question_bound.decode_selected(offered).value, {'prompt': prompt})
+        exported = bound.schema_value(); exported['properties'].clear()
+        self.assertEqual(bound.decode_selected(supplied).value, expected)
+
     def test_malformed_and_duplicate_json_have_value_free_diagnostics(self) -> None:
         schema = {"type": "object", "properties": {}, "additionalProperties": False}
         from story_writing_agents.structured_output_validation import SchemaRules
@@ -697,6 +836,12 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertEqual(diagnose_json_text('{"message":"ok","optional_count":"bad"}', schema),
             ("$.optional_count: expected integer, got string",), )
         self.assertEqual(diagnose_json_text("{}", schema), ("$.message: required property is missing",), )
+        from story_writing_agents.structured_output_validation import SchemaRules
+        optional = SchemaRules.declare(schema)
+        self.assertEqual((optional.findings({'message': 'ok'}), optional.findings({'message': 'ok', 'optional_count': 1})),
+                         ((), ()))
+        self.assertEqual(optional.findings({'message': 'ok', 'optional_count': None}),
+                         ('$.optional_count: expected integer, got null',))
 
     def test_bounded_chunks_preserve_order_and_over_32k_content(self) -> None:
         properties = {f"field_{index:04d}": {"type": "string"} for index in range(1500)}
@@ -1050,6 +1195,82 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assertEqual(len(set(tokens)), len(tokens))
         self.assertIsInstance(self.decode( _answer_wire(self.token, {"kind": "answer", "message": "answer",
             "proposal": None}, ), allowed=("answer",), ), ContextAnswerAction, )
+        from story_writing_agents.lead_provider_contracts import LeadProviderConstraints, LeadResultRuleSeed
+        from story_writing_agents.orchestrator import OrchestrationLeadCallFactory
+        from story_writing_agents.structured_output_validation import SchemaRules
+        from tests.provider_wire_fixture import finite_fixture_selection
+
+        # A semantic-only unavailable choice must not contaminate SEARCH or READ.
+        semantic_schema = {
+            "type": "object", "description": "Return one answer without an unavailable choice.",
+            "properties": {"response_type": {"type": "string", "enum": ["answer"]},
+                           "response_text": {"type": "string"},
+                           "unavailable_choice": {"$ref": "#/$defs/unavailable"}},
+            "required": ["response_type", "response_text"], "additionalProperties": False,
+            "$defs": {"unavailable": {"type": "string", "enum": []}},
+        }
+        seed = LeadResultRuleSeed.declare("lead-discussion-response-v1", semantic_schema)
+        factory = OrchestrationLeadCallFactory(
+            LeadProviderConstraints(), seed, "optional-reference", "EN",
+            lambda _raw, _authorization: None, lambda _locator: "plot_architect")
+        manifest, snapshots = _manifest_fixture()
+        registry = _registry(_SCOPE, snapshots)
+        session = _session(_binding(manifest), registry)
+        _mint_handles(session, registry, snapshots)
+        offers = session.contract_offers("optional-reference-call", allowed_actions=("search", "read", "answer"))
+        bound = service_module.BoundCallContract.bind(factory, offers)
+        self.assertIs(bound.offers, offers)
+        self.assertEqual(len(bound.semantic_index.contracts), 1)
+
+        def schema_nodes(value):
+            if type(value) is dict:
+                yield value
+                for child in value.values():
+                    yield from schema_nodes(child)
+            elif type(value) is list:
+                for child in value:
+                    yield from schema_nodes(child)
+
+        semantic = bound.semantic_index.contracts[0]
+        self.assertTrue(any(node.get("enum") == [] for node in schema_nodes(semantic.rule_graph.schema_value())))
+        actions = {}
+        for member in bound.action_index.contracts:
+            graph = member.rule_graph.schema_value()
+            kind = graph["properties"]["action_type"]["enum"][0]
+            if "artifact_directory_prefix" not in graph["properties"]:
+                actions[kind] = member
+        self.assertEqual(set(actions), {"search_context", "read_context", "submit_result"})
+        read_graph = actions["read_context"].rule_graph.schema_value()
+        references = [node["$ref"] for node in schema_nodes(read_graph) if "$ref" in node]
+        self.assertTrue(references)
+        for reference in references:
+            target = read_graph
+            for name in reference.removeprefix("#/").split("/"):
+                target = target[name.replace("~1", "/").replace("~0", "~")]
+            self.assertIsInstance(target, dict)
+        result = {"schema_id": semantic.schema_id, "response_type": "answer", "response_text": "Visible.",
+                  "response_details": {}}
+        for kind, fields in (
+            ("search_context", {"queries": [{"search_text": "needle", "source_types": {"story_document": True}}]}),
+            ("read_context", {"read_handles": finite_fixture_selection(offers.issued_handle_aliases,
+                                                                       (offers.issued_handle_aliases[0],))}),
+            ("submit_result", {"task_result": result}),
+        ):
+            packet = {"agent_action": {"schema_id": actions[kind].schema_id, "action_type": kind, **fields}}
+            self.assertEqual(bound.rule_graph.findings(packet), ())
+            self.assertTrue(bound.decode_response(json.dumps(packet)).belongs_to(bound))
+        projection = bound.rule_graph.provider_projection()
+        self.assertFalse(any(node.get("enum") == [] for node in schema_nodes(projection.schema_value())))
+        self.assertEqual(projection.findings(packet), ())
+        result["response_details"]["unavailable_choice"] = "not-offered"
+        self.assertTrue(bound.rule_graph.findings(packet))
+        self.assertTrue(projection.findings(packet))
+        with self.assertRaises(ValueError):
+            bound.decode_response(json.dumps(packet))
+        invalid = json.loads(json.dumps(semantic_schema))
+        invalid["$defs"]["unvisited_invalid"] = {"type": "string", "enum": []}
+        with self.assertRaises(ValueError):
+            SchemaRules.declare(invalid)
 
     def test_valid_search_read_and_natural_result_shapes_decode_exactly(self) -> None:
         search = self.decode(_search_wire( self.token, [ ("Needle", ["writing_artifact", "conversation",
@@ -1146,8 +1367,11 @@ class CompactWireDecoderTests(unittest.TestCase):
             {**base, 'agent_action': {**answer_action, "used_handles": True}},
             {**base, 'agent_action': {**answer_action, "extra": 1}}, {'agent_action': {'action_type': 'submit_result'}},
             '{"agent_action":%s,"agent_action":%s}' % tuple(json.dumps(answer_action, separators=(",", ":")) for _ in range(2)))
-        for value in malformed:
-            with self.subTest(value=value): self.assert_malformed(value)
+        for index, value in enumerate(malformed):
+            with self.subTest(value=value):
+                if index in (1, 3, 4, 7, 8):
+                    self.assertEqual(self.decode(value).answer, '{"kind":"answer","message":"Visible.","proposal":null}')
+                else: self.assert_malformed(value)
         self.assert_malformed(base, allowed=("search",))
         self.assert_malformed(_search_wire(self.token, [("x", ["conversation"])]),
                               source_kinds=(ContextSourceKind.WRITING_ARTIFACT,))
@@ -1167,6 +1391,11 @@ class CompactWireDecoderTests(unittest.TestCase):
         ):
             action = {"action_type": "search_context", "artifact_directory_prefix": path_prefix, "queries": queries}
             with self.subTest(search_action=action):
+                if queries == [{'search_text': 'x', 'source_types': ['story_document'], 'extra': True}]:
+                    accepted = self.decode({'agent_action': action}, allowed=('search',))
+                    self.assertEqual(tuple((q.normalized_text, q.source_kinds) for q in accepted.queries),
+                                     (('x', (ContextSourceKind.WRITING_ARTIFACT,)),))
+                    continue
                 failure = self.assert_malformed({'agent_action': action})
                 issues = tuple(issue.removeprefix("Structured reply validation\n") for issue in
                                service_module._context_validation_details(json.dumps({"agent_action": action}), (), failure))
@@ -1178,7 +1407,8 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assert_malformed(_search_wire(self.token, [("x", ["writing_artifact"])]),
             source_kinds=(ContextSourceKind.CONVERSATION,), )
         self.assert_malformed(_read_wire(self.token, ["h1", "h1"])); read_with_extra = _read_wire(self.token, ["h1"])
-        read_with_extra["agent_action"]["extra"] = True; self.assert_malformed(read_with_extra)
+        read_with_extra["agent_action"]["extra"] = True
+        self.assertEqual(self.decode(read_with_extra).handles, (self._resolve_handle('h1'),))
         self.assert_malformed(_search_wire(self.token, [(f"q{i}", ["writing_artifact"])
             for i in range(CONTEXT_ACTION_POLICY.max_queries_per_search + 1)]))
         self.assert_malformed(_read_wire(self.token, [f"h{i}" for i in range(CONTEXT_ACTION_POLICY.max_handles_per_read + 1)]))
@@ -1204,21 +1434,32 @@ class CompactWireDecoderTests(unittest.TestCase):
 
         failure = caught.exception
         self.assertIs( failure.code, service_module.ContextExecutionErrorCode.MALFORMED_ACTION, )
-        self.assertEqual(str(failure), "contextual provider action is malformed"); self.assertIsNone(failure.__cause__)
+        self.assertEqual(str(failure), "contextual provider read action is invalid: `handles` must contain "
+                         "source handles returned by the preceding context search"); self.assertIsNone(failure.__cause__)
         rendered = "\n".join( ( str(failure), repr(failure), repr(failure.__cause__), repr(failure.__context__), ) )
         for private in (self.token, actual_correlation, "PRIVATE critique prose", "\x1b", "\x07", ):
             self.assertNotIn(private, rendered)
+        value['agent_action']['read_handles'] = ['h1']
+        accepted = self.decode(value)
+        self.assertEqual(accepted.handles, (self._resolve_handle('h1'),))
+        self.assertEqual(accepted.correlation, self.correlation)
+        self.assertNotIn(actual_correlation, repr(accepted))
 
     def test_unrelated_malformed_actions_keep_generic_diagnostic(self) -> None:
         cases = ("{", { "correlation": self.token, 'agent_action': {'action_type': 'submit_result',
             "used_handles": []}, }, { "correlation": self.token, 'agent_action': { 'action_type': 'read_context',
             'read_handles': ["h1"], "used_handles": ["h1"], }, }, )
-        for value in cases:
-            with (self.subTest(value=value), self.assertRaises(service_module.ContextExecutionError) as caught,):
-                self.decode(value)
-            self.assertIs(caught.exception.code, service_module.ContextExecutionErrorCode.MALFORMED_ACTION, )
-            self.assertEqual(str(caught.exception), "contextual provider action is malformed", )
-            self.assertIsNone(caught.exception.__cause__)
+        for index, value in enumerate(cases):
+            with self.subTest(value=value):
+                if index == 2:
+                    accepted = self.decode(value)
+                    self.assertEqual(accepted.handles, (self._resolve_handle('h1'),))
+                    self.assertEqual(accepted.correlation, self.correlation)
+                else:
+                    with self.assertRaises(service_module.ContextExecutionError) as caught: self.decode(value)
+                    self.assertIs(caught.exception.code, service_module.ContextExecutionErrorCode.MALFORMED_ACTION)
+                    self.assertEqual(str(caught.exception), "contextual provider action is malformed")
+                    self.assertIsNone(caught.exception.__cause__)
 
     def test_double_encoded_or_invalid_structured_results_reject(self) -> None:
         valid = {"kind": "answer", "message": "Visible.", "proposal": None}
@@ -1226,6 +1467,10 @@ class CompactWireDecoderTests(unittest.TestCase):
                  {**valid, "extra": True}, {**valid, "kind": "unknown"}, [], {**valid, "message": "\ud800"}, None)
         for result in cases:
             with self.subTest(result=result):
+                if result == {**valid, 'extra': True}:
+                    self.assertEqual(self.decode(_answer_wire(self.token, result)).answer,
+                                     '{"kind":"answer","message":"Visible.","proposal":null}')
+                    continue
                 failure = self.assert_malformed(json.dumps(_answer_wire(self.token, result)), allowed=("answer",))
                 if type(result) is dict and result.get("message") == "\ud800":
                     self.assertEqual(failure_issues(failure, path="$.action"),

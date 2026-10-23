@@ -359,7 +359,7 @@ class LeadRecommendationTests(RecommendationCase):
                 "action_type": "search_context", "artifact_directory_prefix": "core_documents/",
                 "queries": [{"search_text": "Source-bound outline line.",
                              "source_types": {"story_document": True}}]},
-                outer_schema_id=outer, inner_schema_id=inner)
+                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         self.backend.enqueue(
             search_outline, lead._read_history_hit, preparation(offered, read_evidence=True))
         drift_plan = await self.runtime.decide_lead_recommendation(decision(offered))

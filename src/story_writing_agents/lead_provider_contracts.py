@@ -13,6 +13,7 @@ from copy import deepcopy
 from itertools import combinations
 from collections.abc import Callable, Mapping
 from typing import Generic, TypeVar
+from types import MappingProxyType
 from dataclasses import dataclass, field, replace
 
 from .agent_context.actions import ContextSourceStatusKind, ContextSourceStatusReceipt
@@ -29,7 +30,7 @@ from .provider_wire import (
 )
 from .provider_wire import share_schema_descriptions
 from .provider_wire import CHANGE_TYPES, ENUM_MEANINGS, field_description
-from .structured_output_validation import closed_rule, finite_subset_rule, schema_rule_fingerprint, schema_rule_fingerprints
+from .structured_output_validation import closed_rule, closed_map_rule, finite_subset_rule, schema_rule_fingerprint, schema_rule_fingerprints
 from .lead_exploration import exploration_result_schema
 from .authoring_admission import assessment_from_dict
 from .authoring_admission import assessment_schema as admission_rule
@@ -87,7 +88,7 @@ def _small_nonempty_selection(
 ) -> dict[str, object]:
     variants = [
         dict(
-            closed_object({item: {"type": "boolean", "enum": [True]} for item in subset}),
+            closed_map_rule({item: {"type": "boolean", "enum": [True]} for item in subset}),
             description=meaning,
         )
         for count in range(1, len(choices) + 1)
@@ -99,7 +100,7 @@ def _small_nonempty_selection(
 
 
 def _fixed_selection(choices: tuple[str, ...]) -> dict[str, object]:
-    return closed_object({item: {"type": "boolean", "enum": [True]} for item in choices})
+    return closed_map_rule({item: {"type": "boolean", "enum": [True]} for item in choices})
 
 
 def _ordered_selection(value: object, choices: tuple[str, ...]) -> list[str]:
@@ -140,14 +141,14 @@ def _scope_wire_rule(rule: AuthoringScopeRuleSet, template: Mapping[str, object]
             if name not in result["required"]:
                 result["required"].append(name)
     elif "contributions" in properties:
-        properties["contributions"] = closed_object({item.domain.value: closed_object({
+        properties["contributions"] = closed_map_rule({item.domain.value: closed_object({
             "domain": {"type": "string", "enum": [item.domain.value]},
             "role": {"type": "string", "enum": [item.role.value]},
         }) for item in rule.contributions})
         draft_domains = tuple(item.domain.value for item in rule.contributions
                               if item.role is AuthoringContributionRole.DRAFT_OWNER)
         if scope is not None:
-            properties["dependency_slots"] = closed_object({slot.slot_id: closed_object({
+            properties["dependency_slots"] = closed_map_rule({slot.slot_id: closed_object({
                 "slot_id": {"type": "string", "enum": [slot.slot_id]},
                 "dependent_domains": _fixed_selection(tuple(domain.value for domain in slot.dependent_domains)),
             }) for slot in scope.dependency_slots})
@@ -228,14 +229,15 @@ def _allocation_wire_rule(template: Mapping[str, object], *, active: tuple[str, 
             "assignment_type": {"type": "string", "enum": [ASSIGNMENT_TYPES[mode]]},
             "review_basis": review_basis,
             "input_anchor_id": {"type": "string", "enum": list(inputs)},
-            "optional_inputs": closed_object({identity: {"type": "boolean", **({"enum": [True]} if identity in forced else {})} for identity in inputs}),
+            "optional_inputs": closed_map_rule({identity: {"type": "boolean", **({"enum": [True]} if identity in forced else {})} for identity in inputs}),
         })
-    properties["assignments"] = closed_object(assignments)
-    properties["required_input_recipients"] = closed_object({identity: {"type": "string", "enum": list(active)} for identity in required})
+    properties["assignments"] = closed_map_rule(assignments)
+    properties["required_input_recipients"] = closed_map_rule({identity: {"type": "string", "enum": list(active)} for identity in required})
     result = deepcopy(dict(template))
     result.setdefault(
         "description", field_description("specialist_consultation_proposal"))
-    result.update(properties=properties, required=list(properties))
+    result.update(properties=properties, required=[
+        name for name in properties if name in template["required"] or name == "required_input_recipients"])
     return result
 
 
@@ -551,7 +553,7 @@ class LeadStagePolicy:
     logical_origin_call_id: str
     owner_declarations: tuple[ContractOwner, ...] = field(kw_only=True, repr=False, compare=False)
     maximum_schema_bytes: int = field(default=65_536, kw_only=True)
-    maximum_index_schema_bytes: int = field(default=262_144, kw_only=True)
+    maximum_index_schema_bytes: int = field(default=MAX_PROVIDER_SCHEMA_UTF8_BYTES, kw_only=True)
     wire_root_path: str = field(default="$.agent_action.task_result", kw_only=True)
 
     def __post_init__(self) -> None:
@@ -559,10 +561,7 @@ class LeadStagePolicy:
                 (self.stage, self.physical_call_id, self.language, self.logical_origin_call_id))
                 or self.maximum_schema_bytes not in {65_536, 262_144}
                 or type(self.maximum_index_schema_bytes) is not int
-                or self.maximum_index_schema_bytes != (
-                    MAX_PROVIDER_SCHEMA_UTF8_BYTES
-                    if self.wire_root_path == "$.agent_action" else 262_144
-                )
+                or self.maximum_index_schema_bytes != MAX_PROVIDER_SCHEMA_UTF8_BYTES
                 or self.wire_root_path not in {"$", "$.agent_action", "$.agent_action.task_result"}
                 or any(type(value) is not str or len(value) != 64 or any(
                     char not in "0123456789abcdef" for char in value)
@@ -835,10 +834,10 @@ def _compile_closed_choices(
         properties = node.get("properties")
         required = node.get("required")
         return (node.get("type") == "object" and node.get("additionalProperties") is False
-                and type(properties) is dict and type(required) is list
+                and type(properties) is dict and "variant_id" not in properties and type(required) is list
                 and len(required) == len(set(required)) and set(required) == set(properties)
                 and not set(node) - {"type", "properties", "required",
-                                     "additionalProperties", "description"})
+                                     "additionalProperties", "description", "x-swa-property-policy"})
 
     size = initial_size = final_cost(working)
     while True:
@@ -1397,7 +1396,7 @@ class LeadContractIndex(Generic[_LeadValue]):
             contract.require_owner_provenance()
 
     def schema_value(self) -> dict[str, object]:
-        return self.rule_graph.schema_value()
+        return self.rule_graph.provider_schema_value()
 
     def select(self, schema_id: object) -> BoundContract[_LeadValue]:
         if type(schema_id) is str and schema_id in self.expected_schema_ids:
@@ -1460,9 +1459,9 @@ class LeadContractIndex(Generic[_LeadValue]):
 
 
 
-def closed_object(properties: dict[str, object]) -> dict[str, object]:
+def closed_object(properties: dict[str, object], *, required: tuple[str, ...] | None = None) -> dict[str, object]:
     return {"type": "object", "properties": properties,
-            "required": list(properties), "additionalProperties": False}
+            "required": list(properties if required is None else required), "additionalProperties": False}
 
 
 def string_array(
@@ -1873,7 +1872,8 @@ class LeadProviderConstraints:
         for root_number, root in enumerate(roots):
             properties = root.get("properties", {})
             ordinary_answer = (
-                set(properties) == {"response_type", "response_text", "writing_task_scope"}
+                set(properties) - {"document_change_request_update"} == {"response_type", "response_text", "writing_task_scope"}
+                and set(root.get("required", ())) == {"response_type", "response_text", "writing_task_scope"}
                 and properties["response_type"].get("enum") == ["answer"]
             )
             scope_template = properties.get("writing_task_scope")
@@ -2107,7 +2107,7 @@ class LeadProviderConstraints:
                                 fields[anchor] = {"anyOf": used} if len(used) > 1 else used[0]
                                 for previous_key, previous_rows in groups.items():
                                     if previous_key == anchor:
-                                        graphs.append(closed_rule(fields))
+                                        graphs.append(closed_map_rule(fields))
                                         break
                                     nonqualifying_rows = [
                                         row for row in previous_rows
@@ -2483,12 +2483,17 @@ class LeadProviderConstraints:
                         if source_member.rules.node_fingerprint((name,)) != common_fingerprints[name]:
                             raise ValueError("Lead family has incompatible common scalar rules")
                     detail_properties = {name: value for name, value in source["properties"].items() if name not in common_names}
+                    if len(members) > 1:
+                        detail_properties["variant_id"] = {"type": "string", "enum": [source_member.branch_key],
+                                                           "description": "Required offered family variant identity; use this exact literal."}
                     scope_node = detail_properties.get("writing_task_scope")
                     if type(scope_node) is dict and "description" in scope_node:
                         notice = "writing_task_scope: " + scope_node["description"]
                         if notice not in guidance: guidance.append(notice)
                     detail = {
-                        **closed_object(detail_properties),
+                    **closed_object(detail_properties, required=tuple(
+                        name for name in source["required"] if name not in common_names
+                    ) + (("variant_id",) if len(members) > 1 else ())),
                         "description": source["description"],
                     }
                     if "$defs" in source: detail["$defs"] = source["$defs"]
@@ -2601,8 +2606,11 @@ class LeadProviderConstraints:
                 )
             for part_number, (part, members, common_names) in enumerate(family_partitions):
                 family_rules = SchemaRules.declare(part, maximum_bytes=maximum_bytes)
+                member_by_variant = MappingProxyType({member.branch_key: member for member in members})
+                if len(member_by_variant) != len(members):
+                    raise ValueError("duplicate Lead family variant identity")
 
-                def family_decode(body: dict[str, object], *, candidates=members,
+                def family_decode(body: dict[str, object], *, candidates=members, by_variant=member_by_variant,
                                   names=common_names, scope_schema=family_rules,
                                   offered_tasks=tasks, restore=restore_lead_scope_result
                                   ) -> dict[str, object]:
@@ -2610,13 +2618,20 @@ class LeadProviderConstraints:
                     details = dict(declared["properties"]["response_details"])
                     if "$defs" in declared:
                         details["$defs"] = declared["$defs"]
+                    supplied = body["response_details"].get("variant_id")
+                    candidate = (candidates[0] if len(candidates) == 1 else
+                                 by_variant.get(supplied) if type(supplied) is str else None)
+                    if candidate is None:
+                        raise ValueError("selected family requires its offered variant identity")
                     expanded = {name: body[name] for name in names}
-                    expanded.update(restore(body["response_details"], details))
+                    restored = restore(body["response_details"], details)
+                    if len(candidates) > 1:
+                        restored.pop("variant_id")
+                    expanded.update(restored)
                     map_current_task_literals(expanded, offered_tasks)
-                    for candidate in candidates:
-                        if not candidate.rules.findings(expanded):
-                            return candidate.decode(expanded)
-                    raise ValueError("selected family details violate its bound choice graph")
+                    if candidate.rules.findings(expanded):
+                        raise ValueError("selected family details violate its bound choice graph")
+                    return candidate.decode(expanded)
                 branch_key = f"{contract.contract_id}:family:{root_number}"
                 if len(family_partitions) > 1:
                     branch_key += f":partition:{part_number}"
@@ -2841,41 +2856,36 @@ class LeadProviderConstraints:
         common = {"instruction": nonempty_text_schema(), "source_ids": source_schema}
         if self.scope and self.scope.intent is AuthoringIntent.REVIEW_ONLY:
             return {**closed_object({
-                **common,
+                **common, "objective_id": {"type": "string", "enum": []},
                 "kind": {"type": "string", "enum": ["prepare_consultation"]},
                 "specialist_ids": string_array(
                     tuple(SPECIALIST_IDS), minimum=1, maximum=len(SPECIALIST_IDS),
                 ),
-            }), "description": (
+            }, required=(*common, "kind", "specialist_ids")), "description": (
                 "Prepare only another exact supplied-material review consultation; "
                 "no replacement or artifact-objective authority."
             )}
-        objectives: list[dict[str, object]] = [{}]
-        if self.objective_ids is None or self.objective_ids:
-            identity: dict[str, object] = {"type": "string"}
-            if self.objective_ids:
-                identity["enum"] = list(self.objective_ids)
-            objectives.append({"objective_id": identity})
+        identity: dict[str, object] = {"type": "string"}
+        if self.objective_ids is not None:
+            identity["enum"] = list(self.objective_ids)
+        objective = {"objective_id": identity}
+        association_description = (
+            "Include the offered document change request identity only when continuing that request."
+        )
         variants = []
-        for objective in objectives:
-            association_description = (
-                "Continue the identified pending document change request."
-                if objective else
-                "Use this variant when no existing document change request is being continued."
-            )
-            variants.extend([
-                {**closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_artifact"]},
-                               "target_paths": string_array(minimum=1)}), "description": (
-                                   "Draft a document-change proposal when the selected sources "
-                                   "already support exact changes to these targets. "
-                               ) + association_description},
-                {**closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_consultation"]},
-                               "specialist_ids": string_array(tuple(SPECIALIST_IDS), minimum=1, maximum=len(SPECIALIST_IDS))}), "description": (
-                                   "Draft a specialist consultation proposal when further "
-                                   "drafting or review is needed; include every affected "
-                                   "specialist. "
-                               ) + association_description},
-            ])
+        variants.extend([
+            {**closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_artifact"]},
+                           "target_paths": string_array(minimum=1)}, required=(*common, "kind", "target_paths")), "description": (
+                               "Draft a document-change proposal when the selected sources "
+                               "already support exact changes to these targets. "
+                           ) + association_description},
+            {**closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_consultation"]},
+                           "specialist_ids": string_array(tuple(SPECIALIST_IDS), minimum=1, maximum=len(SPECIALIST_IDS))}, required=(*common, "kind", "specialist_ids")), "description": (
+                               "Draft a specialist consultation proposal when further "
+                               "drafting or review is needed; include every affected "
+                               "specialist. "
+                           ) + association_description},
+        ])
         result = alternatives(variants)
         result["description"] = (
             (
