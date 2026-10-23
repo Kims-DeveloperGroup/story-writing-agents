@@ -1458,9 +1458,9 @@ class LeadContractIndex(Generic[_LeadValue]):
 
 
 
-def closed_object(properties: dict[str, object]) -> dict[str, object]:
+def closed_object(properties: dict[str, object], *, required: tuple[str, ...] | None = None) -> dict[str, object]:
     return {"type": "object", "properties": properties,
-            "required": list(properties), "additionalProperties": False}
+            "required": list(properties if required is None else required), "additionalProperties": False}
 
 
 def string_array(
@@ -2489,7 +2489,9 @@ class LeadProviderConstraints:
                         notice = "writing_task_scope: " + scope_node["description"]
                         if notice not in guidance: guidance.append(notice)
                     detail = {
-                        **closed_object(detail_properties),
+                    **closed_object(detail_properties, required=tuple(
+                        name for name in source["required"] if name not in common_names
+                    ) + (("variant_id",) if len(members) > 1 else ())),
                         "description": source["description"],
                     }
                     if "$defs" in source: detail["$defs"] = source["$defs"]
@@ -2852,41 +2854,36 @@ class LeadProviderConstraints:
         common = {"instruction": nonempty_text_schema(), "source_ids": source_schema}
         if self.scope and self.scope.intent is AuthoringIntent.REVIEW_ONLY:
             return {**closed_object({
-                **common,
+                **common, "objective_id": {"type": "string", "enum": []},
                 "kind": {"type": "string", "enum": ["prepare_consultation"]},
                 "specialist_ids": string_array(
                     tuple(SPECIALIST_IDS), minimum=1, maximum=len(SPECIALIST_IDS),
                 ),
-            }), "description": (
+            }, required=(*common, "kind", "specialist_ids")), "description": (
                 "Prepare only another exact supplied-material review consultation; "
                 "no replacement or artifact-objective authority."
             )}
-        objectives: list[dict[str, object]] = [{}]
-        if self.objective_ids is None or self.objective_ids:
-            identity: dict[str, object] = {"type": "string"}
-            if self.objective_ids:
-                identity["enum"] = list(self.objective_ids)
-            objectives.append({"objective_id": identity})
+        identity: dict[str, object] = {"type": "string"}
+        if self.objective_ids is not None:
+            identity["enum"] = list(self.objective_ids)
+        objective = {"objective_id": identity}
+        association_description = (
+            "Include the offered document change request identity only when continuing that request."
+        )
         variants = []
-        for objective in objectives:
-            association_description = (
-                "Continue the identified pending document change request."
-                if objective else
-                "Use this variant when no existing document change request is being continued."
-            )
-            variants.extend([
-                {**closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_artifact"]},
-                               "target_paths": string_array(minimum=1)}), "description": (
-                                   "Draft a document-change proposal when the selected sources "
-                                   "already support exact changes to these targets. "
-                               ) + association_description},
-                {**closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_consultation"]},
-                               "specialist_ids": string_array(tuple(SPECIALIST_IDS), minimum=1, maximum=len(SPECIALIST_IDS))}), "description": (
-                                   "Draft a specialist consultation proposal when further "
-                                   "drafting or review is needed; include every affected "
-                                   "specialist. "
-                               ) + association_description},
-            ])
+        variants.extend([
+            {**closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_artifact"]},
+                           "target_paths": string_array(minimum=1)}, required=(*common, "kind", "target_paths")), "description": (
+                               "Draft a document-change proposal when the selected sources "
+                               "already support exact changes to these targets. "
+                           ) + association_description},
+            {**closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_consultation"]},
+                           "specialist_ids": string_array(tuple(SPECIALIST_IDS), minimum=1, maximum=len(SPECIALIST_IDS))}, required=(*common, "kind", "specialist_ids")), "description": (
+                               "Draft a specialist consultation proposal when further "
+                               "drafting or review is needed; include every affected "
+                               "specialist. "
+                           ) + association_description},
+        ])
         result = alternatives(variants)
         result["description"] = (
             (
