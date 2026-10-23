@@ -202,8 +202,10 @@ claiming acceptance. The runner rollout and remaining gates are tracked in
 ## Runtime optimization evidence
 
 For [#874](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/874),
-the maintainer accepted direct alternative dispatch and tolerant production
-consumption of extra response-record properties. Replace obsolete unknown-field
+the maintainer accepted predefined logical records with required/optional fields,
+direct alternative dispatch, and tolerant production consumption of extra
+response-record properties. Optional presence must not create duplicate logical
+schemas or tags, and runtime must not infer or merge optional schemas. Replace obsolete unknown-field
 rejection assertions with acceptance and normalized/typed omission checks. Keep
 required-field, declared-value, semantic-map identity, domain, binding, and
 authorization rejection coverage, strict raw-wire cases, and both native provider
