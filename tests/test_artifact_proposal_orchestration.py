@@ -1215,6 +1215,8 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         from tests.recommendation_fixture import task_assessment
+        await self.record_book_readiness()
+        self.workspace.path(_RULES).unlink(missing_ok=True)
         conversation_id = self.conversation("Reject provider authority")
         before = self.artifact_snapshot()
         invalid = _artifact_outcome(
@@ -1238,10 +1240,10 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             self.session_id,
             conversation_id,
             "Reject provider-supplied Apply authority.", )
-        self.assertIs(result.next_action, CollaborationNextAction.REPLY_TO_LEAD)
+        self.assertIs(result.next_action, CollaborationNextAction.SUBMIT_CONFIRMATION)
         self.assertIs(result.artifact_proposal.state, ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION)
         candidate = result.artifact_proposal.candidate.candidate
-        self.assertNotIn('"apply_authority_granted"', serialize_artifact_review_candidate(candidate))
+        self.assertNotIn(b'"apply_authority_granted"', serialize_artifact_review_candidate(candidate))
         self.assertEqual(self.artifact_snapshot(), before)
         self.assertEqual(self.artifact_events(conversation_id, ArtifactReviewCandidatePayload),
                          (result.artifact_proposal.candidate,))

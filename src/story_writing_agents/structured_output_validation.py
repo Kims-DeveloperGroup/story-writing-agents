@@ -1097,7 +1097,7 @@ class SchemaRules:
                 result["$defs"] = definitions
             return result
 
-        root = compile_node(logical)
+        root = compile_node(deepcopy(logical))
         if encoded_size(root) > self.maximum_bytes:
             raise validation_failure(ValueError("schema rejected"), "$", "schema byte limit exceeded")
         return root
