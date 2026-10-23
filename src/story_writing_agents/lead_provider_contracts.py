@@ -2107,7 +2107,7 @@ class LeadProviderConstraints:
                                 fields[anchor] = {"anyOf": used} if len(used) > 1 else used[0]
                                 for previous_key, previous_rows in groups.items():
                                     if previous_key == anchor:
-                                        graphs.append(closed_rule(fields))
+                                        graphs.append(closed_map_rule(fields))
                                         break
                                     nonqualifying_rows = [
                                         row for row in previous_rows

@@ -1215,6 +1215,8 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         from tests.recommendation_fixture import task_assessment
+        await self.record_book_readiness()
+        self.workspace.path(_RULES).unlink(missing_ok=True)
         conversation_id = self.conversation("Reject provider authority")
         before = self.artifact_snapshot()
         invalid = _artifact_outcome(

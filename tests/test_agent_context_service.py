@@ -1195,6 +1195,82 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assertEqual(len(set(tokens)), len(tokens))
         self.assertIsInstance(self.decode( _answer_wire(self.token, {"kind": "answer", "message": "answer",
             "proposal": None}, ), allowed=("answer",), ), ContextAnswerAction, )
+        from story_writing_agents.lead_provider_contracts import LeadProviderConstraints, LeadResultRuleSeed
+        from story_writing_agents.orchestrator import OrchestrationLeadCallFactory
+        from story_writing_agents.structured_output_validation import SchemaRules
+        from tests.provider_wire_fixture import finite_fixture_selection
+
+        # A semantic-only unavailable choice must not contaminate SEARCH or READ.
+        semantic_schema = {
+            "type": "object", "description": "Return one answer without an unavailable choice.",
+            "properties": {"response_type": {"type": "string", "enum": ["answer"]},
+                           "response_text": {"type": "string"},
+                           "unavailable_choice": {"$ref": "#/$defs/unavailable"}},
+            "required": ["response_type", "response_text"], "additionalProperties": False,
+            "$defs": {"unavailable": {"type": "string", "enum": []}},
+        }
+        seed = LeadResultRuleSeed.declare("lead-discussion-response-v1", semantic_schema)
+        factory = OrchestrationLeadCallFactory(
+            LeadProviderConstraints(), seed, "optional-reference", "EN",
+            lambda _raw, _authorization: None, lambda _locator: "plot_architect")
+        manifest, snapshots = _manifest_fixture()
+        registry = _registry(_SCOPE, snapshots)
+        session = _session(_binding(manifest), registry)
+        _mint_handles(session, registry, snapshots)
+        offers = session.contract_offers("optional-reference-call", allowed_actions=("search", "read", "answer"))
+        bound = service_module.BoundCallContract.bind(factory, offers)
+        self.assertIs(bound.offers, offers)
+        self.assertEqual(len(bound.semantic_index.contracts), 1)
+
+        def schema_nodes(value):
+            if type(value) is dict:
+                yield value
+                for child in value.values():
+                    yield from schema_nodes(child)
+            elif type(value) is list:
+                for child in value:
+                    yield from schema_nodes(child)
+
+        semantic = bound.semantic_index.contracts[0]
+        self.assertTrue(any(node.get("enum") == [] for node in schema_nodes(semantic.rule_graph.schema_value())))
+        actions = {}
+        for member in bound.action_index.contracts:
+            graph = member.rule_graph.schema_value()
+            kind = graph["properties"]["action_type"]["enum"][0]
+            if "artifact_directory_prefix" not in graph["properties"]:
+                actions[kind] = member
+        self.assertEqual(set(actions), {"search_context", "read_context", "submit_result"})
+        read_graph = actions["read_context"].rule_graph.schema_value()
+        references = [node["$ref"] for node in schema_nodes(read_graph) if "$ref" in node]
+        self.assertTrue(references)
+        for reference in references:
+            target = read_graph
+            for name in reference.removeprefix("#/").split("/"):
+                target = target[name.replace("~1", "/").replace("~0", "~")]
+            self.assertIsInstance(target, dict)
+        result = {"schema_id": semantic.schema_id, "response_type": "answer", "response_text": "Visible.",
+                  "response_details": {}}
+        for kind, fields in (
+            ("search_context", {"queries": [{"search_text": "needle", "source_types": {"story_document": True}}]}),
+            ("read_context", {"read_handles": finite_fixture_selection(offers.issued_handle_aliases,
+                                                                       (offers.issued_handle_aliases[0],))}),
+            ("submit_result", {"task_result": result}),
+        ):
+            packet = {"agent_action": {"schema_id": actions[kind].schema_id, "action_type": kind, **fields}}
+            self.assertEqual(bound.rule_graph.findings(packet), ())
+            self.assertTrue(bound.decode_response(json.dumps(packet)).belongs_to(bound))
+        projection = bound.rule_graph.provider_projection()
+        self.assertFalse(any(node.get("enum") == [] for node in schema_nodes(projection.schema_value())))
+        self.assertEqual(projection.findings(packet), ())
+        result["response_details"]["unavailable_choice"] = "not-offered"
+        self.assertTrue(bound.rule_graph.findings(packet))
+        self.assertTrue(projection.findings(packet))
+        with self.assertRaises(ValueError):
+            bound.decode_response(json.dumps(packet))
+        invalid = json.loads(json.dumps(semantic_schema))
+        invalid["$defs"]["unvisited_invalid"] = {"type": "string", "enum": []}
+        with self.assertRaises(ValueError):
+            SchemaRules.declare(invalid)
 
     def test_valid_search_read_and_natural_result_shapes_decode_exactly(self) -> None:
         search = self.decode(_search_wire( self.token, [ ("Needle", ["writing_artifact", "conversation",
