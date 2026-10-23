@@ -4980,7 +4980,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(private, repr(outcomes))
 
         responses = ["unused", "unused", json.dumps({"message": 0}),
-                     json.dumps({"message": "Repaired."})]
+                     json.dumps({"message": "Repaired.", private: private})]
         with mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_PHYSICAL_OUTPUTS": json.dumps(responses)}):
             repaired = await bound.converse(
                 self.conversation_request(session_id=session_id, turn_id="repaired_turn")

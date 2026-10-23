@@ -1181,7 +1181,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             return indexed_response({'action_type': 'read_context', 'read_handles':
                 finite_fixture_read_selection(
                     call.contract.offers.issued_handle_aliases, (handle,))},
-                outer_schema_id=outer, inner_schema_id=inner)
+                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
 
         read_evidence = []
         positive_message = 'The completed READ grounds this factual answer.'

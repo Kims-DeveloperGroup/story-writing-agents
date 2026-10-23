@@ -465,8 +465,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         invalid_values = (
             ({"assessment": "supports"}, "$.agent_action.task_result.response_text: required property is missing"),
             ({"message": "Missing assessment."}, "$.agent_action.task_result.assignment_status: required property is missing"),
-            ({"assessment": "supports", "message": "Private state claim.", "private_state": "forbidden"},
-             "$.agent_action.task_result: contains 1 unexpected properties (names withheld)"), )
+            ({"assessment": 0, "message": "Private state claim.", "private_state": "forbidden"},
+             "$.agent_action.task_result.assignment_status: expected string, got integer"), )
         for ordinal, (value, issue) in enumerate(invalid_values, start=1):
             with self.subTest(ordinal=ordinal):
                 conversation_id = self.conversation(f"Strict specialist {ordinal}")
@@ -499,7 +499,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("Rejected synthesis details")
         proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
-        rejected = _raw_outcome({'message': '', 'PRIVATE_SYNTHESIS_KEY': 'PRIVATE_SYNTHESIS_VALUE'})
+        rejected = _raw_outcome({'message': 0, 'PRIVATE_SYNTHESIS_KEY': 'PRIVATE_SYNTHESIS_VALUE'})
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, rejected)
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
         decision = await self.runtime.decide_lead_step(
@@ -511,8 +511,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                           if payload.role == LEAD_ORCHESTRATOR and payload.validation_details)
         self.assertEqual(len(synthesis), 1)
         self.assertTrue(synthesis[0].validation_details[0].startswith("Original response"))
-        self.assertIn("$.agent_action.task_result.response_details: "
-                      "contains 1 unexpected properties",
+        self.assertIn('$.agent_action.task_result.response_text: expected string, got integer',
                       repr(synthesis[0].validation_details))
         self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
         self.assertEqual(decision.turn.validation_details, tuple((
@@ -973,7 +972,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 branch_key='consultation-summary-v4:family:1', value=grouped)
             encoded = indexed_response(
                 {'action_type': 'submit_result', 'task_result': grouped},
-                outer_schema_id=outer_id, inner_schema_id=inner_id)
+                outer_schema_id=outer_id, inner_schema_id=inner_id, contract=call.contract)
             self.assertEqual(diagnose_json_text(encoded, call.schema), ())
             self.assertEqual(json.loads(call.contract.decode_response(encoded).answer_json), body)
             facts = LeadProviderConstraints(input_ids=tuple(known_ids + reply_ids),
@@ -990,7 +989,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 bad['next_intent']['assignments'][0]['input_ids'][0])
             self.assertTrue(diagnose_json_text(indexed_response(
                 {'action_type': 'submit_result', 'task_result': rejected},
-                outer_schema_id=outer_id, inner_schema_id=inner_id), call.schema))
+                outer_schema_id=outer_id, inner_schema_id=inner_id, contract=call.contract), call.schema))
             self.assertIn(Rule.PURPOSE_REQUIRED, facts.diagnose(json.dumps({**body, "next_intent": {**body["next_intent"], "purpose": ""}})))
             return encoded
         private = "PRIVATE_CONTINUATION_SYNTHESIS_VALUE"

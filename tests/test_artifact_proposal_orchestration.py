@@ -131,7 +131,7 @@ def _artifact_outcome(
                 return indexed_response({'action_type': 'search_context',
                     'artifact_directory_prefix': read_prefix,
                     'queries': [{'search_text': query, 'source_types': {'story_document': True}}
-                                for _path, query in read_queries]}, outer_schema_id=outer, inner_schema_id=inner)
+                                for _path, query in read_queries]}, outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
             read_phase = 2
             hits = call.payload['context_observation']['search_results']
             try:
@@ -149,7 +149,7 @@ def _artifact_outcome(
             outer, inner = offered_fixture_bindings(call, action_type='read_context', response_type=None, family=0)
             return indexed_response({'action_type': 'read_context', 'read_handles': finite_fixture_read_selection(
                     call.contract.offers.issued_handle_aliases, selected_handles)},
-                outer_schema_id=outer, inner_schema_id=inner)
+                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         material = _live_material(call)
         if read_queries:
             reads = call.payload['context_observation']['read_results']
@@ -1316,7 +1316,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             outer, inner = offered_fixture_bindings(call, action_type='search_context', response_type=None, family=1)
             return indexed_response({'action_type': 'search_context', 'artifact_directory_prefix': 'core_documents/',
                 'queries': [{'search_text': 'needle', 'source_types': {'story_document': True}}]},
-                outer_schema_id=outer, inner_schema_id=inner)
+                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         def answer(call, provider):
             scope = lead_fixture_bound_scope(call, _live_scope(call,
                 activity="review", domains=("plot_structure",), paths=(_OUTLINE,)), record=True)

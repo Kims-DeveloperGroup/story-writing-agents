@@ -460,6 +460,52 @@ def strict_json_object(text: str, *, exact_numbers: bool = False) -> dict[str, o
     return value
 
 
+def json_value_utf8_size(value: object, *, maximum_bytes: int) -> int:
+    """Bound an already decoded JSON value without changing its exact numbers."""
+    pending, active = [(value, False)], set()
+    size = visits = 0
+    while pending:
+        node, leaving = pending.pop()
+        if leaving:
+            active.remove(id(node))
+            continue
+        visits += 1
+        if visits > 262_144:
+            raise ValueError("JSON value node limit")
+        if type(node) in {dict, list}:
+            if id(node) in active:
+                raise ValueError("cyclic JSON value")
+            active.add(id(node))
+            pending.append((node, True))
+            size += 2 + max(0, len(node) - 1)
+            if len(node) + len(pending) > 262_144:
+                raise ValueError("JSON value node limit")
+            if type(node) is dict:
+                for key in node:
+                    if type(key) is not str:
+                        raise ValueError("JSON object key must be text")
+                    if len(key) > maximum_bytes:
+                        raise ValueError("JSON value byte limit")
+                    size += len(json.dumps(key, ensure_ascii=False).encode("utf-8", "strict")) + 1
+                children = node.values()
+            else:
+                children = node
+            pending.extend((child, False) for child in children)
+        elif type(node) is Decimal:
+            if not node.is_finite():
+                raise ValueError("nonfinite JSON number")
+            size += len(str(node).encode("ascii"))
+        elif node is None or type(node) in {str, int, float, bool}:
+            if type(node) is str and len(node) > maximum_bytes:
+                raise ValueError("JSON value byte limit")
+            size += len(json.dumps(node, ensure_ascii=False, allow_nan=False).encode("utf-8", "strict"))
+        else:
+            raise ValueError("expected exact JSON value")
+        if size > maximum_bytes:
+            raise ValueError("JSON value byte limit")
+    return size
+
+
 def strict_json_member_text(text: str, member_path: tuple[str, ...]) -> str:
     """Return an exact member token after strict full-document validation."""
     strict_json_value(text, exact_numbers=True)
@@ -521,11 +567,16 @@ def closed_rule(properties: Mapping[str, object], *, description: str | None = N
     return rule
 
 
+def closed_map_rule(properties: Mapping[str, object], *, description: str | None = None) -> dict[str, object]:
+    """Declare semantic membership keys, never ignorable response extensions."""
+    return {**closed_rule(properties, description=description), "x-swa-property-policy": "closed-map"}
+
+
 def finite_subset_rule(choices: tuple[str, ...], *, minimum: int = 1, maximum: int | None = None) -> dict[str, object]:
     maximum = len(choices) if maximum is None else maximum
     if len(choices) > 4 or not 0 <= minimum <= maximum <= len(choices) or len(set(choices)) != len(choices):
         raise ValueError("invalid small finite selection declaration")
-    variants = [closed_rule({item: {"type": "boolean", "enum": [True]} for item in subset})
+    variants = [closed_map_rule({item: {"type": "boolean", "enum": [True]} for item in subset})
                 for count in range(minimum, maximum + 1) for subset in combinations(choices, count)]
     return variants[0] if len(variants) == 1 else {"anyOf": variants}
 
@@ -537,7 +588,7 @@ def finite_selection_rule(choices: tuple[str, ...], *, minimum: int, maximum: in
             or not 0 <= minimum <= maximum <= len(choices)):
         raise ValueError("invalid finite selection declaration")
     if not choices:
-        return closed_rule({})
+        return closed_map_rule({})
     # Unrestricted and nonempty ranges have a linear shared graph.  The wire
     # remains the same balanced tree with one required boolean leaf per offer.
     if maximum == len(choices) and minimum in {0, 1}:
@@ -551,20 +602,20 @@ def finite_selection_rule(choices: tuple[str, ...], *, minimum: int, maximum: in
                 flag = {"type": "boolean"}
                 if mode != "all":
                     flag["enum"] = [mode == "positive"]
-                node = closed_rule({choices[first]: flag})
+                node = closed_map_rule({choices[first]: flag})
             else:
                 middle = (first + end) // 2
                 if mode == "positive":
-                    node = {"anyOf": [closed_rule({"left": range_node(first, middle, "positive"),
+                    node = {"anyOf": [closed_map_rule({"left": range_node(first, middle, "positive"),
                                                   "right": range_node(middle, end, "all")},
                                       description=(f"Select 1 to {middle - first} left choices and "
                                                    f"0 to {end - middle} right choices.")),
-                                      closed_rule({"left": range_node(first, middle, "zero"),
+                                      closed_map_rule({"left": range_node(first, middle, "zero"),
                                                   "right": range_node(middle, end, "positive")},
                                       description=(f"Select 0 left choices and "
                                                    f"1 to {end - middle} right choices."))]}
                 else:
-                    node = closed_rule({"left": range_node(first, middle, mode),
+                    node = closed_map_rule({"left": range_node(first, middle, mode),
                                         "right": range_node(middle, end, mode)})
             definitions[name] = node
             return {"$ref": "#/$defs/" + name}
@@ -578,13 +629,13 @@ def finite_selection_rule(choices: tuple[str, ...], *, minimum: int, maximum: in
         if end - first == 1:
             for count in range(min(maximum, 1) + 1):
                 name = f"{prefix}_{first}_{end}_{count}"
-                definitions[name] = closed_rule({choices[first]: {"type": "boolean", "enum": [bool(count)]}})
+                definitions[name] = closed_map_rule({choices[first]: {"type": "boolean", "enum": [bool(count)]}})
                 counts[count] = {"$ref": "#/$defs/" + name}
             return counts
         middle = (first + end) // 2
         left, right = build(first, middle), build(middle, end)
         for count in range(min(maximum, end - first) + 1):
-            variants = [closed_rule({"left": left[a], "right": right[count - a]},
+            variants = [closed_map_rule({"left": left[a], "right": right[count - a]},
                                     description=(f"Select exactly {a} left choices and "
                                                  f"{count - a} right choices; {count} total."))
                         for a in left if count - a in right]
@@ -663,7 +714,7 @@ def nonempty_text_value(value: object) -> bool:
 _RULE_KEYS = frozenset({
     "type", "enum", "description", "properties", "required", "additionalProperties",
     "items", "minItems", "maxItems", "minLength", "maxLength", "pattern", "minimum", "maximum",
-    "anyOf", "$defs", "$ref",
+    "anyOf", "$defs", "$ref", "x-swa-property-policy",
 })
 
 
@@ -728,6 +779,7 @@ def canonical_schema_rules(schema: Mapping[str, object], *, maximum_bytes: int =
                 reject(path, "expected complete schema alternatives")
             for child in variants:
                 visit(child, path, active)
+            _object_union_dispatch(variants, root)
             return
         raw_types = node.get("type")
         types = [raw_types] if type(raw_types) is str else raw_types
@@ -747,14 +799,15 @@ def canonical_schema_rules(schema: Mapping[str, object], *, maximum_bytes: int =
                 reject(path, "duplicate declared choice")
         keys = set(node) - {"type", "enum", "description", "$defs"}
         if concrete == "object":
-            if keys != {"properties", "required", "additionalProperties"}:
-                reject(path, "expected closed all-required object")
+            if (keys - {"x-swa-property-policy"} != {"properties", "required", "additionalProperties"}
+                    or node.get("x-swa-property-policy", "closed-map") != "closed-map"):
+                reject(path, "expected closed object")
             properties, required = node["properties"], node["required"]
             if (type(properties) is not dict or any(type(k) is not str or not k for k in properties)
                     or type(required) is not list or any(type(k) is not str for k in required)
-                    or len(required) != len(properties) or set(required) != set(properties)
+                    or len(set(required)) != len(required) or set(required) - set(properties)
                     or node["additionalProperties"] is not False):
-                reject(path, "expected closed all-required object")
+                reject(path, "expected closed object")
             for name, child in properties.items():
                 visit(child, _path(path, name), active)
         elif concrete == "array":
@@ -924,9 +977,37 @@ class SchemaRules:
 
     def schema_value(self) -> dict[str, object]:
         return strict_json_object(self.canonical_bytes.decode("utf-8"))
+    def provider_schema_value(self) -> dict[str, object]:
+        """Export native JSON Schema without internal property-role annotations."""
+        root = self.schema_value()
+        pending = [root]
+        while pending:
+            node = pending.pop()
+            if type(node) is dict:
+                node.pop("x-swa-property-policy", None)
+                pending.extend(node.get("properties", {}).values())
+                pending.extend(node.get("$defs", {}).values())
+                pending.extend(node.get("anyOf", ()))
+                if "items" in node:
+                    pending.append(node["items"])
+        return root
 
     def findings(self, value: object) -> tuple[str, ...]:
         return _schema_rule_template_query(self, value)
+    def normalized_value(self, value: object) -> object:
+        """Validate a response record, dropping only undeclared extension fields."""
+        root, memo = _schema_template_context(self, value)
+        if memo is None:
+            raise validation_failure(ValueError("response rejected"), "$", "expected bounded JSON value")
+        normalized = _normalize_rule_value(value, root, root, memo)
+        fresh = [root, normalized, {}, 0, memo[4]] if len(memo) == 5 else [root, normalized, {}, 0]
+        issues = tuple(islice(_diagnose(normalized, root, "$", _memo=fresh), _MAX_ISSUES + 1))
+        if issues:
+            failure = ValueError("response schema rejected")
+            bounded = issues[:_MAX_ISSUES] + ((_OMITTED_ISSUES_NOTICE,) if len(issues) > _MAX_ISSUES else ())
+            failure.provider_validation_findings = tuple(ValidationFinding(*item.split(": ", 1)) for item in bounded)
+            raise failure
+        return normalized
     def corrective_facts(self, requirements: tuple[str, ...]) -> tuple[dict[str, object], ...]:
         """Project bounded trusted rules; supplied paths only locate known nodes.
 
@@ -1130,7 +1211,7 @@ def allowed_values(values: Sequence[object]) -> str:
 
 
 _WIRE_DISCRIMINATORS = (
-    "response_type", "action_type", "change_type", "update_type", "review_outcome",
+    "schema_id", "variant_id", "response_type", "action_type", "change_type", "update_type", "review_outcome",
 )
 
 
@@ -1177,7 +1258,11 @@ def _prepare_diagnostic_template(root: object) -> tuple | None:
                     candidates = tuple(_discriminator_schema(variant, name, root) for variant in variants)
                     if all(child is not None and type(child.get("enum")) is tuple for child in candidates):
                         enums = tuple(child["enum"] for child in candidates)
-                        rows.append((name, (enums, tuple(dict.fromkeys(item for values in enums for item in values)))))
+                        allowed = tuple(dict.fromkeys(item for values in enums for item in values))
+                        dispatch = MappingProxyType({item: tuple(variant for variant, values in zip(variants, enums)
+                                                               if item in values)
+                                                     for item in allowed if type(item) is str})
+                        rows.append((name, (enums, allowed, dispatch)))
                 discriminators = MappingProxyType(dict(rows))
                 resolved = tuple(_diagnostic_schema_node(variant, root) for variant in variants)
                 properties = tuple(variant.get("properties") for variant in resolved
@@ -1192,7 +1277,8 @@ def _prepare_diagnostic_template(root: object) -> tuple | None:
                                all(name in variant.get("required", ()) for variant in resolved))
                         for name in names
                     })
-            nodes[id(node)] = (node, target, discriminators, common)
+            nodes[id(node)] = (node, target, discriminators, common,
+                               _object_union_dispatch(variants, root) if variants else None)
             pending.extend(node.values())
     except (TypeError, ValueError, RecursionError):
         # A new preparation must not surface an error from an unvisited branch.
@@ -1200,22 +1286,25 @@ def _prepare_diagnostic_template(root: object) -> tuple | None:
     return (root, prefix[0], MappingProxyType(nodes))
 
 
-def _schema_template_findings(graph: SchemaRules, value: object) -> tuple[str, ...]:
+def _schema_template_context(graph: SchemaRules, value: object) -> tuple:
+    def fallback() -> tuple:
+        schema = graph.schema_value()
+        return schema, _diagnostic_context(value, schema)
     try:
         source = graph._diagnostic_source
         record = graph._diagnostic_template
         anchor = graph._diagnostic_anchor
     except AttributeError:
-        return diagnose_value(value, graph.schema_value())
+        return fallback()
     if (type(source) is not tuple or len(source) != 3
             or source[0] is not graph.canonical_bytes or source[1] is not graph.maximum_bytes
             or type(source[0]) is not bytes or type(source[1]) is not int):
-        return diagnose_value(value, graph.schema_value())
+        return fallback()
     if record is None and anchor is None and source[2] is None:
         schema = graph.schema_value()
         memo = _diagnostic_context(value, schema)
         if memo is None:
-            return diagnose_value(value, schema)
+            return schema, memo
         root = _freeze_diagnostic_schema(schema)
         plan = _prepare_diagnostic_template(root)
         record = (source[0], source[1], root, plan)
@@ -1234,10 +1323,16 @@ def _schema_template_findings(graph: SchemaRules, value: object) -> tuple[str, .
         root = record[2]
         memo = _diagnostic_context(value, root, _prepared=True, _certificate=record[3])
         if memo is None:
-            return diagnose_value(value, graph.schema_value())
+            return fallback()
     else:
-        return diagnose_value(value, graph.schema_value())
-    issues = tuple(islice(_diagnose(value, root, "$", _memo=memo), _MAX_ISSUES + 1))
+        return fallback()
+    return root, memo
+
+
+def _schema_template_findings(graph: SchemaRules, value: object) -> tuple[str, ...]:
+    root, memo = _schema_template_context(graph, value)
+    issues = tuple(islice((_diagnose(value, root, "$") if memo is None else
+                          _diagnose(value, root, "$", _memo=memo)), _MAX_ISSUES + 1))
     if len(issues) > _MAX_ISSUES:
         return (*issues[:_MAX_ISSUES], _OMITTED_ISSUES_NOTICE)
     return issues
@@ -1269,6 +1364,82 @@ def _discriminator_schema(
     if not isinstance(properties, Mapping):
         return None
     return _diagnostic_schema_node(properties.get(discriminator), root_schema)
+
+
+def _object_union_dispatch(variants: Sequence[object], root: Mapping[str, object]) -> tuple | None:
+    """Compile required singleton identities; optional fields never select a branch."""
+    resolved = tuple(_diagnostic_schema_node(variant, root) for variant in variants)
+    if not resolved or any(not isinstance(node, Mapping) or node.get("type") != "object" for node in resolved):
+        return None
+    def literal(node: Mapping[str, object], name: str) -> str | None:
+        if name not in node.get("required", ()):
+            return None
+        child = _discriminator_schema(node, name, root)
+        values = child.get("enum") if child is not None else None
+        return values[0] if isinstance(values, (list, tuple)) and len(values) == 1 and type(values[0]) is str else None
+    for name in ("schema_id", "variant_id"):
+        values = tuple(literal(node, name) for node in resolved)
+        if any(value is None for value in values):
+            continue
+        groups: dict[str, list] = {}
+        for value, node, variant in zip(values, resolved, variants):
+            groups.setdefault(value, []).append((node, variant))
+        entries = {}
+        for value, group in groups.items():
+            if len(group) == 1:
+                entries[value] = (group[0][1], None)
+                continue
+            tags = tuple(literal(node, "variant_id") for node, _ in group)
+            if name == "variant_id" or any(tag is None for tag in tags) or len(set(tags)) != len(tags):
+                raise ValueError("object union requires unique schema_id/variant_id identities")
+            entries[value] = (None, MappingProxyType({tag: variant for tag, (_, variant) in zip(tags, group)}))
+        return name, MappingProxyType(entries)
+    return None
+
+
+def _object_union_choice(value: dict[str, object], dispatch: tuple, path: str) -> tuple:
+    name, entries = dispatch
+    supplied = value.get(name, _ABSENT)
+    entry = entries.get(supplied) if type(supplied) is str else None
+    if entry is None:
+        return None, _issue(_path(path, name), "required offered string identity")
+    selected, variants = entry
+    if variants is not None:
+        supplied = value.get("variant_id", _ABSENT)
+        selected = variants.get(supplied) if type(supplied) is str else None
+        if selected is None:
+            return None, _issue(_path(path, "variant_id"), "required offered string identity")
+    return selected, None
+
+
+def _normalize_rule_value(value: object, schema: Mapping[str, object], root: Mapping[str, object], memo: list) -> object:
+    """Produce fresh data; semantic-map keys remain available for strict validation."""
+    node = _diagnostic_schema_node(schema, root)
+    if node is None:
+        return deepcopy(value)
+    plan = memo[4] if len(memo) == 5 and type(memo[4]) is tuple else None
+    prepared = plan[2].get(id(node)) if plan is not None else None
+    variants = node.get("anyOf")
+    if isinstance(variants, (list, tuple)):
+        dispatch = prepared[4] if prepared is not None else _object_union_dispatch(variants, root)
+        if type(value) is dict and dispatch is not None:
+            selected, issue = _object_union_choice(value, dispatch, "$")
+            return deepcopy(value) if issue else _normalize_rule_value(value, selected, root, memo)
+        # Legacy untagged/scalar unions retain their declared order and validation.
+        for variant in variants:
+            candidate = _normalize_rule_value(value, variant, root, memo)
+            if next(_diagnose(candidate, variant, "$", root, _memo=memo), None) is None:
+                return candidate
+        return deepcopy(value)
+    if type(value) is dict and node.get("type") == "object":
+        properties = node["properties"]
+        preserve = node.get("x-swa-property-policy") == "closed-map"
+        return {name: (_normalize_rule_value(child, properties[name], root, memo)
+                       if name in properties else deepcopy(child))
+                for name, child in value.items() if name in properties or preserve}
+    if type(value) is list and node.get("type") == "array":
+        return [_normalize_rule_value(child, node["items"], root, memo) for child in value]
+    return deepcopy(value)
 
 
 def _diagnose(value: object, schema: Mapping[str, object], path: str, root_schema: Mapping[str, object] | None=None, *, _memo=None) -> Iterator[str]:
@@ -1303,6 +1474,16 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str, root_schem
             if prepared is not None and prepared[0] is not schema:
                 prepared = None
             if type(value) is dict:
+                dispatch = prepared[4] if prepared is not None else _object_union_dispatch(variants, root_schema)
+                if dispatch is not None:
+                    selected, issue = _object_union_choice(value, dispatch, path)
+                    if issue is not None:
+                        yield issue
+                        _successful = False
+                    elif (yield from _diagnose(value, selected, path, root_schema, _memo=_memo)) is not True:
+                        _successful = False
+                    _completed = True
+                    return _successful if _memo is not None else None
                 for discriminator in (*_WIRE_DISCRIMINATORS, 'kind', 'action', 'decision', 'operation'):
                     if discriminator not in value:
                         continue
@@ -1314,7 +1495,7 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str, root_schem
                             continue
                         candidates = prepared_discriminator[0]
                         # Membership yields one match per variant, including duplicate enum items.
-                        matches = [variant for variant, values in zip(variants, candidates) if supplied in values] if type(supplied) is str else []
+                        matches = prepared_discriminator[2].get(supplied, ()) if type(supplied) is str else ()
                     else:
                         candidates = [child for variant in variants if (child := _discriminator_schema(variant, discriminator, root_schema)) is not None and type(child.get('enum')) is schema_sequence]
                         if len(candidates) != len(variants):
@@ -1588,7 +1769,7 @@ def _diagnostic_plain(value: object, root: object, _type=type, _dict=dict, _list
                 pending.append([definitions[name], True, None])
                 virtual_pending += 1
         elif not (node is None or kind is _str or kind is _int or kind is _bool
-                  or kind is _float and _finite(node)):
+                  or kind is _float and _finite(node) or not schema and kind is Decimal and node.is_finite()):
             return False
         remaining -= 1
         if remaining < 0:
@@ -1630,7 +1811,8 @@ def _diagnostic_pins_match(pins: tuple, _type=type, _dict=dict, _tuple=tuple,
 
 def _diagnostic_source_pins() -> tuple:
     # Immutable implementation anchors, never schema/value/results from a diagnosis.
-    own = ("_prepare_diagnostic_template", "MappingProxyType", "_diagnose", "_local_rule", "_diagnostic_schema_node", "_discriminator_schema",
+    own = ("_prepare_diagnostic_template", "_schema_template_context", "_normalize_rule_value",
+           "_object_union_dispatch", "_object_union_choice", "MappingProxyType", "_diagnose", "_local_rule", "_diagnostic_schema_node", "_discriminator_schema",
            "_finite_number", "_matches_type", "json_type", "_same_json_scalar", "_path",
            "_issue", "allowed_values", "_diagnostic_plain", "_diagnostic_pins_match",
            "_PATH_MEMBER", "_MAX_ISSUES", "_OMITTED_ISSUES_NOTICE", "_WIRE_DISCRIMINATORS",
@@ -2919,9 +3101,9 @@ class BoundContract(Generic[_ContractValue]):
             check.require_provenance()
 
     def schema_value(self) -> dict[str, object]:
-        return self.rule_graph.schema_value()
+        return self.rule_graph.provider_schema_value()
 
-    def decode_selected(self, raw: object) -> SelectedContract[_ContractValue]:
+    def validate_value(self, raw: object) -> ValidatedValue:
         try:
             value = strict_json_object(raw, exact_numbers=True) if type(raw) is str else raw
         except ValueError as failure:
@@ -2931,13 +3113,23 @@ class BoundContract(Generic[_ContractValue]):
             ) from None
         if type(value) is not dict or value.get("schema_id") != self.schema_id:
             raise ContractRejection("LEAD_SCHEMA_ID_REJECTED", None, ("$.schema_id: required offered string identity",))
-        requirements = self.rule_graph.findings(value)
-        if requirements:
-            raise ContractRejection("LEAD_SCHEMA_RULE_REJECTED", self.schema_id, requirements)
-        body = deepcopy(value)
-        del body["schema_id"]
         try:
-            typed = self._decode.decode(ValidatedValue(body, self, seal=_CONTRACT_INPUT_SEAL))
+            value = self.rule_graph.normalized_value(value)
+        except (TypeError, ValueError, RecursionError) as failure:
+            raise ContractRejection("LEAD_SCHEMA_RULE_REJECTED", self.schema_id,
+                                    failure_issues(failure) or ("$: expected bounded declared response",)) from None
+        body = dict(value)
+        del body["schema_id"]
+        return ValidatedValue(body, self, seal=_CONTRACT_INPUT_SEAL)
+
+    def decode_selected(self, raw: object) -> SelectedContract[_ContractValue]:
+        return self.decode_validated(self.validate_value(raw))
+
+    def decode_validated(self, value: ValidatedValue) -> SelectedContract[_ContractValue]:
+        if type(value) is not ValidatedValue or value._contract is not self:
+            raise TypeError("typed decoding requires this exact bound contract's validated value")
+        try:
+            typed = self._decode.decode(value)
             result = object.__new__(SelectedContract)
             object.__setattr__(result, "schema_id", self.schema_id)
             object.__setattr__(result, "value", typed)

@@ -201,6 +201,17 @@ claiming acceptance. The runner rollout and remaining gates are tracked in
 
 ## Runtime optimization evidence
 
+For [#874](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/874),
+the maintainer accepted direct alternative dispatch and tolerant production
+consumption of extra response-record properties. Replace obsolete unknown-field
+rejection assertions with acceptance and normalized/typed omission checks. Keep
+required-field, declared-value, semantic-map identity, domain, binding, and
+authorization rejection coverage, strict raw-wire cases, and both native provider
+projections. Preserve exact ordered diagnostics for unchanged contracts; record
+intentional discriminator and unknown-property behavior changes explicitly.
+This authorization does not increase test IDs, subtest caps, source budgets,
+execution ceilings, or permit unrelated scenario removal.
+
 Before changing a validation shortcut, add independent compatibility oracles to
 existing test IDs and run them against the unchanged implementation. Preserve
 exact ordered diagnostics, fallback behavior, input/export mutation checks, test inventory,
