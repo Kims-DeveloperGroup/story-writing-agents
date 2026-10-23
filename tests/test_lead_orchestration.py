@@ -151,7 +151,7 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
             "alternative_keys": finite_fixture_selection(("knows",), ("knows",)),
             "disposition": "used", "reason": "Retain the actual alternative.",
             "residual_cost": "Reader certainty remains limited."} for item in replies}
-        return lead_fixture_response(call, lead_fixture_result({
+        response = lead_fixture_response(call, lead_fixture_result({
             "response_type": "premise_decision_summary", "status": "options",
             "response_text": "Only USER can select this whole premise.",
             "options": [{"option_key": "knows", "premise_text": literal,
@@ -162,6 +162,16 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
                  "reply_dispositions": {key: {**item, "disposition": "modified",
                      "reason": "Move knowledge to the reader."} for key, item in dispositions.items()}}],
             "recommended_option_key": recommendation}), family=0,branch_key="premise-decision-summary-v1:family:1")
+        unexpected = json.loads(response)
+        reply_map = unexpected['agent_action']['task_result']['response_details']['options'][0][
+            'reply_dispositions']
+        case.assertNotIn('not-offered-reply', reply_map)
+        reply_map['not-offered-reply'] = copy.deepcopy(next(iter(reply_map.values())))
+        case.assertTrue(call.contract.rule_graph.findings(unexpected))
+        case.assertTrue(call.contract.rule_graph.provider_projection().findings(unexpected))
+        with case.assertRaises(ValueError):
+            call.contract.decode_response(json.dumps(unexpected, ensure_ascii=False))
+        return response
     case.backend.enqueue_for(LEAD_ORCHESTRATOR, summarize)
     finished = await case.runtime.decide_lead_step(_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
     turn = finished.turn
@@ -4121,6 +4131,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             replies = bad['agent_action']['task_result']['response_details']['options'][0][ 'reply_dispositions']
             replies['reply-A']['disposition'] = 'unavailable'
             self.assertTrue(selected.rule_graph.findings(bad))
+            unexpected = copy.deepcopy(native)
+            reply_map = unexpected['agent_action']['task_result']['response_details']['options'][0][
+                'reply_dispositions']
+            self.assertNotIn('not-offered-reply', reply_map)
+            reply_map['not-offered-reply'] = copy.deepcopy(reply_map['reply-A'])
+            self.assertTrue(selected.rule_graph.findings(unexpected))
+            self.assertTrue(selected.rule_graph.provider_projection().findings(unexpected))
+            with self.assertRaises(ValueError):
+                selected.decode_response(json.dumps(unexpected, ensure_ascii=False))
         scope_record = {'activity': 'review', 'intent': 'authoring', 'schema_version': 3,
             'target_paths': [], 'domains': ['tone_execution'], 'interpretation': 'Literal test scope.',
             'task_id': task['task_id'], 'task_revision': 1,
