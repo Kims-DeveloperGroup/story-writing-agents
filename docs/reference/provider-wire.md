@@ -24,6 +24,23 @@ native rendering through `--json-schema`. The runtime records the actual
 payload and schema in the exchange request. Transport metadata is not part of
 the agent's semantic answer.
 
+Copy the exact alternative identifiers supplied by the current schema. A unique
+`schema_id` identifies an alternative directly. Where the schema declares a
+shared family and a `variant_id`, both identify the selected alternative.
+In a multi-member Lead family, copy the offered `response_details.variant_id`
+literal alongside that branch's other detail fields.
+Optional properties may be absent without changing that selection; do not infer
+an identifier from which optional fields happen to be present.
+
+The provider schema requests only declared properties. The runtime consumer
+ignores extra response-record properties and removes them before typed decoding,
+but it still rejects missing required fields, invalid declared values, and
+unoffered identifiers. This tolerance applies recursively to response records;
+maps of offered identities still enforce their declared key rules. Extra properties
+do not select another alternative or bypass parsing, size, domain, or authorization
+checks. Native schema diagnostics and tolerant runtime consumption therefore have
+different expectations for extra record properties.
+
 | Request property | Meaning and use |
 | --- | --- |
 | `protocol_version` | Identifies the single current agent wire contract. |

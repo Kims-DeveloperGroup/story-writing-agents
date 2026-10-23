@@ -1731,7 +1731,7 @@ _catalog("start_character end_character", "Paired null means whole idea. Otherwi
 _catalog("source_event_digest selected_material_digest", "Host-pinned bare SHA-256 of the exact source report event and exact selected UTF-8 text; neither grants artifact evidence or workflow authority.")
 _catalog("adoption_intent adoption_targets adoption_rule", "Explicit USER authoring/review_only intent and exact targets constrain fresh task@1 proposal work; every assignment retains the selected input.")
 
-DYNAMIC_CHOICE_FIELDS = frozenset({"task_id", "task_revision", "agent_id", "input_source_ids", "source_ids", "evidence_id", "document_change_request_id", "target_artifact_paths", "specialist_ids", "reviewed_proposal_id", "reviewed_proposal_digest", "slot_id", "basis_input_ids"})
+DYNAMIC_CHOICE_FIELDS = frozenset({"variant_id", "task_id", "task_revision", "agent_id", "input_source_ids", "source_ids", "evidence_id", "document_change_request_id", "target_artifact_paths", "specialist_ids", "reviewed_proposal_id", "reviewed_proposal_digest", "slot_id", "basis_input_ids"})
 
 
 _catalog("authoring_assessment authoring_admission", "Structured semantic assessment and host-bound source/task admission respectively. Neither grants READ, confirmation, review, artifact-write or budget authority.")
@@ -1757,6 +1757,7 @@ ENUM_MEANINGS.update({
 # Source-owned nested objects are deliberately literal. Only these protocol
 # containers have runtime-owned child fields that the guide may enumerate.
 _catalog("schema_id", "Echo one complete contract identity offered for this exact physical request; the outer action identity pins its corresponding inner result identity.")
+_catalog("variant_id", "Required offered variant within this response family. Copy its exact declared literal; optional-field presence and unknown fields do not select an alternative.")
 _catalog("response_details", "All remaining fields of the selected response family; copy its closed required shape without legacy aliases or extra fields.")
 _catalog("input_anchor_id", "One offered input actually selected for this specialist; it establishes a nonempty selection without source priority.")
 _catalog("required_input_recipients", "For each required offered source, name an active specialist actually receiving it.")
@@ -2121,7 +2122,7 @@ class WireShapeError(ValueError):
 
 
 def normalize_context_action(value: object, *, finite_source_kinds: bool = False) -> dict:
-    if type(value) is not dict or set(value) != {"agent_action"}:
+    if type(value) is not dict or "agent_action" not in value:
         raise WireShapeError("$", "expected object containing exactly agent_action")
     action = value["agent_action"]
     if type(action) is not dict:
@@ -2131,7 +2132,7 @@ def normalize_context_action(value: object, *, finite_source_kinds: bool = False
         raise WireShapeError("$.action_type", "expected one of search_context, read_context, submit_result")
     kind = {v: k for k, v in ACTION_TYPES.items()}[selected]
     required = {"search": {"action_type", "queries"}, "read": {"action_type", "read_handles"}, "answer": {"action_type", "task_result"}}[kind]
-    if set(action) != required and not (kind == "search" and set(action) == required | {"artifact_directory_prefix"}):
+    if not required.issubset(action):
         raise WireShapeError("$", "expected exact required action properties for " + selected)
     result = {"kind": kind}
     if kind == "search":
@@ -2141,7 +2142,7 @@ def normalize_context_action(value: object, *, finite_source_kinds: bool = False
         result["queries"] = []
         for index, query in enumerate(queries):
             path = f"$.queries[{index}]"
-            if type(query) is not dict or set(query) != {"search_text", "source_types"}:
+            if type(query) is not dict or not {"search_text", "source_types"}.issubset(query):
                 raise WireShapeError(path, "expected object containing exactly search_text, source_types")
             if finite_source_kinds and type(query["source_types"]) is dict:
                 selected = query["source_types"]

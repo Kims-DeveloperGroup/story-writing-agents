@@ -4958,7 +4958,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         original, repair = rejected.validation_details
         self.assertTrue(original.startswith("Original response"))
         self.assertIn("$.response_text: expected string", original)
-        self.assertIn("unexpected properties", original)
+        self.assertNotIn("unexpected properties", original)
         self.assertTrue(repair.startswith("Repair response"))
         self.assertEqual(repair.splitlines()[1:], ["$.response_text: expected strict UTF-8 text"])
         self.assertNotIn(private, repr(rejected.validation_details))
@@ -4980,7 +4980,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(private, repr(outcomes))
 
         responses = ["unused", "unused", json.dumps({"message": 0}),
-                     json.dumps({"message": "Repaired."})]
+                     json.dumps({"message": "Repaired.", private: private})]
         with mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_PHYSICAL_OUTPUTS": json.dumps(responses)}):
             repaired = await bound.converse(
                 self.conversation_request(session_id=session_id, turn_id="repaired_turn")

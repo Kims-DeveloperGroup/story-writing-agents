@@ -149,6 +149,23 @@ correlation, action index, attribution, and read receipts itself. No JSON-encode
 result string or alternate-name decoder is accepted. All built-in result schemas
 use explicit `response_type`; custom result contracts retain their declared schema.
 
+Response alternatives use the identifiers offered by the current contract. A
+unique `schema_id`, or `schema_id` with a declared `variant_id` for a shared
+family, selects one alternative; optional-field presence does not select it.
+The runtime prepares these lookups per immutable schema owner and validates the
+selected alternative without trying unrelated alternatives after a failure.
+Multi-member Lead families offer the required `variant_id` inside
+`response_details`; the runtime removes that routing tag when restoring the
+selected typed domain response.
+
+Provider-facing schemas remain closed. Production consumption ignores unknown
+response-record properties and excludes them from normalized values passed to
+typed decoding, including nested records. Required fields and declared values
+remain validated. Semantic maps retain their declared identity rules:
+an unoffered source or specialist ID is not an ignorable record extension.
+Strict JSON parsing, whole-response limits, schema pairing, current-call binding,
+domain checks, and authorization still apply.
+
 Each provider-bound role receives common protocol instructions. Each call supplies
 `contract_guidance` for its actual inputs and response, and built-in output schemas
 carry field and enum descriptions. Guidance and schema bytes are accounted as part

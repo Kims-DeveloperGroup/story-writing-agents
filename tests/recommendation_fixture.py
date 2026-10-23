@@ -764,7 +764,7 @@ class RecommendationCase(ObjectiveCase):
             outer, inner = offered_fixture_bindings(call, action_type='search_context', response_type=None, family=1)
             encoded = indexed_response({'action_type': 'search_context', 'artifact_directory_prefix': 'core_documents/',
                 'queries': [{'search_text': 'Outline', 'source_types': {'story_document': True}}]},
-                outer_schema_id=outer, inner_schema_id=inner)
+                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
             good, bad = json.loads(encoded), json.loads(encoded)
             bad['agent_action']['artifact_directory_prefix'] = 'core_documents/\n'
             self.assertFalse(call.contract.rule_graph.findings(good))
@@ -799,7 +799,7 @@ class RecommendationCase(ObjectiveCase):
             outer, inner = offered_fixture_bindings(call, action_type='read_context', response_type=None, family=0)
             return indexed_response({'action_type': 'read_context', 'read_handles':
                 finite_fixture_selection(call.contract.offers.issued_handle_aliases, selected)},
-                outer_schema_id=outer, inner_schema_id=inner)
+                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         async def deliver(call, provider):
             import inspect
             from dataclasses import replace
