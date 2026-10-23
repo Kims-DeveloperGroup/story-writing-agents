@@ -4923,14 +4923,19 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                             turn_id="turn_failed",
                         )
                     )
-                self.assertIn("no action was taken", reply.content)
+                extension = label in {"extra", "wrong session", "wrong conversation", "wrong turn"}
+                if extension:
+                    self.assertEqual(reply.content, "visible reply")
+                    self.assertEqual(reply.validation_details, ())
+                else:
+                    self.assertIn("no action was taken", reply.content)
                 self.assertEqual(reply.session_id, session_id)
                 self.assertEqual(reply.conversation_id, "conversation_a")
                 self.assertEqual(reply.turn_id, "turn_failed")
-                self.assertIs(reply.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
-                self.assertEqual(reply.trace.action, "none")
-                self.assertEqual(reply.trace.recovered_fields, ("structured_reply",))
-                self.assertIs(self.thread(session_id)["tainted"], True)
+                self.assertIs(reply.trace.origin, ReplyTraceOrigin.PROVIDER if extension else ReplyTraceOrigin.RUNTIME_FALLBACK)
+                self.assertEqual(reply.trace.action, "reply" if extension else "none")
+                self.assertEqual(reply.trace.recovered_fields, () if extension else ("structured_reply",))
+                self.assertIs(self.thread(session_id)["tainted"], not extension)
                 await bound.converse(
                     self.conversation_request(
                         session_id=session_id,
