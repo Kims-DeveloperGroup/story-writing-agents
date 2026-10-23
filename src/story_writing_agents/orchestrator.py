@@ -2501,7 +2501,6 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
         owners = tuple(LeadResultContractOwner(variant, tasks, (check,)) for variant in variants)
         return LeadStagePolicy(self.stage, offers.call_id, tasks, self.language, offers.offer_digest,
                                current.choice_snapshot(), offers.offer_digest, offers.call_id,
-                               maximum_index_schema_bytes=262_144,
                                owner_declarations=owners)
 
     def _require_status_rule(self) -> None:

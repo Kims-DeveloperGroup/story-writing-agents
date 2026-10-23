@@ -371,7 +371,9 @@ class StructuredOutputValidationTests(unittest.TestCase):
         class ListSubclass(list): pass
         class FloatSubclass(float): pass
         events.clear()
-        for value in (Decimal(1), IntegerSubclass(1), DictSubclass(), ListSubclass(), FloatSubclass(1),
+        self.assertTrue(plain(Decimal(1), {})); self.assertTrue(plain([Decimal("1.25"), {"n": Decimal(2)}], {}))
+        self.assertFalse(plain(None, {"metadata": Decimal(1)}))
+        for value in (Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity"), IntegerSubclass(1), DictSubclass(), ListSubclass(), FloatSubclass(1),
                       TracedSchema(), float("nan"), float("inf"), float("-inf")):
             self.assertFalse(plain(value, {})); self.assertFalse(plain(None, {"metadata": value}))
             for late_scalar in ([value, {}, None, 1.25], [{"nested": value}, None, 1.25]):
@@ -667,6 +669,90 @@ class StructuredOutputValidationTests(unittest.TestCase):
         finally: sys.setprofile(previous_profile)
         self.assertEqual(admissions, [(262_139, True), (262_140, False), (0, True)])
 
+        # Dispatch identities, optional fields, and normalization are independent contracts.
+        import copy
+        def tagged(identity, variant, field, *, optional_hint=False):
+            properties = {'schema_id': {'type': 'string', 'enum': [identity]},
+                          'variant_id': {'type': 'string', 'enum': [variant]}, field: {'type': 'string'}}
+            required = list(properties)
+            if optional_hint: properties['hint'] = {'type': 'string'}
+            return {'type': 'object', 'properties': properties, 'required': required, 'additionalProperties': False}
+        variants = [tagged('questions.v1', 'plain', 'message'),
+                    tagged('questions.v1', 'hint', 'message', optional_hint=True),
+                    tagged('other.v1', 'hint', 'other_message')]
+        choices = {'anyOf': variants}; dispatch_owner = SchemaRules.declare(choices)
+        packets = [{'schema_id': 'questions.v1', 'variant_id': 'plain', 'message': 'plain'},
+                   {'schema_id': 'questions.v1', 'variant_id': 'hint', 'message': 'hint'},
+                   {'schema_id': 'other.v1', 'variant_id': 'hint', 'other_message': 'other'}]
+        dispatched = []
+        def observe_dispatch(frame, event, _result):
+            if event == 'call' and frame.f_code is diagnostics._diagnose.__code__ and frame.f_locals['path'] == '$':
+                fields = frame.f_locals['schema'].get('properties', {})
+                if 'schema_id' in fields and 'variant_id' in fields:
+                    dispatched.append((fields['schema_id']['enum'][0], fields['variant_id']['enum'][0]))
+        previous = sys.getprofile()
+        try:
+            sys.setprofile(observe_dispatch)
+            for value in packets: self.assertEqual(dispatch_owner.findings(value), ())
+            for value in ({**packets[0], 'variant_id': 'unknown'}, {**packets[0], 'schema_id': 'unknown'},
+                          {**packets[0], 'variant_id': 1}, {k: v for k, v in packets[0].items() if k != 'variant_id'}):
+                self.assertTrue(dispatch_owner.findings(value))
+        finally: sys.setprofile(previous)
+        self.assertEqual(dispatched, [('questions.v1', 'plain'), ('questions.v1', 'hint'), ('other.v1', 'hint')])
+        for value in packets:
+            self.assertEqual((diagnose_value(value, choices), dispatch_owner.findings(value)), ((), ()))
+        foreign = {**packets[0], 'hint': 7}
+        self.assertEqual(dispatch_owner.findings(foreign), ('$: contains 1 unexpected properties (names withheld)',))
+        self.assertEqual(dispatch_owner.findings({**packets[1], 'hint': None}), ('$.hint: expected string, got null',))
+        self.assertEqual(dispatch_owner.findings({**packets[1], 'hint': 'present'}), ())
+        nested = SchemaRules.declare(diagnostics.closed_rule({'left': choices, 'right': choices}))
+        pair_value = {'left': packets[1], 'right': packets[2]}
+        self.assertEqual((nested.findings(pair_value), nested.findings(pair_value)), ((), ()))
+        self.assertEqual(nested.findings({'left': packets[1], 'right': {**packets[2], 'other_message': None}}),
+                         ('$.right.other_message: expected string, got null',))
+        unique = {'anyOf': [diagnostics.closed_rule({'schema_id': {'type': 'string', 'enum': [name]},
+                            name: {'type': 'integer'}}) for name in ('first', 'second')]}
+        unique_owner = SchemaRules.declare(unique)
+        self.assertEqual(unique_owner.findings({'schema_id': 'second', 'second': 1}), ())
+        self.assertEqual(unique_owner.findings({'schema_id': 'second', 'second': 'bad'}),
+                         ('$.second: expected integer, got string',))
+        from story_writing_agents.structured_output_validation import ContractOwner, ContractIdentity, BoundContract
+        def normalized(value): return value.as_object()
+        @dataclass(frozen=True)
+        class DispatchOwner(ContractOwner):
+            rules: SchemaRules
+            owner_id = 'fixture.dispatch'; owner_revision = '1'
+            def declare_rules(self): return self.rules
+            def typed_decoder(self): return TypedDecoder('fixture.dispatch.value', '1', normalized)
+            def named_host_checks(self): return ()
+        bound = BoundContract.bind(DispatchOwner(nested), ContractIdentity(b'{}', 65536, '$'))
+        supplied = {'schema_id': bound.schema_id, 'left': foreign, 'right': packets[2], 'extension': {'private': True}}
+        untouched = copy.deepcopy(supplied)
+        expected = {'left': packets[0], 'right': packets[2]}
+        self.assertEqual(bound.decode_selected(supplied).value, expected)
+        self.assertEqual(bound.decode_selected(json.dumps(supplied)).value, expected)
+        self.assertEqual(supplied, untouched)
+        with self.assertRaises(ValueError): bound.decode_selected({**supplied, 'left': {**foreign, 'message': 7}})
+        with self.assertRaises(ValueError): bound.decode_selected({**supplied, 'left': {**foreign, 'variant_id': 'unknown'}})
+        self.assertEqual(bound.decode_selected(supplied).value, expected)
+        token = bound.validate_value(supplied)
+        returned = token.as_object(); returned['left']['message'] = 'changed return'
+        self.assertEqual(bound.decode_validated(token).value, expected)
+        another = BoundContract.bind(DispatchOwner(nested), ContractIdentity(b'{"other":true}', 65536, '$'))
+        with self.assertRaises(TypeError): another.decode_validated(token)
+        self.assertEqual(bound.decode_validated(token).value, expected)
+        map_rule = {**diagnostics.closed_rule({'offered': {'type': 'boolean'}}), 'x-swa-property-policy': 'closed-map'}
+        map_bound = BoundContract.bind(DispatchOwner(SchemaRules.declare(diagnostics.closed_rule({'selection': map_rule}))),
+                                       ContractIdentity(b'{}', 65536, '$'))
+        selected_map = {'schema_id': map_bound.schema_id, 'selection': {'offered': True}}
+        self.assertEqual(map_bound.decode_selected(selected_map).value, {'selection': {'offered': True}})
+        with self.assertRaises(ValueError):
+            map_bound.decode_selected({**selected_map, 'selection': {'offered': True, 'unoffered': True}})
+        self.assertNotIn('x-swa-property-policy', repr(map_bound.schema_value()))
+        self.assertEqual(map_bound.rule_graph.schema_value()['properties']['selection']['x-swa-property-policy'], 'closed-map')
+        exported = bound.schema_value(); exported['properties'].clear()
+        self.assertEqual(bound.decode_selected(supplied).value, expected)
+
     def test_malformed_and_duplicate_json_have_value_free_diagnostics(self) -> None:
         schema = {"type": "object", "properties": {}, "additionalProperties": False}
         from story_writing_agents.structured_output_validation import SchemaRules
@@ -697,6 +783,12 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertEqual(diagnose_json_text('{"message":"ok","optional_count":"bad"}', schema),
             ("$.optional_count: expected integer, got string",), )
         self.assertEqual(diagnose_json_text("{}", schema), ("$.message: required property is missing",), )
+        from story_writing_agents.structured_output_validation import SchemaRules
+        optional = SchemaRules.declare(schema)
+        self.assertEqual((optional.findings({'message': 'ok'}), optional.findings({'message': 'ok', 'optional_count': 1})),
+                         ((), ()))
+        self.assertEqual(optional.findings({'message': 'ok', 'optional_count': None}),
+                         ('$.optional_count: expected integer, got null',))
 
     def test_bounded_chunks_preserve_order_and_over_32k_content(self) -> None:
         properties = {f"field_{index:04d}": {"type": "string"} for index in range(1500)}
@@ -1146,8 +1238,11 @@ class CompactWireDecoderTests(unittest.TestCase):
             {**base, 'agent_action': {**answer_action, "used_handles": True}},
             {**base, 'agent_action': {**answer_action, "extra": 1}}, {'agent_action': {'action_type': 'submit_result'}},
             '{"agent_action":%s,"agent_action":%s}' % tuple(json.dumps(answer_action, separators=(",", ":")) for _ in range(2)))
-        for value in malformed:
-            with self.subTest(value=value): self.assert_malformed(value)
+        for index, value in enumerate(malformed):
+            with self.subTest(value=value):
+                if index in (1, 3, 4, 7, 8):
+                    self.assertEqual(self.decode(value).answer, '{"kind":"answer","message":"Visible.","proposal":null}')
+                else: self.assert_malformed(value)
         self.assert_malformed(base, allowed=("search",))
         self.assert_malformed(_search_wire(self.token, [("x", ["conversation"])]),
                               source_kinds=(ContextSourceKind.WRITING_ARTIFACT,))
@@ -1167,6 +1262,11 @@ class CompactWireDecoderTests(unittest.TestCase):
         ):
             action = {"action_type": "search_context", "artifact_directory_prefix": path_prefix, "queries": queries}
             with self.subTest(search_action=action):
+                if queries == [{'search_text': 'x', 'source_types': ['story_document'], 'extra': True}]:
+                    accepted = self.decode({'agent_action': action}, allowed=('search',))
+                    self.assertEqual(tuple((q.normalized_text, q.source_kinds) for q in accepted.queries),
+                                     (('x', (ContextSourceKind.WRITING_ARTIFACT,)),))
+                    continue
                 failure = self.assert_malformed({'agent_action': action})
                 issues = tuple(issue.removeprefix("Structured reply validation\n") for issue in
                                service_module._context_validation_details(json.dumps({"agent_action": action}), (), failure))
@@ -1178,7 +1278,8 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assert_malformed(_search_wire(self.token, [("x", ["writing_artifact"])]),
             source_kinds=(ContextSourceKind.CONVERSATION,), )
         self.assert_malformed(_read_wire(self.token, ["h1", "h1"])); read_with_extra = _read_wire(self.token, ["h1"])
-        read_with_extra["agent_action"]["extra"] = True; self.assert_malformed(read_with_extra)
+        read_with_extra["agent_action"]["extra"] = True
+        self.assertEqual(self.decode(read_with_extra).handles, (self._resolve_handle('h1'),))
         self.assert_malformed(_search_wire(self.token, [(f"q{i}", ["writing_artifact"])
             for i in range(CONTEXT_ACTION_POLICY.max_queries_per_search + 1)]))
         self.assert_malformed(_read_wire(self.token, [f"h{i}" for i in range(CONTEXT_ACTION_POLICY.max_handles_per_read + 1)]))
@@ -1204,21 +1305,32 @@ class CompactWireDecoderTests(unittest.TestCase):
 
         failure = caught.exception
         self.assertIs( failure.code, service_module.ContextExecutionErrorCode.MALFORMED_ACTION, )
-        self.assertEqual(str(failure), "contextual provider action is malformed"); self.assertIsNone(failure.__cause__)
+        self.assertEqual(str(failure), "contextual provider read action is invalid: `handles` must contain "
+                         "source handles returned by the preceding context search"); self.assertIsNone(failure.__cause__)
         rendered = "\n".join( ( str(failure), repr(failure), repr(failure.__cause__), repr(failure.__context__), ) )
         for private in (self.token, actual_correlation, "PRIVATE critique prose", "\x1b", "\x07", ):
             self.assertNotIn(private, rendered)
+        value['agent_action']['read_handles'] = ['h1']
+        accepted = self.decode(value)
+        self.assertEqual(accepted.handles, (self._resolve_handle('h1'),))
+        self.assertEqual(accepted.correlation, self.correlation)
+        self.assertNotIn(actual_correlation, repr(accepted))
 
     def test_unrelated_malformed_actions_keep_generic_diagnostic(self) -> None:
         cases = ("{", { "correlation": self.token, 'agent_action': {'action_type': 'submit_result',
             "used_handles": []}, }, { "correlation": self.token, 'agent_action': { 'action_type': 'read_context',
             'read_handles': ["h1"], "used_handles": ["h1"], }, }, )
-        for value in cases:
-            with (self.subTest(value=value), self.assertRaises(service_module.ContextExecutionError) as caught,):
-                self.decode(value)
-            self.assertIs(caught.exception.code, service_module.ContextExecutionErrorCode.MALFORMED_ACTION, )
-            self.assertEqual(str(caught.exception), "contextual provider action is malformed", )
-            self.assertIsNone(caught.exception.__cause__)
+        for index, value in enumerate(cases):
+            with self.subTest(value=value):
+                if index == 2:
+                    accepted = self.decode(value)
+                    self.assertEqual(accepted.handles, (self._resolve_handle('h1'),))
+                    self.assertEqual(accepted.correlation, self.correlation)
+                else:
+                    with self.assertRaises(service_module.ContextExecutionError) as caught: self.decode(value)
+                    self.assertIs(caught.exception.code, service_module.ContextExecutionErrorCode.MALFORMED_ACTION)
+                    self.assertEqual(str(caught.exception), "contextual provider action is malformed")
+                    self.assertIsNone(caught.exception.__cause__)
 
     def test_double_encoded_or_invalid_structured_results_reject(self) -> None:
         valid = {"kind": "answer", "message": "Visible.", "proposal": None}
@@ -1226,6 +1338,10 @@ class CompactWireDecoderTests(unittest.TestCase):
                  {**valid, "extra": True}, {**valid, "kind": "unknown"}, [], {**valid, "message": "\ud800"}, None)
         for result in cases:
             with self.subTest(result=result):
+                if result == {**valid, 'extra': True}:
+                    self.assertEqual(self.decode(_answer_wire(self.token, result)).answer,
+                                     '{"kind":"answer","message":"Visible.","proposal":null}')
+                    continue
                 failure = self.assert_malformed(json.dumps(_answer_wire(self.token, result)), allowed=("answer",))
                 if type(result) is dict and result.get("message") == "\ud800":
                     self.assertEqual(failure_issues(failure, path="$.action"),
