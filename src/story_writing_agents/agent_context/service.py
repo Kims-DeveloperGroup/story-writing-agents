@@ -953,18 +953,17 @@ def _bound_action_index(
             allowed_search_source_kinds=eligible.search_source_kinds,
             action_limits=[value for _, value in eligible.action_limits],
             issued_handle_aliases=eligible.issued_handle_aliases,
+            preserve_action_definitions=True,
         )
         action_rule = native["properties"]["agent_action"]
         roots = action_rule.get("anyOf", [action_rule])
-        templates.append((member, native, roots))
+        templates.append((member, roots))
     owners = []
-    for number, branch in enumerate(templates[0][2]):
+    for number, branch in enumerate(templates[0][1]):
         terminal = branch["properties"]["action_type"]["enum"] == ["submit_result"]
-        for captured_member, native, roots in templates if terminal else templates[:1]:
+        for captured_member, roots in templates if terminal else templates[:1]:
             member = captured_member if terminal else None
-            current = deepcopy(roots[number])
-            if "$defs" in native:
-                current["$defs"] = deepcopy(native["$defs"])
+            current = hoist_schema_definitions(roots[number])
             current = rebase_schema_definitions(current, "a")
             rules = SchemaRules.declare(
                 factor_rule_schema(hoist_schema_definitions(current)),
@@ -4049,6 +4048,7 @@ def _context_action_schema(
     allowed_search_source_kinds: tuple[ContextSourceKind, ...],
     action_limits: list[int],
     issued_handle_aliases: tuple[str, ...] = (),
+    preserve_action_definitions: bool = False,
 ) -> dict[str, object]:
     """Build one closed typed action envelope for the exact physical call."""
 
@@ -4173,9 +4173,10 @@ def _context_action_schema(
             _CONTEXT_ACTION_ROOT_DESCRIPTION
         ),
     )
-    schema = hoist_schema_definitions(project_action_schema(schema))
+    projected = project_action_schema(schema)
+    schema = hoist_schema_definitions(projected)
     _validate_provider_schema_node(schema)
-    return schema
+    return projected if preserve_action_definitions else schema
 
 
 def _source_number(source_alias: str) -> int:
