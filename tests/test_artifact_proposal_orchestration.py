@@ -1197,12 +1197,16 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 native_schema, native_answer["properties"]["schema_id"])["enum"][0]
             native_details = fixture_schema_node(
                 native_schema, native_answer["properties"]["response_details"])
-            native_options = (
-                native_details["anyOf"] if "anyOf" in native_details else (native_details,))
+            native_options, native_records = [native_details], []
+            while native_options:
+                option = fixture_schema_node(native_schema, native_options.pop())
+                if "anyOf" in option:
+                    native_options.extend(option["anyOf"])
+                else:
+                    native_records.append(option["properties"])
             artifact_capabilities.append(
                 inner_id == issued_answers[outer_id]
-                and any("artifact_change_proposal" in fixture_schema_node(
-                    native_schema, option)["properties"] for option in native_options))
+                and any("artifact_change_proposal" in properties for properties in native_records))
         self.assertTrue(any(artifact_capabilities))
         read_evidence_id = self.backend.calls[-1].payload["context_observation"]["read_results"][0]["evidence_id"]
         self.assertIn(
