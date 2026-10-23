@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 
-from .structured_output_validation import schema_rule_fingerprints
+from .structured_output_validation import require_native_schema_projection, schema_rule_fingerprints
 
 WIRE_VERSION = "agent-provider-wire-v10"
 BUILTIN_RESULT_CONTRACT_IDS = frozenset({
@@ -429,50 +429,11 @@ def require_schema_projection(
     bound_schema: Mapping, actual_native_schema: Mapping, *,
     declared_lowering: str = "identity",
 ) -> None:
-    """Reject native transport restriction loss before provider submission.
-
-    This pure comparison certifies equivalence to the bound declaration, not
-    opaque native-model keyword support. Only the adapter's proven numeric
-    singleton lowering and an intrinsically-null redundant enum are allowed.
-    """
-    if declared_lowering not in {"identity", "integer_singleton_bounds"}:
-        raise WireShapeError("$", "undeclared schema lowering")
-    expected = deepcopy(dict(bound_schema))
-
-    def lower(node: object) -> None:
-        if type(node) is not dict:
-            return
-        enum = node.get("enum")
-        if enum == [None] and node.get("type") == "null":
-            node.pop("enum")
-        elif (node.get("type") == "integer"
-              and type(enum) is list and len(enum) == 1 and type(enum[0]) is int
-              and abs(enum[0]) <= (1 << 53) - 1
-              and "minimum" not in node and "maximum" not in node):
-            node.pop("enum")
-            node["minimum"] = node["maximum"] = enum[0]
-        for key in ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies"):
-            children = node.get(key)
-            if type(children) is dict:
-                for child in children.values():
-                    lower(child)
-        for key in ("anyOf", "allOf", "oneOf", "prefixItems"):
-            children = node.get(key)
-            if type(children) is list:
-                for child in children:
-                    lower(child)
-        for key in ("items", "additionalProperties", "additionalItems", "unevaluatedProperties", "contains", "propertyNames", "not", "if", "then", "else", "contentSchema"):
-            lower(node.get(key))
-
-    if declared_lowering == "integer_singleton_bounds":
-        lower(expected)
+    """Preserve the provider adapter's projection error boundary."""
     try:
-        original = json.dumps(expected, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-        native = json.dumps(dict(actual_native_schema), sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-    except (TypeError, ValueError, UnicodeError):
-        raise WireShapeError("$", "invalid native schema projection") from None
-    if original != native:
-        raise WireShapeError("$", "native schema projection changed bound restrictions")
+        require_native_schema_projection(bound_schema, actual_native_schema, declared_lowering=declared_lowering)
+    except ValueError as failure:
+        raise WireShapeError("$", str(failure)) from None
 
 
 def _closed(properties: dict) -> dict:
@@ -550,7 +511,10 @@ def project_result_schema(schema: Mapping, contract_id: str) -> dict:
                 types = [{"lead-exploration-response-v1": "lead_exploration", "specialist-assignment-response-v3": "specialist_assignment_result", "consultation-summary-v4": "consultation_summary", "artifact-review-summary-v4": "artifact_review_summary", "premise-analysis-response-v1": "premise_analysis_result", "premise-decision-summary-v1": "premise_decision_summary"}[family]]
             properties = {"response_type": {"type": "string", "enum": types}, **properties}
         result["properties"] = properties
-        result["required"] = list(properties)
+        result["required"] = (["response_type"] if root and known else []) + [
+            _result_field(name, shape) for name in node.get("required", ())
+            if not (root and known and name == "kind")
+        ]
         return result
 
     projected = describe_schema(visit(schema, root=True))

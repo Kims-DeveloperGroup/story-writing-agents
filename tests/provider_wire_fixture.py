@@ -718,7 +718,8 @@ def field_neighbor_cases(packet, property_policies, required_fields):
     for path, value in nodes(packet):
         if type(value) is dict:
             for key in value:
-                optional = not property_policies[path] and key not in required_fields[path]
+                association = key == 'document_change_request_id' and path[-1:] == ('proposal_drafting_request',)
+                optional = association or (not property_policies[path] and key not in required_fields[path])
                 cases.append(((path, key, 'missing'), path + (key,), 'delete', None, optional, None))
             cases.append(((path, 'foreign'), path + ('foreign_branch_field',), 'set', None, False, path))
         if path:
