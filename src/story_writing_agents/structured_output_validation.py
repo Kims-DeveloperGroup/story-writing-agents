@@ -546,6 +546,193 @@ def strict_json_member_text(text: str, member_path: tuple[str, ...]) -> str:
 _RULE_TYPES = frozenset({"object", "array", "string", "integer", "number", "boolean", "null"})
 # Explicit Python str.strip whitespace, without ECMAScript \s differences.
 # UTF-8 byte ceilings remain an owner check, distinct from character counts.
+
+# The exact table used by str.strip()/the existing source-owned nonblank rule.
+SCHEMA_PYTHON_WHITESPACE = "".join(chr(value) for first, last in (
+    (0x09, 0x0D), (0x1C, 0x20), (0x85, 0x85), (0xA0, 0xA0), (0x1680, 0x1680),
+    (0x2000, 0x200A), (0x2028, 0x2029), (0x202F, 0x202F), (0x205F, 0x205F),
+    (0x3000, 0x3000)) for value in range(first, last + 1))
+
+
+def _schema_pattern_tokens(pattern: str) -> Iterator[tuple[int, str, bool]]:
+    """Locate syntax without treating literal/class/comment text as assertions."""
+    in_class = False
+    first_in_class = False
+    class_negation = False
+    verbose = False
+    scopes = []
+    index = 0
+    while index < len(pattern):
+        character = pattern[index]
+        if character == "\\":
+            token = pattern[index:index + 2]
+            yield index, token, not in_class
+            first_in_class = False
+            index += len(token)
+            continue
+        if in_class:
+            yield index, character, False
+            if character == "]" and not first_in_class:
+                in_class = False
+            elif character == "^" and first_in_class and not class_negation:
+                class_negation = True
+            else:
+                first_in_class = False
+            index += 1
+            continue
+        if verbose and character == "#":
+            end = pattern.find("\n", index)
+            end = len(pattern) if end < 0 else end
+            yield index, pattern[index:end], False
+            index = end
+            continue
+        if pattern.startswith("(?#", index):
+            end = index + 3
+            while end < len(pattern):
+                if pattern[end] == "\\" and end + 1 < len(pattern):
+                    end += 2
+                elif pattern[end] == ")":
+                    end += 1
+                    break
+                else:
+                    end += 1
+            yield index, pattern[index:end], False
+            index = end
+            continue
+        if character == "(":
+            end = index + 2
+            while end < len(pattern) and pattern[end] in "aiLmsux-":
+                end += 1
+            if (pattern.startswith("(?", index) and end > index + 2
+                    and end < len(pattern) and pattern[end] in ":)"):
+                added, _, removed = pattern[index + 2:end].partition("-")
+                if pattern[end] == ":":
+                    scopes.append(verbose)
+                verbose = (verbose or "x" in added) and "x" not in removed
+                yield index, pattern[index:end + 1], True
+                index = end + 1
+                continue
+            scopes.append(verbose)
+        elif character == ")" and scopes:
+            verbose = scopes.pop()
+        elif character == "[":
+            in_class = True
+            first_in_class = True
+            class_negation = False
+        yield index, character, True
+        index += 1
+
+
+def compile_schema_pattern(pattern: str) -> re.Pattern[str]:
+    """Compile the canonical strict-EOF token using Python 3.11's equivalent anchor."""
+    if type(pattern) is not str:
+        raise TypeError("schema pattern must be exact text")
+    if r"\z" not in pattern:
+        return re.compile(pattern)
+    pieces = []
+    cursor = 0
+    for index, token, outside in _schema_pattern_tokens(pattern):
+        if outside and token == r"\z":
+            pieces.extend((pattern[cursor:index], r"\Z"))
+            cursor = index + 2
+    pieces.append(pattern[cursor:])
+    return re.compile("".join(pieces))
+
+
+def require_provider_schema_patterns(schema: Mapping[str, object]) -> None:
+    """Reject known unsupported assertions, without certifying a regex dialect.
+
+    Pattern-property locations use source insertion ordinals, such as
+    $.patternProperties[0], so a regex map key never enters diagnostics.
+    Other locations retain their ordinary schema-member paths.
+    """
+    schema_maps = {"properties", "$defs", "definitions", "patternProperties",
+                   "dependentSchemas", "dependencies"}
+    schema_arrays = {"anyOf", "allOf", "oneOf", "prefixItems", "items"}
+    schema_values = {"items", "additionalProperties", "additionalItems", "contains",
+                     "not", "if", "then", "else", "propertyNames",
+                     "unevaluatedProperties", "unevaluatedItems", "contentSchema"}
+
+    def reject_lookaround(pattern, path):
+        if type(pattern) is str and any(
+            outside and token == "(" and (
+                pattern[index:index + 3] in {"(?=", "(?!"}
+                or pattern[index:index + 4] in {"(?<=", "(?<!"})
+            for index, token, outside in _schema_pattern_tokens(pattern)
+        ):
+            raise validation_failure(ValueError("schema rejected"), path,
+                                     "regex lookaround is not supported")
+
+    pending = [(schema, "$")]
+    seen = set()
+    while pending:
+        node, path = pending.pop()
+        if not isinstance(node, Mapping) or id(node) in seen:
+            continue
+        seen.add(id(node))
+        reject_lookaround(node.get("pattern"), _path(path, "pattern"))
+        children = []
+        for keyword, child in node.items():
+            if keyword in schema_maps and isinstance(child, Mapping):
+                for index, (name, value) in enumerate(child.items()):
+                    if keyword == "patternProperties":
+                        child_path = f"{_path(path, keyword)}[{index}]"
+                        reject_lookaround(name, child_path)
+                    else:
+                        child_path = _path(_path(path, keyword), name)
+                    # Schema-valued dependencies are visited; instance arrays
+                    # and strings are skipped by the Mapping guard above.
+                    children.append((value, child_path))
+            elif keyword in schema_arrays and type(child) in (list, tuple):
+                children.extend((value, f"{_path(path, keyword)}[{index}]")
+                                for index, value in enumerate(child))
+            elif keyword in schema_values:
+                children.append((child, _path(path, keyword)))
+        pending.extend(reversed(children))
+
+
+def unicode_scalar_classes(categories: tuple[str, ...], exclusions: tuple[str, ...]) -> tuple[str, ...]:
+    """Derive related consuming alphabets once from the owner's Unicode table.
+
+    Callers freeze these declarations at module construction, never per response.
+    Surrogates are absent as values and as native range endpoints.
+    """
+    if (type(categories) is not tuple or any(type(item) is not str for item in categories)
+            or type(exclusions) is not tuple or not exclusions
+            or any(type(item) is not str for item in exclusions)):
+        raise TypeError("Unicode alphabets require exact category and exclusion tuples")
+    ranges = []
+    if categories:
+        for codepoint in range(0x110000):
+            if 0xD800 <= codepoint <= 0xDFFF or unicodedata.category(chr(codepoint)) in categories:
+                continue
+            if ranges and ranges[-1][1] + 1 == codepoint:
+                ranges[-1] = (ranges[-1][0], codepoint)
+            else:
+                ranges.append((codepoint, codepoint))
+    else:
+        ranges = [(0, 0xD7FF), (0xE000, 0x10FFFF)]
+    def token(codepoint):
+        character = chr(codepoint)
+        return "\\" + character if character in "\\[]^-" else character
+    results = []
+    for excluded in exclusions:
+        points = sorted({ord(character) for character in excluded})
+        selected = []
+        for first, last in ranges:
+            cursor = first
+            for point in points:
+                if cursor <= point <= last:
+                    if cursor < point:
+                        selected.append((cursor, point - 1))
+                    cursor = point + 1
+            if cursor <= last:
+                selected.append((cursor, last))
+        results.append("[" + "".join(token(first) + ("-" + token(last) if first != last else "")
+                                    for first, last in selected) + "]")
+    return tuple(results)
+
+
 NONEMPTY_TEXT_PATTERN = (
     r"^[^\u0000]*[^\u0000\u0009-\u000d\u001c-\u0020\u0085\u00a0"
     r"\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000][^\u0000]*$"
@@ -828,7 +1015,7 @@ def canonical_schema_rules(schema: Mapping[str, object], *, maximum_bytes: int =
                 if type(node["pattern"]) is not str:
                     reject(path, "expected string pattern")
                 try:
-                    re.compile(node["pattern"])
+                    compile_schema_pattern(node["pattern"])
                 except re.error:
                     reject(path, "invalid string pattern")
         elif concrete in {"integer", "number"}:
@@ -1809,7 +1996,7 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str, root_schem
                         _successful = False
         elif type(value) is str:
             pattern = schema.get('pattern')
-            if type(pattern) is str and re.search(pattern, value) is None:
+            if type(pattern) is str and compile_schema_pattern(pattern).search(value) is None:
                 _successful = False
                 yield _issue(path, f'expected pattern {json.dumps(pattern, ensure_ascii=True)}')
             minimum = schema.get('minLength')

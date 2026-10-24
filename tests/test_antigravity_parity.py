@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
+from story_writing_agents.structured_output_validation import require_provider_schema_patterns
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -1140,6 +1141,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                                     backend._antigravity_adapter, "invoke", new=invoke):
                                 result = await provider.invoke_context(request)
                             current = invocations[-1][1]
+                            for final_schema in (request.schema, current.schema):
+                                self.assertIsNone(require_provider_schema_patterns(final_schema))
                             metadata = (type(request), request.scope.agent_id, stage, kind)
                             if index == 0:
                                 self.assertEqual((metadata, current.payload_json),
@@ -1868,6 +1871,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         failure_calls = self.provider_invocations()[-2:]
         self.assertEqual(len(failure_calls), 2)
         for call in failure_calls:
+            self.assertIsNone(require_provider_schema_patterns(call["schema"]))
             self.assertEqual(call['schema']['required'], ['response_type', 'response_text'])
             self.assertNotIn("session_id", call["schema"]["properties"])
             self.assertNotIn("conversation_id", call["schema"]["properties"])

@@ -88,6 +88,28 @@ class StructuredOutputValidationTests(unittest.TestCase):
                 ("a" * 65, False), ("a\n", False), ("a\r", False), ("a\x00", False)):
             self.assertEqual(not rules.findings(value), expected, repr(value))
 
+        from story_writing_agents.structured_output_validation import compile_schema_pattern
+        strict = r"^ok\z"
+        rules = SchemaRules.declare({"type": "string", "pattern": strict})
+        self.assertEqual(rules.schema_value()["pattern"], strict)
+        self.assertFalse(rules.findings("ok"))
+        self.assertTrue(rules.findings("ok\n"))
+        self.assertIsNotNone(compile_schema_pattern(r"^ok$").search("ok\n"))
+        for pattern, text in ((r"\\z", "\\z"), (r"[\\z]", "\\"), (r"[\\z]", "z"),
+                              (r"^\(\?=literal\)\z", "(?=literal)"),
+                              (r"[(?=]", "?"), (r"^(?:ok|yes)\z", "yes"),
+                              (r"(?=ok)ok", "ok")):
+            self.assertIsNotNone(compile_schema_pattern(pattern).fullmatch(text))
+        with self.assertRaises(ValueError) as error:
+            _owned_visible_text_rule({"type": "string", "pattern": r"^A+$"})
+        self.assertIs(type(error.exception), ValueError)
+        self.assertEqual(str(error.exception), "schema rejected")
+        self.assertEqual(failure_issues(error.exception),
+                         ("$.pattern: unproved native text-pattern intersection",))
+        generic = SchemaRules.declare({"type": "string", "pattern": r"^A+$"})
+        self.assertFalse(generic.findings("A"))
+        self.assertTrue(generic.findings("B"))
+
     def test_union_selects_matching_branch_without_other_branch_noise(self) -> None:
         schema = {"anyOf": [{"type": "object", "properties": { "kind": {"type": "string", "enum": ["search"]},
             "query": {"type": "string"}, }, "required": ["kind", "query"], "additionalProperties": False},

@@ -66,6 +66,7 @@ from story_writing_agents.conversations import (CollaborationReadableFieldKey,
 from story_writing_agents.cli import _parse_backend_overrides, build_parser, main
 from story_writing_agents.backend import backend_configuration_snapshot
 from story_writing_agents.structured_output_validation import diagnose_json_text, failure_issues
+from story_writing_agents.structured_output_validation import require_provider_schema_patterns
 from story_writing_agents.agent_context import (
     ContextComponentKind,
     ProviderCallAccounting,
@@ -6231,6 +6232,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         for invocation, control in zip(invocations, controls):
             schema = invocation["schema"]
+            self.assertIsNone(require_provider_schema_patterns(schema))
             self.assertEqual(schema["required"], ["agent_action"])
             self.assertIs(schema["additionalProperties"], False)
             branches = schema["properties"]["agent_action"]["anyOf"]
@@ -6391,8 +6393,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn(private, repr(reply.validation_details))
 
+        for invocation in self.provider_invocations():
+            self.assertIsNone(require_provider_schema_patterns(invocation["schema"]))
+
     def test_retrieval_schema_uses_supported_strict_object_subset(self) -> None:
         schema = AgentBackend._conversation_retrieval_action_schema()
+        self.assertIsNone(require_provider_schema_patterns(schema))
         self.assertEqual(schema.get("type"), "object")
         self.assertNotIn("anyOf", schema)
         self.assertEqual(set(schema["properties"]), {"agent_action"})

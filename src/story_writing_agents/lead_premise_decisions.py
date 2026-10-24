@@ -769,7 +769,7 @@ def premise_question_schema(question_id: str) -> dict[str, object]:
 
 def premise_analysis_schema(input_ids: tuple[str, ...]) -> dict[str, object]:
     alternative = closed_rule({
-        "alternative_key": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$(?![\s\S])"}, "premise_text": _result_text_rule(),
+        "alternative_key": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z"}, "premise_text": _result_text_rule(),
         "rationale": _result_text_rule(), "tradeoffs": _result_strings(maximum=4),
         "basis_input_ids": (array_rule({"type": "string"}, minimum=1, maximum=64) if input_ids is None else _result_strings(input_ids, minimum=1, maximum=64)),
     })
@@ -787,7 +787,7 @@ def premise_analysis_schema(input_ids: tuple[str, ...]) -> dict[str, object]:
 
 def premise_summary_schema(reply_alternatives: tuple[tuple[str, tuple[str, ...]], ...] | None = None,
                            unavailable_reply_ids: tuple[str, ...] = ()) -> dict[str, object]:
-    identifier = {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$(?![\s\S])"}
+    identifier = {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z"}
     rows = []
     for reply_id, keys in ((None, None),) if reply_alternatives is None else reply_alternatives:
         for status in ("used", "modified", "deferred", "rejected", "unavailable"):

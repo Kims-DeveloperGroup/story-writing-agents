@@ -379,6 +379,9 @@ known unsupported lookarounds before adapter launch, including definitions,
 continuations and repair schemas. Existing validation diagnostics identify the
 schema location without printing pattern or story content. The guard does not
 certify the complete provider regex dialect or strip field restrictions.
+Regex keys under `patternProperties` use source insertion ordinals, such as
+`$.patternProperties[0]`, in diagnostics; child schemas and schema-valued
+dependencies are checked too.
 
 Existing owned primitives and canonical-path intersections require equivalent
 rewrites. An unproved implicit intersection fails explicitly before submission;
