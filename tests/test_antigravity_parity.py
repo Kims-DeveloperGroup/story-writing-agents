@@ -1173,6 +1173,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         await case.runtime.lead_turn(case.session_id,
                             case.conversation("lead-conversation"), "Visible lead request.")
                         case.backend.enqueue(lead._current_exploration_outcome(
+                            "Native provisional 한글 possibility.", basis_input_ids=(), select=True))
+                        case.backend.enqueue(lead._current_exploration_outcome(
                             "Native provisional 한글 possibility.", basis_input_ids=()))
                         await case.runtime.lead_turn(case.session_id,
                             case.conversation("lead-exploration-parity"),
@@ -1181,7 +1183,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     else:
                         await lead._confirmed_premise(case, case.conversation("native-premise"))
                 setup_calls.append(len(case.backend.calls))
-        self.assertEqual(([index for index, _ in invocations], setup_calls), ([0, 1, 2, 3], [2, 4]))
+        self.assertEqual(([index for index, _ in invocations], setup_calls),
+                         ([0, 1, 1, 2, 3, 3], [3, 6]))
 
     @staticmethod
     def _process_is_running(pid: int) -> bool:

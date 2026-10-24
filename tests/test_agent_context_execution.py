@@ -582,6 +582,130 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual(tuple((call.payload['response_contract']['action_limits'][
             'remaining_context_actions'] for call in provider.calls)), (2, 1, 0))
 
+        from story_writing_agents.lead_provider_contracts import LeadResultRuleSeed
+        from tests.provider_wire_fixture import result_selection
+        branches = [{'type': 'object', 'description': 'A nonordinary selected result.',
+            'properties': {
+            'response_type': {'type': 'string', 'enum': ['answer'],
+                'description': 'Return the declared semantic response.'},
+            'response_text': {'type': 'string', 'description': 'Visible selected text.'},
+            'choice': {'type': 'string', 'enum': [choice],
+                'description': 'Use the declared first or second alternative.'}},
+            'required': ['response_type', 'response_text', 'choice'],
+            'additionalProperties': False} for choice in ('first', 'second')]
+        factory = replace(_LEAD_CALL_FACTORY, constraints=LeadProviderConstraints(),
+            rule_seed=LeadResultRuleSeed.declare(
+                'lead-discussion-response-v1', {'anyOf': branches}),
+            authorized_validator=lambda _raw, _authorization: None)
+        native = {'response_type': 'answer', 'response_text': 'Selected second.',
+            'choice': 'second'}
+        selected = {}
+
+        def choose(call, _provider):
+            self.assertEqual(call.contract.offered_semantic_schema_ids, ())
+            self.assertEqual(len(call.contract.semantic_index.contracts), 2)
+            response = result_selection(call, response_type='answer', family=1, value=native)
+            identity = json.loads(response)['agent_action']['result_schema_id']
+            member = next(item for item in call.contract.semantic_index.contracts
+                if item.schema_id == identity)
+            selected.update(identity=identity, branch=member.owner.variant.branch_key,
+                rules=member.owner.variant.rules.node_fingerprint(),
+                decoded=call.contract.decode_response(response))
+            return response
+
+        def finish(call, _provider):
+            self.assertEqual(len(call.contract.semantic_index.contracts), 2)
+            self.assertEqual(len(call.contract.offered_semantic_schema_ids), 1)
+            identity = call.contract.offered_semantic_schema_ids[0]
+            self.assertNotEqual(identity, selected['identity'])
+            member = next(item for item in call.contract.semantic_index.contracts
+                if item.schema_id == identity)
+            self.assertEqual((member.owner.variant.branch_key,
+                member.owner.variant.rules.node_fingerprint()),
+                (selected['branch'], selected['rules']))
+            with self.assertRaises(ValueError):
+                call.contract.selection_lineage(selected['decoded'])
+            response = lead_fixture_response(call, lead_fixture_result(native), family=1)
+            stale = json.loads(response)
+            stale['agent_action']['task_result']['schema_id'] = selected['identity']
+            self.assertTrue(call.contract.structural_findings(json.dumps(stale)))
+            return response
+
+        selected_provider = _ScriptedProvider((choose, finish))
+        selected_result = await self.invoke(selected_provider, self.request(
+            operation_id='selection-operation', result_correlation_id='selection-result',
+            invocation_kind=ContextInvocationKind.LEAD, result_contract=factory,
+            physical_call_limit=2, agent_id=LEAD_ORCHESTRATOR))
+        self.assertEqual(len(selected_provider.calls), 2)
+        self.assertEqual(len(selected_result.provider_calls), 2)
+        self.assertEqual(len(selected_provider.responses), 0)
+        self.assertEqual([item.calls for item in selected_provider.finalizers],
+            [[('accepted', None)], [('accepted', None)]])
+        self.assertEqual(json.loads(selected_result.answer)['message'], 'Selected second.')
+
+        from story_writing_agents.structured_output_validation import (
+            require_provider_schema_patterns)
+
+        def advertised(call):
+            wire = {'search': 'search_context', 'read': 'read_context',
+                'answer': 'submit_result', 'select_result': 'select_result'}
+            self.assertEqual(call.payload['response_contract']['allowed_action_types'],
+                [wire[kind] for kind in call.contract.offered_action_kinds])
+            assert_schema_descriptions(self, call.schema)
+            self.assertIsNone(require_provider_schema_patterns(call.schema))
+
+        for current_call in (*provider.calls, *selected_provider.calls):
+            advertised(current_call)
+
+        def read_issued(call, provider):
+            self.assertEqual(len(call.contract.offered_semantic_schema_ids), 1)
+            self.assertTrue(call.contract.offers.issued_handle_aliases)
+            handle = call.contract.offers.issued_handle_aliases[0]
+            provider.used_handles = (handle,)
+            outer, inner = offered_fixture_bindings(call, action_type='read_context',
+                response_type=None, family=0)
+            handles = finite_fixture_read_selection(
+                call.contract.offers.issued_handle_aliases, (handle,))
+            return indexed_response({'action_type': 'read_context', 'read_handles': handles},
+                outer_schema_id=outer, inner_schema_id=inner)
+
+        for label, script, offered_counts in (
+            ('search-refresh', (choose, _search, choose, finish), (0, 1, 0, 1)),
+            ('read-refresh', (_search, choose, read_issued, choose, finish), (0, 0, 1, 0, 1)),
+        ):
+            refreshed = _ScriptedProvider(script)
+            refreshed_result = await self.invoke(refreshed, self.request(
+                operation_id=label, result_correlation_id=label + '-result',
+                invocation_kind=ContextInvocationKind.LEAD, result_contract=factory,
+                physical_call_limit=len(script), agent_id=LEAD_ORCHESTRATOR))
+            self.assertEqual(len(refreshed.calls), len(script))
+            self.assertEqual(len(refreshed_result.provider_calls), len(script))
+            for current_call in refreshed.calls:
+                advertised(current_call)
+            self.assertEqual(tuple(len(call.contract.offered_semantic_schema_ids)
+                for call in refreshed.calls), offered_counts)
+            self.assertEqual([item.calls for item in refreshed.finalizers],
+                [[('accepted', None)]] * len(script))
+            self.assertEqual(json.loads(refreshed_result.answer)['message'], 'Selected second.')
+
+        exhausted = _ScriptedProvider((choose, finish))
+        exhausted_request = self.request(operation_id='selection-exhausted',
+            result_correlation_id='selection-exhausted-result',
+            invocation_kind=ContextInvocationKind.LEAD, result_contract=factory,
+            physical_call_limit=1, agent_id=LEAD_ORCHESTRATOR)
+        with self.assertRaises(ContextExecutionError) as rejected:
+            await self.invoke(exhausted, exhausted_request)
+        self.assertIs(type(rejected.exception), ContextExecutionError)
+        self.assertIs(rejected.exception.code, ContextExecutionErrorCode.ACTION_EXHAUSTED)
+        failure_facts = context_provider_failure_facts(rejected.exception)
+        self.assertTrue(failure_facts.prelaunch_action_exhausted)
+        self.assertIsNone(failure_facts.response_rejection_code)
+        self.assertFalse(failure_facts.timed_out or failure_facts.submission_uncertain)
+        self.assertIsNone(failure_facts.accounting)
+        self.assertEqual(len(exhausted.calls), 0)
+        self.assertEqual(len(exhausted.finalizers), 0)
+        self.assertEqual(len(exhausted.responses), 2)
+
     async def test_local_reference_load_does_not_consume_lead_physical_limit(self) -> None:
         reference = self.reference('reference-operation')
         request = self.request(invocation_kind=ContextInvocationKind.LEAD, result_contract=
@@ -862,6 +986,11 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         self.assertIsNone(inspection.record.ready_checkpoint)
         self.assertEqual(len(provider.tainted), 1)
         self.assertEqual(provider.threads, {})
+
+        completed_failure = context_provider_failure_facts(caught.exception)
+        self.assertFalse(completed_failure.prelaunch_action_exhausted)
+        self.assertFalse(ContextProviderFailureFacts(
+            response_rejection_code=None).prelaunch_action_exhausted)
 
     async def test_prepared_submitted_timeout_cancel_and_malformed_outcomes_are_exact(self) -> None:
         cases: tuple[tuple[str, BaseException | str, ContextLedgerAttemptOutcome, bool], ...] = ((

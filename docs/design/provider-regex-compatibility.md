@@ -35,6 +35,22 @@ primitives and canonical-kind intersections require exact equivalent rewrites;
 an unproved native intersection fails explicitly before submission. Standalone
 supported custom patterns retain their normal interpretation.
 
+A Lead call retains its full eligible semantic index while binding only the complete
+members delivered on that physical call. Ordinary front answers and clarification
+questions can be delivered directly when their original owner declares that policy;
+a current singleton is also delivered directly. Other results require a charged
+selection call followed by a call bound to the chosen complete member. Schema,
+validation, selection guidance and repair remain tied to the same frozen owners.
+An adapter cannot independently prune the full semantic authority.
+
+Selection adds no source evidence, READ receipt or publication authority. Accepted
+Ordinary SEARCH or READ refreshes the eligible contracts and invalidates the selection.
+Repair retains the rejected physical graph and cannot broaden its terminal subset,
+including after retrieval or selection, or grant another repair attempt.
+The existing physical-call and nonterminal-action limits still apply, including the
+selection call and its required successor. Insufficient room is reported before
+provider launch instead of increasing the budget or offering the failing monolith.
+
 The original workspace and failure history remain diagnostic evidence. Native
 syntax probes and the two reported input checks use disposable verification
 state, separate from canonical fake-provider tests and the deferred editorial

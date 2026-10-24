@@ -46,6 +46,7 @@ __all__ = [
     "ContextAnswerAuthorization",
     "ContextEvidenceReceipt",
     "ContextReadAction",
+    "ContextResultSelectionAction",
     "ContextReadObservation",
     "ContextSearchAction",
     "ContextSearchHit",
@@ -141,11 +142,12 @@ _SOURCE_AUTHORITY = {
 
 
 class ContextActionKind(StrEnum):
-    """Substantive actions one agent can request during a context session."""
+    """Typed actions one agent can request during a context session."""
 
     SEARCH = "search"
     READ = "read"
     ANSWER = "answer"
+    SELECT_RESULT = "select_result"
 
 
 class ContextSourceBoundaryKind(StrEnum):
@@ -687,6 +689,23 @@ class ContextReadAction:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextResultSelectionAction:
+    """Choose one complete currently offered result member; grants no authority."""
+
+    correlation: ContextActionCorrelation
+    selected_schema_id: str
+
+    def __post_init__(self) -> None:
+        if type(self.correlation) is not ContextActionCorrelation:
+            raise validation_failure(_invalid(), '$', 'action correlation must match current request')
+        _safe_identity(self.selected_schema_id)
+
+    @property
+    def kind(self) -> ContextActionKind:
+        return ContextActionKind.SELECT_RESULT
+
+
+@dataclass(frozen=True, slots=True)
 class ContextAnswerAction:
     """Request terminal answer authorization using completed read handles."""
 
@@ -718,7 +737,7 @@ class ContextAnswerAction:
         return ContextActionKind.ANSWER
 
 
-ContextAction: TypeAlias = ContextSearchAction | ContextReadAction | ContextAnswerAction
+ContextAction: TypeAlias = ContextSearchAction | ContextReadAction | ContextAnswerAction | ContextResultSelectionAction
 
 
 @dataclass(frozen=True, slots=True)

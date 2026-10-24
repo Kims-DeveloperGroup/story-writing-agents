@@ -146,6 +146,8 @@ from .agent_context.service import (
     ContextAnswerAuthorization,
     ContextEvidenceReceipt,
     ContextExecutionEvent,
+    ContextExecutionError,
+    ContextExecutionErrorCode,
     ContextInvocationKind,
     ContextInvocationRequest,
     ContextInvocationResult,
@@ -12844,6 +12846,21 @@ class StoryRuntime:
                 ):
                     raise
                 facts = context_provider_failure_facts(failure)
+                if (type(failure) is ContextExecutionError
+                        and failure.code is ContextExecutionErrorCode.ACTION_EXHAUSTED
+                        and facts.prelaunch_action_exhausted
+                        and facts.response_rejection_code is None
+                        and not facts.timed_out and not facts.submission_uncertain
+                        and ordinary_front_cap is not None):
+                    return self._structured_fallback_lead_result(
+                        session_id=session_id, conversation_id=conversation_id,
+                        turn_id=turn_id, step_id=step_id,
+                        message=("The remaining context-call budget cannot deliver a complete "
+                                 "current result. No fresh work or authority was prepared. "
+                                 "Clarify the request or start a fresh turn."),
+                        validation_details=("current result selection requires a paid successor call",),
+                        provider_invocation_id=None if provider is None else provider.invocation_id,
+                    )
                 if isinstance(failure, ProviderAuthenticationRequiredError):
                     if (
                         failure.replay_safe and not facts.timed_out
@@ -17461,9 +17478,10 @@ class StoryRuntime:
         )
         future_floor = StoryRuntime._future_authoring_floor(authoring_scope, inputs)
         remaining = COLLABORATION_PHYSICAL_CALL_LIMIT - physical_calls_spent - future_floor
-        synthesis_minimum = (
-            1 + int(bool(reference_input_ids)) if synthesis_required else 0
-        )
+        # Consultation/premise synthesis retains distinct result-owner roots;
+        # selection plus its complete result requires two paid calls. Attached
+        # references are loaded by the host prelude, without a provider call.
+        synthesis_minimum = 2 if synthesis_required else 0
         minimum_required_calls = sum(assignment_call_limits) + synthesis_minimum
         if minimum_required_calls > remaining:
             raise _LeadCallBudgetExceeded(

@@ -1283,7 +1283,9 @@ class CompactWireDecoderTests(unittest.TestCase):
         registry = _registry(_SCOPE, snapshots)
         session = _session(_binding(manifest), registry)
         _mint_handles(session, registry, snapshots)
-        offers = session.contract_offers("optional-reference-call", allowed_actions=("search", "read", "answer"))
+        offers = session.contract_offers("optional-reference-call",
+            allowed_actions=("search", "read", "answer"),
+            remaining_physical_calls=CONTEXT_ACTION_POLICY.max_provider_calls - 1)
         bound = service_module.BoundCallContract.bind(factory, offers)
         self.assertIs(bound.offers, offers)
         self.assertEqual(len(bound.semantic_index.contracts), 1)
@@ -1337,6 +1339,84 @@ class CompactWireDecoderTests(unittest.TestCase):
         invalid["$defs"]["unvisited_invalid"] = {"type": "string", "enum": []}
         with self.assertRaises(ValueError):
             SchemaRules.declare(invalid)
+
+        from story_writing_agents.agent_context.actions import ContextResultSelectionAction
+        from dataclasses import replace
+        # A domain ANSWER outside the ordinary front owner is not direct delivery.
+        branches = [{'type': 'object', 'description': 'A nonordinary selected result.',
+            'properties': {
+            'response_type': {'type': 'string', 'enum': ['answer'],
+                'description': 'Return the declared semantic response.'},
+            'response_text': {'type': 'string', 'description': 'Visible selected text.'},
+            'choice': {'type': 'string', 'enum': [choice],
+                'description': 'Use the declared first or second alternative.'}},
+            'required': ['response_type', 'response_text', 'choice'],
+            'additionalProperties': False} for choice in ('first', 'second')]
+        multiple = replace(factory, rule_seed=LeadResultRuleSeed.declare(
+            'lead-discussion-response-v1', {'anyOf': branches}))
+        selected_bound = service_module.BoundCallContract.bind(multiple, offers)
+        members = selected_bound.semantic_index.contracts
+        self.assertEqual(len(members), 2)
+        self.assertTrue(all(not item.owner.variant.direct_delivery for item in members))
+        self.assertEqual(selected_bound.offered_semantic_schema_ids, ())
+        self.assertEqual(selected_bound.selectable_semantic_schema_ids,
+            tuple(item.schema_id for item in members))
+        self.assertEqual(bound.offered_semantic_schema_ids, (semantic.schema_id,))
+        selectors = [item for item in selected_bound.action_index.contracts
+            if item.rule_graph.literal_at(('action_type',)) == 'select_result']
+        self.assertEqual(len(selectors), 1)
+        selection = {'agent_action': {'schema_id': selectors[0].schema_id,
+            'action_type': 'select_result', 'result_schema_id': members[1].schema_id}}
+        decoded = selected_bound.decode_response(json.dumps(selection))
+        action_value = decoded.domain_value()['action']
+        self.assertEqual(action_value['kind'], 'select_result')
+        self.assertEqual(action_value['selected_schema_id'], members[1].schema_id)
+        typed = ContextResultSelectionAction(
+            _correlation(session.binding, offers.action_index), members[1].schema_id)
+        self.assertIs(type(typed), ContextResultSelectionAction)
+        self.assertEqual(typed.selected_schema_id, members[1].schema_id)
+        lineage = selected_bound.selection_lineage(decoded)
+        self.assertIs(lineage.origin, selected_bound)
+        self.assertEqual((lineage.kind, lineage.selected_schema_id),
+            ('selection', members[1].schema_id))
+        with self.assertRaises(TypeError):
+            service_module.BoundCallLineage(selected_bound, 'selection')
+        for dimension in ('operation_id', 'result_correlation_id'):
+            next_correlation = replace(offers.correlation,
+                action_index=offers.action_index + 1, **{dimension: 'foreign-invocation'})
+            foreign = replace(offers, call_id=offers.call_id + '-foreign',
+                action_index=offers.action_index + 1, correlation=next_correlation,
+                remaining_physical_calls=offers.remaining_physical_calls - 1,
+                action_limits=tuple((name, count - 1 if name == 'nonterminal_actions' else count)
+                    for name, count in offers.action_limits))
+            self.assertEqual(foreign.scope, offers.scope)
+            with self.assertRaises(ValueError):
+                multiple.for_offer(foreign, lineage)
+        for invalid_id in ('foreign-member', None, True, 0):
+            invalid_selection = json.loads(json.dumps(selection))
+            invalid_selection['agent_action']['result_schema_id'] = invalid_id
+            self.assertTrue(selected_bound.structural_findings(json.dumps(invalid_selection)))
+            with self.assertRaises(ValueError):
+                selected_bound.decode_response(json.dumps(invalid_selection))
+        altered = members[0].owner.variant
+        try:
+            object.__setattr__(altered, 'direct_delivery', True)
+            with self.assertRaises(ValueError):
+                selected_bound.require_current_offer(offers)
+        finally:
+            object.__setattr__(altered, 'direct_delivery', False)
+        from tests.provider_wire_fixture import modeled_selection_binding
+        corrective = multiple.for_offer(replace(offers, call_id=offers.call_id + '-repair',
+            remaining_physical_calls=offers.remaining_physical_calls - 1),
+            selected_bound.repair_lineage())
+        self.assertEqual(corrective.rule_graph.schema_value(),
+                         selected_bound.rule_graph.schema_value())
+        selected_repair = modeled_selection_binding(corrective, response_type='answer', family=1)
+        self.assertEqual(selected_repair.phase, 'repair')
+        self.assertEqual(len(selected_repair.offered_semantic_schema_ids), 1)
+        self.assertEqual(selected_repair.selectable_semantic_schema_ids, ())
+        with self.assertRaises(ValueError):
+            selected_repair.repair_lineage()
 
     def test_valid_search_read_and_natural_result_shapes_decode_exactly(self) -> None:
         search = self.decode(_search_wire( self.token, [ ("Needle", ["writing_artifact", "conversation",

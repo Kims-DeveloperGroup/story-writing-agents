@@ -435,40 +435,97 @@ def fixture_variant_value(schema, value):
     return result
 
 
+def fixture_semantic_member(request, *, response_type, family, branch_key=None, value=None):
+    """Resolve the caller's original full family before physical offer filtering."""
+    families = {}
+    for member in request.contract.semantic_index.contracts:
+        graph = member.rule_graph.schema_value()
+        root = fixture_schema_node(graph, graph)
+        declared = fixture_schema_node(graph, root['properties']['response_type'])
+        if response_type not in declared['enum']:
+            continue
+        key = member.owner.variant.branch_key
+        original = key.partition(':partition:')[0]
+        if branch_key is not None and branch_key not in (key, original):
+            continue
+        families.setdefault(original, []).append(member)
+    if type(family) is not int or not 0 <= family < len(families):
+        raise ValueError('The explicitly intended fixture family is not offered')
+    choices = list(families.values())[family]
+    if len(choices) > 1 and value is not None:
+        for member in choices:
+            if _fixture_partition_matches(member.rule_graph.schema_value(), value):
+                return member
+    return choices[0]
+
+
 def offered_fixture_bindings(
-    request, *, action_type, response_type, family, branch_key=None, value=None):
-    """Look up an explicit original family, then route its unchanged finite fixture selectors."""
+    request, *, action_type, response_type, family, branch_key=None, value=None
+):
+    """Pair an explicit original family only when that current member is offered."""
     if action_type != 'submit_result' and response_type is not None:
         raise ValueError('Context-action fixtures have no semantic result family')
     bound = request.contract
     pairs = dict(bound.outer_inner_schema_ids)
-    results = {member.schema_id: member for member in bound.semantic_index.contracts}
-    offered = {}
+    intended = None if action_type != 'submit_result' else fixture_semantic_member(
+        request, response_type=response_type, family=family, branch_key=branch_key, value=value)
+    offered = []
     for member in bound.action_index.contracts:
         if member.rule_graph.literal_at(('action_type',)) != action_type:
             continue
         inner = pairs[member.schema_id]
-        if inner is None:
-            response_types = (None,)
-        else:
-            graph = results[inner].rule_graph.schema_value()
-            root = fixture_schema_node(graph, graph)
-            declared = fixture_schema_node(graph, root['properties']['response_type'])
-            response_types = tuple(declared['enum'])
-        if response_type in response_types:
-            key = member.schema_id if inner is None else results[inner].owner.variant.branch_key
-            original = key.partition(':partition:')[0]
-            if branch_key is not None and (inner is None or branch_key not in (key, original)):
-                continue
-            offered.setdefault(original, []).append((member.schema_id, inner))
-    if type(family) is not int or not 0 <= family < len(offered):
-        raise ValueError('The explicitly intended fixture family was not offered')
-    choices = list(offered.values())[family]
-    if len(choices) > 1 and value is not None:
-        for pair in choices:
-            if _fixture_partition_matches(results[pair[1]].rule_graph.schema_value(), value):
-                return pair
-    return choices[0]
+        if intended is None or inner == intended.schema_id:
+            offered.append((member.schema_id, inner))
+    ordinal = family if intended is None else 0
+    if type(ordinal) is not int or not 0 <= ordinal < len(offered):
+        raise ValueError('The explicitly intended fixture family is not offered')
+    return offered[ordinal]
+
+
+def result_selection(request, *, response_type, family, branch_key=None, value=None):
+    """Return one explicit paid selection response; never invoke or queue a provider."""
+    member = fixture_semantic_member(request, response_type=response_type, family=family,
+        branch_key=branch_key, value=value)
+    if member.schema_id not in request.contract.selectable_semantic_schema_ids:
+        raise ValueError('The explicitly intended fixture member is not selectable')
+    outer, inner = offered_fixture_bindings(request, action_type='select_result',
+        response_type=None, family=0)
+    return indexed_response({'action_type': 'select_result', 'result_schema_id': member.schema_id},
+        outer_schema_id=outer, inner_schema_id=inner)
+
+
+
+def modeled_selection_binding(bound, *, response_type, family, branch_key=None, value=None):
+    """PURE graph model: one selector and paid successor, never provider/ledger evidence."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+    request = SimpleNamespace(contract=bound)
+    member = fixture_semantic_member(request, response_type=response_type, family=family,
+        branch_key=branch_key, value=value)
+    if member.schema_id in bound.offered_semantic_schema_ids:
+        return bound
+    response = result_selection(request, response_type=response_type, family=family,
+        branch_key=branch_key, value=value)
+    lineage = bound.selection_lineage(bound.decode_response(response))
+    offers = bound.offers
+    successor = replace(offers, call_id=offers.call_id + '-modeled-selection',
+        action_index=offers.action_index + 1,
+        correlation=replace(offers.correlation, action_index=offers.action_index + 1),
+        remaining_physical_calls=offers.remaining_physical_calls - 1,
+        action_limits=tuple((name, count - 1 if name == 'nonterminal_actions' else count)
+            for name, count in offers.action_limits))
+    return bound.factory.for_offer(successor, lineage)
+
+
+
+def modeled_fixture_response(bound, value, *, family, branch_key=None):
+    """PURE bound/frame model; no provider submission, ledger charge or authority."""
+    from types import SimpleNamespace
+    selected = modeled_selection_binding(bound, response_type=value['response_type'],
+        family=family, branch_key=branch_key, value=value)
+    frame = lead_fixture_response(SimpleNamespace(contract=selected), value,
+        family=family, branch_key=branch_key)
+    return selected, frame
 
 
 def finite_fixture_selection(choices, selected):

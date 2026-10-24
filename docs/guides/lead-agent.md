@@ -1502,6 +1502,16 @@ lineage has fewer calls left. Runtime constructs feasible allocations before
 confirmation, carries actual spend into round two, and makes round three and
 physical call thirteen unreachable.
 
+A Lead result can require a selection call before its final response. Selection is
+a submitted provider call and a nonterminal context action; it creates no evidence
+or confirmation authority. Ordinary front answers and clarification questions, or
+a current singleton result contract, can return without that extra call. Other
+results need room for selection and the result within the same allocation. Ordinary
+SEARCH or READ invalidates the prior selection; a corrective call retains its
+rejected contract and repair limit. Insufficient room produces typed budget
+exhaustion before launch; it does not increase the allocation or discard known
+specialist replies when synthesis fails.
+
 <a id="reviewed-now-versus-apply-and-commit-later"></a>
 
 ## Exact context capacity

@@ -1,4 +1,4 @@
-"""Private, stateless vocabulary for the agent-provider-wire-v10 protocol.
+"""Private, stateless vocabulary for the agent-provider-wire-v11 protocol.
 
 Only runtime-owned shapes cross this boundary. Story text, opaque identifiers,
 and public persistence serializers are never rewritten by this module.
@@ -14,7 +14,7 @@ import re
 
 from .structured_output_validation import require_native_schema_projection, schema_rule_fingerprints
 
-WIRE_VERSION = "agent-provider-wire-v10"
+WIRE_VERSION = "agent-provider-wire-v11"
 BUILTIN_RESULT_CONTRACT_IDS = frozenset({
     "lead-exploration-response-v1",
     "lead-response-v6", "specialist-assignment-response-v3",
@@ -28,7 +28,8 @@ SOURCE_TYPES = {
     "active_debate": "current_consensus_run", "own_agent_state": "agent_work_history",
     "runtime_input": "current_task_input", "agent_definition": "agent_instructions",
 }
-ACTION_TYPES = {"search": "search_context", "read": "read_context", "answer": "submit_result"}
+ACTION_TYPES = {"search": "search_context", "read": "read_context", "answer": "submit_result",
+                "select_result": "select_result"}
 PHASES = {"draft": "draft_candidate", "audit": "review_candidate",
           "propose_revision": "revise_candidate", "synthesize": "synthesize_reviews",
           "finalize": "confirm_reviewed_proposal"}
@@ -1018,7 +1019,7 @@ def project_context_payload(payload: Mapping, component_paths: Mapping, mandator
         if key == "q":
             phase, actions, sources, limits, contract = value
             result[target] = {"workflow_phase": WORKFLOWS.get(phase, PHASES.get(phase, phase)),
-                              "allowed_action_types": [ACTION_TYPES[{"s": "search", "r": "read", "a": "answer"}[code]] for code in actions],
+                              "allowed_action_types": [ACTION_TYPES[{"s": "search", "r": "read", "a": "answer", "f": "select_result"}[code]] for code in actions],
                               "searchable_source_types": [SOURCE_TYPES[{"w": "writing_artifact", "c": "conversation", "d": "active_debate", "o": "own_agent_state"}[code]] for code in sources],
                               "action_limits": dict(zip(ACTION_LIMIT_NAMES, limits, strict=True)), "result_contract_id": contract[-1]}
         elif key == "docs":
@@ -2086,6 +2087,14 @@ class WireShapeError(ValueError):
 
 
 def normalize_context_action(value: object, *, finite_source_kinds: bool = False) -> dict:
+    if (type(value) is dict and type(value.get("agent_action")) is dict
+            and value["agent_action"].get("action_type") == "select_result"):
+        action = value["agent_action"]
+        if set(value) != {"agent_action"} or set(action) != {"action_type", "schema_id", "result_schema_id"}:
+            raise WireShapeError("$.agent_action", "expected exact current result-selection fields")
+        if type(action["result_schema_id"]) is not str:
+            raise WireShapeError("$.agent_action.result_schema_id", "expected current result identity")
+        return {"action": {"kind": "select_result", "selected_schema_id": action["result_schema_id"]}}
     if type(value) is not dict or "agent_action" not in value:
         raise WireShapeError("$", "expected object containing exactly agent_action")
     action = value["agent_action"]

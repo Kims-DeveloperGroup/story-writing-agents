@@ -1,6 +1,6 @@
 # Agent JSON contract and field guide
 
-Story sends agents the `agent-provider-wire-v10` contract. It uses named
+Story sends agents the `agent-provider-wire-v11` contract. It uses named
 objects, descriptive property names, and full-word enum values. The contract
 applies to contextual collaboration and direct conversation, retrieval, and
 consensus provider calls. Only this contract is accepted; no migration or
@@ -337,7 +337,23 @@ check explicitly and retains the applicable native field restrictions.
 | --- | --- | --- |
 | `search_context` | `queries`, each containing `search_text` and `source_types`; an artifact-only branch can include `artifact_directory_prefix` | Finds sources and issues READ handles. |
 | `read_context` | `read_handles` selected from returned SEARCH results | Retrieves exact authorized content and evidence. |
+| `select_result` | `result_schema_id` copied from the current explained choices | Selects one complete Lead result contract for a charged continuation. |
 | `submit_result` | `task_result` matching the invocation's result schema | Completes the current agent task. |
+
+For a Lead result-selection action, `schema_id` identifies the current outer
+action contract and `result_schema_id` identifies the complete semantic member to
+bind next. Selection does not return `task_result` or create a READ receipt. The
+runtime validates the choice against the full current semantic index and issues
+its own call-local selection capability; the provider never supplies that capability.
+
+Ordinary front answers and clarification questions can be offered directly under
+their original owner policy. A current full-index singleton is also direct. Other
+results require a submitted selection call and a submitted result call, both within
+the existing allowance. The selected successor offers exactly the chosen terminal
+member. Ordinary SEARCH or READ refreshes current facts and invalidates selection.
+Repair keeps the rejected physical graph and its terminal subset through retrieval
+or selection, without granting another repair attempt. If no terminal result
+can fit the remaining allocation, the runtime reports typed exhaustion before launch.
 
 These examples show specialist context responses. Lead responses use the
 offered IDs and finite choice encodings described below. The handle is a

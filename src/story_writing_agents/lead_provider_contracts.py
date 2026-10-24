@@ -84,6 +84,11 @@ class LeadWireVariant:
     branch_key: str
     rules: SchemaRules
     decode: Callable[[dict[str, object]], dict[str, object]] = field(repr=False, compare=False)
+    direct_delivery: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.direct_delivery) is not bool:
+            raise TypeError("direct delivery is a declared whole-member policy")
 
 
 def _small_nonempty_selection(
@@ -497,7 +502,7 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
                       *(item for check in self._declared_checks
                         for item in (check, check.check, check.dependencies)))
         values = (self.owner_id, self.owner_revision, self.variant.branch_key,
-                  self.variant.rules.canonical_bytes, self.variant.rules.maximum_bytes,
+                  self.variant.rules.canonical_bytes, self.variant.rules.maximum_bytes, self.variant.direct_delivery,
                   COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
                   tuple((check.name, check.revision, check.phase, check.context_type,
                          check.corrective_facts) for check in self._declared_checks))
@@ -2466,7 +2471,36 @@ class LeadProviderConstraints:
                             parent[assessment_path[-1]] = decode_current_assessment(parent[assessment_path[-1]])
                         map_current_task_literals(result, tasks)
                         return normalize_result(result, contract.contract_id)
-                    variants.append(LeadWireVariant(f"{contract.contract_id}:{root_number}:{scope_number}:{roster_number}", encoded_rules, decode))
+                    # Direct delivery is a semantic declaration, before physical grouping.
+                # The shared QUESTION/CRITIQUE owner is split by its actual scalar law;
+                # no complete member later has a partially direct response-type enum.
+                    plain_question = (
+                        set(properties) - {"document_change_request_update"}
+                        == {"response_type", "response_text", "writing_task_scope"}
+                        and set(root.get("required", ()))
+                        == {"response_type", "response_text", "writing_task_scope"}
+                        and "clarification_question" in properties["response_type"].get("enum", ())
+                    )
+                    kinds = offered["properties"]["response_type"].get("enum", ())
+                    alternatives = kinds if plain_question else (None,)
+                    for native_kind in alternatives:
+                        member_rules = encoded_rules
+                        if native_kind is not None:
+                            body = deepcopy(offered)
+                            body["properties"]["response_type"]["enum"] = [native_kind]
+                            raw = hoist_schema_definitions(body)
+                            member_rules = SchemaRules.declare(factor_rule_schema(
+                                raw if member_compilation_is_identity(raw) else _compile_closed_choices(raw)),
+                                maximum_bytes=encoded_rules.maximum_bytes)
+                        direct = not self.continuation and (
+                            (ordinary_answer and rule is not None
+                             and rule.activity is AuthoringActivity.WORKFLOW)
+                            or (plain_question and native_kind == "clarification_question")
+                        )
+                        suffix = "" if native_kind is None else "." + native_kind
+                        variants.append(LeadWireVariant(
+                            f"{contract.contract_id}:{root_number}:{scope_number}:{roster_number}{suffix}",
+                            member_rules, decode, direct_delivery=direct))
         if not variants:
             raise ValueError("current Lead stage has no eligible response branch")
         families = []
@@ -2483,9 +2517,9 @@ class LeadProviderConstraints:
                 names = tuple(name for name in source["properties"] if name == "response_text" or
                               name == "response_type" or name.endswith("_result_type"))
                 key = tuple((name, member.rules.node_fingerprint((name,))) for name in names)
-                scalar_groups.setdefault(key, []).append((source, member))
+                scalar_groups.setdefault((member.direct_delivery, key), []).append((source, member))
             family_partitions = []
-            for common_key, group in scalar_groups.items():
+            for (direct_delivery, common_key), group in scalar_groups.items():
                 sources, members = tuple(zip(*group, strict=True))
                 first = sources[0]
                 common_names = tuple(name for name, _ in common_key)
@@ -2652,7 +2686,8 @@ class LeadProviderConstraints:
                 branch_key = f"{contract.contract_id}:family:{root_number}"
                 if len(family_partitions) > 1:
                     branch_key += f":partition:{part_number}"
-                families.append(LeadWireVariant(branch_key, family_rules, family_decode))
+                families.append(LeadWireVariant(branch_key, family_rules, family_decode,
+                    direct_delivery=members[0].direct_delivery))
         return tuple(families)
 
     def prompt_facts(self) -> dict[str, object]:
