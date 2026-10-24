@@ -347,11 +347,10 @@ runtime validates the choice against the full current semantic index and issues
 its own call-local selection capability; the provider never supplies that capability.
 
 Original owners may declare complete direct results: ordinary front answers and
-clarifications, consultation conclusions, recommendations with a qualified
-completed-draft binding, and prepared proposals after exact user confirmation.
-The completed-draft binding freezes the task/revision and qualified source/capture
-provenance in the current policy; source identifiers alone do not establish it.
-Every physical partition of a declared owner remains complete. A current full-index
+clarifications, consultation conclusions, ordinary structured recommendations,
+and prepared proposals after exact user confirmation. Existing source, revision,
+readiness and authority checks still apply to each result. Every physical partition
+of a declared owner remains complete. A current full-index
 singleton is also direct. Other results require a submitted selection call and a
 submitted result call within the existing allowance. The selected successor offers
 exactly the chosen terminal member. Ordinary SEARCH or READ refreshes current facts

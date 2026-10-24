@@ -1513,8 +1513,8 @@ physical call thirteen unreachable.
 A Lead result can require a selection call before its final response. Selection is
 a submitted provider call and nonterminal context action; it creates no evidence
 or confirmation authority. Original owners can offer workflow answers,
-clarifications, draft conclusions, recommendations bound to a qualified completed
-draft, and prepared proposals after exact confirmation directly. A current
+clarifications, draft conclusions, ordinary structured recommendations, and
+prepared proposals after exact confirmation directly. A current
 singleton result contract also needs no selection. Other results need room for
 selection and result within the same allocation. Ordinary SEARCH or READ
 invalidates prior selection; a corrective call retains its rejected contract and

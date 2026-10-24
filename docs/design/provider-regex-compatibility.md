@@ -38,7 +38,7 @@ supported custom patterns retain their normal interpretation.
 A Lead call retains its full eligible semantic index while binding only complete
 members delivered on the physical call. Original owners can declare direct
 delivery for ordinary front answers and clarifications, a consultation conclusion,
-a recommendation bound to a qualified completed draft, and a prepared proposal
+ordinary structured recommendations, and a prepared proposal
 after its exact user confirmation. The declaration covers every complete physical
 partition of that owner. A current full-index singleton is also direct. Other
 results require a charged selection call followed by a call bound to the chosen
