@@ -1146,7 +1146,8 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             service_module.ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED, )
         self.assertEqual( tuple(field.name for field in fields(service_module.ContextProviderFailureFacts) ),
             ( "accounting", "timed_out", "taint_existing_thread", "submitted_accountings",
-            "submission_uncertain", "response_rejection_code", "continuation_rejection", ), )
+            "submission_uncertain", "response_rejection_code", "continuation_rejection",
+             'prelaunch_action_exhausted'), )
         for code in rejection_codes:
             with self.subTest(code=code):
                 facts = service_module.ContextProviderFailureFacts(
@@ -1219,6 +1220,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assertIsNone(caught.exception.__cause__); return caught.exception
 
     def test_schema_is_action_only_and_runtime_correlation_is_exact(self) -> None:
+        from dataclasses import replace
         limits = [4, 2, 2, 4, 8, 8, 16, 200]
         schema = service_module._context_action_schema(allowed_actions=("search", "read", "answer"),
             result_contract=self.result_contract, allowed_search_source_kinds=service_module._SEARCH_SOURCE_KIND_ORDER,
@@ -1341,7 +1343,6 @@ class CompactWireDecoderTests(unittest.TestCase):
             SchemaRules.declare(invalid)
 
         from story_writing_agents.agent_context.actions import ContextResultSelectionAction
-        from dataclasses import replace
         # A domain ANSWER outside the ordinary front owner is not direct delivery.
         branches = [{'type': 'object', 'description': 'A nonordinary selected result.',
             'properties': {

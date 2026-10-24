@@ -822,7 +822,9 @@ class RecommendationCase(ObjectiveCase):
             self.assertFalse(first.offers.issued_handle_aliases)
             self.assertTrue(read_call.offers.issued_handle_aliases)
             repair_offer = replace(first.offers, call_id=first.offers.call_id + '-fixture-repair',
-                                   action_index=first.offers.action_index + 1)
+                                   action_index=first.offers.action_index + 1,
+            correlation=replace(first.offers.correlation,
+                action_index=first.offers.action_index + 1))
             pinned = first.factory.for_offer(repair_offer, first.repair_lineage())
             self.assertIs(pinned.semantic_index, first.semantic_index)
             self.assertIs(pinned.action_index, first.action_index)

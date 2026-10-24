@@ -222,7 +222,7 @@ def direct_response(text, payload):
 
 def assert_guidance(test, payload, schema):
     """Check independently observable guidance, not the runtime's catalog helper."""
-    test.assertEqual(payload["protocol_version"], "agent-provider-wire-v10")
+    test.assertEqual(payload["protocol_version"], "agent-provider-wire-v11")
     guide = payload["contract_guidance"]
     test.assertEqual(set(guide), {"input_fields", "response_rules"})
     for name in payload:
@@ -274,7 +274,7 @@ def capture_sample(call, name=None, *, witness=None, finalizers=None):
         assert name in ('conclude', 'ready', 'prepared')
         bound = call.contract
         assert [item.calls for item in finalizers] == [[('accepted', None)]]
-        assert not bound.structural_findings(witness)
+        assert not bound.structural_findings(json.loads(witness))
         assert bound.decode_response(witness).belongs_to(bound)
         schemas = [canonical_provider_json(call.schema), canonical_provider_json(
             AntigravityAdapter.native_output_schema(call.schema))]
@@ -556,6 +556,26 @@ def modeled_fixture_response(bound, value, *, family, branch_key=None):
         family=family, branch_key=branch_key)
     return selected, frame
 
+
+
+def modeled_fixture_members(bound):
+    """PURE owner-to-current-ID graph inventory; keys never authorize a response."""
+    rows = []
+    for original in bound.semantic_index.contracts:
+        graph = original.rule_graph.schema_value()
+        root = fixture_schema_node(graph, graph)
+        kind = fixture_schema_node(graph, root['properties']['response_type'])['enum'][0]
+        current = modeled_selection_binding(bound, response_type=kind, family=0,
+            branch_key=original.owner.variant.branch_key)
+        matches = [member for member in current.semantic_index.contracts
+                   if member.schema_id in current.offered_semantic_schema_ids
+                   and member.owner is original.owner]
+        if len(matches) != 1:
+            raise ValueError('Modeled physical scope must retain exactly one original owner')
+        rows.append((original.schema_id, current, matches[0].schema_id))
+    if len({current_id for _, _, current_id in rows}) != len(rows):
+        raise ValueError('Modeled owner-to-current-ID inventory must be injective')
+    return tuple(rows)
 
 def finite_fixture_selection(choices, selected):
     """Encode one explicit valid selection in issued order, including false leaves."""

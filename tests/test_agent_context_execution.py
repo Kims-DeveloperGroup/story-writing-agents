@@ -480,7 +480,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
         fingerprint = service_module._execution_policy_fingerprint
         policy, actions, sources = DEFAULT_CONTEXT_PLANNING_POLICY, CONTEXT_ACTION_POLICY, CONTEXT_SOURCE_POLICY
         baseline = fingerprint(policy, actions, sources)
-        self.assertEqual(service_module._CONTEXT_WIRE_VERSION, "agent-provider-wire-v10")
+        self.assertEqual(service_module._CONTEXT_WIRE_VERSION, "agent-provider-wire-v11")
         with mock.patch.object(service_module, "_CONTEXT_WIRE_VERSION", "agent-context-wire-v7"):
             self.assertEqual(fingerprint(policy, actions, sources),
                              "sha256:d8cfd92e6949dbb817dfb7253cff1865642493d46078fa1e042a64ef81740a18")
@@ -577,8 +577,9 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual(tuple((call.payload['response_contract']['result_contract_id'] for call in
             provider.calls)), (_LEAD_CALL_FACTORY.rule_seed.contract_id,) * 3)
         self.assertEqual(tuple((call.payload['response_contract']['allowed_action_types'] for call
-            in provider.calls)), (['search_context', 'submit_result'], ['search_context',
-            'read_context', 'submit_result'], ['submit_result']))
+            in provider.calls)), (['search_context', 'submit_result', 'select_result'],
+             ['search_context', 'read_context', 'submit_result', 'select_result'],
+             ['submit_result']))
         self.assertEqual(tuple((call.payload['response_contract']['action_limits'][
             'remaining_context_actions'] for call in provider.calls)), (2, 1, 0))
 

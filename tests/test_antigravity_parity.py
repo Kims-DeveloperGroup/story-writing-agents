@@ -1650,7 +1650,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             codex_keys.append(
                 'codex:character_custodian:' + invocation.execution_workspace.continuation_digest(
                 'legacy-definition-policy', hashlib.sha256((
-                'agent-provider-wire-v10\x00' + codex_definition.fingerprint).encode()).hexdigest(
+                'agent-provider-wire-v11\x00' + codex_definition.fingerprint).encode()).hexdigest(
                 )).removeprefix('sha256:'))
             return ProviderResult(thread_id='codex-mixed-thread', response_text=direct_response(
                 '{"message":"codex mixed reply"}', json.loads(invocation.payload_json)))

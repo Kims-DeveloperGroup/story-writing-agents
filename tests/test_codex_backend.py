@@ -4424,7 +4424,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CONTEXT_B_USER", second_payload)
         self.assertNotIn("CONTEXT_A_USER", second_payload)
         execution_workspace = await self.direct_execution_workspace(incompatible_bound, "story_session")
-        expected = execution_workspace.continuation_digest("legacy-definition-policy", hashlib.sha256(("agent-provider-wire-v10\0" + incompatible_bound.definition.fingerprint).encode()).hexdigest()).removeprefix("sha256:")
+        expected = execution_workspace.continuation_digest("legacy-definition-policy", hashlib.sha256(("agent-provider-wire-v11\0" + incompatible_bound.definition.fingerprint).encode()).hexdigest()).removeprefix("sha256:")
         threads = self.workspace.read_json("agent_states/orchestrator_state/provider_sessions/story_session.json")["provider_threads"]
         self.assertEqual((threads[f"codex:{PLOT_ARCHITECT}:{expected}"]["fingerprint"],
                           self.thread("story_session")["fingerprint"]), (expected, expected))
