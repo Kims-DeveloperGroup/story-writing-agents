@@ -272,7 +272,7 @@ jobs:
               const reportedCommit = response?.body?.match(/\*\*Reviewed commit:\*\*\s*`([a-f0-9]{10,40})`/)?.[1];
               const requestTime = Date.parse(request.updated_at || request.created_at);
               if (!Number.isFinite(requestTime)) fail('Codex request timestamp is invalid.');
-              if (state.head_sha && response?.body?.startsWith("Codex Review: Didn't find any major issues.") &&
+              if (state.head_sha && response?.body?.replace(/^<!-- codex-review-receipt:v1 -->\s*/, "").startsWith("Codex Review: Didn't find any major issues.") &&
                   reportedCommit && state.head_sha.startsWith(reportedCommit) &&
                   Number.isFinite(Date.parse(response.created_at)) &&
                   Date.parse(response.created_at) >= requestTime) {
