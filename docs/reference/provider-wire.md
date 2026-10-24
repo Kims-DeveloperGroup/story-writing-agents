@@ -346,14 +346,19 @@ bind next. Selection does not return `task_result` or create a READ receipt. The
 runtime validates the choice against the full current semantic index and issues
 its own call-local selection capability; the provider never supplies that capability.
 
-Ordinary front answers and clarification questions can be offered directly under
-their original owner policy. A current full-index singleton is also direct. Other
-results require a submitted selection call and a submitted result call, both within
-the existing allowance. The selected successor offers exactly the chosen terminal
-member. Ordinary SEARCH or READ refreshes current facts and invalidates selection.
-Repair keeps the rejected physical graph and its terminal subset through retrieval
-or selection, without granting another repair attempt. If no terminal result
-can fit the remaining allocation, the runtime reports typed exhaustion before launch.
+Original owners may declare complete direct results: ordinary front answers and
+clarifications, consultation conclusions, recommendations with a qualified
+completed-draft binding, and prepared proposals after exact user confirmation.
+The completed-draft binding freezes the task/revision and qualified source/capture
+provenance in the current policy; source identifiers alone do not establish it.
+Every physical partition of a declared owner remains complete. A current full-index
+singleton is also direct. Other results require a submitted selection call and a
+submitted result call within the existing allowance. The selected successor offers
+exactly the chosen terminal member. Ordinary SEARCH or READ refreshes current facts
+and invalidates selection. Repair keeps the rejected physical graph and its terminal
+subset through retrieval or selection, without granting another repair attempt.
+If no terminal result fits the remaining allocation, the runtime reports typed
+exhaustion before launch.
 
 These examples show specialist context responses. Lead responses use the
 offered IDs and finite choice encodings described below. The handle is a

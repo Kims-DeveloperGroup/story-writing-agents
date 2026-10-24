@@ -1490,6 +1490,14 @@ provider calls. Each invocation receives a disjoint reservation; siblings
 cannot borrow each other's unused calls. A consultation reserves at least one
 lead-synthesis call; a direct advisory reserves zero synthesis calls.
 
+The shared minimum policy reserves the remaining workflow phases. A reference-free
+three-domain final review needs four calls: three reviewers and artifact synthesis.
+Confirmed preparation adds one call; a preceding standalone recommendation adds
+one more. The draft conclusion plus standalone recommendation and a paid inline
+recommendation each use a two-call envelope. Accepted recommendation submissions
+remain charged to their completed-draft lineage. Additional retrieval, corrections
+and follow-ups use the same remaining budget.
+
 Submitted calls include:
 
 - initial provider call;
@@ -1503,14 +1511,15 @@ confirmation, carries actual spend into round two, and makes round three and
 physical call thirteen unreachable.
 
 A Lead result can require a selection call before its final response. Selection is
-a submitted provider call and a nonterminal context action; it creates no evidence
-or confirmation authority. Ordinary front answers and clarification questions, or
-a current singleton result contract, can return without that extra call. Other
-results need room for selection and the result within the same allocation. Ordinary
-SEARCH or READ invalidates the prior selection; a corrective call retains its
-rejected contract and repair limit. Insufficient room produces typed budget
-exhaustion before launch; it does not increase the allocation or discard known
-specialist replies when synthesis fails.
+a submitted provider call and nonterminal context action; it creates no evidence
+or confirmation authority. Original owners can offer workflow answers,
+clarifications, draft conclusions, recommendations bound to a qualified completed
+draft, and prepared proposals after exact confirmation directly. A current
+singleton result contract also needs no selection. Other results need room for
+selection and result within the same allocation. Ordinary SEARCH or READ
+invalidates prior selection; a corrective call retains its rejected contract and
+repair limit. Insufficient room produces typed budget exhaustion before launch
+and preserves completed specialist replies when synthesis fails.
 
 <a id="reviewed-now-versus-apply-and-commit-later"></a>
 

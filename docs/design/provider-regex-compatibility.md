@@ -35,13 +35,15 @@ primitives and canonical-kind intersections require exact equivalent rewrites;
 an unproved native intersection fails explicitly before submission. Standalone
 supported custom patterns retain their normal interpretation.
 
-A Lead call retains its full eligible semantic index while binding only the complete
-members delivered on that physical call. Ordinary front answers and clarification
-questions can be delivered directly when their original owner declares that policy;
-a current singleton is also delivered directly. Other results require a charged
-selection call followed by a call bound to the chosen complete member. Schema,
-validation, selection guidance and repair remain tied to the same frozen owners.
-An adapter cannot independently prune the full semantic authority.
+A Lead call retains its full eligible semantic index while binding only complete
+members delivered on the physical call. Original owners can declare direct
+delivery for ordinary front answers and clarifications, a consultation conclusion,
+a recommendation bound to a qualified completed draft, and a prepared proposal
+after its exact user confirmation. The declaration covers every complete physical
+partition of that owner. A current full-index singleton is also direct. Other
+results require a charged selection call followed by a call bound to the chosen
+complete member. Schema, validation, selection guidance and repair remain tied to
+the same frozen owners. An adapter cannot independently prune semantic authority.
 
 Selection adds no source evidence, READ receipt or publication authority. Accepted
 Ordinary SEARCH or READ refreshes the eligible contracts and invalidates the selection.
