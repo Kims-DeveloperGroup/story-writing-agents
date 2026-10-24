@@ -854,6 +854,7 @@ jobs:
     timeout-minutes: 60
     env:
       TEST_JOB_MINUTES: '60'
+      PYTHONDONTWRITEBYTECODE: '1'
       TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
     steps:
       - name: Record shared test deadline before setup
@@ -881,7 +882,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           pattern: full-*
-          path: full-reports
+          path: ${{ runner.temp }}/full-reports
       - name: Reconcile shard evidence
         run: |
           test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
@@ -891,9 +892,9 @@ jobs:
           fi
           PYTHONPATH=src timeout --signal=INT --kill-after=30s "${test_seconds}s" \
             python -m tests.runner reconcile \
-            full-reports/full-1/full-1.json full-reports/full-2/full-2.json \
-            full-reports/full-3/full-3.json full-reports/full-4/full-4.json \
-            full-reports/full-5/full-5.json \
+            "$RUNNER_TEMP/full-reports/full-1/full-1.json" "$RUNNER_TEMP/full-reports/full-2/full-2.json" \
+            "$RUNNER_TEMP/full-reports/full-3/full-3.json" "$RUNNER_TEMP/full-reports/full-4/full-4.json" \
+            "$RUNNER_TEMP/full-reports/full-5/full-5.json" \
             --json "$RUNNER_TEMP/full-reconciled.json"
       - name: Enforce frozen suite inventory and wall-time budget
         env:
@@ -901,11 +902,11 @@ jobs:
           WALL_TIME_EXCEPTION: ${{ needs.classify.outputs.wall_time_exception }}
         run: |
           budget_args=(--base-ref "$BASE_SHA"
-            --report full-reports/full-1/full-1.json
-            --report full-reports/full-2/full-2.json
-            --report full-reports/full-3/full-3.json
-            --report full-reports/full-4/full-4.json
-            --report full-reports/full-5/full-5.json)
+            --report "$RUNNER_TEMP/full-reports/full-1/full-1.json"
+            --report "$RUNNER_TEMP/full-reports/full-2/full-2.json"
+            --report "$RUNNER_TEMP/full-reports/full-3/full-3.json"
+            --report "$RUNNER_TEMP/full-reports/full-4/full-4.json"
+            --report "$RUNNER_TEMP/full-reports/full-5/full-5.json")
           if [[ "$WALL_TIME_EXCEPTION" == "true" ]]; then
             echo "Maintainer-authorized wall-time exception: measured durations remain visible."
             budget_args+=(--allow-wall-time-overage)

@@ -259,6 +259,12 @@ then obtain all five canonical reports for the current delivery source. Record
 each report's native run and attempt. Isolated attempts retain successful
 same-source evidence; they do not automatically combine reports or certify full CI.
 
+Download shard reports for reconciliation outside the source checkout, under `RUNNER_TEMP`,
+and pass those paths to both reconciliation and the frozen-budget checker. Source snapshots
+include untracked inputs, so downloading evidence into the checkout changes its identity even
+when tracked source is untouched. Reconciliation uses the full workers' bytecode-suppression
+setting; source admission remains enabled.
+
 For [child #872](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/872),
 the sole achievement target is successful completion of every full shard within
 one hour. No separate benchmark, profiling campaign or percentage speedup is
