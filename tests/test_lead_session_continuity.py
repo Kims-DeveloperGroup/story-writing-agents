@@ -4,7 +4,9 @@ from __future__ import annotations
 import hashlib
 from story_writing_agents.conversations import encode_collaboration_event
 from tests.test_collaboration_events import editorial, editorial_request
-from tests.test_lead_orchestration import _exploration_outcome, _visible_outcome
+from tests.test_lead_orchestration import ( _current_exploration_outcome,
+    _exploration_outcome, _visible_outcome,
+)
 from story_writing_agents import lead_exploration as exploration
 
 import asyncio
@@ -42,8 +44,7 @@ from story_writing_agents.conversations.session_context import (
     MAX_SESSION_CONTEXT_UTF8_BYTES,
     SessionContextCapacityError,
     SessionContextHistoryChangedError,
-    SessionHistorySnapshot,
-)
+    SessionHistorySnapshot, )
 from story_writing_agents.conversations import session_context as session_context_module
 from story_writing_agents.conversations.context import CollaborationReadableField, CollaborationReadableFieldKey
 from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
@@ -114,8 +115,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         followups = (
             "Proceed in the order you recommended.",
             "Recall your last recommendation.",
-            "Summarize our current discussion.",
-        )
+            "Summarize our current discussion.", )
         for index, text in enumerate(followups):
             await self.say(second, text, f"Follow-up answer {index}.")
         calls = [call for agent, call in self.backend.call_records if agent == LEAD_ORCHESTRATOR]
@@ -240,7 +240,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(calls[0].continuation_identity, calls[-1].continuation_identity)
         self.assertNotEqual(calls[0].scope, calls[-1].scope)
         provisional = self.conversation("Provisional restart")
-        self.backend.enqueue(_exploration_outcome())
+        self.backend.enqueue(_current_exploration_outcome())
         explored = await self.runtime.lead_turn(self.session_id, provisional, "Explore possible directions.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         restarted = StoryRuntime(self.workspace, self.backend)
         reports = tuple(event.payload.report for event in self.runtime.conversation_storage_services.event_store.read(self.session_id, provisional) if event.kind is CollaborationEventKind.LEAD_EXPLORATION_RESULT)

@@ -10,8 +10,7 @@ from unittest import mock
 
 from story_writing_agents.agents import EXECUTION_SPECIALIST
 from story_writing_agents.errors import WorkspaceFormatError
-from story_writing_agents.writing_artifacts import (
-    ARTIFACT_APPLICATION_SCHEMA_VERSION,
+from story_writing_agents.writing_artifacts import (ARTIFACT_APPLICATION_SCHEMA_VERSION,
     ArtifactApplicationError,
     ArtifactApplicationProvenance,
     ArtifactApplicationRequest,
@@ -26,11 +25,9 @@ from story_writing_agents.writing_artifacts import (
     ArtifactTextHunk,
     build_artifact_change_set,
 )
-from story_writing_agents.writing_artifacts import (
-    _application_store as application_store_module,
+from story_writing_agents.writing_artifacts import (_application_store as application_store_module,
 )
-from story_writing_agents.writing_artifacts.relationship_policy import (
-    ArtifactRelationshipError,
+from story_writing_agents.writing_artifacts.relationship_policy import (ArtifactRelationshipError,
     validate_artifact_relationships,
 )
 from story_writing_agents.writing_artifacts.repository import (
@@ -54,8 +51,7 @@ def _sha256(content: bytes) -> str:
 
 
 def _canonical_json(value: object) -> bytes:
-    return json.dumps(
-        value,
+    return json.dumps(value,
         allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),
@@ -68,8 +64,7 @@ def _current_state(repository: WritingArtifactRepository) -> dict[str, bytes]:
         return repository._applications.current_state()
 
 
-def _request(
-    repository: WritingArtifactRepository,
+def _request(repository: WritingArtifactRepository,
     operation_factory,
     *,
     application_id: str,
@@ -78,31 +73,26 @@ def _request(
 ) -> ArtifactApplicationRequest:
     base = _current_state(repository)
     change_set = build_artifact_change_set(base, tuple(operation_factory(base)))
-    validation = validate_artifact_relationships(
-        base,
+    validation = validate_artifact_relationships(base,
         change_set,
         attached_core_paths=attached_core_paths,
     )
-    provenance = ArtifactApplicationProvenance(
-        application_id=application_id,
+    provenance = ArtifactApplicationProvenance(application_id=application_id,
         candidate_id=f"candidate-{application_id}",
         candidate_revision=candidate_revision,
         candidate_digest="sha256:" + "a" * 64,
         change_set_digest=change_set.change_set_digest,
-        relationship_validation_digest=(
-            application_store_module._relationship_digest(validation)
+        relationship_validation_digest=(application_store_module._relationship_digest(validation)
         ),
     )
-    return ArtifactApplicationRequest(
-        ARTIFACT_APPLICATION_SCHEMA_VERSION,
+    return ArtifactApplicationRequest(ARTIFACT_APPLICATION_SCHEMA_VERSION,
         provenance,
         change_set,
         attached_core_paths,
     )
 
 
-def _apply(
-    repository: WritingArtifactRepository,
+def _apply(repository: WritingArtifactRepository,
     request: ArtifactApplicationRequest,
 ):
     return repository.apply_artifact_changes(request)
@@ -110,8 +100,7 @@ def _apply(
 
 def _seed_five_operation_state(root: Path) -> None:
     root.joinpath(_CORE_CREATE).unlink()
-    for path, content in (
-        (_CORE_PATCH, b"outline-before"),
+    for path, content in ((_CORE_PATCH, b"outline-before"),
         (_MOVE, b"move-content"),
         (_REPLACE, b"opening-before"),
         (_DELETE, b"retired-content"),
@@ -121,8 +110,7 @@ def _seed_five_operation_state(root: Path) -> None:
         destination.write_bytes(content)
 
 
-def _five_operation_request(
-    repository: WritingArtifactRepository,
+def _five_operation_request(repository: WritingArtifactRepository,
     *,
     application_id: str = "application-five",
 ) -> ArtifactApplicationRequest:
@@ -135,19 +123,16 @@ def _five_operation_request(
         core_after = b"outline-after"
         replaced = b"opening-after"
         core_digest = _sha256(core_before)
-        return (
-            ArtifactCreateOperation(
+        return (ArtifactCreateOperation(
                 _CORE_CREATE,
                 ArtifactKind.CORE_DOCUMENT,
                 created,
                 _sha256(created),
             ),
-            ArtifactPatchOperation(
-                _CORE_PATCH,
+            ArtifactPatchOperation(_CORE_PATCH,
                 ArtifactKind.CORE_DOCUMENT,
                 core_digest,
-                (
-                    ArtifactTextHunk(
+                (ArtifactTextHunk(
                         core_digest,
                         0,
                         len(core_before),
@@ -157,29 +142,25 @@ def _five_operation_request(
                 ),
                 _sha256(core_after),
             ),
-            ArtifactRenameOperation(
-                _MOVE,
+            ArtifactRenameOperation(_MOVE,
                 _MOVED,
                 ArtifactKind.MANUSCRIPT,
                 _sha256(move),
                 _sha256(move),
             ),
-            ArtifactReplaceOperation(
-                _REPLACE,
+            ArtifactReplaceOperation(_REPLACE,
                 ArtifactKind.MANUSCRIPT,
                 _sha256(replace_before),
                 replaced,
                 _sha256(replaced),
             ),
-            ArtifactDeleteOperation(
-                _DELETE,
+            ArtifactDeleteOperation(_DELETE,
                 ArtifactKind.MANUSCRIPT,
                 _sha256(deleted),
             ),
         )
 
-    return _request(
-        repository,
+    return _request(repository,
         operations,
         application_id=application_id,
     )
@@ -202,8 +183,7 @@ class _ApplicationStoreTestCase(unittest.TestCase):
 
 
 class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
-    def test_multifile_request_applies_all_five_operations_and_returns_exact_applied_result(
-        self,
+    def test_multifile_request_applies_all_five_operations_and_returns_exact_applied_result(self,
     ) -> None:
         root, repository = self.new_repository()
         _seed_five_operation_state(root)
@@ -213,10 +193,8 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
 
         self.assertIs(result.state, ArtifactApplicationState.APPLIED)
         self.assertEqual(result.application_id, request.application_id)
-        self.assertEqual(
-            result.affected_paths,
-            tuple(
-                sorted(
+        self.assertEqual(result.affected_paths,
+            tuple(sorted(
                     (_CORE_CREATE, _CORE_PATCH, _MOVE, _MOVED, _REPLACE, _DELETE),
                     key=lambda value: value.encode("utf-8"),
                 )
@@ -229,14 +207,11 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
         self.assertEqual((root / _REPLACE).read_bytes(), b"opening-after")
         self.assertFalse((root / _DELETE).exists())
         catalog = repository.catalog()
-        self.assertEqual(
-            tuple(catalog.entries),
+        self.assertEqual(tuple(catalog.entries),
             (_CORE_CREATE, _CORE_PATCH, _MOVED, _REPLACE),
         )
-        self.assertEqual(
-            tuple((item.path, item.sha256) for item in result.final_artifacts),
-            tuple(
-                (path, catalog.entries[path].sha256)
+        self.assertEqual(tuple((item.path, item.sha256) for item in result.final_artifacts),
+            tuple((path, catalog.entries[path].sha256)
                 for path in (_CORE_CREATE, _CORE_PATCH, _MOVED, _REPLACE)
             ),
         )
@@ -244,13 +219,11 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
             tuple((item.source_path, item.destination_path) for item in result.rename_lineage),
             ((_MOVE, _MOVED),),
         )
-        self.assertEqual(
-            tuple(item.path for item in result.deletion_provenance),
+        self.assertEqual(tuple(item.path for item in result.deletion_provenance),
             (_DELETE,),
         )
 
-    def test_each_operation_enforces_presence_absence_and_source_digest_before_journal(
-        self,
+    def test_each_operation_enforces_presence_absence_and_source_digest_before_journal(self,
     ) -> None:
         cases = (("create", "present"),) + tuple(
             (operation, state)
@@ -288,8 +261,7 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
                             ),
                         )
                     if operation == "replace":
-                        return (
-                            ArtifactReplaceOperation(
+                        return (ArtifactReplaceOperation(
                                 path,
                                 ArtifactKind.MANUSCRIPT,
                                 digest,
@@ -298,8 +270,7 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
                             ),
                         )
                     if operation == "rename":
-                        return (
-                            ArtifactRenameOperation(
+                        return (ArtifactRenameOperation(
                                 path,
                                 _MOVED,
                                 ArtifactKind.MANUSCRIPT,
@@ -311,8 +282,7 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
                         ArtifactDeleteOperation(path, ArtifactKind.MANUSCRIPT, digest),
                     )
 
-                request = _request(
-                    repository,
+                request = _request(repository,
                     operations,
                     application_id=f"application-{operation}-{mutation}",
                 )
@@ -327,8 +297,7 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
                     _apply(repository, request)
                 self.assert_no_application_authority(root)
 
-    def test_core_create_patch_replace_succeed_and_core_rename_delete_fail_before_publication(
-        self,
+    def test_core_create_patch_replace_succeed_and_core_rename_delete_fail_before_publication(self,
     ) -> None:
         for operation in ("create", "patch", "replace"):
             with self.subTest(operation=operation):
@@ -362,8 +331,7 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
                             ),
                         )
                     return (
-                        ArtifactReplaceOperation(
-                            path,
+                        ArtifactReplaceOperation(path,
                             ArtifactKind.CORE_DOCUMENT,
                             digest,
                             b"after",
@@ -371,10 +339,8 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
                         ),
                     )
 
-                result = _apply(
-                    repository,
-                    _request(
-                        repository,
+                result = _apply(repository,
+                    _request(repository,
                         operations,
                         application_id=f"application-core-{operation}",
                     ),
@@ -392,10 +358,8 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
                     (root / destination).unlink()
                 base = _current_state(repository)
                 digest = _sha256(base[path])
-                operations = (
-                    (
-                        ArtifactRenameOperation(
-                            path,
+                operations = ((
+                        ArtifactRenameOperation(path,
                             destination,
                             ArtifactKind.CORE_DOCUMENT,
                             digest,
@@ -403,8 +367,7 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
                         )
                     )
                     if operation == "rename"
-                    else ArtifactDeleteOperation(
-                        path,
+                    else ArtifactDeleteOperation(path,
                         ArtifactKind.CORE_DOCUMENT,
                         digest,
                     ),
@@ -444,8 +407,7 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
         self.assertNotIn(b"retired-content", record_bytes)
         self.assertEqual(result.rename_lineage[0].sha256, _sha256(b"move-content"))
 
-    def test_later_applications_preserve_prior_history_and_audit_exact_current_projection(
-        self,
+    def test_later_applications_preserve_prior_history_and_audit_exact_current_projection(self,
     ) -> None:
         root, repository = self.new_repository()
         _seed_five_operation_state(root)
@@ -457,8 +419,7 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
             before = base[_MOVED]
             after = b"move-content-revised"
             return (
-                ArtifactReplaceOperation(
-                    _MOVED,
+                ArtifactReplaceOperation(_MOVED,
                     ArtifactKind.MANUSCRIPT,
                     _sha256(before),
                     after,
@@ -466,8 +427,7 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
                 ),
             )
 
-        second = _request(
-            repository,
+        second = _request(repository,
             operations,
             application_id="application-second",
             candidate_revision=2,
@@ -479,26 +439,21 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
         catalog = repository.catalog()
         self.assertEqual(catalog.entries[_MOVED].application_id, "application-second")
         self.assertEqual(catalog.entries[_MOVED].application_sequence, 2)
-        self.assertEqual(
-            tuple(path.name for path in sorted(first_path.parent.glob("*.json"))),
+        self.assertEqual(tuple(path.name for path in sorted(first_path.parent.glob("*.json"))),
             ("application-five.json", "application-second.json"),
         )
 
     def test_prior_create_only_catalog_transaction_and_commit_shapes_fail_closed_without_rewrite(
         self,
     ) -> None:
-        cases = {
-            "catalog": (
+        cases = {"catalog": (
                 "catalog.json",
                 _canonical_json({"entries": [], "schema_version": 1}),
             ),
-            "transaction": (
-                "transactions/" + "1" * 32 + ".json",
-                _canonical_json(
-                    {
+            "transaction": ("transactions/" + "1" * 32 + ".json",
+                _canonical_json({
                         "catalog_after": {"entries": [], "schema_version": 1},
-                        "catalog_before": {
-                            "exists": False,
+                        "catalog_before": {"exists": False,
                             "image": {"entries": [], "schema_version": 1},
                             "sha256": None,
                         },
@@ -509,8 +464,7 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
                     }
                 ),
             ),
-            "commit": (
-                "commits/" + "2" * 32 + ".json",
+            "commit": ("commits/" + "2" * 32 + ".json",
                 _canonical_json({"schema_version": 1}),
             ),
         }
@@ -526,18 +480,15 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
                 self.assertEqual(destination.read_bytes(), payload)
                 self.assertFalse(tuple(state.joinpath("applications").glob("*.json")))
 
-    def test_temporary_commit_consensus_delegates_to_new_engine_and_persists_only_new_schemas(
-        self,
+    def test_temporary_commit_consensus_delegates_to_new_engine_and_persists_only_new_schemas(self,
     ) -> None:
         root, repository = self.new_repository()
         original = repository._applications.apply_consensus
-        with mock.patch.object(
-            repository._applications,
+        with mock.patch.object(repository._applications,
             "apply_consensus",
             wraps=original,
         ) as delegated:
-            path, updates = repository.commit_consensus(
-                output_path="part-01/consensus.md",
+            path, updates = repository.commit_consensus(output_path="part-01/consensus.md",
                 candidate="consensus text\n",
                 core_updates={"global_outline.md": "outline\n"},
                 session_id="session-1",

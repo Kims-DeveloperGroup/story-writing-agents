@@ -68,6 +68,7 @@ from ..errors import SessionIdError
 from ..reply_trace import ReplyTrace
 from ..structured_output_validation import validate_details
 from ..specialist_routing import (
+    AUTHORING_SCOPE_SCHEMA_VERSION,
     ArtifactReviewDomain,
     AuthoringActivity,
     AuthoringIntent,
@@ -77,6 +78,7 @@ from ..specialist_routing import (
     AuthoringDependencySlot,
     ReviewBasis,
     SpecialistAssignmentMode,
+    authoring_scope_rules, legal_specialist_rosters,
     required_authoring_specialists,
     required_authoring_domains,
     artifact_domain,
@@ -99,6 +101,7 @@ from ..writing_artifacts import (
     ArtifactApplicationRequest,
     ArtifactApplicationResult,
     ArtifactApplicationState,
+    parse_artifact_references,
     canonical_artifact_kind,
     deserialize_artifact_application_request,
     deserialize_artifact_application_result,
@@ -513,6 +516,35 @@ class CollaborationLeadEvidence:
         if len(correlations) > 1:
             raise ValueError("lead evidence receipts must share one invocation")
 
+    def factual_writing_read_facts(self) -> tuple[tuple[str, str, bool], ...]:
+        """Project nonempty writing READ receipts without granting source authority.
+
+        The boolean describes the receipt boundary: an explicit range remains
+        ranged even when its content happens to cover the entire source.
+        """
+        facts: list[tuple[str, str, bool]] = []
+        for receipt in self.receipts:
+            if (receipt.acquisition not in {
+                    CollaborationEvidenceAcquisition.READ,
+                    CollaborationEvidenceAcquisition.ATTACHED_REFERENCE,
+                } or receipt.source_state is not CollaborationInputState.PRESENT
+                    or receipt.utf8_bytes <= 0 or receipt.source_kind not in {
+                        CollaborationInputKind.CORE_DOCUMENT,
+                        CollaborationInputKind.MANUSCRIPT,
+                        CollaborationInputKind.WRITING_ARTIFACT,
+                    }):
+                continue
+            path = receipt.locator
+            whole_source = receipt.boundary_kind == "whole"
+            if receipt.acquisition is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE:
+                references = parse_artifact_references(receipt.locator).references
+                if len(references) != 1 or references[0].token != receipt.locator:
+                    raise ValueError("factual READ reference is not exact")
+                path = references[0].path
+                whole_source = references[0].line_range is None
+            facts.append((receipt.evidence_id, path, whole_source))
+        return tuple(facts)
+
 
 @dataclass(frozen=True, slots=True)
 class CollaborationLeadJudgmentPayload:
@@ -542,7 +574,9 @@ class CollaborationLeadJudgmentPayload:
         _validate_visible_text(self.message, label="lead judgment message")
         if type(self.evidence) is not CollaborationLeadEvidence:
             raise TypeError("lead judgment evidence must be CollaborationLeadEvidence")
-        _validate_lead_evidence_matrix(self.kind, self.evidence)
+        _validate_lead_evidence_matrix(
+            self.kind, self.evidence, authoring_scope=self.authoring_scope,
+        )
         _validate_authoring_evidence_scope(self.authoring_scope, self.evidence.scope)
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("lead judgment trace must be ReplyTrace or None")
@@ -570,9 +604,61 @@ class CollaborationLeadOutcomeFailurePayload:
         _validate_identifier(self.call_id, label="lead failure call ID")
 
 
+def lead_outcome_scope_paths(
+    kind: LeadOutcomeKind,
+    activity: AuthoringActivity,
+    domains: tuple[ArtifactReviewDomain, ...],
+    writing_read_facts: tuple[tuple[str, str, bool], ...],
+    *,
+    target_paths: tuple[str, ...] = (),
+    ordinary_answer: bool = False,
+) -> tuple[str, ...] | None:
+    """Derive current Lead kind/scope eligibility without granting authority.
+
+    None means unavailable; an empty tuple is a valid WORKFLOW result. Existing
+    substantive QUESTION/PROPOSAL/RECOMMENDATION scopes retain their targets.
+    Ordinary factual ANSWER requires REVIEW and returns canonical writing-READ
+    paths in offered order. Whole and ranged READs may both support inspection.
+    """
+    if (type(kind) is not LeadOutcomeKind or type(ordinary_answer) is not bool
+            or type(activity) is not AuthoringActivity
+            or type(domains) is not tuple
+            or any(type(domain) is not ArtifactReviewDomain for domain in domains)
+            or len(set(domains)) != len(domains)
+            or type(target_paths) is not tuple
+            or any(type(path) is not str for path in target_paths)
+            or len(set(target_paths)) != len(target_paths)
+            or type(writing_read_facts) is not tuple
+            or any(type(fact) is not tuple or len(fact) != 3
+                   or type(fact[0]) is not str or not fact[0]
+                   or type(fact[1]) is not str or not fact[1]
+                   or type(fact[2]) is not bool for fact in writing_read_facts)):
+        raise ValueError("Lead outcome scope requires exact current kind and READ facts")
+    if activity is AuthoringActivity.WORKFLOW:
+        return () if not domains and not target_paths else None
+    if not domains:
+        return None
+    if kind in (LeadOutcomeKind.QUESTION, LeadOutcomeKind.PROPOSAL,
+                LeadOutcomeKind.RECOMMENDATION):
+        return target_paths
+    if (kind is not LeadOutcomeKind.ANSWER or not ordinary_answer
+            or activity is not AuthoringActivity.REVIEW):
+        return None
+    read_domains = {
+        locator: artifact_domain(locator) for _, locator, _ in writing_read_facts
+    }
+    if not set(domains).issubset(set(read_domains.values())):
+        return None
+    paths = tuple(path for path, domain in read_domains.items() if domain in domains)
+    if not set(target_paths).issubset(paths):
+        return None
+    return paths
+
+
 def _validate_lead_evidence_matrix(
     kind: LeadOutcomeKind,
-    evidence: CollaborationLeadEvidence,
+    evidence: CollaborationLeadEvidence, *,
+    authoring_scope: AuthoringScope | None = None,
 ) -> None:
     receipts = evidence.receipts
     if evidence.scope is LeadOutcomeScope.PREMISE_ANALYSIS:
@@ -673,6 +759,16 @@ def _validate_lead_evidence_matrix(
             LeadOutcomeKind.RECOMMENDATION,
             LeadOutcomeKind.PROPOSAL,
         }
+        if (kind is LeadOutcomeKind.ANSWER
+                and type(authoring_scope) is AuthoringScope
+                and authoring_scope.schema_version == AUTHORING_SCOPE_SCHEMA_VERSION
+                and authoring_scope.activity is AuthoringActivity.REVIEW):
+            writing_reads = evidence.factual_writing_read_facts()
+            if writing_reads and lead_outcome_scope_paths(
+                kind, authoring_scope.activity, required_authoring_domains(authoring_scope),
+                writing_reads, target_paths=authoring_scope.target_paths, ordinary_answer=True,
+            ) is not None:
+                allowed.add(LeadOutcomeKind.ANSWER)
     else:
         distinct = {
             (
@@ -7339,6 +7435,9 @@ def _validate_scoped_assignments(
     specialist_ids: tuple[str, ...],
     modes: tuple[SpecialistAssignmentMode | None, ...],
     premise_decision: PremiseQuestionIntent | None = None,
+    *,
+    _scope_rules=authoring_scope_rules,
+    _rosters=legal_specialist_rosters,
 ) -> None:
     if premise_decision is not None:
         if type(premise_decision) is not PremiseQuestionIntent or scope is not None:
@@ -7377,8 +7476,14 @@ def _validate_scoped_assignments(
     if scope.schema_version < 3 and SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT in modes:
         raise ValueError('legacy assignments cannot acquire constraint duties')
     required = required_authoring_specialists(scope)
-    if scope.schema_version == 3 and set(specialist_ids) != set(required):
-        raise ValueError('scope3 assignments must match the complete declared specialist union')
+    if scope.schema_version == 3:
+        declared = _scope_rules(
+            scope.activity, scope.intent, scope.domains, scope.contributions,
+            target_paths=scope.target_paths, dependency_slots=scope.dependency_slots,
+            schema_version=scope.schema_version,
+        )
+        if specialist_ids not in _rosters(declared):
+            raise ValueError('scope3 assignments must match the complete declared specialist union')
     if any(
         mode is not (assignment_mode_for_specialist(scope, specialist_id) if scope.schema_version == 3 else expected_mode)
         for specialist_id, mode in zip(specialist_ids, modes, strict=True)
@@ -7738,6 +7843,7 @@ __all__ = [
     "LeadRecommendationState",
     "authoring_scope_from_dict",
     "authoring_scope_to_dict",
+    "lead_outcome_scope_paths",
     "review_basis_from_dict",
     "review_basis_to_dict",
     "ARTIFACT_REVIEW_SCHEMA_VERSION",

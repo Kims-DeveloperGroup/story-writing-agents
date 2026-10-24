@@ -963,6 +963,7 @@ class _RepositoryReferenceReadInvocation:
                     result = ReferenceReadResult(
                         self.request,
                         delivery.contents,
+                        authorized_references=delivery.authorized_references,
                     )
                 finally:
                     delivery.close()

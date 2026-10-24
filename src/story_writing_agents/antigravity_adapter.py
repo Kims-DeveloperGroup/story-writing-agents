@@ -1,6 +1,8 @@
 """Antigravity-specific binding, command, and structured-JSON adapter."""
 
 from __future__ import annotations
+from .structured_output_validation import strict_json_member_text
+
 from .provider_wire import common_contract_guide
 
 import asyncio
@@ -1905,8 +1907,8 @@ class AntigravityAdapter:
     ) -> ProviderResult:
         """Decode one Antigravity JSON result with fixed diagnostics."""
 
-        terminal = cls._parse_result(stdout)
-        terminal = cls._unwrap_result_envelope(terminal)
+        outer_terminal = cls._parse_result(stdout)
+        terminal = cls._unwrap_result_envelope(outer_terminal)
         native_error = terminal.get("error")
         recoverable_error = (
             terminal.get("status") == "ERROR"
@@ -1937,14 +1939,13 @@ class AntigravityAdapter:
         if type(structured_output) is not dict or type(schema_echo) is not dict:
             cls._malformed_output()
         try:
+            canonical_provider_json(structured_output)
             expected_schema_bytes = canonical_provider_json(
                 cls.native_output_schema(expected_schema)
             )
             echoed_schema_bytes = canonical_provider_json(schema_echo)
-            response_text = canonical_provider_json(structured_output).decode(
-                "utf-8",
-                errors="strict",
-            )
+            member_path = (("result",) if terminal is not outer_terminal else ()) + ("structured_output",)
+            response_text = strict_json_member_text(stdout.decode("utf-8", "strict"), member_path)
         except (
             ProviderJsonEncodingError,
             UnicodeError,
@@ -1971,6 +1972,7 @@ class AntigravityAdapter:
                 response_diagnostic if recoverable_error or completion_required else None
             ),
         )
+
 
     @staticmethod
     def _native_identity(

@@ -31,8 +31,17 @@ from .conversations import (
     CollaborationLeadMaterialCapturePayload, CollaborationLeadDiscussionPayload,
     CollaborationLeadPublicResponsePayload,
 )
-from .lead_provider_contracts import LeadDiscussionConstraints
-from .provider_wire import normalize_result, recover_lead_public_response
+from .lead_provider_contracts import (
+    LeadDiscussionConstraints,
+    LeadStagePolicy,
+    LeadContractIndex,
+    LeadContractRejection,
+    LeadResultContractOwner,
+    LeadResultRuleSeed,
+    LeadDecodedResult,
+    empty_core_status_evidence,
+)
+from .provider_wire import normalize_result, recover_lead_public_response, hoist_schema_definitions
 
 from .lead_premise_decisions import (
     PremiseQuestionIntent, PremiseDecisionSpec, PremiseDecisionSelection,
@@ -41,7 +50,7 @@ from .lead_premise_decisions import (
     PremiseAnalysis, PremiseOption, PremiseReplyRef, PremiseDecisionCost,
     PremiseCostLink, PremiseAdmissionRef, PremiseReportRef,
     PremiseAuthoringTaskRef, PremiseAuthoringSourceRef, PremiseFreshWorkAdmission,
-    premise_question_intent_from_dict, premise_value_to_dict, premise_digest,
+    premise_question_intent_from_dict, premise_analysis_from_dict, premise_summary_from_dict, premise_value_to_dict, premise_digest,
     premise_conflicts_from_dict, material_digest, resolve_premise_choice,
 )
 from .conversations.events import (
@@ -58,7 +67,10 @@ from .editorial_state import (
     EditorialRecordRef, EditorialStateProjection, EditorialApprovalState,
     EditorialStateIntegrityError, EditorialRelationKind, editorial_ref_from_dict, build_editorial_revision, editorial_ref_to_dict,
 )
-from .conversations import CollaborationEditorialRecordPayload, editorial_provenance_available
+from .conversations import (
+    CollaborationEditorialRecordPayload, editorial_provenance_available,
+    lead_outcome_scope_paths,
+)
 
 from .lead_exploration import (LeadInteractionMode, ExplorationIdeaKind, ExplorationReportStatus,
     ExplorationIdea, ExplorationObservation, ExplorationArtifactRead, LeadExplorationReport,
@@ -79,7 +91,8 @@ import sys
 import threading
 import uuid
 from .structured_output_validation import (
-    DomainValidationRule,
+    NamedHostCheck, TypedDecoder, HostCheckContext,
+    DomainValidationRule, SchemaRules, closed_rule, strict_json_object, strict_json_member_text,
     validation_failure,
     validation_call,
     carry_validation,
@@ -90,7 +103,7 @@ from contextlib import AbstractContextManager, asynccontextmanager, contextmanag
 from dataclasses import asdict, dataclass, field, replace
 from functools import partial
 from pathlib import Path
-from typing import Any, AsyncContextManager, AsyncIterator, Mapping, cast
+from typing import Callable, Any, AsyncContextManager, AsyncIterator, Mapping, cast
 
 from .lead_provider_contracts import (
     LeadExplorationConstraints,
@@ -137,6 +150,7 @@ from .agent_context.service import (
     ContextInvocationRequest,
     ContextInvocationResult,
     ContextJsonObjectResultContract,
+    ContextCallOffers,
     ContextProviderCallRequest,
     ContextProviderCallResult,
     ContextProviderTerminalCode,
@@ -148,6 +162,10 @@ from .agent_context.service import (
     ContextZeroHitSearchReceipt,
     context_provider_failure_facts,
     record_context_provider_failure,
+    BoundContextProviderCallRequest,
+    BoundCallFactory,
+    BoundCallLineage,
+    AuthorizedAnswerHostContext,
 )
 from .agent_context.sources import (
     CONTEXT_SOURCE_POLICY,
@@ -161,6 +179,7 @@ from .agent_context.sources import (
     create_guarded_writing_artifact_source_adapter,
     writing_artifact_source_id,
 )
+from .agent_context.actions import normalized_search_text, SEARCH_NORMALIZATION_REVISION
 from .agent_context.progress import ContextActionProgressSink
 from .backend import (
     AgentBackend,
@@ -426,6 +445,7 @@ from .writing_artifacts.repository import WritingArtifactRepository
 from .writing_artifacts.runtime_references import (
     RuntimeReferenceOperation,
     prepare_registered_guarded_runtime_reference_operation,
+    reference_alias_source_text,
     reference_operation_belongs_to_session,
     reference_operation_session_id,
 )
@@ -494,18 +514,15 @@ _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES = frozenset(
     }
 )
 _LEAD_RESPONSE_CORRECTION_INSTRUCTION = (
-    "Return submit_result now without search_context or read_context. Encode one complete "
-    "current offered Lead response schema object in agent_action.task_result using only the selected variant's fields. "
-    "Every Lead result includes response_type, response_text, and writing_task_scope. Include "
-    "specialist_consultation_proposal, artifact_change_proposal, document_change_request_update, "
-    "or proposal_drafting_request only when its variant requires it. Preserve the selected "
-    "draft_document_change_proposal step as its exact artifact proposal; do not downgrade it "
-    "to advice or claim that the document change request is completed."
+    "Return submit_result now without search_context or read_context. "
+    "Follow the current native output schema and the exact frozen "
+    "rule-derived guidance in response_correction.bound_contract "
+    "for the complete selected response. Preserve the selected "
+    "draft_document_change_proposal step as its exact artifact proposal; "
+    "do not downgrade it to advice or claim that the document change "
+    "request is completed."
 )
-_SAFE_STRUCTURED_FALLBACK_MESSAGE = (
-    "I couldn't validate the provider's structured reply after one repair attempt, "
-    "so no action was taken. You can continue the conversation or try again."
-)
+_SAFE_STRUCTURED_FALLBACK_MESSAGE = "LEAD_CONTRACT_REJECTED"
 _LEAD_PROPOSAL_USER_IMPACT = (
     "Specialist advice and durable collaboration records only. "
     "This step cannot change writing artifacts, the Git index, commits, "
@@ -521,11 +538,12 @@ def _closed_result_object(
     properties: dict[str, object],
     *,
     description: str | None = None,
+    required: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     schema: dict[str, object] = {
         "additionalProperties": False,
         "properties": properties,
-        "required": list(properties),
+        "required": list(properties if required is None else required),
         "type": "object",
     }
     if description is not None:
@@ -584,27 +602,21 @@ def _proposal_result_schema(
             "basis_input_ids": string_array(None if facts.allow_read_sources else facts.input_ids),
         }), "description": "Bind each declared dependency slot to a disclosed choice and currently available sources; unresolved choices require clarification."}
     if facts.scope and facts.scope.intent is AuthoringIntent.REVIEW_ONLY:
-        return _closed_result_object(assignments, description="Confirm only this exact supplied-material review; no drafting or artifact objective.")
-    objective = facts.objective_schema("consult")
-    with_objective = _closed_result_object({**assignments, "objective_intent": objective},
-        description=(
-            "Propose specialist work that starts or advances a document change request; "
-            "confirmation authorizes the assignments, not document changes."
-        ),
-    )
-    if facts.preparation_kind:
-        return with_objective if facts.preparation_objective_id else _closed_result_object(assignments,
-            description=(
-                "Propose specialist work when no document change request update is needed; "
-                "confirmation authorizes only these disclosed assignments."
-            ),
-        )
-    return {"anyOf": [_closed_result_object(assignments,
-        description=(
+        return _closed_result_object({**assignments, "objective_intent": {"type": "string", "enum": []}},
+            required=tuple(assignments), description="Confirm only this exact supplied-material review; no drafting or artifact objective.")
+    if facts.preparation_kind and facts.preparation_objective_id is None:
+        return _closed_result_object({**assignments, "objective_intent": {"type": "string", "enum": []}},
+            required=tuple(assignments), description=(
             "Propose specialist work when no document change request update is needed; "
             "confirmation authorizes only these disclosed assignments."
+        ))
+    return _closed_result_object({**assignments, "objective_intent": facts.objective_schema("consult")},
+        required=None if facts.preparation_kind else tuple(assignments),
+        description=(
+            "Propose the disclosed specialist assignments, optionally starting or advancing "
+            "a document change request; confirmation does not authorize document changes."
         ),
-    ), with_objective]}
+    )
 
 
 def _artifact_intent_result_schema(
@@ -674,22 +686,13 @@ def _artifact_intent_result_schema(
         },
     }
     facts = constraints or LeadProviderConstraints()
-    with_objective = _closed_result_object({
-        **operations, "objective_intent": facts.objective_schema("prepare"),
-    },
+    return _closed_result_object({**operations, "objective_intent": facts.objective_schema("prepare")},
+        required=None if facts.preparation_kind else tuple(operations),
         description=(
-            "Prepare exact changes while starting or advancing a document change request; review "
-            "and Apply still require separate confirmation."
-        ),
-    )
-    if facts.preparation_kind:
-        return with_objective
-    return {"anyOf": [_closed_result_object(operations,
-        description=(
-            "Prepare exact changes without a document change request update when none is needed; "
+            "Prepare exact changes, optionally starting or advancing a document change request; "
             "review and Apply still require separate confirmation."
         ),
-    ), with_objective]}
+    )
 
 
 def _recommended_action_result_schema(
@@ -712,11 +715,15 @@ def _objective_intent_result_schema() -> dict[str, object]:
 def _provider_result_contract(contract_id: str, schema: dict[str, object]) -> ContextJsonObjectResultContract:
     return ContextJsonObjectResultContract(contract_id, project_result_schema(schema, contract_id))
 
+def _lead_result_rule_seed(contract_id: str, schema: dict[str, object]) -> LeadResultRuleSeed:
+    """Capture a pure planning declaration; only bound current rules are offered."""
+    return LeadResultRuleSeed.declare(contract_id, project_result_schema(schema, contract_id))
+
 
 def _lead_discussion_result_contract(
     constraints: LeadDiscussionConstraints,
-) -> ContextJsonObjectResultContract:
-    return _provider_result_contract(
+) -> LeadResultRuleSeed:
+    return _lead_result_rule_seed(
         "lead-discussion-response-v1", constraints.schema(),
     )
 
@@ -728,7 +735,7 @@ def _lead_revision_result_contract(
     discussion_constraints: LeadDiscussionConstraints, *,
     fresh_revision_only: bool = False, source_scope: AuthoringScope | None = None,
     artifact_revision_only: bool = False,
-) -> ContextJsonObjectResultContract:
+) -> LeadResultRuleSeed:
     authoring = _lead_front_result_contract(
         expected_relation, input_ids, task_revisions, constraints,
         fresh_revision_only=False,
@@ -740,13 +747,15 @@ def _lead_revision_result_contract(
         if isinstance(value, (tuple, list)):
             return [mutable(member) for member in value]
         return value
-    variants = mutable(list(authoring.schema["anyOf"]))
+    variants = mutable(list(authoring.schema_value()["anyOf"]))
     if artifact_revision_only:
         variants = [
             variant for variant in variants
             if variant.get("properties", {}).get("response_type", {}).get("enum", [])
             in (["artifact_change_proposal"], ["proposal_drafting_recommendation"])
             and variant.get("properties", {}).get("writing_task_scope", {}).get("type") == "object"
+            and variant["properties"]["writing_task_scope"].get("properties", {}).get(
+                "writing_intent", {}).get("enum", []) == [AuthoringIntent.AUTHORING.value]
         ]
         artifact_variants = []
         for variant in variants:
@@ -773,7 +782,9 @@ def _lead_revision_result_contract(
         variants = [variant for variant in variants
                     if variant.get("properties", {}).get("response_type", {}).get("enum", [])
                     in (["specialist_consultation_proposal"], ["proposal_drafting_recommendation"])
-                    and variant.get("properties", {}).get("writing_task_scope", {}).get("type") == "object"]
+                    and variant.get("properties", {}).get("writing_task_scope", {}).get("type") == "object"
+                    and variant["properties"]["writing_task_scope"].get("properties", {}).get(
+                        "writing_intent", {}).get("enum", []) == [AuthoringIntent.AUTHORING.value]]
         consultations = []
         for variant in variants:
             properties = variant["properties"]
@@ -803,10 +814,10 @@ def _lead_revision_result_contract(
             ):
                 scope["activity_type"]["enum"].insert(0, "review_writing")
             scope["writing_intent"]["enum"] = ["authoring"]
-    return ContextJsonObjectResultContract(
+    return LeadResultRuleSeed.declare(
         "lead-response-v9",
         mutable({
-            "anyOf": [*variants, discussion.schema],
+            "anyOf": [*variants, discussion.schema_value()],
             "description": (
                 "Discuss the revision or propose fresh authoring under "
                 "the exact offered task pair."
@@ -821,7 +832,7 @@ def _lead_front_result_contract(
     task_revisions: tuple[tuple[str, int], ...] = (),
     constraints: LeadProviderConstraints | None = None,
     *, fresh_revision_only: bool = False,
-) -> ContextJsonObjectResultContract:
+) -> LeadResultRuleSeed:
     facts = constraints or LeadProviderConstraints(input_ids=input_ids, task_revisions=task_revisions)
     scoped = {"message": nonempty_text_schema(), "authoring_scope": facts.scope_schema()}
     if fresh_revision_only:
@@ -865,50 +876,34 @@ def _lead_front_result_contract(
             ),
         ]
     else:
-        variants = [
-            _closed_result_object(scoped,
-                description=(
-                    "Answer workflow or status questions directly when no clarification, request "
-                    "update, or specialist proposal is needed."
-                ),
-            ),
-            _closed_result_object({**scoped, "kind": {"enum": ["question", "critique"], "type": "string"}},
-                description=(
-                    "Ask for missing information with clarification_question, or explain a scoped"
-                    " concern with critique, when no document request update or proposal is "
-                    "needed."
-                ),
-            ),
-            _closed_result_object({**scoped,
-                "kind": {"enum": ["question"], "type": "string"},
-                "objective_intent": facts.objective_schema("clarify")},
-                description=(
-                    "Ask for missing information while starting or continuing the associated "
-                    "document change request; keep that request pending."
-                ),
-            ),
-            recommendation,
-        ]
-        if facts.objective_ids is None or facts.objective_ids:
+        can_track = not (facts.scope and facts.scope.intent is AuthoringIntent.REVIEW_ONLY)
+        cancellation = {"objective_intent": {"type": "string", "enum": []}}
+        if can_track and (facts.objective_ids is None or facts.objective_ids):
             identity: dict[str, object] = {"type": "string"}
             if facts.objective_ids:
                 identity["enum"] = list(facts.objective_ids)
-            variants.append(_closed_result_object({**scoped,
-                "kind": {"enum": [LeadOutcomeKind.ANSWER.value, LeadOutcomeKind.CRITIQUE.value], "type": "string"},
-                "objective_intent": _closed_result_object({
-                    "action": {"enum": ["cancel"], "type": "string"}, "objective_id": identity,
-                },
-                    description=(
-                        "Close only the selected request that the user explicitly cancelled; this"
-                        " performs no document change."
-                    ),
-                ),
-            },
+            cancellation = {"objective_intent": _closed_result_object({
+                "action": {"enum": ["cancel"], "type": "string"}, "objective_id": identity,
+            }, description="Close only the selected request explicitly cancelled by the user; no document change.")}
+        variants = [
+            _closed_result_object({**scoped, **cancellation}, required=tuple(scoped),
                 description=(
-                    "Acknowledge explicit user cancellation with an answer or critique and close "
-                    "the selected pending document change request without applying changes."
-                ),
-            ))
+                    "Answer workflow or status questions or report current READ-supported facts in REVIEW "
+                    "scope. Optionally acknowledge an explicitly cancelled document change request."
+                )),
+            _closed_result_object({**scoped, "kind": {"enum": ["question"], "type": "string"},
+                "objective_intent": facts.objective_schema("clarify") if can_track else {"type": "string", "enum": []}},
+                required=(*scoped, "kind"), description=(
+                    "Ask for missing information, optionally starting or continuing the associated "
+                    "document change request; keep that request pending."
+                )),
+            _closed_result_object({**scoped, "kind": {"enum": ["critique"], "type": "string"}, **cancellation},
+                required=(*scoped, "kind"), description=(
+                    "Explain a scoped concern, optionally acknowledging an explicitly cancelled "
+                    "document change request; this performs no document change."
+                )),
+            recommendation,
+        ]
         for field, intent in (("proposal", _proposal_result_schema(expected_relation, input_ids, facts)),
                               ("artifact_intent", _artifact_intent_result_schema(facts))):
             variants.append(_closed_result_object({**scoped,
@@ -922,7 +917,6 @@ def _lead_front_result_contract(
         variants = [
             variant for variant in variants
             if "artifact_intent" not in variant.get("properties", {})
-            and "objective_intent" not in variant.get("properties", {})
         ]
     if facts.adoption_intent is not None:
         variants = [variant for variant in variants if "proposal" in variant.get("properties", {})]
@@ -1415,7 +1409,7 @@ def _lead_front_result_contract(
     )
     schema["description"] += " " + shared_rules
 
-    return _provider_result_contract("lead-response-v8" if facts.premise_question_id is not None else "lead-response-v6" if facts.scope is not None and facts.scope.schema_version < 3 else "lead-response-v7", schema)
+    return _lead_result_rule_seed("lead-response-v8" if facts.premise_question_id is not None else "lead-response-v6" if facts.scope is not None and facts.scope.schema_version < 3 else "lead-response-v7", schema)
 
 
 def _specialist_result_contract(
@@ -1476,7 +1470,7 @@ def _lead_synthesis_result_contract(
     artifact_review: bool,
     authoring_scope: AuthoringScope,
     constraints: LeadProviderConstraints | None = None,
-) -> ContextJsonObjectResultContract:
+) -> LeadResultRuleSeed:
     del evidence
     allow_next_intent = allow_next_intent and not (authoring_scope.schema_version == 3 and authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE})
     facts = constraints or LeadProviderConstraints(
@@ -1537,7 +1531,7 @@ def _lead_synthesis_result_contract(
                 "has established what should be prepared next."
             ),
         ))
-        return _provider_result_contract(contract_id, {
+        return _lead_result_rule_seed(contract_id, {
             "anyOf": variants,
             "description": (
                 "Synthesize the specialist replies independently, retaining every material "
@@ -1546,7 +1540,7 @@ def _lead_synthesis_result_contract(
             ),
         })
     contract_id = "artifact-review-summary-v4"
-    return _provider_result_contract(
+    return _lead_result_rule_seed(
         contract_id,
         _closed_result_object({
             "decision": {
@@ -1570,15 +1564,20 @@ class _DuplicateJsonKey(ValueError):
     pass
 
 
-def _provider_review_basis(input_ids: tuple[str, ...], instruction: str) -> ReviewBasis:
-    """Preserve review validation under its provider assignment field names."""
-    try:
-        return ReviewBasis(input_ids, instruction)
-    except (TypeError, ValueError) as failure:
-        raise remap_validation(failure, {
-            "$.candidate_input_ids": "$.input_ids",
-            "$.criteria": "$.instruction",
-        })
+def _provider_review_basis(value: object) -> ReviewBasis:
+    """Preserve explicit candidate inputs and independent review criteria."""
+    if type(value) is not dict or set(value) != {"candidate_input_ids", "criteria"}:
+        raise validation_failure(
+            ValueError("review basis must be a closed object"),
+            "$", "expected a closed review basis with candidate_input_ids and criteria",
+        )
+    candidate_ids = value["candidate_input_ids"]
+    if type(candidate_ids) is not list:
+        raise validation_failure(
+            TypeError("review candidate inputs must be an array"),
+            "$.candidate_input_ids", "expected an array of current input identifiers",
+        )
+    return ReviewBasis(tuple(candidate_ids), value["criteria"])
 
 
 class _LeadOutcomeValidationError(BackendProtocolError):
@@ -1690,7 +1689,11 @@ class _AccountingContextProvider:
         role: str,
         invocation_kind: CollaborationInvocationKind,
         admission: PremiseFreshWorkAdmission | None = None,
+        effective_language: str | None = None,
+        task_revisions: tuple[tuple[str, int], ...] = (),
     ) -> None:
+        self.effective_language = effective_language
+        self.task_revisions = task_revisions
         self._runtime = runtime
         self._delegate = delegate
         self._session_id = session_id
@@ -1802,7 +1805,7 @@ class _AccountingContextProvider:
 
     async def invoke_context(
         self,
-        request: ContextProviderCallRequest,
+        request: ContextProviderCallRequest | BoundContextProviderCallRequest,
     ) -> ContextProviderCallResult:
         kind = (
             CollaborationProviderCallKind.INITIAL
@@ -1832,7 +1835,11 @@ class _AccountingContextProvider:
             )
             raise
         details = (
-            bounded_chunks(diagnose_json_text(result.response_text, request.schema))
+            bounded_chunks(
+                request.contract.structural_findings(result.response_text)
+                if type(request) is BoundContextProviderCallRequest
+                else diagnose_json_text(result.response_text, request.schema)
+            )
             if type(result) is ContextProviderCallResult else ()
         )
         self._record_result_submission(result, request.call_id, ordinal, kind, details)
@@ -1975,9 +1982,16 @@ class _AccountingContextProvider:
             "Original response"
             if call_id == first_diagnostic_call_id else "Repair response"
         )
+        chunks = (
+            details
+            if all(item.startswith("Structured reply validation") for item in details)
+            else bounded_chunks(details)
+        )
         return tuple(
             item.replace("Structured reply validation", label, 1)
-            for item in details
+            if item.startswith("Structured reply validation")
+            else f"{label}: {item}"
+            for item in chunks
         )
 
     @property
@@ -2304,6 +2318,180 @@ class ConsensusArtifactReviewHandoff:
             or self.reviewed_proposal.git_action_occurred
         ):
             raise ValueError("consensus artifact-review handoff is invalid")
+
+
+def _lead_terminal_notice(language: str | None, tasks: tuple[tuple[str, int], ...],
+                          state: object, requirements: tuple[str, ...] = (),
+                          code: str = "LEAD_CONTRACT_REJECTED") -> str:
+    """Language-neutral trusted control notice; literal provider answers stay separate."""
+    paths = []
+    for requirement in requirements:
+        if requirement.startswith("$"):
+            paths.append(requirement.split(": ", 1)[0])
+            continue
+        lines = requirement.splitlines()
+        if not lines:
+            continue
+        label, separator, first_line = lines[0].partition(": ")
+        if label in ("Original response", "Repair response") and separator:
+            lines[0] = first_line
+        elif lines[0] not in (
+            "Original response", "Repair response", "Structured reply validation",
+        ):
+            continue
+        paths.extend(line.split(": ", 1)[0] for line in lines if line.startswith("$"))
+    return json.dumps({"code": code, "language": language, "task_revisions": [
+        {"task_id": task_id, "task_revision": revision}
+        for task_id, revision in tasks
+    ],
+                       "state": state, "paths": tuple(dict.fromkeys(paths))},
+                      ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+
+
+def _lead_source_owner_rejection(failure: BaseException) -> BaseException:
+    failure.lead_source_owner_rejected = True
+    return failure
+
+
+def _lead_is_source_owner_rejection(failure: BaseException) -> bool:
+    seen = set()
+    while id(failure) not in seen:
+        seen.add(id(failure))
+        if getattr(failure, "lead_source_owner_rejected", False):
+            return True
+        nested = getattr(failure, "bound_contract_failure", None) or failure.__cause__
+        if not isinstance(nested, BaseException):
+            break
+        failure = nested
+    return False
+
+
+@dataclass(frozen=True, slots=True)
+class OrchestrationLeadCallFactory(BoundCallFactory):
+    """Existing orchestration owns stage eligibility and genuine final-owner hooks."""
+    constraints: LeadProviderConstraints
+    rule_seed: LeadResultRuleSeed
+    stage: str
+    language: str
+    authorized_validator: Callable[[str, object], object] = field(repr=False, compare=False)
+    reviewer_for_locator: Callable[[str], str] = field(repr=False, compare=False)
+    _declared_authorization_check: Callable[[LeadDecodedResult, HostCheckContext], None] = field(init=False, repr=False, compare=False)
+    _authorization_declaration: NamedHostCheck[LeadDecodedResult] = field(init=False, repr=False, compare=False)
+    _status_rule: tuple[object, object] = field(
+        default=(empty_core_status_evidence, empty_core_status_evidence.__code__),
+        init=False, repr=False, compare=False,
+    )
+
+    _outcome_scope_rule: tuple[object, object] = field(
+        default=(lead_outcome_scope_paths, lead_outcome_scope_paths.__code__),
+        init=False, repr=False, compare=False,
+    )
+
+    def __init_subclass__(cls, **kwargs):
+        raise TypeError("orchestration Lead factory declaration cannot be overridden")
+
+    def __post_init__(self) -> None:
+        if (type(self.constraints) is not LeadProviderConstraints or type(self.rule_seed) is not LeadResultRuleSeed
+                or any(type(value) is not str or not value for value in (self.stage, self.language))
+                or not callable(self.authorized_validator) or inspect.iscoroutinefunction(self.authorized_validator)
+                or not callable(self.reviewer_for_locator) or inspect.iscoroutinefunction(self.reviewer_for_locator)):
+            raise TypeError("Lead factory requires its exact current owner declaration")
+        TypedDecoder.require_hook_shape(self.authorized_validator, 2)
+        TypedDecoder.require_hook_shape(self.reviewer_for_locator, 1)
+        validator = self.authorized_validator
+        guard = type(self).require_declaration
+
+        def authorized_check(result: LeadDecodedResult, context: HostCheckContext, *, validator=validator) -> None:
+            if type(result) is not LeadDecodedResult or type(context) is not AuthorizedAnswerHostContext:
+                raise TypeError("final Lead owner requires the actual selected result/authorization")
+            if validator(result.domain_json, context.authorization) is not None:
+                raise TypeError("final Lead owner check must return None")
+
+        object.__setattr__(self, "_declared_authorization_check", authorized_check)
+        object.__setattr__(self, "_authorization_declaration", NamedHostCheck(
+            "owner.authorized_final", "848-v3:actual-service-authorization", "authorized",
+            AuthorizedAnswerHostContext,
+            b'{"requirements":[{"expected":{"authorization":"ACTUAL_CURRENT_OWNER"},"path":"$","rule":"ACTUAL_CURRENT_OWNER_AUTHORIZATION"}]}',
+            authorized_check,
+            dependencies=(validator, guard, self._require_status_rule,
+                          self._status_rule[0], self._outcome_scope_rule[0], parse_artifact_references),
+        ))
+
+    def require_declaration(self) -> None:
+        declaration = self._authorization_declaration
+        declaration.require_provenance()
+        if (self._declared_authorization_check is not declaration.check
+                or self.authorized_validator is not declaration.dependencies[0]
+                or type(self).require_declaration is not declaration.dependencies[1]):
+            raise ValueError("frozen Lead authorization declaration changed")
+        self._require_status_rule()
+
+    @property
+    def contract_id(self) -> str:
+        return self.rule_seed.contract_id
+
+    def declare_result_owners(self, offers: ContextCallOffers) -> LeadStagePolicy:
+        self._authorization_declaration.require_provenance()
+        self._authorization_declaration.dependencies[1](self)
+        if type(offers) is not ContextCallOffers:
+            raise TypeError("Lead declaration requires actual service-owned physical offers")
+        if self.constraints.continuation and self.constraints.review_candidate_ids is None:
+            raise ValueError("physical continuation requires frozen review candidates")
+        facts = offers.completed_read_facts + offers.delivery_read_facts
+        read_ids = tuple(dict.fromkeys(item.evidence_id for item in facts))
+        writing_ids = tuple(dict.fromkeys(item.evidence_id for item in facts
+                                        if item.source_kind is ContextSourceKind.WRITING_ARTIFACT))
+        inputs = tuple(dict.fromkeys(self.constraints.input_ids + read_ids))
+        sources = None if self.constraints.source_ids is None else tuple(dict.fromkeys(self.constraints.source_ids + read_ids))
+        reviewers = tuple(dict.fromkeys(self.constraints.reviewer_inputs + tuple(
+            (self.reviewer_for_locator("${" + item.artifact_locator + "}"), item.evidence_id)
+            for item in facts if item.source_kind is ContextSourceKind.WRITING_ARTIFACT)))
+        current = replace(self.constraints, input_ids=inputs, source_ids=sources, reviewer_inputs=reviewers,
+                          allow_read_sources=False, required_input_ids=self.constraints.required_assignment_input_ids())
+        writing_reads = tuple(
+            (item.evidence_id, item.artifact_locator, item.whole_source)
+            for item in facts if item.source_kind is ContextSourceKind.WRITING_ARTIFACT
+        )
+        variants = current.current_wire_variants(
+            self.rule_seed, read_ids=read_ids, writing_read_ids=writing_ids,
+            writing_read_facts=writing_reads, core_status_facts=offers.core_status_facts,
+        )
+        tasks = current.task_revisions or (() if current.scope is None else ((current.scope.task_id, current.scope.task_revision),))
+        facts_bytes = json.dumps({"requirements": [{"path": "$", "rule": "ACTUAL_CURRENT_OWNER_AUTHORIZATION",
+            "expected": {"physical_call_id": offers.call_id, "input_ids": current.input_ids,
+                "review_candidate_ids": current.review_candidate_ids,
+                "factual_answer_writing_read_facts": writing_reads,
+                "read_evidence": "DELIVERED_AND_COMPLETED_CURRENT_OWNER_READ", "rejected_answer_authority": "INPUT_ONLY",
+                "new_target_path": "ACTUAL_CURRENT_PHYSICAL_ROOT_POLICY",
+                "admission": "EXISTING_OWNER_STATE_AND_FINAL_ADMISSION"}}]},
+            sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        check = replace(self._authorization_declaration, corrective_facts=facts_bytes)
+        owners = tuple(LeadResultContractOwner(variant, tasks, (check,)) for variant in variants)
+        return LeadStagePolicy(self.stage, offers.call_id, tasks, self.language, offers.offer_digest,
+                               current.choice_snapshot(), offers.offer_digest, offers.call_id,
+                               owner_declarations=owners)
+
+    def _require_status_rule(self) -> None:
+        function, code = self._status_rule
+        if (
+            empty_core_status_evidence is not function
+            or function.__code__ is not code
+        ):
+            raise ValueError("frozen empty-core evidence rule changed")
+        function, code = self._outcome_scope_rule
+        if lead_outcome_scope_paths is not function or function.__code__ is not code:
+            raise ValueError("frozen Lead outcome scope rule changed")
+
+
+def _lead_call_contract_factory(*, constraints: LeadProviderConstraints, contract: LeadResultRuleSeed,
+                                stage: str, language: str, authorized_validator: Callable[[str, object], object],
+                                reviewer_for_locator: Callable[[str], str]) -> OrchestrationLeadCallFactory:
+    if type(contract) is not LeadResultRuleSeed:
+        raise TypeError("Lead planning requires the exact pure source-owned rule seed")
+    return OrchestrationLeadCallFactory(constraints, contract,
+                                       stage, language, authorized_validator, reviewer_for_locator)
+
+
 
 
 class StoryRuntime:
@@ -4753,7 +4941,7 @@ class StoryRuntime:
             return self._blocking_lead_result(origin.session_id, origin.conversation_id,
                 CollaborationStepState.RECOVERY_REQUIRED, "Recommendation closure requires repair.",
                 turn_id=origin.turn_id, step_id=origin.step_id)
-        if result.message == _SAFE_STRUCTURED_FALLBACK_MESSAGE:
+        if result.trace is not None and result.trace.origin is ReplyTraceOrigin.RUNTIME_FALLBACK:
             finalized = self._finalize_recommendation_failure_locked(
                 origin.session_id,
                 origin.conversation_id,
@@ -7950,6 +8138,12 @@ class StoryRuntime:
         current_projection = self.conversation_storage_services.event_store.read_context(session_id, conversation_id)
         constraints = LeadProviderConstraints(
             input_ids=(*(item.input_id for item in proposal.basis.inputs), *reply_event_ids),
+            review_candidate_ids=tuple(dict.fromkeys((
+                *(item.input_id for item in proposal.basis.inputs),
+                *(reply_event_id for reply_event_id, reply in
+                  zip(reply_event_ids, replies, strict=True)
+                  if reply.assessment is CollaborationSpecialistAssessment.DRAFTED),
+            ))),
             reviewer_inputs=tuple((reviewer, item.input_id) for item in proposal.basis.inputs
                 if item.kind in {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
                                  CollaborationInputKind.WRITING_ARTIFACT}
@@ -8010,6 +8204,7 @@ class StoryRuntime:
                 attempt_id=attempt_id,
                 reply_event_ids=reply_event_ids,
                 replies=replies,
+                    review_candidate_ids=constraints.review_candidate_ids,
             )
             if decoded.recommended_action is not None:
                 current_events = self.conversation_storage_services.event_store.read(session_id, conversation_id)
@@ -8184,7 +8379,7 @@ class StoryRuntime:
                 CollaborationInputKind.WRITING_ARTIFACT}), material_value=value,
             invocation_kind=CollaborationInvocationKind.LEAD_SYNTHESIS,
             context_invocation_kind=ContextInvocationKind.LEAD_SYNTHESIS,
-            result_contract=_provider_result_contract("premise-decision-summary-v1", facts.summary_schema()),
+            result_contract=_lead_result_rule_seed("premise-decision-summary-v1", facts.summary_schema()),
             physical_call_limit=proposal.budget.synthesis_max_physical_calls, round_number=1,
             decoder=decode, fallback_answer=json.dumps({"status": "clarification",
                 "message": _SAFE_STRUCTURED_FALLBACK_MESSAGE, "options": [], "recommended_option_key": None}),
@@ -8361,7 +8556,7 @@ class StoryRuntime:
         material_value: object,
         invocation_kind: CollaborationInvocationKind,
         context_invocation_kind: ContextInvocationKind,
-        result_contract: ContextJsonObjectResultContract,
+        result_contract: ContextJsonObjectResultContract | LeadResultRuleSeed,
         physical_call_limit: int,
         round_number: int,
         decoder: Callable[[str, SessionArtifactBinding], object],
@@ -8407,7 +8602,9 @@ class StoryRuntime:
                 repository_access,
                 artifact_binding=artifact_binding,
                 session_id=session_id,
-                text=" ".join(item.locator for item in artifact_inputs),
+                text=reference_alias_source_text(
+                    tuple(item.locator for item in artifact_inputs)
+                ),
             )
             self._validate_assignment_reference_proofs(
                 artifact_inputs,
@@ -8455,6 +8652,9 @@ class StoryRuntime:
                     "inv", step_id, operation_id, str(round_number)
                 ),
                 role=agent_id,
+                effective_language=definition.language,
+                task_revisions=(constraints.task_revisions or (() if constraints.scope is None else
+                    ((constraints.scope.task_id, constraints.scope.task_revision),))) if constraints is not None else (),
                 invocation_kind=invocation_kind,
             )
             scope = self._agent_context_service.scope(
@@ -8489,39 +8689,7 @@ class StoryRuntime:
             reference_operation_id, reservations = self._reference_reservations(
                 reference_operation
             )
-            request = ContextInvocationRequest(
-                session_id=session_id,
-                subject_kind=ContextSubjectKind.CONVERSATION,
-                subject_id=conversation_id,
-                agent_id=agent_id,
-                operation_id=operation_id,
-                result_correlation_id=result_correlation_id,
-                materials=(
-                    self._context_material(
-                        source_id=f"runtime_input:{operation_id}",
-                        semantic_channel=ContextSemanticChannel.CURRENT_INPUT,
-                        ordinal=0,
-                        locator=f"request/{operation_id}",
-                        value=material_value,
-                    ),
-                ),
-                source_classifications=(),
-                reference_operation_id=reference_operation_id,
-                mandatory_references=reservations,
-                fresh=agent_id != LEAD_ORCHESTRATOR,
-                invocation_kind=context_invocation_kind,
-                result_contract=result_contract,
-                physical_call_limit=physical_call_limit,
-                session_state_json=(
-                    self._session_context_state(
-                        session_id,
-                        artifact_binding=artifact_binding,
-                        session_history=session_history,
-                    )
-                    if agent_id == LEAD_ORCHESTRATOR else None
-                ),
-                execution_workspace=execution_workspace,
-            )
+
             async def finish_invocation(
                 value: object,
                 *,
@@ -8559,6 +8727,11 @@ class StoryRuntime:
                     provider_invocation_id=provider.invocation_id,
                 )
 
+            def neutral_fallback_answer():
+                fallback_value = strict_json_object(fallback_answer)
+                fallback_value["message"] = _lead_terminal_notice(provider.effective_language,
+                    provider.task_revisions, "rejected", provider.validation_details)
+                return json.dumps(fallback_value, ensure_ascii=False, separators=(",", ":"))
             decoded: object | None = None
             trace_origin = ReplyTraceOrigin.PROVIDER
 
@@ -8581,13 +8754,57 @@ class StoryRuntime:
                         raise LeadContractError(rules)
                 decoded = decoder(answer, artifact_binding)
 
+            lead_factory = None
+            if agent_id == LEAD_ORCHESTRATOR:
+                lead_factory = _lead_call_contract_factory(
+                    constraints=(constraints if constraints is not None else
+                                 LeadProviderConstraints(input_ids=tuple(item.input_id for item in inputs),
+                                                         source_ids=tuple(item.input_id for item in inputs))),
+                    contract=result_contract, stage=context_invocation_kind.value,
+                    language=definition.language, authorized_validator=validate,
+                    reviewer_for_locator=self._core_reviewer)
+
+            request = ContextInvocationRequest(
+                session_id=session_id,
+                subject_kind=ContextSubjectKind.CONVERSATION,
+                subject_id=conversation_id,
+                agent_id=agent_id,
+                operation_id=operation_id,
+                result_correlation_id=result_correlation_id,
+                materials=(
+                    self._context_material(
+                        source_id=f"runtime_input:{operation_id}",
+                        semantic_channel=ContextSemanticChannel.CURRENT_INPUT,
+                        ordinal=0,
+                        locator=f"request/{operation_id}",
+                        value=material_value,
+                    ),
+                ),
+                source_classifications=(),
+                reference_operation_id=reference_operation_id,
+                mandatory_references=reservations,
+                fresh=agent_id != LEAD_ORCHESTRATOR,
+                invocation_kind=context_invocation_kind,
+                result_contract=lead_factory if lead_factory is not None else result_contract,
+                physical_call_limit=physical_call_limit,
+                session_state_json=(
+                    self._session_context_state(
+                        session_id,
+                        artifact_binding=artifact_binding,
+                        session_history=session_history,
+                    )
+                    if agent_id == LEAD_ORCHESTRATOR else None
+                ),
+                execution_workspace=execution_workspace,
+            )
             invocation_arguments = {
                 "writing_artifacts": authorities[0],
                 "focused_conversation": authorities[1],
                 "active_debate": authorities[2],
                 "own_agent_state": authorities[3],
-                "answer_validator": validate,
-                "answer_diagnostic": diagnose,
+                "answer_validator": validate if lead_factory is None else None,
+
+                "answer_diagnostic": diagnose if lead_factory is None else None,
                 "validation_sink": provider.record_validation_details,
                 "progress_sink": action_progress_sink,
                 **self._lead_continuation_arguments(
@@ -8620,7 +8837,7 @@ class StoryRuntime:
                 if not correctable:
                     raise
                 if remaining < correction_cost:
-                    fallback_value = decoder(fallback_answer, artifact_binding)
+                    fallback_value = decoder(neutral_fallback_answer(), artifact_binding)
                     return await finish_invocation(
                         fallback_value,
                         result=None,
@@ -8640,6 +8857,9 @@ class StoryRuntime:
                     )
                 provider.renew_delegate(delegate)
                 decoded = None
+                if lead_factory is not None:
+                    repair_lineage = lead_factory.repair_lineage(first_failure)
+                    invocation_arguments["contract_lineage"] = repair_lineage
                 correction_material = self._context_material(
                     source_id=f"runtime_input:{operation_id}:repair",
                     semantic_channel=ContextSemanticChannel.CURRENT_INPUT,
@@ -8655,6 +8875,8 @@ class StoryRuntime:
                                         "response schema and validation diagnostics."
                             ),
                             "rejection_code": facts.response_rejection_code.value,
+                            **({"bound_contract": json.loads(lead_factory.corrective_input(first_failure))}
+                               if lead_factory is not None else {}),
                         },
                     },
                 )
@@ -8678,7 +8900,7 @@ class StoryRuntime:
                         or correction_facts.submission_uncertain
                     ):
                         raise
-                    fallback_value = decoder(fallback_answer, artifact_binding)
+                    fallback_value = decoder(neutral_fallback_answer(), artifact_binding)
                     return await finish_invocation(
                         fallback_value,
                         result=None,
@@ -8797,7 +9019,7 @@ class StoryRuntime:
         inputs: tuple[CollaborationInputRevision, ...],
         operation: RuntimeReferenceOperation,
     ) -> None:
-        proofs = operation.reference_proofs
+        proofs = operation.project_alias_proofs(tuple(item.locator for item in inputs))
         if len(proofs) != len(inputs):
             raise BackendProtocolError("assignment reference proof count changed")
         for expected, proof in zip(inputs, proofs, strict=True):
@@ -10361,6 +10583,7 @@ class StoryRuntime:
         attempt_id: str,
         reply_event_ids: tuple[str, ...],
         replies: tuple[CollaborationSpecialistReplyPayload, ...],
+        review_candidate_ids: tuple[str, ...],
     ) -> _LeadSynthesisResult:
         try:
             value = cls._strict_json_object(
@@ -10401,12 +10624,7 @@ class StoryRuntime:
                     raw_intent,
                     authoring_scope=proposal.authoring_scope,
                     shared_premises=cls._captured_premise_intents(proposal.basis),
-                    review_candidate_ids=frozenset(
-                                             {
-                                                 *known_input_order,
-                                                 *(reply_event_id for reply_event_id, reply in zip(reply_event_ids, replies, strict=True) if reply.assessment is CollaborationSpecialistAssessment.DRAFTED),
-                                             },
-                                         ),
+                    review_candidate_ids=review_candidate_ids,
                 )
                 actual_ids = {
                     input_id
@@ -10496,7 +10714,7 @@ class StoryRuntime:
         value: object,
         *,
         authoring_scope: AuthoringScope,
-        review_candidate_ids: frozenset[str],
+        review_candidate_ids: tuple[str, ...],
         shared_premises: tuple[LeadSharedPremiseIntent, ...] = (),
     ) -> LeadProposalIntent:
         if type(value) is not dict or set(value) != {"assignments", "purpose"}:
@@ -10517,15 +10735,33 @@ class StoryRuntime:
             assignment_index = next(
                 index for index, raw in enumerate(raw_assignments) if raw is item
             )
-            if (
-                type(item) is not dict
-                or set(item) != {"agent_id", "input_ids", "instruction", "mode"}
-                or type(item["input_ids"]) is not list
-            ):
+            expected_fields = {"agent_id", "input_ids", "instruction", "mode"}
+            if (type(item) is dict
+                    and item.get("mode") == SpecialistAssignmentMode.REVIEW.value):
+                expected_fields.add("review_basis")
+            if (type(item) is not dict or set(item) != expected_fields
+                    or type(item["input_ids"]) is not list):
                 raise validation_failure(
                     ValueError(),
                     f'$.assignments[{assignment_index}]',
-                    'each assignment must contain agent_id, input_ids (array), instruction, and mode',
+                    'expected current assignment fields, input_ids array '
+                    'and review_basis for review',
+                )
+            mode = validation_call(
+                f'$.assignments[{assignment_index}].mode', SpecialistAssignmentMode, item["mode"])
+            review_basis = (
+                validation_call(
+                    f'$.assignments[{assignment_index}].review_basis',
+                    _provider_review_basis, item["review_basis"],
+                )
+                if mode is SpecialistAssignmentMode.REVIEW else None
+            )
+            if (review_basis is not None
+                    and not set(review_basis.candidate_input_ids).issubset(review_candidate_ids)):
+                raise validation_failure(
+                    ValueError(),
+                    f'$.assignments[{assignment_index}].review_basis.candidate_input_ids',
+                    'review candidates must be current eligible review inputs',
                 )
             assignments.append(
                 validation_call(
@@ -10534,23 +10770,8 @@ class StoryRuntime:
                     agent_id=item['agent_id'],
                     instruction=item['instruction'],
                     input_ids=tuple(item['input_ids']),
-                    mode=validation_call(
-                             f'$.assignments[{assignment_index}].mode',
-                             SpecialistAssignmentMode,
-                             item['mode'],
-                         ),
-                    review_basis=(
-                                     validation_call(
-                                         f'$.assignments[{assignment_index}]',
-                                         _provider_review_basis,
-                                         tuple(
-                                             (input_id for input_id in item['input_ids'] if input_id in review_candidate_ids),
-                                         ),
-                                         item['instruction'],
-                                     )
-                                     if item['mode'] == SpecialistAssignmentMode.REVIEW.value
-                                     else None
-                                 ),
+                    mode=mode,
+                    review_basis=review_basis,
                 )
             )
         specialist_ids = tuple(item.agent_id for item in assignments)
@@ -11484,6 +11705,7 @@ class StoryRuntime:
                 if item.kind is CollaborationInputKind.USER_INPUT)
             readiness_pin = readiness_source_basis_ref(readiness_offered_sources, readiness_request_digest)
             constraints = LeadProviderConstraints(
+                per_assignment_input_ids=tuple(f"selected_material_{ordinal}" for ordinal in range(1, len(task_material_events) + 1)) + (("adopted_idea",) if adoption_capture is not None else ()),
                 input_ids=tuple(item.input_id for item in inputs),
                 readiness_source_basis_ref=readiness_pin,
                 reviewer_inputs=tuple(
@@ -11567,6 +11789,8 @@ class StoryRuntime:
                     role=LEAD_ORCHESTRATOR,
                     invocation_kind=(CollaborationInvocationKind.LEAD_DISCUSSION if discussion_only else CollaborationInvocationKind.LEAD_EXPLORATION if interaction_mode is LeadInteractionMode.EXPLORATION else CollaborationInvocationKind.LEAD),
                     admission=admission,
+                effective_language=definition.language,
+                task_revisions=offered_tasks,
                 )
                 scope = self._agent_context_service.scope(
                     session_id,
@@ -11709,20 +11933,7 @@ class StoryRuntime:
                 physical_call_limit = min(_CONTEXT_INVOCATION_CALL_LIMIT, remaining)
                 if ordinary_front_cap is not None:
                     physical_call_limit = min(physical_call_limit, ordinary_front_cap)
-                contextual_request = ContextInvocationRequest(
-                    session_id=session_id,
-                    subject_kind=ContextSubjectKind.CONVERSATION,
-                    subject_id=conversation_id,
-                    agent_id=LEAD_ORCHESTRATOR,
-                    operation_id=f"lead_{turn_id}",
-                    result_correlation_id=f"outcome_{turn_id}",
-                    materials=(current,),
-                    source_classifications=(),
-                    reference_operation_id=reference_operation_id,
-                    mandatory_references=reservations,
-                    fresh=False,
-                    invocation_kind=ContextInvocationKind.LEAD,
-                    result_contract=((_lead_discussion_result_contract(discussion_constraints) if discussion_only else _lead_revision_result_contract(
+                lead_rule_seed = _lead_discussion_result_contract(discussion_constraints) if discussion_only else _lead_revision_result_contract(
                     expected_relation,
                     tuple((item.input_id for item in inputs)),
                     tuple(offered_tasks),
@@ -11731,25 +11942,16 @@ class StoryRuntime:
                     fresh_revision_only=successor_only or (task_receipt is not None and task_receipt.target_task_id is not None),
                     source_scope=revision_source_scope,
                     artifact_revision_only=source_artifact_revision,
-                ) if discussion_constraints is not None else _provider_result_contract("lead-exploration-response-v1", constraints.schema()) if interaction_mode is LeadInteractionMode.EXPLORATION else _lead_front_result_contract(
+                ) if discussion_constraints is not None else _lead_result_rule_seed("lead-exploration-response-v1", constraints.schema()) if interaction_mode is LeadInteractionMode.EXPLORATION else _lead_front_result_contract(
                         expected_relation,
                         tuple(item.input_id for item in inputs),
                         tuple(offered_tasks),
                         constraints=constraints,
                         fresh_revision_only=successor_only or (task_receipt is not None and task_receipt.target_task_id is not None),
-                    ))),
-                    physical_call_limit=physical_call_limit,
-                    include_core_statuses=True,
-                    session_state_json=self._session_context_state(
-                        session_id,
-                        artifact_binding=artifact_binding,
-                        session_history=session_history,
-                    ),
-                    execution_workspace=execution_workspace,
-                )
+                    )
                 provider._public_response_contract_id = (
-                    contextual_request.result_contract.contract_id
-                    if contextual_request.result_contract.contract_id in {
+                    lead_rule_seed.contract_id
+                    if lead_rule_seed.contract_id in {
                         "lead-response-v6", "lead-response-v7", "lead-response-v8",
                         "lead-response-v9", "lead-discussion-response-v1",
                     } else None
@@ -11772,7 +11974,7 @@ class StoryRuntime:
                             value = None
                         if discussion_only or (type(value) is dict and "writing_task_scope" not in value):
                             return bounded_chunks(diagnose_json_text(
-                                answer, _lead_discussion_result_contract(discussion_constraints).schema,
+                                answer, _lead_discussion_result_contract(discussion_constraints).schema_value(),
                             ))
                     return constraints.diagnose(answer, read_ids=read_ids, read_reviewers=read_reviewers) or (() if interaction_mode is LeadInteractionMode.EXPLORATION else self._lead_outcome_validation_details(answer))
 
@@ -11852,7 +12054,11 @@ class StoryRuntime:
                     )
                     rules = constraints.diagnose(answer, read_ids=read_ids, read_reviewers=read_reviewers)
                     if rules:
-                        raise _LeadOutcomeValidationError("lead result violates its offered constraints")
+                        raise carry_validation(
+                            _LeadOutcomeValidationError(
+                                'lead result violates its offered constraints'),
+                            LeadContractError(rules),
+                        )
                     decoded = self._decode_lead_outcome(
                         answer,
                         expected_relation=expected_relation,
@@ -12018,16 +12224,29 @@ class StoryRuntime:
                                 (*authoring_scope.target_paths, *objective_paths),
                             )))
                     resolved_scope = self._resolve_authoring_scope(authoring_scope, inputs, decoded_evidence, selected_prior)
-                    if resolved_scope.activity is not AuthoringActivity.WORKFLOW and decoded.kind not in {
-                        LeadOutcomeKind.PROPOSAL, LeadOutcomeKind.QUESTION, LeadOutcomeKind.RECOMMENDATION,
-                    }:
-                        raise validation_failure(
-                            _LeadOutcomeValidationError(
-                                'substantive story work requires specialist involvement',
-                            ),
-                            '$.kind',
-                            'substantive story work requires specialist involvement',
+                    if resolved_scope.activity is not AuthoringActivity.WORKFLOW:
+                        ordinary_answer = (
+                            decoded.kind is LeadOutcomeKind.ANSWER
+                            and not any((decoded.proposal, decoded.recommended_action,
+                                         decoded.objective_intent, decoded.artifact_intent))
                         )
+                        writing_reads = (
+                            decoded_evidence.factual_writing_read_facts() if ordinary_answer else ()
+                        )
+                        scope_paths = lead_outcome_scope_paths(
+                            decoded.kind, resolved_scope.activity,
+                            required_authoring_domains(resolved_scope), writing_reads,
+                            target_paths=resolved_scope.target_paths,
+                            ordinary_answer=ordinary_answer,
+                        )
+                        if scope_paths is None:
+                            raise validation_failure(
+                                _LeadOutcomeValidationError(
+                                    'substantive story work requires specialist involvement',
+                                ),
+                                '$.kind',
+                                'substantive story work requires specialist involvement',
+                            )
                     if decoded.proposal is not None:
                         if decoded.proposal.authoring_scope != decoded.authoring_scope:
                             raise validation_failure(
@@ -12265,6 +12484,37 @@ class StoryRuntime:
                             session_history=session_history,
                         )
 
+                lead_factory = _lead_call_contract_factory(
+                    constraints=(constraints if type(constraints) is LeadProviderConstraints else
+                                 LeadProviderConstraints(input_ids=tuple(item.input_id for item in inputs),
+                                                         task_revisions=tuple(offered_tasks),
+                                                         source_ids=tuple(item.input_id for item in inputs))),
+                    contract=lead_rule_seed, stage="lead.front",
+                    language=definition.language, authorized_validator=validate,
+                    reviewer_for_locator=self._core_reviewer)
+                contextual_request = ContextInvocationRequest(
+                    session_id=session_id,
+                    subject_kind=ContextSubjectKind.CONVERSATION,
+                    subject_id=conversation_id,
+                    agent_id=LEAD_ORCHESTRATOR,
+                    operation_id=f"lead_{turn_id}",
+                    result_correlation_id=f"outcome_{turn_id}",
+                    materials=(current,),
+                    source_classifications=(),
+                    reference_operation_id=reference_operation_id,
+                    mandatory_references=reservations,
+                    fresh=False,
+                    invocation_kind=ContextInvocationKind.LEAD,
+                    result_contract=lead_factory,
+                    physical_call_limit=physical_call_limit,
+                    include_core_statuses=True,
+                    session_state_json=self._session_context_state(
+                        session_id,
+                        artifact_binding=artifact_binding,
+                        session_history=session_history,
+                    ),
+                    execution_workspace=execution_workspace,
+                )
                 result = None
                 correction_call_limit = 1
                 corrective_rejection_code: ContextProviderTerminalCode | None = None
@@ -12283,8 +12533,9 @@ class StoryRuntime:
                         focused_conversation=authorities[1],
                         active_debate=authorities[2],
                         own_agent_state=authorities[3],
-                        answer_validator=validate,
-                        answer_diagnostic=diagnose,
+
+
+
                         validation_sink=provider.record_validation_details,
                         event_sink=context_event_sink,
                         progress_sink=action_progress_sink,
@@ -12293,7 +12544,8 @@ class StoryRuntime:
                             session_history=session_history,
                         ),
                     )
-                except BaseException as first_failure:
+                except BaseException as captured_failure:
+                    first_failure = captured_failure
                     facts = context_provider_failure_facts(first_failure)
                     rejection_code = facts.response_rejection_code
                     correction_available = (
@@ -12305,7 +12557,7 @@ class StoryRuntime:
                     )
                     if not correction_available:
                         raise
-                    if isinstance(first_failure, _LeadOutcomeValidationError):
+                    if _lead_is_source_owner_rejection(first_failure):
                         artifact_failure = prepare_selected or declared_artifact_intent or (
                             decoded is not None and decoded.artifact_intent is not None
                         )
@@ -12329,6 +12581,7 @@ class StoryRuntime:
                     rejected_call_id = provider.last_submitted_call_id
 
                 if corrective_rejection_code is not None:
+                    repair_lineage = lead_factory.repair_lineage(first_failure)
                     corrective_current = self._context_material(
                         source_id="runtime_input:current",
                         semantic_channel=ContextSemanticChannel.CURRENT_INPUT,
@@ -12339,6 +12592,7 @@ class StoryRuntime:
                             "response_correction": {
                                 "instruction": _LEAD_RESPONSE_CORRECTION_INSTRUCTION,
                                 "rejection_code": corrective_rejection_code.value,
+                                "bound_contract": json.loads(lead_factory.corrective_input(first_failure)),
                             },
                         },
                     )
@@ -12387,6 +12641,7 @@ class StoryRuntime:
                             step_id=step_id,
                             persist_message=preparation is None,
                             validation_details=provider.validation_details,
+                            language=provider.effective_language, task_revisions=provider.task_revisions,
                             state=(
                                 CollaborationStepState.SUPERSEDED
                                 if previous_proposal is not None
@@ -12403,15 +12658,11 @@ class StoryRuntime:
                             focused_conversation=authorities[1],
                             active_debate=authorities[2],
                             own_agent_state=authorities[3],
-                            answer_validator=validate,
-                            answer_diagnostic=diagnose,
                             validation_sink=provider.record_validation_details,
                             event_sink=context_event_sink,
                             progress_sink=action_progress_sink,
-                            **self._lead_continuation_arguments(
-                                session_id, conversation_id, turn_id, step_id,
-                                session_history=session_history,
-                            ),
+                            **self._lead_continuation_arguments(session_id, conversation_id, turn_id, step_id, session_history=session_history),
+                            contract_lineage=repair_lineage,
                         )
                     except BaseException as correction_failure:
                         correction_facts = context_provider_failure_facts(
@@ -12445,6 +12696,7 @@ class StoryRuntime:
                                 step_id=step_id,
                                 persist_message=preparation is None,
                                 validation_details=provider.validation_details,
+                                language=provider.effective_language, task_revisions=provider.task_revisions,
                                 state=(
                                     CollaborationStepState.SUPERSEDED
                                     if previous_proposal is not None
@@ -12482,6 +12734,7 @@ class StoryRuntime:
                             step_id=step_id,
                             persist_message=preparation is None,
                             validation_details=provider.validation_details,
+                            language=provider.effective_language, task_revisions=provider.task_revisions,
                             state=(
                                 CollaborationStepState.SUPERSEDED
                                 if previous_proposal is not None
@@ -12557,7 +12810,7 @@ class StoryRuntime:
                     invocation_id=provider.invocation_id,
                     call_id=provider.last_submitted_call_id,
                     failure_code=(
-                        CollaborationLeadOutcomeFailureCode.ARTIFACT_INTENT_REJECTED
+                        (CollaborationLeadOutcomeFailureCode.ARTIFACT_INTENT_REJECTED
                         if (
                             declared_artifact_intent
                             or prepare_selected
@@ -12566,7 +12819,7 @@ class StoryRuntime:
                                 and decoded.artifact_intent is not None
                             )
                         )
-                        else CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED
+                        else CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED if _lead_is_source_owner_rejection(failure) else CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED)
                     ),
                     accounting_provider=provider,
                 )
@@ -13715,16 +13968,17 @@ class StoryRuntime:
             artifact_binding
         )
         current_statuses: dict[str, CollaborationEvidenceReceipt] | None = None
-        empty_digest = "sha256:" + hashlib.sha256(b"").hexdigest()
         result: list[ArtifactIntentEvidence] = []
         for receipt in evidence.receipts:
             if receipt.acquisition is CollaborationEvidenceAcquisition.CORE_STATUS:
                 if (
                     receipt.source_kind is not CollaborationInputKind.CORE_DOCUMENT
-                    or receipt.locator not in CORE_ARTIFACT_PATHS
-                    or receipt.source_state is not CollaborationInputState.PRESENT
-                    or receipt.utf8_bytes != 0
-                    or receipt.content_digest != empty_digest
+                    or not empty_core_status_evidence(
+                        locator=receipt.locator,
+                        present=receipt.source_state is CollaborationInputState.PRESENT,
+                        utf8_bytes=receipt.utf8_bytes,
+                        content_digest=receipt.content_digest,
+                    )
                 ):
                     continue
                 if current_statuses is None:
@@ -13776,6 +14030,7 @@ class StoryRuntime:
                     'artifact evidence is missing runtime identity',
                 )
             locator = receipt.locator
+            whole_read = False
             if (
                 receipt.acquisition
                 is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE
@@ -13800,14 +14055,18 @@ class StoryRuntime:
                     session_sources=session_sources,
                 )
                 source_digest = snapshot.descriptor.content_digest
+                whole_read = (
+                    receipt.content_digest == snapshot.descriptor.content_digest
+                    and receipt.utf8_bytes == snapshot.descriptor.utf8_bytes
+                )
             result.append(
                 ArtifactIntentEvidence(
                     evidence_id=receipt.evidence_id,
                     path=path,
                     source_digest=source_digest,
                     boundary_digest=receipt.content_digest,
-                    start_line=receipt.start_line,
-                    end_line=receipt.end_line,
+                    start_line=None if whole_read else receipt.start_line,
+                    end_line=None if whole_read else receipt.end_line,
                 )
             )
         return tuple(result)
@@ -14100,55 +14359,11 @@ class StoryRuntime:
             failure_code
             is CollaborationLeadOutcomeFailureCode.ARTIFACT_INTENT_REJECTED
         )
-        failure_detail = (
-            str(failure).strip()
-            if failure is not None and isinstance(failure, BackendProtocolError)
-            else ""
-        )
-        if failure_code is CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED:
-            message = (
-                f"The Lead provider returned a result that the runtime rejected ({failure_detail}). Retry "
-                "the lead turn; the rejected provider call will not be replayed."
-                if failure_detail
-                else (
-                    "The Lead provider returned a result that the runtime rejected. Retry "
-                    "the lead turn; the rejected provider call will not be replayed."
-                )
-            )
-        else:
-            message = (
-                f"The lead result failed runtime evidence validation ({failure_detail}). Retry the "
-                "lead turn; the rejected provider call will not be replayed."
-                if failure_detail
-                else (
-                    "The lead result failed runtime evidence validation. Retry the "
-                    "lead turn; the rejected provider call will not be replayed."
-                )
-            )
-        attempt_messages = {
-            CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED:
-                "The Lead request stopped before a provider call was recorded.",
-            CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED:
-                f"The Lead provider attempt failed without a usable result ({failure_detail})."
-                if failure_detail
-                else "The Lead provider attempt failed without a usable result.",
-            CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT:
-                f"The Lead provider attempt exceeded its response timeout ({failure_detail})."
-                if failure_detail
-                else "The Lead provider attempt exceeded its response timeout.",
-            CollaborationLeadOutcomeFailureCode.CANCELLED:
-                "The Lead provider attempt was cancelled.",
-            CollaborationLeadOutcomeFailureCode.INTERRUPTED:
-                f"The prior Lead provider attempt ended without a recorded result ({failure_detail})."
-                if failure_detail
-                else "The prior Lead provider attempt ended without a recorded result.",
-        }
-        if failure_code in attempt_messages:
-            message = (
-                attempt_messages[failure_code]
-                + " Your original request and failure remain in history. "
-                "Send a new message or resubmit your request in this conversation."
-            )
+        message = _lead_terminal_notice(
+            accounting_provider.effective_language if accounting_provider is not None else None,
+            accounting_provider.task_revisions if accounting_provider is not None else (),
+            "rejected", accounting_provider.validation_details if accounting_provider is not None else (),
+            failure_code.value)
         if accounting_provider is not None:
             accounting_provider.publish_public_responses()
         try:
@@ -14246,9 +14461,13 @@ class StoryRuntime:
         validation_details: tuple[str, ...] = (),
         message: str = _SAFE_STRUCTURED_FALLBACK_MESSAGE,
         provider_invocation_id: str | None = None,
+        language: str | None = None,
+        task_revisions: tuple[tuple[str, int], ...] = (),
     ) -> LeadTurnResult:
         """Persist one visible no-action answer after exhausted schema repair."""
 
+        if message == _SAFE_STRUCTURED_FALLBACK_MESSAGE:
+            message = _lead_terminal_notice(language, task_revisions, state, validation_details)
         trace = ReplyTrace(
             role=LEAD_ORCHESTRATOR,
             action="none",
@@ -14279,6 +14498,23 @@ class StoryRuntime:
                         ),
                     ),
                 ),
+            )
+        events = self.conversation_storage_services.event_store.read(session_id, conversation_id)
+        control = next((event for event in events
+                        if type(event.payload) is CollaborationLeadTaskTransitionPayload
+                        and (event.turn_id, event.step_id) == (turn_id, step_id)
+                        and event.payload.receipt.action is LeadTaskAction.DISCUSS), None)
+        if control is not None:
+            current = project_collaboration_history(events)
+            return self._discussion_turn(
+                session_id, conversation_id, turn_id, step_id,
+                LeadDiscussionReport(response_kind="answer", response_text=message,
+                                     origin_control_event_id=control.event_id,
+                                     associated_task_ref=control.payload.receipt.source_task_ref),
+                current,
+
+                validation_details=validation_details,
+                provider_invocation_id=provider_invocation_id,
             )
         evidence = CollaborationLeadEvidence(
             LeadOutcomeScope.WORKFLOW_META,
@@ -14588,9 +14824,11 @@ class StoryRuntime:
                 assignment_index = next(
                     index for index, raw in enumerate(raw_assignments) if raw is item
                 )
-                if type(item) is not dict or set(item) != {
-                    "agent_id", "input_ids", "instruction", "mode",
-                }:
+                expected_fields = {"agent_id", "input_ids", "instruction", "mode"}
+                if (type(item) is dict
+                        and item.get("mode") == SpecialistAssignmentMode.REVIEW.value):
+                    expected_fields.add("review_basis")
+                if type(item) is not dict or set(item) != expected_fields:
                     raise validation_failure(
                         ValueError(),
                         f'$.proposal.assignments[{assignment_index}]',
@@ -14615,15 +14853,13 @@ class StoryRuntime:
                                  item['mode'],
                              ),
                         review_basis=(
-                                         validation_call(
-                                             f'$.proposal.assignments[{assignment_index}]',
-                                             _provider_review_basis,
-                                             tuple(item['input_ids']),
-                                             item['instruction'],
-                                         )
-                                         if item['mode'] == SpecialistAssignmentMode.REVIEW.value
-                                         else None
-                                     ),
+                            validation_call(
+                                f'$.proposal.assignments[{assignment_index}].review_basis',
+                                _provider_review_basis,
+                                item["review_basis"],
+                            )
+                            if item["mode"] == SpecialistAssignmentMode.REVIEW.value else None
+                        ),
                     )
                 )
             proposal = validation_call(
@@ -17471,7 +17707,7 @@ class StoryRuntime:
             input_revision = inputs_by_id.get(reference.reference_id)
             if input_revision is None:
                 raise validation_failure(
-                    _LeadOutcomeValidationError('lead reference evidence is not an authoritative input'),
+                    _lead_source_owner_rejection(_LeadOutcomeValidationError('lead reference evidence is not an authoritative input')),
                     '$.authoring_scope',
                     'lead reference evidence is not an authoritative input',
                 )
@@ -17555,7 +17791,7 @@ class StoryRuntime:
         available_by_id = {item.evidence_id: item for item in available}
         if len(available_by_id) != len(available):
             raise validation_failure(
-                _LeadOutcomeValidationError('runtime evidence IDs are duplicate'),
+                _lead_source_owner_rejection(_LeadOutcomeValidationError('runtime evidence IDs are duplicate')),
                 '$.authoring_scope',
                 'runtime evidence IDs are duplicate',
             )
@@ -17608,7 +17844,7 @@ class StoryRuntime:
                 status = LeadEvidenceStatus.NOT_APPLICABLE
             else:
                 raise validation_failure(
-                    _LeadOutcomeValidationError('story-specific Lead outcome has no runtime evidence'),
+                    _lead_source_owner_rejection(_LeadOutcomeValidationError('story-specific Lead outcome has no runtime evidence')),
                     '$.authoring_scope',
                     'story-specific Lead outcome has no runtime evidence',
                 )

@@ -72,9 +72,9 @@ depend on terminal presentation or concrete persistence.
 - `agents`, `models`, `errors`, `config`, `prompts`, `directives`, `artifact_proposals`
 - `specialist_routing`, `authoring_admission`, `core_document_readiness`, `reply_trace`, `run_inputs`
 
-Primary access is the root facade. `specialist_routing` owns pure shared `AuthoringIntent`, independent of activity; conversation codecs preserve its immutable task lineage. `config` owns configuration loading. Scope-v3 contribution/dependency declarations and consistent per-specialist roles remain pure routing contracts; historical scope constructors retain default version 2. Historical drafting-input eligibility is pure routing policy; current execution proof remains host-owned. `core_document_readiness` owns pure whole-book criteria, document dependencies and current-source projection; adapters qualify actual USER/READ origins and retain causal captures in existing event stores. Completion grants no execution or write authority.
+Primary access is the root facade. `specialist_routing` owns pure shared `AuthoringIntent`, independent of activity; conversation codecs preserve its immutable task lineage. `config` owns configuration loading. Scope-v3 contribution/dependency declarations and consistent per-specialist roles remain pure routing contracts; historical scope constructors retain default version 2. Historical drafting-input eligibility is pure routing policy; current execution proof remains host-owned. `core_document_readiness` owns pure whole-book criteria, document dependencies and current-source projection; adapters qualify actual USER/READ origins and retain causal captures in existing event stores. Completion grants no execution or write authority. Scope duties and exact legal rosters share immutable pure declarations; admission, readiness, exploration and premise owners declare their intrinsic result rules and current finite coverage codecs.
 `prompts` owns captured policy bytes, stable fingerprints and runtime authority invariants; stages remain invocation data without provider execution.
-`models` carries optional diagnostics and keyword-only `AgentRequest.expected_reviewed_proposal` and `review_only` hints, without next-action authority.
+`models` carries optional diagnostics and keyword-only `AgentRequest.expected_reviewed_proposal` and `review_only` hints, without next-action authority. Frozen scope rules carry their version and own current exact specialist rosters shared with event validation.
 
 ### Runtime orchestration and providers
 
@@ -85,23 +85,20 @@ authentication, recovery, and diagnostic behavior behind provider-neutral contra
 - `provider_auth`, `provider_auth_recovery`, `provider_catalog`, `provider_process`, `provider_execution_workspace`
 - `provider_error_artifacts`, `debug_log`, `structured_output_validation`, `lead_provider_contracts`, `provider_wire`
 
-`orchestrator` composes domain contracts, storage, consensus, Git story commits, references, and provider-neutral backends. Its Apply handoff prepares the Git candidate before atomically publishing the known result with one exact Commit request; proven absence publishes a reprepare result, while ambiguous publication requires inspection.
+`orchestrator` composes domain contracts, storage, consensus, Git story commits, references, and provider-neutral backends. Its Apply handoff prepares the Git candidate before atomically publishing the known result with one exact Commit request; proven absence publishes a reprepare result, while ambiguous publication requires inspection. The shared reference loader forwards typed delivery proofs; legacy consumers receive context only.
 `provider_process` owns bounded subprocess transport and descriptor-pinned launch/cleanup for trusted native provider processes; it provides no OS filesystem confinement.
-Adapters own native command settings and resource validation; `provider_auth` owns probes; diagnostic adapters own their files.
+Adapters own native settings/resources; `provider_auth` owns probes; diagnostic adapters own files. Backend success postchecks normalize admitted records; failure diagnostics retain strict native schemas.
 Concrete adapters depend on `provider_adapter`. `provider_execution_workspace` owns the internal exact-worktree capability
 borrowed from the workspace binding for both providers; launch uses its duplicated root descriptor. No Git lease spans provider work.
 Continuation, structured repair, authentication replay, and deferred acceptance retain the same generation authority.
-`structured_output_validation` owns pure, bounded diagnostics from trusted schemas and
-source-authored domain findings. Domain validators identify the rejected property and rule;
-orchestration and adapters retain findings through exception translation and map domain
-fields to provider wire paths. This package-internal boundary owns no provider state,
-persistence, or authority and is not a public facade.
-`provider_wire` is a stateless stdlib leaf for vocabulary, projections, schemas, diagnostics, and invocation
-guidance derived from current schema choices; semantic owners retain domain APIs, storage, and state.
+`structured_output_validation` owns sealed bound contracts derived from one canonical rule graph, exact JSON numbers, construction-time typed-decoder declarations, named host-check declarations and trusted repair facts. Pure owners declare rules and permitted hooks; concrete contracts fix schema identity, validation sequencing and repair. Domain validators supply source-authored property findings; orchestration preserves them through provider path translation and retains language-neutral terminal facts and literal answers. Free authoring-slot ID uniqueness stays with the specialist scope rule owner and supplies a named residual check plus concrete native findings before typed scope construction; fixed slot objects remain structurally unique. Alias-neutral acyclic fingerprints support pure Lead graph factoring. Complete graph fingerprints retain all definition checks; compiler-only selected-root identities share the same fresh recursion for detached plain JSON contexts. Explicit schema-node proofs remain available for independent compiler queries. Each `SchemaRules` lazily owns immutable diagnostic grammar with prepared reference/union metadata and schema-admission facts for eligible repeated findings; fresh bounded payload/query state and schema source/owner consistency preserve mutable exports and diagnostic behavior without repeated implementation attestation. The Source-authored optional records have one logical declaration; strict native presence encoding is compiled transport output. `SchemaRules.provider_projection` binds an exact owner to a checked `ProviderSchemaProjection` (including declared numeric lowering), with immutable native bytes and fresh strict query state. JSON/value diagnostic entrypoints accept either exact owner for caller-scoped reuse; raw mappings retain their original diagnostic path. This package-internal boundary owns no provider state, persistence, authority or public facade. SchemaRules owns immutable union-scoped identity dispatch and response-record normalization; explicit finite-selection maps retain semantic keys, while provider exports remove internal role annotations and remain strict.
+
+`provider_wire` owns stateless vocabulary, projections, schemas, diagnostics and guidance. It consumes public core fingerprints for component rebasing, contextual Lead scope projection/inverse decoding and lossless final-document annotation sharing. Lead and service compose graphs; domain owners retain APIs, storage and state.
+
 `lead_exploration`, `editorial_state`/`editorial_scope`, `lead_premise_decisions`, and `lead_task_transitions` own immutable whole/ranged provisional material with explicit intent, USER editorial records with canonical coverage/causal relations and exact application observations, and whole premise choice/cost contracts and USER task/discussion/source receipts. Exploration shares pure specialist intent without an upward dependency. Consumers own workflow authority; conversation events/replay retain these facts in the existing store without a new registry or resource owner.
-`lead_provider_contracts` owns immutable Lead choice snapshots shared by schema projections,
-prompt facts, and closed validation rules. It depends on domain contracts; orchestration
-retains confirmation, current-source membership, READ receipt, and lifecycle authority.
+
+`lead_provider_contracts` owns pure Lead rule owners and complete frozen semantic indices. Physical policy, exact finite choices, typed codecs and named checks derive schema IDs together; current duties, source edges and family details depend on domain and wire owners. Orchestration captures pure Lead planning seeds, stage, language and logical eligibility and constructs the typed factory before request composition. The factory captures its authorization declaration during construction; response decoding checks actual call/offer/repair/replay binding and invokes the captured validator with live authorization context. Current scope and prospective targets retain distinct owner constraints; substantive assignment and artifact eligibility remain in the shared rule graph. Complete indices use Wire-owned lossless annotation sharing after graph factoring. Orchestration and service retain confirmation, current-source membership, READ receipt and lifecycle authority. Current wire binds version-3 rosters; orchestration preserves reviewer-agent/input-alias pairs from actual receipts. The conversations-owned `lead_outcome_scope_paths` law shares actual kind/scope eligibility between frozen graphs, durable evidence validation and current authorized receipt checks; only qualified ordinary factual ANSWER uses REVIEW without action authority, while non-WORKFLOW CRITIQUE is unavailable. Common-scalar fingerprint groups retain original logical families, exact decoder members and contiguous physical cost partitions. Shared family details carry explicit member variant identities; direct selection retains the original member validation and inverse codec.
+Empty-core evidence shares a pure eligibility rule with final runtime checks. Artifact operations consume shared source protection and canonical destination-kind rules before frozen binding.
 
 ### Agent context and source budgeting
 
@@ -117,7 +114,10 @@ Dependencies flow from `service`, `sources`, and `progress` toward manifest/acti
 contracts. Filesystem source access is delegated to writing-artifact and workspace owners. Optional
 validation diagnostics preserve rejection, repair, checkpoint, and authority decisions.
 
-`service` owns provider delivery, exact payload UTF-8 capacity diagnostics and verified native continuity; host retains integrity receipts and complete-history coverage. `request_compaction` shares only when properties and bytes decrease before accounting; it owns no durable state or resources.
+`service` owns provider delivery, exact payload UTF-8 capacity diagnostics and verified native continuity; `backend` enforces native-schema and combined schema-plus-payload input budgets from `conversations.session_context`. Logical payload and member-schema preflights retain their limits. Host retains integrity receipts and complete-history coverage. `request_compaction` shares only when properties and bytes decrease before accounting; it owns no durable state or resources. Genuine mandatory-reference proofs enter current READ offers only through the typed prelude factory and reservation checks; their complete metadata is bound into the offer digest.
+Actual status snapshots stay separate from READ and are pinned in offer and repair digests.
+`BoundCallContract` retains exact call/offer and outer/inner relationships. Raw JSON and decoded-value entry points share owner-issued normalized values, typed/domain validation and live host checks; raw parsing and original-byte limits remain at the wire entry.
+Stable trusted schema/decoder implementations are not re-attested for each response.
 
 ### Agent exchange capture
 
@@ -139,7 +139,7 @@ search/storage contracts without owning persistence.
 - `conversations.events`, `conversations.session_context`
 - `conversation_search`, `conversation_literal_search`, `conversation_retrieval`
 
-`catalog` owns catalog behavior; `events` owns typed exploration request/report/adoption captures and schema-v2 event contracts; `context` enforces exact USER adoption input and fresh intent-bound work; `session_context` qualifies pinned same-session report sources across owners, and `context` projects exact Commit authority or typed reprepare from durable Apply history; `session_context` projects exact session history and owns the fixed UTF-8 delivery cap/content-free capacity exception, without storage bookkeeping or native-thread ownership; `events` also owns immutable qualified premise captures and strict basis-v2 codecs; `context` validates first-confirm task pins and inherits both physical-call and round counters through the existing confirmed recommendation handoff.
+`catalog` owns catalog behavior; `events` owns typed exploration request/report/adoption captures and schema-v2 event contracts; `context` enforces exact USER adoption input and fresh intent-bound work; `session_context` qualifies pinned same-session report sources across owners, and `context` projects exact Commit authority or typed reprepare from durable Apply history; `session_context` projects exact session history and owns the fixed UTF-8 delivery cap/content-free capacity exception, without storage bookkeeping or native-thread ownership; `events` also owns immutable qualified premise captures, strict basis-v2 codecs, and the pure factual-READ scope law exposed through `conversations` (with the existing `lead_provider_contracts` import retained); `context` validates first-confirm task pins and inherits both physical-call and round counters through the existing confirmed recommendation handoff.
 fresh delivery is complete, while compatible continuation carries unseen facts. Search implementations must return public
 search/retrieval contracts rather than expose storage internals. Conversation events and
 retrieval may carry bounded validation details associated with the physical provider call;
@@ -193,16 +193,16 @@ Results may carry ordered provider validation details; historical serialized res
 
 Responsibility: parse artifact references, authorize reviewed changes, model change sets and
 relationships, read sources, and apply/persist artifacts through a repository boundary.
-`writing_artifacts` is the supported facade; underscored storage/evidence modules are private.
+`writing_artifacts` is the supported facade; underscored storage/evidence modules are private. `relationship_policy` owns shared source-operation/kind rules; `catalog` declares exact kind-path grammar for host and Lead.
 
 - `writing_artifacts`, `writing_artifacts.application_contracts`
 - `writing_artifacts.authorization`, `writing_artifacts.catalog`, `writing_artifacts.change_sets`, `writing_artifacts.directives`
 - `writing_artifacts.read_actions`, `writing_artifacts.references`, `writing_artifacts.relationship_policy`, `writing_artifacts.runtime_references`
 - `writing_artifacts.filesystem_sources`, `writing_artifacts.repository`, `writing_artifacts._reference_evidence`, `writing_artifacts._application_store`, `writing_artifacts._storage`
 
-`repository` owns artifact filesystem mutation and strict core absence batches; private stores own durable metadata.
+`repository` owns artifact filesystem mutation and strict core absence batches; private stores own durable metadata. The public `read_actions.ReferenceReadResult` preserves actual authorized delivery proofs beside closeable bytes; no lower reference owner imports context or backend code.
 Session callers borrow descriptor-bound repositories from the workspace binding; root configuration remains the control plane.
-Runtime references retain exact session-owned evidence and release their generation pin at terminal use.
+Runtime references retain exact session-owned evidence and release their generation pin at terminal use. `references.coalesce_reference_aliases` owns physical alias coverage; `authorization` projects exact logical-alias proofs from captured bytes through the public `runtime_references` facade without another READ.
 Callers must not import `_storage`, `_application_store`, or `_reference_evidence`.
 
 ### Git resources, history, checkpoints, and story commits

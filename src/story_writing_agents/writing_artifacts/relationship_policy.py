@@ -11,6 +11,7 @@ from ..specialist_routing import ArtifactReviewDomain, artifact_domain
 from .catalog import CORE_ARTIFACT_PATHS, ArtifactKind, canonical_artifact_kind
 from .change_sets import (
     ArtifactChangeSet,
+    ArtifactChangeOperationKind,
     ArtifactCreateOperation,
     ArtifactDeleteOperation,
     ArtifactPatchOperation,
@@ -419,21 +420,37 @@ def _require_attached_core_paths(value: object) -> tuple[str, ...]:
     return value
 
 
-def _reject_protected_core_operations(change_set: ArtifactChangeSet) -> None:
+def artifact_source_operation_rule(
+    operation_kind: ArtifactChangeOperationKind,
+    source_path: str,
+) -> tuple[bool, ArtifactKind | None]:
+    """Return source permission and the required rename destination kind."""
+
+    if type(operation_kind) is not ArtifactChangeOperationKind or type(source_path) is not str:
+        raise TypeError("artifact operation rule requires exact kind and source text")
+    source_kind = canonical_artifact_kind(source_path)
+    allowed = source_kind is not None and not (
+        operation_kind in (ArtifactChangeOperationKind.RENAME, ArtifactChangeOperationKind.DELETE)
+        and source_path in _CORE_PATH_SET
+    )
+    destination_kind = source_kind if operation_kind is ArtifactChangeOperationKind.RENAME else None
+    return allowed, destination_kind
+
+
+def _reject_protected_core_operations(
+    change_set: ArtifactChangeSet,
+    *,
+    _source_rule=artifact_source_operation_rule,
+) -> None:
     for operation_index, operation in enumerate(change_set.operations):
-        protected = (
-            type(operation) is ArtifactRenameOperation
-            and operation.source_path in _CORE_PATH_SET
-        ) or (
-            type(operation) is ArtifactDeleteOperation
-            and operation.path in _CORE_PATH_SET
+        source_path = (
+            operation.source_path if type(operation) is ArtifactRenameOperation else operation.path
         )
-        if protected:
+        if not _source_rule(operation.operation_kind, source_path)[0]:
             raise ArtifactRelationshipError(
                 ArtifactRelationshipErrorCode.PROTECTED_CORE_OPERATION,
                 operation_index=operation_index,
             )
-
 
 def _parse_state_relationships(
     state: Mapping[str, bytes],
@@ -845,5 +862,6 @@ __all__ = (
     "ArtifactReviewDomain",
     "ArtifactReviewFact",
     "ArtifactReviewReason",
+    "artifact_source_operation_rule",
     "validate_artifact_relationships",
 )

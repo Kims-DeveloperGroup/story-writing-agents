@@ -62,14 +62,12 @@ _AUTHORITY = {
     ContextSourceKind.WRITING_ARTIFACT: ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY,
     ContextSourceKind.CONVERSATION: ContextAuthorityKind.CONVERSATION_STORAGE,
     ContextSourceKind.ACTIVE_DEBATE: ContextAuthorityKind.ACTIVE_DEBATE,
-    ContextSourceKind.OWN_AGENT_STATE: ContextAuthorityKind.OWN_AGENT_STATE,
-}
+    ContextSourceKind.OWN_AGENT_STATE: ContextAuthorityKind.OWN_AGENT_STATE,}
 _CHANNEL = {
     ContextSourceKind.WRITING_ARTIFACT: ContextSemanticChannel.FOCUSED_EVIDENCE,
     ContextSourceKind.CONVERSATION: ContextSemanticChannel.HISTORY,
     ContextSourceKind.ACTIVE_DEBATE: ContextSemanticChannel.HARD_CONSTRAINT,
-    ContextSourceKind.OWN_AGENT_STATE: ContextSemanticChannel.OPTIONAL_BACKGROUND,
-}
+    ContextSourceKind.OWN_AGENT_STATE: ContextSemanticChannel.OPTIONAL_BACKGROUND,}
 
 
 def _digest(body: bytes) -> str:
@@ -92,8 +90,7 @@ def _scope(
         session_id,
         subject_kind,
         subject_id,
-        agent_id,
-    )
+        agent_id,)
 
 
 def _entry(
@@ -114,8 +111,7 @@ def _entry(
         descriptor.content_digest,
         descriptor.provenance,
         descriptor.utf8_bytes,
-        searchable=True,
-    )
+        searchable=True,)
 
 
 def _artifact_snapshot(
@@ -135,8 +131,7 @@ def _artifact_snapshot(
             _digest(line.encode("utf-8")),
             len(line.encode("utf-8")),
         )
-        for index, line in enumerate(lines, start=1)
-    )
+        for index, line in enumerate(lines, start=1))
     descriptor = ContextSourceDescriptor(
         scope,
         _artifact_id(path),
@@ -144,8 +139,7 @@ def _artifact_snapshot(
         _digest(revision_seed),
         ContextProvenance(
             ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY,
-            path,
-        ),
+            path,),
         _digest(body),
         len(body),
         len(records),
@@ -174,8 +168,7 @@ class _SourceFixture(unittest.TestCase):
             session_id="session",
             debate_id="publication",
             revision_id="r0",
-            candidate_author_agent_id=EXECUTION_SPECIALIST,
-        )
+            candidate_author_agent_id=EXECUTION_SPECIALIST,)
 
     def registry(
         self,
@@ -191,8 +184,7 @@ class _SourceFixture(unittest.TestCase):
                 services.catalog,
                 services.event_store,
                 scope,
-                conversation_id,
-            ),
+                conversation_id,),
             ActiveDebateSourceAdapter(self.workspace, scope, debate_id),
             OwnAgentStateSourceAdapter(self.workspace, scope),
         )
@@ -241,8 +233,7 @@ class SourceSurfacePolicyAndValueTests(unittest.TestCase):
         self.assertEqual(
             tuple(
                 getattr(CONTEXT_SOURCE_POLICY, field.name)
-                for field in fields(ContextSourcePolicy)
-            ),
+                for field in fields(ContextSourcePolicy)),
             (
                 4096,
                 8192,
@@ -278,8 +269,7 @@ class SourceSurfacePolicyAndValueTests(unittest.TestCase):
             max_source_utf8_bytes=10,
             max_inventory_body_utf8_bytes=20,
             max_source_scan_utf8_bytes=5,
-            max_cumulative_scan_utf8_bytes=10,
-        )
+            max_cumulative_scan_utf8_bytes=10,)
         self.assertEqual(valid.max_inventory_sources, 2)
         for override in (
             {"max_source_scan_utf8_bytes": 11},
@@ -308,8 +298,7 @@ class SourceSurfacePolicyAndValueTests(unittest.TestCase):
                 ),
             )
         self.assertEqual(
-            caught.exception.code, ContextSourceErrorCode.AUTHORITY_MISMATCH
-        )
+            caught.exception.code, ContextSourceErrorCode.AUTHORITY_MISMATCH)
         with self.assertRaises(ContextSourceError):
             replace(snapshot.records[0], content_digest=_DIGEST)
         with self.assertRaises(ContextSourceError):
@@ -350,8 +339,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
         for locator, code in (
             (
                 "../core_documents/global_outline.md",
-                ContextSourceErrorCode.SOURCE_UNSAFE,
-            ),
+                ContextSourceErrorCode.SOURCE_UNSAFE,),
             ("core_documents\\global_outline.md", ContextSourceErrorCode.SOURCE_UNSAFE),
             ("/core_documents/global_outline.md", ContextSourceErrorCode.SOURCE_UNSAFE),
             ("discussion_logs/private.md", ContextSourceErrorCode.AUTHORITY_MISMATCH),
@@ -389,8 +377,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
         )
         self.assertEqual(
             adapter.capture(allowed, CONTEXT_SOURCE_POLICY).descriptor,
-            inventory[0],
-        )
+            inventory[0],)
         with self.assertRaises(ContextSourceError) as caught:
             adapter.capture(blocked, CONTEXT_SOURCE_POLICY)
         self.assertIs(caught.exception.code, ContextSourceErrorCode.AUTHORITY_MISMATCH)
@@ -413,8 +400,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
         ):
             with self.assertRaises(ContextSourceError) as caught:
                 adapter.capture(
-                    "core_documents/global_outline.md", CONTEXT_SOURCE_POLICY
-                )
+                    "core_documents/global_outline.md", CONTEXT_SOURCE_POLICY)
         self.assertEqual(caught.exception.code, ContextSourceErrorCode.SOURCE_DRIFT)
 
         cores = sources_module.CORE_ARTIFACT_PATHS
@@ -544,11 +530,9 @@ class RealAuthorityAdapterTests(_SourceFixture):
             services.event_store,
             scope,
             conversation_id,
-            captured_context=captured_context,
-        )
+            captured_context=captured_context,)
         snapshot = adapter.capture(
-            f"conversation/{conversation_id}", CONTEXT_SOURCE_POLICY
-        )
+            f"conversation/{conversation_id}", CONTEXT_SOURCE_POLICY)
         self.assertEqual(
             tuple(record.record_id for record in snapshot.records),
             ("proposal_event", "request_event"),
@@ -556,14 +540,11 @@ class RealAuthorityAdapterTests(_SourceFixture):
         self.assertIn("Consult specialists", snapshot.records[0].search_text)
         self.assertNotIn("route_fingerprint", snapshot.records[0].search_text)
         self.assertEqual(
-            snapshot.descriptor.revision, snapshot.descriptor.content_digest
-        )
+            snapshot.descriptor.revision, snapshot.descriptor.content_digest)
         self.assertEqual(
-            snapshot.descriptor.source_id, f"conversation:{conversation_id}"
-        )
+            snapshot.descriptor.source_id, f"conversation:{conversation_id}")
         self.assertEqual(
-            snapshot.descriptor.provenance.locator, f"conversation/{conversation_id}"
-        )
+            snapshot.descriptor.provenance.locator, f"conversation/{conversation_id}")
         with mock.patch.object(
             adapter,
             "_capture_once",
@@ -571,8 +552,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
         ) as capture:
             self.assertEqual(
                 adapter.capture(
-                    f"conversation/{conversation_id}", CONTEXT_SOURCE_POLICY
-                ),
+                    f"conversation/{conversation_id}", CONTEXT_SOURCE_POLICY),
                 snapshot,
             )
         self.assertEqual(capture.call_count, 4)
@@ -591,8 +571,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
                 services.catalog,
                 services.event_store,
                 _scope(subject_id="other"),
-                conversation_id,
-            )
+                conversation_id,)
 
     def test_zero_record_focused_conversation_exists_with_explicit_bootstrap(
         self,
@@ -612,15 +591,13 @@ class RealAuthorityAdapterTests(_SourceFixture):
             services.catalog,
             services.event_store,
             _scope(subject_id=metadata.conversation_id),
-            metadata.conversation_id,
-        )
+            metadata.conversation_id,)
 
         inventory = adapter.inventory(CONTEXT_SOURCE_POLICY)
         self.assertEqual(len(inventory), 1)
         snapshot = adapter.capture(
             f"conversation/{metadata.conversation_id}",
-            CONTEXT_SOURCE_POLICY,
-        )
+            CONTEXT_SOURCE_POLICY,)
         self.assertEqual(snapshot.descriptor, inventory[0])
         self.assertEqual(snapshot.records, ())
         value = json.loads(snapshot.content)
@@ -652,8 +629,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
             _scope(subject_id=focused.conversation_id),
             focused.conversation_id,
             include_same_session_active=True,
-            include_searchable_history=True,
-        )
+            include_searchable_history=True,)
 
         inventory = adapter.inventory(CONTEXT_SOURCE_POLICY)
 
@@ -665,8 +641,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
             ),
         )
         focused_snapshot = adapter.capture(
-            f"conversation/{focused.conversation_id}", CONTEXT_SOURCE_POLICY
-        )
+            f"conversation/{focused.conversation_id}", CONTEXT_SOURCE_POLICY)
         self.assertEqual(
             tuple(record.record_id for record in focused_snapshot.records),
             (
@@ -679,8 +654,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
         )
         self.assertIs(
             adapter.capture(
-                f"conversation/{focused.conversation_id}", CONTEXT_SOURCE_POLICY
-            ),
+                f"conversation/{focused.conversation_id}", CONTEXT_SOURCE_POLICY),
             focused_snapshot,
         )
         services.catalog.create("session", "Created after snapshot")
@@ -694,8 +668,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
                     )
                 self.assertEqual(
                     caught.exception.code,
-                    ContextSourceErrorCode.AUTHORITY_MISMATCH,
-                )
+                    ContextSourceErrorCode.AUTHORITY_MISMATCH,)
 
     def test_active_debate_and_all_four_owner_states_are_public_exact_and_isolated(
         self,

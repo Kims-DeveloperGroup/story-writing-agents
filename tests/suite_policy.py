@@ -1,4 +1,4 @@
-"""Versioned selection and four-shard policy for the canonical test runner."""
+"""Versioned five-shard policy with one explicitly isolated canonical method."""
 
 from __future__ import annotations
 
@@ -9,11 +9,18 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 
-POLICY_VERSION = 2
-SHARD_COUNT = 4
+POLICY_VERSION = 3
+SHARD_COUNT = 5
+BASE_SHARD_COUNT = 4
+WEIGHT_POLICY_VERSION = 2
 WEIGHT_SCHEMA_VERSION = 1
 WEIGHT_MANIFEST_PATH = Path(__file__).parent / "fixtures" / "test_timing_weights_v1.json"
-SHARD_ALGORITHM = "class-lpt-v2"
+SHARD_ALGORITHM = "class-lpt-v2-isolated-front-v1"
+ISOLATED_TEST_ID = (
+    "tests.test_lead_orchestration.LeadOutcomeAndProposalTests."
+    "test_front_schema_is_minimal_closed_and_provider_strict"
+)
+ISOLATED_WEIGHT_BASIS = "historical-class-equal-share-estimate"
 
 
 class SuitePolicyError(ValueError):
@@ -106,7 +113,7 @@ def load_timing_weights(path: Path = WEIGHT_MANIFEST_PATH) -> TimingWeights:
         raise SuitePolicyError("timing weight manifest fields are not exact")
     if payload["schema_version"] != WEIGHT_SCHEMA_VERSION:
         raise SuitePolicyError("unsupported timing weight schema version")
-    if payload["policy_version"] != POLICY_VERSION:
+    if payload["policy_version"] != WEIGHT_POLICY_VERSION:
         raise SuitePolicyError("timing weight policy version does not match suite policy")
     fallback = payload["fallback_test_weight_microseconds"]
     if type(fallback) is not int or fallback <= 0:
@@ -139,14 +146,16 @@ def load_timing_weights(path: Path = WEIGHT_MANIFEST_PATH) -> TimingWeights:
 def partition_full_shards(
     canonical_ids: Sequence[str], weights: TimingWeights
 ) -> ShardPlan:
-    """Partition complete class groups using deterministic four-bin LPT."""
+    """Keep the historical four-bin LPT assignment, then isolate one exact method."""
 
     if len(set(canonical_ids)) != len(canonical_ids):
         raise SuitePolicyError("canonical inventory contains duplicate IDs")
+    if ISOLATED_TEST_ID not in canonical_ids:
+        raise SuitePolicyError("canonical inventory is missing the isolated test ID")
     groups: dict[str, list[str]] = {}
     for identifier in canonical_ids:
         groups.setdefault(canonical_group_id(identifier), []).append(identifier)
-    if len(groups) < SHARD_COUNT:
+    if len(groups) < BASE_SHARD_COUNT:
         raise SuitePolicyError("four nonempty shards require at least four class groups")
     stale = tuple(sorted(set(weights.group_weights_microseconds) - set(groups)))
     if stale:
@@ -161,24 +170,40 @@ def partition_full_shards(
                 weights.fallback_test_weight_microseconds * len(identifiers)
             )
             fallback.append(group_id)
-    assigned_groups: list[list[str]] = [[] for _ in range(SHARD_COUNT)]
-    totals = [0] * SHARD_COUNT
+    assigned_groups: list[list[str]] = [[] for _ in range(BASE_SHARD_COUNT)]
+    totals = [0] * BASE_SHARD_COUNT
     assignment: dict[str, int] = {}
     for group_id in sorted(groups, key=lambda item: (-effective[item], item)):
-        shard = min(range(SHARD_COUNT), key=lambda index: (totals[index], index))
+        shard = min(range(BASE_SHARD_COUNT), key=lambda index: (totals[index], index))
         assigned_groups[shard].append(group_id)
         assignment[group_id] = shard
         totals[shard] += effective[group_id]
     shard_ids = tuple(
         tuple(identifier for identifier in canonical_ids
               if assignment[canonical_group_id(identifier)] == index)
-        for index in range(SHARD_COUNT)
+        for index in range(BASE_SHARD_COUNT)
     )
+    isolated_group = canonical_group_id(ISOLATED_TEST_ID)
+    original_shard = assignment[isolated_group]
+    isolated_weight = effective[isolated_group] // len(groups[isolated_group])
+    shard_ids = tuple(tuple(value for value in shard if value != ISOLATED_TEST_ID) for shard in shard_ids)
+    if any(not shard for shard in shard_ids):
+        raise SuitePolicyError("isolated extraction must retain four nonempty original shards")
+    shard_ids += ((ISOLATED_TEST_ID,),)
+    if len(groups[isolated_group]) == 1:
+        assigned_groups[original_shard].remove(isolated_group)
+    assigned_groups.append([isolated_group])
+    totals[original_shard] -= isolated_weight
+    totals.append(isolated_weight)
     plan_payload = {
         "algorithm": SHARD_ALGORITHM,
         "policy_version": POLICY_VERSION,
         "shard_count": SHARD_COUNT,
         "weight_digest": weights.digest,
+        "isolated_test_id": ISOLATED_TEST_ID,
+        "isolated_weight_basis": ISOLATED_WEIGHT_BASIS,
+        "isolated_weight_microseconds": isolated_weight,
+        "isolated_original_shard": original_shard + 1,
         "assignments": [
             {"group_id": group_id, "shard": assignment[group_id] + 1, "weight_microseconds": effective[group_id]}
             for group_id in sorted(groups)
@@ -196,7 +221,10 @@ def partition_full_shards(
 
 
 __all__ = [
+    "BASE_SHARD_COUNT",
     "FAST_TEST_IDS",
+    "ISOLATED_TEST_ID",
+    "ISOLATED_WEIGHT_BASIS",
     "POLICY_VERSION",
     "SHARD_ALGORITHM",
     "SHARD_COUNT",
@@ -204,6 +232,7 @@ __all__ = [
     "SuitePolicyError",
     "TimingWeights",
     "WEIGHT_MANIFEST_PATH",
+    "WEIGHT_POLICY_VERSION",
     "canonical_group_id",
     "load_timing_weights",
     "partition_full_shards",

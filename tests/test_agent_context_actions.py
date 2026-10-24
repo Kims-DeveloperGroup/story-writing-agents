@@ -271,7 +271,7 @@ class ActionSurfaceAndPolicyTests(unittest.TestCase):
     def test_exact_surface_enums_fields_and_signatures(self) -> None:
         self.assertEqual(
             tuple(actions_module.__all__),
-            (
+            ( "ContextCallReadFact",
                 "CONTEXT_ACTION_POLICY",
                 "ContextAction",
                 "ContextActionCorrelation",
@@ -331,6 +331,9 @@ class ActionSurfaceAndPolicyTests(unittest.TestCase):
             ("correlation", "answer", "used_handles"),
         )
         self.assertIn("answer", inspect.signature(ContextAnswerAction).parameters)
+        self.assertEqual(tuple(field.name for field in fields(actions_module.ContextCallReadFact)),
+                         ('evidence_id', 'source_id', 'source_kind', 'revision', 'source_digest',
+                          'boundary_digest', 'whole_source', 'artifact_locator'))
         self.assertEqual(len(fields(ContextEvidenceReceipt)), 13)
         self.assertEqual(len(fields(ContextAnswerAuthorization)), 11)
 

@@ -75,8 +75,7 @@ def _invocation(
             else payload  # type: ignore[arg-type]
         ),
         thread_id=thread_id,
-        call_kind=call_kind,
-    )
+        call_kind=call_kind,)
 
 
 def _result(*, usage: ProviderUsage | None = None) -> ProviderResult:
@@ -84,8 +83,7 @@ def _result(*, usage: ProviderUsage | None = None) -> ProviderResult:
         thread_id="result_thread",
         response_text="PRIVATE_RESPONSE_한🙂",
         usage=usage,
-        actual_transport_utf8_bytes=777,
-    )
+        actual_transport_utf8_bytes=777,)
 
 
 def _capture(store: _RecordingStore) -> WorkspaceAgentExchangeCapture:
@@ -184,8 +182,7 @@ class AgentExchangeCaptureContractTests(unittest.TestCase):
                 request.scope_id,
                 request.agent_id,
                 request.provider,
-                request.request_type,
-            ),
+                request.request_type,),
             (
                 "session_1",
                 AgentExchangeScopeKind.DEBATE,
@@ -202,8 +199,7 @@ class AgentExchangeCaptureContractTests(unittest.TestCase):
                 "call_kind": "debate",
                 "payload": payload,
                 "prior_thread_id": "prior_thread",
-                "schema": schema,
-            },
+                "schema": schema,},
         )
         captured = json.loads(request.content)
         self.assertEqual(captured["schema"], invocation.schema)
@@ -251,8 +247,7 @@ class AgentExchangeCaptureContractTests(unittest.TestCase):
                 "actual_transport_utf8_bytes": None,
                 "response_text": "body",
                 "thread_id": "thread",
-                "usage": None,
-            },
+                "usage": None,},
         )
 
     def test_begin_failures_disable_without_leaking_or_raising(self) -> None:
@@ -299,8 +294,7 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
                 "rejected",
                 AgentExchangeTerminalCode.RESPONSE_CORRELATION_MISMATCH,
                 "rejected",
-                "response_correlation_mismatch",
-            ),
+                "response_correlation_mismatch",),
             (
                 "rejected",
                 AgentExchangeTerminalCode.RESPONSE_SEMANTIC_REJECTED,
@@ -352,8 +346,7 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     {record.exchange_id for record in store.records},
-                    {lifecycle.exchange_id},
-                )
+                    {lifecycle.exchange_id},)
                 self.assertEqual(
                     _decoded(store.records)[2],
                     {"code": expected_code, "outcome": outcome} | (
@@ -383,12 +376,10 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     _decoded(store.records)[1],
-                    {"provider_failure": True},
-                )
+                    {"provider_failure": True},)
                 self.assertEqual(
                     _decoded(store.records)[2],
-                    {"code": code.value, "outcome": "provider_failure"},
-                )
+                    {"code": code.value, "outcome": "provider_failure"},)
 
         for after_response in (False, True):
             with self.subTest(after_response=after_response):
@@ -399,8 +390,7 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
                 lifecycle.cancelled()
                 self.assertEqual(
                     _decoded(store.records)[-1],
-                    {"code": "cancelled", "outcome": "cancelled"},
-                )
+                    {"code": "cancelled", "outcome": "cancelled"},)
 
     def test_invalid_transitions_are_noops_and_valid_transition_remains_available(
         self,
@@ -410,8 +400,7 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
         lifecycle.accepted()
         lifecycle.rejected(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED)
         lifecycle.post_response_runtime_failure(
-            AgentExchangeTerminalCode.RESPONSE_SEMANTIC_REJECTED
-        )
+            AgentExchangeTerminalCode.RESPONSE_SEMANTIC_REJECTED)
         self.assertEqual(len(store.attempts), 1)
         lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_TIMED_OUT)
         self.assertEqual(len(store.attempts), 3)
@@ -426,8 +415,7 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
         self.assertEqual(_decoded(store.records)[1], {"provider_failure": True})
         self.assertEqual(
             _decoded(store.records)[2],
-            {"code": "provider_timed_out", "outcome": "provider_failure"},
-        )
+            {"code": "provider_timed_out", "outcome": "provider_failure"},)
         terminal_attempts = tuple(store.attempts)
         terminal_records = tuple(store.records)
         lifecycle.cancelled()
@@ -448,8 +436,7 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
         self.assertEqual(len(response_store.attempts), 3)
         self.assertEqual(
             response_store.attempts[-1].request_type,
-            AgentExchangeRequestType.OUTCOME,
-        )
+            AgentExchangeRequestType.OUTCOME,)
 
         terminal_store = _RecordingStore()
         terminal = _begin(terminal_store)
@@ -466,8 +453,7 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=16) as executor:
             list(
                 executor.map(
-                    lambda _index: lifecycle.record_response(_result()), range(32)
-                )
+                    lambda _index: lifecycle.record_response(_result()), range(32))
             )
             list(executor.map(lambda _index: lifecycle.cancelled(), range(32)))
         self.assertEqual(
@@ -497,8 +483,7 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
             exchange_ids = list(executor.map(begin, range(64)))
         self.assertEqual(len(set(exchange_ids)), 64)
         self.assertTrue(
-            all(_EXCHANGE_ID.fullmatch(value or "") for value in exchange_ids)
-        )
+            all(_EXCHANGE_ID.fullmatch(value or "") for value in exchange_ids))
 
 
 class ProviderDiagnosticCaptureTests(unittest.TestCase):
@@ -565,8 +550,7 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
             "error": "Server overloaded",
             "exit_code": 1,
             "status": "ERROR",
-            "stderr": {"data": "error log", "encoding": "utf-8"},
-        })
+            "stderr": {"data": "error log", "encoding": "utf-8"},})
 
     def test_failure_response_handles_nonfinite_json_and_codex_jsonl(self):
         # Non-finite JSON values fall back to None without failing serialization
@@ -579,8 +563,7 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
             "error": None,
             "exit_code": 1,
             "status": None,
-            "stderr": {"data": "err", "encoding": "utf-8"},
-        })
+            "stderr": {"data": "err", "encoding": "utf-8"},})
 
         # Codex JSONL multi-line event streams extract terminal error events
         store = _RecordingStore()
@@ -596,8 +579,7 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
             "error": {"code": 429, "message": "Quota exceeded"},
             "exit_code": 1,
             "status": "failed",
-            "stderr": {"data": "codex-err", "encoding": "utf-8"},
-        })
+            "stderr": {"data": "codex-err", "encoding": "utf-8"},})
 
     def test_recovered_success_records_diagnostic_and_none_default_is_unchanged(self):
         for diagnostic in (None, self.diagnostic()):

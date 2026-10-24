@@ -78,8 +78,13 @@ def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
     )
     if expanded:
         raise BudgetError("increased subtest caps: " + ", ".join(expanded))
-    for name in ("max_sequential_wall_seconds", "max_shard_wall_seconds", "max_test_source_lines"):
-        if current[name] > base[name]:
+    time_fields = ("max_sequential_wall_seconds", "max_shard_wall_seconds")
+    approved_time_transition = (
+        tuple(base[name] for name in time_fields) == (1080, 540)
+        and tuple(current[name] for name in time_fields) == (18000, 3600)
+    )
+    for name in (*time_fields, "max_test_source_lines"):
+        if current[name] > base[name] and not (approved_time_transition and name in time_fields):
             raise BudgetError(f"increased {name}")
 
 

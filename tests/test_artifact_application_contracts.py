@@ -274,8 +274,8 @@ class ArtifactApplicationSurfaceTests(ApplicationContractTestCase):
     def test_exact_public_surface_schemas_enums_signatures_and_facade(self) -> None:
         self.assertEqual(ARTIFACT_APPLICATION_SCHEMA_VERSION, 1)
         self.assertEqual(tuple(application_module.__all__), _MODULE_EXPORTS)
-        self.assertEqual(len(writing_artifacts.__all__), 78)
-        self.assertEqual(len(set(writing_artifacts.__all__)), 78)
+        self.assertEqual(len(writing_artifacts.__all__), 80)
+        self.assertEqual(len(set(writing_artifacts.__all__)), 80)
         for name in _MODULE_EXPORTS:
             with self.subTest(name=name):
                 self.assertIs(
@@ -816,7 +816,7 @@ from story_writing_agents.writing_artifacts import application_contracts
 assert writing_artifacts.ArtifactApplicationRequest is application_contracts.ArtifactApplicationRequest
 assert not hasattr(story_writing_agents, 'ArtifactApplicationRequest')
 assert tuple(application_contracts.__all__) == tuple(sys.argv[2].split(','))
-assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 78
+assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 80
 """
         completed = subprocess.run(
             (
@@ -893,7 +893,7 @@ assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
         self.assertEqual(len(modules), 163)
-        self.assertEqual(len(edges), 712)
+        self.assertEqual(len(edges), 731)
         application_name = (
             "story_writing_agents.writing_artifacts.application_contracts"
         )

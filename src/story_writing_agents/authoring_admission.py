@@ -6,6 +6,8 @@ semantic judgment, not proof of a READ or of literary adequacy.
 
 from __future__ import annotations
 
+from .structured_output_validation import SchemaRules, closed_rule, nonblank_text_rule
+
 import hashlib
 import json
 import re
@@ -313,6 +315,7 @@ def _array(value: object) -> tuple:
 
 
 def assessment_from_dict(value: object) -> AuthoringAssessment:
+    SchemaRules.declare(assessment_schema()).require(value)
     item = _object(value, {"status", "foundations", "direction", "creative_scope",
         "allowed_creative_actions", "protected_constraints", "decisions", "missing_information", "rationale"})
     def evidence(raw: object) -> AdmissionEvidence:
@@ -352,23 +355,28 @@ def admission_basis_from_dict(value: object) -> AuthoringAdmissionBasis:
 
 
 def assessment_schema(source_ids: tuple[str, ...] | None = None) -> dict[str, object]:
-    """Closed provider semantic shape; no host qualification/digest fields."""
-    def obj(properties: dict, description: str) -> dict:
-        return {"type": "object", "description": description, "properties": properties,
-                "required": list(properties), "additionalProperties": False}
-    text = {"type": "string"}
+    """The source-owned closed semantic shape used by wire and typed parsing."""
+    text = nonblank_text_rule(maximum_characters=4096)
     strings = {"type": "array", "items": text, "minItems": 0, "maxItems": 32}
-    refs = {"type": "array", "items": {"type": "string", **({"enum": list(source_ids)} if source_ids else {})}, "minItems": 0, "maxItems": 32}
-    evidence = obj({"requirement": text, "source_ids": {**refs, "minItems": 1}, "justification": text},
-        'Justify this requirement with exact offered sources.')
-    nullable = {"anyOf": [evidence, {"type": "null", "description":
-        'This required USER decision is unavailable.'}]}
-    return obj({"status": {"type": "string", "enum": [v.value for v in AdmissionStatus], "description": 'Semantic status.'},
-        "foundations": {"type": "array", "items": evidence, "minItems": 0, "maxItems": 32},
+    refs = {"type": "array", "items": text, "minItems": 0, "maxItems": 32}
+    if source_ids is not None:
+        refs = ({**refs, "items": {"type": "string", "enum": list(source_ids)}} if source_ids else
+                {"type": "array", "items": {"type": "string"}, "maxItems": 0})
+    evidence = (None if source_ids == () else closed_rule({"requirement": text,
+        "source_ids": {**refs, "minItems": 1}, "justification": text},
+        description="Justify this requirement with exact offered sources."))
+    unavailable = {"type": "null", "description": "This required USER decision is unavailable."}
+    nullable = unavailable if evidence is None else {"anyOf": [evidence, unavailable]}
+    decisions = [closed_rule({"decision": {**text, "description": "Creative choice."},
+        "coverage": {"type": "string", "enum": [coverage.value]},
+        "source_ids": {**refs, "minItems": 0 if coverage is DecisionCoverage.MISSING else 1},
+        "explanation": text}, description="Bind this decision to its actual source or USER delegation.")
+        for coverage in DecisionCoverage if source_ids != () or coverage is DecisionCoverage.MISSING]
+    return closed_rule({"status": {"type": "string", "enum": [value.value for value in AdmissionStatus]},
+        "foundations": {"type": "array", "items": evidence or closed_rule({}), "minItems": 0,
+                        "maxItems": 0 if evidence is None else 32},
         "direction": nullable, "creative_scope": nullable, "allowed_creative_actions": strings,
         "protected_constraints": strings, "decisions": {"type": "array", "minItems": 0, "maxItems": 32,
-            "items": obj({"decision": {**text, "description": 'Creative choice.'}, "coverage": {"type": "string", "enum": [v.value for v in DecisionCoverage], "description": 'Supplied/delegated/missing.'},
-                          "source_ids": refs, "explanation": text},
-            'Bind this decision to its actual source or USER delegation.')},
+            "items": decisions[0] if len(decisions) == 1 else {"anyOf": decisions}},
         "missing_information": strings, "rationale": text},
-        'Assess supplied foundations and USER-bounded creative work; host qualification remains separate.')
+        description="Assess supplied foundations and USER-bounded creative work; host qualification remains separate.")

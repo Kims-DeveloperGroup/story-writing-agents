@@ -23,65 +23,46 @@ from types import SimpleNamespace
 from typing import Any, get_type_hints
 from unittest import mock
 
-from story_writing_agents import (
-    CONVERSATION_CONTEXT_POLICY,
-    CONVERSATION_EVENT_SCHEMA_VERSION,
-    AgentBackend,
+from story_writing_agents import (CONVERSATION_CONTEXT_POLICY,
+    CONVERSATION_EVENT_SCHEMA_VERSION, AgentBackend,
     AgentReply,
     AgentRequest,
-    BoundAgent,
-    CHARACTER_CUSTODIAN,
-    ConversationContextWindow,
-    ConversationEvent,
-    ConversationEventKind,
-    ConversationReply,
+    BoundAgent, CHARACTER_CUSTODIAN,
+    ConversationContextWindow, ConversationEvent,
+    ConversationEventKind, ConversationReply,
     ConversationRequest,
     ConversationRetrievalAction,
-    ConversationRetrievalActionHandler,
-    ConversationRetrievalActionKind,
+    ConversationRetrievalActionHandler, ConversationRetrievalActionKind,
     ConversationRetrievalAnswerAction,
     ConversationRetrievalObservation,
-    ConversationRetrievalReadAction,
-    ConversationRetrievalReadObservation,
+    ConversationRetrievalReadAction, ConversationRetrievalReadObservation,
     ConversationRetrievalReply,
     ConversationRetrievalRequest,
-    ConversationRetrievalSearchAction,
-    ConversationRetrievalSearchItem,
-    ConversationRetrievalSearchObservation,
-    ConversationRetrievalSource,
+    ConversationRetrievalSearchAction, ConversationRetrievalSearchItem,
+    ConversationRetrievalSearchObservation, ConversationRetrievalSource,
     EXECUTION_SPECIALIST,
     PLOT_ARCHITECT,
     Phase,
-    PromptFileReference,
-    ROSTER,
+    PromptFileReference, ROSTER,
     ReplyTrace,
     ReplyTraceOrigin,
     SessionAccessState,
     SessionDurableState,
-    SessionLifecycleState,
-    Workspace,
+    SessionLifecycleState, Workspace,
 )
 from story_writing_agents import cli as cli_module
-from story_writing_agents.conversation_retrieval import (
-    CONVERSATION_RETRIEVAL_POLICY,
-    ConversationRagAttemptOutcome,
-    ConversationRagContext,
-    ConversationRagExcerpt,
-    serialize_conversation_retrieval_observation,
+from story_writing_agents.conversation_retrieval import (CONVERSATION_RETRIEVAL_POLICY,
+    ConversationRagAttemptOutcome, ConversationRagContext,
+    ConversationRagExcerpt, serialize_conversation_retrieval_observation,
 )
 from story_writing_agents.models import AgentReplyKind, AgentReplyNextPhase
-from story_writing_agents.conversation_rag import (
-    ConversationRagDocumentIdentity,
-    ConversationRagDocumentKey,
-    ConversationRagOutcome,
-    ConversationRagReason,
-    ConversationRagSourceReference,
+from story_writing_agents.conversation_rag import (ConversationRagDocumentIdentity,
+    ConversationRagDocumentKey, ConversationRagOutcome,
+    ConversationRagReason, ConversationRagSourceReference,
 )
 from story_writing_agents.conversation_search import CollaborationHistoryCitation
-from story_writing_agents.conversations import (
-    CollaborationReadableFieldKey,
-    select_bounded_collaboration_context,
-)
+from story_writing_agents.conversations import (CollaborationReadableFieldKey,
+    select_bounded_collaboration_context,)
 from story_writing_agents.cli import _parse_backend_overrides, build_parser, main
 from story_writing_agents.backend import backend_configuration_snapshot
 from story_writing_agents.structured_output_validation import diagnose_json_text, failure_issues
@@ -90,103 +71,66 @@ from story_writing_agents.agent_context import (
     ProviderCallAccounting,
     ProviderCallKind,
     ProviderCallState,
-    ProviderUsage,
-    account_provider_payload,
-    canonical_provider_json,
-)
-from story_writing_agents.agent_context.manifest import (
-    ContextContinuationIdentity,
-    ContextScope,
-    ContextSubjectKind,
+    ProviderUsage, account_provider_payload,
+    canonical_provider_json,)
+from story_writing_agents.agent_context.manifest import (ContextContinuationIdentity,
+    ContextScope, ContextSubjectKind,
 )
 from story_writing_agents.agents import CORE_DOCUMENTS, LEAD_ORCHESTRATOR
-from story_writing_agents.agent_context.service import (
-    ContextProviderCallRequest,
-    ContextProviderTerminalCode,
-    ContextReferencePreludeRequest,
-    context_provider_failure_facts,
-)
+from story_writing_agents.agent_context.service import (ContextProviderCallRequest,
+    ContextProviderTerminalCode, ContextReferencePreludeRequest,
+    context_provider_failure_facts,)
 from story_writing_agents.config import ConfigManager, ConfigurationSnapshot
-from story_writing_agents.errors import (
-    BackendProtocolError,
-    ConfigurationError,
-    ConversationRetrievalBudgetError,
-    ConversationRetrievalObserverError,
-    ConversationRetrievalSemanticError,
-    SessionIdError,
-    SessionNotFoundError,
-    WorkspaceFormatError,
-)
-from story_writing_agents.debug_log import (
-    DEBUG_LOG_RELATIVE_PATH,
-    WorkspaceDebugLog,
-)
+from story_writing_agents.errors import (BackendProtocolError,
+    ConfigurationError, ConversationRetrievalBudgetError,
+    ConversationRetrievalObserverError, ConversationRetrievalSemanticError,
+    SessionIdError, SessionNotFoundError,
+    WorkspaceFormatError,)
+from story_writing_agents.debug_log import (DEBUG_LOG_RELATIVE_PATH,
+    WorkspaceDebugLog,)
 from story_writing_agents.prompts import PromptAssembler
-from story_writing_agents.interactive_settings import (
-    ProviderRouteEntry,
-    commit_prepared_settings_save,
-    load_settings_state,
-    prepare_settings_save,
-    update_agent_backend,
+from story_writing_agents.interactive_settings import (ProviderRouteEntry,
+    commit_prepared_settings_save, load_settings_state,
+    prepare_settings_save, update_agent_backend,
 )
 from story_writing_agents.git.session_resources import GitSessionGenerationPin
 from story_writing_agents.orchestrator import StoryRuntime
-from story_writing_agents.provider_execution_workspace import (
-    ProviderExecutionWorkspace,
-    mint_provider_execution_workspace,
-)
+from story_writing_agents.provider_execution_workspace import (ProviderExecutionWorkspace,
+    mint_provider_execution_workspace,)
 from story_writing_agents.workspace.initialization import provision_session_resources
 from story_writing_agents.workspace.initialization import SessionArtifactBindingError
 from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
-from story_writing_agents.writing_artifacts import (
-    ArtifactLineRange,
-    ArtifactReference,
-    ArtifactReferenceBatch,
-    ReferenceAuthorizationError,
-    ReferenceAuthorizationErrorCode,
-    ReferenceInvocationCorrelation,
-    ReferenceInvocationState,
-    ReferenceOperationState,
-    ReferenceReadAction,
-    ReferenceReadActionKind,
-    ReferenceReadRequest,
+from story_writing_agents.writing_artifacts import (ArtifactLineRange,
+    ArtifactReference, ArtifactReferenceBatch,
+    ReferenceAuthorizationError, ReferenceAuthorizationErrorCode,
+    ReferenceInvocationCorrelation, ReferenceInvocationState,
+    ReferenceOperationState, ReferenceReadAction,
+    ReferenceReadActionKind, ReferenceReadRequest,
 )
-from story_writing_agents.provider_adapter import (
-    AgentExecutionProfile,
-    ExecutionValueSource,
-    ProviderInvocationError,
-    ProviderResult,
-    provider_failure_accounting,
-    record_provider_failure_accounting,
+from story_writing_agents.provider_adapter import (AgentExecutionProfile,
+    ExecutionValueSource, ProviderInvocationError,
+    ProviderResult, provider_failure_accounting,
+    record_provider_failure_accounting,)
+from story_writing_agents.provider_error_artifacts import (PROVIDER_ERROR_ARTIFACT_DIRECTORY,
+    PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY, WorkspaceProviderErrorArtifacts,
 )
-from story_writing_agents.provider_error_artifacts import (
-    PROVIDER_ERROR_ARTIFACT_DIRECTORY,
-    PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY,
-    WorkspaceProviderErrorArtifacts,
-)
-from story_writing_agents.provider_process import (
-    ProcessRequest,
-    run_process,
-    stop_process,
+from story_writing_agents.provider_process import (ProcessRequest,
+    run_process, stop_process,
 )
 from story_writing_agents.models import StoryFocusedContextMode
 
 from story_writing_agents.agent_context.request_compaction import compact_context_payload
 from tests.test_agent_context_accounting import _shared_context_payload
 from tests.provider_wire_fixture import assert_guidance, direct_reply, direct_response
-from tests.helpers import (
-    SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE,
-    all_manuscripts,
-    core_snapshot,
-    initialized_workspace,
-    pristine_initialized_workspace,
+from tests.helpers import (SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE,
+    all_manuscripts, core_snapshot,
+    initialized_workspace, pristine_initialized_workspace,
 )
 
 
-_FAKE_CODEX = (
-    """#!/usr/bin/env python3
+_FAKE_CODEX = ("""#!/usr/bin/env python3
 import os
 import signal
 
@@ -357,8 +301,7 @@ if "STORY_FAKE_CODEX_USAGE" in os.environ:
         "type": "turn.completed",
         "usage": json.loads(os.environ["STORY_FAKE_CODEX_USAGE"]),
     }))
-"""
-)
+""")
 
 
 _TIMESTAMP = "2026-08-15T01:02:03+00:00"
@@ -368,99 +311,67 @@ def _fresh_literal_object_side_effect(target, attribute, value):
     return mock.patch.object(target, attribute, side_effect=value)
 
 def _rejected_response_artifact_patch():
-    return mock.patch.object(
-        WorkspaceProviderErrorArtifacts,
-        "record_rejected_response",
-    )
+    return mock.patch.object(WorkspaceProviderErrorArtifacts,
+        "record_rejected_response",)
 
 def _wrapped_thread_taint_patch(backend, wrapped):
     return mock.patch.object(
-        backend,
-        "_taint_thread",
+        backend, "_taint_thread",
         wraps=wrapped,
     )
 
 def _wrapped_thread_store_patch(backend, wrapped):
     return mock.patch.object(
-        backend,
-        "_store_thread",
+        backend, "_store_thread",
         wraps=wrapped,
     )
 
-def _conversation_pair(
-    turn_id: str,
-    sequence: int = 1,
-    *,
+def _conversation_pair(turn_id: str,
+    sequence: int = 1, *,
     session_id: str = "story_session",
-    conversation_id: str = "conversation_a",
-    recipient: str = PLOT_ARCHITECT,
-    user_content: str = "visible question",
-    outcome_content: str = "visible answer",
+    conversation_id: str = "conversation_a", recipient: str = PLOT_ARCHITECT,
+    user_content: str = "visible question", outcome_content: str = "visible answer",
     outcome_kind: ConversationEventKind = ConversationEventKind.AGENT_REPLY,
 ) -> tuple[ConversationEvent, ConversationEvent]:
-    def event(
-        offset: int,
-        kind: ConversationEventKind,
-        sender: str,
-        target: str,
-        content: str,
+    def event(offset: int,
+        kind: ConversationEventKind, sender: str,
+        target: str, content: str,
     ) -> ConversationEvent:
-        return ConversationEvent(
-            CONVERSATION_EVENT_SCHEMA_VERSION,
-            session_id,
-            conversation_id,
-            turn_id,
-            sequence + offset,
-            _TIMESTAMP,
-            sender,
-            target,
-            kind,
-            content,
-        )
+        return ConversationEvent(CONVERSATION_EVENT_SCHEMA_VERSION,
+            session_id, conversation_id,
+            turn_id, sequence + offset,
+            _TIMESTAMP, sender,
+            target, kind,
+            content,)
 
     user = event(0, ConversationEventKind.USER_MESSAGE, "user", recipient, user_content)
-    sender = (
-        recipient if outcome_kind is ConversationEventKind.AGENT_REPLY else "runtime"
+    sender = (recipient if outcome_kind is ConversationEventKind.AGENT_REPLY else "runtime"
     )
     return user, event(1, outcome_kind, sender, "user", outcome_content)
 
 
-def _context_window(
-    events: tuple[ConversationEvent, ...] = (),
-    *,
-    retained_turns: int | None = None,
-    retained_utf8_bytes: int | None = None,
-    omitted_turns: int = 0,
+def _context_window(events: tuple[ConversationEvent, ...] = (),
+    *, retained_turns: int | None = None,
+    retained_utf8_bytes: int | None = None, omitted_turns: int = 0,
 ) -> ConversationContextWindow:
-    retained = (
-        len({event.turn_id for event in events})
-        if retained_turns is None
-        else retained_turns
+    retained = (len({event.turn_id for event in events})
+        if retained_turns is None else retained_turns
     )
-    retained_bytes = (
-        sum(len(event.content.encode("utf-8")) for event in events)
-        if retained_utf8_bytes is None
-        else retained_utf8_bytes
+    retained_bytes = (sum(len(event.content.encode("utf-8")) for event in events)
+        if retained_utf8_bytes is None else retained_utf8_bytes
     )
-    return ConversationContextWindow(
-        events=events,
-        total_complete_turns=retained + omitted_turns,
-        retained_turns=retained,
-        omitted_turns=omitted_turns,
-        retained_utf8_bytes=retained_bytes,
-        truncated=omitted_turns > 0,
-    )
+    return ConversationContextWindow(events=events,
+        total_complete_turns=retained + omitted_turns, retained_turns=retained,
+        omitted_turns=omitted_turns, retained_utf8_bytes=retained_bytes,
+        truncated=omitted_turns > 0,)
 
 
 def _tree_snapshot(root: Path) -> dict[str, bytes | None]:
     if not root.exists():
         return {}
-    return {
-        path.relative_to(root).as_posix(): (
-            None if path.is_dir() else path.read_bytes()
-        )
-        for path in sorted(root.rglob("*"))
-    }
+    return {path.relative_to(root).as_posix(): (
+            None if path.is_dir() else path.read_bytes())
+        for path in sorted(root.rglob("*"))}
 
 
 def _workspace_debug_records(workspace: Any) -> list[dict[str, object]]:
@@ -476,8 +387,7 @@ def _mark_debug_session_attached(workspace: Any) -> None:
     """Model the attached-session boundary required before runtime logging."""
 
     state = workspace.path(
-        "agent_states/orchestrator_state/sessions/test_attached.json"
-    )
+        "agent_states/orchestrator_state/sessions/test_attached.json")
     state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text("{}\n", encoding="utf-8")
 
@@ -488,10 +398,8 @@ def _provider_error_records(workspace: Any) -> list[dict[str, object]]:
     directory = workspace.path(PROVIDER_ERROR_ARTIFACT_DIRECTORY)
     if not directory.exists():
         return []
-    return [
-        json.loads(path.read_text(encoding="utf-8"))
-        for path in sorted(directory.glob("*.json"))
-    ]
+    return [json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(directory.glob("*.json"))]
 
 
 def _agent_exchange_records(workspace: Any) -> list[dict[str, object]]:
@@ -500,11 +408,9 @@ def _agent_exchange_records(workspace: Any) -> list[dict[str, object]]:
     directory = workspace.path("debug_logs/agent_exchanges")
     if not directory.exists():
         return []
-    records = [
-        json.loads(line)
+    records = [json.loads(line)
         for path in directory.rglob("*.jsonl")
-        for line in path.read_text(encoding="utf-8").splitlines()
-    ]
+        for line in path.read_text(encoding="utf-8").splitlines()]
     return sorted(records, key=lambda record: record["workspace_sequence"])
 
 
@@ -512,38 +418,27 @@ def _debug_signature(record: dict[str, object]) -> tuple[object, ...]:
     """Project one diagnostic record to its exact content-safe contract."""
 
     exception = record.get("exception")
-    return (
-        record.get("schema_version"),
-        record.get("level"),
-        record.get("component"),
-        record.get("operation"),
-        record.get("phase"),
-        record.get("outcome"),
-        record.get("session_id"),
-        record.get("debate_id"),
-        record.get("conversation_id"),
+    return (record.get("schema_version"),
+        record.get("level"), record.get("component"),
+        record.get("operation"), record.get("phase"),
+        record.get("outcome"), record.get("session_id"),
+        record.get("debate_id"), record.get("conversation_id"),
         record.get("agent_id"),
-        exception.get("type") if isinstance(exception, dict) else None,
-    )
+        exception.get("type") if isinstance(exception, dict) else None,)
 
 
-def _conversation_request(
-    *,
+def _conversation_request(*,
     session_id: str = "story_session",
     conversation_id: str = "conversation_a",
     turn_id: str = "turn_current",
-    agent_id: str = PLOT_ARCHITECT,
-    content: str = "visible user request",
-    context: ConversationContextWindow | None = None,
-) -> ConversationRequest:
-    return ConversationRequest(
-        session_id=session_id,
+    agent_id: str = PLOT_ARCHITECT, content: str = "visible user request",
+    context: ConversationContextWindow | None = None,) -> ConversationRequest:
+    return ConversationRequest(session_id=session_id,
         conversation_id=conversation_id,
         turn_id=turn_id,
         agent_id=agent_id,
         content=content,
-        context=_context_window() if context is None else context,
-    )
+        context=_context_window() if context is None else context,)
 
 
 def _readable_context():  # type: ignore[no-untyped-def]
@@ -552,75 +447,50 @@ def _readable_context():  # type: ignore[no-untyped-def]
     return select_bounded_collaboration_context(())
 
 
-def _retrieval_request(
-    *,
+def _retrieval_request(*,
     session_id: str = "story_session",
     conversation_id: str = "conversation_a",
     turn_id: str = "turn_current",
-    agent_id: str = PLOT_ARCHITECT,
-    content: str = "visible retrieval request",
-    context: object | None = None,
-    rag_context: ConversationRagContext | None = None,
+    agent_id: str = PLOT_ARCHITECT, content: str = "visible retrieval request",
+    context: object | None = None, rag_context: ConversationRagContext | None = None,
 ) -> ConversationRetrievalRequest:
     """Build one exact bounded-retrieval provider request."""
 
-    return ConversationRetrievalRequest(
-        session_id=session_id,
+    return ConversationRetrievalRequest(session_id=session_id,
         conversation_id=conversation_id,
         turn_id=turn_id,
         agent_id=agent_id,
-        content=content,
-        context=_readable_context() if context is None else context,
-        rag_context=rag_context,
-    )
+        content=content, context=_readable_context() if context is None else context,
+        rag_context=rag_context,)
 
 
 def _provider_rag_context() -> ConversationRagContext:
     """Build one attempted context whose full reference must reach call one."""
 
-    identity = ConversationRagDocumentIdentity(
-        key=ConversationRagDocumentKey(
+    identity = ConversationRagDocumentIdentity(key=ConversationRagDocumentKey(
             session_id="story_session",
-            document_id="a" * 64,
-        ),
-        conversation_id="source_conversation",
-        start_turn_id="source_turn",
-        end_turn_id="source_turn",
-        start_sequence=1,
+            document_id="a" * 64,),
+        conversation_id="source_conversation", start_turn_id="source_turn",
+        end_turn_id="source_turn", start_sequence=1,
         end_sequence=2,
-        revision_id="sha256:" + "b" * 64,
-    )
+        revision_id="sha256:" + "b" * 64,)
     content = "authoritative excerpt 🙂"
-    excerpt = ConversationRagExcerpt(
-        citation_id="g1",
-        source=ConversationRetrievalSource(
-            citation=CollaborationHistoryCitation(
-                session_id="story_session",
-                conversation_id="source_conversation",
-                event_id="source_event",
-                sequence=2,
-                field_key=CollaborationReadableFieldKey.SPECIALIST_REPLY_CONTENT,
-                start_codepoint=0,
-                end_codepoint=len(content),
-            ),
-        ),
-        reference=ConversationRagSourceReference(
-            document=identity,
-            fragment_id="fragment-authorized",
+    excerpt = ConversationRagExcerpt(citation_id="g1",
+        source=ConversationRetrievalSource(citation=CollaborationHistoryCitation(
+                session_id="story_session", conversation_id="source_conversation",
+                event_id="source_event", sequence=2,
+                field_key=CollaborationReadableFieldKey.SPECIALIST_REPLY_CONTENT, start_codepoint=0,
+                end_codepoint=len(content),),
+        ), reference=ConversationRagSourceReference(
+            document=identity, fragment_id="fragment-authorized",
             start_codepoint=0,
-            end_codepoint=len(content),
-        ),
-        content=content,
-    )
-    return ConversationRagContext(
-        outcome=ConversationRagAttemptOutcome(
+            end_codepoint=len(content),),
+        content=content,)
+    return ConversationRagContext(outcome=ConversationRagAttemptOutcome(
             outcome=ConversationRagOutcome.COMPLETE,
-            reason=ConversationRagReason.NONE,
-        ),
-        excerpts=(excerpt,),
-        retained_utf8_bytes=len(content.encode("utf-8")),
-        truncated=False,
-    )
+            reason=ConversationRagReason.NONE,),
+        excerpts=(excerpt,), retained_utf8_bytes=len(content.encode("utf-8")),
+        truncated=False,)
 
 
 class _RecordingRetrievalHandler:
@@ -628,67 +498,48 @@ class _RecordingRetrievalHandler:
 
     def __init__(self) -> None:
         self.actions: list[ConversationRetrievalAction] = []
-        self.outcomes: list[
-            ConversationRetrievalObservation | ConversationRetrievalReply
+        self.outcomes: list[ConversationRetrievalObservation | ConversationRetrievalReply
         ] = []
         self.source: ConversationRetrievalSource | None = None
 
     def handle_conversation_retrieval_action(
-        self,
-        action: ConversationRetrievalAction,
+        self, action: ConversationRetrievalAction,
     ) -> ConversationRetrievalObservation | ConversationRetrievalReply:
         """Return the corresponding exact outcome for one decoded action."""
 
         self.actions.append(action)
         if type(action) is ConversationRetrievalSearchAction:
-            self.source = ConversationRetrievalSource(
-                citation=CollaborationHistoryCitation(
-                    session_id=action.session_id,
-                    conversation_id="source_conversation",
-                    event_id="source_event",
-                    sequence=1,
-                    field_key=CollaborationReadableFieldKey.PROPOSAL_PURPOSE,
-                    start_codepoint=0,
-                    end_codepoint=len("Needle source"),
-                ),
+            self.source = ConversationRetrievalSource(citation=CollaborationHistoryCitation(
+                    session_id=action.session_id, conversation_id="source_conversation",
+                    event_id="source_event", sequence=1,
+                    field_key=CollaborationReadableFieldKey.PROPOSAL_PURPOSE, start_codepoint=0,
+                    end_codepoint=len("Needle source"),),
             )
             outcome: ConversationRetrievalObservation | ConversationRetrievalReply = (
-                ConversationRetrievalSearchObservation(
-                    session_id=action.session_id,
+                ConversationRetrievalSearchObservation(session_id=action.session_id,
                     conversation_id=action.conversation_id,
                     turn_id=action.turn_id,
-                    action_index=action.action_index,
-                    hits=(
-                        ConversationRetrievalSearchItem(
-                            citation_id=f"s{action.action_index}h1",
+                    action_index=action.action_index, hits=(
+                        ConversationRetrievalSearchItem(citation_id=f"s{action.action_index}h1",
                             source=self.source,
-                            snippet='Needle "source" 한🙂',
-                        ),
-                    ),
-                    truncated=False,
+                            snippet='Needle "source" 한🙂',),
+                    ), truncated=False,
                 )
             )
         elif type(action) is ConversationRetrievalReadAction:
             assert self.source is not None
-            outcome = ConversationRetrievalReadObservation(
-                session_id=action.session_id,
+            outcome = ConversationRetrievalReadObservation(session_id=action.session_id,
                 conversation_id=action.conversation_id,
-                turn_id=action.turn_id,
-                action_index=action.action_index,
-                source_citation_id=action.citation_id,
-                source=self.source,
+                turn_id=action.turn_id, action_index=action.action_index,
+                source_citation_id=action.citation_id, source=self.source,
                 records=(),
-                truncated=False,
-            )
+                truncated=False,)
         else:
             assert type(action) is ConversationRetrievalAnswerAction
-            outcome = ConversationRetrievalReply(
-                session_id=action.session_id,
+            outcome = ConversationRetrievalReply(session_id=action.session_id,
                 conversation_id=action.conversation_id,
-                turn_id=action.turn_id,
-                content=action.content,
-                sources=() if self.source is None else (self.source,),
-            )
+                turn_id=action.turn_id, content=action.content,
+                sources=() if self.source is None else (self.source,),)
         self.outcomes.append(outcome)
         return outcome
 
@@ -701,8 +552,7 @@ class _RaisingRetrievalHandler:
         self.calls = 0
 
     def handle_conversation_retrieval_action(
-        self,
-        _action: ConversationRetrievalAction,
+        self, _action: ConversationRetrievalAction,
     ) -> ConversationRetrievalObservation | ConversationRetrievalReply:
         """Record the action and raise the original configured failure."""
 
@@ -710,77 +560,53 @@ class _RaisingRetrievalHandler:
         raise self.failure
 
 
-def _retrieval_action_json(
-    request: ConversationRetrievalRequest,
-    *,
-    kind: ConversationRetrievalActionKind,
-    action_index: int,
-    **fields: object,
+def _retrieval_action_json(request: ConversationRetrievalRequest,
+    *, kind: ConversationRetrievalActionKind,
+    action_index: int, **fields: object,
 ) -> str:
     """Encode one exact provider action with stable insertion order."""
 
-    return direct_response(json.dumps(
-        {
-            "action": {
-                "kind": kind.value,
-                **{
-                    ("message" if key == "content" else key): value
-                    for key, value in fields.items()
-                    if value is not None
-                },
-            },
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ), {"request_type": "answer_with_conversation_history"})
+    return direct_response(json.dumps({
+            "action": {"kind": kind.value,
+                **{("message" if key == "content" else key): value
+                    for key, value in fields.items() if value is not None
+                },},
+        }, ensure_ascii=False,
+        separators=(",", ":"),), {"request_type": "answer_with_conversation_history"})
 
 
 def _needle_search(request):
     return _retrieval_action_json(
         request, kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
-        action_index=1, query="Needle source",
-    )
+        action_index=1, query="Needle source",)
 
 
 def _read_first_search_hit(request):
-    return _retrieval_action_json(
-        request, kind=ConversationRetrievalActionKind.READ_HISTORY,
-        action_index=2, citation_id="s1h1", start_sequence=1, end_sequence=None,
-    )
+    return _retrieval_action_json(request, kind=ConversationRetrievalActionKind.READ_HISTORY,
+        action_index=2, citation_id="s1h1", start_sequence=1, end_sequence=None,)
 
 
 def _provider_candidate_reply(*, role=PLOT_ARCHITECT, context_sources=("current_input",)):
-    return replace(
-        AgentReply.candidate("r0", "generated candidate"),
-        trace=ReplyTrace(
-            role=role,
-            action="candidate",
-            context_sources=context_sources,
+    return replace(AgentReply.candidate("r0", "generated candidate"),
+        trace=ReplyTrace(role=role,
+            action="candidate", context_sources=context_sources,
             recovered_fields=(),
-            origin=ReplyTraceOrigin.PROVIDER,
-        ),
+            origin=ReplyTraceOrigin.PROVIDER,),
     )
 
 
-def _assert_provider_supported_schema(
-    test: unittest.TestCase,
-    specification: object,
-) -> None:
+def _assert_provider_supported_schema(test: unittest.TestCase,
+    specification: object,) -> None:
     """Assert the strict response-schema subset used by reference reads."""
 
     test.assertIs(type(specification), dict)
     assert type(specification) is dict
-    allowed = {
-        "type",
-        "properties",
-        "required",
-        "additionalProperties",
-        "items",
-        "minItems",
-        "maxItems",
+    allowed = {"type",
+        "properties", "required",
+        "additionalProperties", "items",
+        "minItems", "maxItems",
         "anyOf",
-        "enum",
-    }
+        "enum",}
     test.assertTrue(set(specification) <= allowed)
     if "properties" in specification:
         properties = specification["properties"]
@@ -815,65 +641,40 @@ def _assert_provider_supported_schema(
 class ConversationModelContractTests(unittest.TestCase):
     def test_agent_reply_kinds_are_closed_and_fields_are_phase_exact(self) -> None:
         digest = "sha256:" + "a" * 64
-        replies = (
-            AgentReply.candidate("r0", "draft"),
-            AgentReply.approval("r0"),
-            AgentReply.conflict("r0", "repair this"),
+        replies = (AgentReply.candidate("r0", "draft"),
+            AgentReply.approval("r0"), AgentReply.conflict("r0", "repair this"),
             AgentReply.synthesis(
-                "r0", "repair plan", AgentReplyNextPhase.REPAIR
-            ),
+                "r0", "repair plan", AgentReplyNextPhase.REPAIR),
             AgentReply.synthesis(
-                "r0", "ready", AgentReplyNextPhase.FINALIZATION
-            ),
+                "r0", "ready", AgentReplyNextPhase.FINALIZATION),
             AgentReply.deadlock("r0", "conflict remains"),
-            AgentReply.finalization("r0", "reviewed-proposal", digest),
-        )
-        self.assertEqual(
-            tuple(reply.kind for reply in replies),
-            (
-                AgentReplyKind.CANDIDATE,
-                AgentReplyKind.AUDIT,
-                AgentReplyKind.AUDIT,
-                AgentReplyKind.SYNTHESIS,
-                AgentReplyKind.SYNTHESIS,
+            AgentReply.finalization("r0", "reviewed-proposal", digest),)
+        self.assertEqual(tuple(reply.kind for reply in replies),
+            (AgentReplyKind.CANDIDATE,
+                AgentReplyKind.AUDIT, AgentReplyKind.AUDIT,
+                AgentReplyKind.SYNTHESIS, AgentReplyKind.SYNTHESIS,
                 AgentReplyKind.DEADLOCK,
-                AgentReplyKind.FINALIZATION,
-            ),
+                AgentReplyKind.FINALIZATION,),
         )
-        self.assertEqual(
-            (replies[3].next_phase, replies[4].next_phase),
-            (AgentReplyNextPhase.REPAIR, AgentReplyNextPhase.FINALIZATION),
-        )
+        self.assertEqual((replies[3].next_phase, replies[4].next_phase),
+            (AgentReplyNextPhase.REPAIR, AgentReplyNextPhase.FINALIZATION),)
         self.assertTrue(replies[5].deadlocked)
         self.assertEqual(replies[6].reviewed_proposal_digest, digest)
 
-        invalid = (
-            dict(kind="candidate", revision_id="r0", content="draft"),
-            dict(kind=AgentReplyKind.CANDIDATE, revision_id="r0", content=""),
-            dict(
-                kind=AgentReplyKind.CANDIDATE,
-                revision_id="r0",
+        invalid = (dict(kind="candidate", revision_id="r0", content="draft"),
+            dict(kind=AgentReplyKind.CANDIDATE, revision_id="r0", content=""), dict(
+                kind=AgentReplyKind.CANDIDATE, revision_id="r0",
                 content="draft",
-                deadlocked=True,
-            ),
-            dict(kind=AgentReplyKind.AUDIT, revision_id="r0"),
-            dict(
-                kind=AgentReplyKind.SYNTHESIS,
-                revision_id="r0",
-                content="proposal",
-            ),
-            dict(
-                kind=AgentReplyKind.DEADLOCK,
-                revision_id="r0",
-                content="blocked",
-                deadlocked=False,
-            ),
-            dict(
-                kind=AgentReplyKind.FINALIZATION,
-                revision_id="r0",
-                reviewed_proposal_id="reviewed-proposal",
-                reviewed_proposal_digest="a" * 64,
-            ),
+                deadlocked=True,),
+            dict(kind=AgentReplyKind.AUDIT, revision_id="r0"), dict(
+                kind=AgentReplyKind.SYNTHESIS, revision_id="r0",
+                content="proposal",),
+            dict(kind=AgentReplyKind.DEADLOCK,
+                revision_id="r0", content="blocked",
+                deadlocked=False,),
+            dict(kind=AgentReplyKind.FINALIZATION,
+                revision_id="r0", reviewed_proposal_id="reviewed-proposal",
+                reviewed_proposal_digest="a" * 64,),
         )
         for values in invalid:
             with self.subTest(values=values):
@@ -884,8 +685,7 @@ class ConversationModelContractTests(unittest.TestCase):
         self,
     ) -> None:
         reply = ConversationReply(
-            "story_session", "conversation_a", "turn_current", "reply"
-        )
+            "story_session", "conversation_a", "turn_current", "reply")
         cases = (
             (
                 ConversationRequest,
@@ -896,10 +696,8 @@ class ConversationModelContractTests(unittest.TestCase):
                     "agent_id",
                     "content",
                     "context",
-                    "story_session_context",
-                ),
-                _conversation_request(),
-            ),
+                    "story_session_context",),
+                _conversation_request(),),
             (
                 ConversationReply,
                 (
@@ -908,10 +706,8 @@ class ConversationModelContractTests(unittest.TestCase):
                     "turn_id",
                     "content",
                     "trace",
-                    "validation_details",
-                ),
-                reply,
-            ),
+                    "validation_details",),
+                reply,),
         )
         for model, names, value in cases:
             with self.subTest(model=model.__name__):
@@ -922,8 +718,7 @@ class ConversationModelContractTests(unittest.TestCase):
                 self.assertTrue(
                     all(
                         field.default is MISSING and field.default_factory is MISSING
-                        for field in required_fields
-                    )
+                        for field in required_fields)
                 )
                 self.assertIsNone(model_fields[required_count].default)
                 if model is ConversationReply:
@@ -939,8 +734,7 @@ class ConversationModelContractTests(unittest.TestCase):
         )
         self.assertIs(
             signature.parameters["request"].default,
-            inspect.Parameter.empty,
-        )
+            inspect.Parameter.empty,)
         self.assertIs(
             signature.parameters["reference_read"].kind,
             inspect.Parameter.KEYWORD_ONLY,
@@ -968,25 +762,21 @@ class ConversationModelContractTests(unittest.TestCase):
         context_provider_signature = inspect.signature(BoundAgent.context_provider)
         self.assertEqual(
             tuple(context_provider_signature.parameters),
-            ("self", "reference_read"),
-        )
+            ("self", "reference_read"),)
         self.assertIsNone(
-            context_provider_signature.parameters["reference_read"].default
-        )
+            context_provider_signature.parameters["reference_read"].default)
         self.assertEqual(
             tuple(
                 tuple(inspect.signature(method).parameters)
                 for method in (
                     BoundAgent.decode_context_conversation_answer,
                     BoundAgent.decode_context_retrieval_answer,
-                    BoundAgent.decode_context_agent_answer,
-                )
+                    BoundAgent.decode_context_agent_answer,)
             ),
             (
                 ("self", "request", "text"),
                 ("self", "request", "text"),
-                ("self", "request", "text"),
-            ),
+                ("self", "request", "text"),),
         )
 
     def test_identifier_content_agent_and_context_error_taxonomy(self) -> None:
@@ -1002,12 +792,10 @@ class ConversationModelContractTests(unittest.TestCase):
             "session_id": "story_session",
             "conversation_id": "conversation_a",
             "turn_id": "turn_current",
-            "content": "visible",
-        }
+            "content": "visible",}
         cases = (
             (ConversationRequest, request_values, tuple(request_values)[:4]),
-            (ConversationReply, reply_values, tuple(reply_values)[:3]),
-        )
+            (ConversationReply, reply_values, tuple(reply_values)[:3]),)
         for model, base, identifier_fields in cases:
             for field_name in identifier_fields:
                 for value, error in (
@@ -1028,8 +816,7 @@ class ConversationModelContractTests(unittest.TestCase):
         request_values["turn_id"] = "x" * 64
         self.assertEqual(
             ConversationRequest(**request_values).turn_id,  # type: ignore[arg-type]
-            "x" * 64,
-        )
+            "x" * 64,)
         with self.assertRaises(ValueError):
             _conversation_request(agent_id="unknown_agent")
 
@@ -1039,8 +826,7 @@ class ConversationModelContractTests(unittest.TestCase):
             values["content"] = preserved
             self.assertEqual(
                 model(**values).content,  # type: ignore[arg-type]
-                preserved,
-            )
+                preserved,)
             for value, error in (
                 (None, TypeError),
                 (1, TypeError),
@@ -1069,8 +855,7 @@ class ConversationModelContractTests(unittest.TestCase):
             retained_turns=0,
             omitted_turns=0,
             retained_utf8_bytes=0,
-            truncated=False,
-        )
+            truncated=False,)
         values = dict(request_values)
         values["context"] = derived
         with self.assertRaises(TypeError):
@@ -1100,15 +885,13 @@ class ConversationModelContractTests(unittest.TestCase):
             "agent_id": PLOT_ARCHITECT,
             "content": "visible",
             "context": _context_window(),
-            "story_session_context": story_context,
-        }
+            "story_session_context": story_context,}
 
         cases = (
             (ConversationRequest, common),
             (
                 ConversationRetrievalRequest,
-                {**common, "context": _readable_context()},
-            ),
+                {**common, "context": _readable_context()},),
         )
         for request_type, values in cases:
             with self.subTest(request_type=request_type.__name__):
@@ -1124,14 +907,12 @@ class ConversationModelContractTests(unittest.TestCase):
         signature = inspect.signature(BoundAgent.converse_with_retrieval)
         self.assertEqual(
             tuple(signature.parameters),
-            ("self", "request", "handler", "reference_read"),
-        )
+            ("self", "request", "handler", "reference_read"),)
         self.assertTrue(
             all(
                 parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
                 and parameter.default is inspect.Parameter.empty
-                for parameter in tuple(signature.parameters.values())[:3]
-            )
+                for parameter in tuple(signature.parameters.values())[:3])
         )
         self.assertIs(
             signature.parameters["reference_read"].kind,
@@ -1152,38 +933,33 @@ class ConversationModelContractTests(unittest.TestCase):
             "turn_one",
             2,
             recipient=CHARACTER_CUSTODIAN,
-            outcome_kind=ConversationEventKind.RUNTIME_ERROR,
-        )
+            outcome_kind=ConversationEventKind.RUNTIME_ERROR,)
         second = _conversation_pair("turn_two", 4)
         interleaved = (
             first[0],
             second[0],
             replace(second[1], sequence=7),
-            replace(first[1], sequence=11),
-        )
+            replace(first[1], sequence=11),)
         window = _context_window(interleaved, omitted_turns=3)
         request = _conversation_request(context=window)
         self.assertEqual(request.context, window)
         self.assertIs(type(request.context), ConversationContextWindow)
         self.assertIs(type(request.context.events), tuple)
         self.assertTrue(
-            all(type(event) is ConversationEvent for event in request.context.events)
-        )
+            all(type(event) is ConversationEvent for event in request.context.events))
         self.assertEqual(request.context.total_complete_turns, 5)
 
         capped_events = tuple(
             event
             for index in range(CONVERSATION_CONTEXT_POLICY.max_complete_turns)
             for event in _conversation_pair(
-                f"cap_{index}", index * 2 + 1, user_content="u", outcome_content="r"
-            )
+                f"cap_{index}", index * 2 + 1, user_content="u", outcome_content="r")
         )
         _conversation_request(context=_context_window(capped_events))
         byte_capped = _conversation_pair(
             "byte_cap",
             user_content="x" * (CONVERSATION_CONTEXT_POLICY.max_utf8_bytes - 1),
-            outcome_content="y",
-        )
+            outcome_content="y",)
         _conversation_request(context=_context_window(byte_capped))
 
     def test_context_rejects_identity_order_pair_metadata_and_cap_errors(
@@ -1193,8 +969,7 @@ class ConversationModelContractTests(unittest.TestCase):
         over_turn_cap = tuple(
             event
             for index in range(CONVERSATION_CONTEXT_POLICY.max_complete_turns + 1)
-            for event in _conversation_pair(f"over_{index}", index * 2 + 1)
-        )
+            for event in _conversation_pair(f"over_{index}", index * 2 + 1))
         invalid_windows = (
             (
                 "wrong session",
@@ -1227,19 +1002,16 @@ class ConversationModelContractTests(unittest.TestCase):
             (
                 "decreasing sequence",
                 _context_window(
-                    (replace(user, sequence=2), replace(reply, sequence=1))
-                ),
+                    (replace(user, sequence=2), replace(reply, sequence=1))),
             ),
             ("unmatched user", _context_window((user,))),
             (
                 "wrong reply sender",
-                _context_window((user, replace(reply, sender=CHARACTER_CUSTODIAN))),
-            ),
+                _context_window((user, replace(reply, sender=CHARACTER_CUSTODIAN))),),
             ("retained count", _context_window((user, reply), retained_turns=0)),
             (
                 "retained bytes",
-                _context_window((user, reply), retained_utf8_bytes=1),
-            ),
+                _context_window((user, reply), retained_utf8_bytes=1),),
             ("turn cap", _context_window(over_turn_cap)),
             (
                 "byte cap",
@@ -1247,8 +1019,7 @@ class ConversationModelContractTests(unittest.TestCase):
                     _conversation_pair(
                         "byte_over",
                         user_content="x" * CONVERSATION_CONTEXT_POLICY.max_utf8_bytes,
-                        outcome_content="y",
-                    )
+                        outcome_content="y",)
                 ),
             ),
         )
@@ -1281,8 +1052,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
                 "max_debate_rounds": 1,
                 "codex_model": model,
                 "codex_reasoning_effort": effort,
-                **extra,
-            },
+                **extra,},
         )
 
     def test_model_precedence_and_explicit_none_are_exact(self) -> None:
@@ -1294,8 +1064,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
                 "persisted-model",
                 None,
                 {"model": "explicit-model"},
-                "explicit-model",
-            ),
+                "explicit-model",),
         )
         for persisted, effort, keywords, expected in cases:
             with self.subTest(persisted=persisted, keywords=keywords):
@@ -1309,8 +1078,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
 
         self.workspace.write_text(
             "config/system_defaults.json",
-            '{"language":"KO","persona":"default_kim_eun_hee","max_debate_rounds":1}\n',
-        )
+            '{"language":"KO","persona":"default_kim_eun_hee","max_debate_rounds":1}\n',)
         backend = AgentBackend(self.workspace)
         try:
             self.assertIsNone(backend.model)
@@ -1324,8 +1092,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
         configs[PLOT_ARCHITECT].update(
             {
                 "codex_model": "agent-model",
-                "codex_reasoning_effort": "high",
-            }
+                "codex_reasoning_effort": "high",}
         )
         self.workspace.write_json("config/agent_configs.json", configs)
 
@@ -1340,12 +1107,10 @@ class CodexBackendDefaultsTests(unittest.TestCase):
             self.addCleanup(explicit.close)
             self.assertEqual(
                 explicit._codex_invocation_settings(PLOT_ARCHITECT),
-                ("explicit-model", "high"),
-            )
+                ("explicit-model", "high"),)
 
             configs[PLOT_ARCHITECT].update(
-                {"codex_model": "changed", "codex_reasoning_effort": "minimal"}
-            )
+                {"codex_model": "changed", "codex_reasoning_effort": "minimal"})
             self.workspace.write_json("config/agent_configs.json", configs)
             self.assertEqual(
                 backend._codex_invocation_settings(PLOT_ARCHITECT),
@@ -1367,23 +1132,20 @@ class CodexBackendDefaultsTests(unittest.TestCase):
                 "codex_reasoning_effort": "system-effort",
                 "antigravity_model": "system-agy",
                 "antigravity_effort": None,
-                "default_backend": "antigravity",
-            },
+                "default_backend": "antigravity",},
         )
         configs = self.workspace.read_json("config/agent_configs.json")
         configs[ROSTER[0]].update(
             {
                 "backend": None,
                 "codex_model": None,
-                "codex_reasoning_effort": None,
-            }
+                "codex_reasoning_effort": None,}
         )
         configs[PLOT_ARCHITECT].update(
             {
                 "backend": "codex",
                 "codex_model": "agent-codex",
-                "codex_reasoning_effort": "agent-effort",
-            }
+                "codex_reasoning_effort": "agent-effort",}
         )
         configs[CHARACTER_CUSTODIAN].update(
             {
@@ -1396,8 +1158,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
             {
                 "backend": None,
                 "antigravity_model": None,
-                "antigravity_effort": None,
-            }
+                "antigravity_effort": None,}
         )
         self.workspace.write_json("config/agent_configs.json", configs)
 
@@ -1414,8 +1175,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
                 "system-codex",
                 ExecutionValueSource.SYSTEM_DEFAULT,
                 "system-effort",
-                ExecutionValueSource.SYSTEM_DEFAULT,
-            ),
+                ExecutionValueSource.SYSTEM_DEFAULT,),
             AgentExecutionProfile(
                 PLOT_ARCHITECT,
                 "codex",
@@ -1441,8 +1201,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
                 "system-agy",
                 ExecutionValueSource.SYSTEM_DEFAULT,
                 None,
-                ExecutionValueSource.PROVIDER_DEFAULT,
-            ),
+                ExecutionValueSource.PROVIDER_DEFAULT,),
         )
         self.assertEqual(backend.execution_profiles(), expected)
         for profile, active in zip(
@@ -1458,8 +1217,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
                     "model": profile.model,
                     "model_source": profile.model_source.value,
                     "provider": profile.provider,
-                    "provider_source": profile.provider_source.value,
-                },
+                    "provider_source": profile.provider_source.value,},
                 allow_nan=False,
                 ensure_ascii=False,
                 separators=(",", ":"),
@@ -2014,44 +1772,70 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_both_native_backends_preserve_session_continuation_and_legacy_namespaces(self):
+        from story_writing_agents.agent_context.service import (
+            AgentContextService, ContextInvocationKind, ContextInvocationRequest,)
+        from story_writing_agents.agent_context.sources import (
+            ActiveDebateSourceAdapter, FocusedConversationSourceAdapter, OwnAgentStateSourceAdapter,
+            SessionHistorySourceAdapter, WritingArtifactSourceAdapter)
+        from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
+        from tests.test_agent_context_execution import _LEAD_CALL_FACTORY, _lead_answer_frame, _materials
         for provider_id in ("codex", "antigravity"):
             with self.subTest(provider=provider_id):
                 session = f"continuation_{provider_id}"
                 definition = replace(self.definition(LEAD_ORCHESTRATOR), backend=provider_id)
-
                 def factory():
                     value = AgentBackend(
-                        self.workspace, executable=str(self.executable),
-                        antigravity_executable=str(self.executable),
+                        self.workspace, executable=str(self.executable), antigravity_executable=str(self.executable),
                         backend_overrides={LEAD_ORCHESTRATOR: provider_id},
                     )
                     self.addCleanup(value.close)
                     return value
-
                 backend = factory()
                 self.create_provisioned_session_with_access(backend, session)
-                scope = ContextScope("continuity-workspace", session, ContextSubjectKind.CONVERSATION, "conversation_a", LEAD_ORCHESTRATOR)
-                identity = ContextContinuationIdentity(scope.workspace_id, session, LEAD_ORCHESTRATOR)
-                policy = "sha256:" + "7" * 64
-                calls = []
-
+                service = AgentContextService(self.workspace)
+                storage = compose_filesystem_conversation_storage(self.workspace)
+                repository = WritingArtifactRepository(self.workspace.root)
+                scope = service.scope(session, ContextSubjectKind.CONVERSATION, "conversation_a", LEAD_ORCHESTRATOR)
+                identity = service.session_continuation(session, LEAD_ORCHESTRATOR).identity
+                policy = None
+                calls, requests = [], []
                 async def invoke(_binding, invocation):
                     calls.append(invocation)
-                    return ProviderResult(invocation.thread_id or f"native-thread-{len(calls)}", "{}", actual_transport_utf8_bytes=len(invocation.payload_json))
-
+                    return ProviderResult(invocation.thread_id or f"native-thread-{len(calls)}",
+                        _lead_answer_frame(requests[-1], "synthetic exact session context"),
+                        actual_transport_utf8_bytes=len(invocation.payload_json))
                 async def call(owner, current, continuation):
                     provider = (await owner.bind(definition))._context_provider()
-                    async with provider.invocation(current, policy, continuation_identity=continuation):
-                        expected = provider.inspect_context_thread(current, policy)
-                        result = await provider.invoke_context(ContextProviderCallRequest(
-                            current, policy, f"call-{len(calls) + 1}",
-                            ProviderCallKind.COLLABORATION_INITIAL, {"type": "object"},
-                            {"context": "synthetic exact session context"},
-                            expected_thread_id=expected, continuation_identity=continuation,
-                        ))
-                        result.finalizer.accepted()
-                        return result.thread_id
-
+                    class ObservedProvider:
+                        def __getattr__(self, name):
+                            return getattr(provider, name)
+                        async def invoke_context(self, request):
+                            nonlocal policy
+                            requests.append(request)
+                            policy = request.policy_fingerprint
+                            return await provider.invoke_context(request)
+                    request = ContextInvocationRequest(session_id=session, subject_kind=current.subject_kind,
+                        subject_id=current.subject_id, agent_id=LEAD_ORCHESTRATOR,
+                        operation_id=f"call-{len(calls) + 1}", result_correlation_id=f"result-{len(calls) + 1}",
+                        materials=_materials("synthetic exact session context"),
+                        result_contract=_LEAD_CALL_FACTORY, invocation_kind=ContextInvocationKind.LEAD,
+                        physical_call_limit=1)
+                    sources = dict(writing_artifacts=WritingArtifactSourceAdapter(repository, current),
+                        focused_conversation=FocusedConversationSourceAdapter(
+                            storage.catalog, storage.event_store, current, None),
+                        active_debate=ActiveDebateSourceAdapter(self.workspace, current, None),
+                        own_agent_state=OwnAgentStateSourceAdapter(self.workspace, current))
+                    if continuation is None:
+                        result = await service.invoke(request, ObservedProvider(), **sources)
+                    else:
+                        published = False
+                        async with service.session_continuation(session, LEAD_ORCHESTRATOR) as transaction:
+                            result = await service.invoke(request, ObservedProvider(), continuation=transaction,
+                                session_history=SessionHistorySourceAdapter(
+                                    storage.catalog, storage.event_store, session).capture(),
+                                publication_validator=lambda: published, **sources)
+                            published = True
+                    return result.provider_thread_id
                 adapter = getattr(backend, f"_{provider_id}_adapter")
                 with mock.patch.object(adapter, "invoke", new=invoke):
                     legacy = await call(backend, scope, None)
@@ -4418,16 +4202,93 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             (prior_user, prior_reply),
         )
         self.assertEqual(self.workspace.inspect_session(session_id)["debates"], [])
+        from story_writing_agents.agent_context.service import (
+            AgentContextService, ContextInvocationKind, ContextInvocationRequest)
+        from story_writing_agents.agent_context.sources import (
+            ActiveDebateSourceAdapter, FocusedConversationSourceAdapter,
+            OwnAgentStateSourceAdapter, WritingArtifactSourceAdapter)
+        from story_writing_agents.conversation_storage import (
+            compose_filesystem_conversation_storage)
+        from story_writing_agents.lead_provider_contracts import (
+            LeadExplorationConstraints, LeadProviderConstraints, LeadResultRuleSeed,
+            PremiseDecisionConstraints)
+        from story_writing_agents.orchestrator import (
+            LeadContractError, OrchestrationLeadCallFactory)
+        from tests.provider_wire_fixture import lead_fixture_response, lead_fixture_result
+        from tests.test_agent_context_execution import (
+            ContextAuthorityKind, ContextPriority, ContextSemanticChannel, ContextSourceKind,
+            _material, _materials)
+
+        service = AgentContextService(self.workspace)
+        storage = compose_filesystem_conversation_storage(self.workspace)
+        repository = WritingArtifactRepository(self.workspace.root)
+
+        async def bound_call(call_id, family, summary=None):
+            nonlocal schema, payload, response
+            authored = lead_fixture_result(json.loads(response)["agent_action"]["task_result"])
+            inputs = tuple(item["input_id"] for item in payload.get("inputs", ()))
+            if family == "lead-exploration-response-v1":
+                authored["response_details"]["ideas"][0]["basis_input_ids"] = {}
+            result_constraints = (LeadExplorationConstraints() if summary is None else
+                PremiseDecisionConstraints("native-question", input_ids=("user_input",),
+                    reply_alternatives=(("native-reply", ("native-alternative",)),)))
+
+            def authorize(answer, _authorization):
+                if summary is None:
+                    findings = result_constraints.diagnose(answer)
+                    if findings:
+                        raise LeadContractError(findings)
+                elif summary:
+                    result_constraints.validate_summary(json.loads(answer))
+                else:
+                    result_constraints.validate_analysis(json.loads(answer))
+
+            factory = OrchestrationLeadCallFactory(
+                LeadProviderConstraints(input_ids=inputs, source_ids=inputs),
+                LeadResultRuleSeed.declare(family, schema), ContextInvocationKind.LEAD.value,
+                definition.language, authorize, StoryRuntime._core_reviewer)
+            materials = _materials(payload)
+            current = service.scope(scope.session_id, scope.subject_kind, scope.subject_id,
+                LEAD_ORCHESTRATOR)
+            returned = None
+
+            class ObservedProvider:
+                def __getattr__(self, name):
+                    return getattr(provider, name)
+
+                async def invoke_context(self, request):
+                    nonlocal schema, payload, response, returned
+                    schema, payload = request.schema, request.payload
+                    response = lead_fixture_response(
+                        request, authored, family=1 if summary is False else 0)
+                    returned = await provider.invoke_context(request)
+                    return returned
+
+            request = ContextInvocationRequest(session_id=current.session_id,
+                subject_kind=current.subject_kind, subject_id=current.subject_id,
+                agent_id=LEAD_ORCHESTRATOR, operation_id=call_id, result_correlation_id=call_id,
+                materials=materials, result_contract=factory,
+                invocation_kind=ContextInvocationKind.LEAD,
+                physical_call_limit=1)
+            await service.invoke(request, ObservedProvider(),
+                writing_artifacts=WritingArtifactSourceAdapter(repository, current),
+                focused_conversation=FocusedConversationSourceAdapter(
+                    storage.catalog, storage.event_store, current, None),
+                active_debate=ActiveDebateSourceAdapter(self.workspace, current, None),
+                own_agent_state=OwnAgentStateSourceAdapter(self.workspace, current))
+            return returned
+
         schema, payload = _exploration_native_contract()
-        provider = (await backend.bind(self.definition(LEAD_ORCHESTRATOR)))._context_provider()
+        definition = self.definition(LEAD_ORCHESTRATOR)
+        provider = (await backend.bind(definition))._context_provider()
         scope = ContextScope("workspace-context", session_id, ContextSubjectKind.CONVERSATION, "native-exploration", LEAD_ORCHESTRATOR)
         response, invocations = _exploration_outcome("Native provisional 한글 possibility.", basis_input_ids=()), []
         async def invoke(_binding, invocation):
             invocations.append(invocation)
             return ProviderResult("codex-exploration-thread", response, usage=ProviderUsage(input_tokens=1, output_tokens=1), actual_transport_utf8_bytes=len(invocation.payload_json))
         with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
-            async with provider.invocation(scope, "sha256:" + "5" * 64):
-                explored = await provider.invoke_context(ContextProviderCallRequest(scope, "sha256:" + "5" * 64, "codex-exploration-parity-call", ProviderCallKind.COLLABORATION_INITIAL, schema, payload))
+            explored = await bound_call(
+                "codex-exploration-parity-call", "lead-exploration-response-v1")
         self.assertEqual((invocations[0].schema, invocations[0].payload_json), (schema, canonical_provider_json(payload)))
         self.assertEqual((explored.response_text, explored.accounting.state), (response, ProviderCallState.SUBMITTED))
 
@@ -4440,8 +4301,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 return ProviderResult("native-premise-" + str(summary), response, usage=ProviderUsage(input_tokens=1, output_tokens=1), actual_transport_utf8_bytes=len(invocation.payload_json))
             scope = ContextScope("workspace-context", session_id, ContextSubjectKind.CONVERSATION, "native-premise-" + str(summary), LEAD_ORCHESTRATOR)
             with mock.patch.object(backend._codex_adapter, "invoke", new=premise_invoke):
-                async with provider.invocation(scope, "sha256:" + "5" * 64):
-                    returned = await provider.invoke_context(ContextProviderCallRequest(scope, "sha256:" + "5" * 64, "native-premise-call-" + str(summary), ProviderCallKind.COLLABORATION_INITIAL, schema, payload))
+                returned = await bound_call("native-premise-call-" + str(summary),
+                    "premise-decision-summary-v1" if summary else "premise-analysis-response-v1",
+                    summary)
             self.assertEqual((native_calls[0].schema, native_calls[0].payload_json), (schema, canonical_provider_json(payload)))
             self.assertEqual((returned.response_text, returned.accounting.state), (response, ProviderCallState.SUBMITTED))
 
@@ -5061,14 +4923,19 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                             turn_id="turn_failed",
                         )
                     )
-                self.assertIn("no action was taken", reply.content)
+                extension = label in {"extra", "wrong session", "wrong conversation", "wrong turn"}
+                if extension:
+                    self.assertEqual(reply.content, "visible reply")
+                    self.assertEqual(reply.validation_details, ())
+                else:
+                    self.assertIn("no action was taken", reply.content)
                 self.assertEqual(reply.session_id, session_id)
                 self.assertEqual(reply.conversation_id, "conversation_a")
                 self.assertEqual(reply.turn_id, "turn_failed")
-                self.assertIs(reply.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
-                self.assertEqual(reply.trace.action, "none")
-                self.assertEqual(reply.trace.recovered_fields, ("structured_reply",))
-                self.assertIs(self.thread(session_id)["tainted"], True)
+                self.assertIs(reply.trace.origin, ReplyTraceOrigin.PROVIDER if extension else ReplyTraceOrigin.RUNTIME_FALLBACK)
+                self.assertEqual(reply.trace.action, "reply" if extension else "none")
+                self.assertEqual(reply.trace.recovered_fields, () if extension else ("structured_reply",))
+                self.assertIs(self.thread(session_id)["tainted"], not extension)
                 await bound.converse(
                     self.conversation_request(
                         session_id=session_id,
@@ -5118,7 +4985,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(private, repr(outcomes))
 
         responses = ["unused", "unused", json.dumps({"message": 0}),
-                     json.dumps({"message": "Repaired."})]
+                     json.dumps({"message": "Repaired.", private: private})]
         with mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_PHYSICAL_OUTPUTS": json.dumps(responses)}):
             repaired = await bound.converse(
                 self.conversation_request(session_id=session_id, turn_id="repaired_turn")

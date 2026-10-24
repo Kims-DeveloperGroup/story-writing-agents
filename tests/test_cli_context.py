@@ -17,8 +17,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
-from story_writing_agents import (
-    AgentReply,
+from story_writing_agents import (AgentReply,
     BackendProtocolError,
     Phase,
     SessionAccessState,
@@ -27,8 +26,7 @@ from story_writing_agents import (
     Workspace,
 )
 from story_writing_agents import cli as cli_module
-from story_writing_agents.cli_context import (
-    CliContext,
+from story_writing_agents.cli_context import (CliContext,
     load_cli_context,
     load_default_conversation,
     resolve_session,
@@ -36,8 +34,7 @@ from story_writing_agents.cli_context import (
     save_default_conversation,
     save_default_session,
 )
-from story_writing_agents.errors import (
-    ConfigurationError,
+from story_writing_agents.errors import (ConfigurationError,
     SessionIdError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
@@ -47,8 +44,7 @@ from story_writing_agents.conversation_storage import (
     compose_filesystem_conversation_storage,
 )
 from story_writing_agents.run_inputs import read_draft_file
-from story_writing_agents.session_recovery import (
-    SessionRecoveryFailureCode,
+from story_writing_agents.session_recovery import (SessionRecoveryFailureCode,
     SessionRecoveryNextAction,
     SessionRecoveryOwner,
     SessionRecoveryResult,
@@ -71,8 +67,7 @@ CONVERSATION_DEFAULT_DIRECTORY = "agent_states/orchestrator_state/conversation_d
 V1_CONVERSATION_DIRECTORY = "agent_states/orchestrator_state/conversation_selections"
 _CREATED = "2026-01-01T00:00:00+00:00"
 _UPDATED = "2026-01-02T00:00:00+00:00"
-_LEGACY_WORKSPACE_SENTINELS = (
-    "config/system_defaults.json",
+_LEGACY_WORKSPACE_SENTINELS = ("config/system_defaults.json",
     "config/agent_configs.json",
     "config/persona_templates/default_kim_eun_hee.md",
     "config/agents/lead_orchestrator/AGENTS.md",
@@ -88,8 +83,7 @@ def conversation_default_path(workspace: Workspace, session_id: str) -> Path:
 def tree_snapshot(root: Path) -> dict[str, tuple[bytes, int, int]]:
     """Capture file bytes, modes, and timestamps for purity assertions."""
 
-    return {
-        str(path.relative_to(root)): (
+    return {str(path.relative_to(root)): (
             path.read_bytes(),
             path.stat().st_mode,
             path.stat().st_mtime_ns,
@@ -99,8 +93,7 @@ def tree_snapshot(root: Path) -> dict[str, tuple[bytes, int, int]]:
     }
 
 
-def boundary_snapshot(
-    root: Path,
+def boundary_snapshot(root: Path,
 ) -> dict[str, tuple[int, int, int, bytes | str | None]]:
     """Capture a boundary namespace without following symbolic links."""
 
@@ -113,8 +106,7 @@ def boundary_snapshot(
             payload = path.read_bytes()
         else:
             payload = None
-        snapshot[path.relative_to(root).as_posix()] = (
-            metadata.st_mode,
+        snapshot[path.relative_to(root).as_posix()] = (metadata.st_mode,
             metadata.st_size,
             metadata.st_mtime_ns,
             payload,
@@ -162,8 +154,7 @@ def successful_backend() -> ScriptedBackend:
 class LifecycleCommandBackend:
     """Provide correlated lifecycle facts for CLI automation tests."""
 
-    def __init__(
-        self,
+    def __init__(self,
         *_args: Any,
         fail_at: str | None = None,
         assessment: SessionTransitionAssessment | None = None,
@@ -176,8 +167,7 @@ class LifecycleCommandBackend:
         self._states: dict[str, SessionLifecycleState] = {}
 
     @staticmethod
-    def state(
-        session_id: str,
+    def state(session_id: str,
         *,
         durable: SessionDurableState,
         access: SessionAccessState,
@@ -186,8 +176,7 @@ class LifecycleCommandBackend:
 
         absent = durable is SessionDurableState.ABSENT
         held = access is not SessionAccessState.CLAIMABLE
-        return SessionLifecycleState(
-            session_id=session_id,
+        return SessionLifecycleState(session_id=session_id,
             durable_state=durable,
             access_state=access,
             owner_hostname="test-host" if held else None,
@@ -196,8 +185,7 @@ class LifecycleCommandBackend:
             updated_at=None if absent else _UPDATED,
         )
 
-    def seed(
-        self,
+    def seed(self,
         session_id: str,
         *,
         durable: SessionDurableState,
@@ -205,8 +193,7 @@ class LifecycleCommandBackend:
     ) -> None:
         """Seed one lifecycle fact without adding an observed call."""
 
-        self._states[session_id] = self.state(
-            session_id,
+        self._states[session_id] = self.state(session_id,
             durable=durable,
             access=access,
         )
@@ -254,8 +241,7 @@ class LifecycleCommandBackend:
         self._states[session_id] = state
         return state
 
-    def pause_session_and_release_access(
-        self, session_id: str
+    def pause_session_and_release_access(self, session_id: str
     ) -> SessionLifecycleState:
         self._record("pause", session_id)
         state = self.state(
@@ -268,17 +254,14 @@ class LifecycleCommandBackend:
 
     def get_session_lifecycle(self, session_id: str) -> SessionLifecycleState:
         self._record("get", session_id)
-        return self._states.get(
-            session_id,
-            self.state(
-                session_id,
+        return self._states.get(session_id,
+            self.state(session_id,
                 durable=SessionDurableState.ABSENT,
                 access=SessionAccessState.CLAIMABLE,
             ),
         )
 
-    def assess_session_transition(
-        self,
+    def assess_session_transition(self,
         *,
         lifecycle_state: SessionLifecycleState,
         requested_operation: SessionTransitionOperation,
@@ -286,8 +269,7 @@ class LifecycleCommandBackend:
         collaboration_store: object | None = None,
     ) -> SessionTransitionAssessment:
         self._record("assess", lifecycle_state.session_id)
-        self.assessment_calls.append(
-            {
+        self.assessment_calls.append({
                 "lifecycle_state": lifecycle_state,
                 "requested_operation": requested_operation,
                 "conversation_id": conversation_id,
@@ -296,8 +278,7 @@ class LifecycleCommandBackend:
         )
         if self.assessment is not None:
             return self.assessment
-        return SessionTransitionAssessment(
-            session_id=lifecycle_state.session_id,
+        return SessionTransitionAssessment(session_id=lifecycle_state.session_id,
             conversation_id=None,
             scope=SessionTransitionScope.IDLE,
             state=SessionTransitionAssessmentState.IDLE_READY,
@@ -311,8 +292,7 @@ class LifecycleCommandBackend:
     def release_session_access(self, session_id: str) -> SessionLifecycleState:
         self._record("release", session_id)
         durable = self._states[session_id].durable_state
-        state = self.state(
-            session_id, durable=durable, access=SessionAccessState.CLAIMABLE
+        state = self.state(session_id, durable=durable, access=SessionAccessState.CLAIMABLE
         )
         self._states[session_id] = state
         return state
@@ -321,27 +301,23 @@ class LifecycleCommandBackend:
         self.calls.append(("close", None))
 
 
-def active_transition_assessment(
-    session_id: str,
+def active_transition_assessment(session_id: str,
     conversation_id: str,
     state: SessionRecoveryState,
 ) -> SessionTransitionAssessment:
     """Build one exact active assessment for lifecycle CLI tests."""
 
-    next_action = {
-        SessionRecoveryState.AWAITING_APPLICATION: (
+    next_action = {SessionRecoveryState.AWAITING_APPLICATION: (
             SessionRecoveryNextAction.SUBMIT_APPLICATION_DECISION
         ),
         SessionRecoveryState.STAGED: SessionRecoveryNextAction.INSPECT_STORY_COMMIT,
     }[state]
-    values: dict[str, object] = {
-        "session_id": session_id,
+    values: dict[str, object] = {"session_id": session_id,
         "conversation_id": conversation_id,
         "collaboration_tail_sequence": 9,
         "state": state,
         "next_action": next_action,
-        "owner": (
-            SessionRecoveryOwner.STORY_COMMIT
+        "owner": (SessionRecoveryOwner.STORY_COMMIT
             if state is SessionRecoveryState.STAGED
             else SessionRecoveryOwner.LEAD
         ),
@@ -353,15 +329,13 @@ def active_transition_assessment(
         values["confirmation_request_id"] = "R9"
         operations = tuple(SessionTransitionOperation)
     else:
-        values.update(
-            application_id="application-9",
+        values.update(application_id="application-9",
             story_commit_candidate_id="candidate-9",
             story_commit_operation_id="operation-9",
         )
         operations = (SessionTransitionOperation.ENTER_DESTINATION,)
     recovery = SessionRecoveryResult(**values)  # type: ignore[arg-type]
-    return SessionTransitionAssessment(
-        session_id=session_id,
+    return SessionTransitionAssessment(session_id=session_id,
         conversation_id=conversation_id,
         scope=SessionTransitionScope.ACTIVE,
         state=SessionTransitionAssessmentState.ACTIVE,
@@ -385,14 +359,12 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
         outer = pristine_initialized_workspace(self)
         nested = outer.root / "core_documents"
         self.assertEqual(resolve_workspace(None, start=nested).root, outer.root)
-        self.assertEqual(
-            resolve_workspace(str(outer.root), start=nested).root, outer.root
+        self.assertEqual(resolve_workspace(str(outer.root), start=nested).root, outer.root
         )
 
         unsupported = outer.root / "manuscript" / "unsupported"
         (unsupported / "config").mkdir(parents=True)
-        (unsupported / "config/workspace.json").write_text(
-            '{"schema_version":1}\n',
+        (unsupported / "config/workspace.json").write_text('{"schema_version":1}\n',
             encoding="utf-8",
         )
         with self.assertRaises(WorkspaceVersionUnsupportedError):
@@ -400,8 +372,7 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
 
     def test_dangling_exact_legacy_sentinel_is_nearest_unsafe_boundary(self) -> None:
         outer = pristine_initialized_workspace(self)
-        self.assertEqual(
-            workspace_initialization._LEGACY_SENTINELS,
+        self.assertEqual(workspace_initialization._LEGACY_SENTINELS,
             _LEGACY_WORKSPACE_SENTINELS,
         )
 
@@ -417,8 +388,7 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
                 except NotImplementedError:
                     self.skipTest("symbolic links are unavailable")
                 except OSError as exc:
-                    unsupported = {
-                        errno.EACCES,
+                    unsupported = {errno.EACCES,
                         errno.EPERM,
                         getattr(errno, "ENOTSUP", errno.EPERM),
                         getattr(errno, "EOPNOTSUPP", errno.EPERM),
@@ -433,8 +403,7 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
                 self.assertNotEqual(discovered, outer.root)
                 with self.assertRaises(WorkspaceSecurityError) as raised:
                     resolve_workspace(None, start=child)
-                self.assertEqual(
-                    str(raised.exception),
+                self.assertEqual(str(raised.exception),
                     "workspace contains an unsafe entry",
                 )
                 self.assertEqual(boundary_snapshot(inner), before)
@@ -444,8 +413,7 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
         uninitialized.mkdir()
         with self.assertRaisesRegex(WorkspaceFormatError, "workspace is not ready"):
             resolve_workspace(str(uninitialized), start=uninitialized)
-        with self.assertRaisesRegex(
-            ConfigurationError, "no initialized story workspace"
+        with self.assertRaisesRegex(ConfigurationError, "no initialized story workspace"
         ):
             resolve_workspace(None, start=uninitialized)
 
@@ -457,19 +425,15 @@ class CliDefaultPersistenceTests(unittest.TestCase):
         self.workspace = pristine_initialized_workspace(self)
 
     def test_default_session_missing_save_load_and_resolve_are_exact(self) -> None:
-        self.assertEqual(
-            tuple(inspect.signature(CliContext).parameters), ("default_session_id",)
+        self.assertEqual(tuple(inspect.signature(CliContext).parameters), ("default_session_id",)
         )
-        self.assertEqual(
-            tuple(inspect.signature(save_default_session).parameters),
+        self.assertEqual(tuple(inspect.signature(save_default_session).parameters),
             ("workspace", "session_id"),
         )
-        self.assertEqual(
-            tuple(inspect.signature(resolve_session).parameters),
+        self.assertEqual(tuple(inspect.signature(resolve_session).parameters),
             ("workspace", "context", "option_session"),
         )
-        for public_callable in (
-            load_cli_context,
+        for public_callable in (load_cli_context,
             save_default_session,
             load_default_conversation,
             save_default_conversation,
@@ -482,27 +446,23 @@ class CliDefaultPersistenceTests(unittest.TestCase):
         self.assertEqual(tree_snapshot(self.workspace.root), before)
         saved = save_default_session(self.workspace, "story_session")
         self.assertEqual(saved, CliContext(default_session_id="story_session"))
-        self.assertEqual(
-            self.workspace.read_json(CLI_CONTEXT_PATH),
+        self.assertEqual(self.workspace.read_json(CLI_CONTEXT_PATH),
             {"schema_version": 2, "default_session_id": "story_session"},
         )
         context = load_cli_context(self.workspace)
         self.assertEqual(
-            resolve_session(
-                workspace=self.workspace, context=context, option_session=None
+            resolve_session(workspace=self.workspace, context=context, option_session=None
             ),
             "story_session",
         )
         self.assertEqual(
-            resolve_session(
-                workspace=self.workspace, context=context, option_session="explicit"
+            resolve_session(workspace=self.workspace, context=context, option_session="explicit"
             ),
             "explicit",
         )
         self.assertEqual(load_cli_context(self.workspace), context)
         with self.assertRaisesRegex(ConfigurationError, "no default session"):
-            resolve_session(
-                workspace=self.workspace, context=CliContext(), option_session=None
+            resolve_session(workspace=self.workspace, context=CliContext(), option_session=None
             )
 
     def test_read_time_disappearance_is_absent_but_other_io_propagates(self) -> None:
@@ -522,8 +482,7 @@ class CliDefaultPersistenceTests(unittest.TestCase):
             side_effect=disappear_then_read,
         ) as read_text:
             self.assertIsNone(load_default_conversation(self.workspace, "chapter"))
-        read_text.assert_called_once_with(
-            f"{CONVERSATION_DEFAULT_DIRECTORY}/chapter.json"
+        read_text.assert_called_once_with(f"{CONVERSATION_DEFAULT_DIRECTORY}/chapter.json"
         )
         self.assertFalse(target.exists())
 
@@ -566,23 +525,19 @@ class CliDefaultPersistenceTests(unittest.TestCase):
                 before = (target.read_bytes(), target.stat().st_mtime_ns)
                 with self.assertRaises(exception):
                     load_cli_context(self.workspace)
-                self.assertEqual(
-                    (target.read_bytes(), target.stat().st_mtime_ns), before
+                self.assertEqual((target.read_bytes(), target.stat().st_mtime_ns), before
                 )
-        self.workspace.write_text(
-            CLI_CONTEXT_PATH,
+        self.workspace.write_text(CLI_CONTEXT_PATH,
             '{"schema_version":2,"schema_version":2,"default_session_id":"story"}',
         )
         with self.assertRaises(WorkspaceFormatError):
             load_cli_context(self.workspace)
 
     def test_conversation_defaults_are_independent_exact_v2_records(self) -> None:
-        self.assertEqual(
-            tuple(inspect.signature(load_default_conversation).parameters),
+        self.assertEqual(tuple(inspect.signature(load_default_conversation).parameters),
             ("workspace", "session_id"),
         )
-        self.assertEqual(
-            tuple(inspect.signature(save_default_conversation).parameters),
+        self.assertEqual(tuple(inspect.signature(save_default_conversation).parameters),
             ("workspace", "session_id", "default_conversation_id"),
         )
         before = tree_snapshot(self.workspace.root)
@@ -593,15 +548,12 @@ class CliDefaultPersistenceTests(unittest.TestCase):
         values = {"chapter_one": "conversation_one", "chapter_two": "conversation_two"}
         for session, conversation in values.items():
             save_default_conversation(self.workspace, session, conversation)
-            self.assertEqual(
-                load_default_conversation(self.workspace, session), conversation
+            self.assertEqual(load_default_conversation(self.workspace, session), conversation
             )
-            self.assertEqual(
-                self.workspace.read_json(
+            self.assertEqual(self.workspace.read_json(
                     f"{CONVERSATION_DEFAULT_DIRECTORY}/{session}.json"
                 ),
-                {
-                    "schema_version": 2,
+                {"schema_version": 2,
                     "session_id": session,
                     "default_conversation_id": conversation,
                 },
@@ -611,13 +563,11 @@ class CliDefaultPersistenceTests(unittest.TestCase):
         self.assertEqual(
             load_default_conversation(self.workspace, "chapter_two"), "conversation_two"
         )
-        self.assertEqual(
-            self.workspace.path(CLI_CONTEXT_PATH).read_bytes(), context_before
+        self.assertEqual(self.workspace.path(CLI_CONTEXT_PATH).read_bytes(), context_before
         )
 
     def test_conversation_default_schema_and_v1_artifact_fail_unchanged(self) -> None:
-        valid = {
-            "schema_version": 2,
+        valid = {"schema_version": 2,
             "session_id": "chapter_one",
             "default_conversation_id": "conversation_one",
         }
@@ -631,8 +581,7 @@ class CliDefaultPersistenceTests(unittest.TestCase):
             ({**valid, "extra": True}, WorkspaceFormatError),
         )
         for index, (value, exception) in enumerate(rows):
-            self.workspace.write_json(
-                f"{CONVERSATION_DEFAULT_DIRECTORY}/chapter_one.json",
+            self.workspace.write_json(f"{CONVERSATION_DEFAULT_DIRECTORY}/chapter_one.json",
                 value,
             )
             before = (target.read_bytes(), target.stat().st_mtime_ns)
@@ -641,8 +590,7 @@ class CliDefaultPersistenceTests(unittest.TestCase):
             self.assertEqual((target.read_bytes(), target.stat().st_mtime_ns), before)
 
         target.unlink()
-        v1 = self.workspace.write_json(
-            f"{V1_CONVERSATION_DIRECTORY}/chapter_one.json",
+        v1 = self.workspace.write_json(f"{V1_CONVERSATION_DIRECTORY}/chapter_one.json",
             {"schema_version": 1},
         )
         before = (v1.read_bytes(), v1.stat().st_mtime_ns)
@@ -653,20 +601,16 @@ class CliDefaultPersistenceTests(unittest.TestCase):
         self.assertEqual((v1.read_bytes(), v1.stat().st_mtime_ns), before)
 
     def test_malformed_and_non_utf8_defaults_reject_without_rewriting(self) -> None:
-        targets = (
-            (self.workspace.path(CLI_CONTEXT_PATH), load_cli_context),
-            (
-                conversation_default_path(self.workspace, "chapter"),
-                lambda _workspace: load_default_conversation(
-                    self.workspace,
+        targets = ((self.workspace.path(CLI_CONTEXT_PATH), load_cli_context),
+            (conversation_default_path(self.workspace, "chapter"),
+                lambda _workspace: load_default_conversation(self.workspace,
                     "chapter",
                 ),
             ),
         )
         for target, loader in targets:
             target.parent.mkdir(parents=True, exist_ok=True)
-            for label, content in (
-                ("malformed", b"{not-json}\n"),
+            for label, content in (("malformed", b"{not-json}\n"),
                 ("non_utf8", b"\xff\n"),
             ):
                 with self.subTest(target=target.name, content=label):
@@ -674,17 +618,14 @@ class CliDefaultPersistenceTests(unittest.TestCase):
                     before = (target.read_bytes(), target.stat().st_mtime_ns)
                     with self.assertRaises(WorkspaceFormatError):
                         loader(self.workspace)
-                    self.assertEqual(
-                        (target.read_bytes(), target.stat().st_mtime_ns),
+                    self.assertEqual((target.read_bytes(), target.stat().st_mtime_ns),
                         before,
                     )
 
     def test_identifier_symlink_and_atomic_write_failures_are_safe(self) -> None:
-        for operation in (
-            lambda: save_default_session(self.workspace, "../session"),
+        for operation in (lambda: save_default_session(self.workspace, "../session"),
             lambda: load_default_conversation(self.workspace, "../session"),
-            lambda: save_default_conversation(
-                self.workspace, "session", "../conversation"
+            lambda: save_default_conversation(self.workspace, "session", "../conversation"
             ),
         ):
             with self.assertRaises(SessionIdError):
@@ -693,8 +634,7 @@ class CliDefaultPersistenceTests(unittest.TestCase):
         save_default_conversation(self.workspace, "chapter", "first")
         target = conversation_default_path(self.workspace, "chapter")
         before = (target.read_bytes(), target.stat().st_mtime_ns)
-        with mock.patch(
-            "story_writing_agents.workspace.core.os.replace",
+        with mock.patch("story_writing_agents.workspace.core.os.replace",
             side_effect=OSError("replace failed"),
         ):
             with self.assertRaises(OSError):
@@ -728,16 +668,13 @@ class CliDefaultPersistenceTests(unittest.TestCase):
             directory.symlink_to(external, target_is_directory=True)
         except (OSError, NotImplementedError):
             self.skipTest("symbolic links unavailable")
-        for operation in (
-            lambda: load_default_conversation(self.workspace, "chapter"),
-            lambda: save_default_conversation(
-                self.workspace,
+        for operation in (lambda: load_default_conversation(self.workspace, "chapter"),
+            lambda: save_default_conversation(self.workspace,
                 "chapter",
                 "conversation",
             ),
         ):
-            with (
-                self.subTest(kind="directory"),
+            with (self.subTest(kind="directory"),
                 self.assertRaises(WorkspaceSecurityError),
             ):
                 operation()
@@ -748,8 +685,7 @@ class CliDefaultPersistenceTests(unittest.TestCase):
         external_file = second.root.parent / "outside-default.json"
         external_file.write_text("{}\n", encoding="utf-8")
         target.symlink_to(external_file)
-        for operation in (
-            lambda: load_default_conversation(second, "chapter"),
+        for operation in (lambda: load_default_conversation(second, "chapter"),
             lambda: save_default_conversation(second, "chapter", "conversation"),
         ):
             with self.subTest(kind="file"), self.assertRaises(WorkspaceSecurityError):
@@ -782,8 +718,7 @@ class RunInputModuleTests(unittest.TestCase):
             with working_directory(caller):
                 self.assertEqual(read_draft_file("neutral.md"), exact)
                 self.assertEqual(read_draft_file(absolute), "absolute draft")
-                self.assertEqual(
-                    read_draft_file(metachar.name),
+                self.assertEqual(read_draft_file(metachar.name),
                     "literal metacharacters",
                 )
                 self.assertEqual(read_draft_file(empty), "")
@@ -819,18 +754,15 @@ class LifecycleAutomationTests(unittest.TestCase):
             )
         )
 
-    def invoke_with(
-        self, backend: LifecycleCommandBackend, *arguments: str
+    def invoke_with(self, backend: LifecycleCommandBackend, *arguments: str
     ) -> tuple[int, str, str]:
         """Invoke one lifecycle command with a deterministic backend."""
 
         with mock.patch.object(cli_module, "AgentBackend", return_value=backend):
-            return invoke_cli(
-                ["session", *arguments, "--workspace", str(self.workspace.root)]
+            return invoke_cli(["session", *arguments, "--workspace", str(self.workspace.root)]
             )
 
-    def test_create_requires_target_saves_default_after_success_and_formats_json(
-        self,
+    def test_create_requires_target_saves_default_after_success_and_formats_json(self,
     ) -> None:
         backend = LifecycleCommandBackend()
         code, stdout, stderr = self.invoke_with(backend, "create", "created")
@@ -840,10 +772,8 @@ class LifecycleAutomationTests(unittest.TestCase):
             (payload["session_id"], payload["durable_state"], payload["access_state"]),
             ("created", "ready", "claimable"),
         )
-        self.assertEqual(
-            payload["assessment"],
-            {
-                "allowed_operations": [
+        self.assertEqual(payload["assessment"],
+            {"allowed_operations": [
                     "enter_destination",
                     "leave_source",
                     "pause_session",
@@ -860,8 +790,7 @@ class LifecycleAutomationTests(unittest.TestCase):
         )
         self.assertEqual(
             backend.calls,
-            [
-                ("get", "created"),
+            [("get", "created"),
                 ("validate", "created"),
                 ("provision", "created"),
                 ("create", "created"),
@@ -884,8 +813,7 @@ class LifecycleAutomationTests(unittest.TestCase):
         self.assertEqual(payload["durable_state"], "ready")
         self.assertEqual(payload["access_state"], "claimable")
         self.assertEqual(payload["assessment"]["scope"], "idle")
-        self.assertEqual(
-            load_cli_context(self.workspace).default_session_id, "replacement"
+        self.assertEqual(load_cli_context(self.workspace).default_session_id, "replacement"
         )
 
         backend = LifecycleCommandBackend()
@@ -893,8 +821,7 @@ class LifecycleAutomationTests(unittest.TestCase):
         code, stdout, stderr = self.invoke_with(backend, "reopen")
         self.assertEqual((code, stderr), (0, ""))
         self.assertEqual(json.loads(stdout)["session_id"], "replacement")
-        self.assertEqual(
-            backend.calls[0:3],
+        self.assertEqual(backend.calls[0:3],
             [("get", "replacement"), ("validate", "replacement"), ("acquire", "replacement")],
         )
 
@@ -904,8 +831,7 @@ class LifecycleAutomationTests(unittest.TestCase):
         code, stdout, stderr = self.invoke_with(failing, "reopen", "failed")
         self.assertEqual((code, stdout), (2, ""))
         self.assertIn("BackendProtocolError", stderr)
-        self.assertEqual(
-            load_cli_context(self.workspace).default_session_id, "retained"
+        self.assertEqual(load_cli_context(self.workspace).default_session_id, "retained"
         )
 
     def test_pause_uses_optional_default_and_always_retains_it(self) -> None:
@@ -925,8 +851,7 @@ class LifecycleAutomationTests(unittest.TestCase):
         )
         self.assertEqual(
             backend.calls,
-            [
-                ("get", "other_session"),
+            [("get", "other_session"),
                 ("acquire", "other_session"),
                 ("assess", "other_session"),
                 ("pause", "other_session"),
@@ -984,16 +909,14 @@ class LifecycleAutomationTests(unittest.TestCase):
         )
         self.assertIs(assessment_call["collaboration_store"], services.event_store)
         payload = json.loads(stdout)["assessment"]
-        self.assertEqual(
-            (payload["scope"], payload["state"], payload["next_action"]),
+        self.assertEqual((payload["scope"], payload["state"], payload["next_action"]),
             ("active", "active", "follow_active_recovery"),
         )
         recovery = payload["recovery_result"]
         self.assertEqual(recovery["state"], "awaiting_application")
         self.assertEqual(recovery["confirmation_request_id"], "R9")
         self.assertEqual(recovery["collaboration_tail_sequence"], 9)
-        self.assertFalse(
-            {"revision", "digest", "choices", "capability"} & set(recovery)
+        self.assertFalse({"revision", "digest", "choices", "capability"} & set(recovery)
         )
 
     def test_noninteractive_pause_active_staged_denial_preserves_durable_state_and_releases_only_new_claim(
@@ -1008,8 +931,7 @@ class LifecycleAutomationTests(unittest.TestCase):
             conversation.conversation_id,
         )
         default_before = self.workspace.path(CLI_CONTEXT_PATH).read_bytes()
-        conversation_before = conversation_default_path(
-            self.workspace,
+        conversation_before = conversation_default_path(self.workspace,
             "session",
         ).read_bytes()
         backend = LifecycleCommandBackend(
@@ -1031,8 +953,7 @@ class LifecycleAutomationTests(unittest.TestCase):
         self.assertEqual((code, stderr), (2, ""))
         self.assertEqual(
             backend.calls,
-            [
-                ("get", "session"),
+            [("get", "session"),
                 ("acquire", "session"),
                 ("assess", "session"),
                 ("release", "session"),
@@ -1055,22 +976,18 @@ class LifecycleAutomationTests(unittest.TestCase):
         self.assertEqual(payload["durable_state"], "ready")
         self.assertEqual(payload["access_state"], "claimable")
         self.assertEqual(payload["assessment"]["scope"], "active")
-        self.assertEqual(
-            payload["assessment"]["recovery_result"]["state"],
+        self.assertEqual(payload["assessment"]["recovery_result"]["state"],
             "staged",
         )
-        self.assertEqual(
-            self.workspace.path(CLI_CONTEXT_PATH).read_bytes(),
+        self.assertEqual(self.workspace.path(CLI_CONTEXT_PATH).read_bytes(),
             default_before,
         )
-        self.assertEqual(
-            conversation_default_path(self.workspace, "session").read_bytes(),
+        self.assertEqual(conversation_default_path(self.workspace, "session").read_bytes(),
             conversation_before,
         )
 
     def test_lifecycle_grammar_has_no_session_option_or_legacy_actions(self) -> None:
-        invalid = (
-            ["session", "create", "--workspace", str(self.workspace.root)],
+        invalid = (["session", "create", "--workspace", str(self.workspace.root)],
             [
                 "session",
                 "reopen",
@@ -1094,8 +1011,7 @@ class LifecycleAutomationTests(unittest.TestCase):
         for arguments in invalid:
             stdout = io.StringIO()
             stderr = io.StringIO()
-            with (
-                self.subTest(arguments=arguments),
+            with (self.subTest(arguments=arguments),
                 contextlib.redirect_stdout(stdout),
                 contextlib.redirect_stderr(stderr),
                 self.assertRaises(SystemExit) as caught,
@@ -1135,8 +1051,7 @@ class DirectiveAndInspectDefaultTests(unittest.TestCase):
             code, stdout, stderr = invoke_cli(["inspect"])
             self.assertEqual((code, stderr), (0, ""))
             self.assertEqual(json.loads(stdout)["session_id"], "default_session")
-        self.assertEqual(
-            load_cli_context(self.workspace).default_session_id,
+        self.assertEqual(load_cli_context(self.workspace).default_session_id,
             "default_session",
         )
 

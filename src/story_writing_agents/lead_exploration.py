@@ -6,6 +6,8 @@ owns values only; an exploration report never grants authoring authority.
 
 from __future__ import annotations
 
+from .structured_output_validation import SchemaRules, closed_rule, array_rule, nonblank_text_rule
+
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 import hashlib
@@ -297,3 +299,41 @@ def adoption_capture_from_dict(value: Any) -> ExplorationAdoptionCapture:
         value["user_event_id"], selection, value["selected_text"], value["fresh_task_id"],
         value["source_event_digest"], value["selected_material_digest"], value["task_revision"],
     )
+
+
+def _result_text_rule() -> dict[str, object]:
+    return {"type": "string", "pattern": r"^[^\u0000]+$(?![\s\S])", "maxLength": 32768}
+
+
+def _result_strings(values: tuple[str, ...] | None = None, *, minimum: int = 0, maximum: int | None = None) -> dict[str, object]:
+    if values == ():
+        return array_rule(_result_text_rule(), minimum=0, maximum=0)
+    item = _result_text_rule() if values is None else {"type": "string", "enum": list(values)}
+    return array_rule(item, minimum=minimum, maximum=maximum)
+
+
+def _result_alternatives(variants: list[dict[str, object]]) -> dict[str, object]:
+    return variants[0] if len(variants) == 1 else {"anyOf": variants}
+
+
+def exploration_result_schema(input_ids: tuple[str, ...] = ()) -> dict[str, object]:
+    idea = closed_rule({
+        "kind": {"type": "string", "enum": ["hypothesis", "alternative", "short_example"]},
+        "material_text": _result_text_rule(), "basis_input_ids": _result_strings(),
+    })
+    observation = closed_rule({"text": _result_text_rule(), "evidence_input_ids": _result_strings(minimum=1)})
+    common = {"kind": {"type": "string", "enum": ["exploration"]}, "message": _result_text_rule()}
+    result = _result_alternatives([
+        closed_rule({**common, "status": {"type": "string", "enum": ["ideas"]},
+            "ideas": {"type": "array", "items": idea, "minItems": 1},
+            "grounded_observations": {"type": "array", "items": observation, "minItems": 0}}),
+        closed_rule({**common, "status": {"type": "string", "enum": ["clarification"]}}),
+    ])
+    observation_only = closed_rule({**common, "status": {"type": "string", "enum": ["ideas"]},
+        "ideas": {"type": "array", "items": idea, "minItems": 0, "maxItems": 0},
+        "grounded_observations": {"type": "array", "items": observation, "minItems": 1}})
+    result["anyOf"].insert(1, observation_only)
+    result["description"] = "Only explicit user-selected provisional exploration; no authoring or mutation authority."
+    for variant in result.get("anyOf", (result,)):
+        variant["description"] = ("Present provisional ideas and qualified actual artifact READ observations." if "ideas" in variant["properties"] else "Ask for clarification without creating idea material or authority.")
+    return result

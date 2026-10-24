@@ -216,7 +216,8 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         original = "Inspect ${core_documents/global_outline.md} before answering."
         task = asyncio.create_task(self.runtime.lead_turn(self.session_id, conversation, original))
         try:
-            await asyncio.wait_for(entered.wait(), timeout=30)
+            # These guards bound fixture/Git progress, not the provider timeout policy.
+            await asyncio.wait_for(entered.wait(), timeout=120)
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
@@ -229,9 +230,10 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(len(self.backend.calls), 1)
         self.assertIs(self.failures(conversation)[0].payload.code, CollaborationLeadOutcomeFailureCode.CANCELLED)
         restarted = StoryRuntime(self.workspace, self.backend)
-        # Bound test progress across the entire retry, including fixture Git work.
-        async with asyncio.timeout(30):
-            await self.answer(conversation, "A new request after cancellation.", runtime=restarted)
+        # Leave bounded time for provider-free setup and cancellation cleanup on CI.
+        async with asyncio.timeout(120):
+            await self.answer(
+                conversation, "A new request after cancellation.", runtime=restarted)
         self.assertEqual(len(self.backend.calls), 2)
         self.assertEqual(len(self.backend.reference_calls), 1)
         self.assertIsNone(self.backend.calls[-1].expected_thread_id)

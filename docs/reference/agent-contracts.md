@@ -149,6 +149,38 @@ correlation, action index, attribution, and read receipts itself. No JSON-encode
 result string or alternate-name decoder is accepted. All built-in result schemas
 use explicit `response_type`; custom result contracts retain their declared schema.
 
+Logical response records have one predefined contract definition. Every declared
+field appears in `properties`; only mandatory fields appear in `required`.
+Optional-field presence creates no additional logical schema or variant tag.
+Contract compilation produces the validator, typed decode plan, and provider
+encoding from that definition before a response is processed. Current offered
+values can be bound during request construction without rediscovering record
+shapes.
+
+The runtime selects the compiled record by its offered `schema_id`, validates
+supplied optional fields, and retains them in typed input. Absent fields remain
+absent; null is accepted only when declared. An optional identity field stays
+known when no identities are offered: omission is valid and every supplied value
+is rejected. Its unavailable provider field can be omitted from the compiled
+transport encoding. Properties outside the selected record are ignored. Runtime
+and immutable owner preparation do not compare or
+merge optional schemas, and optional-field presence never selects a decoder.
+
+Genuine structural or semantic alternatives retain their offered identities.
+Where a Lead family needs a `variant_id`, it appears inside `response_details`
+and is removed when restoring the typed domain response. Provider-specific
+encodings preserve native constraints without defining another logical record.
+Combined indexes share identical definition bodies through local references,
+preserving definition names and rule fingerprints within the existing byte cap.
+
+Provider-facing schemas remain closed. Production consumption ignores unknown
+response-record properties and excludes them from normalized values passed to
+typed decoding, including nested records. Required fields and declared values
+remain validated. Semantic maps retain their declared identity rules:
+an unoffered source or specialist ID is not an ignorable record extension.
+Strict JSON parsing, whole-response limits, schema pairing, current-call binding,
+domain checks, and authorization still apply.
+
 Each provider-bound role receives common protocol instructions. Each call supplies
 `contract_guidance` for its actual inputs and response, and built-in output schemas
 carry field and enum descriptions. Guidance and schema bytes are accounted as part

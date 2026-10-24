@@ -11,13 +11,13 @@ from story_writing_agents import authoring_admission as admission, conversations
 from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
     preparation, recommendation, rewrite_history,
-    task_assessment,
-)
+    task_assessment, )
 from tests import test_lead_orchestration as lead
 
 
 class RecommendationActionContractTests(RecommendationCase):
     async def test_action_values_and_decisions_are_closed_exact_and_immutable(self):
+        self.workspace.path(OUTLINE).write_text("Outline first line.\nOutline second line.\n", encoding="utf-8")
         conversation_id, turn = await self.recommend()
         request = turn.recommendation_request
         choice = decision(turn)
@@ -119,26 +119,48 @@ class RecommendationActionContractTests(RecommendationCase):
         second = await self.runtime.lead_turn(self.session_id, conversation_id, ("Finished candidate:\n" + message + "\nYou may make bounded review judgments and prepare a separate proposal; preserve supplied facts.\n" + "Offer another plan."))
         self.assertEqual(second.recommendation_request.authoring_scope, request.authoring_scope)
         self.assertEqual(tuple(s.content_digest for s in second.recommendation_request.draft_sources),
-                         (digest(message), digest("Second whole reply")))
+                         (digest("Second whole reply"), digest(message)))
         for sources, objective_id, bad_route in ((("foreign_event",), None, False),
-                (("current_response", "current_response"), None, False),
-                (("current_response",), "foreign_objective", False),
-                (("current_response",), None, True)):
+            (("current_response", "current_response"), None, False), (("current_response",),
+            "foreign_objective", False), (("current_response",), None, True)):
             cid = self.conversation("Rejected source aliases")
-            bad = recommendation(recommended_action=action(source_ids=sources, objective_id=objective_id),
+            bad = recommendation(recommended_action=action(objective_id=objective_id),
                 authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation')))
+            if sources != ("current_response",):
+                def bad(call, provider, encode=bad, sources=sources):
+                    native = json.loads(encode(call, provider))
+                    details = native["agent_action"]["task_result"]["response_details"]
+                    selected = json.dumps(details["proposal_drafting_request"]["source_ids"])
+                    member = '"current_response": true'
+                    self.assertEqual(selected.count(member), 1)
+                    replacement = ('"foreign_event": true' if sources == ("foreign_event",)
+                                   else member + "," + member)
+                    text = json.dumps(native)
+                    field = '"source_ids": ' + selected
+                    self.assertEqual(text.count(field), 1)
+                    return text.replace(field, '"source_ids": ' + selected.replace(
+                        member, replacement, 1), 1)
             if bad_route:
-                bad = recommendation(recommended_action=action(source_ids=sources, kind="prepare_consultation", specialist_ids=("character_custodian",)),
-                    authoring_scope=lambda call: lead._live_scope(call, activity="review", paths=(OUTLINE,)),
+                bad = recommendation(recommended_action=action(source_ids=sources, kind="prepare_consultation", specialist_ids=("plot_architect",)),
+                    authoring_scope=lambda call: lead._live_scope(
+                        call, activity="review", paths=(OUTLINE,), domains=("plot_structure",)),
                     authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation')))
+                def bad(call, provider, encode=bad):
+                    native = json.loads(encode(call, provider))
+                    selection = native['agent_action']['task_result']['response_details'][
+                        'proposal_drafting_request']['specialist_ids']
+                    selection['left']['plot_architect'] = False
+                    selection['right']['left']['character_custodian'] = True
+                    return json.dumps(native)
             self.backend.enqueue(bad)
             self.backend.enqueue(bad)
             result = await self.runtime.lead_turn(self.session_id, cid, ("Finished candidate:\n" + message + "\nYou may make bounded review judgments and prepare a separate proposal; preserve supplied facts.\n" + "Reject undisclosed aliases."))
             self.assertIsNone(result.recommendation_request)
             self.assertFalse(self.payload_events(cid, c.LeadRecommendationRequestPayload))
             if bad_route:
-                issue = ("$.agent_action.task_result.proposal_drafting_request.specialist_ids: select unique offered specialist IDs "
-                         "and include every required authoring domain")
+                issue = ("$.agent_action.task_result.response_details.proposal_drafting_request."
+                         "specialist_ids.left.plot_architect: expected one of [true] "
+                         "(boolean), got boolean")
                 self.assertEqual(tuple(detail.partition("\n")[2] for detail in result.validation_details),
                                  (issue, issue))
             self.assert_no_downstream(cid)
@@ -151,24 +173,25 @@ class RecommendationActionContractTests(RecommendationCase):
                 self.assertEqual(lead.diagnose_json_text(raw, call.schema), ())
                 for change in ("absent", "step", "identity", "scope"):
                     bad = json.loads(raw)
-                    body = bad["agent_action"]["task_result"]
+                    body = bad["agent_action"]["task_result"]["response_details"]
                     intent = body["artifact_change_proposal"]["document_change_request_update"]
                     if change == "absent":
                         del body["artifact_change_proposal"]["document_change_request_update"]
                     elif change == "step":
                         intent["requested_workflow_step"] = "consult_specialists"
                     elif change == "scope":
-                        body["writing_task_scope"]["task_reference"] = {"task_id": "foreign_task", "task_revision": 1}
-                    elif intent["update_type"] == "start_document_change_request":
-                        intent["target_artifact_paths"] = ["core_documents/character_sheets.md"]
+                        body["task_scope"]["task"] = {"id": "foreign_task", "revision": 1}
+                    elif intent["update_type"] == "start_request":
+                        intent["target_artifact_paths"] = {"core_documents/character_sheets.md": True}
                     else:
                         intent["document_change_request_id"] = "foreign_objective"
                     self.assertTrue(lead.diagnose_json_text(json.dumps(bad), call.schema), change)
                 return raw
             return response
+        self.workspace.path(OUTLINE).write_text("Outline first line.\nOutline second line.\n", encoding="utf-8")
         conversation_id, turn = await self.recommend()
         original = tuple(c.encode_collaboration_event(e) for e in self.history(conversation_id))
-        self.backend.enqueue(checked(turn))
+        self.enqueue_preparation(turn, answer=checked(turn))
         confirmed = await self.runtime.decide_lead_recommendation(decision(turn))
         objective = self.objective(conversation_id)
         self.assertIs(type(objective.facts), c.ArtifactObjectiveFactsV2)
@@ -190,7 +213,7 @@ class RecommendationActionContractTests(RecommendationCase):
         old_event = self.payload_events(other, c.ArtifactObjectivePayload)[0]
         old_wire = c.encode_collaboration_event(old_event)
         _, offer = await self.recommend(other, recommended_action=action(objective_id=before.objective_id))
-        self.backend.enqueue(checked(offer))
+        self.enqueue_preparation(offer, answer=checked(offer))
         await self.runtime.decide_lead_recommendation(decision(offer))
         self.assertEqual(self.objective(other).facts, before)
         self.assertIs(type(self.objective(other).facts), c.ArtifactObjectiveFacts)
@@ -198,6 +221,7 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertFalse(self.payload_events(other, c.ArtifactObjectivePayloadV2))
 
     async def test_history_rejects_foreign_origin_tail_and_nonatomic_action_batches(self):
+        self.workspace.path(OUTLINE).write_text("Outline first line.\nOutline second line.\n", encoding="utf-8")
         conversation_id, turn = await self.recommend()
         await self.confirm(turn)
         events = self.history(conversation_id)
@@ -235,6 +259,7 @@ class RecommendationActionContractTests(RecommendationCase):
         from story_writing_agents.conversation_storage.sqlite import provision_sqlite_conversation_storage, compose_sqlite_conversation_storage
         from story_writing_agents.conversation_storage.archive import serialize_conversation_archive, deserialize_conversation_archive
         from tests.conversation_archive_fixture import archive_conversation, archive_from_conversations
+        self.workspace.path(OUTLINE).write_text("Outline first line.\nOutline second line.\n", encoding="utf-8")
         conversation_id, turn = await self.recommend()
         pending = self.history(conversation_id)
         await self.confirm(turn)
@@ -284,8 +309,9 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertNotIn("_RecommendationCapability", encoded)
         self.assertEqual(self.history(conversation_id), before)
         # Decisions/revision and running/terminal states have their own readable fields.
-        from tests.test_lead_orchestration import _discussion_reply
-        self.backend.enqueue(_discussion_reply("How do the four roles cooperate?", "clarification_question"))
+        self.backend.enqueue(lambda call, _: lead.lead_fixture_response(call, {
+            'response_type': 'clarification_question', 'response_text': 'How do the four roles cooperate?',
+            'response_details': {'used_evidence_ids': {}}}, family=0))
         revised = await self.runtime.decide_lead_recommendation(decision(turn, c.CollaborationConfirmationDecision.REVISE))
         self.assertIsNone(revised.proposal)
         self.assertIsNone(revised.artifact_proposal)

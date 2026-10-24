@@ -291,7 +291,7 @@ class ArtifactChangeSetSurfaceTests(ChangeSetTestCase):
     def test_exact_public_surface_enums_signatures_and_facades(self) -> None:
         self.assertEqual(ARTIFACT_CHANGE_SET_SCHEMA_VERSION, 1)
         self.assertEqual(tuple(change_sets_module.__all__), _MODULE_EXPORTS)
-        self.assertEqual(len(writing_artifacts.__all__), 78)
+        self.assertEqual(len(writing_artifacts.__all__), 80)
         for name in _MODULE_EXPORTS:
             self.assertIs(
                 getattr(writing_artifacts, name),

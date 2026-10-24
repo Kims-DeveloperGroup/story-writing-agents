@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import pickle
 import unittest
 from dataclasses import FrozenInstanceError, fields
@@ -14,7 +15,7 @@ from story_writing_agents.agents import PLOT_ARCHITECT
 from story_writing_agents.writing_artifacts import (
     ArtifactLineRange,
     ArtifactReference,
-    ArtifactReferenceBatch,
+    ArtifactReferenceBatch, AuthorizedArtifactReference,
     ReferenceAuthorizationError,
     ReferenceAuthorizationErrorCode,
     ReferenceInvocationCorrelation,
@@ -144,8 +145,13 @@ class ReferenceReadActionContractTests(unittest.TestCase):
             )
 
     def test_result_is_closeable_hidden_and_nonserializable(self) -> None:
+        from tests.test_artifact_reference_authorization import _snapshot
         contents = (b"one", b"two")
-        result = ReferenceReadResult(self.request, contents)
+        proofs = tuple( AuthorizedArtifactReference(ordinal, reference,
+                _snapshot(reference.path, content if reference.line_range is None else b"\n" + content).source,
+                hashlib.sha256(content).hexdigest(), len(content), 1 if reference.line_range is None else 2)
+            for ordinal, (reference, content) in enumerate(zip(self.references, contents), start=1))
+        result = ReferenceReadResult(self.request, contents, authorized_references=proofs)
         self.assertEqual(result.request, self.request)
         self.assertEqual(result.contents, contents)
         self.assertEqual(repr(result), "ReferenceReadResult(<content hidden>)")
@@ -160,7 +166,7 @@ class ReferenceReadActionContractTests(unittest.TestCase):
         result.close()
         for bad in ((b"one",), (b"one", "two")):
             with self.subTest(contents=bad), self.assertRaises((TypeError, ValueError)):
-                ReferenceReadResult(self.request, bad)  # type: ignore[arg-type]
+                ReferenceReadResult(self.request, bad, authorized_references=proofs)  # type: ignore[arg-type]
 
     def test_protocol_is_module_only_and_facades_are_exact(self) -> None:
         self.assertTrue(ReferenceReadInvocation._is_protocol)

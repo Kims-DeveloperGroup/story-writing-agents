@@ -21,14 +21,12 @@ from story_writing_agents.errors import BackendProtocolError
 from story_writing_agents.workspace.initialization import (
     SessionArtifactBinding,
     SessionArtifactBindingError,
-    compose_session_artifact_binding,
-)
+    compose_session_artifact_binding, )
 from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
 from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
     preparation, recommendation, rewrite_history,
-    task_assessment,
-)
+    task_assessment, )
 from tests import test_lead_orchestration as lead
 from tests import test_artifact_proposal_orchestration as artifact
 from tests import test_lead_artifact_application as application
@@ -45,6 +43,7 @@ class LeadRecommendationTests(RecommendationCase):
 
 
     async def test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review(self):
+        self.workspace.path(OUTLINE).write_text("Outline source.\n", encoding="utf-8")
         before = self.snapshots()
         conversation_id, turn = await self.recommend()
         request = turn.recommendation_request
@@ -61,10 +60,15 @@ class LeadRecommendationTests(RecommendationCase):
             self.assertEqual(decision_event.batch_id, started.batch_id)
             self.assertEqual(started.payload.decision_event_id, decision_event.event_id)
             self.assertEqual(started.payload.request_event_id, request.request_event_id)
-            material = lead._workflow_material(call.payload)["structured_recommendation_execution"]
-            self.assertEqual(call.payload["context_reuse"]["format"], "shared-objects-v1")
-            self.assertLess(len(json.dumps(dict(call.payload), ensure_ascii=False)),
-                            len(json.dumps(lead._expanded_context_payload(call.payload), ensure_ascii=False)))
+            initial = self.backend.calls[calls]
+            self.assertIs(initial.contract.factory, call.contract.factory)
+            self.assertEqual(initial.scope, call.scope)
+            self.assertIs(initial.call_kind, lead.ProviderCallKind.COLLABORATION_INITIAL)
+            material = lead._live_material(call)["structured_recommendation_execution"]
+            self.assertEqual(initial.payload["context_reuse"]["format"], "shared-objects-v1")
+            self.assertLess(len(json.dumps(dict(initial.payload), ensure_ascii=False)),
+                            len(json.dumps(lead._expanded_context_payload(initial.payload),
+                                           ensure_ascii=False)))
             self.assertEqual(material["request"]["action_digest"], request.action_digest)
             self.assertEqual(material["decision"]["decision"]["kind"], "confirm")
             self.assertEqual(material["start"]["execution_attempt_id"], started.payload.execution_attempt_id)
@@ -72,7 +76,7 @@ class LeadRecommendationTests(RecommendationCase):
             self.assertEqual(sum(type(e.payload) is c.CollaborationMessagePayload and
                 e.direction is c.CollaborationDirection.USER_TO_LEAD for e in events), 1)
             return producer(call, provider)
-        self.backend.enqueue(observed)
+        self.enqueue_preparation(turn, answer=observed)
         calls = len(self.backend.calls)
         original_qualifier = self.runtime._qualify_authoring_inputs
         qualification_starts = []
@@ -84,7 +88,7 @@ class LeadRecommendationTests(RecommendationCase):
             prepared = await self.runtime.session(self.session_id).decide_lead_recommendation(decision(turn))
         self.assertEqual(qualification_starts[:1], [False])
         self.assertIs(type(prepared), c.LeadTurnResult)
-        self.assertEqual(len(self.backend.calls) - calls, 1)
+        self.assertEqual(len(self.backend.calls) - calls, 3)
         self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL)
         self.assertIs(prepared.next_action, c.CollaborationNextAction.SUBMIT_CONFIRMATION)
         self.assertIsNone(prepared.recommendation_request)
@@ -110,8 +114,9 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertEqual(self.snapshots(), before)
 
         for call in self.backend.calls:
-            self.assertNotIn("response_correction", lead._workflow_material(call.payload))
+            self.assertNotIn("response_correction", lead._live_material(call))
             self.assertNotIn("structured_response_repair", call.payload)
+        from tests.provider_wire_fixture import finite_fixture_selection
         for aliases, omit_source in (((), False), (("recommendation_request",), False),
                                      (("recommendation_decision",), False),
                                      (("recommendation_request", "recommendation_decision"), True)):
@@ -125,17 +130,20 @@ class LeadRecommendationTests(RecommendationCase):
             request = offered.recommendation_request
             source_ids = [item.input_id for item in request.basis.inputs]
             self.assertTrue(source_ids)
-            mode = "review" if request.authoring_scope.activity is AuthoringActivity.REVIEW else "draft"
+            selected = ([] if omit_source else source_ids) + list(aliases)
+            review_ids = () if omit_source else tuple(source_ids)
             raw_observations = []
             def raw(call, _provider):
-                selected = ([] if omit_source else source_ids) + list(aliases)
-                body = {"kind": "proposal", "message": request.purpose, "authoring_assessment": asdict(request.basis.authoring_admission.assessment),
-                    "authoring_scope": lead._compact_scope(c.authoring_scope_to_dict(request.authoring_scope)),
-                    "proposal": {"shared_premises": [], "assignments": [{"agent_id": agent, "mode": mode,
-                        "instruction": request.instruction, "input_ids": selected} for agent in request.specialist_ids]}}
-                encoded = lead.wire_answer(body, lead.wire_contract_id(call.payload))
-                raw_observations.append((json.loads(encoded)["agent_action"]["task_result"]["specialist_consultation_proposal"]["assignments"][0]["input_source_ids"],
-                                         lead.diagnose_json_text(encoded, call.schema)))
+                packet = json.loads(preparation(offered)(call, _provider))["agent_action"]
+                choices = dict(call.contract.semantic_index.policy.choices)
+                proposal = packet["task_result"]["response_details"]["specialist_consultation_proposal"]
+                for row in proposal["assignments"].values():
+                    row.update(input_anchor_id=selected[0], optional_inputs={alias: alias in selected for alias in choices["allocation_input_ids"]})
+                    row["review_basis"]["candidate_input_ids"] = finite_fixture_selection(choices["review_candidate_ids"], review_ids)
+                if omit_source:
+                    proposal["required_input_recipients"] = {}
+                encoded = json.dumps({"agent_action": packet})
+                raw_observations.append((packet, choices, call.contract.outer_inner_schema_ids, lead.diagnose_json_text(encoded, call.schema)))
                 return encoded
             self.backend.enqueue(raw)
             if omit_source:
@@ -143,9 +151,28 @@ class LeadRecommendationTests(RecommendationCase):
             calls = len(self.backend.calls)
             prepared = await self.runtime.decide_lead_recommendation(decision(offered))
             self.assertTrue(raw_observations, prepared)
-            for selected, issues in raw_observations:
-                self.assertEqual(selected, ([] if omit_source else source_ids) + list(aliases))
-                self.assertEqual(issues, (), (aliases, issues))
+            for packet, choices, pairs, issues in raw_observations:
+                self.assertIn((packet["schema_id"], packet["task_result"]["schema_id"]), pairs)
+                proposal = packet["task_result"]["response_details"]["specialist_consultation_proposal"]
+                self.assertEqual(set(proposal["assignments"]), set(request.specialist_ids))
+                recipients = proposal["required_input_recipients"]
+                self.assertEqual(recipients, {} if omit_source else dict.fromkeys(source_ids, request.specialist_ids[0]))
+                for agent, row in proposal["assignments"].items():
+                    self.assertEqual(row["input_anchor_id"], selected[0])
+                    self.assertEqual(row["optional_inputs"], {alias: alias in selected for alias in choices["allocation_input_ids"]})
+                    self.assertEqual(row["review_basis"], {"candidate_input_ids": finite_fixture_selection(choices["review_candidate_ids"], review_ids), "criteria": request.instruction})
+                    edges = {row["input_anchor_id"], *review_ids, *(alias for alias, recipient in recipients.items() if recipient == agent), *(alias for alias, included in row["optional_inputs"].items() if included)}
+                    self.assertEqual([alias for alias in choices["allocation_input_ids"] if alias in edges], selected)
+                if omit_source:
+                    prefix = "$.agent_action.task_result.response_details.specialist_consultation_proposal"
+                    missing = {f"{prefix}.required_input_recipients.{alias}: required property is missing" for alias in source_ids}
+                    basis_paths = tuple(f"{prefix}.assignments.{agent}.review_basis.candidate_input_ids." for agent in request.specialist_ids)
+                    basis_error = "expected one of [true] (boolean), got boolean"
+                    self.assertTrue(missing.issubset(issues), issues)
+                    self.assertTrue(all(any(issue.startswith(path) and issue.endswith(basis_error) for issue in issues) for path in basis_paths), issues)
+                    self.assertTrue(all(issue in missing or (issue.startswith(basis_paths) and issue.endswith(basis_error)) for issue in issues), issues)
+                else:
+                    self.assertEqual(issues, (), (aliases, issues))
             self.assertEqual(len(self.backend.calls) - calls, 2 if omit_source else 1, prepared)
             self.assert_no_downstream(cid)
             if omit_source:
@@ -167,6 +194,7 @@ class LeadRecommendationTests(RecommendationCase):
 
 
     async def test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority(self):
+        self.workspace.path(OUTLINE).write_text("Outline source.\n", encoding="utf-8")
         conversation_id, turn = await self.recommend()
         snapshots = self.snapshots()
         choice = decision(turn)
@@ -187,9 +215,19 @@ class LeadRecommendationTests(RecommendationCase):
             entered.set()
             await release.wait()
             return producer(call, provider)
-        self.backend.enqueue(held)
+        self.enqueue_preparation(turn, answer=held)
         first = asyncio.create_task(self.runtime.decide_lead_recommendation(choice))
-        await asyncio.wait_for(entered.wait(), 2)
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+        except TimeoutError as failure:
+            from tests.recommendation_fixture import (
+                _bounded_failure_note, _stored_failure_snapshots)
+            state = ('cancelled' if first.cancelled() else
+                     'done_unknown' if first.done() else 'pending')
+            failure.add_note(_bounded_failure_note(
+                ('task', calls, entered.is_set(), state),
+                *_stored_failure_snapshots(self.backend)))
+            raise
         second = asyncio.create_task(self.runtime.decide_lead_recommendation(choice))
         try:
             await asyncio.sleep(0)
@@ -203,11 +241,11 @@ class LeadRecommendationTests(RecommendationCase):
             await asyncio.gather(first, second, return_exceptions=True)
         self.assertIs(type(results[0]), c.LeadTurnResult)
         self.assertIsInstance(results[1], BackendProtocolError)
-        self.assertEqual(len(self.backend.calls), calls + 1)
+        self.assertEqual(len(self.backend.calls), calls + 3)
         self.assertEqual(len(self.payload_events(conversation_id, c.LeadRecommendationStartedPayload)), 1)
         with self.assertRaises(BackendProtocolError):
             await self.runtime.decide_lead_recommendation(choice)
-        self.assertEqual(len(self.backend.calls), calls + 1)
+        self.assertEqual(len(self.backend.calls), calls + 3)
         self.assert_no_downstream(conversation_id)
         self.assertEqual(self.snapshots(), snapshots)
 
@@ -240,7 +278,7 @@ class LeadRecommendationTests(RecommendationCase):
             editorial.EditorialRecordRequest.directive(independent, transition_reason="Independent scope."))
         state = self.runtime.inspect_editorial_state(self.session_id)
         self.assertEqual(state.context_digest((a_ref,)), pin)
-        self.backend.enqueue(preparation(offered))
+        self.enqueue_preparation(offered)
         prepared = await self.runtime.decide_lead_recommendation(decision(offered))
         self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL)
         self.assertEqual(prepared.proposal.basis.editorial_context_digest, pin)
@@ -268,7 +306,7 @@ class LeadRecommendationTests(RecommendationCase):
         fresh_basis = fresh.recommendation_request.basis
         self.assertEqual(fresh_basis.editorial_context_digest,
                          state.context_digest(fresh_basis.editorial_refs))
-        self.backend.enqueue(preparation(fresh))
+        self.enqueue_preparation(fresh)
         new_prepared = await self.runtime.decide_lead_recommendation(decision(fresh))
         self.assertEqual(new_prepared.proposal.basis.editorial_context_digest,
             fresh_basis.editorial_context_digest)
@@ -313,8 +351,15 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertEqual(state.scope_state(whole_result.record_ref).status, "partial")
         drift_work, offered = await self.recommend(self.conversation("Range anchor drift"))
         def search_outline(call, _provider):
-            return json.dumps({"action": {
-                "kind": "search", "path_prefix": "core_documents/", "queries": [{"text": "Source-bound outline line.", "source_kinds": ["writing_artifact"]}], }})
+            from tests.provider_wire_fixture import indexed_response, offered_fixture_bindings
+            outer, inner = offered_fixture_bindings(
+                call, action_type="search_context", response_type=None, family=1)
+            assert inner is None
+            return indexed_response({
+                "action_type": "search_context", "artifact_directory_prefix": "core_documents/",
+                "queries": [{"search_text": "Source-bound outline line.",
+                             "source_types": {"story_document": True}}]},
+                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         self.backend.enqueue(
             search_outline, lead._read_history_hit, preparation(offered, read_evidence=True))
         drift_plan = await self.runtime.decide_lead_recommendation(decision(offered))

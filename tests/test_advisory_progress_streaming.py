@@ -66,8 +66,7 @@ def _ansi_terminal_capabilities():
         output_tty=True,
         raw_mode=True,
         cursor_controls=True,
-        decorative_sgr=True,
-    )
+        decorative_sgr=True,)
 
 
 class AdvisoryProgressStreamingTests(unittest.TestCase):
@@ -85,8 +84,7 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
         )
         self.assertEqual(
             state.stream_status.get(("agent_a", "op_1")),
-            "Connecting to model...",
-        )
+            "Connecting to model...",)
 
         state.observe_stream(
             ProviderStreamEvent(
@@ -98,8 +96,7 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
         )
         self.assertEqual(
             state.stream_status.get(("agent_a", "op_1")),
-            "Thinking...",
-        )
+            "Thinking...",)
 
         state.observe_stream(
             ProviderStreamEvent(
@@ -119,8 +116,7 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
         )
         self.assertEqual(
             state.stream_preview.get(("agent_a", "op_1")),
-            "The door opened with a shudder.",
-        )
+            "The door opened with a shudder.",)
 
     def test_observe_stream_bounds_preview_buffer_to_500_chars(self) -> None:
         state = AdvisoryProgressState()
@@ -132,8 +128,7 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
                     kind=ProviderStreamEventKind.TEXT_DELTA,
                     agent_id="agent_a",
                     text=f"chunk_{i:02d}_" + ("x" * 90) + "\n",
-                    operation_id="op_1",
-                )
+                    operation_id="op_1",)
             )
 
         preview = state.stream_preview.get(("agent_a", "op_1"), "")
@@ -155,8 +150,7 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
         )
         self.assertEqual(
             state.stream_status.get(("lead_orchestrator", "turn_123")),
-            "Generating response...",
-        )
+            "Generating response...",)
 
     def test_render_formats_bounded_preview_and_status(self) -> None:
         state = AdvisoryProgressState()
@@ -180,8 +174,7 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
                     "Line 3: Shadows lengthened.\n"
                     "Line 4: A floorboard creaked.\n"
                     "Line 5: Dust danced in the air.\n"
-                    "Line 6: The key turned slowly."
-                ),
+                    "Line 6: The key turned slowly."),
                 operation_id="op_99",
             )
         )
@@ -261,8 +254,7 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
             ContextActionProgressSource(
                 ContextSourceKind.WRITING_ARTIFACT,
                 f"chapters/chapter_{i:02d}.md",
-                boundary,
-            )
+                boundary,)
             for i in range(10)
         )
         state.observe(
@@ -321,8 +313,7 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
                 ProviderStreamEventKind.STATUS,
                 "agent_err",
                 "Error: No capacity available for model gpt-oss-120b-medium on the server",
-                operation_id="op_err",
-            )
+                operation_id="op_err",)
         )
         self.assertEqual(
             state.last_error_message,
@@ -349,8 +340,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             session_id="session_test",
             schema={},
             payload={},
-            thread_id=None,
-        )
+            thread_id=None,)
         self.assertIsNone(inv_outside.stream_sink)
 
         mock_terminal = mock.create_autospec(InteractiveTerminal, instance=True)
@@ -380,8 +370,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                 ProviderStreamEvent(
                     kind=ProviderStreamEventKind.TEXT_DELTA,
                     agent_id="active_agent",
-                    text="Streaming preview chunk",
-                )
+                    text="Streaming preview chunk",)
             )
             self.assertIn(
                 "Streaming preview chunk",
@@ -442,8 +431,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             mock.MagicMock(),
             mock.MagicMock(),
             mock.MagicMock(),
-            recover_authentication=lambda _key: True,
-        )
+            recover_authentication=lambda _key: True,)
 
         observed_sink_in_operation = None
 
@@ -509,8 +497,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         )
         self.assertEqual(
             state.stream_status.get(("lead_orchestrator", "lead_turn_42")),
-            "Searching artifacts...",
-        )
+            "Searching artifacts...",)
 
     def test_observe_migrates_provisional_stream_state_when_authoritative_action_arrives(self) -> None:
         state = AdvisoryProgressState()
@@ -564,8 +551,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         )
         self.assertEqual(
             state.stream_preview.get(("lead_orchestrator", "lead_turn_99")),
-            "Chapter 1 overview",
-        )
+            "Chapter 1 overview",)
         self.assertEqual(
             state.agent_errors.get(("lead_orchestrator", "lead_turn_99")),
             "Error: initial failure",
@@ -646,8 +632,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             terminal = _core.build_stream_terminal(
                 lambda _prompt: "",
                 io.StringIO(),
-                output,
-            )
+                output,)
             progress = InteractiveAdvisoryProgress(terminal)
             progress.begin(
                 (AdvisoryProgressRequest("lead_orchestrator", "lead_turn_1", "Consulting specialist..."),)
@@ -851,8 +836,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                 driver.run_advisory_progress(
                     successful_op(),
                     lambda _f: "Running task...",
-                    is_failure=lambda r: r.get("status") != "ok",
-                )
+                    is_failure=lambda r: r.get("status") != "ok",)
             )
             self.assertEqual(res, {"status": "ok"})
             self.assertIn("\r\x1b[K", success_output.getvalue())
@@ -884,8 +868,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                 visible_lines=("Error occurred line 1", "Error occurred line 2"),
                 visible_height=2,
                 is_focused=True,
-                state=ViewState.ERROR,
-            )
+                state=ViewState.ERROR,)
             scroll_state = MultiAgentScrollState((view,), 0)
 
             res = asyncio.run(
@@ -895,8 +878,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                     scroll_state_provider=lambda: scroll_state,
                     is_failure=lambda r: r.get("next_action") == "retry_lead_turn",
                     nested_scroll_transition=transition_nested_scroll,
-                    nested_scroll_renderer=render_nested_scroll_view,
-                )
+                    nested_scroll_renderer=render_nested_scroll_view,)
             )
             self.assertEqual(res["next_action"], "retry_lead_turn")
             rendered_fail = fail_output.getvalue()
@@ -1359,8 +1341,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                     ProviderStreamEventKind.STATUS,
                     "test_agent",
                     f"Status {i}",
-                    operation_id="op1",
-                )
+                    operation_id="op1",)
             )
         buf = state.agent_buffers[key]
         self.assertEqual(len(buf), 2000)
@@ -1507,8 +1488,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                 ProviderStreamEventKind.STATUS,
                 "lead_agent",
                 "Analyzing outline...",
-                operation_id="lead_op",
-            )
+                operation_id="lead_op",)
         )
         rendered = state.render(0)
         self.assertIn("lead_agent", rendered)
@@ -1614,8 +1594,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                 initial_state,
                 transition_nested_scroll,
                 renderer,
-                toggle_callback=on_toggle,
-            )
+                toggle_callback=on_toggle,)
 
         self.assertEqual(len(toggle_called), 1)
 
@@ -1656,8 +1635,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                     driver.run_advisory_progress(
                         dummy_op(),
                         lambda _f: "frame",
-                        is_failure=broken_is_failure,
-                    )
+                        is_failure=broken_is_failure,)
                 )
         self.assertFalse(driver._progress_active)
         self.assertIsNone(driver._progress_renderer)
@@ -1705,8 +1683,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                     driver.run_advisory_progress(
                         coro,
                         lambda _f: "frame",
-                        toggle_callback=lambda: False,
-                    )
+                        toggle_callback=lambda: False,)
                 )
 
     def test_nested_inspector_failure_is_preserved_and_not_swallowed(self) -> None:
@@ -1827,8 +1804,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                         scroll_state_provider=lambda _f: scroll_state,
                         nested_scroll_transition=mock.MagicMock(),
                         nested_scroll_renderer=mock.MagicMock(),
-                        keep_frame=True,
-                    )
+                        keep_frame=True,)
                 )
             self.assertEqual(str(exc_info.exception), "viewer terminal restoration failed")
 
@@ -1880,8 +1856,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                     driver.run_advisory_progress(
                         dummy_op(),
                         lambda _f: "frame",
-                        toggle_callback=lambda: None,
-                    )
+                        toggle_callback=lambda: None,)
                 )
             self.assertIn("restoration failed", str(exc_info.exception))
         self.assertFalse(driver._progress_active)
@@ -1960,8 +1935,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
 
         self.assertEqual(
             progress._state.last_error_message,
-            "Codex CLI exited with status 1",
-        )
+            "Codex CLI exited with status 1",)
 
         # 3. scroll_state_provider with unexpected exception: sanitized
         progress._state.last_error_message = None
@@ -1983,8 +1957,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         captured_provider(BackendProtocolError("Transport closed prematurely"))
         self.assertEqual(
             progress._state.last_error_message,
-            "Transport closed prematurely",
-        )
+            "Transport closed prematurely",)
 
     def test_run_progress_frames_preserves_typeahead_characters(self) -> None:
         driver = RawTerminalDriver(
@@ -2468,8 +2441,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                 driver.run_advisory_progress(
                     successful_op(),
                     lambda _f: "Running task...",
-                    keep_frame=False,
-                )
+                    keep_frame=False,)
             )
             self.assertEqual(res, {"status": "ok"})
             val = output.getvalue()
@@ -2615,8 +2587,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             visible_lines=("Done step 1",),
             visible_height=1,
             is_focused=True,
-            state=ViewState.IDLE,
-        )
+            state=ViewState.IDLE,)
         scroll_state = MultiAgentScrollState((view,), 0)
 
         async def successful_op() -> dict:
@@ -2757,8 +2728,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         merged = state.agent_buffers.get(("lead", "op_1"))
         self.assertEqual(
             merged,
-            ["prov row 1", "prov row 2", "auth row 1", "auth row 2"],
-        )
+            ["prov row 1", "prov row 2", "auth row 1", "auth row 2"],)
 
     def test_benign_status_prose_is_not_marked_as_error(self) -> None:
         """Verify benign prose like 'Checking capacity' or 'No errors found' does not set last_error_message."""
@@ -3000,8 +2970,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         viewer_state = TextViewerState(
             document=doc,
             active_line=5,
-            anchor_line=5,
-        )
+            anchor_line=5,)
         self.assertEqual(viewer_state.selection, (5, 5))
 
         # Shift down expands selection
@@ -3159,8 +3128,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             ProviderStreamEventKind.STATUS,
             agent_id="planner",
             text=long_error,
-            operation_id="step_1",
-        )
+            operation_id="step_1",)
         state.observe_stream(event)
         expected = ("Error: " + "x" * 200)[:120]
         self.assertEqual(len(state.agent_errors[("planner", "step_1")]), 120)

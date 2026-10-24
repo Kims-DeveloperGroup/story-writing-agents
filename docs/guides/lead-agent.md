@@ -3,9 +3,11 @@
 The Lead Orchestrator is the normal user-facing story agent in both the
 interactive shell and Python runtime. Users discuss story work with the lead; they do not need to choose an
 agent for every turn. The lead answers workflow/status questions and asks
-focused clarification questions directly. In ordinary orchestration, substantive
-story answers, critiques, drafting, revision and review require a bounded
-proposal covering every affected specialist domain. The Lead may first recommend preparing that scoped
+focused clarification questions directly. The lead can also answer factual questions by inspecting current writing-artifact
+READs under a review scope covering the relevant domains. This inspection does
+not draft or revise story text or grant specialist, candidate or write authority.
+Substantive story critiques, drafting, revision and specialist review require a
+bounded proposal covering every affected specialist domain. The Lead may first recommend preparing that scoped
 proposal; preparation grants no specialist execution authority. For a requested
 story-file change, the lead can also describe a
 provider-neutral edit intent. Runtime code—not the lead provider—resolves that
@@ -105,6 +107,14 @@ Official outlines, character material, narrative rules and manuscripts need foun
 A detailed literal USER brief can supply those foundations and creative latitude. An empty target READ records that the target has no content; it does not forbid creating an initial document from a sufficient brief. A bare request to write an outline, with no story foundation or direction, requires a question about the actual missing material or decisions. The Lead reuses facts and choices already supplied.
 
 The assessment names required foundations and supporting source IDs, the USER direction, permitted creative actions, protected constraints, supplied or explicitly delegated decisions, and any missing information. Source availability and semantic adequacy are separate: nonempty text, summaries, confidence or an asserted receipt do not replace the host's exact source qualification. Rejected public responses can remain attributable selected input, with their original rejected status, and undergo fresh qualification.
+
+Each offered Lead response has a required schema ID bound to its final field
+and value rules, validation and corrective guidance. Review-only intent permits
+review work; workflow activity has no story-domain or target selections. Writing
+keeps its actual domains, roles and assessment obligations. A rejected reply and
+its bounded correction remain separate answers. A necessary clarification keeps
+the current task and document request pending; it does not claim that drafting,
+review, Apply or Commit completed. See [provider validation and repair](../reference/provider-wire.md#validation-and-accounting).
 
 Ordinary Lead and adoption obtain the assessment through their existing Lead front. Direct specialist and consensus AUTHORING API intakes accept an explicit `authoring_assessment`; absent or insufficient input returns `AuthoringAdmissionNeeded` with actionable guidance and available source IDs. Callers use those offered IDs and the retained actual input instead of inventing receipts. Assessment input grants no confirmation or write authority. Review-only work keeps its existing exact-input contract, and drafting still proceeds through specialist confirmation, all required final-candidate reviews, Apply and Commit.
 
@@ -414,7 +424,7 @@ The lead returns one `LeadTurnResult`:
 
 | `kind` | User meaning | `next_action` |
 | --- | --- | --- |
-| `answer` | A workflow/status answer, without substantive story authoring. | `continue_with_lead` |
+| `answer` | Workflow/status guidance or a verified factual writing-READ inspection, without story authoring. | `continue_with_lead` |
 | `question` | One material user choice is missing. | `reply_to_lead` |
 | `critique` | A non-authoring workflow critique; substantive story critique needs specialists. | `continue_with_lead` |
 | `recommendation` | A fresh preparation recommendation, or a runtime workflow/recovery notice. | `submit_recommendation_decision` for a fresh action; otherwise state-specific. |
@@ -455,7 +465,7 @@ property paths, expected and actual JSON types, or a fixed rule. Reports that
 exceed the diagnostic cap list up to 2,048 findings, then say additional issues
 were omitted.
 For example, a missing
-`$.agent_action.task_result.writing_task_scope` is described as a missing required property;
+`$.agent_action.task_result.response_details.task_scope` is described as a missing required property;
 unexpected property names and provider values are never printed. Python
 callers can read the same ordered chunks from `LeadTurnResult.validation_details`;
 direct `AgentReply` and `ConversationReply` values also expose
@@ -607,8 +617,13 @@ target. Constraint assessment returns `constraints_assessed`, `concern`,
 `conflict`, or `insufficient_evidence`; it supplies constraints to the draft owner
 and cannot supply draft proof or review support. Review requires `ReviewBasis`
 schema 1 with nonempty `candidate_input_ids` and visible `criteria`; a brief or
-status receipt alone is not a review candidate. When the user supplies a complete
+status receipt alone is not a review candidate. The candidate subset and criteria
+remain independent of the assignment's other required inputs and task instructions.
+A continuation preserves its frozen candidate eligibility after READ. When the user supplies a complete
 candidate, the Lead must disclose that interpretation.
+
+Continuation assignments keep the original required input set after READ adds
+evidence. Review candidates remain separately frozen within that set.
 
 Active same-session tasks come from validated conversation catalog/events. The
 Lead explicitly selects a runtime-offered task/revision to continue it across
@@ -788,11 +803,11 @@ scope. Evidence and authoring routing remain separate from execution authority:
 | --- | --- | --- |
 | `workflow_meta` / `not_applicable` | No receipts | `answer`, `question`, `critique`, `recommendation` |
 | `premise_analysis` / `not_applicable` | No receipts; exact typed analysis Spec in the same batch, with no AuthoringScope | Candidate-free `proposal` only |
-| `story_specific` / `verified` | One nonempty attached reference or completed READ | All five kinds |
+| `story_specific` / `verified` | One nonempty attached reference or completed READ | `question`, `recommendation`, `proposal`; a factual `answer` also requires the current writing-READ review scope |
 | `story_specific` / `missing` | An absent canonical-core status, or a complete non-truncated zero-hit SEARCH whose authorized scope includes writing artifacts | `question`, `recommendation`, `proposal` |
 | `story_specific` / `empty` | A zero-byte canonical-core status or a zero-byte whole attached reference | `question`, `recommendation`, `proposal` |
-| `story_specific` / `incomplete` | At least one current content or canonical-core status receipt | `question`, `critique`, `recommendation`, `proposal` |
-| `story_specific` / `conflicting` | At least two distinct, nonempty current content receipts | `question`, `critique`, `recommendation`, `proposal` |
+| `story_specific` / `incomplete` | At least one current content or canonical-core status receipt | `question`, `recommendation`, `proposal` |
+| `story_specific` / `conflicting` | At least two distinct, nonempty current content receipts | `question`, `recommendation`, `proposal` |
 
 The `premise_analysis` scope is host-derived after strict validation of the
 offered question and analyst assignments; a provider cannot select it. A typed
@@ -1276,10 +1291,13 @@ exact source content. A terminal response embeds the semantic object directly in
 Every built-in result has an explicit `response_type`. The Lead contract,
 `lead-response-v7`, distinguishes answers, clarification questions, critiques,
 proposal-drafting recommendations, specialist-consultation proposals, and artifact
-change proposals. Every Lead result includes `response_text` and
-`writing_task_scope`; the scope selects an exact offered `{task_id, task_revision}`
-pair. Missing scope receives the bounded structured-result repair and then the
-runtime's visible no-action fallback if repair fails.
+change proposals. Scoped Lead results include `response_text` and
+`response_details.task_scope`; the scope selects an exact offered `task: {id, revision}`
+pair. Other response families retain their exact offered field names and
+nullability. For example, an unconstrained front readiness branch requires
+`response_details.writing_task_scope` to be `null`. Missing a branch-required
+scope receives the bounded structured-result repair and then the runtime's visible
+no-action fallback if repair fails.
 
 A `proposal_drafting_request` asks Lead to draft a concrete document-change or
 specialist-consultation proposal for later confirmation. A `document_change_request`

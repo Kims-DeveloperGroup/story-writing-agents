@@ -242,3 +242,71 @@ class ArtifactReferenceBatch:
                             "reference input contains overlapping ranges"
                         )
             ranges.append(reference.line_range)
+
+
+def coalesce_reference_aliases(
+    references: tuple[ArtifactReference, ...],
+) -> tuple[ArtifactReferenceBatch, tuple[int, ...]]:
+    """Return coverage and alias-order indices into its reference tuple.
+
+    Indices are zero-based with no sentinel; valid batches retain identity indices.
+    """
+
+    if type(references) is not tuple:
+        raise TypeError("reference aliases must be a tuple")
+    if any(type(item) is not ArtifactReference for item in references):
+        raise TypeError("reference aliases must contain ArtifactReference values")
+    if len(references) > MAX_REFERENCE_COUNT:
+        raise ArtifactReferenceDirectiveError("reference input exceeds the directive limit")
+    source_text = " ".join(item.token for item in references)
+    try:
+        batch = ArtifactReferenceBatch(source_text, source_text, references)
+    except ArtifactReferenceDirectiveError:
+        pass
+    else:
+        return batch, tuple(range(len(references)))
+
+    by_path: dict[str, list[ArtifactReference]] = {}
+    for reference in references:
+        by_path.setdefault(reference.path, []).append(reference)
+    components: dict[str, tuple[ArtifactReference, ...]] = {}
+    for path, aliases in by_path.items():
+        whole = next((item for item in aliases if item.line_range is None), None)
+        if whole is not None:
+            components[path] = (whole,)
+            continue
+        ranges = sorted(
+            (item.line_range for item in aliases if item.line_range is not None),
+            key=lambda item: (item.start, item.end),
+        )
+        merged: list[ArtifactLineRange] = []
+        for line_range in ranges:
+            if merged and line_range.start <= merged[-1].end:
+                merged[-1] = ArtifactLineRange(
+                    merged[-1].start, max(merged[-1].end, line_range.end)
+                )
+            else:
+                merged.append(line_range)
+        components[path] = tuple(ArtifactReference(path, item) for item in merged)
+
+    canonical: list[ArtifactReference] = []
+    ordinals: list[int] = []
+    for alias in references:
+        for reference in components[alias.path]:
+            covered = reference.line_range
+            selected = alias.line_range
+            if covered is None or (
+                selected is not None
+                and covered.start <= selected.start <= selected.end <= covered.end
+            ):
+                if reference not in canonical:
+                    canonical.append(reference)
+                ordinals.append(canonical.index(reference))
+                break
+        else:
+            raise ArtifactReferenceDirectiveError("reference aliases do not share coverage")
+    source_text = " ".join(item.token for item in canonical)
+    return (
+        ArtifactReferenceBatch(source_text, source_text, tuple(canonical)),
+        tuple(ordinals),
+    )
