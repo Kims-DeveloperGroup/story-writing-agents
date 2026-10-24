@@ -1406,7 +1406,7 @@ class CompactWireDecoderTests(unittest.TestCase):
                 selected_bound.require_current_offer(offers)
         finally:
             object.__setattr__(altered, 'direct_delivery', False)
-        from tests.provider_wire_fixture import modeled_selection_binding
+        from tests.provider_wire_fixture import modeled_selection_binding, offered_fixture_bindings
         corrective = multiple.for_offer(replace(offers, call_id=offers.call_id + '-repair',
             remaining_physical_calls=offers.remaining_physical_calls - 1),
             selected_bound.repair_lineage())
@@ -1420,6 +1420,13 @@ class CompactWireDecoderTests(unittest.TestCase):
             selected_repair.repair_lineage()
         selected_normal = modeled_selection_binding(selected_bound, response_type='answer',
             family=1)
+        from types import SimpleNamespace
+        selected_request = SimpleNamespace(contract=selected_normal)
+        for family, branch in ((0, None),
+                (1, members[1].owner.variant.branch_key + ':partition:unoffered')):
+            with self.assertRaises(ValueError):
+                offered_fixture_bindings(selected_request, action_type='submit_result',
+                                         response_type='answer', family=family, branch_key=branch)
         for proof in (selected_normal.repair_lineage(), selected_normal.replay_lineage()):
             current = selected_normal.offers
             same = replace(current, call_id=current.call_id + '-retained',

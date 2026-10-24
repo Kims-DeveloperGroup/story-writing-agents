@@ -113,7 +113,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
                       "next_step": "consult", "draft_source_event_ids": []}
         elif target_path is None:
             intent = None
-        def respond(call, provider):
+        def respond(call, provider, *, select=False):
             native = (native_inputs(call) if native_inputs is not None else {
                 'input_choices': ('user_input',), 'anchors': {PLOT_ARCHITECT: 'user_input'},
                 'recipients': {'user_input': PLOT_ARCHITECT},
@@ -134,7 +134,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
                 if response_text is not None:
                     value['message'] = response_text
             return scoped_proposal(
-                *specialist_ids, native_inputs=native,
+                *specialist_ids, native_inputs=native, select=select,
                 paths=authoring_paths if authoring_paths is not None else paths,
                 domains=(('plot_structure',) if (native_start or native_continuation) else ()
                     if target_path is not None and specialist_ids == (PLOT_ARCHITECT,) else tuple(
@@ -143,6 +143,8 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
                 selected=self.objective_tasks.get(objective_id), mutate=mutate,
                 authoring_assessment=task_assessment(foundation_ids=('user_input',),
                     actions=('scene transitions', 'supporting dialogue')))(call, provider)
+        if native_start or native_continuation or native_inputs is not None:
+            self.backend.enqueue(lambda call, provider: respond(call, provider, select=True))
         self.backend.enqueue(respond)
         proposed = await self.runtime.lead_turn(self.session_id, conversation_id,
             ((f"Draft {target_path or 'a synthetic scene'} from this brief: a lantern vanishes, its keeper is found, and it returns." + " Invent scene transitions and supporting dialogue; preserve the supplied brief facts."

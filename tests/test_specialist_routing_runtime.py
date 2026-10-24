@@ -859,7 +859,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         result_event = next(e for e in exploration_prefix if type(e.payload) is c.CollaborationLeadExplorationResultPayload)
         start = len("Discarded prefix.\n")
         selection = replace(_adoption_selection(source_conversation, result_event, (path,)), start_character=start, end_character=start + len(premise))
-        self.assertEqual(tuple((call.call_id, call.invocation_kind) for call in _submitted_calls(exploration_prefix)), ((explored.exploration.provider_call_id, c.CollaborationInvocationKind.LEAD_EXPLORATION),))
+        self.assertEqual(tuple((call.call_id, call.invocation_kind) for call in _submitted_calls(exploration_prefix)), tuple((call.call_id, c.CollaborationInvocationKind.LEAD_EXPLORATION)
+                  for call in self.backend.calls[-2:]))
+        self.assertEqual(self.backend.calls[-1].call_id, explored.exploration.provider_call_id)
         def mixed(value, material):
             scope = value["authoring_scope"]
             scope["contributions"] = [{"domain": domain, "role": "draft_owner" if domain == "tone_execution" else "constraint_assessor"} for domain in ("plot_structure", "character_world", "tone_execution")]

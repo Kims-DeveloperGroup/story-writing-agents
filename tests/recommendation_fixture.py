@@ -463,7 +463,7 @@ def task_assessment(*, foundation_ids, actions):
 _RECOMMENDATION_SCOPE_DEFAULT = object()
 
 def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
-                   authoring_scope=_RECOMMENDATION_SCOPE_DEFAULT, authoring_assessment=None):
+                   authoring_scope=_RECOMMENDATION_SCOPE_DEFAULT, authoring_assessment=None, modeled=False):
     selected = action() if recommended_action is None else recommended_action
 
     def respond(call, _provider):
@@ -501,7 +501,7 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
         if hasattr(call, 'contract'):
             from tests.provider_wire_fixture import (
                 result, lead_fixture_scope, lead_fixture_result,
-                lead_fixture_response, finite_fixture_selection, lead_fixture_assessment)
+                lead_fixture_response, finite_fixture_selection, lead_fixture_assessment, modeled_fixture_response)
             compact = {'kind': value['kind'], 'message': value['message'],
                        'authoring_scope': copy.deepcopy(value['authoring_scope']),
                        'recommended_action': lead._compact_recommended(value['recommended_action'])}
@@ -535,6 +535,8 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
             if 'authoring_assessment' in native:
                 native['authoring_assessment'] = lead_fixture_assessment(
                     native['authoring_assessment'], source_choices=choices['input_ids'])
+            if modeled:
+                return modeled_fixture_response(call.contract, lead_fixture_result(native), family=0)
             return lead_fixture_response(call, lead_fixture_result(native), family=0)
         return lead._provider_envelope(call, value)
     return respond

@@ -813,7 +813,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             self.assertNotIn("unresolved_input_ids", repr(call.schema))
             for message in ("Visible.", " \t\0"):
                 self.assertEqual(LeadProviderConstraints(continuation=True).diagnose(json.dumps({"message": message})), ())
-            frame = _provider_envelope(call, {"message": "The concerns remain visible."})
+            frame = _synthesis_outcome(message="The concerns remain visible.")(call, _provider)
             cooffer_profile.append((call, frame, len(self.backend.finalizers)))
             return frame
         conversation_id = self.conversation("Strict synthesis")

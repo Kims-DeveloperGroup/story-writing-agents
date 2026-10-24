@@ -706,10 +706,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual(len(exhausted.calls), 0)
         self.assertEqual(len(exhausted.finalizers), 0)
         self.assertEqual(len(exhausted.responses), 2)
-        mixed_constraints = replace(_LEAD_CONSTRAINTS, scope=None)
-        mixed = replace(_LEAD_CALL_FACTORY, constraints=mixed_constraints,
-                        rule_seed=_lead_front_result_contract(
-                            LeadProposalRelation.NEW_STEP, (), constraints=mixed_constraints))
+        mixed = _LEAD_CALL_FACTORY
         mixed_request = self.request(operation_id='mixed-selection-capacity',
                                      result_correlation_id='mixed-capacity-result',
                                      invocation_kind=ContextInvocationKind.LEAD,

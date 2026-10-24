@@ -274,7 +274,7 @@ def capture_sample(call, name=None, *, witness=None, finalizers=None):
         assert name in ('conclude', 'ready', 'prepared')
         bound = call.contract
         assert [item.calls for item in finalizers] == [[('accepted', None)]]
-        assert not bound.structural_findings(json.loads(witness))
+        assert not bound.structural_findings(witness)
         assert bound.decode_response(witness).belongs_to(bound)
         schemas = [canonical_provider_json(call.schema), canonical_provider_json(
             AntigravityAdapter.native_output_schema(call.schema))]
@@ -459,7 +459,7 @@ def fixture_variant_value(schema, value):
     return result
 
 
-def fixture_semantic_member(request, *, response_type, family, branch_key=None, value=None):
+def fixture_semantic_member(request, *, response_type, family, branch_key=None, value=None, offered_only=False):
     """Resolve the caller's original full family before physical offer filtering."""
     families = {}
     for member in request.contract.semantic_index.contracts:
@@ -476,6 +476,11 @@ def fixture_semantic_member(request, *, response_type, family, branch_key=None, 
     if type(family) is not int or not 0 <= family < len(families):
         raise ValueError('The explicitly intended fixture family is not offered')
     choices = list(families.values())[family]
+    if offered_only:
+        choices = [member for member in choices
+                   if member.schema_id in request.contract.offered_semantic_schema_ids]
+        if not choices:
+            raise ValueError('The explicitly intended fixture family is not offered')
     if len(choices) > 1 and value is not None:
         for member in choices:
             if _fixture_partition_matches(member.rule_graph.schema_value(), value):
@@ -492,7 +497,7 @@ def offered_fixture_bindings(
     bound = request.contract
     pairs = dict(bound.outer_inner_schema_ids)
     intended = None if action_type != 'submit_result' else fixture_semantic_member(
-        request, response_type=response_type, family=family, branch_key=branch_key, value=value)
+        request, response_type=response_type, family=family, branch_key=branch_key, value=value, offered_only=True)
     offered = []
     for member in bound.action_index.contracts:
         if member.rule_graph.literal_at(('action_type',)) != action_type:
