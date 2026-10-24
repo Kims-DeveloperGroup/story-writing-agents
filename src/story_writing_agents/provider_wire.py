@@ -1555,6 +1555,7 @@ ENUM_MEANINGS = {
     "search_context": "locate authorized evidence and obtain READ handles",
     "read_context": "read exact search handles to obtain evidence",
     "submit_result": "finish this call with its semantic result",
+    "select_result": "select one complete current result member for the next paid provider call; this does not finish the task or grant story, Apply, or Commit authority",
     "constraints_assessed": "assigned constraints were assessed, without draft, review support, task completion or write authority",
     "draft_owner": "this declared domain requires a substantive current-task draft from its owning specialist",
     "constraint_assessor": "this declared domain requires constraint assessment, without drafting or final-review support",
