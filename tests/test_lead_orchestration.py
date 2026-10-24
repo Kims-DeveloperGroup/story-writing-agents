@@ -4,7 +4,7 @@ from __future__ import annotations
 from tests.provider_wire_fixture import lead_fixture_scope_record, lead_fixture_response
 from tests.provider_wire_fixture import ( fixture_schema_node, indexed_response, lead_fixture_result,
     lead_fixture_scope, offered_fixture_bindings, finite_fixture_selection,)
-from tests.provider_wire_fixture import lead_fixture_bound_scope
+from tests.provider_wire_fixture import lead_fixture_bound_scope, selected_fixture_calls
 
 import hashlib
 from story_writing_agents import core_document_readiness as core_readiness
