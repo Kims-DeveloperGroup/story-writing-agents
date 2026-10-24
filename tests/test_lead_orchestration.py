@@ -864,6 +864,8 @@ def _synthesis_outcome(*, message: str = "The specialist evidence supports proce
                 {'action_type': 'submit_result', 'task_result': lead_fixture_result(native)},
                 outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         if (getattr(call, 'contract', None) is not None and next_intent is None and recommended_action is None):
+            native = {'response_type': 'consultation_summary', 'response_text': message,
+                'response_details': {}}
             if select:
                 from tests.provider_wire_fixture import result_selection
                 return result_selection(call,
@@ -872,7 +874,6 @@ def _synthesis_outcome(*, message: str = "The specialist evidence supports proce
                     value=lead_fixture_result(native))
             outer, inner = offered_fixture_bindings(call, action_type='submit_result',
                 response_type='consultation_summary', family=0,branch_key='consultation-summary-v4:family:0')
-            native = {'response_type': 'consultation_summary', 'response_text': message, 'response_details': {}}
             return indexed_response({'action_type': 'submit_result', 'task_result': native},
                 outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         return _provider_envelope(call, value)

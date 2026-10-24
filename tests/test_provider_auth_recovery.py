@@ -722,7 +722,7 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
         self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome())
         self.backend.enqueue_for(CHARACTER_CUSTODIAN, lead._specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR,
-            *selected_fixture_calls(lead._synthesis_outcome))
+            lead._synthesis_outcome())
         with mock.patch.object(lead._LeadContextProvider, "invoke_context", new=physical):
             result, keys = await drive_recovery(self.runtime.decide_lead_step(
                 lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM)))

@@ -1,4 +1,4 @@
-from tests.provider_wire_fixture import selected_fixture_calls
+from tests.provider_wire_fixture import selected_fixture_calls, capture_sample
 """Runtime routing accepts typed task facts and keeps draft/review authority separate."""
 from tests.provider_wire_fixture import ( result as wire_result, lead_fixture_bound_scope, lead_fixture_assignments,
     finite_fixture_selection, lead_fixture_result, lead_fixture_response,)
@@ -196,7 +196,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.backend.enqueue_for(assignment.specialist_id, _specialist_outcome(status, "Summons leads choice; choice causes consequence."))
         if synthesis is None:
             self.backend.enqueue_for(LEAD_ORCHESTRATOR,
-                *selected_fixture_calls(_synthesis_outcome,
+                _synthesis_outcome(
                 message="The draft material is available for integration; no artifact changed."))
         else:
             self.backend.enqueue_for(LEAD_ORCHESTRATOR, partial(synthesis, select=True), synthesis)
@@ -244,7 +244,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             authoring_assessment=assessment,)
         def prepare(call, provider, *, select=False):
             return response(call, provider, select=select)
-        self.backend.enqueue(partial(prepare, select=True), prepare)
+        self.backend.enqueue(prepare)
         review = await self.runtime.decide_lead_recommendation(recommendation_decision(result.turn))
         self.assertEqual(review.proposal.participants, (PLOT_ARCHITECT,))
         self.assertIs(review.proposal.assignments[0].mode, SpecialistAssignmentMode.REVIEW)
@@ -461,7 +461,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             authoring_assessment=asdict(_fixture_assessment(foundation_ids=("selected_premise",))),)
         def integrate(call, provider, *, select=False):
             return response(call, provider, select=select)
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, partial(integrate, select=True), integrate)
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, integrate)
         review = await self.runtime.decide_lead_recommendation(recommendation_decision(finished.turn))
         self.assertEqual(review.proposal.participants, ROSTER)
         self.assertEqual(self.artifact_bytes(), before)
@@ -489,7 +489,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                     self.backend.enqueue_for(assignment.specialist_id, lambda call, provider: wire_answer({"assessment": "drafted", "message": premise_text, "premise_conflicts": []}, wire_contract_id(call.payload)))
                 else:
                     self.backend.enqueue_for(assignment.specialist_id, _specialist_outcome("constraints_assessed"))
-            self.backend.enqueue_for(LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome))
+            self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
             return await self.runtime.decide_lead_step(_decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
 
         reused_selection = replace(selection, request_id="reuse-report-after-apply")
@@ -590,7 +590,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(good.proposal.assignments[0].review_basis.candidate_input_ids, ("user_input",))
         self.assertIs(good.proposal.authoring_scope.intent, AuthoringIntent.REVIEW_ONLY)
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome,
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR,
+            _synthesis_outcome(
             message="Suggested edits remain findings until a fresh authoring request."))
         reviewed = await self.runtime.decide_lead_step(_decision(good, c.CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual([item["text"].encode() for agent, call in self.backend.call_records if agent == PLOT_ARCHITECT for item in _workflow_material(call.payload)["inputs"] if item["input_id"] == "user_input"], [original.encode()])
@@ -616,8 +617,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIsNotNone(selected.proposal, selected)
         self.assertEqual(selected.proposal.assignments[0].review_basis.candidate_input_ids, ("adopted_idea",))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome,
-            message="Selected supplied review findings."))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR,
+            _synthesis_outcome(message="Selected supplied review findings."))
         result = await self.runtime.decide_lead_step(_decision(selected, c.CollaborationConfirmationDecision.CONFIRM))
         delivered = [item["conversation_event"]["capture"]["selected_text"]
                      for agent, call in self.backend.call_records
@@ -913,7 +914,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             authoring_assessment=asdict(_fixture_assessment(foundation_ids=("adopted_idea",))),)
         def integrate(call, provider, *, select=False):
             return response(call, provider, select=select)
-        self.backend.enqueue(partial(integrate, select=True), integrate)
+        self.backend.enqueue(integrate)
         proposed = await self.runtime.decide_lead_recommendation(recommendation_decision(draft_result.turn))
         self.assertIs(proposed.kind, c.LeadOutcomeKind.PROPOSAL, msg=proposed.validation_details)
         self.assertEqual(proposed.proposal.participants, ROSTER)
@@ -927,7 +928,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.backend.enqueue_for(assignment.specialist_id, _specialist_outcome("supports", "The exact integrated candidate preserves the assigned domain."))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _artifact_synthesis_outcome())
         reviewed = await self.runtime.decide_lead_step(_decision(proposed,c.CollaborationConfirmationDecision.CONFIRM))
-        self.assertEqual(len(_submitted_calls(self.history(conversation))), 12,
+        self.assertEqual(len(_submitted_calls(self.history(conversation))), 11,
                          [(actor, call.call_kind.value) for actor, call in self.backend.call_records])
         review_frames = [_workflow_material(call.payload) for actor, call in self.backend.call_records if actor in ROSTER][-3:]
         review_candidates = [next(item["artifact_candidate"] for item in frame["inputs"] if item["input_id"] == candidate_inputs[0].input_id) for frame in review_frames]
@@ -944,9 +945,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIsNotNone(applied.commit_request)
         await self.runtime.decide_story_commit(_commit_decision(applied, StoryCommitDecision.REJECT))
         completed = self.runtime.inspect_lead_collaboration(self.session_id, conversation)
-        self.assertEqual((completed.rounds_spent, completed.physical_calls_spent), (2, 12))
+        self.assertEqual((completed.rounds_spent, completed.physical_calls_spent), (2, 11))
         submitted = _submitted_calls(self.history(conversation))
-        self.assertEqual(len({(item.invocation_id, item.call_id) for item in submitted}), 12)
+        self.assertEqual(len({(item.invocation_id, item.call_id) for item in submitted}), 11)
         for failure, code in ((ConnectionError("Known adoption failure"), c.CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED), (asyncio.CancelledError(), c.CollaborationLeadOutcomeFailureCode.CANCELLED)):
             self.backend.enqueue(_SubmittedFailure(failure))
             if code is c.CollaborationLeadOutcomeFailureCode.CANCELLED:
@@ -1019,7 +1020,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIsNotNone(fresh.proposal, fresh)
         self.assertNotEqual(fresh.proposal.authoring_scope.task_id, task_id)
         self.assertEqual((fresh.proposal.authoring_scope.task_revision, fresh.proposal.budget.rounds_spent,
-                          fresh.proposal.budget.physical_calls_spent), (1, 0, 2))
+                          fresh.proposal.budget.physical_calls_spent), (1, 0, 1))
         changed_response = _artifact_outcome(operations=[{"kind": "create", "suggested_path": fresh_path,
                            "new_text": "The changed tide preserves the current consequence.\n"}],
                            evidence_status="incomplete", evidence_ids=lambda call, material:
@@ -1030,7 +1031,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             authoring_assessment=asdict(_fixture_assessment(foundation_ids=("adopted_idea",))),)
         def changed_integrate(call, provider, *, select=False):
             return changed_response(call, provider, select=select)
-        self.backend.enqueue(partial(changed_integrate, select=True), changed_integrate)
+        self.backend.enqueue(changed_integrate)
         prepared = await self.runtime.decide_lead_recommendation(recommendation_decision(fresh_draft.turn))
         self.assertIsNotNone(prepared.proposal, prepared)
         self.assertEqual(prepared.proposal.participants, ROSTER)
@@ -1068,10 +1069,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                          and event.payload.state is c.CollaborationStepState.RUNNING
                          and event.step_id in new_steps for event in new_history)
         self.assertEqual((old_task.ref.task_id, old_task.ref.task_revision, old_task.status, old_rounds,
-                          len(old_task.submitted_call_ids)), (task_id, 1, "completed", 2, 12))
+                          len(old_task.submitted_call_ids)), (task_id, 1, "completed", 2, 11))
         self.assertEqual((new_task.ref.task_id, new_task.ref.task_revision, new_task.status, new_rounds,
                           len(new_task.submitted_call_ids)),
-                         (fresh.proposal.authoring_scope.task_id, 1, "active", 2, 12))
+                         (fresh.proposal.authoring_scope.task_id, 1, "active", 2, 11))
         self.assertEqual(self.artifact_bytes(), condition_before)
         coordinator=WorkspaceConversationStorageMutationCoordinator(self.control_workspace)
         with coordinator.borrow(timeout_seconds=2.0) as lease:
@@ -1101,6 +1102,19 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(self.history(archived),before)
 
     async def test_old_drafted_revision_cannot_authorize_revised_candidate(self):
+        cooffer_profiles = []
+        def capture_response(label, producer):
+            def respond(call, provider):
+                frame = producer(call, provider)
+                cooffer_profiles.append((label, call, frame, len(self.backend.finalizers)))
+                return frame
+            return respond
+        def publish_profile(expected):
+            label, call, witness, baseline = cooffer_profiles[-1]
+            self.assertEqual((label, len(cooffer_profiles)),
+                             (expected, 1 if expected == 'ready' else 2))
+            self.assertTrue(capture_sample(call, label, witness=witness,
+                                          finalizers=self.backend.finalizers[baseline:]))
         readiness = await self.record_book_readiness()
         conversation=self.conversation()
         assessment = asdict(_fixture_assessment())
@@ -1125,15 +1139,17 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             "role": "draft_owner" if domain == "plot_structure" else "constraint_assessor"} for domain in (
             "plot_structure", "character_world", "tone_execution")]),
             mutate=lambda value: value.update(authoring_assessment=assessment),
-        ), select=True)
+        ))
         self.assertIsNone(drifted.recommendation_request, drifted)
         self._assert_continuation(drifted, "proposal")
-        ready = await self.proposal_for(conversation, recommendation(recommended_action=action(
+        ready = await self.proposal_for(conversation, capture_response('ready',
+            recommendation(recommended_action=action(
             source_ids=(old_source,), target_paths=(path,), specialist_ids=ROSTER),
             authoring_scope=c.authoring_scope_to_dict(original.proposal.authoring_scope),
             mutate=lambda value: value.update(authoring_assessment=assessment),
-        ), select=True)
+        )))
         self.assertIsNotNone(ready.recommendation_request, ready)
+        publish_profile('ready')
         response = _artifact_outcome(operations=[{"kind": "create", "suggested_path": path, "new_text": "Synthetic chronology remains explicit.\n"}],
             evidence_status="incomplete", evidence_ids=lambda call, material: [call.payload["core_document_statuses"][0]["evidence_id"]],
             objective_intent={"action": "start", "target_paths": {path: True}, "next_step": "prepare"},
@@ -1141,10 +1157,11 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             authoring_assessment=assessment,)
         def integrate(call, provider, *, select=False):
             return response(call, provider, select=select)
-        self.backend.enqueue(partial(integrate, select=True), integrate)
+        self.backend.enqueue(capture_response('prepared', integrate))
         review = await self.runtime.decide_lead_recommendation(recommendation_decision(ready))
         self.assertIsNotNone(review.proposal, review)
         self.assertEqual(review.proposal.participants, ROSTER)
+        publish_profile('prepared')
         for assignment in review.proposal.assignments:
             self.backend.enqueue_for(assignment.specialist_id, _specialist_outcome("supports", "The candidate preserves the reviewed chronology and motivation."))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _artifact_synthesis_outcome())
@@ -1210,7 +1227,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             source_ids=(first_source,), target_paths=(multi_path,), specialist_ids=ROSTER),
             authoring_scope=c.authoring_scope_to_dict(first_draft.proposal.authoring_scope),
             mutate=lambda value: value.update(authoring_assessment=assessment),
-        ), select=True)
+        ))
         self.assertIsNotNone(first_ready.recommendation_request, first_ready)
         first_response = _artifact_outcome(operations=[{"kind": "create", "suggested_path": multi_path, "new_text": "Synthetic chronology remains explicit.\n"}],
             evidence_status="incomplete", evidence_ids=lambda call, material: [call.payload["core_document_statuses"][0]["evidence_id"]],
@@ -1221,7 +1238,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             authoring_assessment=assessment,)
         def integrate_multiple(call, provider, *, select=False):
             return first_response(call, provider, select=select)
-        self.backend.enqueue(partial(integrate_multiple, select=True), integrate_multiple)
+        self.backend.enqueue(integrate_multiple)
         first_review = await self.runtime.decide_lead_recommendation(recommendation_decision(first_ready))
         self.assertIsNotNone(first_review.proposal, first_review)
         self.assertEqual(first_review.proposal.participants, ROSTER)
@@ -1262,7 +1279,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(self.history(multiple)[:len(multi_prefix)], multi_prefix)
         self.assertEqual(self.artifact_bytes(), before_multiple)
         self.workspace.path(OUTLINE).unlink()
-        def stale(call, provider, *, select=False):
+        def stale(call, provider):
             self.assertIn(old_source, _workflow_material(call.payload)["available_proposal_drafting_source_ids"])
             current = next(t["current_scope"] for t in _workflow_material(call.payload)["authoring_tasks"] if t["task_id"] == task_id and t["task_revision"] == 2)
             self.assertEqual((current["task_id"], current["task_revision"]), (task_id, 2))
@@ -1270,8 +1287,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 recommended_action=action(source_ids=(old_source,), target_paths=(OUTLINE,),
                 specialist_ids=(PLOT_ARCHITECT,)), authoring_scope=current,
                 mutate=lambda value: value.update(authoring_assessment=assessment),
-            )(call, provider, select=select)
-        self.backend.enqueue(partial(stale, select=True), stale)
+            )(call, provider)
+        self.backend.enqueue(stale)
         rejected=await self.runtime.lead_turn(self.session_id,conversation,
             _ADMISSION_BRIEF + "\nUse the earlier draft for this revised candidate.")
         self.assertIsNone(rejected.recommendation_request, rejected)
@@ -1303,8 +1320,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(c.project_collaboration_history(self.history(prior)).offered_draft_sources[-1], source)
         self.assertEqual(self.history(prior)[:len(original_history)], original_history)
         original_history = self.history(prior)
-        self.backend.enqueue(*selected_fixture_calls(recommendation,
-            message=fresh_scope.interpretation, recommended_action=action(
+        self.backend.enqueue(recommendation(message=fresh_scope.interpretation,
+            recommended_action=action(
             kind="prepare_consultation", source_ids=(source.event_id,)),
                 authoring_scope=c.authoring_scope_to_dict(fresh_scope),
             authoring_assessment=_fixture_assessment(foundation_ids=("user_input", "selected_material_1")),
@@ -1343,7 +1360,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 recipients={source: PLOT_ARCHITECT for source in choices['required_input_ids']})
             proposal.update(allocation)
             return lead_fixture_response(call, lead_fixture_result(native), family=0, select=select)
-        self.backend.enqueue(partial(prepare_historical, select=True), prepare_historical)
+        self.backend.enqueue(prepare_historical)
         prepared = await self.runtime.decide_lead_recommendation(recommendation_decision(suggested))
         self.assertEqual(prepared.proposal.authoring_scope, fresh_scope)
         self.assertEqual(prepared.proposal.budget.rounds_spent, 0)
@@ -1374,7 +1391,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIn(selected_input.input_id, prepared.proposal.assignments[0].input_ids)
         self.assertEqual((historical_input.locator, historical_input.revision_digest), ("conversation/" + source.event_id, source.content_digest))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("drafted", "A fresh chronology follows the selected historical material."))
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
         drafted = await self.runtime.decide_lead_step(_decision(prepared, c.CollaborationConfirmationDecision.CONFIRM))
         self.assertIs(drafted.turn.state, c.CollaborationStepState.COMPLETED)
         self.assertEqual(next(item["conversation_event"] for agent, call in reversed(self.backend.call_records) if agent == PLOT_ARCHITECT for item in _workflow_material(call.payload)["inputs"] if (item["input_id"], item["locator"], item["revision_digest"]) == (historical_input.input_id, historical_input.locator, historical_input.revision_digest)), json.loads(json.dumps(asdict(next(event.payload for event in original_history if event.event_id == source.event_id)))))
@@ -1388,7 +1405,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         fresh_ready = await self.proposal_for(prior, recommendation(recommended_action=action(source_ids=(
             current.event_id,)), authoring_scope=c.authoring_scope_to_dict(fresh_scope),
             mutate=lambda value: value.update(authoring_assessment=assessment),
-        ), select=True)
+        ))
         def integrate_fresh(call, provider, *, select=False):
             return _artifact_outcome(
                 operations=lambda call, material: [{"kind": "replace",
@@ -1402,7 +1419,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                     "structured_recommendation_execution"]["request"]["authoring_scope"],
                 authoring_assessment=assessment,
              select=select)(call, provider)
-        self.backend.enqueue(partial(integrate_fresh, select=True), integrate_fresh)
+        self.backend.enqueue(integrate_fresh)
         fresh_review = await self.runtime.decide_lead_recommendation(recommendation_decision(fresh_ready))
         self.assertEqual(None if fresh_review.proposal is None else (fresh_review.proposal.participants, fresh_review.proposal.assignments[0].mode), ((PLOT_ARCHITECT,), SpecialistAssignmentMode.REVIEW), fresh_review)
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("supports"))

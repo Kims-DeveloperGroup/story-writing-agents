@@ -266,8 +266,32 @@ def assert_schema_descriptions(test, schema):
     visit(schema, True)
 
 
-def capture_sample(call, name=None):
+def capture_sample(call, name=None, *, witness=None, finalizers=None):
     """Optional synthetic fixture evidence, enabled only for an assigned test run."""
+    if witness is not None:
+        from story_writing_agents.agent_context import canonical_provider_json
+        from story_writing_agents.antigravity_adapter import AntigravityAdapter
+        assert name in ('conclude', 'ready', 'prepared')
+        bound = call.contract
+        assert [item.calls for item in finalizers] == [[('accepted', None)]]
+        assert not bound.structural_findings(witness)
+        assert bound.decode_response(witness).belongs_to(bound)
+        schemas = [canonical_provider_json(call.schema), canonical_provider_json(
+            AntigravityAdapter.native_output_schema(call.schema))]
+        good = len(witness.encode('utf-8')) <= 65536 and all(len(x) <= 524288 for x in schemas)
+        profile = {'profile': name, 'overflow': not good, 'native_admitted': False,
+            'semantic_members': len(bound.semantic_index.contracts),
+            'direct_members': sum(
+            x.owner.variant.direct_delivery for x in bound.semantic_index.contracts),
+            'offered_members': len(bound.offered_semantic_schema_ids),
+            'selectable_members': len(bound.selectable_semantic_schema_ids),
+            'remaining_physical_calls': bound.offers.remaining_physical_calls,
+            'schema_utf8_bytes': [len(x) for x in schemas]}
+        if good:
+            profile.update(witness=witness, codex_cli_schema_file_json=schemas[0].decode('utf-8'),
+                antigravity_response_schema_json=schemas[1].decode('utf-8'))
+        print('SWA_COOFFER_V1 ' + json.dumps(profile, ensure_ascii=False))
+        return good
     import os
     from pathlib import Path
     directory = os.environ.get("STORY_WIRE_TEST_CAPTURE_DIR")

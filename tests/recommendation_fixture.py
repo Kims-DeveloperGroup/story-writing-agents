@@ -463,11 +463,10 @@ def task_assessment(*, foundation_ids, actions):
 _RECOMMENDATION_SCOPE_DEFAULT = object()
 
 def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
-                   authoring_scope=_RECOMMENDATION_SCOPE_DEFAULT,
-                   authoring_assessment=None, select=False):
+                   authoring_scope=_RECOMMENDATION_SCOPE_DEFAULT, authoring_assessment=None):
     selected = action() if recommended_action is None else recommended_action
 
-    def respond(call, _provider, *, select=select):
+    def respond(call, _provider):
         material = lead._live_material(call)
         execution = material.get("structured_recommendation_execution")
         if authoring_scope is not _RECOMMENDATION_SCOPE_DEFAULT:
@@ -536,7 +535,7 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
             if 'authoring_assessment' in native:
                 native['authoring_assessment'] = lead_fixture_assessment(
                     native['authoring_assessment'], source_choices=choices['input_ids'])
-            return lead_fixture_response(call, lead_fixture_result(native), family=0, select=select)
+            return lead_fixture_response(call, lead_fixture_result(native), family=0)
         return lead._provider_envelope(call, value)
     return respond
 

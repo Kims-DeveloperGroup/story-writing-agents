@@ -536,8 +536,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             with self.subTest(kinds=kinds):
                 conversation_id = self.conversation(f"Zero hit {index}")
                 self.backend.enqueue(_search("phrase absent from every source", kinds),
-                    *selected_fixture_calls(_missing_outcome,
-                    authoring_assessment=_fixture_assessment()),)
+                    _missing_outcome(authoring_assessment=_fixture_assessment()),)
                 result = await self.runtime.lead_turn(
                     self.session_id,
                     conversation_id,
@@ -634,7 +633,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             )),
         )
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
         completed = await self.runtime.decide_lead_step(_decision(proposed, self._confirm_decision()))
         self.assertIs(completed.turn.state, CollaborationStepState.COMPLETED)
         after = {

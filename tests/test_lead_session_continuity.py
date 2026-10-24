@@ -111,7 +111,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         plan = "First inspect the outline.\nSecond review the character motive.\nThird draft the opening."
         self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR,
-            *selected_fixture_calls(lead._synthesis_outcome, message=plan))
+            lead._synthesis_outcome(message=plan))
         await self.runtime.decide_lead_step(lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(self.backend.call_records[-1][1].expected_thread_id, "thread-lead-1")
         followups = (
