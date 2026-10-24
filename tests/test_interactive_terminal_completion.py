@@ -2727,7 +2727,7 @@ class CompletionDriverTests(unittest.TestCase):
             self.assertEqual(empty.alerts[0].text, "Enter a message or slash command.")
             self.assertIs(empty.alerts[0].role, _model.SemanticRole.ERROR)
             self.assertEqual(apply(empty, KeyEvent(KeyKind.ENTER)), (empty, None))
-            edited, outcome = apply(empty, KeyEvent(KeyKind.TEXT, "x"))
+            edited, outcome = apply(empty, KeyEvent(KeyKind.TEXT, text="x"))
             self.assertIsNone(outcome)
             self.assertEqual(edited.alerts, ())
             recalled, outcome = apply(
