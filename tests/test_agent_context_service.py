@@ -54,6 +54,40 @@ class StructuredOutputValidationTests(unittest.TestCase):
             "$.items[0]: expected at least 1 characters, got 0", "$.items[1]: expected string, got integer", ))
         self.assertNotIn(secret, repr(issues))
 
+        # Independent character boundaries, not expected patterns copied from their producers.
+        from story_writing_agents.lead_provider_contracts import (
+            LeadDiscussionConstraints, _owned_visible_text_rule)
+        from story_writing_agents import lead_exploration, lead_premise_decisions
+        from story_writing_agents.structured_output_validation import SchemaRules
+        values = ("", " ", "\t\n", "\x00", "x\x00", "x\n", "포기😀", "\ud800", "\udfff")
+        for nonblank, accepted in (
+            (False, (False, True, True, True, True, True, True, False, False)),
+            (True, (False, False, False, False, False, True, True, False, False)),
+        ):
+            rules = SchemaRules.declare(_owned_visible_text_rule(
+                {"type": "string"}, nonblank=nonblank))
+            for value, expected in zip(values, accepted, strict=True):
+                self.assertEqual(not rules.findings(value), expected, repr(value))
+        for declaration in (lead_exploration._result_text_rule(),
+                LeadDiscussionConstraints("control").schema()["properties"]["message"]):
+            rules = SchemaRules.declare(declaration)
+            for value, expected in zip(values[:-2],
+                    (False, True, True, False, False, True, True), strict=True):
+                self.assertEqual(not rules.findings(value), expected, repr(value))
+        for value in (" ", "\n", "x\n", "포기😀"):
+            self.assertIsNone(lead_exploration._text(value))
+        for value in ("", "x\x00"):
+            with self.assertRaises(ValueError): lead_exploration._text(value)
+        with self.assertRaises(UnicodeEncodeError): lead_exploration._text("\ud800")
+        analysis = lead_premise_decisions.premise_analysis_schema(("user_input",))
+        identity = analysis["anyOf"][0]["properties"]["alternatives"]["items"][
+            "properties"]["alternative_key"]
+        rules = SchemaRules.declare(identity)
+        for value, expected in (("A", True), ("0", True), ("a_b-9", True), ("a" * 64, True),
+                ("_a", False), (".a", False), ("a.b", False), ("포기", False),
+                ("a" * 65, False), ("a\n", False), ("a\r", False), ("a\x00", False)):
+            self.assertEqual(not rules.findings(value), expected, repr(value))
+
     def test_union_selects_matching_branch_without_other_branch_noise(self) -> None:
         schema = {"anyOf": [{"type": "object", "properties": { "kind": {"type": "string", "enum": ["search"]},
             "query": {"type": "string"}, }, "required": ["kind", "query"], "additionalProperties": False},
@@ -1357,6 +1391,35 @@ class CompactWireDecoderTests(unittest.TestCase):
             ContextSearchAction(self.correlation, ( ContextSearchQuery("one",
                         (ContextSourceKind.WRITING_ARTIFACT,), "manuscript/part-01/", ), ContextSearchQuery("two",
                         (ContextSourceKind.WRITING_ARTIFACT,), "manuscript/part-02/", ), ), )
+
+        from story_writing_agents.agent_context.actions import (
+            artifact_directory_prefix_rule, search_text_rule)
+        from story_writing_agents.structured_output_validation import SchemaRules
+        prefix_rules = SchemaRules.declare(artifact_directory_prefix_rule())
+        for prefix in valid + ("manuscript/.../", "manuscript/..name/"):
+            self.assertEqual(prefix_rules.findings(prefix), (), repr(prefix))
+        for prefix in invalid + ("manuscript/a/\n",):
+            self.assertTrue(prefix_rules.findings(prefix), repr(prefix))
+        query_rules = SchemaRules.declare(search_text_rule(200))
+        for text, normalized in (("needle", "needle"), ("포기😀", "포기😀"),
+                ("A\u2028B", "a b"), (" \u00a0ﬃß ", "ffiss"), ("", None), (" ", None),
+                ("\u00a0", None), ("x\x00", None), ("x\n", None), ("x\u200d", None),
+                ("\ue000", None), ("\u0378", None), ("\ud800", None)):
+            self.assertEqual(not query_rules.findings(text), normalized is not None, repr(text))
+            if normalized is None:
+                with self.assertRaises(ContextActionError):
+                    ContextSearchQuery(text, (ContextSourceKind.WRITING_ARTIFACT,))
+            else:
+                query = ContextSearchQuery(text, (ContextSourceKind.WRITING_ARTIFACT,))
+                self.assertEqual(query.normalized_text, normalized)
+        for text, normalized in (("ﬃ" * 66 + "ff", "ffi" * 66 + "ff"),
+                                  ("ß" * 100, "ss" * 100)):
+            query = ContextSearchQuery(text, (ContextSourceKind.WRITING_ARTIFACT,))
+            self.assertEqual(query.normalized_text, normalized)
+        for text in ("ﬃ" * 67, "ß" * 101):
+            self.assertEqual(query_rules.findings(text), ())
+            with self.assertRaises(ContextActionError):
+                ContextSearchQuery(text, (ContextSourceKind.WRITING_ARTIFACT,))
 
     def test_malformed_exact_shape_types_routes_duplicates_and_limits_reject(self) -> None:
         base = _answer_wire(self.token, {"kind": "answer", "message": "Visible.", "proposal": None})

@@ -364,6 +364,30 @@ from an earlier call or an example in this guide.
 
 ## Result contracts
 
+### Native pattern compatibility
+
+Owning field rules preserve their exact text, identifier and path languages
+when exported to a provider. Canonical strict end-of-string uses `\z`;
+`compile_schema_pattern()` translates that token to Python 3.11's equivalent
+`\Z` for local evaluation. Literal escapes and character classes retain their
+meaning. Source-derived positive Unicode scalar classes preserve each owner's
+whitespace, NUL and category exclusions. Native support is checked separately
+from Python compilation.
+
+`require_provider_schema_patterns()` checks the final invocation schema for
+known unsupported lookarounds before adapter launch, including definitions,
+continuations and repair schemas. Existing validation diagnostics identify the
+schema location without printing pattern or story content. The guard does not
+certify the complete provider regex dialect or strip field restrictions.
+
+Existing owned primitives and canonical-path intersections require equivalent
+rewrites. An unproved implicit intersection fails explicitly before submission;
+its prior pattern is not discarded. Standalone supported custom patterns keep
+their normal interpretation. See the
+[compatibility design](../design/provider-regex-compatibility.md).
+
+### Bound rule ownership
+
 The code boundary uses a `ContractOwner[T]` for authoritative rule declarations,
 typed decoding, and named genuine host checks. A sealed immutable `BoundContract[T]`
 derives the schema, complete structural validation sequence, and trusted repair
