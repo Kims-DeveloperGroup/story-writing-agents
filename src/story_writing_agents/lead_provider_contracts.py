@@ -1487,6 +1487,8 @@ def alternatives(variants: list[dict[str, object]]) -> dict[str, object]:
 
 _OWNED_SCALAR, _OWNED_NONNUL, _OWNED_NONBLANK, _OWNED_NONBLANK_WITH_NUL = unicode_scalar_classes(
     (), ("", "\x00", "\x00" + SCHEMA_PYTHON_WHITESPACE, SCHEMA_PYTHON_WHITESPACE))
+_NUL_FREE_TEXT_PATTERN = r"^[^\u0000]+\z"
+_OWNED_NUL_FREE_PATTERN = "^" + _OWNED_NONNUL + r"+\z"
 _OWNED_VISIBLE_PATTERN = "^" + _OWNED_SCALAR + r"+\z"
 _OWNED_NONEMPTY_PATTERN = "^" + _OWNED_NONNUL + "*" + _OWNED_NONBLANK + _OWNED_NONNUL + r"*\z"
 _OWNED_NONBLANK_PATTERN = "^" + _OWNED_SCALAR + "*" + _OWNED_NONBLANK_WITH_NUL + _OWNED_SCALAR + r"*\z"
@@ -1509,6 +1511,8 @@ def _owned_visible_text_rule(
     nonempty = nonempty_text_rule()["pattern"]
     if prior is None or prior in (visible, _OWNED_VISIBLE_PATTERN):
         selected = _OWNED_NONEMPTY_PATTERN if nonblank else _OWNED_VISIBLE_PATTERN
+    elif prior in (_NUL_FREE_TEXT_PATTERN, _OWNED_NUL_FREE_PATTERN):
+        selected = _OWNED_NONEMPTY_PATTERN if nonblank else _OWNED_NUL_FREE_PATTERN
     elif prior in (nonempty, _OWNED_NONEMPTY_PATTERN):
         selected = _OWNED_NONEMPTY_PATTERN
     elif prior in (nonblank_text_rule()["pattern"], _OWNED_NONBLANK_PATTERN):
@@ -2082,7 +2086,10 @@ class LeadProviderConstraints:
                                         path_kinds = (rename_kind,) if rename_kind is not None else tuple(ArtifactKind)
                                         path_rules = []
                                         for kind in path_kinds:
-                                            canonical = artifact_kind_path_rule(kind)
+                                            canonical = {
+                                                **artifact_kind_path_rule(kind),
+                                                "description": guidance["description"],
+                                            }
                                             if kind is ArtifactKind.MANUSCRIPT:
                                                 if ArtifactReviewDomain.TONE_EXECUTION in target_domains:
                                                     path_rules.append(canonical)
@@ -3203,7 +3210,7 @@ class LeadDiscussionConstraints:
     def schema(self) -> dict[str, object]:
         schema = closed_object({
             "kind": {"type": "string", "enum": ["answer", "question"]},
-            "message": {"type": "string", "pattern": r"^[^\u0000]+\z",
+            "message": {"type": "string", "pattern": _NUL_FREE_TEXT_PATTERN,
                         "maxLength": COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES},
             "used_evidence_ids": string_array(),
         })

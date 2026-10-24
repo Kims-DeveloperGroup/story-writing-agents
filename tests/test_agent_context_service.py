@@ -110,6 +110,16 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertFalse(generic.findings("A"))
         self.assertTrue(generic.findings("B"))
 
+        discussion = LeadDiscussionConstraints("control").schema()["properties"]["message"]
+        self.assertEqual(discussion["pattern"], r"^[^\u0000]+\z")
+        for nonblank, accepted in (
+            (False, (False, True, True, False, False, True, True, False, False)),
+            (True, (False, False, False, False, False, True, True, False, False)),
+        ):
+            rules = SchemaRules.declare(_owned_visible_text_rule(discussion, nonblank=nonblank))
+            for value, expected in zip(values, accepted, strict=True):
+                self.assertEqual(not rules.findings(value), expected, repr(value))
+
     def test_union_selects_matching_branch_without_other_branch_noise(self) -> None:
         schema = {"anyOf": [{"type": "object", "properties": { "kind": {"type": "string", "enum": ["search"]},
             "query": {"type": "string"}, }, "required": ["kind", "query"], "additionalProperties": False},
