@@ -717,9 +717,15 @@ def _objective_intent_result_schema() -> dict[str, object]:
 def _provider_result_contract(contract_id: str, schema: dict[str, object]) -> ContextJsonObjectResultContract:
     return ContextJsonObjectResultContract(contract_id, project_result_schema(schema, contract_id))
 
-def _lead_result_rule_seed(contract_id: str, schema: dict[str, object]) -> LeadResultRuleSeed:
-    """Capture a pure planning declaration; only bound current rules are offered."""
-    return LeadResultRuleSeed.declare(contract_id, project_result_schema(schema, contract_id))
+def _lead_result_rule_seed(
+    contract_id: str, schema: dict[str, object], *,
+    direct_delivery_roots: tuple[int, ...] = (),
+) -> LeadResultRuleSeed:
+    """Capture one pure declaration, including complete-owner delivery policy."""
+    return LeadResultRuleSeed.declare(
+        contract_id, project_result_schema(schema, contract_id),
+        direct_delivery_roots=direct_delivery_roots,
+    )
 
 
 def _lead_discussion_result_contract(
@@ -1411,7 +1417,17 @@ def _lead_front_result_contract(
     )
     schema["description"] += " " + shared_rules
 
-    return _lead_result_rule_seed("lead-response-v8" if facts.premise_question_id is not None else "lead-response-v6" if facts.scope is not None and facts.scope.schema_version < 3 else "lead-response-v7", schema)
+    direct_delivery_roots = tuple(
+        index for index, variant in enumerate(variants)
+        if (variant["properties"].get("kind", {}).get("enum") == ["recommendation"]
+            and "recommended_action" in variant["properties"])
+        or (facts.preparation_kind is not None
+            and variant["properties"].get("kind", {}).get("enum") == ["proposal"])
+    )
+    return _lead_result_rule_seed(
+        "lead-response-v8" if facts.premise_question_id is not None else "lead-response-v6" if facts.scope is not None and facts.scope.schema_version < 3 else "lead-response-v7", schema,
+        direct_delivery_roots=direct_delivery_roots,
+    )
 
 
 def _specialist_result_contract(
@@ -1461,6 +1477,9 @@ def _specialist_result_contract(
         ),
         ),
     )
+
+
+_CONSULTATION_CONCLUDE_DIRECT_ROOTS = (0,)
 
 
 def _lead_synthesis_result_contract(
@@ -1540,7 +1559,9 @@ def _lead_synthesis_result_contract(
                 "concern and grounding the result in their shared task and evidence. "
                 + synthesis_guidance
             ),
-        })
+        },
+            direct_delivery_roots=_CONSULTATION_CONCLUDE_DIRECT_ROOTS,
+        )
     contract_id = "artifact-review-summary-v4"
     return _lead_result_rule_seed(
         contract_id,
@@ -2379,6 +2400,8 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
     reviewer_for_locator: Callable[[str], str] = field(repr=False, compare=False)
     _declared_authorization_check: Callable[[LeadDecodedResult, HostCheckContext], None] = field(init=False, repr=False, compare=False)
     _authorization_declaration: NamedHostCheck[LeadDecodedResult] = field(init=False, repr=False, compare=False)
+    _rule_declaration: tuple[LeadResultRuleSeed, str, bytes, tuple[int, ...]] = field(
+        init=False, repr=False, compare=False)
     _status_rule: tuple[object, object] = field(
         default=(empty_core_status_evidence, empty_core_status_evidence.__code__),
         init=False, repr=False, compare=False,
@@ -2418,8 +2441,17 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
             dependencies=(validator, guard, self._require_status_rule,
                           self._status_rule[0], self._outcome_scope_rule[0], parse_artifact_references),
         ))
+        object.__setattr__(self, "_rule_declaration", (
+            self.rule_seed, self.rule_seed.contract_id, self.rule_seed.domain_rules,
+            self.rule_seed.direct_delivery_roots,
+        ))
 
     def require_declaration(self) -> None:
+        seed, identity, rules, delivery = self._rule_declaration
+        if (self.rule_seed is not seed or (self.rule_seed.contract_id,
+                self.rule_seed.domain_rules, self.rule_seed.direct_delivery_roots)
+                != (identity, rules, delivery)):
+            raise ValueError("frozen Lead result delivery declaration changed")
         declaration = self._authorization_declaration
         declaration.require_provenance()
         if (self._declared_authorization_check is not declaration.check
@@ -4552,8 +4584,10 @@ class StoryRuntime:
         if scope.schema_version == 3:
             if fresh_consultation:
                 read = int(self._has_present_references(selected_inputs))
-                draft_floor = (len(action.specialist_ids) + 1) * (1 + read)
-                floor = self._future_authoring_floor(scope, selected_inputs) + draft_floor
+                future_floor = self._future_authoring_floor(scope, selected_inputs, phase="preparation")
+                synthesis_and_ready = 1 + int(bool(future_floor))
+                draft_floor = (len(action.specialist_ids) + synthesis_and_ready) * (1 + read)
+                floor = future_floor + draft_floor
                 if remaining < floor + 1 + read:
                     raise _LeadOutcomeValidationError(
                         "fresh drafting preparation and full review are infeasible; clarify and freshly propose"
@@ -4570,7 +4604,7 @@ class StoryRuntime:
                 inherited_capture = self._remap_shared_premises(source_proposal.basis, selected_inputs)
                 if authoring_capture_identity(scope, source_proposal.basis) != authoring_capture_identity(source_proposal.authoring_scope, source_proposal.basis):
                     raise _LeadOutcomeValidationError("preparation cannot change the confirmed authoring task")
-                floor = self._final_review_floor(scope, selected_inputs, preparation=False)
+                floor = self._final_review_floor(scope, selected_inputs, phase="review")
                 minimum_preparation = 1 + int(self._has_present_references(selected_inputs))
                 if remaining < floor + minimum_preparation:
                     raise _LeadOutcomeValidationError("declared preparation and full final review are infeasible; clarify or freshly propose")
@@ -10387,6 +10421,7 @@ class StoryRuntime:
             ),
             physical_calls_spent=projection.physical_calls_spent,
             authoring_scope=next_intent.authoring_scope,
+            premise_decision=next_intent.premise_decision,
         )
         proposal_id = self._deterministic_id(
             "p", result.execution_attempt_id, "continuation"
@@ -15240,7 +15275,10 @@ class StoryRuntime:
             "rounds_spent": proposal.budget.rounds_spent,
             "physical_calls_spent": proposal.budget.physical_calls_spent,
             "max_additional_physical_calls": proposal.budget.max_additional_physical_calls,
-            "reserved_preparation_and_final_review_calls": StoryRuntime._future_authoring_floor(scope, proposal.basis.inputs),
+            "reserved_preparation_and_final_review_calls": StoryRuntime._future_authoring_floor(scope, proposal.basis.inputs,
+                phase=("preparation" if proposal.step_kind is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+                and proposal.premise_decision is None else "recommendation"),
+            ),
         }
         return message + "\n\nProposed responsibilities, immutable premises and bounded cost: " + json.dumps(
             disclosure, ensure_ascii=False, sort_keys=True,
@@ -15298,19 +15336,22 @@ class StoryRuntime:
 
     @classmethod
     def _final_review_floor(cls, scope: AuthoringScope,
-                            inputs: tuple[CollaborationInputRevision, ...],
-                            *, preparation: bool) -> int:
+                            inputs: tuple[CollaborationInputRevision, ...], *, phase: str) -> int:
+        """Reserve review, confirmed preparation, or a still-needed ready recommendation."""
+        stages = {"review": 0, "preparation": 1, "recommendation": 2}
+        if phase not in stages:
+            raise ValueError("unknown authoring task budget phase")
         read = int(cls._has_present_references(inputs))
-        return (len(required_authoring_specialists(scope)) + 1 + 2 * int(preparation)) * (1 + read)
+        return (len(required_authoring_specialists(scope)) + 1 + stages[phase]) * (1 + read)
 
     @classmethod
     def _future_authoring_floor(cls, scope: AuthoringScope | None,
-                                inputs: tuple[CollaborationInputRevision, ...]) -> int:
-        if scope is None or scope.schema_version < 3 or scope.intent is not AuthoringIntent.AUTHORING or (
-            scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
-        ):
+                                inputs: tuple[CollaborationInputRevision, ...], *,
+                                phase: str = "recommendation") -> int:
+        if not (scope is not None and scope.schema_version == 3 and scope.intent is AuthoringIntent.AUTHORING
+                and scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}):
             return 0
-        return cls._final_review_floor(scope, inputs, preparation=True)
+        return cls._final_review_floor(scope, inputs, phase=phase)
 
     @staticmethod
     def _basis_budget_fingerprint(scope: AuthoringScope | None) -> str:
@@ -15703,9 +15744,8 @@ class StoryRuntime:
                 and event.payload.state is CollaborationProviderCallState.SUBMITTED
             )
             read = int(self._has_present_references(source.basis.inputs))
-            available = COLLABORATION_PHYSICAL_CALL_LIMIT - spent - (
-                self._final_review_floor(scope, source.basis.inputs, preparation=False) + 1 + read
-            )
+            available = COLLABORATION_PHYSICAL_CALL_LIMIT - spent - self._final_review_floor(
+                scope, source.basis.inputs, phase="preparation")
             caps.append(min(1 + read, available))
         return min(caps) if caps else None
 
@@ -16418,6 +16458,7 @@ class StoryRuntime:
                 assignment_input_ids=tuple(item.input_ids for item in assignments),
                 physical_calls_spent=projection.physical_calls_spent,
                 authoring_scope=intent.authoring_scope,
+                premise_decision=intent.premise_decision,
             )
         )
         proposal_revision = (
@@ -16638,6 +16679,7 @@ class StoryRuntime:
                         proposal.step_kind
                         is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
                     ),
+                    premise_decision=proposal.premise_decision,
                 )
             )
             runtime_assignments = tuple(
@@ -17464,6 +17506,7 @@ class StoryRuntime:
         assignment_input_ids: tuple[tuple[str, ...], ...],
         physical_calls_spent: int,
         synthesis_required: bool = True,
+        premise_decision: PremiseQuestionIntent | PremiseDecisionSpec | None = None,
         authoring_scope: AuthoringScope | None = None,
     ) -> tuple[tuple[int, ...], int, int]:
         reference_input_ids = {
@@ -17481,19 +17524,29 @@ class StoryRuntime:
             1 + int(any(input_id in reference_input_ids for input_id in input_ids))
             for input_ids in assignment_input_ids
         )
-        future_floor = StoryRuntime._future_authoring_floor(authoring_scope, inputs)
+        direct_conclude = premise_decision is None and bool(_CONSULTATION_CONCLUDE_DIRECT_ROOTS)
+        future_floor = StoryRuntime._future_authoring_floor(
+            authoring_scope, inputs,
+            phase="preparation" if synthesis_required and direct_conclude else "recommendation",
+        )
         remaining = COLLABORATION_PHYSICAL_CALL_LIMIT - physical_calls_spent - future_floor
-        # Consultation/premise synthesis retains distinct result-owner roots;
-        # selection plus its complete result requires two paid calls. Attached
-        # references are loaded by the host prelude, without a provider call.
-        synthesis_minimum = 2 if synthesis_required else 0
-        minimum_required_calls = sum(assignment_call_limits) + synthesis_minimum
+        # Only the source-declared consultation CONCLUDE owner guarantees one call.
+        # Premise decisions retain paid selection; attached references are loaded
+        # by the host prelude, without a provider call.
+        synthesis_minimum = (1 if direct_conclude else 2) if synthesis_required else 0
+        joint_ready = bool(future_floor and synthesis_required and direct_conclude)
+        minimum_required_calls = sum(assignment_call_limits) + synthesis_minimum + int(joint_ready)
         if minimum_required_calls > remaining:
             raise _LeadCallBudgetExceeded(
                 "declared preparation and full final review cannot fit the remaining physical-call budget; clarify or freshly propose"
             )
         allocated_limits = list(assignment_call_limits)
         unallocated = remaining - minimum_required_calls
+        synthesis_calls = synthesis_minimum + int(joint_ready)
+        # Preserve paid follow-up/inline choices before discretionary sibling capacity.
+        if synthesis_required and synthesis_calls < 2 and unallocated:
+            synthesis_calls += 1
+            unallocated -= 1
         while unallocated and any(
             limit < _CONTEXT_INVOCATION_CALL_LIMIT for limit in allocated_limits
         ):
@@ -17503,15 +17556,8 @@ class StoryRuntime:
                 if limit < _CONTEXT_INVOCATION_CALL_LIMIT:
                     allocated_limits[index] += 1
                     unallocated -= 1
-        synthesis_calls = (
-            synthesis_minimum
-            + min(
-                _CONTEXT_INVOCATION_CALL_LIMIT - synthesis_minimum,
-                unallocated,
-            )
-            if synthesis_required
-            else 0
-        )
+        synthesis_calls += (min(_CONTEXT_INVOCATION_CALL_LIMIT - synthesis_calls, unallocated)
+                            if synthesis_required else 0)
         required_calls = sum(allocated_limits) + synthesis_calls
         return tuple(allocated_limits), synthesis_calls, required_calls
 

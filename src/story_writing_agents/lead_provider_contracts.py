@@ -306,6 +306,7 @@ class LeadResultRuleSeed:
     """Internal domain rule input, never a provider-call binding capability."""
     contract_id: str
     domain_rules: bytes = field(repr=False)
+    direct_delivery_roots: tuple[int, ...] = field(default=(), kw_only=True)
 
     def __post_init__(self) -> None:
         if type(self.contract_id) is not str or not self.contract_id or type(self.domain_rules) is not bytes:
@@ -314,11 +315,21 @@ class LeadResultRuleSeed:
         if (type(value) is not dict or json.dumps(value, sort_keys=True, ensure_ascii=False,
             allow_nan=False, separators=(",", ":")).encode("utf-8") != self.domain_rules):
             raise ValueError("Lead rule seed must be canonical source-owned object rules")
+        roots = value.get("anyOf", (value,))
+        if (type(self.direct_delivery_roots) is not tuple
+                or any(type(index) is not int or not 0 <= index < len(roots)
+                       for index in self.direct_delivery_roots)
+                or len(set(self.direct_delivery_roots)) != len(self.direct_delivery_roots)):
+            raise ValueError("direct delivery requires distinct complete declared roots")
 
     @classmethod
-    def declare(cls, contract_id: str, schema: Mapping[str, object]) -> LeadResultRuleSeed:
+    def declare(
+        cls, contract_id: str, schema: Mapping[str, object], *,
+        direct_delivery_roots: tuple[int, ...] = (),
+    ) -> LeadResultRuleSeed:
         return cls(contract_id, json.dumps(dict(schema), sort_keys=True, ensure_ascii=False,
-                                           allow_nan=False, separators=(",", ":")).encode("utf-8"))
+                   allow_nan=False, separators=(",", ":")).encode("utf-8"),
+                   direct_delivery_roots=direct_delivery_roots)
 
     def schema_value(self) -> dict[str, object]:
         return json.loads(self.domain_rules)
@@ -2492,10 +2503,12 @@ class LeadProviderConstraints:
                             member_rules = SchemaRules.declare(factor_rule_schema(
                                 raw if member_compilation_is_identity(raw) else _compile_closed_choices(raw)),
                                 maximum_bytes=encoded_rules.maximum_bytes)
-                        direct = not self.continuation and (
-                            (ordinary_answer and rule is not None
-                             and rule.activity is AuthoringActivity.WORKFLOW)
-                            or (plain_question and native_kind == "clarification_question")
+                        direct = root_number in contract.direct_delivery_roots or (
+                            not self.continuation and (
+                                (ordinary_answer and rule is not None
+                                 and rule.activity is AuthoringActivity.WORKFLOW)
+                                or (plain_question and native_kind == "clarification_question")
+                            )
                         )
                         suffix = "" if native_kind is None else "." + native_kind
                         variants.append(LeadWireVariant(
