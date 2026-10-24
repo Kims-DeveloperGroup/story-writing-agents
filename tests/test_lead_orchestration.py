@@ -57,6 +57,7 @@ from story_writing_agents.conversations import (
 from story_writing_agents.conversation_storage import ( compose_filesystem_conversation_storage,)
 from story_writing_agents.errors import BackendProtocolError, SessionIdError
 from story_writing_agents.structured_output_validation import DomainValidationRule as Rule, diagnose_json_text, failure_issues
+from story_writing_agents.structured_output_validation import require_provider_schema_patterns
 from story_writing_agents.lead_provider_contracts import (
     LeadContractError, LeadProviderConstraints, canonical_assignments, canonical_scope,)
 from story_writing_agents.writing_artifacts.authorization import (ReferenceAuthorizationErrorCode,)
@@ -1211,6 +1212,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
             elif type(value) is list:
                 for index, child in enumerate(value): yield from property_orders(child, path + (index,))
         for provider, schema, owner in native_projections:
+            self.assertIsNone(require_provider_schema_patterns(schema))
             self.assertIs(owner.owner, bound.rule_graph)
             bound.require_projection(schema, declared_lowering='integer_singleton_bounds'
                                      if provider == 'antigravity' else 'identity')
@@ -1861,6 +1863,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             if isinstance(value, Mapping): return {key: plain(item) for key, item in value.items()}
             return [plain(item) for item in value] if type(value) in (tuple, list) else value
         full_schema = plain(self.backend.calls[-1].schema)
+        self.assertIsNone(require_provider_schema_patterns(full_schema))
         action_schema = fixture_schema_node( full_schema, full_schema["properties"]["agent_action"])
         branches = (fixture_schema_node(full_schema, branch) for branch in action_schema["anyOf"])
         result_schemas = tuple(fixture_schema_node(full_schema, branch["properties"]["task_result"])

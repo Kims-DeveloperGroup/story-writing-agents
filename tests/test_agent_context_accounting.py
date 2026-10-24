@@ -341,6 +341,46 @@ class ProviderNeutralCompatibilityTests(unittest.TestCase):
         self.assertNotIn("secret", representation)
         self.assertIsNotNone(invocation.call_accounting)
 
+        from unittest import mock
+        from story_writing_agents import provider_adapter
+        from story_writing_agents.structured_output_validation import (
+            failure_issues, require_provider_schema_patterns)
+        patterns = (r"(?=PRIVATE_PATTERN)", r"(?!PRIVATE_PATTERN)",
+                    r"(?<=PRIVATE_PATTERN)", r"(?<!PRIVATE_PATTERN)")
+        cases = [({"type": "object", "properties": {
+            "message": {"type": "string", "pattern": pattern}}}, "$.properties.message.pattern")
+                 for pattern in patterns]
+        bad = {"type": "string", "pattern": patterns[0]}
+        cases += [({"$defs": {"unsafe": bad}}, '$["$defs"].unsafe.pattern'),
+                  ({"patternProperties": {patterns[0]: {"type": "string"}}},
+                   "$.patternProperties[0]"),
+                  ({"patternProperties": {"^safe$": bad}}, "$.patternProperties[0].pattern"),
+                  ({"items": [bad]}, "$.items[0].pattern"),
+                  ({"items": (bad,)}, "$.items[0].pattern"),
+                  ({"dependencies": {"named": bad}}, "$.dependencies.named.pattern")]
+        with mock.patch.object(
+            provider_adapter, "account_provider_payload",
+            side_effect=AssertionError("guard ran after accounting"),
+        ) as accounting:
+            for declaration, path in cases:
+                with self.assertRaises(ValueError) as error:
+                    ProviderInvocation("session", declaration, {"message": "ok"}, None)
+                self.assertIs(type(error.exception), ValueError)
+                self.assertEqual(str(error.exception), "schema rejected")
+                self.assertEqual(failure_issues(error.exception),
+                                 (path + ": regex lookaround is not supported",))
+                self.assertNotIn("PRIVATE_PATTERN", repr(failure_issues(error.exception)))
+            accounting.assert_not_called()
+        for pattern in (r"^\(\?=PRIVATE_PATTERN\)\z", r"[(?=]", r"^(?:ok|yes)\z",
+                        r"(?x)ok # (?=PRIVATE_PATTERN)"):
+            declaration = {"type": "string", "pattern": pattern}
+            self.assertIsNone(require_provider_schema_patterns(declaration))
+            control = ProviderInvocation("session", declaration, {}, None)
+            self.assertIsNotNone(control.call_accounting)
+        self.assertIsNone(require_provider_schema_patterns({
+            "description": patterns[0], "enum": [patterns[0]],
+            "dependencies": {"list": [patterns[0]], "text": patterns[0]}}))
+
     def test_unencodable_invocation_has_no_accounting_record_or_content_leak(
         self,
     ) -> None:

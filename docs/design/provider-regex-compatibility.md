@@ -14,7 +14,7 @@ their separate whitespace, Unicode, NUL, component, suffix, and newline rules.
 An equivalent consuming grammar replaces lookaround-dependent declarations;
 restrictions are not dropped or combined into one broader path language.
 
-The proposed canonical strict-end token is `\z`. One central compiler maps it
+The canonical strict-end token is `\z`. One central compiler maps it
 to Python 3.11's equivalent `\Z` at evaluation, preserving literal escapes and
 character classes. Actual native admission must be verified before accepting
 this representation. Schema, validation, repair, and contract fingerprints keep
@@ -25,6 +25,10 @@ lookarounds before adapter launch, including patterns inside definitions and
 continuation or repair schemas. Existing diagnostics identify the schema path
 without exposing pattern or story content. This is a check for known
 incompatibilities, not a complete provider-regex certification.
+
+Regex keys under `patternProperties` use source insertion ordinals in diagnostic
+locations, such as `$.patternProperties[0]`, instead of exposing the key itself.
+The guard also visits their child schemas and schema-valued dependencies.
 
 Arbitrary implicit intersections are not silently weakened. Existing owned
 primitives and canonical-kind intersections require exact equivalent rewrites;
