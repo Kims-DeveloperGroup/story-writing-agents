@@ -254,7 +254,7 @@ class CompletionModelContractTests(unittest.TestCase):
             (CommandCompletionCandidate, ("position", "replacement")),
             (CommandCompletionProjection, ("position", "start", "end", "candidates")),
             (MainCommandPaletteState, ("projection", "highlighted", "snapshot")),
-            (MainCommandControlState, ("main_input", "palette", "dismissal_latch")),
+            (MainCommandControlState, ("main_input", "palette", "dismissal_latch", "alerts")),
         )
         candidate = CommandCompletionCandidate("root.command", "/say")
         projection = CommandCompletionProjection("root.command", 0, 1, (candidate,))
@@ -302,6 +302,11 @@ class CompletionModelContractTests(unittest.TestCase):
         self.assertNotIn(CommandCompletionProjection, get_args(Component))
         self.assertNotIn(MainCommandPaletteState, get_args(Component))
         self.assertNotIn(MainCommandControlState, get_args(Component))
+        self.assertEqual(MainCommandControlState().alerts, ())
+        with self.assertRaises(TypeError):
+            MainCommandControlState(alerts=[_model.Notice("retry")])  # type: ignore[arg-type]
+        with self.assertRaises(TypeError):
+            MainCommandControlState(alerts=(object(),))  # type: ignore[arg-type]
 
     def test_models_reject_invalid_spans_candidates_and_state_relations(self) -> None:
         root = CommandCompletionCandidate("root", "/say")
@@ -865,6 +870,14 @@ class CompletionControlTests(unittest.TestCase):
                 self.assertIsNone(state.palette)
 
     def test_enter_without_highlight_and_veof_submit_visible_buffer(self) -> None:
+        for buffer in ("", " \u2003"):
+            state = self.type_text(buffer)
+            submitted, outcome = self.apply(state, KeyEvent(KeyKind.ENTER))
+            self.assertEqual(submitted.main_input.line_state, state.main_input.line_state)
+            self.assertEqual(
+                outcome,
+                _model.ControlOutcome(ControlOutcomeKind.COMMIT, text=buffer),
+            )
         cases = (
             ("ordinary", KeyKind.ENTER),
             ("/xz", KeyKind.ENTER),
@@ -2607,14 +2620,14 @@ class CompletionDriverTests(unittest.TestCase):
         for sequence in sequences:
             with self.subTest(sequence_length=len(sequence)):
                 driver, _input, output, fallback, _termios, _os = make_driver(
-                    sequence + "\n"
+                    sequence + "x\n"
                 )
                 with _ready_select_patch() as readiness:
-                    self.assertEqual(self.read(driver), "")
+                    self.assertEqual(self.read(driver), "x")
                 readiness.assert_called_once_with((7,), (), (), 0.05)
                 fallback.assert_not_called()
-                self.assertEqual(driver._history_state, MainInputHistoryState())
-                self.assertEqual(len(output.records), 2)
+                self.assertEqual(driver._history_state, MainInputHistoryState(("x",)))
+                self.assertEqual(len(output.records), 3)
 
     def test_overlong_suffixes_do_not_recall_history_or_move_cursor(self) -> None:
         for introducer in ("\x1b[", "\x1bO"):
@@ -2658,12 +2671,13 @@ class CompletionDriverTests(unittest.TestCase):
         self,
     ) -> None:
         driver, _input, output, fallback, _termios, _os = make_driver(
-            "\x1b[Z\x1b[999~\n"
+            "\x1b[Z\x1b[999~x\n"
         )
         with _ready_select_patch():
-            self.assertEqual(self.read(driver), "")
+            self.assertEqual(self.read(driver), "x")
         fallback.assert_not_called()
-        self.assertEqual(len(output.records), 2)
+        self.assertEqual(len(output.records), 3)
+        self.assertEqual(driver._history_state, MainInputHistoryState(("x",)))
 
     def test_interrupt_veof_and_physical_eof_restore_without_failed_append(
         self,
@@ -2693,8 +2707,43 @@ class CompletionDriverTests(unittest.TestCase):
         self,
     ) -> None:
         driver, input_stream, output, fallback, termios, os_module = make_driver(
-            "/s\n\n"
+            "\n\n \u2003\n/s\n\n"
         )
+
+        def apply(state, event, history=MainInputHistoryState()):
+            return driver._main_prompt_transition(
+                state, event, history, _core._main_command_completion,
+            )
+
+        for buffer in ("", " \u2003"):
+            initial = MainCommandControlState(
+                MainInputControlState(LineInputState(buffer, len(buffer)))
+            )
+            empty, outcome = apply(initial, KeyEvent(KeyKind.ENTER))
+            self.assertIsNone(outcome)
+            self.assertEqual(empty.main_input, MainInputControlState())
+            self.assertIsNone(empty.palette)
+            self.assertEqual(len(empty.alerts), 1)
+            self.assertEqual(empty.alerts[0].text, "Enter a message or slash command.")
+            self.assertIs(empty.alerts[0].role, _model.SemanticRole.ERROR)
+            self.assertEqual(apply(empty, KeyEvent(KeyKind.ENTER)), (empty, None))
+            edited, outcome = apply(empty, KeyEvent(KeyKind.TEXT, text="x"))
+            self.assertIsNone(outcome)
+            self.assertEqual(edited.alerts, ())
+            recalled, outcome = apply(
+                empty, KeyEvent(KeyKind.UP), MainInputHistoryState(("/status",))
+            )
+            self.assertIsNone(outcome)
+            self.assertEqual(recalled.main_input.line_state.buffer, "/status")
+            self.assertEqual(recalled.alerts, ())
+            self.assertIs(
+                apply(empty, KeyEvent(KeyKind.EOF))[1].kind,  # type: ignore[union-attr]
+                ControlOutcomeKind.EOF,
+            )
+            self.assertIs(
+                apply(empty, KeyEvent(KeyKind.INTERRUPT))[1].kind,  # type: ignore[union-attr]
+                ControlOutcomeKind.INTERRUPT,
+            )
         self.assertEqual(self.read(driver), "/settings ")
 
         fallback.assert_not_called()
@@ -2703,7 +2752,7 @@ class CompletionDriverTests(unittest.TestCase):
             driver._history_state,
             MainInputHistoryState(("/settings ",)),
         )
-        self.assertEqual(os_module.observed_widths, [8, 8])
+        self.assertEqual(os_module.observed_widths, [8, 8, 8, 8])
         self.assertEqual(
             tuple(call[1] for call in termios.set_calls),
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
@@ -2711,6 +2760,18 @@ class CompletionDriverTests(unittest.TestCase):
         rendered = "".join(output.records)
         self.assertIn("Suggestions [open]", rendered)
         self.assertNotIn("Suggestions [open]", output.records[-1])
+        alert_frames = [
+            frame for frame in output.records
+            if "Enteramessageorslashcommand." in "".join(
+                re.sub(r"\x1b\[[0-9;]*m", "", frame).split()
+            )
+        ]
+        self.assertEqual(len(alert_frames), 2)
+        for frame in alert_frames:
+            self.assertTrue(
+                frame.endswith("\x1b[A" * frame.count("\n") + "\r" + "\x1b[C" * 6)
+            )
+        self.assertEqual(output.records[-1], "\r\r\x1b[J")
 
     def test_completion_only_enter_does_not_append_before_interrupt(self) -> None:
         driver, _input, output, fallback, termios, _os = make_driver("/s\n\x03")
@@ -2841,6 +2902,7 @@ class CompletionDriverTests(unittest.TestCase):
                 driver,
                 "main> ",
                 input_context_provider=header,
+                initial_alerts=(_model.Notice("Retry the command.", label="command"),),
             ),
             "@plot message",
         )
@@ -2866,6 +2928,7 @@ class CompletionDriverTests(unittest.TestCase):
         rendered = "".join(output.records)
         self.assertIn("[active runtime] Codex", rendered)
         self.assertIn("[one-shot runtime] Antigravity", rendered)
+        self.assertEqual(sum("Retry the command." in frame for frame in output.records), 1)
         self.assertEqual(input_stream.reads, [])
         fallback.assert_not_called()
         self.assertEqual(
@@ -2946,6 +3009,37 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertTrue(fallback_prompt.endswith("main> "))
         self.assertEqual(output.records, [])
         self.assertEqual(termios.set_calls, [])
+
+        for rows in (3, 1):
+            driver, _input, output, fallback, termios, os_module = make_driver("\x04")
+            os_module.environ["NO_COLOR"] = "1"
+            os_module.get_terminal_size = lambda _descriptor: SimpleNamespace(
+                columns=20, lines=rows,
+            )
+            with self.assertRaises(EOFError):
+                _core.read_main_command_line(
+                    driver,
+                    "main> ",
+                    initial_alerts=(
+                        _model.Notice(
+                            "First summary remains visible in a short terminal.",
+                            label="command",
+                        ),
+                        _model.Notice("Secondary diagnostic.", label="hint"),
+                    ),
+                )
+            frame = output.records[0]
+            self.assertLessEqual(frame.count("\n"), max(0, rows - 2))
+            self.assertNotIn("Secondary", frame)
+            self.assertEqual("…" in frame, rows == 3)
+            self.assertEqual("[command]" in frame, rows == 3)
+            visible = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", frame).replace("\r", "")
+            self.assertTrue(all(len(line) < 20 for line in visible.splitlines()))
+            fallback.assert_not_called()
+            self.assertEqual(
+                tuple(call[1] for call in termios.set_calls),
+                (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+            )
 
     def test_transient_picker_renderer_failure_clears_and_restores(self) -> None:
         driver, _input, output, fallback, termios, _os = make_driver("unused")

@@ -58,13 +58,16 @@ from ._model import (
     MainInputHistoryState,
     MultiAgentScrollState,
     NestedScrollViewport,
+    Notice,
     PickerControlState,
     PickerViewport,
     RenderedInputFrame,
     RenderedFrame,
+    SemanticRole,
     SlashCommandSuggestion,
     SuggestionPalette,
     TerminalCapabilities,
+    ViewState,
     display_character_width,
     sanitize_terminal_text,
 )
@@ -357,7 +360,7 @@ _PaletteProjector: TypeAlias = Callable[
     [MainCommandControlState], SuggestionPalette | None
 ]
 _PaletteRenderer: TypeAlias = Callable[
-    [SuggestionPalette, TerminalCapabilities], RenderedFrame
+    [SuggestionPalette | Notice, TerminalCapabilities], RenderedFrame
 ]
 _HistoryAppend: TypeAlias = Callable[
     [MainInputHistoryState, str], MainInputHistoryState
@@ -2459,6 +2462,38 @@ class RawTerminalDriver:
             line = view.initial_value
         return ControlOutcome(ControlOutcomeKind.COMMIT, text=line)
 
+    def _main_prompt_transition(
+        self,
+        state: MainCommandControlState,
+        event: KeyEvent,
+        history: MainInputHistoryState,
+        completion_provider: _CompletionProvider,
+    ) -> tuple[MainCommandControlState, ControlOutcome | None]:
+        """Reject blank Enter submissions only in actual main-prompt reads."""
+
+        updated, outcome = self._main_transition(
+            state, event, history, completion_provider,
+        )
+        if (
+            event.kind is KeyKind.ENTER
+            and type(updated) is MainCommandControlState
+            and type(outcome) is ControlOutcome
+            and outcome.kind is ControlOutcomeKind.COMMIT
+            and outcome.text is not None
+            and not outcome.text.strip()
+        ):
+            return MainCommandControlState(
+                alerts=(
+                    Notice(
+                        "Enter a message or slash command.",
+                        label="input",
+                        role=SemanticRole.ERROR,
+                        state=ViewState.ERROR,
+                    ),
+                ),
+            ), None
+        return updated, outcome
+
     def read_main_line(
         self,
         prompt: str,
@@ -2484,7 +2519,7 @@ class RawTerminalDriver:
         ) -> tuple[_ControlState, ControlOutcome | None]:
             if type(state) is not MainCommandControlState:
                 raise TypeError("main transition requires MainCommandControlState")
-            return self._main_transition(
+            return self._main_prompt_transition(
                 state,
                 event,
                 self._history_state,
@@ -2515,6 +2550,8 @@ class RawTerminalDriver:
         completion_provider: _CompletionProvider,
         palette_projector: _PaletteProjector,
         palette_renderer: _PaletteRenderer,
+        *,
+        initial_alerts: tuple[Notice, ...] = (),
     ) -> str:
         """Read one selectable semantic main command through stable seams."""
 
@@ -2525,6 +2562,7 @@ class RawTerminalDriver:
             palette_renderer,
             None,
             None,
+            initial_alerts,
         )
 
     def read_reference_main_command_line(
@@ -2534,6 +2572,8 @@ class RawTerminalDriver:
         palette_projector: _PaletteProjector,
         palette_renderer: _PaletteRenderer,
         reference_bindings: ReferenceInputBindings,
+        *,
+        initial_alerts: tuple[Notice, ...] = (),
     ) -> str:
         """Read one main command with call-local reference activation."""
 
@@ -2546,6 +2586,7 @@ class RawTerminalDriver:
             palette_renderer,
             reference_bindings,
             None,
+            initial_alerts,
         )
 
     def read_contextual_main_command_line(
@@ -2556,6 +2597,8 @@ class RawTerminalDriver:
         palette_renderer: _PaletteRenderer,
         input_frame_provider: _InputFrameProvider,
         reference_bindings: ReferenceInputBindings | None,
+        *,
+        initial_alerts: tuple[Notice, ...] = (),
     ) -> str:
         """Read a main command beneath a buffer-aware semantic header."""
 
@@ -2577,6 +2620,7 @@ class RawTerminalDriver:
             palette_renderer,
             reference_bindings,
             input_frame_provider,
+            initial_alerts,
         )
 
     def _read_main_command_line(
@@ -2587,11 +2631,13 @@ class RawTerminalDriver:
         palette_renderer: _PaletteRenderer,
         reference_bindings: ReferenceInputBindings | None,
         input_frame_provider: _InputFrameProvider | None,
+        initial_alerts: tuple[Notice, ...],
     ) -> str:
         """Implement main input with optional package-internal activation."""
 
         if not isinstance(prompt, str):
             raise TypeError("prompt must be a string")
+        initial_state = MainCommandControlState(alerts=initial_alerts)
         for name, collaborator in (
             ("completion_provider", completion_provider),
             ("palette_projector", palette_projector),
@@ -2625,7 +2671,7 @@ class RawTerminalDriver:
             )
             if reference_outcome is not None:
                 return state, reference_outcome
-            return self._main_transition(
+            return self._main_prompt_transition(
                 state,
                 event,
                 self._history_state,
@@ -2635,11 +2681,15 @@ class RawTerminalDriver:
         with self._input_latch.input_operation():
             observed_capabilities = self._observe_input_capabilities()
             capabilities, configuration = self._prepare_input(observed_capabilities)
+            if configuration is None:
+                for alert in initial_alerts:
+                    frame = palette_renderer(alert, capabilities)
+                    self.write_text(f"{frame.text}\n")
             line = (
                 self._read_control_line(
                     prompt,
                     _empty_suggestion_preview,
-                    MainCommandControlState(),
+                    initial_state,
                     transition,
                     configuration=configuration,
                     live_capabilities=capabilities,
@@ -4517,6 +4567,42 @@ class RawTerminalDriver:
             render_width,
         )
         panel_lines: list[str] = []
+        alert_lines: list[str] = []
+        if type(control_state) is MainCommandControlState:
+            for alert in control_state.alerts:
+                if palette_renderer is None or live_capabilities is None:
+                    alert_lines.extend(
+                        _wrap_editor_text(
+                            f"[{alert.label}] {alert.text}", render_width,
+                        )
+                    )
+                else:
+                    rendered_alert = palette_renderer(
+                        alert,
+                        _capabilities_with_width(live_capabilities, render_width),
+                    )
+                    if type(rendered_alert) is not RenderedFrame:
+                        raise TypeError("alert renderer must return a RenderedFrame")
+                    if rendered_alert.width != render_width:
+                        raise ValueError(
+                            "rendered alert width must match the live render width"
+                        )
+                    alert_lines.extend(rendered_alert.text.split("\n"))
+        if alert_lines:
+            alert_height = (
+                history_screen_height
+                if display_state.history_enabled
+                else self._text_viewer_geometry(width, bounded_height=False)[1]
+            )
+            alert_capacity = max(0, alert_height - len(input_lines) - 1)
+            if len(alert_lines) > alert_capacity:
+                alert_lines = alert_lines[:alert_capacity]
+                if alert_lines:
+                    alert_lines[-1] = (
+                        _clip_external_view_line(alert_lines[-1], render_width - 1)
+                        + "…"
+                    )
+            panel_lines.extend(alert_lines)
         if palette_projector is None:
             suggestions = suggestion_provider(line_state.buffer)
             if type(suggestions) is not tuple or any(

@@ -136,6 +136,7 @@ class MainInputHistoryContractTests(unittest.TestCase):
                 "completion_provider",
                 "palette_projector",
                 "palette_renderer",
+                "initial_alerts",
             ),
         )
         self.assertEqual(

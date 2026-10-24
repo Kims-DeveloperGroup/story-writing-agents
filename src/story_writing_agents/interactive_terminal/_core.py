@@ -554,6 +554,39 @@ _STARTUP_WELCOME_SEQUENCE = (
 )
 
 
+def _interactive_error_notices(
+    error: InteractiveError,
+    *,
+    secrets: Iterable[str] = (),
+    debug_log_path: str | None = None,
+) -> tuple[Notice, ...]:
+    """Project the same bounded diagnostics for persistent and inline errors."""
+
+    if not isinstance(error, InteractiveError):
+        raise TypeError("error must be an InteractiveError")
+    if debug_log_path is not None:
+        _validate_default_message("debug_log_path", debug_log_path)
+    spec = INTERACTIVE_ERROR_SPECS[error.code]
+    variants = _redaction_variants(secrets)
+    notices = (
+        Notice(
+            _prepare_error_message(
+                error.summary, spec.summary, variants, _SUMMARY_LIMIT,
+            ),
+            label=f"error {error.code.value}",
+            role=SemanticRole.ERROR,
+            state=ViewState.ERROR,
+        ),
+        Notice(
+            _prepare_error_message(error.hint, spec.hint, variants, _HINT_LIMIT),
+            label="hint",
+        ),
+    )
+    if debug_log_path is not None:
+        notices += (Notice(sanitize_terminal_text(debug_log_path), label="debug log"),)
+    return notices
+
+
 class InteractiveTerminal:
     """Render plain terminal records and collect one input operation at a time."""
 
@@ -630,17 +663,7 @@ class InteractiveTerminal:
                 self._main_choice_read_line(prompt, choice_provider)
             )
         )
-        self._main_context_read_line = (
-            lambda prompt, choice_provider, scope, paths, text, _header: (
-                self._main_reference_read_line(
-                    prompt,
-                    choice_provider,
-                    scope,
-                    paths,
-                    text,
-                )
-            )
-        )
+        self._main_context_read_line = self._read_main_context_line
         self._composition_read_line = _plain_input_reader(read_line, width)
         self._composition_reference_read_line = (
             lambda view, _scope, _paths, _text: self._composition_read_line(view)
@@ -1347,46 +1370,34 @@ class InteractiveTerminal:
     ) -> None:
         """Render one typed, redacted error, hint, and optional debug-log path."""
 
-        if not isinstance(error, InteractiveError):
-            raise TypeError("error must be an InteractiveError")
-        if debug_log_path is not None:
-            _validate_default_message("debug_log_path", debug_log_path)
-        spec = INTERACTIVE_ERROR_SPECS[error.code]
-        variants = _redaction_variants(secrets)
-        summary = _prepare_error_message(
-            error.summary,
-            spec.summary,
-            variants,
-            _SUMMARY_LIMIT,
-        )
-        hint = _prepare_error_message(
-            error.hint,
-            spec.hint,
-            variants,
-            _HINT_LIMIT,
-        )
-        notices = [
-            Notice(
-                summary,
-                label=f"error {error.code.value}",
-                role=SemanticRole.ERROR,
-                state=ViewState.ERROR,
-            ),
-            Notice(hint, label="hint"),
-        ]
-        if debug_log_path is not None:
-            notices.append(
-                Notice(
-                    sanitize_terminal_text(debug_log_path),
-                    label="debug log",
-                )
-            )
         self._write_component(
             Panel(
                 "Interactive error",
-                tuple(notices),
+                _interactive_error_notices(
+                    error,
+                    secrets=secrets,
+                    debug_log_path=debug_log_path,
+                ),
                 state=ViewState.ERROR,
             )
+        )
+
+    def _read_main_context_line(
+        self,
+        prompt: str,
+        choice_provider: Callable[[str, int], Picker | None],
+        scope: Callable[[str, int], ReferenceInputScope | None] | None,
+        paths: Callable[[], tuple[str, ...]] | None,
+        text: Callable[[str], str] | None,
+        header: Callable[[str, int], Notice | None] | None,
+        initial_alerts: tuple[Notice, ...] = (),
+    ) -> str:
+        """Present queued notices through ordinary callback-only input."""
+
+        for alert in initial_alerts:
+            self._write_component(alert)
+        return self._main_reference_read_line(
+            prompt, choice_provider, scope, paths, text,
         )
 
     def _record_discarded_composition(
@@ -1604,6 +1615,7 @@ class InteractiveMainInput:
         "_reference_paths_provider",
         "_reference_scope_provider",
         "_reference_text_reader",
+        "_pending_alerts",
     )
 
     def __init__(self, terminal: InteractiveTerminal) -> None:
@@ -1619,6 +1631,7 @@ class InteractiveMainInput:
                 Callable[[], tuple[str, ...]] | None,
                 Callable[[str], str] | None,
                 Callable[[str, int], Notice | None] | None,
+                tuple[Notice, ...],
             ],
             str,
         ] = terminal._main_context_read_line
@@ -1627,6 +1640,28 @@ class InteractiveMainInput:
         ) = None
         self._reference_paths_provider: Callable[[], tuple[str, ...]] | None = None
         self._reference_text_reader: Callable[[str], str] | None = None
+        self._pending_alerts: tuple[Notice, ...] = ()
+
+    def queue_alert(
+        self,
+        alert: InteractiveError | Notice,
+        *,
+        debug_log_path: str | None = None,
+    ) -> None:
+        """Retain semantic diagnostics for the next main read only."""
+
+        if isinstance(alert, InteractiveError):
+            notices = _interactive_error_notices(alert, debug_log_path=debug_log_path)
+        elif type(alert) is Notice:
+            notices = (alert,)
+            if debug_log_path is not None:
+                _validate_default_message("debug_log_path", debug_log_path)
+                notices += (
+                    Notice(sanitize_terminal_text(debug_log_path), label="debug log"),
+                )
+        else:
+            raise TypeError("alert must be an InteractiveError or Notice")
+        self._pending_alerts += notices
 
     def read_main(
         self,
@@ -1723,6 +1758,8 @@ class InteractiveMainInput:
                 "reference scope, paths, and text collaborators must be supplied together"
             )
         prompt = _main_prompt(session_id=session_id, agent_id=agent_id)
+        initial_alerts = self._pending_alerts
+        self._pending_alerts = ()
         try:
             line = self._read(
                 prompt,
@@ -1731,6 +1768,7 @@ class InteractiveMainInput:
                 reference_paths_provider,
                 reference_text_reader,
                 header_provider,
+                initial_alerts,
             )
         except KeyboardInterrupt:
             return TerminalAction(TerminalActionKind.INTERRUPT)
@@ -2831,6 +2869,7 @@ def read_main_command_line(
         Callable[[ReferenceInputFailureKind], None] | None
     ) = None,
     input_context_provider: Callable[[str, int], Notice | None] | None = None,
+    initial_alerts: tuple[Notice, ...] = (),
 ) -> str:
     """Read one canonical selectable main command through the sole driver."""
 
@@ -2840,6 +2879,7 @@ def read_main_command_line(
         raise TypeError("choice_provider must be callable or None")
     if input_context_provider is not None and not callable(input_context_provider):
         raise TypeError("input_context_provider must be callable or None")
+    MainCommandControlState(alerts=initial_alerts)
     reference_collaborators = (
         reference_scope_provider,
         reference_paths_provider,
@@ -2929,6 +2969,7 @@ def read_main_command_line(
             render_component,
             input_frame_provider,
             reference_bindings,
+            initial_alerts=initial_alerts,
         )
 
     if reference_bindings is None:
@@ -2937,6 +2978,7 @@ def read_main_command_line(
             completion_provider,
             palette_projector,
             render_component,
+            initial_alerts=initial_alerts,
         )
     return driver.read_reference_main_command_line(
         prompt,
@@ -2944,6 +2986,7 @@ def read_main_command_line(
         palette_projector,
         render_component,
         reference_bindings,
+        initial_alerts=initial_alerts,
     )
 
 
@@ -3032,19 +3075,22 @@ def build_stream_terminal(
         )
     )
     terminal._main_context_read_line = (
-        lambda prompt, choices, scope, paths, text, header: read_main_command_line(
-            driver,
-            prompt,
-            choice_provider=choices,
-            reference_scope_provider=scope,
-            reference_paths_provider=paths,
-            reference_text_reader=text,
-            reference_failure_writer=(
-                None
-                if scope is None
-                else lambda kind: terminal.write_error(_reference_input_error(kind))
-            ),
-            input_context_provider=header,
+        lambda prompt, choices, scope, paths, text, header, initial_alerts=(): (
+            read_main_command_line(
+                driver,
+                prompt,
+                choice_provider=choices,
+                reference_scope_provider=scope,
+                reference_paths_provider=paths,
+                reference_text_reader=text,
+                reference_failure_writer=(
+                    None
+                    if scope is None
+                    else lambda kind: terminal.write_error(_reference_input_error(kind))
+                ),
+                input_context_provider=header,
+                initial_alerts=initial_alerts,
+            )
         )
     )
     terminal._composition_read_line = lambda view: driver.read_input_line(
