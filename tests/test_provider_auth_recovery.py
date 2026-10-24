@@ -398,6 +398,47 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertEqual(len(bound_result.authorization.used_evidence), 1)
         self.assertEqual(bound_result.authorization.used_evidence[0].source_kind.value, "conversation")
 
+        from story_writing_agents.lead_provider_contracts import (
+            LeadProviderConstraints, LeadResultRuleSeed)
+        branches = [{'type': 'object', 'description': 'A nonordinary replay result.',
+            'properties': {
+                'response_type': {'type': 'string', 'enum': ['answer'],
+                                  'description': 'Return the declared answer.'},
+                'response_text': {'type': 'string', 'enum': [text],
+                                  'description': 'Use the selected answer.'}},
+            'required': ['response_type', 'response_text'], 'additionalProperties': False}
+            for text in ('First.', 'Second.')]
+        factory = replace(context._LEAD_CALL_FACTORY, constraints=LeadProviderConstraints(),
+            rule_seed=LeadResultRuleSeed.declare(
+                'lead-discussion-response-v1', {'anyOf': branches}))
+        failure, approvals = auth_failure(), []
+        provider = AuthContextProvider((failure, context._answer))
+        request = self.request(
+            operation_id='exhausted-auth-replay', result_correlation_id='exhausted-auth-result',
+            invocation_kind=context.ContextInvocationKind.LEAD,
+            result_contract=factory, physical_call_limit=2, agent_id=LEAD_ORCHESTRATOR)
+        with self.assertRaises(context.ContextExecutionError) as rejected:
+            await drive_recovery(self.invoke(provider, request),
+                                 lambda key: approvals.append(key) or True)
+        self.assertIs(type(rejected.exception), context.ContextExecutionError)
+        self.assertIs(rejected.exception.code, context.ContextExecutionErrorCode.ACTION_EXHAUSTED)
+        facts = context_provider_failure_facts(rejected.exception)
+        self.assertTrue(facts.prelaunch_action_exhausted)
+        self.assertFalse(facts.submission_uncertain or facts.timed_out)
+        self.assertIsNone(facts.response_rejection_code)
+        self.assertIsNone(facts.accounting)
+        self.assertEqual((len(provider.calls), len(provider.responses), len(provider.finalizers)),
+                         (1, 1, 0))
+        self.assertEqual(len(approvals), 1)
+        self.assertEqual(approvals[0][0], 'antigravity')
+        self.assertEqual(len(facts.submitted_accountings), 1)
+        self.assertIs(facts.submitted_accountings[0],
+                      context_provider_failure_facts(failure).accounting)
+        self.assertIs(facts.submitted_accountings[0].state, ProviderCallState.SUBMITTED)
+        self.assertEqual(len(provider.calls[0].contract.semantic_index.contracts), 2)
+        self.assertEqual(provider.calls[0].contract.offered_semantic_schema_ids, ())
+        self.assertEqual(len(provider.calls[0].contract.selectable_semantic_schema_ids), 2)
+
     async def test_unsafe_unconfirmed_and_repeated_auth_failure_never_replay(self):
         for index, (safe, approved, twice) in enumerate(((False, True, False), (True, False, False), (True, True, True))):
             failures = [auth_failure(safe=safe)] + ([auth_failure()] if twice else [])
