@@ -265,6 +265,10 @@ include untracked inputs, so downloading evidence into the checkout changes its 
 when tracked source is untouched. Reconciliation uses the full workers' bytecode-suppression
 setting; source admission remains enabled.
 
+The deadline guardian exits when the completion marker and every peer job are terminal,
+including after cancellation. Individual cancelled and failed outcomes remain nonpassing;
+the guardian must keep watching while any peer job is still running.
+
 For [child #872](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/872),
 the sole achievement target is successful completion of every full shard within
 one hour. No separate benchmark, profiling campaign or percentage speedup is

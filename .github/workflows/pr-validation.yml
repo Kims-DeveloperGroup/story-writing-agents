@@ -71,7 +71,8 @@ jobs:
             while (Date.now() < (deadline === undefined ? metadataDeadline : deadline - 30_000)) {
               try {
                 if (!await currentRun()) return;
-                let complete;
+              let complete;
+              let peersTerminal = false;
                 try {
                   const {data: page} = await github.rest.actions.listJobsForWorkflowRunAttempt({
                     ...parameters(), attempt_number: attempt, per_page: 100,
@@ -82,13 +83,14 @@ jobs:
                   }
                   // A marker covers downstream jobs absent from an earlier API snapshot.
                   complete = page.jobs.find(job => job.name === "Validation jobs complete");
+                peersTerminal = page.jobs.every(job =>
+                  job.name === "Enforce 75-minute workflow limit" || job.status === "completed");
                 } catch (error) {
                   // Job-list failures cannot prevent cancellation at the deadline.
                   core.warning(`Completion lookup failed: ${error.message}`);
                 }
-                if (Date.now() < deadline && complete?.status === "completed" &&
-                    ["success", "failure"].includes(complete.conclusion)) {
-                  core.info("All validation jobs finished within the workflow deadline.");
+              if (Date.now() < deadline && complete?.status === "completed" && peersTerminal) {
+                core.info("All validation jobs are terminal; individual outcomes remain authoritative.");
                   return;
                 }
                 if (Date.now() >= deadline - 330_000) {
