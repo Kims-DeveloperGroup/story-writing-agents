@@ -1110,8 +1110,8 @@ def _bound_action_index(
         rules = closed_rule({
             "action_type": {"type": "string", "enum": ["select_result"],
                             "description": "Choose a complete result family for the next paid call; no story authority."},
-            "result_schema_id": {"anyOf": choices,
-                "description": "Exact current member to deliver next; use its owning meaning."},
+            "result_schema_id": (choices[0] if len(choices) == 1 else {"anyOf": choices,
+                "description": "Exact current member to deliver next; use its owning meaning."}),
         }, description="Select one complete current result member. This consumes a call and action; it is not a result.")
         owners.append(ContextActionContractOwner("lead.action.select_result",
             SchemaRules.declare(rules, maximum_bytes=262144), eligible, None))
@@ -7081,6 +7081,7 @@ class AgentContextService:
                             stage == "provider"
                             and provider_failure
                             and existing_facts.accounting is None
+                            and not prelaunch_action_exhausted
                         )
                     ),
                     response_rejection_code=response_rejection_code,
