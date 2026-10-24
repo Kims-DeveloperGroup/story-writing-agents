@@ -182,6 +182,28 @@ grammar. Fallback streams use ordinary line reads. Submitted management input
 is recorded according to the terminal's bounded main-input history rules;
 picker answers and sensitive settings/authentication input remain isolated.
 
+In a capable terminal, pressing Enter on empty or Unicode-whitespace-only
+main input clears the field and keeps the prompt and cursor in place. A single
+inline alert below the input says `Enter a message or slash command.` Repeated
+Enter replaces that alert without submitting input or adding history. Editing
+the buffer or recalling history clears the alert. Enter still accepts a
+highlighted suggestion before attempting submission.
+This rule applies only to main input; multiline composition retains blank and
+whitespace-only lines.
+
+Alerts fit the available terminal rows; clipped feedback ends with an ellipsis.
+
+Submitted command text clears after success or failure. Recoverable command
+errors, including invalid syntax, missing session/conversation prerequisites,
+and top-level `/auth` failures, appear below the next empty prompt as inline
+alerts. Successful commands retain their normal output without an alert.
+Nonblank submitted commands remain available in history, including failed
+attempts. Detailed provider/workflow results and nested settings diagnostics
+keep their existing presentation.
+
+Fallback input shows equivalent notices as ordinary text and re-prompts. It
+does not erase terminal echo or promise a fixed physical cursor position.
+
 ## Ordinary lead input
 
 After session attachment and active conversation focus, a nonblank line that

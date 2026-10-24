@@ -1017,10 +1017,26 @@ class ControllerContractTests(ControllerTestCase):
         """Keep handled errors and normal exit independent of fatal traces."""
 
         workspace = self.make_workspace()
+        status_mark: list[int] = []
+
+        def status_input(_prompt: str) -> str:
+            status_mark.append(len(callbacks.records))
+            return "/status"
+
+        def quit_input(_prompt: str) -> str:
+            self.assertNotIn("[error", "".join(callbacks.records[status_mark[0]:]))
+            self.assertNotIn("Enter a message", "".join(callbacks.records[status_mark[0]:]))
+            return "/quit"
+
         controller, backend, callbacks = self.make_controller(
             workspace,
+            "",
+            " \u2003",
+            "/xz",
+            "/history 0",
             "/search PRIVATE_TRACE_SEARCH",
-            "/quit",
+            status_input,
+            quit_input,
         )
         failed_log = mock.Mock()
         failed_log.trace.side_effect = KeyboardInterrupt("diagnostic trace failure")
@@ -1031,12 +1047,12 @@ class ControllerContractTests(ControllerTestCase):
 
         close.assert_called_once_with()
         self.assertGreater(failed_log.trace.call_count, 0)
-        self.assertEqual(
-            callbacks.records.count(
-                _error_record(InteractiveErrorCode.SESSION_NOT_ATTACHED)
-            ),
-            1,
-        )
+        rendered = "".join(callbacks.records)
+        self.assertEqual(rendered.count("[error session_not_attached]"), 1)
+        self.assertEqual(rendered.count("[error command_invalid]"), 2)
+        self.assertEqual(rendered.count("Enter a message or slash command."), 2)
+        self.assertNotIn("Interactive error", rendered)
+        self.assertEqual(controller._error_write_count, 3)
         self.assertNotIn("PRIVATE_TRACE_SEARCH", "".join(callbacks.records))
         self.assertNotIn("diagnostic trace failure", "".join(callbacks.records))
         self.assertIsNone(controller._runner)
@@ -1817,11 +1833,15 @@ class ControllerAuthTests(ControllerTestCase):
             ProviderAuthState.AUTHENTICATED,
         )
         coordinator = ScriptedAuthCoordinator(
-            snapshots=(initial, refreshed),
-            results=(_auth_result(refreshed, "antigravity"),),
+            snapshots=(initial, initial, initial, refreshed),
+            results=(
+                _auth_result(initial, "antigravity"),
+                _auth_result(refreshed, "antigravity"),
+            ),
         )
         controller, backend, callbacks = self.make_controller(
             workspace,
+            "/auth",
             "/auth",
             "/quit",
             auth_coordinator=coordinator,
@@ -1837,13 +1857,18 @@ class ControllerAuthTests(ControllerTestCase):
                 ("probe_all", None),
                 ("run", None),
                 ("probe_all", None),
+                ("probe_all", None),
+                ("run", None),
+                ("probe_all", None),
             ],
         )
-        self.assertEqual(coordinator.presentations, [terminal_module.InputPresentation.STANDARD])
+        self.assertEqual(coordinator.presentations, [terminal_module.InputPresentation.STANDARD] * 2)
         defaults = ConfigManager(workspace).load_system_defaults()
         self.assertEqual(defaults.default_backend, "antigravity")
         self.assertTrue(backend._closed)
         rendered = "".join(callbacks.records)
+        self.assertEqual(rendered.count("Antigravity is not authenticated. Run /auth to retry."), 1)
+        self.assertEqual(controller._error_write_count, 1)
         for secret in ("token=", "account@", "https://oauth"):
             self.assertNotIn(secret, rendered)
 
@@ -1880,7 +1905,11 @@ class ControllerAuthTests(ControllerTestCase):
         )
         self.assertEqual(controller.run_session_lobby(), 0)
         self.assertEqual(_tree_snapshot(workspace.root), before)
-        self.assertIn('Provider authentication is unavailable in this shell.', ''.join(callbacks.records))
+        rendered = ''.join(callbacks.records)
+        self.assertEqual(rendered.count('Provider authentication is unavailable in this shell.'), 1)
+        self.assertIn('[authentication]', rendered)
+        self.assertNotIn('Interactive error', rendered)
+        self.assertEqual(controller._error_write_count, 1)
 
 
 def _cancel_control_outcome():

@@ -569,7 +569,7 @@ class LiveEditingTests(unittest.TestCase):
         editor, _input, _output, fallback = make_editor(
             "alpha\n\x1b[Acontext\n\x1b[A\n"
         )
-        other, _other_input, _other_output, other_fallback = make_editor("\x1b[A\n")
+        other, _other_input, _other_output, other_fallback = make_editor("\x1b[Aother\n")
         with capable_terminal(FakeTermios()):
             self.assertEqual(editor.read_line("main[1]> "), "alpha")
             self.assertEqual(
@@ -580,13 +580,14 @@ class LiveEditingTests(unittest.TestCase):
                 "context",
             )
             self.assertEqual(editor.read_line("main[2]> "), "alpha")
-            self.assertEqual(other.read_line("other> "), "")
+            self.assertEqual(other._driver._history_state, MainInputHistoryState())
+            self.assertEqual(other.read_line("other> "), "other")
 
         self.assertEqual(
             editor._driver._history_state,
             MainInputHistoryState(("alpha", "alpha")),
         )
-        self.assertEqual(other._driver._history_state, MainInputHistoryState())
+        self.assertEqual(other._driver._history_state, MainInputHistoryState(("other",)))
         self.assertIsNot(
             editor._driver._history_state,
             other._driver._history_state,
@@ -642,7 +643,7 @@ class LiveEditingTests(unittest.TestCase):
             ("ab\x1bOHX\x1bOFY\n", "XabY"),
             ("ab\x1b[1~X\x1b[4~Y\n", "XabY"),
             ("ab\x1b[7~X\x1b[8~Y\n", "XabY"),
-            ("ab\x08\x7f\n", ""),
+            ("ab\x08\x7fx\n", "x"),
         )
         for characters, expected in cases:
             with self.subTest(characters=repr(characters)):
@@ -731,7 +732,7 @@ class LiveEditingTests(unittest.TestCase):
 
     def test_enter_interrupt_and_eof_events_restore_the_terminal(self) -> None:
         cases = (
-            ("\n", "", None),
+            ("\nx\n", "x", None),
             ("text\x04", "text", None),
             ("\x03", None, KeyboardInterrupt),
             ("\x04", None, EOFError),
@@ -749,8 +750,8 @@ class LiveEditingTests(unittest.TestCase):
                             editor.read_line("p> ")
                 fallback.assert_not_called()
                 expected_history = (
-                    MainInputHistoryState(("text",))
-                    if characters == "text\x04"
+                    MainInputHistoryState((expected,))
+                    if expected is not None
                     else MainInputHistoryState()
                 )
                 self.assertEqual(editor._driver._history_state, expected_history)

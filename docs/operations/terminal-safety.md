@@ -604,8 +604,26 @@ highlight movement, Enter to commit, and Escape to cancel; edit and completion
 keys are no-ops. The settings prompt uses ordinary line editing, but Escape has
 a distinct nested-cancel outcome. Neither route consults history or completion
 state.
-Enter submits when no highlighted static completion is open; VEOF submits
-nonempty text or returns EOF when empty; VINTR returns interrupt.
+Enter submits nonblank main input when no highlighted static completion is
+open. Empty or Unicode-whitespace-only Enter resets the main field and cursor
+without returning from the live read, dispatching work, or adding history. It
+shows one replaceable `Enter a message or slash command.` alert beneath the
+input. Buffer edits and history recall clear active alerts. Generic prompts
+and multiline composition retain their existing Enter behavior, including
+literal blank and whitespace-only composition lines; VEOF submits nonempty text or returns EOF
+when empty; VINTR returns interrupt.
+
+The main-input facade owns queued semantic command alerts until the next read;
+the driver then owns their transient display and cleanup. Recoverable
+top-level slash-command errors use this route while preserving diagnostic
+records and rejection telemetry. Startup/fatal errors, detailed provider or
+workflow result panels, and nested settings errors retain their normal
+presentation. Both successful and failed submitted command text clears, while
+nonblank command history remains available. Ordinary fallback emits plain
+notices and re-prompts without attempting cursor control or erasure.
+The live alert region is bounded by the rows available beneath the input;
+clipped feedback ends with an ellipsis rather than extending the frame beyond
+the observed screen height.
 
 Every input route, including the ranged viewer, uses the same admitted live
 source and decoder. On the first input call, every other or unknown codec,
