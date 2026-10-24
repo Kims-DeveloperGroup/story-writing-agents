@@ -1,8 +1,8 @@
 # Native schema regex compatibility
 
-This design contract records the accepted boundary for
+This contract defines the native schema regex boundary for
 [Issue #881](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/881).
-The opening documentation commit does not implement the runtime fix.
+The issue and its linked PR retain implementation and verification evidence.
 
 Provider-facing patterns must preserve the owning field's accepted values while
 using syntax the provider admits. Python compilation alone does not establish
