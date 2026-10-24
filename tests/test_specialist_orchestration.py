@@ -591,7 +591,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 requirement = (
                     r'expected pattern "[\\s\\S]"'
                     if rejected_role == PLOT_ARCHITECT else
-                    r'expected pattern "^(?=[^\\ud800-\\udfff]*$(?![\\s\\S]))[\\s\\S]"'
+                    r'expected pattern "^[\u0000-\ud7ff\ue000-\udbff\udfff]+\\z"'
                     '\n$.agent_action.task_result.response_text: '
                     'expected at least 1 characters, got 0')
                 self.assertEqual(expected[0],
