@@ -24,6 +24,27 @@ native rendering through `--json-schema`. The runtime records the actual
 payload and schema in the exchange request. Transport metadata is not part of
 the agent's semantic answer.
 
+Copy the exact alternative identifiers supplied by the current schema. A
+`schema_id` selects one predefined logical record with required and optional
+fields. Optional fields do not create another logical schema or variant tag.
+They are validated and retained when supplied; absence does not imply null.
+Provider-specific syntax is compiled from the same contract before decoding.
+
+Where genuinely different structural or semantic alternatives require a
+`variant_id`, copy both offered identifiers. Lead families expose that tag as
+`response_details.variant_id` when required by the declared alternative.
+Optional-field presence never selects another schema or decoder, and runtime
+does not infer or merge record shapes.
+
+The provider schema requests only declared properties. The runtime consumer
+ignores extra response-record properties and removes them before typed decoding,
+but it still rejects missing required fields, invalid declared values, and
+unoffered identifiers. This tolerance applies recursively to response records;
+maps of offered identities still enforce their declared key rules. Extra properties
+do not select another alternative or bypass parsing, size, domain, or authorization
+checks. Native schema diagnostics and tolerant runtime consumption therefore have
+different expectations for extra record properties.
+
 | Request property | Meaning and use |
 | --- | --- |
 | `protocol_version` | Identifies the single current agent wire contract. |
@@ -366,13 +387,17 @@ include `swa-annotation-rules-v2` provenance. Copy only the IDs offered by the
 current call.
 
 Budget declarations are frozen call policy. For bound Lead calls, each semantic
-member stays within 65,536 UTF-8 bytes; semantic aggregates and inner action
-contracts stay within 262,144 bytes. The final contextual/provider schema has a
-524,288-byte limit. The service retains its 262,144-byte serialized request and
-context-frame limit, while transport counts rendered schema plus payload against
-the 786,432-byte invocation-input limit. These physical allowances do not widen
-member, semantic, history or generic-contract limits. Action templates compose
-the frozen semantic rules; generic result contracts keep their existing defaults.
+member stays within 65,536 UTF-8 bytes and each inner action contract stays within
+262,144 bytes. The intermediate semantic aggregate and final contextual/provider
+schema share the existing 524,288-byte provider-schema limit. The semantic
+aggregate previously had a separate 262,144-byte ceiling; aligning it with the
+final schema allowance supports the offered variant declarations without changing
+the physical provider limit. Final assembly still enforces that limit.
+The service retains its 262,144-byte serialized request/context-frame limit, while
+transport counts rendered schema plus payload against the 786,432-byte
+invocation-input limit. Aggregate allowances do not widen member, action,
+history, or generic-contract limits. Action templates compose the frozen semantic
+rules; generic result contracts keep their existing defaults.
 
 Every built-in semantic result includes `response_type`. Objects and their nested
 variants are closed: return every required field and no extra properties.

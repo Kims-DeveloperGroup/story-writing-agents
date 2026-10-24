@@ -149,10 +149,12 @@ def _suite_policy_metadata(weights: suite_policy.TimingWeights,
     if plan is not None:
         policy["partition"] = {
             "algorithm": suite_policy.SHARD_ALGORITHM, "shard_count": suite_policy.SHARD_COUNT,
+            "isolated_test_id": suite_policy.ISOLATED_TEST_ID,
+            "isolated_weight_basis": suite_policy.ISOLATED_WEIGHT_BASIS,
             "digest": plan.digest, "group_count": len(plan.group_weights_microseconds),
             "fallback_group_count": len(plan.fallback_groups),
             "shards": [
-                {"identity": f"{index + 1}/4", "group_count": len(plan.shard_groups[index]),
+                {"identity": f"{index + 1}/{suite_policy.SHARD_COUNT}", "group_count": len(plan.shard_groups[index]),
                  "predicted_weight_microseconds": plan.shard_weights_microseconds[index],
                  "selection_manifest": _manifest(plan.shard_ids[index])}
                 for index in range(suite_policy.SHARD_COUNT)
@@ -184,8 +186,8 @@ def _policy_select(
         raise RunnerError(str(error)) from error
 
     if shard is not None:
-        if shard not in {f"{index}/4" for index in range(1, 5)}:
-            raise RunnerError("--shard must be 1/4, 2/4, 3/4, or 4/4")
+        if shard not in {f"{index}/{suite_policy.SHARD_COUNT}" for index in range(1, suite_policy.SHARD_COUNT + 1)}:
+            raise RunnerError("--shard must be one of 1/5 through 5/5")
         try:
             plan = suite_policy.partition_full_shards(collection.ids, weights)
         except suite_policy.SuitePolicyError as error:
@@ -439,6 +441,11 @@ def _run_report(canonical: CanonicalCollection, selection: CanonicalCollection,
     }
     if policy_metadata is not None:
         report.update(policy_metadata)
+    token = os.environ.get(_METHOD_TOKEN_ENV)
+    if token is not None:
+        if len(token) != 32 or set(token) - set("0123456789abcdef"):
+            raise RunnerError("invalid method child token")
+        report["method_child"] = {"version": 1, "token": token, "pid": os.getpid(), "parent_pid": os.getppid()}
     return report
 
 
@@ -617,10 +624,10 @@ def _required_report_identity(report: dict[str, object]) -> tuple[dict[str, obje
 
 
 def reconcile_reports(paths: Sequence[str]) -> dict[str, object]:
-    """Validate the complete current four-report contract and retain its records."""
-    identities = tuple(f"{index}/4" for index in range(1, 5))
-    if len(paths) != 4 or len(set(paths)) != 4:
-        raise RunnerError("reconcile requires four distinct shard report paths")
+    """Validate the complete current five-report contract and retain its records."""
+    identities = tuple(f"{index}/{suite_policy.SHARD_COUNT}" for index in range(1, suite_policy.SHARD_COUNT + 1))
+    if len(paths) != suite_policy.SHARD_COUNT or len(set(paths)) != suite_policy.SHARD_COUNT:
+        raise RunnerError("reconcile requires five distinct shard report paths")
     by_shard: dict[str, dict[str, object]] = {}
     durations_by_shard: dict[str, dict[str, float]] = {}
     bindings = []
@@ -636,7 +643,7 @@ def reconcile_reports(paths: Sequence[str]) -> dict[str, object]:
         selection = _required_dict(report, "selection")
         shard = selection.get("shard")
         if shard not in identities or shard in by_shard or selection.get("tiers") != []:
-            raise RunnerError("reports must have complementary unique four-shard identities")
+            raise RunnerError("reports must have complementary unique five-shard identities")
         bindings.append(_required_report_identity(report))
         durations = _required_durations(report)
         totals = _required_dict(report, "totals")
@@ -693,6 +700,10 @@ def reconcile_reports(paths: Sequence[str]) -> dict[str, object]:
         durations_by_shard[shard] = durations
     if any(binding != bindings[0] for binding in bindings[1:]):
         raise RunnerError("shard source or execution environments disagree")
+    modes = {_execution_metadata(report) for report in by_shard.values()}
+    if len(modes) != 1:
+        raise RunnerError("mixed execution modes, profiles or timing bases")
+    mode, profile, timing_basis = modes.pop()
     first = by_shard[identities[0]]
     canonical = _required_dict(first, "canonical_manifest")
     canonical_ids = _required_ids(first, "canonical_manifest")
@@ -714,7 +725,7 @@ def reconcile_reports(paths: Sequence[str]) -> dict[str, object]:
     except suite_policy.SuitePolicyError as error:
         raise RunnerError(str(error)) from error
     if json.dumps(policy, sort_keys=True) != json.dumps(_suite_policy_metadata(weights, plan), sort_keys=True):
-        raise RunnerError("shard policy differs from the current deterministic four-partition plan")
+        raise RunnerError("shard policy differs from the current deterministic five-partition plan")
     source = bindings[0][0]
     root = Path(__file__).resolve().parents[1]
     try:
@@ -747,7 +758,8 @@ def reconcile_reports(paths: Sequence[str]) -> dict[str, object]:
         "schema_version": SCHEMA_VERSION, "runner": RUNNER_NAME, "kind": "reconciliation",
         "outcome": "success" if all(item["outcome"] == "success" for item in summaries) else "failure",
         "canonical_manifest": canonical, "suite_policy": policy, "source_binding": source,
-        "common_environment": bindings[0][1], "shards": summaries,
+        "common_environment": bindings[0][1],
+        "execution": {"version": 1, "mode": mode, "profile": profile, "timing_basis": timing_basis}, "shards": summaries,
         "tests": [record_map[identifier] for identifier in canonical_ids],
         "totals": {"selected": len(canonical_ids), "completed": sum(by_shard[key]["totals"]["completed"] for key in identities)},
         "durations": {"sequential_equivalent_wall_seconds": sum(walls), "concurrent_wall_seconds": max(walls),
@@ -789,6 +801,668 @@ def _write_reconciliation_human(report: dict[str, object], stream: TextIO) -> No
         )
 
 
+# This closed profile is audited for fresh whole-method processes. Adding a method
+# (even in one of these classes) requires another fixture/eligibility review.
+_HOSTED_PROFILE = 'audited-147-v3'
+_HOSTED_CLEANUP_SECONDS = 30.0
+_HOSTED_LAUNCH_IDS = (
+    'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict',
+    'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_intent_variants_and_objective_values_are_closed_and_content_safe',
+    'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_readable_and_session_context_include_objectives_without_new_records',
+    'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists',
+    'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate',
+    'tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_failure_correlation_and_post_closure_calls_fail_closed',
+    'tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_whole_and_range_conflict_bind_proposal_and_detect_drift',
+    'tests.test_provider_auth_recovery.ContextRecoveryTests.test_safe_replay_preserves_wire_and_counts_distinct_physical_calls',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay',
+    'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_old_drafted_revision_cannot_authorize_revised_candidate',
+    'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does',
+    'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_rejected_returned_result_closes_and_next_turn_uses_one_fresh_call',
+    'tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_mismatch_reject_revise_and_free_text_are_non_authorizing',
+    'tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch',
+    'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows',
+    'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_draft_integrates_exact_all_role_review_apply_and_storage_parity',
+    'tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_revision_direct_workflow_cannot_erase_selected_story_scope',
+    'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews',
+    'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_search_read_answer_uses_bounded_history_without_proposal',
+    'tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_zero_hits_and_scoped_status_evidence_are_derived_locally',
+    'tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_only_matching_successful_apply_satisfies_objective',
+    'tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_unread_and_truncated_search_fall_back_while_reads_attach_locally',
+    'tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_unknown_duplicate_reordered_and_prior_turn_ids_fail_once',
+    'tests.test_recommendation_actions.RecommendationActionContractTests.test_current_response_alias_binds_exact_whole_message_before_action',
+    'tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_budget_notice_preserves_maximum_utf8_synthesis',
+    'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_empty_continuation_retains_selection_and_cancel_is_terminal',
+    'tests.test_lead_orchestration.LeadReferenceFailurePrecedenceTests.test_primary_reference_and_capacity_errors_are_not_reclassified',
+    'tests.test_lead_recommendations.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority',
+    'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_runtime_repairs_then_safely_ignores_invalid_proposals',
+    'tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review',
+    'tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_forced_timeout_restart_and_explicit_retry_preserve_both_attempts',
+    'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles',
+    'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate',
+    'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_strict_provider_outcomes_reject_unknown_private_mixed_and_duplicate',
+    'tests.test_provider_auth_recovery.ContextRecoveryTests.test_later_action_recovery_preserves_prior_evidence_and_per_call_cap',
+    'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions',
+    'tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_unaffordable_continuation_finalizes_exact_result_without_authority',
+    'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_rejection_is_repaired_once',
+    'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_literal_lead_turn_and_consultation_decisions_are_exact',
+    'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_cross_conversation_selection_preserves_scope_and_rejects_workflow_relabel',
+    'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority',
+    'tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_only_budget_subtype_is_caught_after_successful_result',
+    'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_declared_substantive_direct_outcomes_fail_closed',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_search_before_first_rejection_uses_attempt_labels',
+    'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_question_and_synthesis_sources_preserve_exact_whole_message_digests',
+    'tests.test_recommendation_actions.RecommendationActionContractTests.test_confirm_origin_v2_and_continuing_v1_preserve_exact_wire_facts',
+    'tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_legacy_bare_prepared_and_submitted_tails_close_only_on_new_input',
+    'tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_abandoned_turn_preserves_other_conversation_successful_checkpoint',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_invalid_specialist_shapes_repair_then_fall_back_without_halting',
+    'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority',
+    'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_review_rejects_empty_reference_but_accepts_explicit_user_candidate',
+    'tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_restart_and_repeated_known_result_finalization_are_idempotent',
+    'tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_validation_failure_closes_once_and_restart_uses_fresh_turn',
+    'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_read_evidence_translates_whole_content_and_range_boundary_digests',
+    'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive',
+    'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source',
+    'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_history_rejects_foreign_or_changed_origin_predecessor_sources_and_targets',
+    'tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_matching_unfinished_legacy_operation_retires_native_context',
+    'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_v1_objective_wire_round_trips_without_changing_legacy_bytes',
+    'tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated',
+    'tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_attached_reference_cancellation_closes_and_releases_for_explicit_retry',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_domain_rejection_details_survive_restarted_finalization',
+    'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_one_and_two_assignments_run_with_exact_parallel_width',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restart_after_completed_execution_accepts_a_new_lead_turn',
+    'tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_revision_timeout_keeps_superseded_confirmation_non_authorizing',
+    'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_draft_task_cannot_skip_current_revision_drafting_via_review_artifact_intent',
+    'tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_empty_whole_is_evidence_but_missing_and_invalid_range_fail',
+    'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_target_adequate_brief_produces_draft_without_writes',
+    'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity',
+    'tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_mixed_zero_hit_survives_self_appended_history_without_mutation',
+    'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation',
+    'tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_zero_hit_source_drift_blocks_confirmation_before_specialists',
+    'tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_pre_submission_correction_failure_closes_first_rejected_call',
+    'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_archived_task_is_context_without_routable_authority',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_response_correction_requires_capacity',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_untrusted_answer_diagnostic_cannot_publish_private_text',
+    'tests.test_recommendation_actions.RecommendationActionContractTests.test_readable_and_session_context_expose_exact_origin_without_private_authority',
+    'tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_corrupt_failed_history_cannot_admit_provider_work',
+    'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_recommendation_controls_route_exact_decisions_and_cancel_without_mutation',
+    'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_recommendation_revision_cancel_and_eof_preserve_pending_request',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_execution_delivers_only_each_assignments_ordered_reference_subset',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_second_round_uses_reply_events_fresh_authority_and_cannot_chain_again',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_concurrent_duplicate_domain_and_schema_reports_keep_call_order',
+    'tests.test_recommendation_actions.RecommendationActionContractTests.test_recommendation_and_objective_v2_round_trip_through_both_stores_and_archive',
+    'tests.test_recommendation_actions.RecommendationActionContractTests.test_history_rejects_foreign_origin_tail_and_nonatomic_action_batches',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_specialist_and_synthesis_validation_details_are_private_and_correlated',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics',
+    'tests.test_recommendation_actions.RecommendationActionContractTests.test_action_values_and_decisions_are_closed_exact_and_immutable',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_synthesis_derives_non_supporting_inputs_locally',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_original_and_repair_validation_details_persist_across_restart',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_start_append_failure_makes_zero_specialist_calls_and_leaks_no_marker',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_confirmed_restart_preserves_evidence_and_requires_fresh_authority',
+    'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_non_string_lead_kind_reports_exact_type_and_common_issues',
+    'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_kind_bearing_lead_result_reports_common_anyof_issues',
+    'tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_confirm_is_exact_single_use_and_executes_without_artifact_effect',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_huge_invalid_array_truncates_safe_durable_report',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_republishing_domain_notice_is_idempotent',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_long_validation_details_survive_history_restart_in_chunks',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_validation_details_do_not_grant_action_authority',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_second_returned_rejection_closes_against_last_call',
+    'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_runtime_constructs_complete_ordered_content_free_proposal',
+    'tests.test_recommendation_actions.RecommendationActionContractTests.test_scoped_request_digest_and_legacy_absent_scope_remain_distinct',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_confirmed_live_capability_preserves_exact_evidence_without_dispatch',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility',
+    'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_legacy_pending_confirmation_requires_fresh_scoped_proposal_without_rewrite',
+    'tests.test_recommendation_actions.RecommendationActionContractTests.test_legacy_judgments_synthesis_and_runtime_notices_never_gain_action_authority',
+    'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_wrong_task_pair_rejects_before_dispatch',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_no_repair_capacity_preserves_validation_notice_without_authority',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_domain_rejection_without_repair_persists_safe_notice',
+    'tests.test_lead_orchestration.LeadReferenceFailurePrecedenceTests.test_reference_failure_with_unwritable_history_stays_recovery_required',
+    'tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_reference_drift_blocks_confirmation_without_calls',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_minimal_reference_answer_needs_no_provider_correction',
+    'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role',
+    'tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_provider_free_advisory_confirms_one_specialist_without_synthesis_or_chain',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unresolved_running_becomes_outcome_unknown_without_provider',
+    'tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure',
+    'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_capability_is_private_nonserializable_and_single_use',
+    'tests.test_provider_auth_recovery.ContextRecoveryTests.test_backend_route_session_thread_and_workspace_drift_veto_replay',
+    'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation',
+    'tests.test_provider_auth_recovery.ContextRecoveryTests.test_local_reference_load_does_not_consume_provider_capacity',
+    'tests.test_provider_auth_recovery.ContextRecoveryTests.test_replay_requires_explicit_exact_true_validator',
+    'tests.test_provider_auth_recovery.ContextRecoveryTests.test_admission_race_abort_keeps_original_accounting_and_exchanges',
+    'tests.test_provider_auth_recovery.ContextRecoveryTests.test_unsafe_unconfirmed_and_repeated_auth_failure_never_replay',
+    'tests.test_provider_auth_recovery.ContextRecoveryTests.test_source_drift_vetoes_replay_before_submission',
+    'tests.test_provider_auth_recovery.ContextRecoveryTests.test_auth_cancel_cleans_validator_and_retains_prior_call_facts',
+    'tests.test_provider_auth_recovery.ContextRecoveryTests.test_noninteractive_auth_errors_and_restart_never_replay',
+    'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_provider_invocation_failure_writes_error_notice_without_crashing',
+    'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_artifact_and_commit_controls_are_distinct_and_correlated',
+    'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_pending_commit_redisclosure_reuses_exact_picker_without_apply',
+    'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_unexpected_exception_in_submit_propagates_to_fatal_boundary',
+    'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_run_operation_returns_task_result_when_task_completes_after_auth_ready',
+    'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_failure_interruption_and_recovery_turns_never_replay_authority',
+    'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_ordinary_lead_progress_sink_finishes_before_lead_and_elapsed_output',
+    'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_confirmed_execution_writes_specialists_then_lead_then_elapsed',
+    'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_provider_invocation_failure_surfaces_transient_stream_error_in_final_output',
+)
+_HOSTED_METHOD_IDS = tuple(sorted(_HOSTED_LAUNCH_IDS))
+_HOSTED_PRIORITY_ID = _HOSTED_LAUNCH_IDS[0]
+_METHOD_TOKEN_ENV = "STORY_TEST_METHOD_CHILD_TOKEN"
+
+
+def _hosted_capacity() -> int:
+    capacity = os.cpu_count()
+    if type(capacity) is not int or capacity < 1:
+        raise RunnerError("hosted method execution requires known CPU capacity")
+    if hasattr(os, "sched_getaffinity"):
+        capacity = min(capacity, len(os.sched_getaffinity(0)))
+    if capacity < 1:
+        raise RunnerError("hosted method execution has no available CPU")
+    return min(4, capacity)
+
+
+def _hosted_options(args) -> dict[str, object] | None:
+    profile, deadline = args.hosted_methods, args.hosted_deadline_epoch
+    if profile is None and deadline is None:
+        return None
+    if (profile != _HOSTED_PROFILE or args.command != "run" or not args.shard
+            or args.id or args.module or args.tier or args.failfast
+            or type(args.json) is not str or not args.json):
+        raise RunnerError("hosted methods require the audited profile and one full shard")
+    forbidden = ("STORY_WIRE_TEST_CAPTURE_DIR", _METHOD_TOKEN_ENV, "STORY_LOCAL_CI_TOKEN",
+                 "STORY_LOCAL_CI_WORKER_STATE", "STORY_LOCAL_CI_GUEST_STATE")
+    if (os.environ.get("GITHUB_ACTIONS") != "true" or sys.platform != "linux"
+            or any(name in os.environ for name in forbidden)):
+        raise RunnerError("hosted methods require an isolated hosted Linux environment")
+    try:
+        limits = [float(os.environ[name]) - 450 for name in ("TEST_RUN_DEADLINE", "TEST_JOB_DEADLINE")]
+        deadline = float(deadline)
+    except (KeyError, TypeError, ValueError, OverflowError) as error:
+        raise RunnerError("hosted methods require the original absolute worker deadline") from error
+    now = time.time()
+    if (not all(math.isfinite(value) for value in [deadline, *limits])
+            or not now < deadline <= min(*limits, now + 3600)):
+        raise RunnerError("hosted method deadline exceeds the grant or cleanup reserve")
+    started = time.monotonic()
+    work_deadline = started + (deadline - now)
+    return {"started": work_deadline - 3600, "work_deadline": work_deadline,
+            "deadline": work_deadline + _HOSTED_CLEANUP_SECONDS,
+            "work_deadline_epoch": deadline, "cleanup_deadline_epoch": deadline + _HOSTED_CLEANUP_SECONDS,
+            "report_path": args.json, "capacity": _hosted_capacity()}
+
+
+def _hosted_partition(canonical: CanonicalCollection, selection: CanonicalCollection):
+    eligible = set(_HOSTED_METHOD_IDS)
+    classes = {identifier.rsplit(".", 1)[0] for identifier in eligible}
+    present = {identifier for identifier in canonical.ids if identifier.rsplit(".", 1)[0] in classes}
+    if present != eligible or len(eligible) != 147:
+        raise RunnerError("audited whole-method eligibility changed")
+    serial = tuple(test for test in selection.tests if test.id() not in eligible)
+    scheduled = tuple(identifier for identifier in selection.ids if identifier in eligible)
+    return CanonicalCollection(serial, tuple(test.id() for test in serial)), scheduled
+
+
+def _hosted_launch_order(scheduled):
+    rank = {identifier: index for index, identifier in enumerate(_HOSTED_LAUNCH_IDS)}
+    return tuple(sorted(scheduled, key=rank.__getitem__))
+
+
+def _hosted_artifacts(report_path: str) -> Path:
+    root = Path(report_path + ".methods")
+    root.mkdir(mode=0o700)
+    return root
+
+
+def _method_group_absent(pid: int) -> bool:
+    try:
+        os.killpg(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+def _method_supervisor(config_path: str) -> int:
+    """Private Linux entry: owns one worker group, never discovers applications."""
+    import ctypes
+    import select
+    import signal
+    import subprocess
+    config = _load_json_object(config_path)
+    required = {"version", "argv", "cwd", "read_fd", "work_deadline", "deadline", "token", "receipt", "log"}
+    if (set(config) != required or type(config["version"]) is not int
+            or config["version"] != 1 or sys.platform != "linux"):
+        raise RunnerError("invalid method supervisor configuration")
+    command, work_deadline, deadline = config["argv"], config["work_deadline"], config["deadline"]
+    if (type(command) is not list or not command or command[0] != sys.executable
+            or any(type(value) is not str or not value for value in command)
+            or type(config["read_fd"]) is not int or config["read_fd"] < 0
+            or any(type(value) not in (int, float) or not math.isfinite(value)
+                   for value in (work_deadline, deadline))
+            or deadline != work_deadline + _HOSTED_CLEANUP_SECONDS
+            or type(config["token"]) is not str or len(config["token"]) != 32
+            or set(config["token"]) - set("0123456789abcdef")):
+        raise RunnerError("invalid method supervisor grant")
+    # Linux PR_SET_CHILD_SUBREAPER: adopted descendants can be reaped after the
+    # direct Popen child has been waited. Never consume Popen's status via waitpid.
+    libc = ctypes.CDLL(None, use_errno=True)
+    prctl = libc.prctl
+    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+    prctl.restype = ctypes.c_int
+    if prctl(36, 1, 0, 0, 0) != 0:
+        raise RunnerError("method supervisor requires Linux child-subreaper ownership")
+    receipt = {"version": 1, "token": config["token"], "supervisor_pid": os.getpid(),
+               "worker_pid": None, "worker_exit": None, "reason": "not_started", "reaped": False,
+               "group_absent": False, "complete": False, "work_deadline": work_deadline, "deadline": deadline}
+    process = None
+    interrupted = False
+    old_handlers = {}
+    def request_stop(signum, frame):
+        nonlocal interrupted
+        interrupted = True
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        old_handlers[signum] = signal.signal(signum, request_stop)
+    cleanup_stop = deadline - 5  # Retain five seconds for receipt publication and parent reaping.
+    read_fd = config["read_fd"]
+    os.set_blocking(read_fd, False)
+    try:
+        if interrupted or time.monotonic() >= work_deadline or select.select([read_fd], [], [], 0)[0]:
+            receipt["reason"] = "no_grant_or_parent"
+            return 1
+        environment = dict(os.environ, **{_METHOD_TOKEN_ENV: config["token"]})
+        with open(config["log"], "xb", buffering=0) as log:
+            if interrupted or time.monotonic() >= work_deadline:
+                receipt["reason"] = "no_grant_or_parent"
+                return 1
+            process = subprocess.Popen(command, cwd=config["cwd"], env=environment, stdin=subprocess.DEVNULL,
+                                       stdout=log, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True)
+            receipt["worker_pid"] = process.pid
+            receipt["reason"] = "completed"
+            while process.poll() is None:
+                remaining = work_deadline - time.monotonic()
+                if interrupted or remaining <= 0:
+                    receipt["reason"] = "interrupted" if interrupted else "deadline"
+                    break
+                if select.select([read_fd], [], [], min(0.1, remaining))[0]:
+                    receipt["reason"] = "parent_closed"
+                    break
+    finally:
+        if process is not None:
+            if not _method_group_absent(process.pid):
+                if process.poll() is not None and receipt["reason"] == "completed":
+                    receipt["reason"] = "descendants_survived"
+                try:
+                    os.killpg(process.pid, signal.SIGINT)
+                except ProcessLookupError:
+                    pass
+                interrupt_end = min(cleanup_stop, time.monotonic() + 5)
+                while time.monotonic() < interrupt_end:
+                    if process.poll() is not None:
+                        # Only now may waitpid reap adopted descendants.
+                        try:
+                            while time.monotonic() < cleanup_stop and os.waitpid(-1, os.WNOHANG)[0]:
+                                pass
+                        except ChildProcessError:
+                            pass
+                    if _method_group_absent(process.pid):
+                        break
+                    time.sleep(min(0.05, max(0, interrupt_end - time.monotonic())))
+                if not _method_group_absent(process.pid):
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            while time.monotonic() < cleanup_stop:
+                if process.poll() is not None:
+                    receipt["worker_exit"] = process.returncode
+                    receipt["reaped"] = True
+                    try:
+                        while time.monotonic() < cleanup_stop and os.waitpid(-1, os.WNOHANG)[0]:
+                            pass
+                    except ChildProcessError:
+                        pass
+                if receipt["reaped"] and _method_group_absent(process.pid):
+                    receipt["group_absent"] = True
+                    break
+                time.sleep(min(0.05, max(0, cleanup_stop - time.monotonic())))
+        receipt["complete"] = bool(receipt["reaped"] and receipt["group_absent"])
+        receipt["finished"] = time.monotonic()
+        _write_json(config["receipt"], receipt)
+        os.close(read_fd)
+        for signum, previous in old_handlers.items():
+            signal.signal(signum, previous)
+    return 0 if receipt["complete"] and receipt["reason"] == "completed" else 1
+
+
+def _launch_method(command, directory: Path, *, work_deadline: float):
+    import secrets
+    import subprocess
+    if (type(work_deadline) not in (int, float) or not math.isfinite(work_deadline)
+            or time.monotonic() >= work_deadline):
+        raise RunnerError("method work deadline exhausted before launch")
+    deadline = work_deadline + _HOSTED_CLEANUP_SECONDS
+    token = secrets.token_hex(16)
+    read_fd, write_fd = os.pipe()
+    config = {"version": 1, "argv": list(command), "cwd": str(Path(__file__).resolve().parents[1]),
+              "read_fd": read_fd, "deadline": deadline, "work_deadline": work_deadline,
+              "token": token, "receipt": str(directory / "supervisor.json"), "log": str(directory / "worker.log")}
+    _write_json(str(directory / "config.json"), config)
+    try:
+        if time.monotonic() >= work_deadline:
+            raise RunnerError("method work deadline exhausted before supervisor launch")
+        process = subprocess.Popen([sys.executable, "-m", "tests.runner", "--_method-supervisor",
+                                    str(directory / "config.json")], cwd=config["cwd"], pass_fds=(read_fd,),
+                                   stdin=subprocess.DEVNULL, start_new_session=True)
+    except BaseException:
+        os.close(write_fd)
+        raise
+    finally:
+        os.close(read_fd)
+    return process, write_fd, config
+
+
+def _method_receipt(config, process):
+    receipt = _load_json_object(config["receipt"])
+    keys = {"version", "token", "supervisor_pid", "worker_pid", "worker_exit", "reason", "reaped",
+            "group_absent", "complete", "work_deadline", "deadline", "finished"}
+    if (set(receipt) != keys or type(receipt["version"]) is not int or receipt["version"] != 1
+            or receipt["token"] != config["token"] or type(receipt["supervisor_pid"]) is not int
+            or receipt["supervisor_pid"] != process.pid or type(receipt["worker_pid"]) is not int
+            or receipt["reason"] not in ("completed", "descendants_survived", "interrupted", "deadline", "parent_closed")
+            or receipt["worker_pid"] <= 1 or type(receipt["worker_exit"]) is not int
+            or any(receipt[name] is not True for name in ("reaped", "group_absent", "complete"))
+            or receipt["work_deadline"] != config["work_deadline"] or receipt["deadline"] != config["deadline"]
+            or type(receipt["finished"]) not in (int, float) or not math.isfinite(receipt["finished"])
+            or receipt["finished"] > config["deadline"] or not _method_group_absent(receipt["worker_pid"])):
+        raise RunnerError("method supervisor cleanup proof is incomplete")
+    return receipt
+
+
+def _validate_method_report(report, ids, canonical_ids, binding, environment, caps, exit_code):
+    required = {"schema_version", "runner", "kind", "outcome", "canonical_manifest", "selection_manifest",
+                "tests", "totals", "unexecuted_ids", "durations", "slowest", "details", "source_binding",
+                "environment", "environment_valid"}
+    if type(report) is not dict or not required <= set(report) <= required | {"selection", "suite_policy"}:
+        raise RunnerError("method report fields differ from the serial contract")
+    if (report.get("schema_version") != SCHEMA_VERSION or report.get("runner") != RUNNER_NAME
+            or report.get("kind") != "run_result" or report.get("outcome") not in ("success", "failure")
+            or type(exit_code) is not int or exit_code != (0 if report["outcome"] == "success" else 1)
+            or _required_ids(report, "canonical_manifest") != tuple(canonical_ids)
+            or _required_ids(report, "selection_manifest") != tuple(ids) or report.get("unexecuted_ids") != []
+            or _required_report_identity(report)[0] != binding
+            or report.get("environment") != environment or "execution" in report):
+        raise RunnerError("method report identity, source or completion differs")
+    rows, totals, details = report.get("tests"), report.get("totals"), report.get("details")
+    total_keys = {"selected", "started", "completed", "passed", "failures", "errors", "skipped",
+                  "expected_failures", "unexpected_successes", "interrupted"}
+    if (type(rows) is not list or type(totals) is not dict or set(totals) != total_keys
+            or any(type(value) is not int or value < 0 for value in totals.values())
+            or any(totals[key] != len(ids) for key in ("selected", "started", "completed"))
+            or totals["interrupted"] or type(details) is not list
+            or any(type(row) is not dict for row in rows)
+            or tuple(row.get("canonical_id") for row in rows) != tuple(ids)):
+        raise RunnerError("method report has incomplete or duplicate records")
+    terminal = {"passed", "failed", "error", "skipped", "expected_failure", "unexpected_success"}
+    for row in rows:
+        duration, count = row.get("duration_seconds"), row.get("subtest_count")
+        if (set(row) != {"canonical_id", "status", "duration_seconds", "subtest_count"}
+                or row["status"] not in terminal or type(count) is not int or not 0 <= count <= caps[row["canonical_id"]]
+                or type(duration) not in (int, float) or not math.isfinite(duration) or duration < 0):
+            raise RunnerError("method report has invalid terminal data or subtest count")
+    kinds = {"failures": {"failure", "subtest_failure"}, "errors": {"error", "subtest_error"},
+             "skipped": {"skip"}, "expected_failures": {"expected_failure"},
+             "unexpected_successes": {"unexpected_success"}}
+    allowed = set().union(*kinds.values())
+    if any(type(item) is not dict or item.get("canonical_id") not in ids or item.get("kind") not in allowed
+           or (item["kind"] == "skip" and type(item.get("reason")) is not str) for item in details):
+        raise RunnerError("method report details differ from selected IDs")
+    for item in details:
+        extra = {"reason"} if item["kind"] == "skip" else (set() if item["kind"] == "unexpected_success" else {"traceback"})
+        if (set(item) != {"canonical_id", "display_id", "kind"} | extra
+                or any(type(value) is not str for value in item.values()) or not item["display_id"]):
+            raise RunnerError("method report observation is malformed")
+    if report["slowest"] != []:
+        raise RunnerError("method component report must retain the zero-slowest request")
+    if any(totals[key] != sum(item["kind"] in values for item in details) for key, values in kinds.items()):
+        raise RunnerError("method report outcome counts disagree")
+    priority = {"skip": "skipped", "failure": "failed", "subtest_failure": "failed", "error": "error",
+                "subtest_error": "error", "expected_failure": "expected_failure", "unexpected_success": "unexpected_success"}
+    for row in rows:
+        statuses = [priority[item["kind"]] for item in details if item["canonical_id"] == row["canonical_id"]]
+        if row["status"] != max(["passed", *statuses], key=TimedTextTestResult._PRIORITY.__getitem__):
+            raise RunnerError("method report status disagrees with details")
+    if (totals["passed"] != sum(row["status"] == "passed" for row in rows)
+            or (report["outcome"] == "success") != (not any(totals[key] for key in ("failures", "errors", "unexpected_successes")))):
+        raise RunnerError("method report outcome disagrees with records")
+    durations = _required_durations(report)
+    if not math.isclose(durations["cumulative_test_seconds"], sum(row["duration_seconds"] for row in rows),
+                        rel_tol=1e-12, abs_tol=1e-9):
+        raise RunnerError("method report cumulative duration differs")
+    return rows, details, totals
+
+
+def _merge_method_reports(canonical, selection, reports, *, binding, environment, caps, wall, metadata, errors, slowest):
+    rows, details, totals = {}, [], {key: 0 for key in ("selected", "started", "completed", "passed", "failures",
+                                                     "errors", "skipped", "expected_failures", "unexpected_successes", "interrupted")}
+    for report, ids, exit_code in reports:
+        records, observations, counts = _validate_method_report(report, ids, canonical.ids, binding, environment, caps, exit_code)
+        if any(row["canonical_id"] in rows or row["canonical_id"] not in selection.ids for row in records):
+            raise RunnerError("method report overlaps another report or selection")
+        rows.update((row["canonical_id"], row) for row in records)
+        details.extend(observations)
+        for key in totals:
+            totals[key] += counts[key]
+    details.sort(key=lambda item: selection.ids.index(item["canonical_id"]))
+    records = [rows[identifier] for identifier in selection.ids if identifier in rows]
+    totals["selected"] = len(selection.ids)
+    unexecuted = [identifier for identifier in selection.ids if identifier not in rows]
+    failure = bool(errors or unexecuted or any(totals[key] for key in ("failures", "errors", "unexpected_successes")))
+    report = {"schema_version": SCHEMA_VERSION, "runner": RUNNER_NAME, "kind": "run_result",
+              "outcome": "failure" if failure else "success", "canonical_manifest": _manifest(canonical.ids),
+              "selection_manifest": _manifest(selection.ids), "tests": records, "totals": totals,
+              "unexecuted_ids": unexecuted, "durations": {"wall_seconds": wall,
+              "cumulative_test_seconds": sum(row["duration_seconds"] for row in records)},
+              "slowest": sorted(records, key=lambda row: (-row["duration_seconds"], row["canonical_id"]))[:slowest],
+              "details": details, "source_binding": binding, "environment": environment, "environment_valid": True}
+    report.update(metadata)
+    return report
+
+
+def _hosted_execute(canonical, selected, options, *, slowest, stream):
+    import signal
+    import subprocess
+    serial, scheduled = _hosted_partition(canonical, selected.selection)
+    caps = _load_json_object(str(CANONICAL_INVENTORY_PATH))["subtest_caps"]
+    if tuple(sorted(caps)) != canonical.ids or any(type(cap) is not int or cap < 0 for cap in caps.values()):
+        raise RunnerError("hosted method inventory differs from frozen caps")
+    root = _hosted_artifacts(options["report_path"])
+    before, environment = _source_snapshot(), _execution_environment()
+    binding = {"checkout_sha": before["checkout_sha"], "checkout_tree": before["checkout_tree"],
+               "before_digest": before["digest"], "after_digest": before["digest"], "source_valid": True}
+    reports, errors, active = [], [], {}
+    deadline, capacity = options["deadline"], options["capacity"]
+    peak = launched = completed = 0
+    cleanup_complete = True
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+    previous = {value: signal.getsignal(value) for value in (signal.SIGALRM, signal.SIGINT, signal.SIGTERM)}
+    if previous_timer != (0.0, 0.0):
+        raise RunnerError("hosted method execution cannot replace an existing alarm")
+    def stop(signum, frame):
+        raise KeyboardInterrupt
+    for value in previous:
+        signal.signal(value, stop)
+    work_deadline = options["work_deadline"]
+    try:
+        if time.monotonic() >= work_deadline:
+            raise RunnerError("hosted method work grant exhausted before serial traversal")
+        signal.setitimer(signal.ITIMER_REAL, work_deadline - time.monotonic())
+        if serial.ids:
+            execution = _execute(serial, stream=stream)
+            report = _run_report(canonical, serial, execution, slowest=0)
+            if execution.interrupted or report["unexecuted_ids"] or report["totals"]["completed"] != len(serial.ids):
+                errors.append("serial traversal interrupted or incomplete")
+                # The original report already records only observed callbacks.
+                reports.append((report, serial.ids, 130))
+            else:
+                reports.append((report, serial.ids, 0 if report["outcome"] == "success" else 1))
+        pending = iter(_hosted_launch_order(scheduled))
+        exhausted = bool(errors)
+        try:
+            while active or not exhausted:
+                while not exhausted and len(active) < capacity:
+                    if time.monotonic() >= work_deadline:
+                        raise KeyboardInterrupt
+                    identifier = next(pending, None)
+                    if identifier is None:
+                        exhausted = True
+                        break
+                    directory = root / str(launched)
+                    directory.mkdir(mode=0o700)
+                    command = [sys.executable, "-m", "tests.runner", "run", "--id", identifier,
+                               "--json", str(directory / "report.json"), "--slowest", "0"]
+                    process, pipe, config = _launch_method(command, directory, work_deadline=work_deadline)
+                    active[process.pid] = (process, pipe, config, identifier, directory)
+                    launched += 1
+                    peak = max(peak, len(active))
+                for pid, (process, pipe, config, identifier, directory) in tuple(active.items()):
+                    if process.poll() is None:
+                        continue
+                    os.close(pipe)
+                    del active[pid]
+                    custody_verified = False
+                    try:
+                        receipt = _method_receipt(config, process)
+                        custody_verified = True
+                        if process.returncode != 0 or receipt["reason"] != "completed":
+                            raise RunnerError("method supervisor did not complete normally")
+                        child = _load_json_object(str(directory / "report.json"))
+                        identity = {"version": 1, "token": config["token"], "pid": receipt["worker_pid"],
+                                    "parent_pid": process.pid}
+                        captured = child.pop("method_child", None)
+                        if (type(captured) is not dict or captured != identity
+                                or any(type(captured[name]) is not int for name in ("version", "pid", "parent_pid"))):
+                            raise RunnerError("method report is stale or from another child")
+                        if child.get("selection") != {"tiers": [], "shard": None}:
+                            raise RunnerError("method child must use the original serial ID selector")
+                        _validate_method_report(child, (identifier,), canonical.ids, binding, environment, caps,
+                                                receipt["worker_exit"])
+                        reports.append((child, (identifier,), receipt["worker_exit"]))
+                        completed += 1
+                    except (RunnerError, OSError) as error:
+                        errors.append(f"{identifier}: {error}")
+                        cleanup_complete = cleanup_complete and custody_verified
+                        exhausted = True
+                if active:
+                    time.sleep(min(0.05, max(0, work_deadline - time.monotonic())))
+        except KeyboardInterrupt:
+            errors.append("hosted method work interrupted or deadline exhausted")
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                signal.signal(signum, signal.SIG_IGN)
+            # Closing the liveness pipe makes each independent supervisor
+            # clean its worker group, even when this parent cannot signal it.
+            for process, pipe, config, identifier, directory in active.values():
+                os.close(pipe)
+            for process, pipe, config, identifier, directory in active.values():
+                remaining = max(0, deadline - 2 - time.monotonic())
+                try:
+                    process.wait(timeout=remaining)
+                    _method_receipt(config, process)
+                except (OSError, RunnerError, subprocess.TimeoutExpired):
+                    cleanup_complete = False
+                    errors.append(f"{identifier}: supervisor cleanup incomplete")
+                    if process.poll() is None:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                            process.wait(timeout=max(0, deadline - time.monotonic()))
+                        except (ProcessLookupError, subprocess.TimeoutExpired):
+                            pass
+            active.clear()
+    except KeyboardInterrupt:
+        errors.append("hosted serial work interrupted or deadline exhausted")
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        for value, handler in previous.items():
+            signal.signal(value, handler)
+    after = _source_snapshot()
+    environment_valid = environment == _execution_environment()
+    if before != after or not environment_valid:
+        errors.append("hosted method source or environment changed")
+    execution_metadata = {"version": 1, "mode": "hosted-whole-method", "profile": _HOSTED_PROFILE,
+                          "profile_manifest": _manifest(_HOSTED_METHOD_IDS), "serial_manifest": _manifest(serial.ids),
+                          "scheduled_manifest": _manifest(scheduled),
+                 "launch_manifest": _manifest(_hosted_launch_order(scheduled)),
+                 "work_deadline_epoch": options["work_deadline_epoch"],
+                 "cleanup_deadline_epoch": options["cleanup_deadline_epoch"],
+                 "capacity": capacity, "peak_children": peak,
+                          "launched": launched, "completed": completed, "cleanup_complete": cleanup_complete,
+                          "timing_basis": "observed-parent-wall-and-test-sum", "infrastructure_errors": errors}
+    # Invalid/partial child reports never become synthetic test rows. For an
+    # interrupted serial suite retain its already-observed rows separately.
+    interrupted = [item for item in reports if item[2] == 130]
+    complete = [item for item in reports if item[2] != 130]
+    report = _merge_method_reports(canonical, selected.selection, complete, binding=binding, environment=environment,
+                                  caps=caps, wall=max(0, time.monotonic() - options["started"]),
+                                  metadata=selected.metadata, errors=errors, slowest=slowest)
+    if interrupted:
+        partial = interrupted[0][0]
+        report["tests"] = partial["tests"]
+        report["details"] = partial["details"]
+        report["totals"] = {**partial["totals"], "selected": len(selected.selection.ids)}
+        observed = {row["canonical_id"] for row in partial["tests"]}
+        report["unexecuted_ids"] = [identifier for identifier in selected.selection.ids if identifier not in observed]
+        report["durations"]["cumulative_test_seconds"] = partial["durations"]["cumulative_test_seconds"]
+        report["slowest"] = partial["slowest"]
+    report["source_binding"] = {**binding, "after_digest": after["digest"], "source_valid": before == after}
+    report["execution"] = execution_metadata
+    report["environment_valid"] = environment_valid
+    report["durations"]["wall_seconds"] = max(0, time.monotonic() - options["started"])
+    return report
+
+
+def _method_manifest_equal(value, ids):
+    return (type(value) is dict and type(value.get("count")) is int
+            and type(value.get("ordered_ids")) is list and type(value.get("digest")) is str
+            and all(type(item) is str for item in value["ordered_ids"]) and value == _manifest(ids))
+
+
+def _execution_metadata(report):
+    value = report.get("execution")
+    if "execution" not in report:
+        return ("serial", None, "sum-observed-shard-walls")
+    keys = {"version", "mode", "profile", "profile_manifest", "serial_manifest", "scheduled_manifest", "capacity",
+            "peak_children", "launched", "completed", "cleanup_complete", "timing_basis", "infrastructure_errors",
+            "launch_manifest", "work_deadline_epoch", "cleanup_deadline_epoch"}
+    ids = tuple(_required_dict(report, "selection_manifest")["ordered_ids"])
+    scheduled = tuple(identifier for identifier in ids if identifier in _HOSTED_METHOD_IDS)
+    serial = tuple(identifier for identifier in ids if identifier not in _HOSTED_METHOD_IDS)
+    if (type(value) is not dict or set(value) != keys or type(value["version"]) is not int or value["version"] != 1
+            or value["mode"] != "hosted-whole-method" or value["profile"] != _HOSTED_PROFILE
+            or not _method_manifest_equal(value["profile_manifest"], _HOSTED_METHOD_IDS)
+            or not _method_manifest_equal(value["serial_manifest"], serial)
+            or not _method_manifest_equal(value["scheduled_manifest"], scheduled)
+            or not _method_manifest_equal(value["launch_manifest"], _hosted_launch_order(scheduled))
+            or any(type(value[key]) not in (int, float) or not math.isfinite(value[key]) or value[key] <= 0
+                   for key in ("work_deadline_epoch", "cleanup_deadline_epoch"))
+            or value["cleanup_deadline_epoch"] != value["work_deadline_epoch"] + _HOSTED_CLEANUP_SECONDS
+            or any(type(value[key]) is not int for key in ("capacity", "peak_children", "launched", "completed"))
+            or not 1 <= value["capacity"] <= 4 or not 0 <= value["peak_children"] <= value["capacity"]
+            or value["launched"] != len(scheduled) or value["completed"] != len(scheduled)
+            or (bool(scheduled) != bool(value["peak_children"])) or value["cleanup_complete"] is not True
+            or value["infrastructure_errors"] != [] or value["timing_basis"] != "observed-parent-wall-and-test-sum"):
+        raise RunnerError("invalid hosted execution metadata or incomplete cleanup")
+    return (value["mode"], value["profile"], "sum-observed-shard-walls")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -797,15 +1471,18 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--id", action="append", default=[])
         command.add_argument("--module", action="append", default=[])
         command.add_argument("--tier", action="append", default=[])
-        command.add_argument("--shard", choices=("1/4", "2/4", "3/4", "4/4"),
-                             help="one complete partition of the four-shard suite")
+        command.add_argument("--shard", choices=tuple(f"{index}/{suite_policy.SHARD_COUNT}"
+                                                    for index in range(1, suite_policy.SHARD_COUNT + 1)),
+                             help="one complete partition of the five-shard suite")
         command.add_argument("--json")
         if name == "run":
             command.add_argument("--slowest", type=int, default=20)
             command.add_argument("--failfast", action="store_true")
+            command.add_argument("--hosted-methods")
+            command.add_argument("--hosted-deadline-epoch", type=float)
     reconcile = commands.add_parser("reconcile")
-    reconcile.add_argument("reports", nargs=4, metavar="REPORT",
-                           help="one current report for each of 1/4 through 4/4")
+    reconcile.add_argument("reports", nargs=suite_policy.SHARD_COUNT, metavar="REPORT",
+                           help="one current report for each of 1/5 through 5/5")
     reconcile.add_argument("--json")
     return parser
 
@@ -821,6 +1498,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0 if report["outcome"] == "success" else 1
         if args.command == "run" and args.slowest < 0:
             raise RunnerError("--slowest must be zero or greater")
+        hosted = _hosted_options(args) if args.command == "run" else None
         canonical = _discover_canonical()
         selected = _policy_select(
             canonical,
@@ -858,6 +1536,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise RunnerError(str(error)) from error
         if admitted is not None:
             return admitted
+        if hosted is not None:
+            report = _hosted_execute(canonical, selected, hosted, slowest=args.slowest, stream=sys.stderr)
+            _write_human_report(report, sys.stderr)
+            if args.json:
+                _write_json(args.json, report)
+            return 0 if report["outcome"] == "success" else 1
         execution = _execute(selection, stream=sys.stderr, failfast=args.failfast)
         report = _run_report(
             canonical,
@@ -883,4 +1567,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--_method-supervisor":
+        raise SystemExit(_method_supervisor(sys.argv[2]))
     raise SystemExit(main())

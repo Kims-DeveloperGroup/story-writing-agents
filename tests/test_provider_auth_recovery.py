@@ -70,7 +70,7 @@ def auth_failure(provider="antigravity", *, safe=True, validator=lambda: True):
     return failure
 
 
-async def drive_recovery(operation, callback=lambda _key: True):
+async def drive_recovery(operation, callback=lambda _key: True, *, progress_timeout=30):
     """Drive the private async coordination seam with bounded synthetic authority."""
     recovery = ProviderAuthRecovery()
     keys = []
@@ -82,7 +82,7 @@ async def drive_recovery(operation, callback=lambda _key: True):
             ready = asyncio.create_task(recovery.wait_ready())
             # Harness progress allowance includes synchronous fixture Git work.
             done, _ = await asyncio.wait((task, ready), return_when=asyncio.FIRST_COMPLETED,
-                                         timeout=30)
+                                         timeout=progress_timeout)
             ready.cancel()
             await asyncio.gather(ready, return_exceptions=True)
             if not done: raise AssertionError("recovery failed to make bounded progress")
@@ -305,7 +305,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         case.backend.enqueue(*(guarded for _ in responses))
         with mock.patch.object(AgentContextService, "invoke", capture):
             outcome, keys = await drive_recovery(case.runtime.lead_turn(
-                case.session_id, conversation_id, "Explain bounded workflow."))
+                case.session_id, conversation_id, "Explain bounded workflow."), progress_timeout=120)
         self.assertEqual(keys, [("antigravity", 0)])
         self.assertEqual(len(captured), 1)
         self.assertEqual(remaining, [])

@@ -13,6 +13,7 @@ from copy import deepcopy
 from itertools import combinations
 from collections.abc import Callable, Mapping
 from typing import Generic, TypeVar
+from types import MappingProxyType
 from dataclasses import dataclass, field, replace
 
 from .agent_context.actions import ContextSourceStatusKind, ContextSourceStatusReceipt
@@ -24,11 +25,12 @@ from .writing_artifacts.relationship_policy import artifact_source_operation_rul
 from .provider_wire import (
     project_result_schema, normalize_result, hoist_schema_definitions, rebase_schema_definitions,
     project_lead_scope_schema, restore_lead_scope_result, project_lead_scope_diagnostic,
+    diagnostic_to_wire,
     ACTIVITIES as AUTHORING_ACTIVITIES, ASSIGNMENT_TYPES,
 )
 from .provider_wire import share_schema_descriptions
 from .provider_wire import CHANGE_TYPES, ENUM_MEANINGS, field_description
-from .structured_output_validation import closed_rule, finite_subset_rule, schema_rule_fingerprints
+from .structured_output_validation import closed_rule, closed_map_rule, finite_subset_rule, schema_rule_fingerprint, schema_rule_fingerprints
 from .lead_exploration import exploration_result_schema
 from .authoring_admission import assessment_from_dict
 from .authoring_admission import assessment_schema as admission_rule
@@ -86,7 +88,7 @@ def _small_nonempty_selection(
 ) -> dict[str, object]:
     variants = [
         dict(
-            closed_object({item: {"type": "boolean", "enum": [True]} for item in subset}),
+            closed_map_rule({item: {"type": "boolean", "enum": [True]} for item in subset}),
             description=meaning,
         )
         for count in range(1, len(choices) + 1)
@@ -98,7 +100,7 @@ def _small_nonempty_selection(
 
 
 def _fixed_selection(choices: tuple[str, ...]) -> dict[str, object]:
-    return closed_object({item: {"type": "boolean", "enum": [True]} for item in choices})
+    return closed_map_rule({item: {"type": "boolean", "enum": [True]} for item in choices})
 
 
 def _ordered_selection(value: object, choices: tuple[str, ...]) -> list[str]:
@@ -139,14 +141,14 @@ def _scope_wire_rule(rule: AuthoringScopeRuleSet, template: Mapping[str, object]
             if name not in result["required"]:
                 result["required"].append(name)
     elif "contributions" in properties:
-        properties["contributions"] = closed_object({item.domain.value: closed_object({
+        properties["contributions"] = closed_map_rule({item.domain.value: closed_object({
             "domain": {"type": "string", "enum": [item.domain.value]},
             "role": {"type": "string", "enum": [item.role.value]},
         }) for item in rule.contributions})
         draft_domains = tuple(item.domain.value for item in rule.contributions
                               if item.role is AuthoringContributionRole.DRAFT_OWNER)
         if scope is not None:
-            properties["dependency_slots"] = closed_object({slot.slot_id: closed_object({
+            properties["dependency_slots"] = closed_map_rule({slot.slot_id: closed_object({
                 "slot_id": {"type": "string", "enum": [slot.slot_id]},
                 "dependent_domains": _fixed_selection(tuple(domain.value for domain in slot.dependent_domains)),
             }) for slot in scope.dependency_slots})
@@ -227,14 +229,15 @@ def _allocation_wire_rule(template: Mapping[str, object], *, active: tuple[str, 
             "assignment_type": {"type": "string", "enum": [ASSIGNMENT_TYPES[mode]]},
             "review_basis": review_basis,
             "input_anchor_id": {"type": "string", "enum": list(inputs)},
-            "optional_inputs": closed_object({identity: {"type": "boolean", **({"enum": [True]} if identity in forced else {})} for identity in inputs}),
+            "optional_inputs": closed_map_rule({identity: {"type": "boolean", **({"enum": [True]} if identity in forced else {})} for identity in inputs}),
         })
-    properties["assignments"] = closed_object(assignments)
-    properties["required_input_recipients"] = closed_object({identity: {"type": "string", "enum": list(active)} for identity in required})
+    properties["assignments"] = closed_map_rule(assignments)
+    properties["required_input_recipients"] = closed_map_rule({identity: {"type": "string", "enum": list(active)} for identity in required})
     result = deepcopy(dict(template))
     result.setdefault(
         "description", field_description("specialist_consultation_proposal"))
-    result.update(properties=properties, required=list(properties))
+    result.update(properties=properties, required=[
+        name for name in properties if name in template["required"] or name == "required_input_recipients"])
     return result
 
 
@@ -322,6 +325,56 @@ class LeadDecodedResult:
         return strict_json_object(self.domain_json)
 
 
+def _has_free_dependency_slots(rules: SchemaRules) -> bool:
+    """Only free native slot arrays need the residual cross-row ID rule."""
+    # Closed object keys cannot preserve arbitrary IDs; whole-row uniqueness
+    # would still allow one ID with different domain selections.
+    root = rules.schema_value()
+    seen: set[tuple[int, tuple[str, ...]]] = set()
+
+    def visit(node: dict[str, object], path: tuple[str, ...]) -> bool:
+        key = (id(node), path)
+        if key in seen:
+            return False
+        seen.add(key)
+        if "$ref" in node:
+            return visit(root["$defs"][node["$ref"].removeprefix("#/$defs/")], path)
+        if "anyOf" in node:
+            return any(visit(child, path) for child in node["anyOf"])
+        if not path:
+            return node.get("type") == "array" and node.get("maxItems") != 0
+        properties = node.get("properties", {})
+        return path[0] in properties and visit(properties[path[0]], path[1:])
+
+    return visit(root, ("response_details", "task_scope", "slots"))
+
+
+def _require_dependency_slot_ids(
+    value: object, *, rule=AuthoringScopeRuleSet.dependency_slot_id_rule,
+    wire_path=diagnostic_to_wire, scope_path=project_lead_scope_diagnostic,
+) -> None:
+    """Use the domain rule before intrinsic scope construction can reject it."""
+    if AuthoringScopeRuleSet.dependency_slot_id_rule is not rule:
+        raise ValueError("frozen dependency-slot identity rule changed")
+    def visit(node: object, path: str) -> None:
+        if type(node) is dict:
+            for name, child in node.items():
+                child_path = path + "." + name
+                if name == "authoring_scope" and child is not None:
+                    finding = rule(tuple(slot["slot_id"] for slot in child["dependency_slots"]))
+                    if finding is not None:
+                        raise validation_failure(
+                            ValueError("dependency slots must be unique"),
+                            scope_path(wire_path(child_path + finding.path[1:])), finding.requirement,
+                        )
+                visit(child, child_path)
+        elif type(node) is list:
+            for index, child in enumerate(node):
+                visit(child, f"{path}[{index}]")
+
+    visit(value, "$")
+
+
 def _require_intrinsic_lead_result(value: object) -> None:
     if type(value) is not dict or type(value.get("message")) is not str:
         raise TypeError("selected Lead response requires typed text")
@@ -398,7 +451,26 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
             separators=(",", ":")).encode("utf-8")
         visible = NamedHostCheck("owner.visible_text_utf8", "848-v3:existing-visible-text-cap", "selected",
                                 SelectedHostContext, facts, self._require_visible_text)
-        object.__setattr__(self, "_declared_checks", (visible, *self.checks))
+        free_slots = _has_free_dependency_slots(self.variant.rules)
+        slot_checks = ()
+        check_slots = _require_dependency_slot_ids
+        if free_slots:
+            finding = AuthoringScopeRuleSet.dependency_slot_id_rule()
+            slot_facts = json.dumps({"requirements": [{
+                "path": project_lead_scope_diagnostic(diagnostic_to_wire("$.authoring_scope" + finding.path[1:])),
+                "rule": "DEPENDENCY_SLOT_IDS_UNIQUE",
+                "expected": {"requirement": finding.requirement, "comparison": "SLOT_ID_WITHIN_ONE_SCOPE"},
+            }]}, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+
+            def selected_slots(value: LeadDecodedResult, context: HostCheckContext, *, check_slots=check_slots) -> None:
+                check_slots(value.domain_value())
+
+            slot_checks = (NamedHostCheck(
+                "owner.dependency_slot_ids_unique", "848-v1:dependency-slot-identity", "selected",
+                SelectedHostContext, slot_facts, selected_slots,
+                dependencies=(AuthoringScopeRuleSet.dependency_slot_id_rule,),
+            ),)
+        object.__setattr__(self, "_declared_checks", (visible, *slot_checks, *self.checks))
         variant_decode = self.variant.decode
         task_revisions = self.task_revisions
 
@@ -408,6 +480,8 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
             body = value.as_object()
             map_current_task_literals(body, task_revisions)
             domain = variant_decode(body)
+            if free_slots:
+                check_slots(domain)
             _require_intrinsic_lead_result(domain)
             return LeadDecodedResult(json.dumps(domain, ensure_ascii=False, allow_nan=False, separators=(",", ":")))
         object.__setattr__(self, "_declared_decode", decode_typed)
@@ -453,7 +527,9 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
              LeadProviderConstraints._allocation_input_ids, lead_outcome_scope_paths, normalize_result,
              map_current_task_literals,
             _require_intrinsic_lead_result,
-                             project_lead_scope_schema, restore_lead_scope_result, project_lead_scope_diagnostic))
+             project_lead_scope_schema, restore_lead_scope_result, project_lead_scope_diagnostic,
+             diagnostic_to_wire, AuthoringScopeRuleSet.dependency_slot_id_rule,
+             _has_free_dependency_slots, _require_dependency_slot_ids))
 
     def named_host_checks(self) -> tuple[NamedHostCheck[LeadDecodedResult], ...]:
         self._require_declaration()
@@ -477,7 +553,7 @@ class LeadStagePolicy:
     logical_origin_call_id: str
     owner_declarations: tuple[ContractOwner, ...] = field(kw_only=True, repr=False, compare=False)
     maximum_schema_bytes: int = field(default=65_536, kw_only=True)
-    maximum_index_schema_bytes: int = field(default=262_144, kw_only=True)
+    maximum_index_schema_bytes: int = field(default=MAX_PROVIDER_SCHEMA_UTF8_BYTES, kw_only=True)
     wire_root_path: str = field(default="$.agent_action.task_result", kw_only=True)
 
     def __post_init__(self) -> None:
@@ -485,10 +561,7 @@ class LeadStagePolicy:
                 (self.stage, self.physical_call_id, self.language, self.logical_origin_call_id))
                 or self.maximum_schema_bytes not in {65_536, 262_144}
                 or type(self.maximum_index_schema_bytes) is not int
-                or self.maximum_index_schema_bytes != (
-                    MAX_PROVIDER_SCHEMA_UTF8_BYTES
-                    if self.wire_root_path == "$.agent_action" else 262_144
-                )
+                or self.maximum_index_schema_bytes != MAX_PROVIDER_SCHEMA_UTF8_BYTES
                 or self.wire_root_path not in {"$", "$.agent_action", "$.agent_action.task_result"}
                 or any(type(value) is not str or len(value) != 64 or any(
                     char not in "0123456789abcdef" for char in value)
@@ -533,6 +606,43 @@ def _compile_closed_choices(
     """Certify a same-payload one-property distribution of closed alternatives."""
     original = deepcopy(dict(schema))
     original_fingerprints = schema_rule_fingerprints(original)
+
+    def plain_json_graph(value: object) -> bool:
+        pending = [(value, False)]
+        visiting: set[int] = set()
+        complete: set[int] = set()
+        try:
+            while pending:
+                node, leaving = pending.pop()
+                kind = type(node)
+                if kind is dict or kind is list:
+                    identity = id(node)
+                    if leaving:
+                        visiting.remove(identity)
+                        complete.add(identity)
+                        continue
+                    if identity in visiting:
+                        return False
+                    if identity in complete:
+                        continue
+                    visiting.add(identity)
+                    pending.append((node, True))
+                    if kind is dict:
+                        if any(type(name) is not str for name in node):
+                            return False
+                        pending.extend((child, False) for child in node.values())
+                    else:
+                        pending.extend((child, False) for child in node)
+                elif node is None or kind is str or kind is int or kind is bool:
+                    continue
+                elif kind is not float or node.hex() in ("nan", "inf", "-inf"):
+                    return False
+        except Exception:
+            return False
+        return True
+
+    # The complete proof above remains authoritative for this private snapshot.
+    plain_context = plain_json_graph(original)
     working = deepcopy(original)
     fingerprints: dict[str, str] = {}
     grouping_prefill: tuple[list, list[str]] | None = None
@@ -584,7 +694,9 @@ def _compile_closed_choices(
                 grouping_prefill = None
                 prefill_grouping_fingerprints(choices, names)
             if key not in fingerprints:
-                fingerprints[key] = schema_rule_fingerprints(original, selected=node)[0]
+                fingerprints[key] = (schema_rule_fingerprint(original, selected=node)
+                                     if plain_context and plain_json_graph(node)
+                                     else schema_rule_fingerprints(original, selected=node)[0])
         return fingerprints[key]
 
     def prefill_grouping_fingerprints(choices: list, names: list[str]) -> None:
@@ -722,10 +834,10 @@ def _compile_closed_choices(
         properties = node.get("properties")
         required = node.get("required")
         return (node.get("type") == "object" and node.get("additionalProperties") is False
-                and type(properties) is dict and type(required) is list
+                and type(properties) is dict and "variant_id" not in properties and type(required) is list
                 and len(required) == len(set(required)) and set(required) == set(properties)
                 and not set(node) - {"type", "properties", "required",
-                                     "additionalProperties", "description"})
+                                     "additionalProperties", "description", "x-swa-property-policy"})
 
     size = initial_size = final_cost(working)
     while True:
@@ -959,6 +1071,23 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
             result["items"] = render(result["items"])
         return result
 
+    def symbol_aliases(reference_counts: Mapping[str, int]) -> dict[str, str]:
+        alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+        def short_name(number: int) -> str:
+            name = ""
+            while True:
+                number, digit = divmod(number, len(alphabet))
+                name = alphabet[digit] + name
+                if not number:
+                    return name
+                number -= 1
+
+        return {
+            name: short_name(number)
+            for number, name in enumerate(sorted(reference_counts, key=lambda name: (-reference_counts[name], name)))
+        }
+
     def compact_symbols(graph: dict[str, object]) -> tuple[dict[str, object], dict[str, str]]:
         """Use the same local-symbol layout for every cost trial and final graph."""
         if not graph.get("$defs"):
@@ -977,21 +1106,7 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
         count_references(graph)
         for node in graph["$defs"].values():
             count_references(node)
-        alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-
-        def short_name(number: int) -> str:
-            name = ""
-            while True:
-                number, digit = divmod(number, len(alphabet))
-                name = alphabet[digit] + name
-                if not number:
-                    return name
-                number -= 1
-
-        aliases = {
-            name: short_name(number)
-            for number, name in enumerate(sorted(reference_counts, key=lambda name: (-reference_counts[name], name)))
-        }
+        aliases = symbol_aliases(reference_counts)
         compact = rename(graph, aliases)
         compact["$defs"] = {aliases[name]: rename(node, aliases) for name, node in graph["$defs"].items()}
         return compact, aliases
@@ -1006,6 +1121,70 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
         if declarations:
             result["$defs"] = declarations
         return compact_symbols(result)
+
+    quoted_sizes: dict[str, int] = {}
+    fixed_sizes: dict[int, int] = {}
+
+    def quoted_size(value: str) -> int:
+        if value not in quoted_sizes:
+            quoted_sizes[value] = len(key(value).encode("utf-8"))
+        return quoted_sizes[value]
+
+    def fixed_size(node: dict[str, object]) -> int:
+        """Count unchanged bytes; the detached source keeps every node alive."""
+        identity = id(node)
+        if identity not in fixed_sizes:
+            size = 2 + max(0, len(node) - 1)
+            for name, value in node.items():
+                size += quoted_size(name) + 1
+                if name == "properties" and type(value) is dict:
+                    size += 2 + max(0, len(value) - 1)
+                    size += sum(quoted_size(field) + 1 for field in value)
+                elif name == "anyOf" and type(value) is list:
+                    size += 2 + max(0, len(value) - 1)
+                elif name != "items":
+                    size += len(key(value).encode("utf-8"))
+            fixed_sizes[identity] = size
+        return fixed_sizes[identity]
+
+    def measure(node: object, reference_counts: dict[str, int], *,
+                own: str | None = None, count_refs: bool = True) -> int:
+        if type(node) is not dict:
+            return len(key(node).encode("utf-8"))
+        identity = source_key(node)
+        if identity in shared and identity != own:
+            name = shared[identity]
+            if count_refs:
+                reference_counts[name] += 1
+            return 2 + quoted_size("$ref") + 1 + quoted_size("#/$defs/" + name)
+        size = fixed_size(node)
+        if "$ref" in node:
+            if count_refs:
+                reference_counts[node["$ref"][len("#/$defs/"):]] += 1
+            count_refs = False
+        for child in children(node):
+            size += measure(child, reference_counts, count_refs=count_refs)
+        return size
+
+    def trial_size() -> tuple[int, dict[str, str]]:
+        """Measure the exact rendered/renamed trial without materializing it."""
+        declarations = {name: (node, source_key(node)) for name, node in definitions.items()}
+        for identity, name in shared.items():
+            if name not in declarations:
+                declarations[name] = (nodes[identity], identity)
+        reference_counts = dict.fromkeys(declarations, 0)
+        size = measure(root, reference_counts, own=source_key(root))
+        if declarations:
+            size += (1 if root else 0) + quoted_size("$defs") + 1
+            size += 2 + max(0, len(declarations) - 1)
+            for name, (node, own) in declarations.items():
+                size += quoted_size(name) + 1 + measure(node, reference_counts, own=own)
+        aliases = symbol_aliases(reference_counts)
+        for name, alias in aliases.items():
+            size += quoted_size(alias) - quoted_size(name)
+            size += reference_counts[name] * (
+                quoted_size("#/$defs/" + alias) - quoted_size("#/$defs/" + name))
+        return size, aliases
 
     def share_annotations(graph: dict[str, object]) -> dict[str, object]:
         literal_ids: dict[tuple[object, ...], int] = {}
@@ -1108,24 +1287,24 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
     shared.clear()
     baseline, baseline_aliases = assemble()
     baseline_bytes = len(key(baseline).encode("utf-8"))
-    shared.update(seeded)
-    result, final_aliases = assemble()
-    current_bytes = len(key(result).encode("utf-8"))
-    if current_bytes >= baseline_bytes:
-        shared.clear()
-        result, final_aliases = baseline, baseline_aliases
-        current_bytes = baseline_bytes
+    current_bytes, expected_aliases = baseline_bytes, baseline_aliases
+    if seeded:
+        shared.update(seeded)
+        current_bytes, expected_aliases = trial_size()
+        if current_bytes >= baseline_bytes:
+            shared.clear()
+            current_bytes, expected_aliases = baseline_bytes, baseline_aliases
     for identity, times in sorted(counts.items(), key=lambda item: source_order[item[0]]):
         if identity in shared or (times <= 1 and identity not in existing):
             continue
         shared[identity] = existing.get(identity, f"n{len(shared)}")
-        candidate, candidate_aliases = assemble()
-        candidate_bytes = len(key(candidate).encode("utf-8"))
+        candidate_bytes, candidate_aliases = trial_size()
         if candidate_bytes < current_bytes:
-            result, current_bytes, final_aliases = candidate, candidate_bytes, candidate_aliases
+            current_bytes, expected_aliases = candidate_bytes, candidate_aliases
         else:
             del shared[identity]
-    if (len(key(result).encode("utf-8")) != current_bytes or current_bytes > baseline_bytes
+    result, final_aliases = assemble() if shared else (baseline, baseline_aliases)
+    if (final_aliases != expected_aliases or len(key(result).encode("utf-8")) != current_bytes or current_bytes > baseline_bytes
             or (shared and current_bytes >= baseline_bytes)):
         raise ValueError("schema sharing does not preserve its complete UTF-8 cost guard")
     candidate, candidate_aliases = compact_symbols(share_annotations(result))
@@ -1217,12 +1396,10 @@ class LeadContractIndex(Generic[_LeadValue]):
             contract.require_owner_provenance()
 
     def schema_value(self) -> dict[str, object]:
-        self.require_provenance()
-        return self.rule_graph.schema_value()
+        return self.rule_graph.provider_schema_value()
 
     def select(self, schema_id: object) -> BoundContract[_LeadValue]:
-        self.require_provenance()
-        if type(schema_id) is str:
+        if type(schema_id) is str and schema_id in self.expected_schema_ids:
             for contract in self.contracts:
                 if contract.schema_id == schema_id:
                     return contract
@@ -1230,7 +1407,6 @@ class LeadContractIndex(Generic[_LeadValue]):
                                     ("$.schema_id: required exact current offered string identity",))
 
     def decode_and_validate(self, result: object) -> SelectedContract[_LeadValue]:
-        self.require_provenance()
         try:
             value = strict_json_object(result, exact_numbers=True) if type(result) is str else result
         except ValueError as failure:
@@ -1258,7 +1434,6 @@ class LeadContractIndex(Generic[_LeadValue]):
                                         findings or ("$: current authorized owner requirements",)) from None
 
     def repair_input(self, failure: LeadContractRejection) -> str:
-        self.require_provenance()
         if type(failure) is not LeadContractRejection:
             raise TypeError("repair requires a trusted selected contract rejection")
         if failure.schema_id in self.expected_schema_ids:
@@ -1284,9 +1459,9 @@ class LeadContractIndex(Generic[_LeadValue]):
 
 
 
-def closed_object(properties: dict[str, object]) -> dict[str, object]:
+def closed_object(properties: dict[str, object], *, required: tuple[str, ...] | None = None) -> dict[str, object]:
     return {"type": "object", "properties": properties,
-            "required": list(properties), "additionalProperties": False}
+            "required": list(properties if required is None else required), "additionalProperties": False}
 
 
 def string_array(
@@ -1697,7 +1872,8 @@ class LeadProviderConstraints:
         for root_number, root in enumerate(roots):
             properties = root.get("properties", {})
             ordinary_answer = (
-                set(properties) == {"response_type", "response_text", "writing_task_scope"}
+                set(properties) - {"document_change_request_update"} == {"response_type", "response_text", "writing_task_scope"}
+                and set(root.get("required", ())) == {"response_type", "response_text", "writing_task_scope"}
                 and properties["response_type"].get("enum") == ["answer"]
             )
             scope_template = properties.get("writing_task_scope")
@@ -1931,7 +2107,7 @@ class LeadProviderConstraints:
                                 fields[anchor] = {"anyOf": used} if len(used) > 1 else used[0]
                                 for previous_key, previous_rows in groups.items():
                                     if previous_key == anchor:
-                                        graphs.append(closed_rule(fields))
+                                        graphs.append(closed_map_rule(fields))
                                         break
                                     nonqualifying_rows = [
                                         row for row in previous_rows
@@ -2307,12 +2483,17 @@ class LeadProviderConstraints:
                         if source_member.rules.node_fingerprint((name,)) != common_fingerprints[name]:
                             raise ValueError("Lead family has incompatible common scalar rules")
                     detail_properties = {name: value for name, value in source["properties"].items() if name not in common_names}
+                    if len(members) > 1:
+                        detail_properties["variant_id"] = {"type": "string", "enum": [source_member.branch_key],
+                                                           "description": "Required offered family variant identity; use this exact literal."}
                     scope_node = detail_properties.get("writing_task_scope")
                     if type(scope_node) is dict and "description" in scope_node:
                         notice = "writing_task_scope: " + scope_node["description"]
                         if notice not in guidance: guidance.append(notice)
                     detail = {
-                        **closed_object(detail_properties),
+                    **closed_object(detail_properties, required=tuple(
+                        name for name in source["required"] if name not in common_names
+                    ) + (("variant_id",) if len(members) > 1 else ())),
                         "description": source["description"],
                     }
                     if "$defs" in source: detail["$defs"] = source["$defs"]
@@ -2425,8 +2606,11 @@ class LeadProviderConstraints:
                 )
             for part_number, (part, members, common_names) in enumerate(family_partitions):
                 family_rules = SchemaRules.declare(part, maximum_bytes=maximum_bytes)
+                member_by_variant = MappingProxyType({member.branch_key: member for member in members})
+                if len(member_by_variant) != len(members):
+                    raise ValueError("duplicate Lead family variant identity")
 
-                def family_decode(body: dict[str, object], *, candidates=members,
+                def family_decode(body: dict[str, object], *, candidates=members, by_variant=member_by_variant,
                                   names=common_names, scope_schema=family_rules,
                                   offered_tasks=tasks, restore=restore_lead_scope_result
                                   ) -> dict[str, object]:
@@ -2434,13 +2618,20 @@ class LeadProviderConstraints:
                     details = dict(declared["properties"]["response_details"])
                     if "$defs" in declared:
                         details["$defs"] = declared["$defs"]
+                    supplied = body["response_details"].get("variant_id")
+                    candidate = (candidates[0] if len(candidates) == 1 else
+                                 by_variant.get(supplied) if type(supplied) is str else None)
+                    if candidate is None:
+                        raise ValueError("selected family requires its offered variant identity")
                     expanded = {name: body[name] for name in names}
-                    expanded.update(restore(body["response_details"], details))
+                    restored = restore(body["response_details"], details)
+                    if len(candidates) > 1:
+                        restored.pop("variant_id")
+                    expanded.update(restored)
                     map_current_task_literals(expanded, offered_tasks)
-                    for candidate in candidates:
-                        if not candidate.rules.findings(expanded):
-                            return candidate.decode(expanded)
-                    raise ValueError("selected family details violate its bound choice graph")
+                    if candidate.rules.findings(expanded):
+                        raise ValueError("selected family details violate its bound choice graph")
+                    return candidate.decode(expanded)
                 branch_key = f"{contract.contract_id}:family:{root_number}"
                 if len(family_partitions) > 1:
                     branch_key += f":partition:{part_number}"
@@ -2665,41 +2856,36 @@ class LeadProviderConstraints:
         common = {"instruction": nonempty_text_schema(), "source_ids": source_schema}
         if self.scope and self.scope.intent is AuthoringIntent.REVIEW_ONLY:
             return {**closed_object({
-                **common,
+                **common, "objective_id": {"type": "string", "enum": []},
                 "kind": {"type": "string", "enum": ["prepare_consultation"]},
                 "specialist_ids": string_array(
                     tuple(SPECIALIST_IDS), minimum=1, maximum=len(SPECIALIST_IDS),
                 ),
-            }), "description": (
+            }, required=(*common, "kind", "specialist_ids")), "description": (
                 "Prepare only another exact supplied-material review consultation; "
                 "no replacement or artifact-objective authority."
             )}
-        objectives: list[dict[str, object]] = [{}]
-        if self.objective_ids is None or self.objective_ids:
-            identity: dict[str, object] = {"type": "string"}
-            if self.objective_ids:
-                identity["enum"] = list(self.objective_ids)
-            objectives.append({"objective_id": identity})
+        identity: dict[str, object] = {"type": "string"}
+        if self.objective_ids is not None:
+            identity["enum"] = list(self.objective_ids)
+        objective = {"objective_id": identity}
+        association_description = (
+            "Include the offered document change request identity only when continuing that request."
+        )
         variants = []
-        for objective in objectives:
-            association_description = (
-                "Continue the identified pending document change request."
-                if objective else
-                "Use this variant when no existing document change request is being continued."
-            )
-            variants.extend([
-                {**closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_artifact"]},
-                               "target_paths": string_array(minimum=1)}), "description": (
-                                   "Draft a document-change proposal when the selected sources "
-                                   "already support exact changes to these targets. "
-                               ) + association_description},
-                {**closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_consultation"]},
-                               "specialist_ids": string_array(tuple(SPECIALIST_IDS), minimum=1, maximum=len(SPECIALIST_IDS))}), "description": (
-                                   "Draft a specialist consultation proposal when further "
-                                   "drafting or review is needed; include every affected "
-                                   "specialist. "
-                               ) + association_description},
-            ])
+        variants.extend([
+            {**closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_artifact"]},
+                           "target_paths": string_array(minimum=1)}, required=(*common, "kind", "target_paths")), "description": (
+                               "Draft a document-change proposal when the selected sources "
+                               "already support exact changes to these targets. "
+                           ) + association_description},
+            {**closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_consultation"]},
+                           "specialist_ids": string_array(tuple(SPECIALIST_IDS), minimum=1, maximum=len(SPECIALIST_IDS))}, required=(*common, "kind", "specialist_ids")), "description": (
+                               "Draft a specialist consultation proposal when further "
+                               "drafting or review is needed; include every affected "
+                               "specialist. "
+                           ) + association_description},
+        ])
         result = alternatives(variants)
         result["description"] = (
             (

@@ -582,6 +582,14 @@ validation, and source-authored repair requirements together. Check strict
 field/value rules and branch relationships after the final provider projection;
 a successful repair does not establish schema alignment.
 
+For repeated JSON payload checks, `diagnose_value` and `diagnose_json_text` in
+`structured_output_validation` also accept an exact `SchemaRules` owner. Declare
+each final schema once with its existing byte budget and retain that owner for
+the repeated calls. It reuses immutable schema preparation while each payload
+gets fresh validation state. Raw mappings keep their original diagnostic order;
+the JSON entry point retains strict parsing. Native projection checks still use
+the original raw schema with `require_projection`.
+
 Run tests from the repository root in the same Python 3.11+ development
 environment used to install the project. The canonical runner uses only the
 standard library and records the exact selected IDs, results, timings, policy,
@@ -611,20 +619,49 @@ PYTHONPATH=src python -m tests.runner run \
   --json "$report_dir/affected.json"
 ```
 
-For runtime or test changes, CI requires four complementary full-suite shards.
-Hosted full shards, static validation, the runtime fast lane, and reconciliation
-use standard Ubuntu 24.04 x64 runners with the same locked dependencies and test
-inventory. Full-suite selection
-includes test-only changes. The fixed timing limits still apply to every
+For runtime or test changes, CI requires five complementary full-suite shards.
+Hosted runtime fast and full jobs use the standard four-core Ubuntu 24.04 ARM64
+runner. Static validation, reconciliation and deadline control use Ubuntu 24.04
+x64 runners. They retain the same locked dependencies and test inventory.
+Full-suite selection includes test-only changes. The fixed timing limits still apply to every
 selected full shard; a diagnostic run never replaces this evidence.
 
+The original four-bin assignment is retained, with only
+`LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict`
+extracted into dedicated shard `5/5`. The five selections contain
+577/554/704/691/1 tests, covering all 2,527 IDs exactly once. The other schema tests
+keep their original assignments.
+
+To measure whole-front independently, manually dispatch `pr-validation` with
+`validation_scope: whole-front`. That mode runs static validation, focused policy
+checks and only the dedicated whole-front job; fast, the four regular shards and
+full-suite reconciliation are skipped. Retain completed reports while investigating
+whole-front. An isolated report supplies partial evidence and never implies a
+complete-suite pass. Normal PR/merge-group validation includes all five shards.
+The dedicated canonical selector is:
+
+```bash
+PYTHONPATH=src python -m tests.runner run --shard 5/5 --json whole-front.json
+```
+
+Hosted full shards use the fixed `audited-147-v3` profile of 147 fixture-audited
+methods across 17 classes to run at most four fresh test processes after their
+original noneligible serial suite. The frozen launch order starts whole-front,
+then seven other v40 failed or unexecuted methods in canonical order, then 139
+passed methods by descending v40 observed duration with canonical tie-breaks.
+Runtime history cannot change this order, and final report rows stay canonical.
+Every process shares the shard's original one-hour work cutoff; shutdown has a
+separate 30-second bound. Fast, affected and local runs remain serial. See
+[TEST_POLICY.md](TEST_POLICY.md) for eligibility, source reconciliation and cleanup
+requirements.
+
 Independent task threads share a host queue with four executing test processes;
-a campaign still runs only four full shards. Local `tests.runner run` commands
+a campaign schedules five full shards within those four slots. Local `tests.runner run` commands
 enter this queue automatically. Queue waiting is separate from test wall time.
 
 Use the host campaign command to execute the lanes selected by the pinned
 workflow, plus the affected modules you specify. It captures static checks,
-fast and affected tests, all four full shards, reconciliation, and the strict budget
+fast and affected tests, all five full shards, reconciliation, and the strict budget
 check. Prepare a clean checkout and its locked Python 3.11 `.venv` first:
 
 ```bash
@@ -642,10 +679,10 @@ PYTHONPATH=src .venv/bin/python -m tests.local_ci run \
 
 Choose `--timing-mode shared` for concurrent task feedback. Isolated mode drains
 active executions and reserves the host for the campaign; use it for performance
-measurements. Isolated campaigns run the four full shards sequentially on their
+measurements. Isolated campaigns run the five full shards sequentially on their
 executor by default; shared campaigns permit four concurrently. Set
 `--full-concurrency 1`, `2`, `3`, or `4` to choose explicitly. Campaign metadata records the
-resolved value. The strict 1,080/540-second limits still apply in either mode.
+resolved value. The strict 18,000/3,600-second limits apply in either mode.
 Run status and capability-authorized cancellation from a checkout containing
 the queue utilities; campaigns can target older prepared checkouts with
 `--checkout`:
@@ -692,10 +729,14 @@ classes use the manifest's deterministic fallback, so the weights are a
 partitioning input rather than proof of current performance.
 
 The frozen suite scope and measured limits are in [TEST_POLICY.md](TEST_POLICY.md):
-1,080 seconds sequential equivalent and 540 seconds per shard. The checked-in
-budget contains exact canonical IDs and per-ID subtest caps; the CI gate compares
-it with the base commit and current Python 3.11 reports. Class timing weights
-only balance the four shards; they do not prove the run is under budget.
+18,000 seconds sequential equivalent and 3,600 seconds per full shard. Hosted
+full workers receive one hour of test execution. Full-shard jobs, the deadline
+guardian and the shared workflow have 75-minute limits for setup and shutdown;
+other jobs retain 60-minute native limits. The checked-in budget contains exact canonical IDs and per-ID
+subtest caps. The gate compares it with the base commit, allowing only the
+explicitly approved paired duration-policy transition, and current Python 3.11
+reports. Class timing weights
+balance the original four regular bins before whole-front extraction; they do not prove a shard is under budget.
 
 <a id="contribution-guidelines"></a>
 
@@ -704,6 +745,6 @@ Contributors must follow [AGENTS.md](AGENTS.md),
 [COMMIT_POLICY.md](COMMIT_POLICY.md). For tracked work, load
 [`$github-task-lifecycle`](.agents/skills/github-task-lifecycle/SKILL.md).
 
-The four-shard validation work is tracked in [Issue #846](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/846#implementation-plan).
+The original four-shard calibration is tracked in [Issue #846](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/846#implementation-plan). The dedicated fifth shard and isolated execution are tracked in [Issue #872](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/872#implementation-plan).
 Its plan covers partitioning, local scheduling and complete reconciliation while
 preserving the existing suite cost limits.

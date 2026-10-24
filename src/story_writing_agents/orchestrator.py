@@ -538,11 +538,12 @@ def _closed_result_object(
     properties: dict[str, object],
     *,
     description: str | None = None,
+    required: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     schema: dict[str, object] = {
         "additionalProperties": False,
         "properties": properties,
-        "required": list(properties),
+        "required": list(properties if required is None else required),
         "type": "object",
     }
     if description is not None:
@@ -601,27 +602,21 @@ def _proposal_result_schema(
             "basis_input_ids": string_array(None if facts.allow_read_sources else facts.input_ids),
         }), "description": "Bind each declared dependency slot to a disclosed choice and currently available sources; unresolved choices require clarification."}
     if facts.scope and facts.scope.intent is AuthoringIntent.REVIEW_ONLY:
-        return _closed_result_object(assignments, description="Confirm only this exact supplied-material review; no drafting or artifact objective.")
-    objective = facts.objective_schema("consult")
-    with_objective = _closed_result_object({**assignments, "objective_intent": objective},
-        description=(
-            "Propose specialist work that starts or advances a document change request; "
-            "confirmation authorizes the assignments, not document changes."
-        ),
-    )
-    if facts.preparation_kind:
-        return with_objective if facts.preparation_objective_id else _closed_result_object(assignments,
-            description=(
-                "Propose specialist work when no document change request update is needed; "
-                "confirmation authorizes only these disclosed assignments."
-            ),
-        )
-    return {"anyOf": [_closed_result_object(assignments,
-        description=(
+        return _closed_result_object({**assignments, "objective_intent": {"type": "string", "enum": []}},
+            required=tuple(assignments), description="Confirm only this exact supplied-material review; no drafting or artifact objective.")
+    if facts.preparation_kind and facts.preparation_objective_id is None:
+        return _closed_result_object({**assignments, "objective_intent": {"type": "string", "enum": []}},
+            required=tuple(assignments), description=(
             "Propose specialist work when no document change request update is needed; "
             "confirmation authorizes only these disclosed assignments."
+        ))
+    return _closed_result_object({**assignments, "objective_intent": facts.objective_schema("consult")},
+        required=None if facts.preparation_kind else tuple(assignments),
+        description=(
+            "Propose the disclosed specialist assignments, optionally starting or advancing "
+            "a document change request; confirmation does not authorize document changes."
         ),
-    ), with_objective]}
+    )
 
 
 def _artifact_intent_result_schema(
@@ -691,22 +686,13 @@ def _artifact_intent_result_schema(
         },
     }
     facts = constraints or LeadProviderConstraints()
-    with_objective = _closed_result_object({
-        **operations, "objective_intent": facts.objective_schema("prepare"),
-    },
+    return _closed_result_object({**operations, "objective_intent": facts.objective_schema("prepare")},
+        required=None if facts.preparation_kind else tuple(operations),
         description=(
-            "Prepare exact changes while starting or advancing a document change request; review "
-            "and Apply still require separate confirmation."
-        ),
-    )
-    if facts.preparation_kind:
-        return with_objective
-    return {"anyOf": [_closed_result_object(operations,
-        description=(
-            "Prepare exact changes without a document change request update when none is needed; "
+            "Prepare exact changes, optionally starting or advancing a document change request; "
             "review and Apply still require separate confirmation."
         ),
-    ), with_objective]}
+    )
 
 
 def _recommended_action_result_schema(
@@ -890,51 +876,34 @@ def _lead_front_result_contract(
             ),
         ]
     else:
-        variants = [
-            _closed_result_object(scoped,
-                description=(
-                    "Answer workflow or status questions directly, or report facts supported "
-                    "by current writing READs in a REVIEW scope, without requesting "
-                    "specialist or document actions."
-                ),
-            ),
-            _closed_result_object({**scoped, "kind": {"enum": ["question", "critique"], "type": "string"}},
-                description=(
-                    "Ask for missing information with clarification_question, or explain a scoped"
-                    " concern with critique, when no document request update or proposal is "
-                    "needed."
-                ),
-            ),
-            _closed_result_object({**scoped,
-                "kind": {"enum": ["question"], "type": "string"},
-                "objective_intent": facts.objective_schema("clarify")},
-                description=(
-                    "Ask for missing information while starting or continuing the associated "
-                    "document change request; keep that request pending."
-                ),
-            ),
-            recommendation,
-        ]
-        if facts.objective_ids is None or facts.objective_ids:
+        can_track = not (facts.scope and facts.scope.intent is AuthoringIntent.REVIEW_ONLY)
+        cancellation = {"objective_intent": {"type": "string", "enum": []}}
+        if can_track and (facts.objective_ids is None or facts.objective_ids):
             identity: dict[str, object] = {"type": "string"}
             if facts.objective_ids:
                 identity["enum"] = list(facts.objective_ids)
-            variants.append(_closed_result_object({**scoped,
-                "kind": {"enum": [LeadOutcomeKind.ANSWER.value, LeadOutcomeKind.CRITIQUE.value], "type": "string"},
-                "objective_intent": _closed_result_object({
-                    "action": {"enum": ["cancel"], "type": "string"}, "objective_id": identity,
-                },
-                    description=(
-                        "Close only the selected request that the user explicitly cancelled; this"
-                        " performs no document change."
-                    ),
-                ),
-            },
+            cancellation = {"objective_intent": _closed_result_object({
+                "action": {"enum": ["cancel"], "type": "string"}, "objective_id": identity,
+            }, description="Close only the selected request explicitly cancelled by the user; no document change.")}
+        variants = [
+            _closed_result_object({**scoped, **cancellation}, required=tuple(scoped),
                 description=(
-                    "Acknowledge explicit user cancellation with an answer or critique and close "
-                    "the selected pending document change request without applying changes."
-                ),
-            ))
+                    "Answer workflow or status questions or report current READ-supported facts in REVIEW "
+                    "scope. Optionally acknowledge an explicitly cancelled document change request."
+                )),
+            _closed_result_object({**scoped, "kind": {"enum": ["question"], "type": "string"},
+                "objective_intent": facts.objective_schema("clarify") if can_track else {"type": "string", "enum": []}},
+                required=(*scoped, "kind"), description=(
+                    "Ask for missing information, optionally starting or continuing the associated "
+                    "document change request; keep that request pending."
+                )),
+            _closed_result_object({**scoped, "kind": {"enum": ["critique"], "type": "string"}, **cancellation},
+                required=(*scoped, "kind"), description=(
+                    "Explain a scoped concern, optionally acknowledging an explicitly cancelled "
+                    "document change request; this performs no document change."
+                )),
+            recommendation,
+        ]
         for field, intent in (("proposal", _proposal_result_schema(expected_relation, input_ids, facts)),
                               ("artifact_intent", _artifact_intent_result_schema(facts))):
             variants.append(_closed_result_object({**scoped,
@@ -948,7 +917,6 @@ def _lead_front_result_contract(
         variants = [
             variant for variant in variants
             if "artifact_intent" not in variant.get("properties", {})
-            and "objective_intent" not in variant.get("properties", {})
         ]
     if facts.adoption_intent is not None:
         variants = [variant for variant in variants if "proposal" in variant.get("properties", {})]
@@ -2407,6 +2375,8 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
     language: str
     authorized_validator: Callable[[str, object], object] = field(repr=False, compare=False)
     reviewer_for_locator: Callable[[str], str] = field(repr=False, compare=False)
+    _declared_authorization_check: Callable[[LeadDecodedResult, HostCheckContext], None] = field(init=False, repr=False, compare=False)
+    _authorization_declaration: NamedHostCheck[LeadDecodedResult] = field(init=False, repr=False, compare=False)
     _status_rule: tuple[object, object] = field(
         default=(empty_core_status_evidence, empty_core_status_evidence.__code__),
         init=False, repr=False, compare=False,
@@ -2428,13 +2398,41 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
             raise TypeError("Lead factory requires its exact current owner declaration")
         TypedDecoder.require_hook_shape(self.authorized_validator, 2)
         TypedDecoder.require_hook_shape(self.reviewer_for_locator, 1)
+        validator = self.authorized_validator
+        guard = type(self).require_declaration
+
+        def authorized_check(result: LeadDecodedResult, context: HostCheckContext, *, validator=validator) -> None:
+            if type(result) is not LeadDecodedResult or type(context) is not AuthorizedAnswerHostContext:
+                raise TypeError("final Lead owner requires the actual selected result/authorization")
+            if validator(result.domain_json, context.authorization) is not None:
+                raise TypeError("final Lead owner check must return None")
+
+        object.__setattr__(self, "_declared_authorization_check", authorized_check)
+        object.__setattr__(self, "_authorization_declaration", NamedHostCheck(
+            "owner.authorized_final", "848-v3:actual-service-authorization", "authorized",
+            AuthorizedAnswerHostContext,
+            b'{"requirements":[{"expected":{"authorization":"ACTUAL_CURRENT_OWNER"},"path":"$","rule":"ACTUAL_CURRENT_OWNER_AUTHORIZATION"}]}',
+            authorized_check,
+            dependencies=(validator, guard, self._require_status_rule,
+                          self._status_rule[0], self._outcome_scope_rule[0], parse_artifact_references),
+        ))
+
+    def require_declaration(self) -> None:
+        declaration = self._authorization_declaration
+        declaration.require_provenance()
+        if (self._declared_authorization_check is not declaration.check
+                or self.authorized_validator is not declaration.dependencies[0]
+                or type(self).require_declaration is not declaration.dependencies[1]):
+            raise ValueError("frozen Lead authorization declaration changed")
+        self._require_status_rule()
 
     @property
     def contract_id(self) -> str:
         return self.rule_seed.contract_id
 
     def declare_result_owners(self, offers: ContextCallOffers) -> LeadStagePolicy:
-        self._require_status_rule()
+        self._authorization_declaration.require_provenance()
+        self._authorization_declaration.dependencies[1](self)
         if type(offers) is not ContextCallOffers:
             raise TypeError("Lead declaration requires actual service-owned physical offers")
         if self.constraints.continuation and self.constraints.review_candidate_ids is None:
@@ -2467,20 +2465,10 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
                 "new_target_path": "ACTUAL_CURRENT_PHYSICAL_ROOT_POLICY",
                 "admission": "EXISTING_OWNER_STATE_AND_FINAL_ADMISSION"}}]},
             sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
-        check = NamedHostCheck(
-            'owner.authorized_final',
-            '848-v3:actual-service-authorization',
-            'authorized',
-            AuthorizedAnswerHostContext,
-            facts_bytes,
-            self._require_authorized_result,
-            dependencies=(self.authorized_validator, self._status_rule[0],
-                          self._outcome_scope_rule[0], parse_artifact_references),
-        )
+        check = replace(self._authorization_declaration, corrective_facts=facts_bytes)
         owners = tuple(LeadResultContractOwner(variant, tasks, (check,)) for variant in variants)
         return LeadStagePolicy(self.stage, offers.call_id, tasks, self.language, offers.offer_digest,
                                current.choice_snapshot(), offers.offer_digest, offers.call_id,
-                               maximum_index_schema_bytes=262_144,
                                owner_declarations=owners)
 
     def _require_status_rule(self) -> None:
@@ -2493,13 +2481,6 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
         function, code = self._outcome_scope_rule
         if lead_outcome_scope_paths is not function or function.__code__ is not code:
             raise ValueError("frozen Lead outcome scope rule changed")
-
-    def _require_authorized_result(self, result: LeadDecodedResult, context: HostCheckContext) -> None:
-        self._require_status_rule()
-        if type(result) is not LeadDecodedResult or type(context) is not AuthorizedAnswerHostContext:
-            raise TypeError("final Lead owner requires the actual selected result/authorization")
-        if self.authorized_validator(result.domain_json, context.authorization) is not None:
-            raise TypeError("final Lead owner check must return None")
 
 
 def _lead_call_contract_factory(*, constraints: LeadProviderConstraints, contract: LeadResultRuleSeed,

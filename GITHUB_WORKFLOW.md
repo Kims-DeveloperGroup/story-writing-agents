@@ -282,13 +282,13 @@ and runs the applicable CI commands locally without another confirmation. Use th
 pin base/head and the checkout tree, use the locked Python 3.11 environment, select every lane
 from the current workflow, and retain commands, exit codes, exact test IDs, artifacts, and
 platform limits. Static-only changes run all static steps; runtime/test changes also run the
-fast tier, affected runtime tests, all four full shards, reconciliation, and frozen-budget checks.
+fast tier, affected runtime tests, all five full shards, reconciliation, and frozen-budget checks.
 
 Independent local task threads use the host-wide `tests.local_ci` coordinator.
 It admits four executing top-level test processes across native and Lima
-workers, with four complementary full shards per campaign. Isolated campaigns drain and reserve
+workers, with five complementary full shards per campaign. Isolated campaigns drain and reserve
 the host for timing evidence and run their full shards sequentially by default;
-shared campaigns permit all four full shards concurrently. `--full-concurrency 1`, `2`, `3`, or `4` overrides that choice; campaign metadata records the resolved value.
+shared campaigns permit at most four of the five full shards concurrently. `--full-concurrency 1`, `2`, `3`, or `4` overrides that choice; campaign metadata records the resolved value.
 Queue wait and uncertain-worker quarantine remain visible in durable job state.
 An actual validation failure must be diagnosed and fixed; switching execution locations does
 not erase it. Unknown failure causes are not an established outage.
@@ -368,7 +368,7 @@ The canonical suite follows [TEST_POLICY.md](TEST_POLICY.md). Runtime-code
 changes, including runtime agent definitions under `config/agents/`, require
 current-head fast CI and affected tests selected with exact `--module` or `--id`
 selectors. Record selected IDs, command, result, and head SHA in the PR. CI
-runs all four complete shards and the frozen inventory/time budget for runtime or
+runs all five complete shards and the frozen inventory/time budget for runtime or
 test changes. Update a retained representative case when changed behavior
 lacks coverage within the frozen limits. Test-only changes also require this
 full CI gate. Documentation,

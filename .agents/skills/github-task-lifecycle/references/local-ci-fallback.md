@@ -22,7 +22,7 @@ not grant additional stage or GitHub mutation authority.
    If classification is uncertain or the diff is incomplete, run all lanes.
 4. Current static-only selection covers documentation, templates, skills, development-agent
    configuration, and module-index-only changes. Runtime/dependency paths, tests, test policy,
-   the validation workflow, or `test:full` also select fast and all four full shards. Runtime-code
+   the validation workflow, or `test:full` also select fast and all five full shards. Runtime-code
    changes additionally need affected exact modules/IDs. Re-read classification if it changes;
    this list does not replace the workflow as the command/selection source.
 5. Record dirty content with hashes during implementation. Before integration, require evidence
@@ -82,11 +82,11 @@ PYTHONPATH=src .venv/bin/python -m tests.local_ci run \
 Supply repeated `--module`/`--id` selectors for affected runtime behavior and
 repeated `--label` values for relevant PR labels, including `test:full`. Static-only
 selection runs all static checks; runtime/test selection also runs fast,
-affected when supplied, four complementary full shards, reconciliation, and the strict frozen
+affected when supplied, five complementary full shards, reconciliation, and the strict frozen
 budget check. Record the selectors and explain any absent affected lane.
 
 Every task thread and checkout shares four host execution permits. A campaign
-schedules exactly four complementary full shards. Shared mode permits concurrent feedback;
+schedules exactly five complementary full shards. Shared mode permits concurrent feedback;
 isolated mode drains active work and reserves the host for measurement. Full
 shards run sequentially by default in isolated mode and up to four concurrently in shared
 mode. `--full-concurrency 1`, `2`, `3`, or `4` overrides this choice; campaign metadata

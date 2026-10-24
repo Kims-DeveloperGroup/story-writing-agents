@@ -57,7 +57,9 @@ else:
     _msvcrt = None
 
 from .agents import ROSTER
-from .structured_output_validation import bounded_chunks, diagnose_json_text
+from .structured_output_validation import (
+    SchemaRules, bounded_chunks, diagnose_json_text, strict_json_value,
+)
 from .agent_context import (
     ContextComponentKind,
     JsonPath,
@@ -5015,11 +5017,20 @@ class AgentBackend:
                         BackendProtocolError("provider result violates its property contract"),
                         model_failure,
                     ) from model_failure
-                schema_issues = (
-                    diagnose_json_text(result.response_text, schema)
-                    if schema
-                    else ()
-                )
+                if schema:
+                    try:
+                        rules = SchemaRules.declare(
+                            schema, maximum_bytes=MAX_PROVIDER_SCHEMA_UTF8_BYTES,
+                        )
+                    except (TypeError, ValueError, RecursionError):
+                        schema_issues = diagnose_json_text(result.response_text, schema)
+                    else:
+                        try:
+                            rules.normalized_value(strict_json_value(result.response_text, exact_numbers=True))
+                        except (TypeError, ValueError, RecursionError) as schema_failure:
+                            schema_issues = failure_issues(schema_failure) or (
+                                "$: expected a value matching the current result contract",
+                            )
                 if schema_issues:
                     raise BackendProtocolError(
                         "provider structured response has an invalid schema"

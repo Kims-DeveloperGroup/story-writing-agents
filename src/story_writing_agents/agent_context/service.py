@@ -18,8 +18,9 @@ import threading
 from ..structured_output_validation import (
     ContractOwner,
     ContractRejection, BoundContract, NamedHostCheck, TypedDecoder, HostCheckContext,
-    SelectedHostContext, SelectedContract, ValidatedValue, closed_rule, strict_json_member_text, failure_findings,
-    SchemaRules, finite_subset_rule, finite_selection_rule, decode_finite_selection,
+    SelectedHostContext, SelectedContract, ValidatedValue, closed_rule, strict_json_member_text, json_value_utf8_size, failure_findings,
+    SchemaRules,
+    finite_subset_rule, finite_selection_rule, decode_finite_selection,
     canonical_schema_rules, diagnose_value, schema_accepts_only_objects, strict_json_object,
     validation_failure,
     validation_call,
@@ -286,6 +287,7 @@ class ContextJsonObjectResultContract:
     schema: Mapping[str, object] = field(repr=False, compare=False)
     wire_format: bool = field(default=False, kw_only=True)
     _schema_bytes: bytes = field(init=False, repr=False)
+    rule_graph: SchemaRules = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if type(self.wire_format) is not bool:
@@ -296,13 +298,12 @@ class ContextJsonObjectResultContract:
         assert type(decoded) is dict
         object.__setattr__(self, "schema", MappingProxyType(decoded))
         object.__setattr__(self, "_schema_bytes", encoded)
+        object.__setattr__(self, "rule_graph", SchemaRules(encoded))
 
     def schema_value(self) -> dict[str, object]:
         """Return a detached exact schema for one physical provider call."""
 
-        decoded = json.loads(self._schema_bytes)
-        assert type(decoded) is dict
-        return decoded
+        return self.rule_graph.provider_schema_value()
 
 
 @dataclass(frozen=True, slots=True)
@@ -516,6 +517,11 @@ class BoundCallFactory(ABC):
     def declare_result_owners(self, offers: ContextCallOffers) -> LeadStagePolicy:
         raise NotImplementedError
 
+    @abstractmethod
+    def require_declaration(self) -> None:
+        """Reject changed owner invocation targets without freezing live context."""
+        raise NotImplementedError
+
     def for_offer(self, offers: ContextCallOffers, lineage: BoundCallLineage | None = None) -> BoundCallContract:
         return BoundCallContract.bind(self, offers, lineage)
 
@@ -583,7 +589,6 @@ class BoundCallContract:
     outer_inner_schema_ids: tuple[tuple[str, str | None], ...] = field(init=False)
     logical_origin_call_id: str = field(init=False)
     phase: str = field(init=False)
-    _factory_method: object = field(init=False, repr=False, compare=False)
     _semantic_anchor: LeadContractIndex[LeadDecodedResult] = field(init=False, repr=False, compare=False)
     _action_anchor: LeadContractIndex[ContextActionValue] = field(init=False, repr=False, compare=False)
 
@@ -595,7 +600,10 @@ class BoundCallContract:
             raise TypeError("bound call requires typed logical factory and actual physical offers")
         if self.offers.scope.agent_id != LEAD_ORCHESTRATOR:
             raise TypeError("typed Lead call requires actual Lead offers")
-        method = type(self.factory).declare_result_owners
+        guard = type(self.factory).require_declaration
+        TypedDecoder.require_hook_shape(self.factory.require_declaration, 0)
+        if guard(self.factory) is not None:
+            raise TypeError("frozen owner declaration guard must return None")
         if self.lineage is None:
             policy = self.factory.declare_result_owners(self.offers)
             owners = () if type(policy) is not LeadStagePolicy else policy.owner_declarations
@@ -632,7 +640,7 @@ class BoundCallContract:
                       for member, owner in zip(outer.contracts, outer.owners, strict=True))
         graph = SchemaRules.declare(
             hoist_schema_definitions(closed_rule(
-                {"agent_action": outer.schema_value()},
+                {"agent_action": outer.rule_graph.schema_value()},
                 description=_CONTEXT_ACTION_ROOT_DESCRIPTION,
             )),
             maximum_bytes=MAX_PROVIDER_SCHEMA_UTF8_BYTES,
@@ -644,9 +652,12 @@ class BoundCallContract:
         object.__setattr__(self, "outer_inner_schema_ids", pairs)
         object.__setattr__(self, "logical_origin_call_id", semantic.policy.logical_origin_call_id)
         object.__setattr__(self, "phase", phase)
-        object.__setattr__(self, "_factory_method", method)
         object.__setattr__(self, "_semantic_anchor", semantic)
         object.__setattr__(self, "_action_anchor", outer)
+        semantic.require_provenance()
+        outer.require_provenance()
+        if graph.node_fingerprint(("agent_action",)) != outer.rule_graph.node_fingerprint():
+            raise ValueError("actual call/graph/frozen owner provenance changed")
         self.require_current_offer(self.offers)
 
     @classmethod
@@ -655,28 +666,18 @@ class BoundCallContract:
         return cls(factory, offers, lineage)
 
     def require_current_offer(self, offers: ContextCallOffers) -> None:
-        methods = (type(self)._validate_response_structure, type(self).structural_findings)
-        if any(method is not declared or method.__code__ is not code
-               for method, (declared, code) in zip(
-                   methods, _BOUND_CALL_STRUCTURE_DECLARATIONS, strict=True,
-               )):
-            raise ValueError("frozen bound structural query implementation changed")
         if (type(offers) is not ContextCallOffers or offers != self.offers
                 or offers.offer_digest != self.offers.offer_digest
-                or type(self.factory).declare_result_owners is not self._factory_method
-                or self.semantic_index is not self._semantic_anchor or self.action_index is not self._action_anchor
-                or type(self.rule_graph) is not SchemaRules
-                or self.rule_graph.node_fingerprint(("agent_action",)) != self.action_index.rule_graph.node_fingerprint()):
+                or self.semantic_index is not self._semantic_anchor
+                or self.action_index is not self._action_anchor
+                or type(self.rule_graph) is not SchemaRules):
             raise ValueError("actual call/graph/frozen owner provenance changed")
         semantic_index = self.semantic_index
         semantic_contracts = semantic_index.contracts
-        if type(semantic_contracts) is not tuple:
-            raise ValueError('frozen bound structural query implementation changed')
-        semantic_index.require_provenance()
-        self.action_index.require_provenance()
-        if (self.semantic_index is not semantic_index
-                or semantic_index.contracts is not semantic_contracts):
-            raise ValueError('frozen bound structural query implementation changed')
+        if (type(semantic_contracts) is not tuple
+                or tuple(member.schema_id for member in semantic_contracts)
+                != semantic_index.expected_schema_ids):
+            raise ValueError("current semantic contract identities changed")
         if (self.semantic_index.policy.eligibility_offer_digest != self.eligibility_offers.offer_digest
                 or self.semantic_index.policy.logical_origin_call_id != self.logical_origin_call_id):
             raise ValueError("frozen logical eligibility snapshot changed")
@@ -691,43 +692,37 @@ class BoundCallContract:
             if (origin.factory is not self.factory or self.eligibility_offers is not origin.eligibility_offers
                     or self.semantic_index is not origin.semantic_index or self.action_index is not origin.action_index):
                 raise ValueError("corrective request changed the frozen rejected index")
-        pairs = []
+        for index in (semantic_index, self.action_index):
+            if (index.owners is not index.policy.owner_declarations
+                    or len(index.contracts) != len(index.owners)):
+                raise ValueError("current contract owner binding changed")
+            for member, owner in zip(index.contracts, index.owners, strict=True):
+                if (type(member) is not BoundContract or member.owner is not owner
+                        or member.identity != index.policy.identity_for(owner.owner_id)):
+                    raise ValueError("current contract owner binding changed")
+        pairs: list[tuple[str, str | None]] = []
         for member, owner in zip(self.action_index.contracts, self.action_index.owners, strict=True):
             if type(owner) is not ContextActionContractOwner or owner.eligibility_offers is not self.eligibility_offers:
-                raise ValueError("outer owner differs from frozen eligible call")
-            kind = member.rule_graph.literal_at(("action_type",))
-            if kind == "submit_result":
-                inner_id = member.rule_graph.literal_at(("task_result", "schema_id"))
-                inner = next((item for item in semantic_contracts
-                              if type(inner_id) is str and item.schema_id == inner_id), None)
-                if inner is None:
-                    inner = semantic_index.select(inner_id)
-                if (owner.semantic_member is not inner
-                        or member.rule_graph.node_fingerprint(("task_result",)) != inner.rule_graph.node_fingerprint()):
-                    raise ValueError("outer offered ID differs from exact paired semantic member")
-                pairs.append((member.schema_id, inner_id))
-            elif kind in {"search_context", "read_context"} and owner.semantic_member is None:
-                pairs.append((member.schema_id, None))
+                raise ValueError("outer action lost its frozen eligibility owner")
+            inner = owner.semantic_member
+            if inner is not None:
+                if not any(item is inner for item in semantic_contracts):
+                    raise ValueError("outer ID lost its exact authoritative semantic member")
+                pairs.append((member.schema_id, inner.schema_id))
             else:
-                raise ValueError("invalid outer/semantic family relationship")
-        if (tuple(pairs) != self.outer_inner_schema_ids or
-                tuple(inner for _, inner in pairs if inner is not None) != self.semantic_index.expected_schema_ids):
-            raise ValueError("incomplete/duplicate/current outer-inner pairing")
-        if (self.semantic_index is not semantic_index
-                or semantic_index.contracts is not semantic_contracts):
-            raise ValueError('frozen bound structural query implementation changed')
-        semantic_index.require_provenance()
-        if (self.semantic_index is not semantic_index
-                or semantic_index.contracts is not semantic_contracts):
-            raise ValueError('frozen bound structural query implementation changed')
+                pairs.append((member.schema_id, None))
+        if (tuple(pairs) != self.outer_inner_schema_ids
+                or tuple(inner for _, inner in pairs if inner is not None)
+                != self.semantic_index.expected_schema_ids):
+            raise ValueError("incomplete/duplicate/current outer-inner relationship")
 
     def schema_value(self) -> dict[str, object]:
         self.require_current_offer(self.offers)
-        return self.rule_graph.schema_value()
+        return self.rule_graph.provider_schema_value()
 
     def _validate_response_structure(
         self, response_text: str,
-    ) -> tuple[dict[str, object], str | None]:
+    ) -> tuple:
         self.require_current_offer(self.offers)
         try:
             value = strict_json_object(response_text, exact_numbers=True)
@@ -736,9 +731,12 @@ class BoundCallContract:
                 "LEAD_JSON_REJECTED", None,
                 failure_issues(failure) or ("$: expected strict JSON object",),
             ) from None
-        if set(value) != {"agent_action"} or type(value["agent_action"]) is not dict:
+        return self._validate_response_value(value, response_text=response_text)
+
+    def _validate_response_value(self, value: object, *, response_text: str | None = None) -> tuple:
+        if type(value) is not dict or type(value.get("agent_action")) is not dict:
             raise LeadContractRejection("LEAD_ACTION_ENVELOPE_REJECTED", None,
-                                        ("$: required closed agent_action object envelope",))
+                                        ("$: required agent_action object envelope",))
         action = value["agent_action"]
         action_root = self.action_index.policy.wire_root_path
         semantic_root = action_root + ".task_result"
@@ -747,11 +745,12 @@ class BoundCallContract:
         except ContractRejection as failure:
             raise remap_validation(failure, {"$": action_root}) from None
         try:
-            encoded_response = response_text.encode("utf-8", errors="strict")
-        except UnicodeError:
+            response_size = (len(response_text.encode("utf-8", errors="strict")) if response_text is not None
+                             else json_value_utf8_size(value, maximum_bytes=262_144))
+        except (TypeError, ValueError, UnicodeError):
             raise LeadContractRejection("LEAD_ACTION_UTF8_REJECTED", member.schema_id,
                                         ("$: required strict UTF8 action encoding",)) from None
-        if len(encoded_response) > 262_144:
+        if response_size > 262_144:
             raise LeadContractRejection("LEAD_ACTION_UTF8_LIMIT", member.schema_id,
                                         ("$: full action UTF8 limit 262144",))
         expected_inner = dict(self.outer_inner_schema_ids)[member.schema_id]
@@ -762,30 +761,32 @@ class BoundCallContract:
                         "LEAD_PAIRED_SCHEMA_ID_REJECTED", member.schema_id,
                         ("$.task_result.schema_id: required exact paired semantic ID",)),
                     {"$": action_root})
-            literal = strict_json_member_text(response_text, ("agent_action", "task_result"))
-            if len(literal.encode("utf-8", errors="strict")) > 65_536:
+            if response_text is not None:
+                literal = strict_json_member_text(response_text, ("agent_action", "task_result"))
+                result_size = len(literal.encode("utf-8", errors="strict"))
+            else:
+                try:
+                    result_size = json_value_utf8_size(action["task_result"], maximum_bytes=65_536)
+                except (TypeError, ValueError, UnicodeError):
+                    result_size = 65_537
+            if result_size > 65_536:
                 raise remap_validation(
                     LeadContractRejection(
                         "LEAD_RESULT_UTF8_LIMIT", member.schema_id,
                         ("$.task_result: semantic result UTF8 limit 65536",)),
                     {"$": action_root})
-        requirements = member.rule_graph.findings(action)
-        if requirements:
-            raise remap_validation(
-                LeadContractRejection("LEAD_SCHEMA_RULE_REJECTED", member.schema_id, requirements),
-                {"$": action_root},
-            ) from None
+        try:
+            action_value = member.validate_value(action)
+        except ContractRejection as failure:
+            raise remap_validation(failure, {"$": action_root}) from None
+        inner, result_value = None, None
         if expected_inner is not None:
             inner = self.semantic_index.select(expected_inner)
-            requirements = inner.rule_graph.findings(action["task_result"])
-            if requirements:
-                raise remap_validation(
-                    LeadContractRejection(
-                        "LEAD_SCHEMA_RULE_REJECTED", inner.schema_id, requirements,
-                    ),
-                    {"$": semantic_root},
-                ) from None
-        return action, expected_inner
+            try:
+                result_value = inner.validate_value(action_value.as_object()["task_result"])
+            except ContractRejection as failure:
+                raise remap_validation(failure, {"$": semantic_root}) from None
+        return member, action_value, inner, result_value
 
     def structural_findings(self, response_text: str) -> tuple[str, ...]:
         """Return selected pure rule findings without decoding or host checks."""
@@ -796,17 +797,25 @@ class BoundCallContract:
         return ()
 
     def decode_response(self, response_text: str) -> BoundCallDecodedAction:
-        action, expected_inner = self._validate_response_structure(response_text)
+        return self._decode_values(self._validate_response_structure(response_text))
+
+    def decode_value(self, value: object) -> BoundCallDecodedAction:
+        """Decode an existing JSON value with the same live binding and owner checks."""
+        self.require_current_offer(self.offers)
+        return self._decode_values(self._validate_response_value(value))
+
+    def _decode_values(self, values: tuple) -> BoundCallDecodedAction:
+        member, action_value, inner, result_value = values
         action_root = self.action_index.policy.wire_root_path
         semantic_root = action_root + ".task_result"
         try:
-            selected = self.action_index.decode_and_validate(action)
+            selected = member.decode_validated(action_value)
         except ContractRejection as failure:
             raise remap_validation(failure, {"$": action_root}) from None
         result = None
-        if expected_inner is not None:
+        if inner is not None:
             try:
-                result = self.semantic_index.decode_and_validate(action["task_result"])
+                result = inner.decode_validated(result_value)
             except ContractRejection as failure:
                 raise remap_validation(failure, {"$": semantic_root}) from None
         decoded = object.__new__(BoundCallDecodedAction)
@@ -869,10 +878,6 @@ class BoundCallContract:
         *,
         declared_lowering: str = "identity",
     ) -> None:
-        current_offer = type(self).require_current_offer
-        declared, code = _BOUND_CALL_CURRENT_OFFER_DECLARATION
-        if current_offer is not declared or current_offer.__code__ is not code:
-            raise ValueError("frozen bound current-offer implementation changed")
         self.require_projection(native_schema, declared_lowering=declared_lowering)
         input_json, _ = account_provider_payload(native_schema, payload)
         if len(input_json) > 262_144:
@@ -909,17 +914,6 @@ class BoundCallContract:
         payload["logical_origin_call_id"] = self.logical_origin_call_id
         payload["phase"] = self.phase
         return json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-
-
-_BOUND_CALL_CURRENT_OFFER_DECLARATION = (
-    BoundCallContract.require_current_offer,
-    BoundCallContract.require_current_offer.__code__,
-)
-
-_BOUND_CALL_STRUCTURE_DECLARATIONS = tuple(
-    (getattr(BoundCallContract, name), getattr(BoundCallContract, name).__code__)
-    for name in ("_validate_response_structure", "structural_findings")
-)
 
 
 def _bound_call_failure(failure: BaseException) -> tuple[BoundCallContract, LeadContractRejection]:
@@ -959,18 +953,17 @@ def _bound_action_index(
             allowed_search_source_kinds=eligible.search_source_kinds,
             action_limits=[value for _, value in eligible.action_limits],
             issued_handle_aliases=eligible.issued_handle_aliases,
+            preserve_action_definitions=True,
         )
         action_rule = native["properties"]["agent_action"]
         roots = action_rule.get("anyOf", [action_rule])
-        templates.append((member, native, roots))
+        templates.append((member, roots))
     owners = []
-    for number, branch in enumerate(templates[0][2]):
+    for number, branch in enumerate(templates[0][1]):
         terminal = branch["properties"]["action_type"]["enum"] == ["submit_result"]
-        for captured_member, native, roots in templates if terminal else templates[:1]:
+        for captured_member, roots in templates if terminal else templates[:1]:
             member = captured_member if terminal else None
-            current = deepcopy(roots[number])
-            if "$defs" in native:
-                current["$defs"] = deepcopy(native["$defs"])
+            current = hoist_schema_definitions(roots[number])
             current = rebase_schema_definitions(current, "a")
             rules = SchemaRules.declare(
                 factor_rule_schema(hoist_schema_definitions(current)),
@@ -3822,14 +3815,21 @@ def _answer_text_for_contract(
 ) -> str:
     """Validate one owner-supplied result schema and canonicalize its object."""
 
-    if type(contract) is not ContextJsonObjectResultContract or (
-        not contract.wire_format and not _value_matches_provider_schema(value, contract.schema_value())
-    ):
+    if type(contract) is not ContextJsonObjectResultContract:
         raise validation_failure(
             ValueError(),
             '$',
             'expected a JSON object matching the current result contract',
         )
+    if not contract.wire_format:
+        try:
+            value = contract.rule_graph.normalized_value(value)
+        except (TypeError, ValueError, RecursionError):
+            raise validation_failure(
+                ValueError(),
+                "$",
+                "expected a JSON object matching the current result contract",
+            ) from None
     try:
         if contract.wire_format:
             if decode_result is None:
@@ -4048,6 +4048,7 @@ def _context_action_schema(
     allowed_search_source_kinds: tuple[ContextSourceKind, ...],
     action_limits: list[int],
     issued_handle_aliases: tuple[str, ...] = (),
+    preserve_action_definitions: bool = False,
 ) -> dict[str, object]:
     """Build one closed typed action envelope for the exact physical call."""
 
@@ -4172,9 +4173,10 @@ def _context_action_schema(
             _CONTEXT_ACTION_ROOT_DESCRIPTION
         ),
     )
-    schema = hoist_schema_definitions(project_action_schema(schema))
+    projected = project_action_schema(schema)
+    schema = hoist_schema_definitions(projected)
     _validate_provider_schema_node(schema)
-    return schema
+    return projected if preserve_action_definitions else schema
 
 
 def _source_number(source_alias: str) -> int:
