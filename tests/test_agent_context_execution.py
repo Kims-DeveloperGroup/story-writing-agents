@@ -371,7 +371,7 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
         None, answer_validator: Callable[[str, object], object] | None=None, answer_diagnostic:
         Callable[[str], object] | None=None, event_sink: ContextExecutionEventSink | None=None,
         progress_sink: Callable[[ContextActionProgressEvent], None] | None=None, phase: str | None=
-        None, round_number: int | None=None) -> ContextInvocationResult:
+        None, round_number: int | None=None, contract_lineage=None) -> ContextInvocationResult:
         actual_request = request or self.request()
         actual_service = service or self.service
         collaborators = authorities or self.authorities(actual_request, service=actual_service)
@@ -387,7 +387,7 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
             answer_validator=answer_validator,  # type: ignore[arg-type]
             answer_diagnostic=answer_diagnostic,  # type: ignore[arg-type]
             event_sink=event_sink, progress_sink=progress_sink, phase=phase, round_number=round_number,
-            **collaborators,  # type: ignore[arg-type]
+            contract_lineage=contract_lineage, **collaborators,  # type: ignore[arg-type]
         )
 
     def inspect(self, provider: _ScriptedProvider, request: ContextInvocationRequest):
@@ -705,6 +705,35 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual(len(exhausted.calls), 0)
         self.assertEqual(len(exhausted.finalizers), 0)
         self.assertEqual(len(exhausted.responses), 2)
+        mixed_constraints = replace(_LEAD_CONSTRAINTS, scope=None)
+        mixed = replace(_LEAD_CALL_FACTORY, constraints=mixed_constraints,
+                        rule_seed=_lead_front_result_contract(
+                            LeadProposalRelation.NEW_STEP, (), constraints=mixed_constraints))
+        mixed_request = self.request(operation_id='mixed-selection-capacity',
+                                     result_correlation_id='mixed-capacity-result',
+                                     invocation_kind=ContextInvocationKind.LEAD,
+                                     result_contract=mixed, physical_call_limit=2,
+                                     agent_id=LEAD_ORCHESTRATOR)
+        malformed = _ScriptedProvider(('not-json',))
+        with self.assertRaises(ContextExecutionError) as rejected:
+            await self.invoke(malformed, mixed_request)
+        self.assertIs(context_provider_failure_facts(rejected.exception).response_rejection_code,
+                      ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)
+        origin = malformed.calls[0].contract
+        self.assertTrue(origin.offered_semantic_schema_ids)
+        self.assertTrue(origin.selectable_semantic_schema_ids)
+        for proof in (origin.repair_lineage(), origin.replay_lineage()):
+            blocked = _ScriptedProvider((_lead_answer_with_read,))
+            with self.assertRaises(ContextExecutionError) as exhausted_mixed:
+                await self.invoke(blocked, replace(mixed_request, physical_call_limit=1),
+                                  contract_lineage=proof)
+            self.assertIs(exhausted_mixed.exception.code,
+                ContextExecutionErrorCode.ACTION_EXHAUSTED)
+            facts = context_provider_failure_facts(exhausted_mixed.exception)
+            self.assertTrue(facts.prelaunch_action_exhausted)
+            self.assertIsNone(facts.response_rejection_code)
+            self.assertEqual((len(blocked.calls), len(blocked.finalizers)), (0, 0))
+            self.assertEqual(len(blocked.responses), 1)
 
     async def test_local_reference_load_does_not_consume_lead_physical_limit(self) -> None:
         reference = self.reference('reference-operation')

@@ -1,6 +1,7 @@
 """Exhaustive acceptance coverage for runtime-grounded lead judgments."""
 
 from __future__ import annotations
+from tests.provider_wire_fixture import selected_fixture_calls
 from story_writing_agents import authoring_admission as admission
 from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
 
@@ -359,7 +360,7 @@ def _search(query: str, kinds: list[str]):
     return respond
 
 
-def _missing_outcome(*, proposal: bool = False, authoring_assessment=None):
+def _missing_outcome(*, proposal: bool = False, authoring_assessment=None, select=False):
     def respond(call, _provider):
         observation = call.payload["context_observation"]
         assert observation["observation_type"] == "context_search_results" and observation["zero_hit_receipt"] is not None
@@ -422,7 +423,7 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None):
             if 'authoring_assessment' in native:
                 native['authoring_assessment'] = lead_fixture_assessment(
                     native['authoring_assessment'], source_choices=choices['input_ids'])
-            return lead_fixture_response(call, lead_fixture_result(native), family=0)
+            return lead_fixture_response(call, lead_fixture_result(native), family=0, select=select)
         from tests.provider_wire_fixture import (
             lead_fixture_assignments, lead_fixture_bound_scope,
             lead_fixture_assessment, lead_fixture_response,
@@ -446,13 +447,13 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None):
                     value.get("authoring_assessment"), source_choices=choices["input_ids"]),
                 "specialist_consultation_proposal": {
                     "shared_premises": value["proposal"]["shared_premises"], **allocated}}},
-            family=0)
+            family=0, select=select)
 
     return respond
 
 
 def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
-                        authoring_assessment=None, native_proposal=False):
+                        authoring_assessment=None, native_proposal=False, select=False):
     def respond(call, _provider):
         aliases = call.payload["task_input"]["available_input_sources"]
         target_paths = tuple(
@@ -494,7 +495,7 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
             return lead_fixture_response(call, {
                 "response_type": "clarification_question", "response_text": value["message"],
                 "response_details": details}, family=0,
-                branch_key=call.contract.factory.rule_seed.contract_id + ":family:1")
+                branch_key=call.contract.factory.rule_seed.contract_id + ":family:1", select=select)
         if not native_proposal:
             return _provider_envelope(call, value)
         from tests.provider_wire_fixture import (
@@ -523,7 +524,7 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
                     value.get('authoring_assessment'), source_choices=choices['input_ids']),
                 'specialist_consultation_proposal': {
                     'shared_premises': value['proposal']['shared_premises'], **allocated}}},
-            family=0)
+            family=0, select=select)
     return respond
 
 
@@ -535,7 +536,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             with self.subTest(kinds=kinds):
                 conversation_id = self.conversation(f"Zero hit {index}")
                 self.backend.enqueue(_search("phrase absent from every source", kinds),
-                    _missing_outcome(authoring_assessment=_fixture_assessment()),)
+                    *selected_fixture_calls(_missing_outcome,
+                    authoring_assessment=_fixture_assessment()),)
                 result = await self.runtime.lead_turn(
                     self.session_id,
                     conversation_id,
@@ -618,7 +620,9 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         }
         self.backend.enqueue(
             _search("phrase absent from every source", ["w", "c"]),
-            _missing_outcome(proposal=True, authoring_assessment=task_assessment(foundation_ids=('user_input',), actions=('bounded missing-evidence review judgments',))),
+            *selected_fixture_calls(_missing_outcome, proposal=True,
+            authoring_assessment=task_assessment(foundation_ids=('user_input',),
+            actions=('bounded missing-evidence review judgments',))),
         )
         proposed = await self.runtime.lead_turn(
             self.session_id,
@@ -630,7 +634,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             )),
         )
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome))
         completed = await self.runtime.decide_lead_step(_decision(proposed, self._confirm_decision()))
         self.assertIs(completed.turn.state, CollaborationStepState.COMPLETED)
         after = {
@@ -671,7 +675,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
     ) -> None:
         conversation_id = self.conversation("Attached conflict")
         self.backend.enqueue(
-            _referenced_outcome(
+            *selected_fixture_calls(_referenced_outcome,
                 status="conflicting",
                 evidence_ids=["reference_1", "reference_2"],
                 authoring_assessment=_fixture_assessment(foundation_ids=("reference_1", "reference_2")),
@@ -716,8 +720,10 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         path = self.workspace.path("manuscript/part-01/exploration.md")
         path.write_text("current-exploration-evidence\nSecond line.\n", encoding="utf-8")
         observed = []
-        def grounded(call, _provider):
-            observed.append(call.payload["context_observation"]["read_results"][0])
+        def grounded(call, _provider, *, select=False):
+            read_observation = call.payload["context_observation"]["read_results"][0]
+            if not select:
+                observed.append(read_observation)
             from story_writing_agents.agent_context.manifest import ContextSourceKind
             from tests.provider_wire_fixture import finite_fixture_selection
             facts = call.contract.eligibility_offers
@@ -727,8 +733,9 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             return _current_exploration_outcome(observations=({
                 "text": "The current artifact READ supports this observation.",
                 "evidence_input_ids": finite_fixture_selection(
-                    read_ids, (observed[-1]["evidence_id"],))},))(call, _provider)
-        self.backend.enqueue(_search("current-exploration-evidence", ["w"]), _read_history_hit, grounded)
+                read_ids, (read_observation["evidence_id"],))},), select=select)(call, _provider)
+        self.backend.enqueue(_search("current-exploration-evidence", ["w"]), _read_history_hit,
+            lambda call, provider: grounded(call, provider, select=True), grounded)
         explored = await self.runtime.lead_turn(self.session_id, self.conversation("Grounded exploration"), "Explore using the current artifact.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         receipt = explored.exploration.grounded_observations[0].receipts[0]
         self.assertEqual((receipt.evidence_id, receipt.source_id), (observed[0]["evidence_id"], observed[0]["source"]["source_id"]))
@@ -740,7 +747,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 "text": "An input alias is not artifact evidence.",
                 "evidence_input_ids": {"user_input": True}}]
             return json.dumps(packet, ensure_ascii=False)
-        self.backend.enqueue(unsupported, unsupported)
+        self.backend.enqueue(_current_exploration_outcome(select=True), unsupported, unsupported)
         refused = await self.runtime.lead_turn(self.session_id, self.conversation("False evidence claim"), "Explore alternatives.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         self.assertIsNone(refused.exploration)
 

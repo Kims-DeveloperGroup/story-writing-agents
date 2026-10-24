@@ -482,6 +482,11 @@ def offered_fixture_bindings(
     return offered[ordinal]
 
 
+def selected_fixture_calls(builder, *args, **kwargs):
+    """Queue both paid callbacks explicitly; never submit or choose for the provider."""
+    return builder(*args, select=True, **kwargs), builder(*args, **kwargs)
+
+
 def result_selection(request, *, response_type, family, branch_key=None, value=None):
     """Return one explicit paid selection response; never invoke or queue a provider."""
     member = fixture_semantic_member(request, response_type=response_type, family=family,
@@ -738,8 +743,13 @@ def lead_fixture_assignments(rows, *, input_choices, review_choices, anchors, re
     return {'assignments': assignments, 'required_input_recipients': copy.deepcopy(recipients)}
 
 
-def lead_fixture_response(request, value, *, family, branch_key=None, response_type=None):
+def lead_fixture_response(request, value, *, family, branch_key=None, response_type=None,
+                          select=False):
     """Pair caller-authored current wire values with one explicitly intended issued family."""
+    if select:
+        return result_selection(request, response_type=(
+            value['response_type'] if response_type is None else response_type),
+            family=family, branch_key=branch_key, value=value)
     outer, inner = offered_fixture_bindings(
         request, action_type='submit_result',
         response_type=value['response_type'] if response_type is None else response_type,

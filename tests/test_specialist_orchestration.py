@@ -1,6 +1,7 @@
 """Permanent execution acceptance coverage for confirmed specialist collaboration."""
 
 from __future__ import annotations
+from tests.provider_wire_fixture import selected_fixture_calls
 
 from tests.provider_wire_fixture import response as wire_response, contract_id as wire_contract_id
 
@@ -138,8 +139,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
     ) -> None:
         conversation_id = self.conversation("Three-way parallel consultation")
         proposed = await _three_way_proposal_fixture(self, conversation_id)
-        self.assertEqual(tuple((item.max_physical_calls for item in proposed.proposal.assignments)), (4, 3, 3))
-        self.assertEqual(proposed.proposal.budget.synthesis_max_physical_calls, 1)
+        self.assertEqual(tuple((
+            item.max_physical_calls for item in proposed.proposal.assignments)), (3, 3, 2))
+        self.assertEqual(proposed.proposal.budget.synthesis_max_physical_calls, 2)
         self.assertEqual(
             sum(item.max_physical_calls for item in proposed.proposal.assignments)
             + proposed.proposal.budget.synthesis_max_physical_calls
@@ -180,7 +182,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
 
         for agent_id in ((PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST)):
             self.backend.enqueue_for(agent_id, overlapping)
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome))
 
         with (_fast_prevalidated_session_binding(self.runtime, self.session_id),
             mock.patch.object(SessionArtifactBinding, 'open_ready_resources', tracked_open)):
@@ -371,7 +373,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
 
                 for agent_id in specialist_ids:
                     self.backend.enqueue_for(agent_id, overlapping)
-                self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+                self.backend.enqueue_for(LEAD_ORCHESTRATOR,
+                    *selected_fixture_calls(_synthesis_outcome))
                 task = _confirmed_execution_task_fixture(self.runtime, proposed)
                 await asyncio.wait_for(ready.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS)
                 self.assertEqual(entered, len(specialist_ids))
@@ -430,7 +433,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome())
         self.backend.enqueue_for(CHARACTER_CUSTODIAN, _specialist_outcome("concern"))
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome(unresolved_input_ids=[ 'reference_2']))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome,
+            unresolved_input_ids=[ 'reference_2']))
 
         decision = await self.runtime.decide_lead_step(
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
@@ -474,7 +478,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 response = _raw_outcome(value)
                 self.backend.enqueue_for(PLOT_ARCHITECT, response)
                 self.backend.enqueue_for(PLOT_ARCHITECT, response)
-                self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+                self.backend.enqueue_for(LEAD_ORCHESTRATOR,
+                    *selected_fixture_calls(_synthesis_outcome))
                 decision = await self.runtime.decide_lead_step(_decision(proposed,
                     CollaborationConfirmationDecision.CONFIRM))
                 self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
@@ -501,7 +506,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         rejected = _raw_outcome({'message': 0, 'PRIVATE_SYNTHESIS_KEY': 'PRIVATE_SYNTHESIS_VALUE'})
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, rejected)
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome))
         decision = await self.runtime.decide_lead_step(
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
         )
@@ -526,7 +531,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.backend.enqueue_for(PLOT_ARCHITECT, _raw_outcome({'message': 0,
             'assessment': 'supports', private: private}))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome))
         with _stop_after_durable_result_patch(self.runtime):
             with self.assertRaisesRegex(RuntimeError, "durable execution result"):
                 await self.runtime.decide_lead_step(
@@ -567,10 +572,11 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                         PLOT_ARCHITECT, _specialist_outcome(),
                     )
                     self.backend.enqueue_for(
-                        LEAD_ORCHESTRATOR, _synthesis_outcome(message=""),
+                        LEAD_ORCHESTRATOR, _synthesis_outcome(select=True),
+                        _synthesis_outcome(message=""),
                     )
                 self.backend.enqueue_for(
-                    LEAD_ORCHESTRATOR, _synthesis_outcome(),
+                    LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome),
                 )
                 with _stop_after_durable_result_patch(self.runtime):
                     with self.assertRaisesRegex(RuntimeError, "durable execution result"):
@@ -618,7 +624,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             self.backend.enqueue_for(role, _specialist_outcome())
         self.backend.enqueue_for(EXECUTION_SPECIALIST, _raw_outcome({'assessment': 'supports', 'message': 0}))
         self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome())
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome))
 
         with _stop_after_durable_result_patch(self.runtime):
             with self.assertRaisesRegex(RuntimeError, "durable execution result"):
@@ -732,10 +738,11 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                         PLOT_ARCHITECT, _specialist_outcome(),
                     )
                     self.backend.enqueue_for(
-                        LEAD_ORCHESTRATOR, _synthesis_outcome(message=""),
+                        LEAD_ORCHESTRATOR, _synthesis_outcome(select=True),
+                        _synthesis_outcome(message=""),
                     )
                 self.backend.enqueue_for(
-                    LEAD_ORCHESTRATOR, _synthesis_outcome(),
+                    LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome),
                 )
                 original_append = self.runtime._append_validation_messages
                 attempts = 0
@@ -752,7 +759,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                         CollaborationConfirmationDecision.CONFIRM))
                 self.assertEqual(attempts, 2)
                 self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
-                self.assertEqual(len(self.backend.calls) - calls_before, 3)
+                self.assertEqual(len(self.backend.calls) - calls_before, 4)
                 history = self.history(conversation_id)
                 result = _payloads(history, CollaborationExecutionResult)[0]
                 self.assertIs(result.overall_outcome, CollaborationExecutionOutcomeKind.SUCCEEDED)
@@ -835,7 +842,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(synthesis.unresolved_input_ids, ("user_input",))
         result = _payloads(history, CollaborationExecutionResult)[0]
         self.assertIs(result.synthesis_outcome, CollaborationSynthesisOutcomeKind.SUCCEEDED)
-        self.assertEqual(result.synthesis_submitted_physical_calls, 1)
+        self.assertEqual(result.synthesis_submitted_physical_calls, 2)
         duplicate = {**_assignments(PLOT_ARCHITECT)[0], "mode": "review"}
         with self.assertRaises(BackendProtocolError) as caught:
             self.runtime._decode_lead_synthesis(json.dumps({"message": "Visible.", "next_intent": {
@@ -851,7 +858,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("Unresolved concern")
         proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("concern"))
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome(unresolved_input_ids=[]))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome,
+            unresolved_input_ids=[]))
 
         decision = await self.runtime.decide_lead_step(
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
@@ -933,7 +941,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         first = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\n" + "Check ${core_documents/global_outline.md}",
             assignments=[{**_assignments(PLOT_ARCHITECT)[0], "input_ids": ["user_input", "reference_1"]}], authoring_assessment=asdict(_review_assessment()))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("concern"))
-        def continue_lineage(call, _provider):
+        def continue_lineage(call, _provider, *, select=False):
             from tests.provider_wire_fixture import (
                 indexed_response, lead_fixture_assignments, lead_fixture_result,
                 offered_fixture_bindings, result as wire_result)
@@ -967,6 +975,10 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 anchors={PLOT_ARCHITECT: known_ids[0]},
                 recipients={alias: PLOT_ARCHITECT for alias in choices['required_input_ids']}))
             grouped = lead_fixture_result(native)
+            if select:
+                from tests.provider_wire_fixture import result_selection
+                return result_selection(call, response_type='consultation_summary', family=0,
+                    branch_key='consultation-summary-v4:family:1', value=grouped)
             outer_id, inner_id = offered_fixture_bindings(
                 call, action_type='submit_result', response_type='consultation_summary', family=0,
                 branch_key='consultation-summary-v4:family:1', value=grouped)
@@ -993,6 +1005,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             self.assertIn(Rule.PURPOSE_REQUIRED, facts.diagnose(json.dumps({**body, "next_intent": {**body["next_intent"], "purpose": ""}})))
             return encoded
         private = "PRIVATE_CONTINUATION_SYNTHESIS_VALUE"
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR,
+            lambda call, provider: continue_lineage(call, provider, select=True))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _raw_outcome({"message": "", private: private}))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, continue_lineage)
         first_decision = await self.runtime.decide_lead_step(_decision(first, CollaborationConfirmationDecision.CONFIRM))
@@ -1002,7 +1016,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(second.proposal.step_id, first.step_id)
         self.assertEqual(second.proposal.proposal_revision, first.proposal.proposal_revision + 1)
         self.assertEqual((second.proposal.budget.rounds_spent, second.proposal.budget.rounds_added,
-                          second.proposal.budget.physical_calls_spent), (1, 1, 4))
+                          second.proposal.budget.physical_calls_spent), (1, 1, 6))
         first_history = self.history(conversation_id)
         expected_details = tuple(chunk for payload in _submitted_calls(first_history)
             for chunk in payload.validation_details)
@@ -1014,7 +1028,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         with self.assertRaises(ValueError):
             await self.runtime.decide_lead_step(_decision(first, CollaborationConfirmationDecision.CONFIRM))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("supports"))
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome))
         second_decision = await self.runtime.decide_lead_step(_decision(second, CollaborationConfirmationDecision.CONFIRM))
         self.assertIs(second_decision.turn.state, CollaborationStepState.COMPLETED)
         self.assertIsNone(second_decision.turn.proposal)
@@ -1068,7 +1082,7 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
 
         self.backend.enqueue_for(PLOT_ARCHITECT, search_current_proposal,
                                  read_current_proposal, answer_after_read)
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome))
         decision = await self.runtime.decide_lead_step(
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
         )
@@ -1089,9 +1103,9 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
             CollaborationProviderCallKind.CONTINUATION, CollaborationProviderCallState.SUBMITTED)))
         result = _payloads(history, CollaborationExecutionResult)[0]
         self.assertEqual(result.assignment_outcomes[0].submitted_physical_calls, 3)
-        self.assertEqual(result.synthesis_submitted_physical_calls, 1)
+        self.assertEqual(result.synthesis_submitted_physical_calls, 2)
         projection = project_collaboration_history(history)
-        self.assertEqual(projection.physical_calls_spent, 5)
+        self.assertEqual(projection.physical_calls_spent, 7)
         self.assertLessEqual(projection.physical_calls_spent, 12)
 
     async def test_result_persistence_failure_cleans_marker_after_provider_completion(self) -> None:
@@ -1111,7 +1125,7 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
             conversation_storage_services=services,
         )
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *selected_fixture_calls(_synthesis_outcome))
         failing.enabled = True
 
         captured = []

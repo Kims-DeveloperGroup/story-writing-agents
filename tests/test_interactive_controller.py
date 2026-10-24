@@ -1,6 +1,7 @@
 """Session-lobby controller contracts, transitions, and cleanup tests."""
 
 from __future__ import annotations
+from tests.provider_wire_fixture import selected_fixture_calls
 import story_writing_agents.lead_task_transitions as task
 from story_writing_agents import conversations as collaboration
 from story_writing_agents import lead_exploration as exploration
@@ -6165,7 +6166,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         case = _task_fixture(self)
         source, owner = case.conversation("Installed source A"), case.conversation("Installed owner B")
         source_text = "Prefix. 한글\r\nSelected.  Suffix."
-        case.backend.enqueue(_current_exploration_outcome(source_text))
+        case.backend.enqueue(*selected_fixture_calls(_current_exploration_outcome, source_text))
         runner = asyncio.Runner()
         self.addCleanup(runner.close)
         runner.run(case.runtime.lead_turn(case.session_id, source, "Explore alternatives.",

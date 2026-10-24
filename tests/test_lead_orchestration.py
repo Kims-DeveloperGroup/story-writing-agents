@@ -1072,7 +1072,8 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         domains=("plot_structure",),
         authoring_assessment: dict[str, object] | None = None,
     ):
-        (self.backend.enqueue(_current_proposal_outcome(assignments or [{'agent_id':
+        (self.backend.enqueue(*selected_fixture_calls(_current_proposal_outcome,
+            assignments or [{'agent_id':
             PLOT_ARCHITECT, 'instruction': 'Check the story direction against the request.',
             'input_ids': ['user_input']}], relation=relation, domains=domains,
             author_review_basis=True,
@@ -1404,6 +1405,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
     async def test_direct_search_read_answer_uses_bounded_history_without_proposal(self) -> None:
         self.backend.context_threads = {}
         conversation_id = self.conversation("Searchable lead history")
+        from tests.provider_wire_fixture import selected_fixture_calls
         self.backend.enqueue(_visible_outcome("answer", "A prior lead response"))
         await self.runtime.lead_turn(self.session_id, conversation_id, "Create one prior visible answer.",)
         session_definition = self.backend.definitions[-1]

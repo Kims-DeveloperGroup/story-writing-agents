@@ -1417,6 +1417,20 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assertEqual(selected_repair.selectable_semantic_schema_ids, ())
         with self.assertRaises(ValueError):
             selected_repair.repair_lineage()
+        selected_normal = modeled_selection_binding(selected_bound, response_type='answer',
+            family=1)
+        for proof in (selected_normal.repair_lineage(), selected_normal.replay_lineage()):
+            current = selected_normal.offers
+            same = replace(current, call_id=current.call_id + '-retained',
+                           remaining_physical_calls=current.remaining_physical_calls - 1)
+            retained = multiple.for_offer(same, proof)
+            self.assertEqual(len(retained.offered_semantic_schema_ids), 1)
+            for field in ('operation_id', 'result_correlation_id'):
+                foreign = replace(same, correlation=replace(
+                    same.correlation, **{field: 'foreign-invocation'}))
+                self.assertEqual(foreign.scope, same.scope)
+                with self.assertRaises(ValueError):
+                    multiple.for_offer(foreign, proof)
 
     def test_valid_search_read_and_natural_result_shapes_decode_exactly(self) -> None:
         search = self.decode(_search_wire( self.token, [ ("Needle", ["writing_artifact", "conversation",

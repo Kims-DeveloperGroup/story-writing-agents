@@ -1,6 +1,7 @@
 """Issue 631 authentication evidence; all providers and login processes are synthetic."""
 
 from __future__ import annotations
+from tests.provider_wire_fixture import selected_fixture_calls
 
 import asyncio
 import json
@@ -720,7 +721,8 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
                 return await original(provider, request)
         self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome())
         self.backend.enqueue_for(CHARACTER_CUSTODIAN, lead._specialist_outcome())
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, lead._synthesis_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR,
+            *selected_fixture_calls(lead._synthesis_outcome))
         with mock.patch.object(lead._LeadContextProvider, "invoke_context", new=physical):
             result, keys = await drive_recovery(self.runtime.decide_lead_step(
                 lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM)))

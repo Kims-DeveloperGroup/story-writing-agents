@@ -113,10 +113,11 @@ def _artifact_outcome(
     authoring_scope=None,
     read_queries: tuple[tuple[str, str], ...] = (),
     read_prefix: str | None = None,
+    select=False,
 ):
     read_phase = 0
     selected_handles = ()
-    def respond(call, _provider):
+    def respond(call, _provider, *, select=select):
         nonlocal read_phase, selected_handles
         from tests.provider_wire_fixture import finite_fixture_read_selection, indexed_response
         from tests.provider_wire_fixture import offered_fixture_bindings
@@ -214,7 +215,7 @@ def _artifact_outcome(
                     native['authoring_assessment'], source_choices=choices['input_ids'])
             if 'writing_task_scope' in native:
                 native['task_scope'] = lead_fixture_bound_scope(call, native.pop('writing_task_scope'))
-            return lead_fixture_response(call, lead_fixture_result(native), family=0)
+            return lead_fixture_response(call, lead_fixture_result(native), family=0, select=select)
         return _provider_envelope(
             call,
             {

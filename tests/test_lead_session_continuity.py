@@ -1,6 +1,7 @@
 """Exact session memory, recovery, and publication safety using synthetic providers."""
 
 from __future__ import annotations
+from tests.provider_wire_fixture import selected_fixture_calls
 import hashlib
 from story_writing_agents.conversations import encode_collaboration_event
 from tests.test_collaboration_events import editorial, editorial_request
@@ -109,7 +110,8 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(self.snapshot(), prior)
         plan = "First inspect the outline.\nSecond review the character motive.\nThird draft the opening."
         self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome())
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=plan))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR,
+            *selected_fixture_calls(lead._synthesis_outcome, message=plan))
         await self.runtime.decide_lead_step(lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(self.backend.call_records[-1][1].expected_thread_id, "thread-lead-1")
         followups = (
@@ -240,7 +242,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(calls[0].continuation_identity, calls[-1].continuation_identity)
         self.assertNotEqual(calls[0].scope, calls[-1].scope)
         provisional = self.conversation("Provisional restart")
-        self.backend.enqueue(_current_exploration_outcome())
+        self.backend.enqueue(*selected_fixture_calls(_current_exploration_outcome))
         explored = await self.runtime.lead_turn(self.session_id, provisional, "Explore possible directions.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         restarted = StoryRuntime(self.workspace, self.backend)
         reports = tuple(event.payload.report for event in self.runtime.conversation_storage_services.event_store.read(self.session_id, provisional) if event.kind is CollaborationEventKind.LEAD_EXPLORATION_RESULT)
