@@ -11784,6 +11784,7 @@ class StoryRuntime:
                 ProviderExecutionWorkspace
             ] | None = None
             execution_workspace: ProviderExecutionWorkspace | None = None
+            corrective_rejection_code: ContextProviderTerminalCode | None = None
             try:
                 candidate_workspace_manager = _provider_execution_workspace_manager(
                     bound_agent,
@@ -12553,7 +12554,6 @@ class StoryRuntime:
                     execution_workspace=execution_workspace,
                 )
                 result = None
-                corrective_rejection_code: ContextProviderTerminalCode | None = None
                 if admission is not None:
                     remaining = min(remaining, admission.front_physical_call_limit)
                 correction_failure_code: CollaborationLeadOutcomeFailureCode | None = None
@@ -12890,6 +12890,7 @@ class StoryRuntime:
                         and failure.code is ContextExecutionErrorCode.ACTION_EXHAUSTED
                         and facts.prelaunch_action_exhausted
                         and facts.response_rejection_code is None
+                        and corrective_rejection_code is None
                         and not facts.timed_out and not facts.submission_uncertain
                         and ordinary_front_cap is not None):
                     return self._structured_fallback_lead_result(
