@@ -12518,7 +12518,6 @@ class StoryRuntime:
                     execution_workspace=execution_workspace,
                 )
                 result = None
-                correction_call_limit = 1
                 corrective_rejection_code: ContextProviderTerminalCode | None = None
                 if admission is not None:
                     remaining = min(remaining, admission.front_physical_call_limit)
@@ -12550,8 +12549,14 @@ class StoryRuntime:
                     first_failure = captured_failure
                     facts = context_provider_failure_facts(first_failure)
                     rejection_code = facts.response_rejection_code
+                    correction_call_limit = max(
+                        0,
+                        min(contextual_request.physical_call_limit, remaining)
+                        - provider.submitted_physical_calls,
+                    )
                     correction_available = (
-                        rejection_code in _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES
+                        correction_call_limit > 0
+                        and rejection_code in _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES
                         and not facts.submission_uncertain
                         and provider.last_submitted_call_id is not None
                         and provider.submitted_physical_calls + correction_call_limit

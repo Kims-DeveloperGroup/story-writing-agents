@@ -2091,7 +2091,9 @@ def normalize_context_action(value: object, *, finite_source_kinds: bool = False
     if (type(value) is dict and type(value.get("agent_action")) is dict
             and value["agent_action"].get("action_type") == "select_result"):
         action = value["agent_action"]
-        if set(value) != {"agent_action"} or set(action) != {"action_type", "schema_id", "result_schema_id"}:
+        if set(value) != {"agent_action"} or set(action) not in (
+                {"action_type", "result_schema_id"},
+                {"action_type", "schema_id", "result_schema_id"}):
             raise WireShapeError("$.agent_action", "expected exact current result-selection fields")
         if type(action["result_schema_id"]) is not str:
             raise WireShapeError("$.agent_action.result_schema_id", "expected current result identity")
