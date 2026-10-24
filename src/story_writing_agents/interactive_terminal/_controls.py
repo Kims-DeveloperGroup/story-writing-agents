@@ -315,20 +315,6 @@ def transition_main_command_input(
             dismiss_palette=True,
         ), None
     if (
-        event.kind is KeyKind.ENTER
-        and not state.main_input.line_state.buffer.strip()
-    ):
-        return MainCommandControlState(
-            alerts=(
-                Notice(
-                    "Enter a message or slash command.",
-                    label="input",
-                    role=SemanticRole.ERROR,
-                    state=ViewState.ERROR,
-                ),
-            ),
-        ), None
-    if (
         event.kind in {KeyKind.ENTER, KeyKind.TAB}
         and state.palette is None
         and state.dismissal_latch is not None

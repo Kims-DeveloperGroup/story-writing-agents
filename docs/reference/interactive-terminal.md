@@ -188,6 +188,8 @@ inline alert below the input says `Enter a message or slash command.` Repeated
 Enter replaces that alert without submitting input or adding history. Editing
 the buffer or recalling history clears the alert. Enter still accepts a
 highlighted suggestion before attempting submission.
+This rule applies only to main input; multiline composition retains blank and
+whitespace-only lines.
 
 Alerts fit the available terminal rows; clipped feedback ends with an ellipsis.
 

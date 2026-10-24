@@ -871,30 +871,12 @@ class CompletionControlTests(unittest.TestCase):
 
     def test_enter_without_highlight_and_veof_submit_visible_buffer(self) -> None:
         for buffer in ("", " \u2003"):
-            empty, outcome = self.apply(self.type_text(buffer), KeyEvent(KeyKind.ENTER))
-            self.assertIsNone(outcome)
-            self.assertEqual(empty.main_input, MainInputControlState())
-            self.assertIsNone(empty.palette)
-            self.assertEqual(len(empty.alerts), 1)
-            self.assertEqual(empty.alerts[0].text, "Enter a message or slash command.")
-            self.assertIs(empty.alerts[0].role, _model.SemanticRole.ERROR)
-            self.assertEqual(self.apply(empty, KeyEvent(KeyKind.ENTER)), (empty, None))
-            edited, outcome = self.apply(empty, KeyEvent(KeyKind.TEXT, "x"))
-            self.assertIsNone(outcome)
-            self.assertEqual(edited.alerts, ())
-            recalled, outcome = self.apply(
-                empty, KeyEvent(KeyKind.UP), MainInputHistoryState(("/status",))
-            )
-            self.assertIsNone(outcome)
-            self.assertEqual(recalled.main_input.line_state.buffer, "/status")
-            self.assertEqual(recalled.alerts, ())
-            self.assertIs(
-                self.apply(empty, KeyEvent(KeyKind.EOF))[1].kind,  # type: ignore[union-attr]
-                ControlOutcomeKind.EOF,
-            )
-            self.assertIs(
-                self.apply(empty, KeyEvent(KeyKind.INTERRUPT))[1].kind,  # type: ignore[union-attr]
-                ControlOutcomeKind.INTERRUPT,
+            state = self.type_text(buffer)
+            submitted, outcome = self.apply(state, KeyEvent(KeyKind.ENTER))
+            self.assertEqual(submitted.main_input.line_state, state.main_input.line_state)
+            self.assertEqual(
+                outcome,
+                _model.ControlOutcome(ControlOutcomeKind.COMMIT, text=buffer),
             )
         cases = (
             ("ordinary", KeyKind.ENTER),
@@ -2638,14 +2620,14 @@ class CompletionDriverTests(unittest.TestCase):
         for sequence in sequences:
             with self.subTest(sequence_length=len(sequence)):
                 driver, _input, output, fallback, _termios, _os = make_driver(
-                    sequence + "\n"
+                    sequence + "x\n"
                 )
                 with _ready_select_patch() as readiness:
-                    self.assertEqual(self.read(driver), "")
+                    self.assertEqual(self.read(driver), "x")
                 readiness.assert_called_once_with((7,), (), (), 0.05)
                 fallback.assert_not_called()
-                self.assertEqual(driver._history_state, MainInputHistoryState())
-                self.assertEqual(len(output.records), 2)
+                self.assertEqual(driver._history_state, MainInputHistoryState(("x",)))
+                self.assertEqual(len(output.records), 3)
 
     def test_overlong_suffixes_do_not_recall_history_or_move_cursor(self) -> None:
         for introducer in ("\x1b[", "\x1bO"):
@@ -2689,12 +2671,13 @@ class CompletionDriverTests(unittest.TestCase):
         self,
     ) -> None:
         driver, _input, output, fallback, _termios, _os = make_driver(
-            "\x1b[Z\x1b[999~\n"
+            "\x1b[Z\x1b[999~x\n"
         )
         with _ready_select_patch():
-            self.assertEqual(self.read(driver), "")
+            self.assertEqual(self.read(driver), "x")
         fallback.assert_not_called()
-        self.assertEqual(len(output.records), 2)
+        self.assertEqual(len(output.records), 3)
+        self.assertEqual(driver._history_state, MainInputHistoryState(("x",)))
 
     def test_interrupt_veof_and_physical_eof_restore_without_failed_append(
         self,
@@ -2726,6 +2709,41 @@ class CompletionDriverTests(unittest.TestCase):
         driver, input_stream, output, fallback, termios, os_module = make_driver(
             "\n\n \u2003\n/s\n\n"
         )
+
+        def apply(state, event, history=MainInputHistoryState()):
+            return driver._main_prompt_transition(
+                state, event, history, _core._main_command_completion,
+            )
+
+        for buffer in ("", " \u2003"):
+            initial = MainCommandControlState(
+                MainInputControlState(LineInputState(buffer, len(buffer)))
+            )
+            empty, outcome = apply(initial, KeyEvent(KeyKind.ENTER))
+            self.assertIsNone(outcome)
+            self.assertEqual(empty.main_input, MainInputControlState())
+            self.assertIsNone(empty.palette)
+            self.assertEqual(len(empty.alerts), 1)
+            self.assertEqual(empty.alerts[0].text, "Enter a message or slash command.")
+            self.assertIs(empty.alerts[0].role, _model.SemanticRole.ERROR)
+            self.assertEqual(apply(empty, KeyEvent(KeyKind.ENTER)), (empty, None))
+            edited, outcome = apply(empty, KeyEvent(KeyKind.TEXT, "x"))
+            self.assertIsNone(outcome)
+            self.assertEqual(edited.alerts, ())
+            recalled, outcome = apply(
+                empty, KeyEvent(KeyKind.UP), MainInputHistoryState(("/status",))
+            )
+            self.assertIsNone(outcome)
+            self.assertEqual(recalled.main_input.line_state.buffer, "/status")
+            self.assertEqual(recalled.alerts, ())
+            self.assertIs(
+                apply(empty, KeyEvent(KeyKind.EOF))[1].kind,  # type: ignore[union-attr]
+                ControlOutcomeKind.EOF,
+            )
+            self.assertIs(
+                apply(empty, KeyEvent(KeyKind.INTERRUPT))[1].kind,  # type: ignore[union-attr]
+                ControlOutcomeKind.INTERRUPT,
+            )
         self.assertEqual(self.read(driver), "/settings ")
 
         fallback.assert_not_called()
@@ -2734,7 +2752,7 @@ class CompletionDriverTests(unittest.TestCase):
             driver._history_state,
             MainInputHistoryState(("/settings ",)),
         )
-        self.assertEqual(os_module.observed_widths, [8, 8])
+        self.assertEqual(os_module.observed_widths, [8, 8, 8, 8])
         self.assertEqual(
             tuple(call[1] for call in termios.set_calls),
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),

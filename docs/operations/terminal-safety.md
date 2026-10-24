@@ -609,7 +609,8 @@ open. Empty or Unicode-whitespace-only Enter resets the main field and cursor
 without returning from the live read, dispatching work, or adding history. It
 shows one replaceable `Enter a message or slash command.` alert beneath the
 input. Buffer edits and history recall clear active alerts. Generic prompts
-retain their existing Enter behavior; VEOF submits nonempty text or returns EOF
+and multiline composition retain their existing Enter behavior, including
+literal blank and whitespace-only composition lines; VEOF submits nonempty text or returns EOF
 when empty; VINTR returns interrupt.
 
 The main-input facade owns queued semantic command alerts until the next read;

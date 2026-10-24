@@ -63,9 +63,11 @@ from ._model import (
     PickerViewport,
     RenderedInputFrame,
     RenderedFrame,
+    SemanticRole,
     SlashCommandSuggestion,
     SuggestionPalette,
     TerminalCapabilities,
+    ViewState,
     display_character_width,
     sanitize_terminal_text,
 )
@@ -2460,6 +2462,38 @@ class RawTerminalDriver:
             line = view.initial_value
         return ControlOutcome(ControlOutcomeKind.COMMIT, text=line)
 
+    def _main_prompt_transition(
+        self,
+        state: MainCommandControlState,
+        event: KeyEvent,
+        history: MainInputHistoryState,
+        completion_provider: _CompletionProvider,
+    ) -> tuple[MainCommandControlState, ControlOutcome | None]:
+        """Reject blank Enter submissions only in actual main-prompt reads."""
+
+        updated, outcome = self._main_transition(
+            state, event, history, completion_provider,
+        )
+        if (
+            event.kind is KeyKind.ENTER
+            and type(updated) is MainCommandControlState
+            and type(outcome) is ControlOutcome
+            and outcome.kind is ControlOutcomeKind.COMMIT
+            and outcome.text is not None
+            and not outcome.text.strip()
+        ):
+            return MainCommandControlState(
+                alerts=(
+                    Notice(
+                        "Enter a message or slash command.",
+                        label="input",
+                        role=SemanticRole.ERROR,
+                        state=ViewState.ERROR,
+                    ),
+                ),
+            ), None
+        return updated, outcome
+
     def read_main_line(
         self,
         prompt: str,
@@ -2485,7 +2519,7 @@ class RawTerminalDriver:
         ) -> tuple[_ControlState, ControlOutcome | None]:
             if type(state) is not MainCommandControlState:
                 raise TypeError("main transition requires MainCommandControlState")
-            return self._main_transition(
+            return self._main_prompt_transition(
                 state,
                 event,
                 self._history_state,
@@ -2637,7 +2671,7 @@ class RawTerminalDriver:
             )
             if reference_outcome is not None:
                 return state, reference_outcome
-            return self._main_transition(
+            return self._main_prompt_transition(
                 state,
                 event,
                 self._history_state,
