@@ -606,7 +606,7 @@ class BoundCallContract:
     outer_inner_schema_ids: tuple[tuple[str, str | None], ...] = field(init=False)
     offered_semantic_schema_ids: tuple[str, ...] = field(init=False)
     selectable_semantic_schema_ids: tuple[str, ...] = field(init=False)
-    _delivery_anchor: tuple[tuple[str, ...], tuple[str, ...]] = field(init=False, repr=False)
+    _delivery_anchor: tuple[tuple[str, ...], tuple[str, ...], str] = field(init=False, repr=False)
     logical_origin_call_id: str = field(init=False)
     phase: str = field(init=False)
     _semantic_anchor: LeadContractIndex[LeadDecodedResult] = field(init=False, repr=False, compare=False)
@@ -672,9 +672,10 @@ class BoundCallContract:
         pairs = tuple((member.schema_id, owner.semantic_member.schema_id
                        if owner.semantic_member is not None else None)
                       for member, owner in zip(outer.contracts, outer.owners, strict=True))
+        physical_rules = _physical_action_rules(outer, phase)
         graph = SchemaRules.declare(
             hoist_schema_definitions(closed_rule(
-                {"agent_action": outer.rule_graph.schema_value()},
+                {"agent_action": physical_rules.schema_value()},
                 description=_CONTEXT_ACTION_ROOT_DESCRIPTION,
             )),
             maximum_bytes=MAX_PROVIDER_SCHEMA_UTF8_BYTES,
@@ -686,14 +687,14 @@ class BoundCallContract:
         object.__setattr__(self, "outer_inner_schema_ids", pairs)
         object.__setattr__(self, "offered_semantic_schema_ids", offered)
         object.__setattr__(self, "selectable_semantic_schema_ids", selectable)
-        object.__setattr__(self, "_delivery_anchor", (offered, selectable))
+        object.__setattr__(self, "_delivery_anchor", (offered, selectable, phase))
         object.__setattr__(self, "logical_origin_call_id", semantic.policy.logical_origin_call_id)
         object.__setattr__(self, "phase", phase)
         object.__setattr__(self, "_semantic_anchor", semantic)
         object.__setattr__(self, "_action_anchor", outer)
         semantic.require_provenance()
         outer.require_provenance()
-        if graph.node_fingerprint(("agent_action",)) != outer.rule_graph.node_fingerprint():
+        if graph.node_fingerprint(("agent_action",)) != physical_rules.node_fingerprint():
             raise ValueError("actual call/graph/frozen owner provenance changed")
         self.require_current_offer(self.offers)
 
@@ -707,8 +708,8 @@ class BoundCallContract:
         """Actual physical action choices, from the same sealed owner graph."""
         self.require_current_offer(self.offers)
         names = {wire: logical for logical, wire in ACTION_TYPES.items()}
-        return tuple(dict.fromkeys(names[owner.rules.literal_at(("action_type",))]
-                                   for owner in self.action_index.owners))
+        return tuple(dict.fromkeys(names[member.owner.rules.literal_at(("action_type",))]
+                                   for member in _physical_action_members(self.action_index, self.phase)))
 
     def require_current_offer(self, offers: ContextCallOffers) -> None:
         if (type(offers) is not ContextCallOffers or offers != self.offers
@@ -716,7 +717,7 @@ class BoundCallContract:
                 or self.semantic_index is not self._semantic_anchor
                 or self.action_index is not self._action_anchor
                 or type(self.rule_graph) is not SchemaRules
-                or self._delivery_anchor != (self.offered_semantic_schema_ids, self.selectable_semantic_schema_ids)):
+                or self._delivery_anchor != (self.offered_semantic_schema_ids, self.selectable_semantic_schema_ids, self.phase)):
             raise ValueError("actual call/graph/frozen owner provenance changed")
         semantic_index = self.semantic_index
         semantic_contracts = semantic_index.contracts
@@ -746,6 +747,7 @@ class BoundCallContract:
                 if (type(member) is not BoundContract or member.owner is not owner
                         or member.identity != index.policy.identity_for(owner.owner_id)):
                     raise ValueError("current contract owner binding changed")
+                owner.declare_rules()
         pairs: list[tuple[str, str | None]] = []
         for member, owner in zip(self.action_index.contracts, self.action_index.owners, strict=True):
             if type(owner) is not ContextActionContractOwner or owner.eligibility_offers is not self.eligibility_offers:
@@ -830,6 +832,14 @@ class BoundCallContract:
             action_value = member.validate_value(action)
         except ContractRejection as failure:
             raise remap_validation(failure, {"$": action_root}) from None
+        if not any(current is member for current in _physical_action_members(self.action_index, self.phase)):
+            # Classify only an otherwise valid frozen action as exhausted.
+            try:
+                member.decode_validated(action_value)
+            except ContractRejection as failure:
+                raise remap_validation(failure, {"$": action_root}) from None
+            raise LeadContractRejection(_CORRECTIVE_ACTION_EXHAUSTED, member.schema_id,
+                (action_root + ".action_type: corrective call permits only submit_result or select_result",))
         inner, result_value = None, None
         if expected_inner is not None:
             inner = self.semantic_index.select(expected_inner)
@@ -985,6 +995,36 @@ class BoundCallContract:
         payload["logical_origin_call_id"] = self.logical_origin_call_id
         payload["phase"] = self.phase
         return json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+
+
+_CORRECTIVE_ACTION_EXHAUSTED = "LEAD_CORRECTIVE_ACTION_EXHAUSTED"
+
+
+def _physical_action_members(index: LeadContractIndex[ContextActionValue],
+                             phase: str) -> tuple[BoundContract[ContextActionValue], ...]:
+    if phase not in {"repair", "replay_repair"}:
+        return index.contracts
+    return tuple(member for member, owner in zip(index.contracts, index.owners, strict=True)
+                 if owner.rules.literal_at(("action_type",)) in {"submit_result", "select_result"})
+
+
+def _physical_action_rules(index: LeadContractIndex[ContextActionValue], phase: str) -> SchemaRules:
+    members = _physical_action_members(index, phase)
+    if len(members) == len(index.contracts):
+        return index.rule_graph
+    if not members:
+        raise ValueError("corrective call has no frozen submit or selection member")
+    if len(members) == 1:
+        return members[0].rule_graph
+    schema = index.rule_graph.schema_value()
+    branches = schema.get("anyOf")
+    if type(branches) is not list or len(branches) != len(index.contracts):
+        raise ValueError("frozen complete action branch order is unavailable")
+    # Index construction and factoring retain this complete-member order. Keep
+    # original branch references and all definitions; never rebind issued IDs.
+    schema["anyOf"] = [branch for branch, member in zip(branches, index.contracts, strict=True)
+                       if any(current is member for current in members)]
+    return SchemaRules.declare(schema, maximum_bytes=index.policy.maximum_index_schema_bytes)
 
 
 def _bound_call_failure(failure: BaseException) -> tuple[BoundCallContract, LeadContractRejection]:
@@ -6457,7 +6497,10 @@ class AgentContextService:
                             call_decoded = call_contract.decode_response(result.response_text)
                             action = _decode_context_action(result.response_text, correlation=correlation, allowed_actions=allowed_actions, result_contract=phase_contract[1], allowed_search_source_kinds=request.allowed_search_source_kinds, resolve_handle=action_session.resolve_wire_handle, completed_handles=action_session.completed_handles, decoded_action=call_decoded)
                         except ContractRejection as bound_failure:
-                            rejected = carry_validation(_execution_error(ContextExecutionErrorCode.MALFORMED_ACTION), bound_failure)
+                            execution_code = (ContextExecutionErrorCode.ACTION_EXHAUSTED
+                                if bound_failure.code == _CORRECTIVE_ACTION_EXHAUSTED
+                                else ContextExecutionErrorCode.MALFORMED_ACTION)
+                            rejected = carry_validation(_execution_error(execution_code), bound_failure)
                             rejected.bound_contract_failure = bound_failure
                             raise rejected from None
                         if type(action) not in {ContextSearchAction, ContextReadAction, ContextAnswerAction, ContextResultSelectionAction}:
