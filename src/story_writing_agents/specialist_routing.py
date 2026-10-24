@@ -11,7 +11,7 @@ import unicodedata
 from itertools import combinations, product
 from .structured_output_validation import (
     ValidationFinding,
-    unicode_category_exclusion,
+    unicode_scalar_classes,
     validation_failure,
     validation_call,
 )
@@ -306,21 +306,21 @@ def authoring_source_scope_is_eligible(
     )
 
 
-_ARTIFACT_PATH_EXCLUDED = unicode_category_exclusion(("Cc", "Cf", "Cs")) + r"\\}\u2028\u2029"
+_ARTIFACT_PATH_CLASS, _ARTIFACT_PATH_NON_DOT = unicode_scalar_classes(
+    ("Cc", "Cf"), ("/\\}\u2028\u2029", "/\\}\u2028\u2029."))
 
 
 def artifact_path_rule(domains: tuple[ArtifactReviewDomain, ...]) -> dict[str, object]:
     """Declare the same normalized lexical path language used by artifact_domain."""
     choices = [re.escape(path) for path, domain in _CORE_DOMAIN_BY_PATH.items() if domain in domains]
     if ArtifactReviewDomain.TONE_EXECUTION in domains:
-        excluded = _ARTIFACT_PATH_EXCLUDED
-        segment = "(?!\\.{1,2}(?:/|$))[^/" + excluded + "]+"
-        filename = "(?!\\.md$)[^/" + excluded + "]+\\.md"
+        segment = r"(?:\.{0,2}" + _ARTIFACT_PATH_NON_DOT + r"|\.\.\.)" + _ARTIFACT_PATH_CLASS + "*"
+        filename = _ARTIFACT_PATH_CLASS + r"+\.md"
         choices.append("manuscript/(?:" + segment + "/)*" + filename)
     if not choices:
         raise ValueError("artifact path rule requires a declared domain")
-    return {"type": "string", "pattern": "^(?:" + "|".join(choices) + r")$(?![\s\S])",
-            "description": "Normalized relative artifact path in the declared specialist domains; current physical-root qualification remains required."}
+    return {"type": "string", "pattern": "^(?:" + "|".join(choices) + r")\z",
+            "description": "Normalized relative artifact path in declared specialist domains; current physical-root qualification remains required."}
 
 
 def artifact_domain(path: str) -> ArtifactReviewDomain | None:

@@ -26,6 +26,7 @@ from .agent_context import (
 from .errors import ProviderAuthenticationRequiredError
 from .models import AgentDefinition
 from .provider_execution_workspace import ProviderExecutionWorkspace
+from .structured_output_validation import require_provider_schema_patterns
 
 
 DEFAULT_PROVIDER_TIMEOUT_SECONDS = 900.0
@@ -144,6 +145,7 @@ class ProviderInvocation:
                     "provider invocation stream sink must be a synchronous callable or None"
                 )
         schema = MappingProxyType(dict(self.schema))
+        require_provider_schema_patterns(schema)
         payload = MappingProxyType(dict(self.payload))
         component_paths = MappingProxyType(dict(self.component_paths))
         if type(self.binding_components) is not tuple or any(

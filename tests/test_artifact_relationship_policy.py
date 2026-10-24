@@ -711,6 +711,14 @@ class ArtifactRelationshipGrammarTests(RelationshipTestCase):
             ('manuscript//scene.md', None), ('manuscript/p/../scene.md', None),
             ('manuscript/p/café.md', None), ('manuscript/p/scene.md\n', None),
             ('manuscript/p/scene.md\r', None), ('manuscript/p/a:b.md', None), ('manuscript/p/a\\b.md', None)]
+        path_cases += [
+            ('core_documents/global_outline.md\n', None), ('manuscript/a.md', None),
+            ('manuscript/p/a..md', ArtifactKind.MANUSCRIPT),
+            ('manuscript/p/sub.md/a.md', ArtifactKind.MANUSCRIPT),
+            ('manuscript/p/a.md.md', ArtifactKind.MANUSCRIPT),
+            ('manuscript/p/a.md.txt', None), ('manuscript/p/\ud800.md', None),
+            ('manuscript/p/a\x00.md', None),
+        ]
         self.assertEqual(len(longest.encode('utf-8')), 1024)
         for path, expected_kind in path_cases:
             try:
@@ -1773,7 +1781,7 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
         self.assertEqual(len(modules), 163)
-        self.assertEqual(len(edges), 731)
+        self.assertEqual(len(edges), 732)
         relationship_name = "story_writing_agents.writing_artifacts.relationship_policy"
         lead = 'story_writing_agents.lead_provider_contracts'
         self.assertIn((lead, 'story_writing_agents.writing_artifacts.change_sets'), edges)
