@@ -315,6 +315,20 @@ def transition_main_command_input(
             dismiss_palette=True,
         ), None
     if (
+        event.kind is KeyKind.ENTER
+        and not state.main_input.line_state.buffer.strip()
+    ):
+        return MainCommandControlState(
+            alerts=(
+                Notice(
+                    "Enter a message or slash command.",
+                    label="input",
+                    role=SemanticRole.ERROR,
+                    state=ViewState.ERROR,
+                ),
+            ),
+        ), None
+    if (
         event.kind in {KeyKind.ENTER, KeyKind.TAB}
         and state.palette is None
         and state.dismissal_latch is not None
@@ -368,6 +382,12 @@ def transition_main_command_input(
 
     history_recalled = event.kind in {KeyKind.UP, KeyKind.DOWN}
     line_changed = updated_main.line_state != state.main_input.line_state
+    alerts = (
+        ()
+        if history_recalled
+        or updated_main.line_state.buffer != state.main_input.line_state.buffer
+        else state.alerts
+    )
     dismissal_latch = state.dismissal_latch
     if line_changed or history_recalled:
         dismissal_latch = None
@@ -380,12 +400,16 @@ def transition_main_command_input(
         return MainCommandControlState(
             closed_main,
             dismissal_latch=dismissal_latch,
+            alerts=alerts,
         ), None
     return (
-        _project_main_command_state(
-            closed_main,
-            completion_provider,
-            previous_palette=state.palette,
+        replace(
+            _project_main_command_state(
+                closed_main,
+                completion_provider,
+                previous_palette=state.palette,
+            ),
+            alerts=alerts,
         ),
         None,
     )

@@ -410,12 +410,17 @@ class MainCommandControlState:
     main_input: MainInputControlState = MainInputControlState()
     palette: MainCommandPaletteState | None = None
     dismissal_latch: LineInputState | None = None
+    alerts: tuple[Notice, ...] = ()
 
     def __post_init__(self) -> None:
         """Require exactly one source of open or dismissed overlay state."""
 
         if type(self.main_input) is not MainInputControlState:
             raise TypeError("main_input must be a MainInputControlState")
+        if type(self.alerts) is not tuple or any(
+            type(alert) is not Notice for alert in self.alerts
+        ):
+            raise TypeError("alerts must be a tuple of Notice values")
         if self.palette is not None and type(
             self.palette
         ) is not MainCommandPaletteState:
