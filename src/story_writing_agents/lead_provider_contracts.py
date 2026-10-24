@@ -2482,8 +2482,8 @@ class LeadProviderConstraints:
                         and "clarification_question" in properties["response_type"].get("enum", ())
                     )
                     kinds = offered["properties"]["response_type"].get("enum", ())
-                    alternatives = kinds if plain_question else (None,)
-                    for native_kind in alternatives:
+                    response_kind_alternatives = kinds if plain_question else (None,)
+                    for native_kind in response_kind_alternatives:
                         member_rules = encoded_rules
                         if native_kind is not None:
                             body = deepcopy(offered)
