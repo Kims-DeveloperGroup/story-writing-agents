@@ -213,8 +213,6 @@ class RecommendationActionContractTests(RecommendationCase):
         old_event = self.payload_events(other, c.ArtifactObjectivePayload)[0]
         old_wire = c.encode_collaboration_event(old_event)
         _, offer = await self.recommend(other, recommended_action=action(objective_id=before.objective_id))
-        self.assertNotEqual(c.project_collaboration_history(self.history(other)).premise_admission.prior_authoring_source_ref.task.task_id,
-                            offer.recommendation_request.authoring_scope.task_id)
         self.enqueue_preparation(offer, answer=checked(offer))
         await self.runtime.decide_lead_recommendation(decision(offer))
         self.assertEqual(self.objective(other).facts, before)

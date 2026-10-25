@@ -18,6 +18,7 @@ import asyncio
 from story_writing_agents import lead_premise_decisions as premise
 import copy
 import inspect
+import traceback
 import json
 import story_writing_agents.lead_task_transitions as task
 from story_writing_agents import provider_wire as wire
@@ -29,7 +30,7 @@ import unittest
 from story_writing_agents.conversations import CollaborationConfirmationPayload
 from story_writing_agents.specialist_routing import SpecialistAssignmentMode
 from collections.abc import Mapping
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass, replace, asdict
 from typing import Awaitable, Callable
 from unittest import mock
@@ -997,6 +998,12 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(boundary_patch.stop)
         self.runtime = StoryRuntime(  # type: ignore[arg-type]
             self.control_workspace, self.backend,)
+        def observe_reference_failure(operation, failure, *args, original=self.runtime._fail_reference_operation, **kwargs):
+            with suppress(BaseException):
+                print('SWA_REFERENCE_FAILURE', (type(failure).__name__[:128], str(failure)[:1024],
+                      str(traceback.extract_tb(failure.__traceback__)[-1])[:512] if failure.__traceback__ else None), flush=True)
+            return original(operation, failure, *args, **kwargs)
+        self.runtime._fail_reference_operation = observe_reference_failure
 
 
     async def _lead_turn(self, conversation_id, message, **kwargs):
@@ -1265,7 +1272,6 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         def checkpoint(name, status):
             print('WHOLE_FRONT_NEIGHBORS ' + json.dumps({'test_id': self.id(), 'invocation': invocation, 'packet': identity,
                 'phase': name, 'status': status,
-                'monotonic_seconds': time.perf_counter(),
                 'totals_kind': 'cumulative', 'final': status in ('complete', 'partial'),
                 'case_count': case_count, 'counts_wall_cpu': totals[name]}, separators=(',', ':')), flush=True)
         @contextmanager
@@ -1783,7 +1789,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
     async def test_front_schema_is_minimal_closed_and_provider_strict(self) -> None:
         # Ref spelling and lossless factoring preserve independently supplied neighboring values.
-        import time
         from story_writing_agents.lead_provider_contracts import factor_rule_schema
         from story_writing_agents.provider_wire import hoist_schema_definitions, require_schema_projection, WireShapeError
         from story_writing_agents.structured_output_validation import SchemaRules
@@ -3728,17 +3733,14 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                 continue
                             if semantic_kind == 'recommendation' and intent == 'authoring':
                                 extra['authoring_assessment'] = None; semantic_extra['authoring_assessment'] = None
-                            print('WHOLE_FRONT_MODEL_BEGIN', time.perf_counter(), getattr(self, '_neighbor_invocation', 0) + 1, family, intent, activity, domains, roles, flush=True)
                             profile_binding, modeled_frame = modeled_fixture_response(
                                 profile_origin, {**base, 'response_type': response_kind,
                                  'response_details': {'task_scope': native_scope, **extra}},
                                 family=0,
                                 branch_key=stem + ':family:' + str(family))
-                            print('WHOLE_FRONT_MODEL_END', time.perf_counter(), getattr(self, '_neighbor_invocation', 0) + 1, family, intent, activity, domains, roles, flush=True)
                             packet = json.loads(modeled_frame)
                             prepared_profile = (prepared_profile_projections if profile_binding is profile_origin
                                 else self._require_fixture_projections(profile_binding))
-                            print('WHOLE_FRONT_PROJECTIONS_END', time.perf_counter(), getattr(self, '_neighbor_invocation', 0) + 1, family, intent, activity, domains, roles, flush=True)
                             profile_projection_rules = tuple(item[2] for item in prepared_profile[1])
                             self.assertFalse(profile_binding.rule_graph.findings(packet))
                             decoded_profile = profile_binding.decode_response(json.dumps(packet))
