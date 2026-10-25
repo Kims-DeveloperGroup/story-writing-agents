@@ -3334,7 +3334,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         package_root = repository_root / "src" / "story_writing_agents"
         terminal_root = package_root / "interactive_terminal"
         expected_dependencies = {
-            '__init__.py': {'._advisory_progress', '._collaboration_view', '._core'},
+            '__init__.py': {'._advisory_progress', '._core'},
             '_advisory_progress.py': {'..agent_context.actions', '..agent_context.progress'},
             '_collaboration_view.py': {'..agents', '..conversations', '..core_document_readiness', '..editorial_state', '..lead_premise_decisions', '..lead_task_transitions', '..reply_trace', '..specialist_routing', '..writing_artifacts', '._model', '._response_usage'},
             '_external_view.py': set(), '_input_lifecycle.py': set(),

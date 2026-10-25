@@ -3626,8 +3626,8 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
         self.assertEqual(
             tuple(terminal_facade.__all__),
             (
-                "AttachmentKind",
-                "ComposeMode",
+                "project_conversation_messages",
+                "AttachmentKind", "ComposeMode",
                 "ConfirmationResult",
                 "TerminalActionKind",
                 "TerminalMessageKind",

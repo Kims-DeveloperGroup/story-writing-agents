@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from ._collaboration_view import project_conversation_messages
-
 from ._core import (  # noqa: F401
+    project_conversation_messages,
     AdvisoryProgressError,
     format_agent_reply_content,
     InteractiveAdvisoryProgress,

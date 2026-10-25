@@ -109,8 +109,8 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(tuple(event.event_id for event, _ in project_conversation_messages(legacy)),
                              tuple(event.event_id for event, _ in projected))
             synthesis = origin.payload
-            refs = tuple(premise.PremiseReplyRef(event.event_id, event.sender.agent_id, "1" * 64)
-                for event in known if event.event_id in synthesis.reply_event_ids)
+            refs = tuple(premise.PremiseReplyRef(reply_id, next(event.sender.agent_id for event in known if event.event_id == reply_id), "sha256:" + "1" * 64)
+                for reply_id in synthesis.reply_event_ids)
             dispositions = tuple(premise.PremiseReplyDisposition(ref.event_id, ("knows",), "used", "Keep the shared premise.", "No residual cost.") for ref in refs)
             option = premise.PremiseOption("option", premise.material_digest("The narrator knows."), "knows", "The narrator knows.", "Preserve ambiguity.", dispositions)
             report = premise.PremiseDecisionReport(premise.PremiseDecisionSpec("question", "slot", "Who knows?",
@@ -119,7 +119,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
                 premise.PremiseDecisionSummary("options", synthesis.message, (option.intent,), "knows"), (option,),
                 premise.PremiseDecisionCost(origin.step_id, ("call_synthesis",), 1, synthesis.proposal_id,
                     synthesis.proposal_revision, synthesis.proposal_digest, synthesis.execution_attempt_id))
-            with_options = tuple(replace(event, payload=replace(synthesis, premise_report=report,
+            with_options = tuple(replace(event, payload=replace(synthesis, premise_report=report, authoring_scope=None, next_intent=None,
                 evidence=replace(synthesis.evidence, scope=type(synthesis.evidence.scope).PREMISE_ANALYSIS))) if event == origin else event for event in final_history)
             option_view = project_conversation_messages((finalization_notice,), history_events=with_options)
             self.assertEqual(len(option_view), 1)

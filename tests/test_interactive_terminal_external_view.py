@@ -5,9 +5,11 @@ from __future__ import annotations
 import os
 import re
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
+from story_writing_agents.conversations import CollaborationLeadJudgmentPayload
 from story_writing_agents.interactive_terminal import (
     InteractiveExternalViewer,
     InteractiveTerminal, InteractiveTranscriptViewer,
@@ -201,6 +203,8 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         batches = contract_batches(CONVERSATION_ID)
         for name in ("proposal", "confirmation", "running", "calls", "result", "completion"):
             history = store_batch(history, measured_batch(batches[name]))
+        history = tuple(replace(event, payload=replace(event.payload, message=event.payload.message + "\n\n" + "Transcript page fixture.\n\n" * 80))
+                        if type(event.payload) is CollaborationLeadJudgmentPayload else event for event in history)
         # Portable terminals may archive ED2 even in an alternate buffer. The
         # model also wraps eagerly at the right margin, exposing bottom-row leaks.
         leaky = PortableTerminalScreen(); before_leak = leaky.snapshot()
