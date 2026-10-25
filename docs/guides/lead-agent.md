@@ -685,9 +685,14 @@ two-round/twelve-call limits. Review, Apply, and Commit remain separate decision
 
 While a completed local scope-v3 draft is offered for continuation, ordinary
 Lead calls leave the preparation and full final-review minimum available,
-including required READs and corrections. Fresh alternatives in that invocation
-share this finite allowance. The separate advisory-consultation API accepts
-historical scope1/2 only; scope3 uses the confirmed Lead flow.
+including required READs and corrections. When only one ordinary call remains,
+a separately admitted premise proposal can use two physical calls for selection
+and its terminal result. That allowance covers only the premise proposal;
+current-task results keep the ordinary ceiling, and retrieval, correction and
+authentication replay cannot borrow it. Analyst execution still requires its
+own confirmation, and task source/cost receipts remain distinct. The separate
+advisory-consultation API accepts historical scope1/2 only; scope3 uses the
+confirmed Lead flow.
 
 ### Choosing an unresolved premise
 

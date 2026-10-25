@@ -1,4 +1,4 @@
-from tests.provider_wire_fixture import selected_fixture_calls, capture_sample
+from tests.provider_wire_fixture import selected_fixture_calls, capture_sample, frozen_fixture_field
 """Runtime routing accepts typed task facts and keeps draft/review authority separate."""
 from tests.provider_wire_fixture import ( result as wire_result, lead_fixture_bound_scope, lead_fixture_assignments,
     finite_fixture_selection, lead_fixture_result, lead_fixture_response,)
@@ -6,6 +6,8 @@ from tests.provider_wire_fixture import author_positive_fixture_review_bases, le
 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id
 
 from functools import partial
+from story_writing_agents.agent_context.service import ContextExecutionError, ContextExecutionErrorCode
+from story_writing_agents.errors import BackendProtocolError
 from tests.test_collaboration_events import editorial, editorial_request
 import asyncio
 import hashlib
@@ -15,7 +17,6 @@ from tests.test_lead_orchestration import ( _current_exploration_outcome,
     _discussion_reply,)
 import subprocess
 from dataclasses import asdict, replace
-from unittest import mock
 
 from story_writing_agents import authoring_admission as admission
 from story_writing_agents import AgentBackend, StoryRuntime, lead_exploration as exploration, lead_premise_decisions as premise
@@ -128,12 +129,9 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
 
 
 class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
-    def _assert_continuation(self, result, field, *, diagnostic=False):
+    def _assert_continuation(self, result, field, *, expected_next_action=c.CollaborationNextAction.CONTINUE_WITH_LEAD):
         self.assertIsNone(getattr(result, field))
-        self.assertIs(result.next_action, c.CollaborationNextAction.CONTINUE_WITH_LEAD, (
-            result.kind, tuple((len(chunk), chunk[:1024]) for chunk in result.validation_details[:2]),
-            ('last-retained-unpaired', len(self.backend.calls), len(self.backend.finalizers)),
-            tuple((row.contract.phase, row.contract.offers.remaining_physical_calls) for row in self.backend.calls[-1:])) if diagnostic else None)
+        self.assertIs(result.next_action, expected_next_action)
     def _native_scoped(self, *agents, **values):
         mutate = values.pop('mutate', None)
         def respond(call, provider, *, select=False):
@@ -512,6 +510,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         reuse_completed = await complete_selected(reused, option.premise_text)
         self.assertIs(reuse_completed.turn.state, c.CollaborationStepState.COMPLETED)
         previous = self.history(conversation)
+        ordinary_cap, ordinary_source = self.runtime._ordinary_front_budget(previous,
+            self.runtime._authoring_tasks(self.runtime._session_authoring_events(self.session_id)))
+        self.assertEqual((ordinary_cap, ordinary_source[0]), (1, reused.proposal.authoring_scope))
         changed_option = report.options[1]
         successor = replace(selection, request_id="change-whole-direction", option_id=changed_option.option_id, material_digest=changed_option.material_digest, authoring_task_id=reused.proposal.authoring_scope.task_id, expected_authoring_task_revision=reused.proposal.authoring_scope.task_revision)
         self.backend.enqueue(*selected_fixture_calls(_selected_premise_proposal,successor, authoring_assessment=_fixture_assessment(
@@ -537,12 +538,73 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertLessEqual(len(_submitted_calls(self.history(conversation)[len(previous):])), 12)
         for decision in (premise.PremiseDecisionAction.REJECT, premise.PremiseDecisionAction.DEFER):
             retained_choice = c.project_collaboration_history(self.history(conversation)).premise_selection
-            _, later = await _confirmed_premise(self, conversation)
+            funded_start = len(self.backend.calls)
+            premise_front, later = await _confirmed_premise(self, conversation)
+            origin, selected = (row.contract for row in self.backend.calls[funded_start:funded_start + 2])
+            funding = origin.semantic_index.policy.funding
+            self.assertIs(funding, origin.action_index.policy.funding)
+            self.assertIs(funding, origin.factory.funding)
+            self.assertIs(funding, selected.semantic_index.policy.funding)
+            self.assertEqual((funding.ordinary_call_limit, funding.allocated_call_limit), (1, 2))
+            self.assertEqual((origin.offers.remaining_physical_calls, selected.offers.remaining_physical_calls), (2, 1))
+            admission = funding.premise_admission
+            source = admission.prior_authoring_source_ref
+            self.assertEqual(source.task, premise.PremiseAuthoringTaskRef(
+                changed.proposal.authoring_scope.task_id, changed.proposal.authoring_scope.task_revision))
+            self.assertEqual(source.cost.step_id, confirmed.turn.step_id)
+            self.assertNotEqual(admission.offered_authoring_tasks[0], source.task)
+            self.assertTrue(any(member.rule_graph.literal_at(('response_type',)) == 'recommendation'
+                for member in origin.semantic_index.contracts if member.schema_id in origin.offered_semantic_schema_ids))
+            self.assertEqual(set(origin.selectable_semantic_schema_ids), {member.schema_id
+                for member in origin.semantic_index.contracts if member.owner.variant.independent_premise})
+            self.assertEqual(set(origin.offered_action_kinds), {'submit_result', 'select_result'})
+            self.assertEqual(selected.offered_action_kinds, ('submit_result',))
+            self.assertEqual(len(selected.offered_semantic_schema_ids), 1)
+            self.assertFalse(selected.selectable_semantic_schema_ids)
+            # Pure allocation model; no submission, new admission, or runtime grant.
+            reduced_factory = replace(origin.factory, funding=replace(funding, allocated_call_limit=1))
+            reduced = reduced_factory.for_offer(replace(origin.offers, remaining_physical_calls=1))
+            self.assertEqual(tuple(member.owner.variant for member in reduced.semantic_index.contracts),
+                tuple(member.owner.variant for member in origin.semantic_index.contracts))
+            self.assertGreater(len(reduced.semantic_index.contracts), 1)
+            self.assertEqual(reduced.offered_action_kinds, ('submit_result',))
+            self.assertFalse(reduced.selectable_semantic_schema_ids)
+            self.assertEqual({member.owner.variant.branch_key for member in reduced.semantic_index.contracts
+                if member.schema_id in reduced.offered_semantic_schema_ids},
+                {member.owner.variant.branch_key for member in origin.semantic_index.contracts
+                    if member.schema_id in origin.offered_semantic_schema_ids})
+            # Retained repair/replay models reuse the real successor offer without launching.
+            for lineage in (origin.repair_lineage(), origin.replay_lineage()):
+                with self.assertRaises(ContextExecutionError) as exhausted:
+                    origin.factory.for_offer(selected.offers, lineage)
+                self.assertIs(exhausted.exception.code, ContextExecutionErrorCode.ACTION_EXHAUSTED)
+            for index in range(4):
+                foreign = list(funding.request_identity)
+                foreign[index] += '-foreign'
+                with self.assertRaises(ValueError):
+                    funding.require_request(*foreign)
+            stale = next(event.payload.admission for event in self.history(conversation)
+                if type(event.payload) is c.CollaborationPremiseFreshWorkAdmissionPayload
+                and event.payload.admission.provider_step_id != admission.provider_step_id)
+            for record, field, value in ((funding, 'premise_admission', None),
+                (funding, 'premise_admission', stale),
+                (origin.factory.constraints, 'premise_question_id', 'foreign-question'),
+                (origin.factory.rule_seed, 'independent_premise_roots', ())):
+                with frozen_fixture_field(record, field, value, getattr(record, field)):
+                    with self.assertRaises(ValueError):
+                        origin.require_current_offer(origin.offers)
             ref = later.premise_report_ref
             selection = premise.PremiseDecisionSelection(
                 "later-" + decision.value, decision, ref.source_conversation_id,
                 ref.report_event_id, ref.report_digest, ref.question_id)
             prefix, call_count = self.history(conversation), len(self.backend.call_records)
+            self.assertEqual(self.runtime._ordinary_front_budget(prefix,
+                self.runtime._authoring_tasks(self.runtime._session_authoring_events(self.session_id)))[0], 1)
+            with self.assertRaisesRegex(BackendProtocolError, '^ordinary premise admission source is no longer current$'):
+                self.runtime._publish_premise_admission(self.session_id, conversation, premise_front.turn_id,
+                    admission.provider_step_id, admission.provider_invocation_id, admission.offered_question_id,
+                    tuple((ref.task_id, ref.task_revision) for ref in admission.offered_authoring_tasks), ordinary_source=ordinary_source)
+            self.assertEqual(self.history(conversation), prefix)
             controlled = await self.runtime.lead_turn(
                 self.session_id,
                 conversation,
@@ -1128,6 +1190,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIsNone(original.proposal.basis.core_document_readiness)
         old_source = c.project_collaboration_history(self.history(conversation)).offered_draft_sources[-1].event_id
         task_id=original.proposal.authoring_scope.task_id
+        drift_prefix = len(self.history(conversation))
         drifted = await self.proposal_for(conversation, recommendation(recommended_action=action(source_ids=(
             old_source,), target_paths=(OUTLINE,), specialist_ids=ROSTER),
             authoring_scope=lambda call: dict(next(t["current_scope"] for t in _workflow_material(call.payload)[
@@ -1137,8 +1200,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             "plot_structure", "character_world", "tone_execution")]),
             mutate=lambda value: value.update(authoring_assessment=assessment),
         ))
+        self.assertEqual(len(_submitted_calls(self.history(conversation)[drift_prefix:])), 1)
         self.assertIsNone(drifted.recommendation_request, drifted)
-        self._assert_continuation(drifted, "proposal", diagnostic=True)
+        self._assert_continuation(drifted, "proposal", expected_next_action=c.CollaborationNextAction.RETRY_LEAD_TURN)
         ready = await self.proposal_for(conversation, capture_response('ready',
             recommendation(recommended_action=action(
             source_ids=(old_source,), target_paths=(path,), specialist_ids=ROSTER),
@@ -1340,7 +1404,6 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 "authoring_scope": _compact_scope(c.authoring_scope_to_dict(fresh_scope)),
                 "proposal": {"shared_premises": [], "assignments": [{"agent_id": PLOT_ARCHITECT, "mode": "draft", "instruction": request.instruction,
                     "input_ids": [item.input_id for item in request.basis.inputs]}]}}, wire_contract_id(call.payload))
-            from tests.provider_wire_fixture import lead_fixture_assessment
             choices = dict(call.contract.semantic_index.policy.choices)
             native['task_scope'] = lead_fixture_bound_scope(
                 call, native.pop('writing_task_scope'), record=True)

@@ -4,6 +4,16 @@ from __future__ import annotations
 import copy
 from collections.abc import Mapping
 import json
+from contextlib import contextmanager
+
+@contextmanager
+def frozen_fixture_field(record, field, replacement, original):
+    try:
+        object.__setattr__(record, field, replacement)
+        yield
+    finally:
+        object.__setattr__(record, field, original)
+
 
 _FIELDS = {'message': 'response_text', 'authoring_scope': 'writing_task_scope',
     'activity': 'activity_type', 'intent': 'writing_intent', 'domains': 'specialist_domains',
@@ -811,7 +821,7 @@ def lead_fixture_scoped_response(request, value, *, response_type, family=0,
 
 
 def lead_fixture_response(request, value, *, family, branch_key=None, response_type=None,
-                          select=False, raw=False):
+                          select=False, raw=False, match_value=True):
     """Pair caller-authored current wire values with one explicitly intended issued family."""
     if select:
         return result_selection(request, response_type=(
@@ -820,7 +830,7 @@ def lead_fixture_response(request, value, *, family, branch_key=None, response_t
     outer, inner = offered_fixture_bindings(
         request, action_type='submit_result',
         response_type=value['response_type'] if response_type is None else response_type,
-        family=family, branch_key=branch_key, value=None if raw else value)
+        family=family, branch_key=branch_key, value=None if raw or not match_value else value)
     return indexed_response({'action_type': 'submit_result', 'task_result': value},
                             outer_schema_id=outer, inner_schema_id=inner, contract=None if raw else request.contract)
 

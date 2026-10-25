@@ -23,7 +23,6 @@ import story_writing_agents.lead_task_transitions as task
 from story_writing_agents import provider_wire as wire
 from story_writing_agents.conversations.events import COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
 import pickle
-import shutil
 import subprocess
 import tempfile
 import unittest
@@ -66,7 +65,7 @@ from story_writing_agents.workspace.initialization import SessionArtifactBinding
 
 from story_writing_agents import lead_exploration as exploration
 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id, scenario_input, response as wire_response, result as wire_result, assert_guidance, assert_schema_descriptions, capture_sample
-from tests.provider_wire_fixture import finite_fixture_read_selection
+from tests.provider_wire_fixture import finite_fixture_read_selection, frozen_fixture_field
 from tests.collaboration_contract_fixture import contract_batches
 from tests.helpers import materialize_pristine_initialized_workspace
 from tests.test_agent_context_accounting import _expanded_context_payload
@@ -124,14 +123,14 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
                    for member in call.contract.semantic_index.contracts
                    if premise_signature(member.rule_graph.schema_value(), member.rule_graph.schema_value())
                    and member.rule_graph.literal_at(("response_type",)) == "specialist_consultation_proposal"}
-        if select:
-            return result_selection(call, response_type='specialist_consultation_proposal',
-                family=0, branch_key=branch, value=lead_fixture_result(native))
-        return lead_fixture_response(call, lead_fixture_result(native), family=0, branch_key=branch)
+        return lead_fixture_response(call, lead_fixture_result(native),
+            family=0, branch_key=branch, select=select)
+    history_start = len(case.history(conversation))
     case.backend.enqueue(lambda call, provider: front(call, provider, select=True), front)
     request = "Compare knowledge alternatives without drafting."
     if reference: request += " ${core_documents/global_outline.md}#L1-L2"
     proposed = await case.runtime.lead_turn(case.session_id, conversation, request)
+    case.assertEqual(len(_submitted_calls(case.history(conversation)[history_start:])), 2)
     case.assertIs(proposed.kind, LeadOutcomeKind.PROPOSAL, proposed)
     case.assertIsNone(proposed.proposal.authoring_scope)
     case.assertIs(proposed.evidence.scope, LeadOutcomeScope.PREMISE_ANALYSIS)
@@ -150,7 +149,6 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
     for agent in agents:
         case.backend.enqueue_for(agent, lambda call, provider: wire_answer(analysis, wire_contract_id(call.payload)))
     def summarize(call, provider, *, select=False):
-        from tests.provider_wire_fixture import lead_fixture_response, result_selection
         replies = _workflow_material(call.payload)["replies"]
         dispositions = {item["reply_event_id"]: {"reply_event_id": item["reply_event_id"],
             "alternative_keys": finite_fixture_selection(("knows",), ("knows",)),
@@ -368,7 +366,6 @@ class _LeadContextProvider:
         if hasattr(self, "_live_material"):
             _LIVE_CONTEXT[request.payload["request_correlation_token"]] = self._live_material
         if not self.responses:
-            self.backend._record_fixture_failure('script_empty', 'assertion')
             raise AssertionError("unexpected lead provider call")
         scripted = self.responses.pop(0)
         accounting = self._account(request.schema, request.payload, call_kind=request.call_kind,
@@ -381,12 +378,7 @@ class _LeadContextProvider:
             raise scripted.failure
         response: str | BaseException = scripted
         if callable(response):
-            try:
-                response = response(request, self)
-            except (AssertionError, IndexError, KeyError, TypeError, ValueError) as failure:
-                labels = {AssertionError: 'assertion', IndexError: 'index', KeyError: 'key', TypeError: 'type', ValueError: 'value'}
-                self.backend._record_fixture_failure('callback', labels.get(type(failure), 'unsupported'))
-                raise
+            response = response(request, self)
             if inspect.isawaitable(response):
                 try: response = await response
                 except asyncio.CancelledError as failure:
@@ -461,17 +453,12 @@ class _LeadBackend:
         self.reference_contexts: list[tuple[dict[str, object], ...]] = []
         self.reference_records: list[tuple[str, tuple[dict[str, object], ...]]] = []
         self.finalizers: list[_Finalizer] = []
-        self.fixture_failures: list[tuple[str, str]] = []
         self.providers: list[_LeadContextProvider] = []
         self.definitions: list[object] = []
         self.context_threads: dict[tuple[object, str], str] | None = {} if persist_context_threads else None
         self.tainted_thread_ids: list[str] = []
         self.execution_workspaces: list[object | None] = []
 
-    def _record_fixture_failure(self, stage, label):
-        if len(self.fixture_failures) < 3:
-            self.fixture_failures.append((stage, label))
-            print(('lead_fixture_v1', stage, label))
 
     def enqueue(self, *responses: _Response | _SubmittedFailure) -> None:
         self.scripts.append(tuple(responses))
@@ -637,7 +624,6 @@ def _current_exploration_outcome(text="A provisional alternative.", *, observati
         for idea in native['ideas']:
             idea['basis_input_ids'] = finite_fixture_selection(choices['input_ids'], idea['basis_input_ids'])
         if select:
-            from tests.provider_wire_fixture import result_selection
             return result_selection(call,
                 response_type='lead_exploration', family=0,
                 branch_key='lead-exploration-response-v1:family:0',
@@ -697,9 +683,8 @@ def _provider_envelope(call, value, *, used_handles=()):
 
 def _bound_rejection_envelope(call, value):
     """Bind explicitly intended answer IDs while retaining the supplied violation."""
-    outer, inner = offered_fixture_bindings(call, action_type='submit_result', response_type='answer', family=0)
-    return indexed_response({'action_type': 'submit_result', 'task_result': value},
-                            outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
+    return lead_fixture_response(call, value, response_type='answer',
+        family=0, match_value=False)
 
 def _visible_outcome(kind: str, message: str = "Visible lead response.", *, recommended_action=None, select=False, revision_discussion=False):
     def respond(
@@ -721,14 +706,8 @@ def _visible_outcome(kind: str, message: str = "Visible lead response.", *, reco
                           'contributions': [], 'dependency_slots': [], 'task_reference': {
                               'task_id': task['task_id'], 'task_revision': task['task_revision']}})}
             response_type = {'answer': 'answer', 'question': 'clarification_question', 'critique': 'critique'}[kind]
-            if select:
-                return result_selection(call, response_type=response_type, family=0,
-                                        value=lead_fixture_result(native))
-            outer, inner = offered_fixture_bindings(
-                call, action_type='submit_result', response_type=response_type, family=0)
-            return indexed_response(
-                {'action_type': 'submit_result', 'task_result': lead_fixture_result(native)},
-                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
+            return lead_fixture_response(call, lead_fixture_result(native), response_type=response_type,
+                family=0, select=select, match_value=False)
         return _provider_envelope(call, {'recommended_action': recommended_action, 'kind': kind,
             'message': message, 'scope': 'workflow_meta', 'evidence_status': 'not_applicable',
             'evidence_ids': [], 'artifact_intent': None, 'objective_intent': None,'proposal': None})
@@ -797,11 +776,8 @@ def _current_proposal_outcome(assignments, *, domains, relation='new_step',
                         'authoring_assessment': (lead_fixture_assessment(authoring_assessment,
                 source_choices=choices['input_ids']) if type(authoring_assessment) is dict
                 else authoring_assessment), 'specialist_consultation_proposal': {'shared_premises': [], **allocated}}}
-        from tests.provider_wire_fixture import result_selection
-        if select:
-            return result_selection(call, response_type='specialist_consultation_proposal',
-                                    family=0, value=supplied)
-        return lead_fixture_response(call, supplied, family=0)
+        return lead_fixture_response(call, supplied,
+            family=0, select=select)
     return respond
 
 
@@ -869,31 +845,18 @@ def _synthesis_outcome(*, message: str = "The specialist evidence supports proce
             request = native['proposal_drafting_request']
             choices = dict(call.contract.semantic_index.policy.choices)['source_ids']
             request['source_ids'] = finite_fixture_selection(choices, request['source_ids'])
-            if select:
-                from tests.provider_wire_fixture import result_selection
-                return result_selection(call,
-                    response_type='consultation_summary', family=0,
-                    branch_key=f'consultation-summary-v4:family:{recommendation_family}',
-                    value=lead_fixture_result(native))
-            outer, inner = offered_fixture_bindings(
-                call, action_type='submit_result', response_type='consultation_summary', family=0,
-                branch_key=f'consultation-summary-v4:family:{recommendation_family}')
-            return indexed_response(
-                {'action_type': 'submit_result', 'task_result': lead_fixture_result(native)},
-                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
+            return lead_fixture_response(call, lead_fixture_result(native), response_type='consultation_summary',
+                family=0, branch_key=f'consultation-summary-v4:family:{recommendation_family}', select=select, match_value=False)
         if (getattr(call, 'contract', None) is not None and next_intent is None and recommended_action is None):
             native = {'response_type': 'consultation_summary', 'response_text': message,
                 'response_details': {}}
             if select:
-                from tests.provider_wire_fixture import result_selection
                 return result_selection(call,
                     response_type='consultation_summary', family=0,
                     branch_key='consultation-summary-v4:family:0',
                     value=lead_fixture_result(native))
-            outer, inner = offered_fixture_bindings(call, action_type='submit_result',
-                response_type='consultation_summary', family=0,branch_key='consultation-summary-v4:family:0')
-            return indexed_response({'action_type': 'submit_result', 'task_result': native},
-                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
+            return lead_fixture_response(call, native, response_type='consultation_summary',
+                family=0, branch_key='consultation-summary-v4:family:0', match_value=False)
         return _provider_envelope(call, value)
 
     return respond
@@ -1003,13 +966,8 @@ def _whole_book_assessment(call, answer, *, offered_inputs, logical_transform: C
             'response_text': (answer if type(answer) is str else
                              answer['agent_action']['task_result']['response_text']),
             'response_details': {'writing_task_scope': None, 'core_document_assessment': native_assessment}}
-        if select:
-            return result_selection(call, response_type='core_document_readiness_assessment',
-                                    family=0, value=value)
-        outer, inner = offered_fixture_bindings(call, action_type='submit_result',
-            response_type='core_document_readiness_assessment', family=0)
-        return indexed_response({'action_type': 'submit_result', 'task_result': value},
-            outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
+        return lead_fixture_response(call, value, response_type='core_document_readiness_assessment',
+            family=0, select=select, match_value=False)
     answer["action"]["result"] = { "response_type": "core_document_readiness_assessment",
         "response_text": answer["action"]["result"]["message"], "writing_task_scope": None, "core_document_assessment": core_readiness.assessment_to_dict(assessment), }
     return json.dumps(answer, ensure_ascii=False)
@@ -1824,7 +1782,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
     async def test_front_schema_is_minimal_closed_and_provider_strict(self) -> None:
         # Ref spelling and lossless factoring preserve independently supplied neighboring values.
-        from tests.provider_wire_fixture import modeled_fixture_response
         from story_writing_agents.lead_provider_contracts import factor_rule_schema
         from story_writing_agents.provider_wire import hoist_schema_definitions, require_schema_projection, WireShapeError
         from story_writing_agents.structured_output_validation import SchemaRules
@@ -2233,12 +2190,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         action_owner = action_member.owner
         for field, replacement in ( ('rules', replace(action_owner.rules)),
                 ('eligibility_offers', replace(action_owner.eligibility_offers, call_id='changed_owner_call'))):
-            original = getattr(action_owner, field)
-            try:
-                object.__setattr__(action_owner, field, replacement)
+            with frozen_fixture_field(action_owner, field, replacement, getattr(action_owner, field)):
                 with self.assertRaisesRegex(ValueError, '^frozen context action owner declaration changed$'):
                     BoundContract.bind(action_owner, action_member.identity)
-            finally: object.__setattr__(action_owner, field, original)
             self.assertEqual(BoundContract.bind(action_owner, action_member.identity).schema_id, action_member.schema_id)
 
         from story_writing_agents.lead_provider_contracts import LeadContractRejection
@@ -2731,12 +2685,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             replace(current.host_checks[0], check=forbidden_hook), "frozen named owner hook provenance changed")):
             original_guards = declaration._hook_guards
             self.assertIsNot(original_guards, guard_replacement._hook_guards)
-            try:
-                object.__setattr__(declaration, "_hook_guards", guard_replacement._hook_guards)
+            with frozen_fixture_field(declaration, '_hook_guards', guard_replacement._hook_guards, original_guards):
                 with self.assertRaisesRegex(ValueError, "^" + guard_message + "$") as guard_stale:
                     declaration.require_provenance()
                 self.assertIs(type(guard_stale.exception), ValueError)
-            finally: object.__setattr__(declaration, "_hook_guards", original_guards)
             declaration.require_provenance()
         # Nested declarations attest excluded proof metadata on both pure and mutable-state paths.
         for nested_state in ((), []):
@@ -2747,14 +2699,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             for nested_target, nested_field, nested_replacement in ( (stable_decoder, "_hook_guards",
                  TypedDecoder("nested-foreign", "guard-v1", forbidden_hook)._hook_guards),
                 (stable_decoder, "revision", "changed-revision"), (stable_decode, "__defaults__", ("changed",))):
-                nested_original = getattr(nested_target, nested_field)
-                try:
-                    object.__setattr__(nested_target, nested_field, nested_replacement)
+                with frozen_fixture_field(nested_target, nested_field, nested_replacement, getattr(nested_target, nested_field)):
                     with self.assertRaises(ValueError) as nested_error:
                         nested_decoder.require_provenance()
                     self.assertIs(type(nested_error.exception), ValueError)
                     self.assertEqual(str(nested_error.exception), "frozen typed decoder hook provenance changed")
-                finally: object.__setattr__(nested_target, nested_field, nested_original)
                 nested_decoder.require_provenance()
         # Dependency defaults are first read by guard capture, after the top-level arity check.
         from enum import Enum
@@ -3229,13 +3178,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         budget_original_limit = budget_policy.maximum_index_schema_bytes
         with self.assertRaises(ValueError):
             replace(budget_policy, maximum_index_schema_bytes=65536)
-        try:
-            object.__setattr__(budget_policy, 'maximum_index_schema_bytes', 65536)
+        with frozen_fixture_field(budget_policy, 'maximum_index_schema_bytes', 65536, budget_original_limit):
             self.assertNotEqual(budget_policy.identity_for(budget_owner_id), budget_identity)
             self.assertEqual(budget_policy.maximum_schema_bytes, 65536)
             self.assertIs(budget_index.rule_graph, budget_rules)
             self.assertIs(budget_index.owners, budget_owners)
-        finally: object.__setattr__(budget_policy, 'maximum_index_schema_bytes', budget_original_limit)
         self.assertEqual(budget_policy.maximum_index_schema_bytes, 524288)
         self.assertEqual(budget_policy.identity_for(budget_owner_id), budget_identity)
         bound.require_submission(call.payload, call.schema)
@@ -3793,7 +3740,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                 family=0,
                                 branch_key=stem + ':family:' + str(family))
                             packet = json.loads(modeled_frame)
-                            prepared_profile = self._require_fixture_projections(profile_binding)
+                            prepared_profile = (prepared_profile_projections if profile_binding is profile_origin
+                                else self._require_fixture_projections(profile_binding))
                             profile_projection_rules = tuple(item[2] for item in prepared_profile[1])
                             self.assertFalse(profile_binding.rule_graph.findings(packet))
                             decoded_profile = profile_binding.decode_response(json.dumps(packet))
@@ -3843,14 +3791,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                     operation = {'change_type': kind, 'evidence_id': identity}
                                     if kind == 'rename_artifact':
                                         operation['proposed_destination_path'] = future_path
-                                    profile_binding, modeled_frame = modeled_fixture_response(
-                                        profile_origin, {**base,
+                                    invalid = json.loads(lead_fixture_response(
+                                        SimpleNamespace(contract=profile_binding), {**base,
                                         'response_type': 'artifact_change_proposal', 'response_details': {
                                             'task_scope': native_scope, 'authoring_assessment': native_assessment,
                                             'artifact_change_proposal': {'artifact_changes': [operation]}}},
                                         family=0,
-                                        branch_key=stem + ':family:7')
-                                    invalid = json.loads(modeled_frame)
+                                        branch_key=stem + ':family:7'))
                                     self.assertTrue(profile_binding.rule_graph.findings(invalid))
                                     with self.assertRaises(ValueError):
                                         profile_binding.decode_response(json.dumps(invalid))
@@ -4676,9 +4623,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertIsNone(ordinary.exploration)
         self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer."))
         await self.runtime.lead_turn(self.session_id, ordinary_conversation, "Explain collaboration workflow.")
-        self.backend.enqueue(lambda call, _provider: lead_fixture_response(call, { "response_type": "lead_exploration",
-            "response_text": "Which ending should we explore?", "response_details": {"status": "clarification"}},
-            family=0, branch_key="lead-exploration-response-v1:family:2"))
+        self.backend.enqueue(*selected_fixture_calls(lambda select=False: lambda call, _provider:
+            lead_fixture_response(call, { "response_type": "lead_exploration", "response_text": "Which ending should we explore?",
+                "response_details": {"status": "clarification"}}, family=0, branch_key="lead-exploration-response-v1:family:2", select=select)))
         clarified = await self.runtime.lead_turn(self.session_id, self.conversation("Explicit clarification"), "Explore endings.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         self.assertEqual((clarified.kind, clarified.exploration.status, clarified.exploration.ideas), (LeadOutcomeKind.EXPLORATION, exploration.ExplorationReportStatus.CLARIFICATION, ()))
 
@@ -5118,7 +5065,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         with self.assertRaises(ValueError):
             await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(retired.ref, task.LeadTaskAction.RESUME,
                                                                              text="Cannot revive discarded authority."))
-        case.backend.enqueue(native_scoped(
+        case.backend.enqueue(*selected_fixture_calls(native_scoped,
             EXECUTION_SPECIALIST, paths=("manuscript/part-01/opening.md",), domains=("tone_execution",), activity="draft",
             authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded prose drafting",)),))
         created = await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(
@@ -5130,8 +5077,8 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         self.assertEqual(created.turn.proposal.authoring_scope.domains, (ArtifactReviewDomain.TONE_EXECUTION,))
         self.assertEqual(next(item for item in case.runtime.inspect_lead_collaboration(case.session_id, conversation).available_tasks
                               if item.ref.task_id == retired.ref.task_id).status, "discarded")
-        self.assertEqual(len(_submitted_calls(case.history(conversation))), len(_submitted_calls(prefix)) + 5)
-        self.assertEqual(len(case.backend.calls), spent + 5)
+        self.assertEqual(len(_submitted_calls(case.history(conversation))), len(_submitted_calls(prefix)) + 6)
+        self.assertEqual(len(case.backend.calls), spent + 6)
         self.assertEqual(StoryRuntime(case.control_workspace, case.backend).inspect_lead_collaboration(
             case.session_id, conversation), case.runtime.inspect_lead_collaboration(case.session_id, conversation))
 
@@ -5678,7 +5625,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             self.assertNotEqual(capture.authoring_task_id, previous_capture.authoring_task_id)
             self.assertEqual(recovered.proposal.basis.shared_premises[0].selected_premise, capture.selected_text)
             self.assertEqual(self.history(conversation)[:len(recovery_prefix)], recovery_prefix)
-            self.assertEqual(len(_submitted_calls(self.history(conversation)[len(recovery_prefix):])), 1)
+            self.assertEqual(len(_submitted_calls(self.history(conversation)[len(recovery_prefix):])), 2)
             conflict = premise.PremiseConflict(capture.slot_id, capture.capture_digest, "The owner cannot draft this selected whole premise consistently.")
             self.backend.enqueue_for(PLOT_ARCHITECT, lambda call, provider: wire_answer({"assessment": "conflict", "message": conflict.reason, "premise_conflicts": premise.premise_value_to_dict((conflict,))}, wire_contract_id(call.payload)))
             self.backend.enqueue_for(CHARACTER_CUSTODIAN, lambda call, provider: wire_answer({"assessment": "drafted", "message": capture.selected_text, "premise_conflicts": []}, wire_contract_id(call.payload)))
@@ -5835,9 +5782,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             body = lead_fixture_result(json.loads(
                 _discussion_reply("Corrected visible answer."))['agent_action']['task_result'])
             body['response_details']['used_evidence_ids'] = {}
-            outer, inner = offered_fixture_bindings(call, action_type='submit_result', response_type='answer', family=0)
-            return indexed_response({'action_type': 'submit_result', 'task_result': body},
-                                    outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
+            return lead_fixture_response(call, body, response_type='answer',
+                family=0, match_value=False)
         case.backend.enqueue(current_discussion)
         decision = task.LeadTaskDecision.for_conversation(case.session_id, conversation, task.LeadTaskAction.DISCUSS,
                                                          text="Discuss the role boundaries without authoring.")
@@ -6089,11 +6035,6 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertFalse(any(type(event.payload) is CollaborationLeadOutcomeFailurePayload for event in history))
 
     async def test_response_correction_requires_capacity(self) -> None:
-        def capacity_note(result, backend):
-            return (len(backend.calls), result.kind, len(backend.finalizers),
-                    tuple((item.calls, len(item.response_text), item.response_text[:4096]) for item in backend.finalizers[:2]),
-                    tuple((prefix, next(((len(chunk), chunk[:4096]) for chunk in result.validation_details if chunk.startswith(prefix)), None))
-                          for prefix in ('Original response', 'Repair response')))
         def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
             return json.dumps({'action': {'kind': 'answer', 'result': [], 'used_handles': []}}, separators=(',', ':'))
 
@@ -6110,7 +6051,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT",3 if label == "action_exhausted" else 1):
                     result = await runtime.lead_turn(self.session_id, conversation_id,
                         'Do not exceed the remaining capacity.')
-                self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN, capacity_note(result, backend))
+                self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
                 self.assertEqual(len(backend.calls), 2 if label == "action_exhausted" else 1)
                 self.assertEqual(len(backend.providers), 2 if label == "action_exhausted" else 1)
                 finalized = [[("rejected", expected_code)]]
@@ -6127,7 +6068,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         backend.enqueue(_search_history)
         with mock.patch.object(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 2):
             result = await runtime.lead_turn(self.session_id, conversation_id, "Visible budget.")
-        self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN, capacity_note(result, backend))
+        self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
         self.assertEqual((len(backend.calls), len(_submitted_calls(self.history(conversation_id)))), (1, 1))
         self.assertEqual([item.calls for item in backend.finalizers],
                          [[("rejected", ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)]])
@@ -6140,10 +6081,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         private = "PRIVATE_NO_REPAIR_PROVIDER_VALUE_한🙂"
 
         def malformed(_call: ContextProviderCallRequest, _provider: object) -> str:
-            outer, inner = offered_fixture_bindings(
-                _call, action_type="submit_result", response_type="answer", family=0)
-            return indexed_response({"action_type": "submit_result", "task_result": [private]},
-                outer_schema_id=outer, inner_schema_id=inner, contract=_call.contract)
+            return lead_fixture_response(_call, [private], response_type='answer',
+                family=0, match_value=False)
 
         self.backend.enqueue(malformed)
         with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 1):

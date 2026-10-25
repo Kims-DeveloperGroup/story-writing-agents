@@ -652,7 +652,8 @@ class BoundCallContract:
             eligible = origin.eligibility_offers
             if self.lineage.kind == "repair":
                 semantic, outer, phase = origin.semantic_index, origin.action_index, "repair"
-                offered, selectable = origin.offered_semantic_schema_ids, origin.selectable_semantic_schema_ids
+                offered, selectable = _result_delivery(semantic, self.offers, retained=(
+                    origin.offered_semantic_schema_ids, origin.selectable_semantic_schema_ids))
             else:
                 policy = replace(origin.semantic_index.policy, physical_call_id=self.offers.call_id,
                                  offer_digest=self.offers.offer_digest)
@@ -664,6 +665,8 @@ class BoundCallContract:
                 else:
                     offered = _rebound_result_ids(origin, semantic, origin.offered_semantic_schema_ids)
                     selectable = _rebound_result_ids(origin, semantic, origin.selectable_semantic_schema_ids)
+                offered, selectable = _result_delivery(semantic, self.offers,
+                    retained=(offered, selectable))
                 outer = _bound_action_index(eligible, semantic, self.offers, offered, selectable)
                 corrective = origin.phase in {"repair", "replay_repair"}
                 phase = (("repair" if corrective else "ordinary") if self.lineage.kind == "selection"
@@ -720,6 +723,13 @@ class BoundCallContract:
                 or self._delivery_anchor != (self.offered_semantic_schema_ids, self.selectable_semantic_schema_ids, self.phase)):
             raise ValueError("actual call/graph/frozen owner provenance changed")
         semantic_index = self.semantic_index
+        semantic_index.policy.require_funding_current()
+        self.action_index.policy.require_funding_current()
+        if self.action_index.policy.funding is not semantic_index.policy.funding:
+            raise ValueError("outer action changed its exact semantic funding")
+        if semantic_index.policy.funding is not None:
+            _result_delivery(semantic_index, self.offers, retained=(
+                self.offered_semantic_schema_ids, self.selectable_semantic_schema_ids))
         semantic_contracts = semantic_index.contracts
         if (type(semantic_contracts) is not tuple
                 or tuple(member.schema_id for member in semantic_contracts)
@@ -1051,16 +1061,40 @@ def _bound_call_failure(failure: BaseException) -> tuple[BoundCallContract, Lead
     return contract, rejection
 
 
-def _result_delivery(semantic: LeadContractIndex[LeadDecodedResult], actual: ContextCallOffers
+def _result_delivery(semantic: LeadContractIndex[LeadDecodedResult], actual: ContextCallOffers,
+                     *, retained: tuple[tuple[str, ...], tuple[str, ...]] | None = None,
                      ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     ids = semantic.expected_schema_ids
-    if len(ids) == 1:
-        return ids, ()
-    offered = tuple(member.schema_id for member, owner in zip(semantic.contracts, semantic.owners, strict=True)
-                    if type(owner) is LeadResultContractOwner and owner.variant.direct_delivery)
-    selectable = tuple(name for name in ids if name not in offered)
-    if actual.remaining_physical_calls < 2 or dict(actual.action_limits)["nonterminal_actions"] < 1:
-        selectable = ()
+    if retained is not None:
+        offered, selectable = retained
+    elif len(ids) == 1:
+        offered, selectable = ids, ()
+    else:
+        offered = tuple(member.schema_id for member, owner in zip(semantic.contracts, semantic.owners, strict=True)
+                        if type(owner) is LeadResultContractOwner and owner.variant.direct_delivery)
+        selectable = tuple(name for name in ids if name not in offered)
+    funding = semantic.policy.funding
+    if funding is not None:
+        semantic.policy.require_funding_current()
+        funding.require_request(actual.scope.session_id, actual.scope.subject_id,
+            actual.correlation.operation_id, actual.correlation.result_correlation_id)
+        def available(name: str) -> int:
+            owner = semantic.select(name).owner
+            if type(owner) is not LeadResultContractOwner:
+                raise ValueError("funding requires its complete declared result owner")
+            return funding.remaining_for(owner.variant.independent_premise,
+                                         actual.remaining_physical_calls)
+        funded_offered = tuple(name for name in offered if available(name) >= 1)
+        funded_selectable = tuple(name for name in selectable if available(name) >= 2
+            and dict(actual.action_limits)["nonterminal_actions"] >= 1)
+        if retained is not None and (funded_offered, funded_selectable) != retained:
+            # A retained repair/replay graph is never rewritten to spend another route.
+            raise _execution_error(ContextExecutionErrorCode.ACTION_EXHAUSTED,
+                                   detail=_ContextExecutionErrorDetail.RESULT_SELECTION_UNAVAILABLE)
+        offered, selectable = funded_offered, funded_selectable
+    elif retained is None:
+        if actual.remaining_physical_calls < 2 or dict(actual.action_limits)["nonterminal_actions"] < 1:
+            selectable = ()
     _require_delivery_capacity(offered, selectable, actual)
     return offered, selectable
 
@@ -1115,6 +1149,9 @@ def _bound_action_index(
     reserve = 1 if direct_successor else 2
     retrieval = (actual.remaining_physical_calls > reserve
                  and dict(actual.action_limits)["nonterminal_actions"] > 0)
+    # The mixed front has ordinary1 or premise SELECT+result2, never a retrieval grant.
+    if semantic.policy.funding is not None:
+        retrieval = False
     allowed = tuple(kind for kind in eligible.allowed_actions if kind == "answer" or
                     (retrieval and kind in actual.allowed_actions))
     templates = []
@@ -1161,6 +1198,7 @@ def _bound_action_index(
         semantic.policy.choices, eligible.offer_digest, semantic.policy.logical_origin_call_id,
         maximum_schema_bytes=262144, maximum_index_schema_bytes=MAX_PROVIDER_SCHEMA_UTF8_BYTES,
         wire_root_path="$.agent_action", owner_declarations=tuple(owners),
+        funding=semantic.policy.funding,
     )
     return LeadContractIndex.bind(policy)
 
@@ -2294,6 +2332,8 @@ def _context_provider_decode_terminal_code(
         _ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH,
     ):
         return ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH
+    if failure.code is ContextExecutionErrorCode.ACTION_EXHAUSTED:
+        return ContextProviderTerminalCode.ACTION_EXHAUSTED
     return ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE
 
 

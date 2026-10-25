@@ -29,7 +29,7 @@ _PRIVATE_BODY_B = "PRIVATE_SOURCE_B needle\n"
 _SCOPE = ContextScope("workspace", "session", ContextSubjectKind.CONVERSATION, "conversation", "lead_orchestrator", )
 
 
-from tests.provider_wire_fixture import assert_schema_descriptions
+from tests.provider_wire_fixture import assert_schema_descriptions, frozen_fixture_field
 
 
 class StructuredOutputValidationTests(unittest.TestCase):
@@ -331,12 +331,11 @@ class StructuredOutputValidationTests(unittest.TestCase):
             self.assertEqual(query_calls, ["public", "plural"])
             original_record = proof._record; replacement_record = tuple(list(original_record))
             self.assertIsNot(replacement_record, original_record)
-            try:
-                object.__setattr__(proof, "_record", replacement_record); query_calls.clear()
+            with frozen_fixture_field(proof, '_record', replacement_record, original_record):
+                query_calls.clear()
                 with self.assertRaisesRegex(ValueError, "^frozen schema node fingerprint proof changed$"):
                     bound_fingerprint(query_graph, ("kind",), proof=proof)
                 self.assertEqual(query_calls, [])
-            finally: object.__setattr__(proof, "_record", original_record)
             query_calls.clear(); value, reused = bound_fingerprint(query_graph, ("kind",), proof=proof)
             self.assertEqual(value, draft_id); self.assertIs(reused, proof); self.assertEqual(query_calls, [])
         finally:
@@ -579,11 +578,9 @@ class StructuredOutputValidationTests(unittest.TestCase):
         def field_decode(value, captured=field_value): return value
         field_decoder = TypedDecoder("fixture.field.layout", "1", field_decode)
         self.assertIsNone(field_decoder.require_provenance())
-        try:
-            object.__setattr__(field_value, "right", "changed-value")
+        with frozen_fixture_field(field_value, 'right', 'changed-value', 'right-value'):
             with self.assertRaisesRegex(ValueError, "^frozen typed decoder hook provenance changed$"):
                 field_decoder.require_provenance()
-        finally: object.__setattr__(field_value, "right", "right-value")
         self.assertIsNone(field_decoder.require_provenance())
         field_records = fields(FieldCapture); later_field = field_records[1]
         try:
@@ -677,9 +674,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
             finally:
                 object.__setattr__(cached, '_diagnostic_template', template)
                 object.__setattr__(cached, '_diagnostic_anchor', anchor)
-        source_bytes = cached.canonical_bytes
-        try:
-            object.__setattr__(cached, 'canonical_bytes', foreign.canonical_bytes)
+        with frozen_fixture_field(cached, 'canonical_bytes', foreign.canonical_bytes, cached.canonical_bytes):
             self.assertEqual(cached.findings(packet), ('$: expected integer, got object',))
             self.assertEqual(diagnose_value(packet, cached), ('$: expected integer, got object',))
             with self.assertRaisesRegex(ValueError, '^frozen typed decoder hook provenance changed$'):
@@ -687,7 +682,6 @@ class StructuredOutputValidationTests(unittest.TestCase):
             object.__setattr__(cached, 'canonical_bytes', b'{')
             with self.assertRaises(ValueError): cached.findings(packet)
             with self.assertRaises(ValueError): diagnose_json_text(json.dumps(packet), cached)
-        finally: object.__setattr__(cached, 'canonical_bytes', source_bytes)
         self.assertIsNone(template_decoder.require_provenance())
         marker = RuntimeError('fixture dynamic diagnosis')
         class DynamicPayload(dict):
@@ -1400,12 +1394,10 @@ class CompactWireDecoderTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 selected_bound.decode_response(json.dumps(invalid_selection))
         altered = members[0].owner.variant
-        try:
-            object.__setattr__(altered, 'direct_delivery', True)
-            with self.assertRaises(ValueError):
-                selected_bound.require_current_offer(offers)
-        finally:
-            object.__setattr__(altered, 'direct_delivery', False)
+        for field in ('direct_delivery', 'independent_premise'):
+            with frozen_fixture_field(altered, field, True, False):
+                with self.assertRaises(ValueError):
+                    selected_bound.require_current_offer(offers)
         from tests.provider_wire_fixture import modeled_selection_binding, offered_fixture_bindings
         corrective = multiple.for_offer(replace(offers, call_id=offers.call_id + '-repair',
             remaining_physical_calls=offers.remaining_physical_calls - 1),
