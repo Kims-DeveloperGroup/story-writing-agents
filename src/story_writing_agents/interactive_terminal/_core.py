@@ -56,6 +56,7 @@ from ._controls import (
 )
 from ._collaboration_view import (
     collaboration_view_context,
+    project_conversation_messages as project_conversation_messages,
     project_collaboration_event,
     validate_collaboration_event_order,
 )
@@ -2006,7 +2007,7 @@ class InteractiveExternalViewer:
 
 
 class InteractiveTranscriptViewer:
-    """Bind transient rich transcript presentation without owning history storage."""
+    """Bind transient conversation presentation without owning history storage."""
 
     __slots__ = ("_viewer",)
 

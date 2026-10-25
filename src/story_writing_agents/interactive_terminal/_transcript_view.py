@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from ..conversations import CollaborationEvent
 from ._collaboration_view import (
-    collaboration_view_context,
-    project_collaboration_event,
+    project_conversation_messages,
     validate_collaboration_event_order,
 )
 from ._external_view import ExternalViewerHost
@@ -29,7 +28,7 @@ def prepare_transcript_components(
     show_details: bool,
     history_events: tuple[CollaborationEvent, ...] | None,
 ) -> tuple[Component, ...]:
-    """Prepare the same rich event frames as inline collaboration presentation."""
+    """Prepare message frames from one selected, immutable conversation view."""
     if type(request) is not Record or type(result) is not Notice:
         raise TypeError("transcript request and result must be Record and Notice values")
     if continuation is not None and type(continuation) is not Notice:
@@ -44,18 +43,9 @@ def prepare_transcript_components(
         events[0].conversation_id,
     ) != (context[0].session_id, context[0].conversation_id):
         raise ValueError("history events must share the selected session and conversation")
-    references, paths, proposals = collaboration_view_context(context)
     components: list[Component] = [request]
     components.extend(
-        project_collaboration_event(
-            event,
-            show_details=show_details,
-            input_references=references,
-            candidate_paths=paths,
-            proposals=proposals,
-            history_events=context,
-        )
-        for event in events
+        message for _, message in project_conversation_messages(events, history_events=context)
     )
     components.append(result)
     if continuation is not None:

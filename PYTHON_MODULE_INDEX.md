@@ -257,7 +257,7 @@ exchange, lead, session, and runtime concerns in focused private policy modules.
 
 Only `_core` composes the private policies. Other subsystems must not import those policies;
 the controller may depend on runtime/storage/terminal facades, never the reverse.
-The existing `_lead_policy` to `interactive_terminal._collaboration_view` and `_exchange_viewer` to `interactive_terminal._external_view` imports are narrow presentation bridges, not general private access. Exchanges validate the pinned four-export viewer contract and use its owned terminal transport. Transcript selection uses one validated immutable store snapshot.
+The existing `_lead_policy` to `interactive_terminal._collaboration_view` and `_exchange_viewer` to `interactive_terminal._external_view` imports are narrow presentation bridges, not general private access. Exchanges validate the pinned four-export viewer contract and use its owned terminal transport. Transcript message paging uses one validated immutable store snapshot and preserves raw event-sequence anchors.
 
 ### Interactive terminal and presentation
 
@@ -274,8 +274,8 @@ live composition, reference activation, collaboration presentation, and the term
 - `interactive_terminal._viewer_controls`, `interactive_terminal._viewer_render`
 
 Presentation consumes domain contracts without owning runtime state. Private `_box.Box` shares Unicode cell geometry.
-`_markdown` owns sanitized prose; `_response_usage` joins exact scoped call identities. Live/history/transcript share frames.
-The main-input facade owns queued alerts. `_output_history` owns semantic message/JSON order, group identity and navigation.
+`_markdown` owns sanitized prose; `_response_usage` joins exact scoped call identities. The facade's pure `project_conversation_messages` selects and deduplicates restored/transcript messages; detailed history retains event panels. Live/history/transcript share frames.
+The main-input facade owns queued semantic alerts until the next read. `_output_history` owns semantic message/JSON order, group identity and navigation.
 The driver owns terminal I/O, geometry and input lifecycle; borrowed views own transient rows. Lazy `open_owned` lends validated LIVE transport; jsonl-viewer owns exchange raw/screen/cursor/mouse modes. Callback/fallback refuse before content.
 Resumable idle preserves partial decoding/typeahead. Main-thread termination and `InteractiveInputLifecycle` retain
 native-auth handoff and lobby cleanup. Model/render/control internals are not public APIs.
