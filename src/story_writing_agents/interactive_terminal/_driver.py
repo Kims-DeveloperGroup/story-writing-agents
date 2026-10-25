@@ -745,10 +745,11 @@ class RawTerminalDriver:
             self.write_component(user)
             yield
             return
-        render_component(user, self.semantic_capabilities())
+        frame = render_component(user, self.semantic_capabilities())
         origin = self._output_history.begin_submission(session_id, conversation_id, user)
         try:
-            self._paint_timeline()
+            if not self._timeline_suspended and not self._paint_timeline():
+                self._write_raw_text(f"{frame.text}\n")
             yield
         finally:
             self._output_history.end_submission(origin)
@@ -758,7 +759,8 @@ class RawTerminalDriver:
         frame = render_component(component, self.semantic_capabilities())
         if self._timeline_enabled and not self._native_input_handoff_active:
             self._output_history.append_component(component)
-            self._paint_timeline()
+            if not self._timeline_suspended and not self._paint_timeline():
+                self._write_raw_text(f"{frame.text}\n")
         else:
             self.write_text(f"{frame.text}\n")
 
@@ -802,13 +804,28 @@ class RawTerminalDriver:
         self._timeline_rows = len(lines)
         self._timeline_cursor_row = row
 
-    def _paint_timeline(self) -> None:
+    def _paint_timeline(self) -> bool:
+        """Paint usable geometry, or leave current output to the linear writer."""
         if not self._timeline_enabled or self._timeline_suspended or self._native_input_handoff_active:
-            return
+            return False
         width, height = self._text_viewer_geometry(self.capabilities().width, bounded_height=False)
         capabilities = _capabilities_with_width(self.capabilities(), max(1, width - 1))
-        layout = self._output_history.render(capabilities, max(0, min(height, _MAX_VIEWER_HEIGHT) - 1))
+        available = max(0, min(height, _MAX_VIEWER_HEIGHT) - 1)
+        layout = self._output_history.render(capabilities, available)
+        if capabilities.width < 8 or available == 0:
+            # An empty managed layout must never consume a semantic message.
+            # Reflow made the previous origin uncertain: release interaction and
+            # move only down to fresh linear output, without stale upward clears.
+            if self._timeline_rows:
+                self._write_live_text(_MOUSE_DISABLE + "\r\n")
+            self._timeline_rows = self._timeline_cursor_row = 0
+            self._timeline_origin = None
+            self._timeline_geometry = None
+            return False
+        if self._timeline_operation is not None and self._progress_rows:
+            self._clear_linear_progress_frame()
         self._render_inline_rows(layout.lines, max(0, len(layout.lines) - 1))
+        return True
 
     @contextmanager
     def _suspend_timeline(self) -> Iterator[None]:
@@ -883,7 +900,8 @@ class RawTerminalDriver:
                 lines.pop()
             if lines:
                 self._output_history.append_lines(tuple(lines))
-                self._paint_timeline()
+            if not self._paint_timeline():
+                self._write_raw_text(plain)
             return
         if self._progress_active:
             self._clear_progress_frame()
@@ -937,9 +955,13 @@ class RawTerminalDriver:
 
         if self._timeline_operation is not None:
             self._output_history.update_operation(self._timeline_operation)
-            self._progress_rows = 0
-            self._paint_timeline()
-            return
+            if self._paint_timeline():
+                self._progress_rows = 0
+                return
+        self._clear_linear_progress_frame()
+
+    def _clear_linear_progress_frame(self) -> None:
+        """Clear only the rows belonging to an ordinary linear indicator."""
         if self._progress_rows <= 0:
             return
         rows = self._progress_rows
@@ -984,11 +1006,11 @@ class RawTerminalDriver:
         display_frame = frame if plain_frame != frame else "\n".join(lines)
         if self._timeline_operation is not None:
             self._output_history.update_operation(self._timeline_operation, lines=tuple(lines))
-            self._progress_rows = 0
-            self._paint_timeline()
-        else:
-            self._progress_rows = len(lines)
-            self._write_raw_text("\r" + display_frame)
+            if self._paint_timeline():
+                self._progress_rows = 0
+                return
+        self._progress_rows = len(lines)
+        self._write_raw_text("\r" + display_frame)
 
     async def run_advisory_progress(
         self,
@@ -1632,10 +1654,10 @@ class RawTerminalDriver:
             raise ValueError("rendered frame must contain safe text rows within capability width")
         if self._timeline_operation is not None:
             self._output_history.update_operation(self._timeline_operation, preview=replace(state, views=tuple(bounded_views)))
-            self._progress_rows = 0
-            self._paint_timeline()
-            self._inspector_width = width
-            return
+            if self._paint_timeline():
+                self._progress_rows = 0
+                self._inspector_width = width
+                return
         old_count = self._progress_rows
         if old_count > 0:
             self._clear_progress_frame()

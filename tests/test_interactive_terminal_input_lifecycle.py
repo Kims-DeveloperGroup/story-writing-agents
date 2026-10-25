@@ -609,6 +609,38 @@ class InputLatchAndDriverTests(unittest.TestCase):
                 self.assertEqual(termios.attributes, original)
                 fallback.assert_not_called()
 
+        with _session_driver(b"seed\r") as (driver, termios, _, output, fallback):
+            size = [40, 24]
+            output.fileno.return_value = 8
+            driver._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=size[0], lines=size[1]))
+            self.assertEqual(driver.read_main_line("main> ", lambda _: ()), "seed")
+            user = Message("User", "ORIGINAL_INPUT")
+            with driver.submission("session", "conversation", user):
+                origin = driver._output_history.origin
+                for width, height, label in ((7, 24, "NARROW"), (40, 1, "SHORT")):
+                    size[:] = [width, height]
+                    output.reset_mock()
+                    driver.write_component(Message("Lead", f"SEMANTIC_{label}"))
+                    driver.write_text(f"RAW_{label}\n")
+                    rendered = "".join(call.args[0] for call in output.write.call_args_list)
+                    visible = "".join(driver_module._EXTERNAL_VIEW_SGR.sub("", rendered).split())
+                    self.assertIn(f"SEMANTIC_{label}", visible)
+                    self.assertIn(f"RAW_{label}", visible)
+                    self.assertNotIn(driver_module._MOUSE_ENABLE, rendered)
+                    self.assertTrue(all(entry.origin == origin for entry in driver._output_history.entries))
+                size[:] = [40, 24]
+                output.reset_mock()
+                driver.write_component(Message("Lead", "USABLE_AGAIN"))
+                restored = driver_module._EXTERNAL_VIEW_SGR.sub("", "".join(call.args[0] for call in output.write.call_args_list))
+                previous = -1
+                for token in ("ORIGINAL_INPUT", "SEMANTIC_NARROW", "RAW_NARROW", "SEMANTIC_SHORT", "RAW_SHORT", "USABLE_AGAIN"):
+                    self.assertGreater(restored.index(token), previous)
+                    previous = restored.index(token)
+                self.assertEqual(sum(entry.component == user for entry in driver._output_history.entries), 1)
+            self.assertIsNone(driver._output_history.origin)
+            self.assertNotIn(driver_module._MOUSE_ENABLE, restored)
+            fallback.assert_not_called()
+
     def test_driver_construction_does_not_inspect_resources(self) -> None:
         fallback = mock.Mock(return_value="unused")
         driver, input_stream, output_stream = _resource_free_driver(fallback)
