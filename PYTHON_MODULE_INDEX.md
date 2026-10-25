@@ -275,7 +275,7 @@ live composition, reference activation, collaboration presentation, and the term
 
 Presentation consumes domain contracts without owning runtime state. Private `_box.Box` shares Unicode cell geometry.
 `_markdown` owns sanitized prose; `_response_usage` joins exact scoped call identities. The facade's pure `project_conversation_messages` owns response selection and deduplication for restoration and transcripts; detailed history retains event panels. Live/history/transcript share frames.
-The driver owns inline I/O, exclusion, restoration, shell-lifetime immutable output history
+The main-input facade owns queued semantic alerts until the next read; the driver owns their transient display below the input, inline I/O, exclusion, restoration, shell-lifetime immutable output history
 with focus/scroll offsets, pointer geometry and mouse handoffs; borrowed views paint/clear rows. Lazy `open_owned` lends validated LIVE transport; jsonl-viewer owns exchange raw/screen/cursor/mouse modes. Callback/fallback refuse before content.
 Resumable idle preserves partial decoding/typeahead. Main-thread termination and `InteractiveInputLifecycle` retain
 native-auth handoff and lobby cleanup. Model/render/control internals are not public APIs.

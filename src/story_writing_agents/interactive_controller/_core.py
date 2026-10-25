@@ -630,6 +630,7 @@ class InteractiveController:
         "_context",
         "_debug_log",
         "_error_write_count",
+        "_command_alerts",
         "_external_viewer",
         "_main_input",
         "_picker_input",
@@ -701,6 +702,7 @@ class InteractiveController:
             defer_until_session=True,
         )
         self._error_write_count = 0
+        self._command_alerts = False
         self._context = context
         self._backend = backend
         self._show_message_details = backend_configuration_snapshot(
@@ -779,10 +781,25 @@ class InteractiveController:
     def _write_error(self, error: InteractiveError) -> None:
         """Render one post-workspace error with the fixed debug-log notice."""
 
-        self._terminal.write_error(
-            error,
-            debug_log_path=_DEBUG_LOG_NOTICE,
+        if self._command_alerts:
+            self._main_input.queue_alert(error, debug_log_path=_DEBUG_LOG_NOTICE)
+        else:
+            self._terminal.write_error(error, debug_log_path=_DEBUG_LOG_NOTICE)
+        self._error_write_count += 1
+
+    def _write_command_alert(self, text: str, *, label: str) -> None:
+        """Present a top-level command notice through the current error scope."""
+
+        notice = Notice(
+            text,
+            label=label,
+            role=SemanticRole.ERROR,
+            state=ViewState.ERROR,
         )
+        if self._command_alerts:
+            self._main_input.queue_alert(notice)
+        else:
+            self._semantic_output.write_component(notice)
         self._error_write_count += 1
 
     def _record_debug_error(
@@ -2073,6 +2090,8 @@ class InteractiveController:
             conversation_id=conversation_id,
         )
         error_write_count = self._error_write_count
+        previous_command_alerts = self._command_alerts
+        self._command_alerts = original_line.startswith("/")
         try:
             should_exit = self._dispatch_session_lobby_action_unlogged(
                 action,
@@ -2101,6 +2120,8 @@ class InteractiveController:
                 conversation_id=conversation_id,
             )
             raise
+        finally:
+            self._command_alerts = previous_command_alerts
         rejected = self._error_write_count > error_write_count
         self._trace_debug(
             DebugOperation.INTERACTIVE_COMMAND,
@@ -2131,6 +2152,14 @@ class InteractiveController:
         """
 
         if action.kind is ActionKind.IGNORED:
+            self._main_input.queue_alert(
+                Notice(
+                    "Enter a message or slash command.",
+                    label="input",
+                    role=SemanticRole.ERROR,
+                    state=ViewState.ERROR,
+                )
+            )
             return False
         if action.kind in {ActionKind.LEAD_INPUT, ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION, ActionKind.LEAD_TASK}:
             if self._attached_session_id is None:
@@ -2294,11 +2323,9 @@ class InteractiveController:
 
         coordinator = self._auth_coordinator
         if coordinator is None:
-            self._write_notice(
+            self._write_command_alert(
                 "Provider authentication is unavailable in this shell.",
                 label="authentication",
-                role=SemanticRole.ERROR,
-                state=ViewState.ERROR,
             )
             return
 
@@ -2333,14 +2360,12 @@ class InteractiveController:
         )
         assert result.provider is not None
         if not refreshed.is_authenticated(result.provider):
-            self._write_notice(
+            self._write_command_alert(
                 (
                     f"{_provider_display_name(result.provider)} is not "
                     "authenticated. Run /auth to retry."
                 ),
                 label="authentication",
-                role=SemanticRole.ERROR,
-                state=ViewState.ERROR,
             )
 
     def _persist_missing_auth_default(
@@ -2477,6 +2502,8 @@ class InteractiveController:
             self._write_error(InteractiveError(InteractiveErrorCode.WORKSPACE_INVALID))
             return
 
+        # Once the settings editor opens, its diagnostics belong to that view.
+        self._command_alerts = False
         top_highlight: str | None = "language"
         while True:
             dirty = state.pending != state.baseline.configuration
