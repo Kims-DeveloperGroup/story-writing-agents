@@ -372,11 +372,14 @@ the composer, releases mouse capture, and preserves the first character. Press
 `F6` again to release capture and restore ordinary wheel scrolling. Navigation
 does not add command-history entries or change conversation focus.
 
-Pickers and reference controls remain transient. Native authentication and
-external viewers suspend timeline painting and release mouse capture; returning
-restores the timeline and draft with fresh terminal geometry. Very short, narrow,
-or unsupported terminals retain safe ordinary output behavior. Ordinary input
-never re-enables mouse capture merely because older frames exist.
+Inline pickers and prompts keep the timeline visible, so proposal details remain
+available during confirmation. If a decision and its context cannot fit, enlarge
+the terminal or press Escape to leave without confirming. These controls remain
+transient. Native authentication and external viewers suspend timeline painting
+and release mouse capture; returning restores the timeline and draft with fresh
+terminal geometry.
+Very short, narrow, or unsupported terminals retain safe ordinary output behavior.
+Ordinary input never re-enables mouse capture merely because older frames exist.
 
 ## Safety
 

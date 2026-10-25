@@ -1946,6 +1946,87 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                     transition_prompt_input,
                 )
 
+        from tests._external_view_support import _raw_driver, PortableTerminalScreen
+        for case in ("plain", "reviewing", "blocked"):
+            reviewing, blocked = case == "reviewing", case == "blocked"
+            navigation = "\x1b[17~\x1b[B\x1b[<64;120;1M\x1b" if reviewing else ""
+            decision = "\r\x1b" if blocked else "revise candidate\r"
+            managed, incoming, output, fallback, termios = _raw_driver("seed\r" + navigation + decision, width=120, height=24)
+            if reviewing:
+                managed._os_provider().environ["NO_COLOR"] = "1"
+            screen = PortableTerminalScreen(width=120, height=24)
+            screen.primary[:] = [[" "] * 120 for _ in range(24)]
+            screen.cursor = (0, 0); screen.history.clear()
+            original_write = output.write
+            def paint(value):
+                result = original_write(value)
+                screen.write(value.replace("\n", "\r\n"))
+                if "\x1b[6n" in value:
+                    row, column = screen.cursor
+                    incoming.characters[:0] = list(f"\x1b[{row + 1};{column + 1}R".encode())
+                return result
+            output.write = paint
+            self.assertEqual(managed.read_main_line("main> ", lambda _: ()), "seed")
+            if reviewing:
+                managed.write_component(_model.Message("User", "OLDER_INPUT"))
+                managed.write_component(_model.Message("Lead", "\n".join(f"OLDER_ROW_{row}" for row in range(35))))
+                timeline = managed._output_history
+                timeline.focus_visible(timeline.render(managed.semantic_capabilities(), 23))
+                timeline.handle_key(KeyEvent(KeyKind.HOME)); timeline.handle_key(KeyEvent(KeyKind.ENTER))
+                managed._paint_timeline()
+            user = _model.Message("User", "USER_VISIBLE", presentation=_model.MessagePresentation.CHAT_BLOCK)
+            proposal = _model.Panel("Proposal", (_model.Field("Target", "TARGET_VISIBLE"), _model.Field("Reviewers", "REVIEWERS_VISIBLE"), _model.Field("Authority", "AUTHORITY_VISIBLE")))
+            with managed.submission("session", "conversation", user):
+                managed.write_component(proposal)
+                preview = _model.NestedScrollViewport("review:one", "JSON review", 3, 1, ("JSON_ONE",), 1, False, buffer_lines=("JSON_ONE", "JSON_TWO", "JSON_THREE"))
+                managed._output_history.retain(_model.MultiAgentScrollState((preview,), 0)); managed._paint_timeline()
+                before = tuple(map(tuple, screen.primary))
+                pending = _model.InputPromptView((), Prompt("REVISION_INPUT", instruction="Explain immutable review authority. " * 180 if blocked else None))
+                self.assertEqual(pending.context, ())
+                original_read = RawTerminalDriver._read_character
+                decisions = []
+                wheel_offsets, wheel_pending = [], []
+                def checked_read(owner, **kwargs):
+                    visible = "\n".join("".join(row) for row in screen.primary)
+                    self.assertEqual(visible.count("USER_VISIBLE"), 1, visible)
+                    for marker in ("TARGET_VISIBLE", "REVIEWERS_VISIBLE", "AUTHORITY_VISIBLE"):
+                        self.assertIn(marker, visible)
+                    if blocked:
+                        self.assertIn("resize", visible.lower()); self.assertIn("esc", visible.lower())
+                    else:
+                        self.assertIn("REVISION_INPUT", visible)
+                    self.assertFalse(any("USER_VISIBLE" in row for row in screen.history))
+                    if reviewing and incoming.characters[:5] == list(b"\x1b[<64"):
+                        wheel_offsets.append(managed._output_history._visible_offset)
+                    if wheel_pending:
+                        wheel_offsets.append(managed._output_history._visible_offset)
+                        self.assertLess(wheel_offsets[-1], wheel_offsets[0])
+                        wheel_pending.clear()
+                    character = original_read(owner, **kwargs)
+                    if reviewing and character == "M":
+                        wheel_pending.append(True)
+                    if character == "\r":
+                        decisions.append(visible)
+                        if reviewing:
+                            transcript = "".join(output.records)
+                            self.assertGreater(transcript.rfind(_driver._MOUSE_DISABLE), transcript.rfind(_driver._MOUSE_ENABLE))
+                    return character
+                with (mock.patch.object(RawTerminalDriver, "_read_character", autospec=True, side_effect=checked_read),
+                      mock.patch.object(_driver._select, "select", side_effect=lambda read, write, error, _timeout: (read if incoming.characters else (), write, error))):
+                    outcome = managed.read_prompt(pending, render_input_prompt, transition_prompt_input)
+                expected = ControlOutcome(ControlOutcomeKind.CANCEL) if blocked else ControlOutcome(ControlOutcomeKind.COMMIT, text="revise candidate")
+                self.assertEqual(outcome, expected)
+                self.assertEqual(len(decisions), 1)
+                self.assertEqual(len(wheel_offsets), 2 if reviewing else 0)
+                self.assertEqual(tuple(map(tuple, screen.primary)), before)
+                self.assertEqual(managed._output_history.frames[0].view.start_line, 2 if reviewing else 1)
+                self.assertEqual(sum(entry.component == user for entry in managed._output_history.entries), 1)
+                self.assertEqual(managed._history_state, MainInputHistoryState(("seed",)))
+                self.assertEqual(list(managed._typeahead_buffer), [])
+                fallback.assert_not_called()
+                self.assertEqual(termios.events.count("activate"), termios.events.count("restore"))
+                self.assertEqual("".join(output.records).count(_driver._MOUSE_ENABLE), int(reviewing))
+
     def _progress_driver(self) -> tuple[RawTerminalDriver, io.StringIO]:
         """Build a driver whose output can observe progress serialization."""
 

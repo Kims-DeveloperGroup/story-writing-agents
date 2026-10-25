@@ -1,5 +1,7 @@
 """Own shell-local chronological conversation entries and nested JSON navigation."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 
 from ._box import Box
@@ -100,6 +102,24 @@ class ConversationTimeline:
     @property
     def origin(self) -> SubmissionOrigin | None:
         return self._origins[-1] if self._origins else None
+
+    def reveal_latest(self) -> None:
+        """Return a pending inline decision to the disclosure it is deciding."""
+        self._offset = None
+        self._anchor = None
+
+    @contextmanager
+    def review_context(self) -> Iterator[None]:
+        """Reveal current disclosures temporarily without losing the reader's place."""
+        saved = self._offset, self._anchor, self.focused_id, self.timeline_focused
+        self._offset = None
+        self._anchor = None
+        self.focused_id = None
+        self.timeline_focused = False
+        try:
+            yield
+        finally:
+            self._offset, self._anchor, self.focused_id, self.timeline_focused = saved
 
     def begin_submission(self, session_id: str, conversation_id: str, user: Message) -> SubmissionOrigin:
         """Start an explicit submission; never infer origin from rendered text."""

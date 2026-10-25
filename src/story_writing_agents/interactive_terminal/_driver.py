@@ -176,6 +176,7 @@ class _LiveEditorState:
     history_mouse_active: bool = False
     history_anchored: bool = False
     history_line_count: int = 0
+    inline_control_blocked: bool = False
 
 
 @dataclass(slots=True)
@@ -514,6 +515,15 @@ def _timeline_borrowed(operation):
     return run
 
 
+def _timeline_inline(operation):
+    """Keep existing disclosure entries visible alongside an inline control."""
+    @wraps(operation)
+    def run(self, *args, **kwargs):
+        with self._inline_timeline_control():
+            return operation(self, *args, **kwargs)
+    return run
+
+
 def _timeline_borrowed_async(operation):
     """Keep the async live composer within the same borrowed-surface lifecycle."""
     @wraps(operation)
@@ -538,6 +548,7 @@ class RawTerminalDriver:
         "_timeline_origin",
         "_timeline_geometry",
         "_timeline_suspended",
+        "_timeline_inline_depth",
         "_timeline_operation",
         "_inspector_anchored",
         "_inspector_top",
@@ -613,6 +624,7 @@ class RawTerminalDriver:
         self._timeline_origin: int | None = None
         self._timeline_geometry: tuple[int, int] | None = None
         self._timeline_suspended = 0
+        self._timeline_inline_depth = 0
         self._timeline_operation: int | None = None
         self._inspector_anchored = False
         self._inspector_top = 1
@@ -718,7 +730,7 @@ class RawTerminalDriver:
                 )
                 raise
 
-    @_timeline_borrowed
+    @_timeline_inline
     def read_line(self, prompt: str) -> str:
         """Read one history-free line through the driver's selected input."""
 
@@ -828,9 +840,31 @@ class RawTerminalDriver:
         return True
 
     @contextmanager
+    def _inline_timeline_control(self) -> Iterator[None]:
+        """Lend transient rows without erasing the disclosure being decided."""
+        active = (self._timeline_enabled and not self._native_input_handoff_active
+                  and self._timeline_suspended == self._timeline_inline_depth)
+        if not active:
+            yield
+            return
+        try:
+            with self._output_history.review_context():
+                self._timeline_inline_depth += 1
+                self._timeline_suspended += 1
+                try:
+                    yield
+                finally:
+                    self._timeline_suspended -= 1
+                    self._timeline_inline_depth -= 1
+        finally:
+            if not self._timeline_inline_depth:
+                self._paint_timeline()
+
+    @contextmanager
     def _suspend_timeline(self) -> Iterator[None]:
         """Lend a clean surface and restore only fresh physical geometry afterwards."""
-        active = self._timeline_enabled and not self._timeline_suspended
+        active = (self._timeline_enabled
+                  and self._timeline_suspended == self._timeline_inline_depth)
         if active and self._timeline_rows:
             self._render_inline_rows((), 0)
         self._timeline_suspended += 1
@@ -2659,7 +2693,7 @@ class RawTerminalDriver:
                 transient=transient,
             )
 
-    @_timeline_borrowed
+    @_timeline_inline
     def read_prompt(
         self,
         view: InputPromptView,
@@ -2700,7 +2734,12 @@ class RawTerminalDriver:
                         initial_state,
                         transition,
                         configuration=configuration,
-                        rendered_input=rendered_input,
+                        rendered_input=None if self._timeline_inline_depth else rendered_input,
+                        live_capabilities=capabilities if self._timeline_inline_depth else None,
+                        input_frame_provider=(
+                            (lambda _buffer, _cursor, current: renderer(view, current))
+                            if self._timeline_inline_depth else None
+                        ),
                         transient=transient,
                     )
                     if configuration is not None
@@ -2988,7 +3027,7 @@ class RawTerminalDriver:
             self._append_completed_main_history(line)
             return line
 
-    @_timeline_borrowed
+    @_timeline_inline
     def read_reference_input_line(
         self,
         view: InputPromptView,
@@ -3061,7 +3100,11 @@ class RawTerminalDriver:
                 MainCommandControlState(),
                 transition,
                 configuration=configuration,
-                rendered_input=rendered_input,
+                rendered_input=None if self._timeline_inline_depth else rendered_input,
+                input_frame_provider=(
+                    (lambda _buffer, _cursor, current: renderer(view, current))
+                    if self._timeline_inline_depth else None
+                ),
                 live_capabilities=capabilities,
                 palette_projector=palette_projector,
                 palette_renderer=palette_renderer,
@@ -3239,7 +3282,7 @@ class RawTerminalDriver:
             bindings.write_failure(failure.kind)
             return origin
 
-    @_timeline_borrowed
+    @_timeline_inline
     def read_picker(
         self,
         state: PickerControlState,
@@ -3308,6 +3351,7 @@ class RawTerminalDriver:
             raise
 
         display_state = _LiveEditorState()
+        display_state.history_enabled = bool(self._timeline_inline_depth)
         outcome: ControlOutcome | None = None
         active_failure: BaseException | None = None
         try:
@@ -3326,7 +3370,7 @@ class RawTerminalDriver:
                     ControlOutcomeKind.COMMIT,
                     ControlOutcomeKind.CANCEL,
                 }
-                and not transient
+                and not transient and not self._timeline_inline_depth
             ):
                 display_state.rendered_cursor_row = self._redraw_live_picker(
                     state,
@@ -3348,6 +3392,11 @@ class RawTerminalDriver:
                 # the collaborator that already failed.
                 pass
 
+        if display_state.history_mouse_active:
+            try:
+                self._set_history_mouse_mode(display_state, False)
+            except BaseException as failure:
+                active_failure = active_failure or failure
         _restore_terminal_or_raise(configuration, active_failure)
         if active_failure is not None:
             raise active_failure
@@ -3973,7 +4022,9 @@ class RawTerminalDriver:
             palette_renderer,
             live_capabilities,
         )
-        if any(value is not None for value in palette_collaborators) and not all(
+        frame_only = (input_frame_provider is not None and live_capabilities is not None
+                      and palette_projector is None and palette_renderer is None)
+        if not frame_only and any(value is not None for value in palette_collaborators) and not all(
             value is not None for value in palette_collaborators
         ):
             raise ValueError(
@@ -4082,7 +4133,9 @@ class RawTerminalDriver:
         is_main = type(initial_state) in {MainInputControlState, MainCommandControlState}
         if is_main:
             self._timeline_enabled = True
-        display_state.history_enabled = is_main and not self._timeline_suspended
+        display_state.history_enabled = (
+            (is_main and not self._timeline_suspended) or bool(self._timeline_inline_depth)
+        )
         self._output_history.focused_id = None
 
         def redraw(state):
@@ -4093,6 +4146,22 @@ class RawTerminalDriver:
             )
 
         def transition(state, event):
+            if self._timeline_inline_depth:
+                if self._handle_inline_review_key(
+                    event, display_state, configuration, lambda: redraw(state),
+                ):
+                    return state, None
+                was_blocked = display_state.inline_control_blocked
+                redraw(state)
+                if was_blocked or display_state.inline_control_blocked:
+                    if event.kind is KeyKind.INTERRUPT:
+                        return state, ControlOutcome(ControlOutcomeKind.INTERRUPT)
+                    if event.kind is KeyKind.EOF:
+                        return state, ControlOutcome(ControlOutcomeKind.EOF)
+                    if event.kind is KeyKind.ESCAPE:
+                        updated, outcome = ordinary_transition(state, event)
+                        return updated, outcome or ControlOutcome(ControlOutcomeKind.INTERRUPT)
+                    return state, None
             if display_state.history_mouse_active:
                 width, height = self._text_viewer_geometry(configuration.width, bounded_height=False)
                 prompt_rows = display_state.history_line_count - len(display_state.history_layout.lines)
@@ -4197,6 +4266,8 @@ class RawTerminalDriver:
                             self._output_history.handle_pointer(local, display_state.history_layout)
                             if pointer.pressed and pointer.button == 0 and not (1 <= local.row <= len(display_state.history_layout.lines)):
                                 self._set_history_mouse_mode(display_state, False)
+                                if self._timeline_inline_depth:
+                                    self._output_history.reveal_latest()
                         display_state.rendered_cursor_row = self._redraw_live_display(
                             prompt, configuration.width, display_state, control_state,
                             suggestion_provider, rendered_input, live_capabilities,
@@ -4420,6 +4491,29 @@ class RawTerminalDriver:
     ) -> tuple[PickerControlState, ControlOutcome]:
         """Drive one picker without fabricating an editable-line control."""
 
+        def redraw(current: PickerControlState) -> None:
+            display_state.rendered_cursor_row = self._redraw_live_picker(
+                current, display_state, capabilities, viewport_projector, viewport_renderer,
+            )
+
+        def apply_picker_event(current, event, selected_transition):
+            if self._handle_inline_review_key(
+                event, display_state, configuration, lambda: redraw(current),
+            ):
+                return current, None, False
+            if display_state.history_enabled:
+                was_blocked = display_state.inline_control_blocked
+                redraw(current)
+                if was_blocked or display_state.inline_control_blocked:
+                    if event.kind is KeyKind.INTERRUPT:
+                        return current, ControlOutcome(ControlOutcomeKind.INTERRUPT), False
+                    if event.kind is KeyKind.EOF:
+                        return current, ControlOutcome(ControlOutcomeKind.EOF), False
+                    if event.kind is KeyKind.ESCAPE:
+                        return current, ControlOutcome(ControlOutcomeKind.CANCEL), False
+                    return current, None, False
+            return _apply_picker_event(current, event, selected_transition)
+
         display_state.rendered_cursor_row = self._redraw_live_picker(
             state,
             display_state,
@@ -4441,7 +4535,7 @@ class RawTerminalDriver:
                 configuration,
             )
             if configured_event is not None:
-                state, outcome, changed = _apply_picker_event(
+                state, outcome, changed = apply_picker_event(
                     state,
                     configured_event,
                     transition,
@@ -4465,8 +4559,10 @@ class RawTerminalDriver:
                     display_state,
                     character,
                 )
+                if display_state.pointer_event is not None:
+                    self._handle_inline_review_pointer(display_state, lambda: redraw(state))
                 if event is not None:
-                    state, outcome, changed = _apply_picker_event(
+                    state, outcome, changed = apply_picker_event(
                         state,
                         event,
                         transition,
@@ -4494,7 +4590,7 @@ class RawTerminalDriver:
                 except KeyboardInterrupt:
                     return state, ControlOutcome(ControlOutcomeKind.INTERRUPT)
                 if not continuation_ready:
-                    state, outcome, changed = _apply_picker_event(
+                    state, outcome, changed = apply_picker_event(
                         state,
                         KeyEvent(KeyKind.ESCAPE),
                         transition,
@@ -4516,7 +4612,7 @@ class RawTerminalDriver:
                 continue
 
             event = _key_event(character, configuration)
-            state, outcome, changed = _apply_picker_event(
+            state, outcome, changed = apply_picker_event(
                 state,
                 event,
                 transition,
@@ -4695,6 +4791,96 @@ class RawTerminalDriver:
             pass
         return width, height
 
+    def _inline_control_budget(self, capabilities: TerminalCapabilities, screen_height: int) -> int:
+        height = min(screen_height, _MAX_VIEWER_HEIGHT)
+        if (self._timeline_inline_depth and self._output_history.has_entries
+                and capabilities.width >= 8 and height >= 3):
+            return max(1, height - min(6, max(1, height // 3)) - 1)
+        return max(1, height - 1)
+
+    def _render_timeline_control(
+        self, control_lines: list[str], display_state: _LiveEditorState,
+        capabilities: TerminalCapabilities, screen_height: int,
+        cursor_row: int, cursor_column: int = 0,
+    ) -> int:
+        """Compose original disclosure entries and transient controls in one block."""
+        budget = self._inline_control_budget(capabilities, screen_height)
+        bounded = (self._timeline_inline_depth and self._output_history.has_entries
+                   and capabilities.width >= 8 and screen_height >= 3)
+        display_state.inline_control_blocked = bool(bounded and len(control_lines) > budget)
+        if display_state.inline_control_blocked:
+            notice = _wrap_editor_text("Resize terminal to show this control beside its disclosure.", capabilities.width - 1)
+            control_lines = [*notice[:max(0, budget - 1)],
+                             _clip_external_view_line("Esc: cancel without deciding", capabilities.width - 1)]
+            cursor_row, cursor_column = len(control_lines) - 1, 0
+        available = max(0, min(screen_height, _MAX_VIEWER_HEIGHT) - len(control_lines) - 1)
+        layout = self._output_history.render(
+            capabilities, available, mouse_mode=display_state.history_mouse_active,
+        )
+        display_state.history_layout = layout
+        if not layout.lines:
+            self._set_history_mouse_mode(display_state, False)
+        rows = [*layout.lines, *control_lines]
+        cursor_row += len(layout.lines)
+        self._render_inline_rows(rows, cursor_row, cursor_column)
+        display_state.history_line_count = len(rows)
+        if display_state.history_mouse_active:
+            origin = self._timeline_origin
+            if origin is None and self._live_configuration is not None:
+                origin = self._observe_timeline_origin(self._live_configuration)
+            if origin is None:
+                self._set_history_mouse_mode(display_state, False)
+            else:
+                display_state.history_top = origin
+        return cursor_row
+
+    def _handle_inline_review_key(
+        self, event: KeyEvent, display_state: _LiveEditorState,
+        configuration: _TerminalConfiguration, redraw: Callable[[], None],
+    ) -> bool:
+        """Route explicit disclosure review before a picker can accept a choice."""
+        if not display_state.history_enabled:
+            return False
+        if display_state.history_mouse_active:
+            width, height = self._text_viewer_geometry(configuration.width, bounded_height=False)
+            control_rows = display_state.history_line_count - len(display_state.history_layout.lines)
+            if width - 1 < 8 or min(height, _MAX_VIEWER_HEIGHT) <= control_rows + 1:
+                self._set_history_mouse_mode(display_state, False)
+        if event.kind is KeyKind.F6:
+            if display_state.history_mouse_active:
+                self._set_history_mouse_mode(display_state, False)
+                self._output_history.reveal_latest()
+            else:
+                redraw()
+                self._set_history_mouse_mode(display_state, True)
+            redraw()
+            return True
+        if display_state.history_mouse_active:
+            consumed = self._output_history.handle_key(event)
+            if event.kind in {KeyKind.ENTER, KeyKind.ESCAPE, KeyKind.TEXT}:
+                self._set_history_mouse_mode(display_state, False)
+                self._output_history.reveal_latest()
+            if consumed:
+                redraw()
+                return True
+        return False
+
+    def _handle_inline_review_pointer(
+        self, display_state: _LiveEditorState, redraw: Callable[[], None],
+    ) -> None:
+        pointer = display_state.pointer_event
+        display_state.pointer_event = None
+        if pointer is None or not display_state.history_mouse_active:
+            return
+        redraw()
+        local = replace(pointer, row=pointer.row - display_state.history_top + 1)
+        if display_state.history_mouse_active:
+            self._output_history.handle_pointer(local, display_state.history_layout)
+        if pointer.pressed and pointer.button == 0 and not (1 <= local.row <= len(display_state.history_layout.lines)):
+            self._set_history_mouse_mode(display_state, False)
+            self._output_history.reveal_latest()
+        redraw()
+
     def _redraw_live_picker(
         self,
         state: PickerControlState,
@@ -4703,31 +4889,40 @@ class RawTerminalDriver:
         viewport_projector: _PickerViewportProjector,
         viewport_renderer: _PickerViewportRenderer,
     ) -> int:
-        """Replace one transient picker frame using a freshly observed width."""
-
+        """Replace an inline picker while keeping its original disclosure visible."""
         observed = self.capabilities()
         render_width = max(1, observed.width - 1)
-        render_capabilities = _capabilities_with_width(
-            capabilities,
-            render_width,
-        )
-        viewport = viewport_projector(state)
-        if type(viewport) is not PickerViewport:
-            raise TypeError("viewport_projector must return a PickerViewport")
-        frame = viewport_renderer(viewport, render_capabilities)
-        if type(frame) is not RenderedFrame:
-            raise TypeError("viewport_renderer must return a RenderedFrame")
-        if frame.width != render_width:
-            raise ValueError("rendered picker width must match the live width")
-        payload = "".join(
-            (
-                _CARRIAGE_RETURN,
-                _CURSOR_UP * display_state.rendered_cursor_row,
-                _CARRIAGE_RETURN,
-                _CLEAR_TO_END,
-                frame.text,
+        render_capabilities = _capabilities_with_width(capabilities, render_width)
+
+        def render(current: PickerControlState) -> RenderedFrame:
+            viewport = viewport_projector(current)
+            if type(viewport) is not PickerViewport:
+                raise TypeError("viewport_projector must return PickerViewport")
+            frame = viewport_renderer(viewport, render_capabilities)
+            if type(frame) is not RenderedFrame:
+                raise TypeError("viewport_renderer must return RenderedFrame")
+            if frame.width != render_width:
+                raise ValueError("rendered picker width must match live width")
+            return frame
+
+        frame = render(state)
+        if display_state.history_enabled:
+            _, height = self._text_viewer_geometry(observed.width, bounded_height=False)
+            hint = ("Reviewing conversation • Enter/Esc: return to decision"
+                    if display_state.history_mouse_active else "F6: inspect conversation before deciding")
+            hint_lines = _wrap_editor_text(hint, render_width)
+            budget = self._inline_control_budget(render_capabilities, height)
+            limit = state.picker.visible_choice_limit
+            while frame.line_count + len(hint_lines) > budget and limit > 1:
+                limit -= 1
+                frame = render(replace(state, picker=replace(state.picker, visible_choice_limit=limit)))
+            return self._render_timeline_control(
+                [*frame.text.split("\n"), *hint_lines], display_state,
+                render_capabilities, height, frame.line_count + len(hint_lines) - 1,
             )
-        )
+        payload = "".join((_CARRIAGE_RETURN,
+                           _CURSOR_UP * display_state.rendered_cursor_row,
+                           _CARRIAGE_RETURN, _CLEAR_TO_END, frame.text))
         self._write_live_text(payload)
         return frame.line_count - 1
 
@@ -4939,26 +5134,11 @@ class RawTerminalDriver:
 
         output_lines = [*input_lines, *panel_lines]
         if display_state.history_enabled:
-            available = max(0, min(history_screen_height, _MAX_VIEWER_HEIGHT) - len(output_lines) - 1)
             history_capabilities = live_capabilities or _capabilities_with_width(self.capabilities(), width)
-            layout = self._output_history.render(history_capabilities, available, mouse_mode=display_state.history_mouse_active)
-            display_state.history_layout = layout
-            if not layout.lines:
-                self._set_history_mouse_mode(display_state, False)
-            output_lines = [*layout.lines, *output_lines]
-            cursor_row += len(layout.lines)
-            self._render_inline_rows(output_lines, cursor_row, cursor_column)
-            display_state.history_line_count = len(output_lines)
-            if display_state.history_mouse_active:
-                configuration = self._live_configuration
-                origin = self._timeline_origin
-                if origin is None and configuration is not None:
-                    origin = self._observe_timeline_origin(configuration)
-                if origin is None:
-                    self._set_history_mouse_mode(display_state, False)
-                else:
-                    display_state.history_top = origin
-            return cursor_row
+            return self._render_timeline_control(
+                output_lines, display_state, history_capabilities, history_screen_height,
+                cursor_row, cursor_column,
+            )
         move_to_top = _CURSOR_UP * display_state.rendered_cursor_row
         move_to_cursor = _CURSOR_UP * (len(output_lines) - 1 - cursor_row)
         payload = "".join((_CARRIAGE_RETURN, move_to_top, _CARRIAGE_RETURN, _CLEAR_TO_END,
@@ -5000,7 +5180,7 @@ class RawTerminalDriver:
             render_width,
         )
         if display_state.history_enabled:
-            if line_state.buffer.startswith("/"):
+            if not self._timeline_inline_depth and line_state.buffer.startswith("/"):
                 self._output_history.append_lines(tuple(input_lines))
             self._paint_timeline()
             display_state.rendered_cursor_row = 0

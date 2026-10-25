@@ -158,7 +158,7 @@ class MainInputHistoryContractTests(unittest.TestCase):
                 "_fallback_capabilities",
                 "_history_append",
                 "_history_state", "_output_history", "_timeline_enabled", "_timeline_rows", "_timeline_cursor_row",
-                "_timeline_origin", "_timeline_geometry", "_timeline_suspended", "_timeline_operation",
+                "_timeline_origin", "_timeline_geometry", "_timeline_suspended", "_timeline_inline_depth", "_timeline_operation",
                 "_inspector_anchored", "_inspector_top", "_inspector_width",
                 "_input_stream",
                 "_input_latch",
