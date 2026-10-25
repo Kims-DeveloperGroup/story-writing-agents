@@ -1,7 +1,6 @@
 """Session-lobby controller contracts, transitions, and cleanup tests."""
 
 from __future__ import annotations
-from tests.provider_wire_fixture import selected_fixture_calls
 import story_writing_agents.lead_task_transitions as task
 from story_writing_agents import conversations as collaboration
 from story_writing_agents import lead_exploration as exploration
@@ -1785,7 +1784,7 @@ class ControllerContractTests(ControllerTestCase):
         for module_name in graph:
             visit(module_name)
         self.assertEqual(len(modules), 163)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 732)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 731)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6166,7 +6165,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         case = _task_fixture(self)
         source, owner = case.conversation("Installed source A"), case.conversation("Installed owner B")
         source_text = "Prefix. 한글\r\nSelected.  Suffix."
-        case.backend.enqueue(*selected_fixture_calls(_current_exploration_outcome, source_text))
+        case.backend.enqueue(_current_exploration_outcome(source_text))
         runner = asyncio.Runner()
         self.addCleanup(runner.close)
         runner.run(case.runtime.lead_turn(case.session_id, source, "Explore alternatives.",
@@ -6174,7 +6173,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         report = next(e.payload.report for e in case.history(source)
                       if type(e.payload) is collaboration.CollaborationLeadExplorationResultPayload)
         idea = report.ideas[0]
-        def adopted_plot_proposal(call, provider, *, select=False):
+        def adopted_plot_proposal(call, provider):
             choices = dict(call.contract.semantic_index.policy.choices)
             required = choices['required_input_ids']
             self.assertEqual(set(required), {'user_input', 'adopted_idea'})
@@ -6189,12 +6188,11 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     'family': 0, 'source_choices': choices['input_ids'],
                     'anchors': {PLOT_ARCHITECT: 'adopted_idea'},
                     'recipients': {source: PLOT_ARCHITECT for source in required},
-                }, select=select)(call, provider)
+                })(call, provider)
             self.assertFalse(call.contract.structural_findings(frame))
             self.assertTrue(call.contract.decode_response(frame).belongs_to(call.contract))
             return frame
-        case.backend.enqueue(lambda call, provider: adopted_plot_proposal(call, provider, select=True),
-                                 adopted_plot_proposal)
+        case.backend.enqueue(adopted_plot_proposal)
         controller, _, callbacks = self.make_controller(case.control_workspace,
                         conversation_storage_services=case.runtime.conversation_storage_services, terminal_width=200)
         controller._runtime, controller._runner = case.runtime, runner
@@ -6222,7 +6220,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 failure.add_note(_current_policy_failure_note(
                     case.backend, projection=projected))
             raise
-        self.assertEqual(len(_submitted_calls(case.history(source))) + len(_submitted_calls(case.history(owner))), 4)
+        self.assertEqual(len(_submitted_calls(case.history(source))) + len(_submitted_calls(case.history(owner))), 2)
 
 
 

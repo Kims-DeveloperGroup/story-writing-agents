@@ -1,7 +1,6 @@
 """Exact session memory, recovery, and publication safety using synthetic providers."""
 
 from __future__ import annotations
-from tests.provider_wire_fixture import selected_fixture_calls
 import hashlib
 from story_writing_agents.conversations import encode_collaboration_event
 from tests.test_collaboration_events import editorial, editorial_request
@@ -110,20 +109,15 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(self.snapshot(), prior)
         plan = "First inspect the outline.\nSecond review the character motive.\nThird draft the opening."
         self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome())
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR,
-            lead._synthesis_outcome(message=plan))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=plan))
         await self.runtime.decide_lead_step(lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(self.backend.call_records[-1][1].expected_thread_id, "thread-lead-1")
         followups = (
             "Proceed in the order you recommended.",
             "Recall your last recommendation.",
             "Summarize our current discussion.", )
-        followup_groups = []
         for index, text in enumerate(followups):
-            start = len(self.backend.call_records)
             await self.say(second, text, f"Follow-up answer {index}.")
-            followup_groups.append([call for agent, call in self.backend.call_records[start:]
-                                    if agent is LEAD_ORCHESTRATOR])
         calls = [call for agent, call in self.backend.call_records if agent == LEAD_ORCHESTRATOR]
         self.assertEqual({call.expected_thread_id for call in calls[1:]}, {"thread-lead-1"})
         delivered = [text for call in calls for text in _fields(call.payload["session_history"])]
@@ -133,10 +127,8 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             self.assertIn(text, [call.payload["task_input"]["user_request_text"] for call in calls
                                  if "user_request_text" in call.payload["task_input"]])
         self.assertEqual(calls[-1].scope.subject_id, second)
-        for group in followup_groups:
-            for call in group:
-                self.assertNotIn(call.payload["task_input"]["user_request_text"],
-                                 _fields(call.payload["session_history"]))
+        for call in calls[2:]:
+            self.assertNotIn(call.payload["task_input"]["user_request_text"], _fields(call.payload["session_history"]))
         self.assertLessEqual(_property_count(calls[-1].payload["session_history"]),
                              _property_count(calls[-2].payload["session_history"]))
         self.assertTrue(all("timestamp" not in record and "batch_digest" not in record
@@ -144,7 +136,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
                             for call in calls for record in _records(call.payload["session_history"])))
         judgment = next(event for event in self.history(second)
                         if type(event.payload) is CollaborationLeadJudgmentPayload)
-        host_fact = next(record for record in _records(followup_groups[1][0].payload["session_history"])
+        host_fact = next(record for record in _records(calls[3].payload["session_history"])
                          if record["event_id"] == judgment.event_id)
         self.assertEqual(host_fact["details"]["authoring_scope"]["task_id"],
                          judgment.payload.authoring_scope.task_id)
@@ -248,7 +240,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(calls[0].continuation_identity, calls[-1].continuation_identity)
         self.assertNotEqual(calls[0].scope, calls[-1].scope)
         provisional = self.conversation("Provisional restart")
-        self.backend.enqueue(*selected_fixture_calls(_current_exploration_outcome))
+        self.backend.enqueue(_current_exploration_outcome())
         explored = await self.runtime.lead_turn(self.session_id, provisional, "Explore possible directions.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         restarted = StoryRuntime(self.workspace, self.backend)
         reports = tuple(event.payload.report for event in self.runtime.conversation_storage_services.event_store.read(self.session_id, provisional) if event.kind is CollaborationEventKind.LEAD_EXPLORATION_RESULT)

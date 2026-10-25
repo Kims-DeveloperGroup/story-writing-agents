@@ -29,7 +29,7 @@ _PRIVATE_BODY_B = "PRIVATE_SOURCE_B needle\n"
 _SCOPE = ContextScope("workspace", "session", ContextSubjectKind.CONVERSATION, "conversation", "lead_orchestrator", )
 
 
-from tests.provider_wire_fixture import assert_schema_descriptions, frozen_fixture_field
+from tests.provider_wire_fixture import assert_schema_descriptions
 
 
 class StructuredOutputValidationTests(unittest.TestCase):
@@ -100,12 +100,11 @@ class StructuredOutputValidationTests(unittest.TestCase):
                               (r"[(?=]", "?"), (r"^(?:ok|yes)\z", "yes"),
                               (r"(?=ok)ok", "ok")):
             self.assertIsNotNone(compile_schema_pattern(pattern).fullmatch(text))
-        with self.assertRaises(ValueError) as error:
-            _owned_visible_text_rule({"type": "string", "pattern": r"^A+$"})
-        self.assertIs(type(error.exception), ValueError)
-        self.assertEqual(str(error.exception), "schema rejected")
-        self.assertEqual(failure_issues(error.exception),
-                         ("$.pattern: unproved native text-pattern intersection",))
+        custom = SchemaRules.declare(_owned_visible_text_rule(
+            {"type": "string", "pattern": r"^A+$"}))
+        self.assertFalse(custom.findings("A"))
+        self.assertFalse(custom.findings("A\n"))
+        self.assertTrue(custom.findings("B"))
         generic = SchemaRules.declare({"type": "string", "pattern": r"^A+$"})
         self.assertFalse(generic.findings("A"))
         self.assertTrue(generic.findings("B"))
@@ -331,11 +330,12 @@ class StructuredOutputValidationTests(unittest.TestCase):
             self.assertEqual(query_calls, ["public", "plural"])
             original_record = proof._record; replacement_record = tuple(list(original_record))
             self.assertIsNot(replacement_record, original_record)
-            with frozen_fixture_field(proof, '_record', replacement_record, original_record):
-                query_calls.clear()
+            try:
+                object.__setattr__(proof, "_record", replacement_record); query_calls.clear()
                 with self.assertRaisesRegex(ValueError, "^frozen schema node fingerprint proof changed$"):
                     bound_fingerprint(query_graph, ("kind",), proof=proof)
                 self.assertEqual(query_calls, [])
+            finally: object.__setattr__(proof, "_record", original_record)
             query_calls.clear(); value, reused = bound_fingerprint(query_graph, ("kind",), proof=proof)
             self.assertEqual(value, draft_id); self.assertIs(reused, proof); self.assertEqual(query_calls, [])
         finally:
@@ -578,23 +578,29 @@ class StructuredOutputValidationTests(unittest.TestCase):
         def field_decode(value, captured=field_value): return value
         field_decoder = TypedDecoder("fixture.field.layout", "1", field_decode)
         self.assertIsNone(field_decoder.require_provenance())
-        with frozen_fixture_field(field_value, 'right', 'changed-value', 'right-value'):
+        try:
+            object.__setattr__(field_value, "right", "changed-value")
             with self.assertRaisesRegex(ValueError, "^frozen typed decoder hook provenance changed$"):
                 field_decoder.require_provenance()
+        finally: object.__setattr__(field_value, "right", "right-value")
         self.assertIsNone(field_decoder.require_provenance())
         field_records = fields(FieldCapture); later_field = field_records[1]
-        with frozen_fixture_field(later_field, 'name', 'undeclared-slot', 'right', setter=setattr):
+        try:
+            later_field.name = "undeclared-slot"
             with self.assertRaisesRegex(
                     TypeError, "^typed decoder dataclass captures require only declared slot fields$"):
                 field_decoder.require_provenance()
+        finally: later_field.name = "right"
         self.assertIsNone(field_decoder.require_provenance())
         field_map = FieldCapture.__dataclass_fields__
-        with frozen_fixture_field(FieldCapture, '__dataclass_fields__', dict(field_map), field_map, setter=setattr):
+        try:
+            FieldCapture.__dataclass_fields__ = dict(field_map)
             self.assertIsNot(FieldCapture.__dataclass_fields__, field_map)
             self.assertIsNone(field_decoder.require_provenance())
             FieldCapture.__dataclass_fields__ = dict(reversed(tuple(field_map.items())))
             with self.assertRaisesRegex(ValueError, "^frozen typed decoder hook provenance changed$"):
                 field_decoder.require_provenance()
+        finally: FieldCapture.__dataclass_fields__ = field_map
         self.assertIsNone(field_decoder.require_provenance())
         field_name_slot, field_reads, field_armed = Field.name, [], [False]
         field_error = RuntimeError("fixture Field.name access")
@@ -670,7 +676,9 @@ class StructuredOutputValidationTests(unittest.TestCase):
             finally:
                 object.__setattr__(cached, '_diagnostic_template', template)
                 object.__setattr__(cached, '_diagnostic_anchor', anchor)
-        with frozen_fixture_field(cached, 'canonical_bytes', foreign.canonical_bytes, cached.canonical_bytes):
+        source_bytes = cached.canonical_bytes
+        try:
+            object.__setattr__(cached, 'canonical_bytes', foreign.canonical_bytes)
             self.assertEqual(cached.findings(packet), ('$: expected integer, got object',))
             self.assertEqual(diagnose_value(packet, cached), ('$: expected integer, got object',))
             with self.assertRaisesRegex(ValueError, '^frozen typed decoder hook provenance changed$'):
@@ -678,6 +686,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
             object.__setattr__(cached, 'canonical_bytes', b'{')
             with self.assertRaises(ValueError): cached.findings(packet)
             with self.assertRaises(ValueError): diagnose_json_text(json.dumps(packet), cached)
+        finally: object.__setattr__(cached, 'canonical_bytes', source_bytes)
         self.assertIsNone(template_decoder.require_provenance())
         marker = RuntimeError('fixture dynamic diagnosis')
         class DynamicPayload(dict):
@@ -1136,8 +1145,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             service_module.ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED, )
         self.assertEqual( tuple(field.name for field in fields(service_module.ContextProviderFailureFacts) ),
             ( "accounting", "timed_out", "taint_existing_thread", "submitted_accountings",
-            "submission_uncertain", "response_rejection_code", "continuation_rejection",
-             'prelaunch_action_exhausted'), )
+            "submission_uncertain", "response_rejection_code", "continuation_rejection", ), )
         for code in rejection_codes:
             with self.subTest(code=code):
                 facts = service_module.ContextProviderFailureFacts(
@@ -1210,7 +1218,6 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assertIsNone(caught.exception.__cause__); return caught.exception
 
     def test_schema_is_action_only_and_runtime_correlation_is_exact(self) -> None:
-        from dataclasses import replace
         limits = [4, 2, 2, 4, 8, 8, 16, 200]
         schema = service_module._context_action_schema(allowed_actions=("search", "read", "answer"),
             result_contract=self.result_contract, allowed_search_source_kinds=service_module._SEARCH_SOURCE_KIND_ORDER,
@@ -1275,9 +1282,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         registry = _registry(_SCOPE, snapshots)
         session = _session(_binding(manifest), registry)
         _mint_handles(session, registry, snapshots)
-        offers = session.contract_offers("optional-reference-call",
-            allowed_actions=("search", "read", "answer"),
-            remaining_physical_calls=CONTEXT_ACTION_POLICY.max_provider_calls - 1)
+        offers = session.contract_offers("optional-reference-call", allowed_actions=("search", "read", "answer"))
         bound = service_module.BoundCallContract.bind(factory, offers)
         self.assertIs(bound.offers, offers)
         self.assertEqual(len(bound.semantic_index.contracts), 1)
@@ -1331,102 +1336,6 @@ class CompactWireDecoderTests(unittest.TestCase):
         invalid["$defs"]["unvisited_invalid"] = {"type": "string", "enum": []}
         with self.assertRaises(ValueError):
             SchemaRules.declare(invalid)
-
-        from story_writing_agents.agent_context.actions import ContextResultSelectionAction
-        # A domain ANSWER outside the ordinary front owner is not direct delivery.
-        branches = [{'type': 'object', 'description': 'A nonordinary selected result.',
-            'properties': {
-            'response_type': {'type': 'string', 'enum': ['answer'],
-                'description': 'Return the declared semantic response.'},
-            'response_text': {'type': 'string', 'description': 'Visible selected text.'},
-            'choice': {'type': 'string', 'enum': [choice],
-                'description': 'Use the declared first or second alternative.'}},
-            'required': ['response_type', 'response_text', 'choice'],
-            'additionalProperties': False} for choice in ('first', 'second')]
-        multiple = replace(factory, rule_seed=LeadResultRuleSeed.declare(
-            'lead-discussion-response-v1', {'anyOf': branches}))
-        selected_bound = service_module.BoundCallContract.bind(multiple, offers)
-        members = selected_bound.semantic_index.contracts
-        self.assertEqual(len(members), 2)
-        self.assertTrue(all(not item.owner.variant.direct_delivery for item in members))
-        self.assertEqual(selected_bound.offered_semantic_schema_ids, ())
-        self.assertEqual(selected_bound.selectable_semantic_schema_ids,
-            tuple(item.schema_id for item in members))
-        self.assertEqual(bound.offered_semantic_schema_ids, (semantic.schema_id,))
-        selectors = [item for item in selected_bound.action_index.contracts
-            if item.rule_graph.literal_at(('action_type',)) == 'select_result']
-        self.assertEqual(len(selectors), 1)
-        selection = {'agent_action': {'schema_id': selectors[0].schema_id,
-            'action_type': 'select_result', 'result_schema_id': members[1].schema_id}}
-        decoded = selected_bound.decode_response(json.dumps(selection))
-        action_value = decoded.domain_value()['action']
-        self.assertEqual(action_value['kind'], 'select_result')
-        self.assertEqual(action_value['selected_schema_id'], members[1].schema_id)
-        typed = ContextResultSelectionAction(
-            _correlation(session.binding, offers.action_index), members[1].schema_id)
-        self.assertIs(type(typed), ContextResultSelectionAction)
-        self.assertEqual(typed.selected_schema_id, members[1].schema_id)
-        lineage = selected_bound.selection_lineage(decoded)
-        self.assertIs(lineage.origin, selected_bound)
-        self.assertEqual((lineage.kind, lineage.selected_schema_id),
-            ('selection', members[1].schema_id))
-        with self.assertRaises(TypeError):
-            service_module.BoundCallLineage(selected_bound, 'selection')
-        for dimension in ('operation_id', 'result_correlation_id'):
-            next_correlation = replace(offers.correlation,
-                action_index=offers.action_index + 1, **{dimension: 'foreign-invocation'})
-            foreign = replace(offers, call_id=offers.call_id + '-foreign',
-                action_index=offers.action_index + 1, correlation=next_correlation,
-                remaining_physical_calls=offers.remaining_physical_calls - 1,
-                action_limits=tuple((name, count - 1 if name == 'nonterminal_actions' else count)
-                    for name, count in offers.action_limits))
-            self.assertEqual(foreign.scope, offers.scope)
-            with self.assertRaises(ValueError):
-                multiple.for_offer(foreign, lineage)
-        for invalid_id in ('foreign-member', None, True, 0):
-            invalid_selection = json.loads(json.dumps(selection))
-            invalid_selection['agent_action']['result_schema_id'] = invalid_id
-            self.assertTrue(selected_bound.structural_findings(json.dumps(invalid_selection)))
-            with self.assertRaises(ValueError):
-                selected_bound.decode_response(json.dumps(invalid_selection))
-        altered = members[0].owner.variant
-        for field in ('direct_delivery', 'independent_premise'):
-            with frozen_fixture_field(altered, field, True, False):
-                with self.assertRaises(ValueError):
-                    selected_bound.require_current_offer(offers)
-        from tests.provider_wire_fixture import modeled_selection_binding, offered_fixture_bindings
-        corrective = multiple.for_offer(replace(offers, call_id=offers.call_id + '-repair',
-            remaining_physical_calls=offers.remaining_physical_calls - 1),
-            selected_bound.repair_lineage())
-        self.assertEqual(corrective.action_index.rule_graph.schema_value(),
-                         selected_bound.action_index.rule_graph.schema_value())
-        selected_repair = modeled_selection_binding(corrective, response_type='answer', family=1)
-        self.assertEqual(selected_repair.phase, 'repair')
-        self.assertEqual(len(selected_repair.offered_semantic_schema_ids), 1)
-        self.assertEqual(selected_repair.selectable_semantic_schema_ids, ())
-        with self.assertRaises(ValueError):
-            selected_repair.repair_lineage()
-        selected_normal = modeled_selection_binding(selected_bound, response_type='answer',
-            family=1)
-        from types import SimpleNamespace
-        selected_request = SimpleNamespace(contract=selected_normal)
-        for family, branch in ((0, None),
-                (1, members[1].owner.variant.branch_key + ':partition:unoffered')):
-            with self.assertRaises(ValueError):
-                offered_fixture_bindings(selected_request, action_type='submit_result',
-                                         response_type='answer', family=family, branch_key=branch)
-        for proof in (selected_normal.repair_lineage(), selected_normal.replay_lineage()):
-            current = selected_normal.offers
-            same = replace(current, call_id=current.call_id + '-retained',
-                           remaining_physical_calls=current.remaining_physical_calls - 1)
-            retained = multiple.for_offer(same, proof)
-            self.assertEqual(len(retained.offered_semantic_schema_ids), 1)
-            for field in ('operation_id', 'result_correlation_id'):
-                foreign = replace(same, correlation=replace(
-                    same.correlation, **{field: 'foreign-invocation'}))
-                self.assertEqual(foreign.scope, same.scope)
-                with self.assertRaises(ValueError):
-                    multiple.for_offer(foreign, proof)
 
     def test_valid_search_read_and_natural_result_shapes_decode_exactly(self) -> None:
         search = self.decode(_search_wire( self.token, [ ("Needle", ["writing_artifact", "conversation",

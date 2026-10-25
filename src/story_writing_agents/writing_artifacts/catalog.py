@@ -83,18 +83,22 @@ def canonical_artifact_kind(path: object) -> ArtifactKind | None:
 
 
 def artifact_kind_path_rule(artifact_kind: ArtifactKind) -> dict[str, object]:
-    """Declare the exact canonical path language for one artifact kind."""
+    """Declare the exact canonical lexical path language for one artifact kind."""
+
     if type(artifact_kind) is not ArtifactKind:
         raise TypeError("artifact kind must be an exact ArtifactKind")
     if artifact_kind is ArtifactKind.CORE_DOCUMENT:
         body = "(?:" + "|".join(re.escape(path) for path in CORE_ARTIFACT_PATHS) + ")"
     else:
         component = _PATH_COMPONENT.pattern
-        # The former suffix lookahead intersected a 1..128 ASCII component.
+        # The suffix intersection leaves a 1..128 ASCII component.
         filename = r"[A-Za-z0-9][A-Za-z0-9_.-]{0,124}\.md"
         body = "manuscript/" + _PART_ID.pattern + "/(?:" + component + "/)*" + filename
-    return {"type": "string", "maxLength": MAX_ARTIFACT_PATH_BYTES,
-            "pattern": "^" + body + r"\z"}
+    return {
+        "type": "string",
+        "maxLength": MAX_ARTIFACT_PATH_BYTES,
+        "pattern": "^(?:" + body + r")\z",
+    }
 
 
 def manuscript_artifact_path(output_path: object) -> str:

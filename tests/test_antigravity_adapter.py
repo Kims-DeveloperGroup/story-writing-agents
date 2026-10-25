@@ -674,7 +674,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             for body, components in ((codex_bytes, codex_components), (agy_bytes, agy_components)):
                 self.assertEqual(len(body), sum(item.serialized_utf8_bytes for item in components))
                 self.assertEqual(next(item.serialized_utf8_bytes for item in components if item.kind is ContextComponentKind.ROLE_SYSTEM_PROMPT), len(role))
-                for token in (b"agent-provider-wire-v11", b"contract_guidance.input_fields", b"contract_guidance.response_rules", b"agent_action", b"action_type", b"task_result", b"response_type", b"Select only an offered agent_action"):
+                for token in (b"agent-provider-wire-v10", b"contract_guidance.input_fields", b"contract_guidance.response_rules", b"agent_action", b"action_type", b"task_result", b"response_type", b"Select only an offered agent_action"):
                     self.assertIn(token, body[len(prefix):])
             self.assertIn(b"Use finish only for structured delivery of the exact schema-selected object; do not use other tools, subagents, or hidden reasoning.", agy_bytes[len(prefix):])
             self.assertNotIn(b"Do not invoke tools, other agents", agy_bytes)

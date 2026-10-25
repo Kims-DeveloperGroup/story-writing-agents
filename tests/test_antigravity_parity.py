@@ -14,7 +14,6 @@ import sys
 import tempfile
 import time
 import unittest
-from story_writing_agents.structured_output_validation import require_provider_schema_patterns
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -1141,8 +1140,6 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                                     backend._antigravity_adapter, "invoke", new=invoke):
                                 result = await provider.invoke_context(request)
                             current = invocations[-1][1]
-                            for final_schema in (request.schema, current.schema):
-                                self.assertIsNone(require_provider_schema_patterns(final_schema))
                             metadata = (type(request), request.scope.agent_id, stage, kind)
                             if index == 0:
                                 self.assertEqual((metadata, current.payload_json),
@@ -1172,8 +1169,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         case.backend.enqueue(lead._visible_outcome("answer", "Visible."))
                         await case.runtime.lead_turn(case.session_id,
                             case.conversation("lead-conversation"), "Visible lead request.")
-                        case.backend.enqueue(*lead.selected_fixture_calls(lead._current_exploration_outcome,
-                "Native provisional 한글 possibility.", basis_input_ids=()))
+                        case.backend.enqueue(lead._current_exploration_outcome(
+                            "Native provisional 한글 possibility.", basis_input_ids=()))
                         await case.runtime.lead_turn(case.session_id,
                             case.conversation("lead-exploration-parity"),
                             "Explore provisional directions.",
@@ -1181,8 +1178,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     else:
                         await lead._confirmed_premise(case, case.conversation("native-premise"))
                 setup_calls.append(len(case.backend.calls))
-        self.assertEqual(([index for index, _ in invocations], setup_calls),
-                         ([0, 1, 1, 2, 3, 3], [3, 6]))
+        self.assertEqual(([index for index, _ in invocations], setup_calls), ([0, 1, 2, 3], [2, 4]))
 
     @staticmethod
     def _process_is_running(pid: int) -> bool:
@@ -1648,7 +1644,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             codex_keys.append(
                 'codex:character_custodian:' + invocation.execution_workspace.continuation_digest(
                 'legacy-definition-policy', hashlib.sha256((
-                'agent-provider-wire-v11\x00' + codex_definition.fingerprint).encode()).hexdigest(
+                'agent-provider-wire-v10\x00' + codex_definition.fingerprint).encode()).hexdigest(
                 )).removeprefix('sha256:'))
             return ProviderResult(thread_id='codex-mixed-thread', response_text=direct_response(
                 '{"message":"codex mixed reply"}', json.loads(invocation.payload_json)))
@@ -1872,7 +1868,6 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         failure_calls = self.provider_invocations()[-2:]
         self.assertEqual(len(failure_calls), 2)
         for call in failure_calls:
-            self.assertIsNone(require_provider_schema_patterns(call["schema"]))
             self.assertEqual(call['schema']['required'], ['response_type', 'response_text'])
             self.assertNotIn("session_id", call["schema"]["properties"])
             self.assertNotIn("conversation_id", call["schema"]["properties"])

@@ -52,7 +52,7 @@ from .specialist_routing import (
 from .lead_premise_decisions import (
     premise_question_schema, premise_analysis_schema, premise_summary_schema,
     PremiseAnalysis, PremiseDecisionSummary, premise_question_intent_from_dict,
-    premise_analysis_from_dict, premise_summary_from_dict, PremiseFreshWorkAdmission, premise_digest,
+    premise_analysis_from_dict, premise_summary_from_dict,
 )
 from .structured_output_validation import (
     ContractOwner, BoundContract, ContractIdentity, ContractRejection, NamedHostCheck, TypedDecoder,
@@ -84,14 +84,6 @@ class LeadWireVariant:
     branch_key: str
     rules: SchemaRules
     decode: Callable[[dict[str, object]], dict[str, object]] = field(repr=False, compare=False)
-    direct_delivery: bool = False
-    independent_premise: bool = False
-
-    def __post_init__(self) -> None:
-        if type(self.direct_delivery) is not bool or type(self.independent_premise) is not bool:
-            raise TypeError("delivery and funding are declared whole-member policies")
-        if self.direct_delivery and self.independent_premise:
-            raise ValueError("independent premise selection cannot be declared direct")
 
 
 def _small_nonempty_selection(
@@ -165,7 +157,7 @@ def _scope_wire_rule(rule: AuthoringScopeRuleSet, template: Mapping[str, object]
             }) for slot in scope.dependency_slots})
         elif draft_domains:
             properties["dependency_slots"] = {"type": "array", "minItems": 0, "items": closed_object({
-                "slot_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z"},
+                "slot_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$(?![\s\S])"},
                 "dependent_domains": _small_nonempty_selection(
                     draft_domains, meaning=field_description("dependent_domains"),
                 ),
@@ -309,8 +301,6 @@ class LeadResultRuleSeed:
     """Internal domain rule input, never a provider-call binding capability."""
     contract_id: str
     domain_rules: bytes = field(repr=False)
-    direct_delivery_roots: tuple[int, ...] = field(default=(), kw_only=True)
-    independent_premise_roots: tuple[int, ...] = field(default=(), kw_only=True)
 
     def __post_init__(self) -> None:
         if type(self.contract_id) is not str or not self.contract_id or type(self.domain_rules) is not bytes:
@@ -319,109 +309,14 @@ class LeadResultRuleSeed:
         if (type(value) is not dict or json.dumps(value, sort_keys=True, ensure_ascii=False,
             allow_nan=False, separators=(",", ":")).encode("utf-8") != self.domain_rules):
             raise ValueError("Lead rule seed must be canonical source-owned object rules")
-        roots = value.get("anyOf", (value,))
-        if (type(self.direct_delivery_roots) is not tuple
-                or any(type(index) is not int or not 0 <= index < len(roots)
-                       for index in self.direct_delivery_roots)
-                or len(set(self.direct_delivery_roots)) != len(self.direct_delivery_roots)):
-            raise ValueError("direct delivery requires distinct complete declared roots")
-        if (type(self.independent_premise_roots) is not tuple
-                or any(type(index) is not int or not 0 <= index < len(roots)
-                       for index in self.independent_premise_roots)
-                or len(set(self.independent_premise_roots)) != len(self.independent_premise_roots)
-                or set(self.independent_premise_roots).intersection(self.direct_delivery_roots)):
-            raise ValueError("independent premise funding requires distinct non-direct complete roots")
 
     @classmethod
-    def declare(
-        cls, contract_id: str, schema: Mapping[str, object], *,
-        direct_delivery_roots: tuple[int, ...] = (),
-        independent_premise_roots: tuple[int, ...] = (),
-    ) -> LeadResultRuleSeed:
+    def declare(cls, contract_id: str, schema: Mapping[str, object]) -> LeadResultRuleSeed:
         return cls(contract_id, json.dumps(dict(schema), sort_keys=True, ensure_ascii=False,
-                   allow_nan=False, separators=(",", ":")).encode("utf-8"),
-                   direct_delivery_roots=direct_delivery_roots,
-                   independent_premise_roots=independent_premise_roots)
+                                           allow_nan=False, separators=(",", ":")).encode("utf-8"))
 
     def schema_value(self) -> dict[str, object]:
         return json.loads(self.domain_rules)
-
-
-@dataclass(frozen=True, slots=True)
-class LeadResultFunding:
-    """Alternative ceilings over the same charged calls of one admitted front."""
-    ordinary_call_limit: int
-    allocated_call_limit: int
-    premise_admission: PremiseFreshWorkAdmission
-    request_identity: tuple[str, str, str, str]
-    funding_digest: str = field(init=False)
-    _declaration: tuple = field(init=False, repr=False, compare=False)
-
-    def __post_init__(self) -> None:
-        if (type(self.ordinary_call_limit) is not int or self.ordinary_call_limit != 1
-                or type(self.allocated_call_limit) is not int
-                or not 1 <= self.allocated_call_limit <= 2
-                or type(self.premise_admission) is not PremiseFreshWorkAdmission
-                or self.premise_admission.front_physical_call_limit != 2
-                or type(self.premise_admission.ordinary_front_physical_call_limit) is not int
-                or self.premise_admission.ordinary_front_physical_call_limit != 1
-                or self.premise_admission.offered_question_id is None
-                or type(self.request_identity) is not tuple or len(self.request_identity) != 4
-                or any(type(item) is not str or not item for item in self.request_identity)):
-            raise ValueError("mixed front funding requires exact ordinary1 and admitted premise2")
-        declaration = self._capture_declaration()
-        encoded = json.dumps((self.ordinary_call_limit, self.allocated_call_limit,
-            premise_digest(self.premise_admission), self.request_identity),
-            ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
-        object.__setattr__(self, "funding_digest", hashlib.sha256(encoded).hexdigest())
-        object.__setattr__(self, "_declaration", (declaration, self.funding_digest))
-
-    def _capture_declaration(self) -> tuple:
-        admission = self.premise_admission
-        def task(item):
-            return None if item is None else (item, item.task_id, item.task_revision)
-        parent, report = admission.prior_admission_ref, admission.prior_analysis_report_ref
-        source = admission.prior_authoring_source_ref
-        cost = None if source is None else source.cost
-        return (self.ordinary_call_limit, self.allocated_call_limit, self.request_identity,
-            admission, admission.source_user_event_id, admission.source_user_event_digest,
-            admission.provider_step_id, admission.provider_invocation_id,
-            admission.front_physical_call_limit,
-            (type(admission.ordinary_front_physical_call_limit),
-             admission.ordinary_front_physical_call_limit), admission.offered_question_id,
-            tuple(task(item) for item in admission.offered_authoring_tasks),
-            task(admission.selected_authoring_task), admission.schema_version,
-            None if parent is None else (parent, parent.event_id, parent.digest),
-            None if report is None else (report, report.source_conversation_id,
-                report.report_event_id, report.report_digest, report.question_id),
-            None if source is None else (source, task(source.task), cost, cost.step_id,
-                cost.submitted_call_ids, cost.rounds_spent, cost.proposal_id,
-                cost.proposal_revision, cost.proposal_digest, cost.execution_attempt_id))
-
-    def require_current(self) -> None:
-        expected, digest = self._declaration
-        try:
-            current = self._capture_declaration()
-        except (AttributeError, TypeError) as failure:
-            raise ValueError("frozen result funding changed") from failure
-        if (self.premise_admission is not expected[3] or current != expected
-                or self.funding_digest != digest):
-            raise ValueError("frozen result funding changed")
-
-    def require_request(self, session_id: str, subject_id: str,
-                        operation_id: str, result_correlation_id: str) -> None:
-        self.require_current()
-        if self.request_identity != (session_id, subject_id, operation_id, result_correlation_id):
-            raise ValueError("result funding belongs to another logical invocation")
-
-    def remaining_for(self, independent_premise: bool, remaining_physical_calls: int) -> int:
-        if (type(independent_premise) is not bool or type(remaining_physical_calls) is not int
-                or not 1 <= remaining_physical_calls <= self.allocated_call_limit):
-            raise ValueError("result funding requires actual original-allocation progress")
-        spent = self.allocated_call_limit - remaining_physical_calls
-        ceiling = (self.premise_admission.front_physical_call_limit
-                   if independent_premise else self.ordinary_call_limit)
-        return min(remaining_physical_calls, max(0, ceiling - spent))
 
 
 @dataclass(frozen=True, slots=True)
@@ -602,7 +497,7 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
                       *(item for check in self._declared_checks
                         for item in (check, check.check, check.dependencies)))
         values = (self.owner_id, self.owner_revision, self.variant.branch_key,
-                  self.variant.rules.canonical_bytes, self.variant.rules.maximum_bytes, self.variant.direct_delivery, self.variant.independent_premise,
+                  self.variant.rules.canonical_bytes, self.variant.rules.maximum_bytes,
                   COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
                   tuple((check.name, check.revision, check.phase, check.context_type,
                          check.corrective_facts) for check in self._declared_checks))
@@ -663,8 +558,6 @@ class LeadStagePolicy:
     maximum_schema_bytes: int = field(default=65_536, kw_only=True)
     maximum_index_schema_bytes: int = field(default=MAX_PROVIDER_SCHEMA_UTF8_BYTES, kw_only=True)
     wire_root_path: str = field(default="$.agent_action.task_result", kw_only=True)
-    funding: LeadResultFunding | None = field(default=None, kw_only=True, repr=False, compare=False)
-    _funding_anchor: tuple = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if (any(type(value) is not str or not value for value in
@@ -691,20 +584,6 @@ class LeadStagePolicy:
                 or any(not isinstance(owner, ContractOwner) for owner in self.owner_declarations)
                 or len({owner.owner_id for owner in self.owner_declarations}) != len(self.owner_declarations)):
             raise ValueError("stage requires its complete immutable typed owner declaration")
-        if self.funding is not None:
-            if type(self.funding) is not LeadResultFunding:
-                raise TypeError("stage funding requires its exact frozen value")
-            self.funding.require_current()
-        object.__setattr__(self, "_funding_anchor", (self.funding,
-            None if self.funding is None else self.funding.funding_digest))
-
-    def require_funding_current(self) -> None:
-        funding, digest = self._funding_anchor
-        if (self.funding is not funding
-                or (None if funding is None else funding.funding_digest) != digest):
-            raise ValueError("frozen stage funding changed")
-        if funding is not None:
-            funding.require_current()
 
     def identity_for(self, owner_id: str) -> ContractIdentity:
         value = {
@@ -714,7 +593,6 @@ class LeadStagePolicy:
             "logical_origin_call_id": self.logical_origin_call_id, "choices": self.choices,
             "maximum_schema_bytes": self.maximum_schema_bytes, "wire_root_path": self.wire_root_path,
             "branch": owner_id,
-            **({"funding": self.funding.funding_digest} if self.funding is not None else {}),
             "owner_set_digest": hashlib.sha256(json.dumps(tuple((owner.owner_id, id(owner))
                 for owner in self.owner_declarations), separators=(",", ":")).encode("utf-8")).hexdigest(),
             "maximum_index_schema_bytes": self.maximum_index_schema_bytes,
@@ -1606,7 +1484,6 @@ def alternatives(variants: list[dict[str, object]]) -> dict[str, object]:
     return variants[0] if len(variants) == 1 else {"anyOf": variants}
 
 
-
 _OWNED_SCALAR, _OWNED_NONNUL, _OWNED_NONBLANK, _OWNED_NONBLANK_WITH_NUL = unicode_scalar_classes(
     (), ("", "\x00", "\x00" + SCHEMA_PYTHON_WHITESPACE, SCHEMA_PYTHON_WHITESPACE))
 _NUL_FREE_TEXT_PATTERN = r"^[^\u0000]+\z"
@@ -1633,15 +1510,19 @@ def _owned_visible_text_rule(
     nonempty = nonempty_text_rule()["pattern"]
     if prior is None or prior in (visible, _OWNED_VISIBLE_PATTERN):
         selected = _OWNED_NONEMPTY_PATTERN if nonblank else _OWNED_VISIBLE_PATTERN
-    elif prior in (_NUL_FREE_TEXT_PATTERN, _OWNED_NUL_FREE_PATTERN):
+    elif prior in (_NUL_FREE_TEXT_PATTERN, r"^[^\u0000]+$(?![\s\S])", _OWNED_NUL_FREE_PATTERN):
         selected = _OWNED_NONEMPTY_PATTERN if nonblank else _OWNED_NUL_FREE_PATTERN
     elif prior in (nonempty, _OWNED_NONEMPTY_PATTERN):
         selected = _OWNED_NONEMPTY_PATTERN
     elif prior in (nonblank_text_rule()["pattern"], _OWNED_NONBLANK_PATTERN):
         selected = _OWNED_NONEMPTY_PATTERN if nonblank else _OWNED_NONBLANK_PATTERN
     else:
-        raise validation_failure(ValueError("schema rejected"), "$.pattern",
-                                 "unproved native text-pattern intersection")
+        # Preserve an unproved custom prior's exact host conjunction.
+        required = nonempty if nonblank else visible
+        prefix = r"^(?=[^\ud800-\udfff]*$(?![\s\S]))"
+        if prior is not None and prior not in (visible, required):
+            prefix += r"(?=[\s\S]*(?:" + prior + "))"
+        selected = prefix + required
     result["pattern"] = selected
     return result
 
@@ -2588,39 +2469,7 @@ class LeadProviderConstraints:
                             parent[assessment_path[-1]] = decode_current_assessment(parent[assessment_path[-1]])
                         map_current_task_literals(result, tasks)
                         return normalize_result(result, contract.contract_id)
-                    # Direct delivery is a semantic declaration, before physical grouping.
-                # The shared QUESTION/CRITIQUE owner is split by its actual scalar law;
-                # no complete member later has a partially direct response-type enum.
-                    plain_question = (
-                        set(properties) - {"document_change_request_update"}
-                        == {"response_type", "response_text", "writing_task_scope"}
-                        and set(root.get("required", ()))
-                        == {"response_type", "response_text", "writing_task_scope"}
-                        and "clarification_question" in properties["response_type"].get("enum", ())
-                    )
-                    kinds = offered["properties"]["response_type"].get("enum", ())
-                    response_kind_alternatives = kinds if plain_question else (None,)
-                    for native_kind in response_kind_alternatives:
-                        member_rules = encoded_rules
-                        if native_kind is not None:
-                            body = deepcopy(offered)
-                            body["properties"]["response_type"]["enum"] = [native_kind]
-                            raw = hoist_schema_definitions(body)
-                            member_rules = SchemaRules.declare(factor_rule_schema(
-                                raw if member_compilation_is_identity(raw) else _compile_closed_choices(raw)),
-                                maximum_bytes=encoded_rules.maximum_bytes)
-                        direct = root_number in contract.direct_delivery_roots or (
-                            not self.continuation and (
-                                (ordinary_answer and rule is not None
-                                 and rule.activity is AuthoringActivity.WORKFLOW)
-                                or (plain_question and native_kind == "clarification_question")
-                            )
-                        )
-                        suffix = "" if native_kind is None else "." + native_kind
-                        variants.append(LeadWireVariant(
-                            f"{contract.contract_id}:{root_number}:{scope_number}:{roster_number}{suffix}",
-                            member_rules, decode, direct_delivery=direct,
-                            independent_premise=root_number in contract.independent_premise_roots))
+                    variants.append(LeadWireVariant(f"{contract.contract_id}:{root_number}:{scope_number}:{roster_number}", encoded_rules, decode))
         if not variants:
             raise ValueError("current Lead stage has no eligible response branch")
         families = []
@@ -2637,9 +2486,9 @@ class LeadProviderConstraints:
                 names = tuple(name for name in source["properties"] if name == "response_text" or
                               name == "response_type" or name.endswith("_result_type"))
                 key = tuple((name, member.rules.node_fingerprint((name,))) for name in names)
-                scalar_groups.setdefault((member.direct_delivery, member.independent_premise, key), []).append((source, member))
+                scalar_groups.setdefault(key, []).append((source, member))
             family_partitions = []
-            for (direct_delivery, independent_premise, common_key), group in scalar_groups.items():
+            for common_key, group in scalar_groups.items():
                 sources, members = tuple(zip(*group, strict=True))
                 first = sources[0]
                 common_names = tuple(name for name, _ in common_key)
@@ -2806,9 +2655,7 @@ class LeadProviderConstraints:
                 branch_key = f"{contract.contract_id}:family:{root_number}"
                 if len(family_partitions) > 1:
                     branch_key += f":partition:{part_number}"
-                families.append(LeadWireVariant(branch_key, family_rules, family_decode,
-                    direct_delivery=members[0].direct_delivery,
-                    independent_premise=members[0].independent_premise))
+                families.append(LeadWireVariant(branch_key, family_rules, family_decode))
         return tuple(families)
 
     def prompt_facts(self) -> dict[str, object]:

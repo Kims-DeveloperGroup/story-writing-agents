@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from tests.provider_wire_fixture import selected_fixture_calls
 from story_writing_agents.errors import BackendProtocolError
 import story_writing_agents.lead_task_transitions as task
 from tests.test_lead_orchestration import _discussion_reply, _SubmittedFailure, _submitted_calls
@@ -154,7 +153,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             await self.record_book_readiness(seed_before_capture=True)
         conversation_id = self.conversation(subject)
         self.backend.enqueue(
-            *selected_fixture_calls(_artifact_outcome,
+            _artifact_outcome(
                 operations=lambda _call, material: [
                     {"evidence_id": _reference_ids(material)[0], "kind": "replace", "new_text": new_text}
                 ],

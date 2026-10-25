@@ -66,7 +66,6 @@ from story_writing_agents.conversations import (CollaborationReadableFieldKey,
 from story_writing_agents.cli import _parse_backend_overrides, build_parser, main
 from story_writing_agents.backend import backend_configuration_snapshot
 from story_writing_agents.structured_output_validation import diagnose_json_text, failure_issues
-from story_writing_agents.structured_output_validation import require_provider_schema_patterns
 from story_writing_agents.agent_context import (
     ContextComponentKind,
     ProviderCallAccounting,
@@ -4253,9 +4252,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 LEAD_ORCHESTRATOR)
             returned = None
 
-            phase_requests = []
-            case = self
-            from tests.provider_wire_fixture import result_selection
             class ObservedProvider:
                 def __getattr__(self, name):
                     return getattr(provider, name)
@@ -4263,16 +4259,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 async def invoke_context(self, request):
                     nonlocal schema, payload, response, returned
                     schema, payload = request.schema, request.payload
-                    phase_requests.append(request)
-                    if len(phase_requests) == 1:
-                        case.assertGreater(len(request.contract.semantic_index.contracts), 1)
-                        case.assertEqual(request.contract.offered_semantic_schema_ids, ())
-                        response = result_selection(request,
-                            response_type=authored['response_type'],
-                            family=1 if summary is False else 0, value=authored)
-                    else:
-                        response = lead_fixture_response(request, authored,
-                            family=1 if summary is False else 0)
+                    response = lead_fixture_response(
+                        request, authored, family=1 if summary is False else 0)
                     returned = await provider.invoke_context(request)
                     return returned
 
@@ -4281,22 +4269,13 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 agent_id=LEAD_ORCHESTRATOR, operation_id=call_id, result_correlation_id=call_id,
                 materials=materials, result_contract=factory,
                 invocation_kind=ContextInvocationKind.LEAD,
-                physical_call_limit=2)
-            outcome = await service.invoke(request, ObservedProvider(),
+                physical_call_limit=1)
+            await service.invoke(request, ObservedProvider(),
                 writing_artifacts=WritingArtifactSourceAdapter(repository, current),
                 focused_conversation=FocusedConversationSourceAdapter(
                     storage.catalog, storage.event_store, current, None),
                 active_debate=ActiveDebateSourceAdapter(self.workspace, current, None),
                 own_agent_state=OwnAgentStateSourceAdapter(self.workspace, current))
-            self.assertEqual(len(outcome.provider_calls), 2)
-            self.assertEqual(len(phase_requests), 2)
-            self.assertEqual(len(phase_requests[1].contract.offered_semantic_schema_ids), 1)
-            self.assertNotEqual(phase_requests[0].call_id, phase_requests[1].call_id)
-            for phase_request in phase_requests:
-                wires = {'search': 'search_context', 'read': 'read_context',
-                    'answer': 'submit_result', 'select_result': 'select_result'}
-                self.assertEqual(phase_request.payload['response_contract']['allowed_action_types'],
-                    [wires[kind] for kind in phase_request.contract.offered_action_kinds])
             return returned
 
         schema, payload = _exploration_native_contract()
@@ -4310,8 +4289,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
             explored = await bound_call(
                 "codex-exploration-parity-call", "lead-exploration-response-v1")
-        self.assertEqual((invocations[-1].schema, invocations[-1].payload_json),
-                         (schema, canonical_provider_json(payload)))
+        self.assertEqual((invocations[0].schema, invocations[0].payload_json), (schema, canonical_provider_json(payload)))
         self.assertEqual((explored.response_text, explored.accounting.state), (response, ProviderCallState.SUBMITTED))
 
 
@@ -4326,8 +4304,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 returned = await bound_call("native-premise-call-" + str(summary),
                     "premise-decision-summary-v1" if summary else "premise-analysis-response-v1",
                     summary)
-            self.assertEqual((native_calls[-1].schema, native_calls[-1].payload_json),
-                             (schema, canonical_provider_json(payload)))
+            self.assertEqual((native_calls[0].schema, native_calls[0].payload_json), (schema, canonical_provider_json(payload)))
             self.assertEqual((returned.response_text, returned.accounting.state), (response, ProviderCallState.SUBMITTED))
 
     async def test_conversation_request_snapshots_derived_event_content(self) -> None:
@@ -4424,7 +4401,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CONTEXT_B_USER", second_payload)
         self.assertNotIn("CONTEXT_A_USER", second_payload)
         execution_workspace = await self.direct_execution_workspace(incompatible_bound, "story_session")
-        expected = execution_workspace.continuation_digest("legacy-definition-policy", hashlib.sha256(("agent-provider-wire-v11\0" + incompatible_bound.definition.fingerprint).encode()).hexdigest()).removeprefix("sha256:")
+        expected = execution_workspace.continuation_digest("legacy-definition-policy", hashlib.sha256(("agent-provider-wire-v10\0" + incompatible_bound.definition.fingerprint).encode()).hexdigest()).removeprefix("sha256:")
         threads = self.workspace.read_json("agent_states/orchestrator_state/provider_sessions/story_session.json")["provider_threads"]
         self.assertEqual((threads[f"codex:{PLOT_ARCHITECT}:{expected}"]["fingerprint"],
                           self.thread("story_session")["fingerprint"]), (expected, expected))
@@ -6254,7 +6231,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         for invocation, control in zip(invocations, controls):
             schema = invocation["schema"]
-            self.assertIsNone(require_provider_schema_patterns(schema))
             self.assertEqual(schema["required"], ["agent_action"])
             self.assertIs(schema["additionalProperties"], False)
             branches = schema["properties"]["agent_action"]["anyOf"]
@@ -6415,12 +6391,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn(private, repr(reply.validation_details))
 
-        for invocation in self.provider_invocations():
-            self.assertIsNone(require_provider_schema_patterns(invocation["schema"]))
-
     def test_retrieval_schema_uses_supported_strict_object_subset(self) -> None:
         schema = AgentBackend._conversation_retrieval_action_schema()
-        self.assertIsNone(require_provider_schema_patterns(schema))
         self.assertEqual(schema.get("type"), "object")
         self.assertNotIn("anyOf", schema)
         self.assertEqual(set(schema["properties"]), {"agent_action"})

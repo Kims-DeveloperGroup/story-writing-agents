@@ -1,7 +1,7 @@
 """Live lead-review workflows for exact artifact proposals."""
 
 from __future__ import annotations
-from tests.provider_wire_fixture import lead_fixture_bound_scope, lead_fixture_response, selected_fixture_calls, modeled_fixture_response
+from tests.provider_wire_fixture import lead_fixture_bound_scope, lead_fixture_response
 
 import json
 import unittest
@@ -113,18 +113,17 @@ def _artifact_outcome(
     authoring_scope=None,
     read_queries: tuple[tuple[str, str], ...] = (),
     read_prefix: str | None = None,
-    select=False,
 ):
     read_phase = 0
     selected_handles = ()
-    def respond(call, _provider, *, select=select):
+    def respond(call, _provider):
         nonlocal read_phase, selected_handles
         from tests.provider_wire_fixture import finite_fixture_read_selection, indexed_response
         from tests.provider_wire_fixture import offered_fixture_bindings
         if read_queries and read_phase < 2:
             if read_prefix is None:
                 raise ValueError('The caller must supply the intended artifact search prefix')
-            _provider.responses.insert(0, lambda call, provider: respond(call, provider, select=select))
+            _provider.responses.insert(0, respond)
             if read_phase == 0:
                 read_phase = 1
                 outer, inner = offered_fixture_bindings(call, action_type='search_context',
@@ -215,7 +214,7 @@ def _artifact_outcome(
                     native['authoring_assessment'], source_choices=choices['input_ids'])
             if 'writing_task_scope' in native:
                 native['task_scope'] = lead_fixture_bound_scope(call, native.pop('writing_task_scope'))
-            return lead_fixture_response(call, lead_fixture_result(native), family=0, select=select)
+            return lead_fixture_response(call, lead_fixture_result(native), family=0)
         return _provider_envelope(
             call,
             {
@@ -278,7 +277,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         from tests.recommendation_fixture import task_assessment
         self.workspace.path(_RULES).unlink(missing_ok=True)
         self.backend.enqueue(
-            *selected_fixture_calls(_artifact_outcome,
+            _artifact_outcome(
                 operations=[ { "kind" : "create" , "new_text" : "Use restrained close-third narration.\n" , "suggested_path" : _RULES , } ],
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
@@ -315,7 +314,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.workspace.path(_RULES).unlink(missing_ok=True)
         before = self.artifact_snapshot()
         self.backend.enqueue(
-            *selected_fixture_calls(_artifact_outcome,
+            _artifact_outcome(
                 operations=[ { "kind" : "create" , "new_text" : "Use restrained close-third narration.\n" , "suggested_path" : _RULES , } ],
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
@@ -343,7 +342,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertEqual(
             tuple(item.specialist_id for item in proposed.proposal.assignments),
             (EXECUTION_SPECIALIST,), )
-        self.assertEqual(len(self.backend.call_records) - before_calls, 2)
+        self.assertEqual(len(self.backend.call_records) - before_calls, 1)
         self.assertEqual(self.backend.call_records[before_calls][0], LEAD_ORCHESTRATOR)
         self.assertEqual(self.artifact_snapshot(), before)
 
@@ -427,7 +426,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         conflict_id = self.conversation("Conflicting core edit")
         before = self.artifact_snapshot()
         self.backend.enqueue(
-            *selected_fixture_calls(_artifact_outcome, reuse_response=True,
+            _artifact_outcome(
                 operations=lambda _call,
                 material: [{"evidence_id": material['qualified_read_ids'][_RULES],
                     "kind": "replace", "new_text": "Use present tense in dream passages.\n",
@@ -450,7 +449,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
              + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
         physical = self.backend.calls[physical_before:]
-        self.assertEqual(len(physical), 4)
+        self.assertEqual(len(physical), 3)
         reads = physical[-1].payload['context_observation']['read_results']
         expected_links = ((_RULES, 'replace'),)
         self.assertEqual(tuple((path, kind) for path, kind, _identity
@@ -487,7 +486,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         rename_id = self.conversation("Atomic manuscript rename repair")
         rename_before = self.artifact_snapshot()
         self.backend.enqueue(
-            *selected_fixture_calls(_artifact_outcome, reuse_response=True,
+            _artifact_outcome(
                 operations=lambda _call, material: [
                     {"evidence_id": material['qualified_read_ids'][_INDEX],
                      "kind": "replace", "new_text": "[next](third.md)\n"},
@@ -509,7 +508,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
              + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
         physical = self.backend.calls[physical_before:]
-        self.assertEqual(len(physical), 4)
+        self.assertEqual(len(physical), 3)
         reads = physical[-1].payload['context_observation']['read_results']
         expected_links = ((_INDEX, 'replace'), (_SECOND, 'rename'))
         self.assertEqual(tuple((path, kind) for path, kind, _identity
@@ -596,7 +595,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         stale_id = self.conversation("Stale candidate")
         self.workspace.path(_RULES).unlink(missing_ok=True)
         self.backend.enqueue(
-            *selected_fixture_calls(_artifact_outcome,
+            _artifact_outcome(
                 operations=[ { "kind" : "create" , "new_text" : "A narrative rule.\n" , "suggested_path" : _RULES , } ],
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
@@ -627,7 +626,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.workspace.path(_RULES).unlink()
         revise_id = self.conversation("Revise candidate")
         self.backend.enqueue(
-            *selected_fixture_calls(_artifact_outcome,
+            _artifact_outcome(
                 operations=[ { "kind" : "create" , "new_text" : "First candidate.\n" , "suggested_path" : _RULES , } ],
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
@@ -649,7 +648,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         first_digest = first.artifact_proposal.candidate.candidate.candidate_digest
         before_revision_calls = len(self.backend.call_records)
 
-        def fresh_recommendation(call, _provider, *, select=False):
+        def fresh_recommendation(call, _provider):
             def encode_current(call, value):
                 from tests.provider_wire_fixture import (
                     result as native_result, lead_fixture_result, lead_fixture_scope_record,
@@ -673,8 +672,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                         choices['preparation_targets'], tuple(drafting['target_artifact_paths']))
                 native['authoring_assessment'] = lead_fixture_assessment(
                     native['authoring_assessment'], source_choices=choices['input_ids'])
-                frame = lead_fixture_response(call, lead_fixture_result(native), family=0, select=select)
-                return frame if select else self._require_revision_fixture(call, frame,
+                return self._require_revision_fixture(call, lead_fixture_response(call, lead_fixture_result(native), family=0),
                     first.proposal.authoring_scope, artifact=True)
             return encode_current(
                 call,
@@ -702,8 +700,8 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             )
 
         self.backend.enqueue_for(
-            LEAD_ORCHESTRATOR, lambda call, provider: fresh_recommendation(call, provider, select=True),
-            fresh_recommendation)
+            LEAD_ORCHESTRATOR,
+            fresh_recommendation, )
         revised = await self.runtime.decide_lead_step(
             _decision(first, CollaborationConfirmationDecision.REVISE, revision_request=(
                 'Revise proposed review.\nSupplied narrative-rule candidate:\n'
@@ -727,16 +725,16 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                           and type(e.payload) is ArtifactReviewCandidatePayload]
         self.assertEqual(old_candidates, [first.artifact_proposal.candidate])
         self.assertEqual(old_candidates[0].candidate.candidate_digest, first_digest)
-        self.assertEqual(len(self.backend.call_records), before_revision_calls + 2)
+        self.assertEqual(len(self.backend.call_records), before_revision_calls + 1)
         self.assertEqual(
             tuple(
                 agent_id
                 for agent_id, _call in self.backend.call_records[before_revision_calls:]
             ),
-            (LEAD_ORCHESTRATOR, LEAD_ORCHESTRATOR), )
+            (LEAD_ORCHESTRATOR,), )
 
         self.backend.enqueue(
-            *selected_fixture_calls(_artifact_outcome,
+            _artifact_outcome(
                 operations=[ { "kind" : "create" , "new_text" : "Second candidate.\n" , "suggested_path" : _RULES , } ],
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
@@ -769,7 +767,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("Replace artifact candidate")
         self.workspace.path(_RULES).unlink(missing_ok=True)
         self.backend.enqueue(
-            *selected_fixture_calls(_artifact_outcome,
+            _artifact_outcome(
                 operations=[ { "kind" : "create" , "new_text" : "First candidate.\n" , "suggested_path" : _RULES , } ],
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
@@ -799,17 +797,14 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 paths=(_RULES,), contributions=[
                     {'domain': domain, 'role': 'constraint_assessor'}
                     for domain in ('tone_execution',)]),)
-        def checked_revision(call, provider, *, select=False):
-            if select:
-                return revision_fixture(call, provider, select=True)
+        def checked_revision(call, provider):
             for response_type in ('answer', 'clarification_question'):
                 discussion = {'response_type': response_type, 'response_text': 'Clarify the existing artifact revision.',
                               'response_details': {'used_evidence_ids': {}}}
-                self._require_revision_fixture(call, modeled_fixture_response(call.contract.lineage.origin, discussion, family=0),
+                self._require_revision_fixture(call, lead_fixture_response(call, discussion, family=0),
                                                first.proposal.authoring_scope, artifact=True)
             return self._require_revision_fixture(call, revision_fixture(call, provider), first.proposal.authoring_scope, artifact=True)
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR,
-            lambda call, provider: checked_revision(call, provider, select=True), checked_revision)
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, checked_revision)
         replacement = await self.runtime.decide_lead_step(
             _decision(first, CollaborationConfirmationDecision.REVISE) )
         second = replacement.turn
@@ -889,7 +884,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         await self.record_book_readiness(preserve_documents=True)
         failed_id = self.conversation("Partial reviewer failure")
         self.backend.enqueue(
-            *selected_fixture_calls(_artifact_outcome,
+            _artifact_outcome(
                 operations=[ { "kind" : "create" , "new_text" : "New scene.\n" , "suggested_path" : "manuscript/part-02/new.md" , } ],
                 evidence_status="incomplete",
                 evidence_ids=lambda call, _material: [_status_id(call, _OUTLINE)],
@@ -961,7 +956,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             mismatch_id = self.conversation(f"Synthesis mismatch {ordinal}")
             self.workspace.path(_RULES).unlink(missing_ok=True)
             self.backend.enqueue(
-                *selected_fixture_calls(_artifact_outcome,
+                _artifact_outcome(
                     operations=[ { "kind" : "create" , "new_text" : "Rule candidate.\n" , "suggested_path" : _RULES , } ],
                     evidence_status="missing",
                     evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
@@ -1132,7 +1127,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             conversation_id,
             "Give one workflow answer.", )
 
-        def answer_with_artifact(call, provider, *, select=False):
+        def answer_with_artifact(call, provider):
             observation = call.payload["context_observation"]
             evidence_id = observation["read_results"][0]["evidence_id"]
             return _artifact_outcome(
@@ -1147,7 +1142,6 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',),
                     actions=('bounded artifact review judgments',
                              'separate proposal preparation'))),
-                select=select,
             )(call, provider)
 
         def search_prior_answer(call, _provider):
@@ -1157,7 +1151,6 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.backend.enqueue(
             search_prior_answer,
             _read_history_hit,
-            lambda call, provider: answer_with_artifact(call, provider, select=True),
             answer_with_artifact, )
         result = await self.runtime.lead_turn(
             self.session_id,
@@ -1169,20 +1162,19 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertIs(
             result.artifact_proposal.state,
             ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION, )
-        call_kinds = tuple(call.call_kind for call in self.backend.calls[-4:])
+        call_kinds = tuple(call.call_kind for call in self.backend.calls[-3:])
         self.assertEqual(
             call_kinds,
             (
                 ProviderCallKind.COLLABORATION_INITIAL,
                 ProviderCallKind.COLLABORATION_CONTINUATION,
                 ProviderCallKind.COLLABORATION_CONTINUATION,
-                ProviderCallKind.COLLABORATION_CONTINUATION,
             ), )
-        self.assertNotIn("context_observation", self.backend.calls[-4].payload)
-        self.assertEqual(self.backend.calls[-3].payload["context_observation"]["observation_type"], "context_search_results")
+        self.assertNotIn("context_observation", self.backend.calls[-3].payload)
+        self.assertEqual(self.backend.calls[-2].payload["context_observation"]["observation_type"], "context_search_results")
         self.assertEqual(self.backend.calls[-1].payload["context_observation"]["observation_type"], "context_read_results")
         from tests.provider_wire_fixture import fixture_schema_node
-        bound_call = self.backend.calls[-1]
+        bound_call = self.backend.calls[-3]
         native_schema = bound_call.schema
         inner_by_outer = dict(bound_call.contract.outer_inner_schema_ids)
         issued_answers = {
@@ -1246,7 +1238,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                     paths=(_RULES,), contributions=[
                         {'domain': domain, 'role': 'constraint_assessor'}
                         for domain in ('tone_execution',)]),)
-        self.backend.enqueue(lambda call, provider: invalid(call, provider, select=True), invalid)
+        self.backend.enqueue(invalid)
         self.backend.enqueue(invalid)
         result = await self.runtime.lead_turn(
             self.session_id,

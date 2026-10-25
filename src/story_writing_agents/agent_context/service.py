@@ -75,7 +75,6 @@ from .actions import (
     ContextEvidenceReceipt,
     ContextReadAction,
     ContextReadObservation,
-    ContextResultSelectionAction,
     ContextSearchAction,
     ContextSearchHit,
     ContextSearchObservation,
@@ -143,7 +142,7 @@ from ..lead_provider_contracts import (LeadStagePolicy, LeadContractIndex, LeadR
     LeadDecodedResult, LeadContractRejection, factor_rule_schema)
 from .actions import normalized_search_text, SEARCH_NORMALIZATION_REVISION
 from ..provider_wire import (
-    require_schema_projection, ACTION_TYPES,
+    require_schema_projection,
     BUILTIN_RESULT_CONTRACT_IDS, WIRE_VERSION, WireShapeError, add_contract_guidance, diagnostic_to_wire, project_lead_scope_diagnostic, normalize_context_action,
     normalize_result, project_action_schema, project_context_payload,
     hoist_schema_definitions, rebase_schema_definitions,
@@ -198,7 +197,6 @@ _ACTION_WIRE_CODES = {
     "search": "s",
     "read": "r",
     "answer": "a",
-    "select_result": "f",
 }
 _SOURCE_KIND_WIRE_CODES = {
     ContextSourceKind.WRITING_ARTIFACT: "w",
@@ -321,20 +319,12 @@ class ContextCallOffers:
     completed_read_facts: tuple[ContextCallReadFact, ...]
     delivery_read_facts: tuple[ContextCallReadFact, ...]
     core_status_facts: tuple[ContextSourceStatusReceipt, ...]
-    remaining_physical_calls: int
-    correlation: ContextActionCorrelation
     reference_read_digest: str | None = field(default=None, init=False)
     offer_digest: str = field(init=False)
 
     def __post_init__(self) -> None:
         _safe_identity(self.call_id)
-        if (type(self.scope) is not ContextScope or type(self.action_index) is not int
-                or type(self.correlation) is not ContextActionCorrelation
-                or self.correlation.scope != self.scope
-                or self.correlation.action_index != self.action_index):
-            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-        if (type(self.scope) is not ContextScope or type(self.action_index) is not int or self.action_index < 1 or type(self.remaining_physical_calls) is not int
-                or not 1 <= self.remaining_physical_calls <= CONTEXT_ACTION_POLICY.max_provider_calls
+        if (type(self.scope) is not ContextScope or type(self.action_index) is not int or self.action_index < 1
                 or type(self.allowed_actions) is not tuple or not self.allowed_actions
                 or len(set(self.allowed_actions)) != len(self.allowed_actions)
                 or any(item not in {"search", "read", "answer"} for item in self.allowed_actions)
@@ -360,8 +350,6 @@ class ContextCallOffers:
             _safe_digest(self.reference_read_digest)
         value = {"call_id": self.call_id, "scope": repr(self.scope), "action_index": self.action_index,
             "actions": self.allowed_actions, "limits": self.action_limits,
-            "remaining_physical_calls": self.remaining_physical_calls,
-            "invocation": [self.correlation.operation_id, self.correlation.result_correlation_id],
             "search_kinds": [kind.value for kind in self.search_source_kinds],
             "handles": self.issued_handle_aliases,
             "completed": [item.snapshot_value() for item in self.completed_read_facts],
@@ -420,9 +408,9 @@ class ContextActionContractOwner(ContractOwner[ContextActionValue]):
                     or self.rules.literal_at(("task_result", "schema_id")) != self.semantic_member.schema_id
                     or self.rules.node_fingerprint(("task_result",)) != self.semantic_member.rule_graph.node_fingerprint()):
                 raise ValueError("ANSWER requires its exact authoritative semantic member")
-        elif action_type in {"search_context", "read_context", "select_result"}:
+        elif action_type in {"search_context", "read_context"}:
             if self.semantic_member is not None:
-                raise ValueError("nonterminal actions cannot bind a semantic result member")
+                raise ValueError("SEARCH/READ cannot bind a semantic result member")
         else:
             raise ValueError("unknown current action family")
         checks = ()
@@ -560,17 +548,12 @@ class BoundCallFactory(ABC):
 class BoundCallLineage:
     origin: BoundCallContract = field(repr=False, compare=False)
     kind: str
-    selected_schema_id: str | None
-    def __init__(self, origin: BoundCallContract, kind: str, *, selected_schema_id=None, seal=None):
-        if seal is not _CALL_PROOF_SEAL or type(origin) is not BoundCallContract or kind not in {"repair", "replay", "selection"}:
+
+    def __init__(self, origin: BoundCallContract, kind: str, *, seal=None):
+        if seal is not _CALL_PROOF_SEAL or type(origin) is not BoundCallContract or kind not in {"repair", "replay"}:
             raise TypeError("lineage is issued only by the frozen current call")
         object.__setattr__(self, "origin", origin)
-        if ((kind == "selection" and (type(selected_schema_id) is not str
-                or selected_schema_id not in origin.selectable_semantic_schema_ids))
-                or (kind != "selection" and selected_schema_id is not None)):
-            raise TypeError("selection lineage requires an issued current member")
         object.__setattr__(self, "kind", kind)
-        object.__setattr__(self, "selected_schema_id", selected_schema_id)
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -604,9 +587,6 @@ class BoundCallContract:
     action_index: LeadContractIndex[ContextActionValue] = field(init=False, repr=False, compare=False)
     rule_graph: SchemaRules = field(init=False, repr=False)
     outer_inner_schema_ids: tuple[tuple[str, str | None], ...] = field(init=False)
-    offered_semantic_schema_ids: tuple[str, ...] = field(init=False)
-    selectable_semantic_schema_ids: tuple[str, ...] = field(init=False)
-    _delivery_anchor: tuple[tuple[str, ...], tuple[str, ...], str] = field(init=False, repr=False)
     logical_origin_call_id: str = field(init=False)
     phase: str = field(init=False)
     _semantic_anchor: LeadContractIndex[LeadDecodedResult] = field(init=False, repr=False, compare=False)
@@ -638,47 +618,29 @@ class BoundCallContract:
                 raise ValueError("logical owner declaration differs from actual physical offer")
             semantic = LeadContractIndex.bind(policy)
             eligible, phase = self.offers, "ordinary"
-            offered, selectable = _result_delivery(semantic, self.offers)
-            outer = _bound_action_index(eligible, semantic, self.offers, offered, selectable)
+            outer = _bound_action_index(eligible, semantic, self.offers)
         else:
             if type(self.lineage) is not BoundCallLineage or self.lineage.origin.factory is not self.factory:
                 raise ValueError("cross-owner logical/corrective lineage")
             origin = self.lineage.origin
             origin.require_current_offer(origin.offers)
-            if (self.offers.scope != origin.offers.scope or self.offers.call_id == origin.offers.call_id
-                    or self.offers.correlation.operation_id != origin.offers.correlation.operation_id
-                    or self.offers.correlation.result_correlation_id != origin.offers.correlation.result_correlation_id):
+            if self.offers.scope != origin.offers.scope or self.offers.call_id == origin.offers.call_id:
                 raise ValueError("retained lineage requires same scope and a new physical call")
             eligible = origin.eligibility_offers
             if self.lineage.kind == "repair":
                 semantic, outer, phase = origin.semantic_index, origin.action_index, "repair"
-                offered, selectable = _result_delivery(semantic, self.offers, retained=(
-                    origin.offered_semantic_schema_ids, origin.selectable_semantic_schema_ids))
             else:
                 policy = replace(origin.semantic_index.policy, physical_call_id=self.offers.call_id,
                                  offer_digest=self.offers.offer_digest)
                 semantic = LeadContractIndex.bind(policy)
-                if self.lineage.kind == "selection":
-                    _require_selection_successor(origin, self.offers)
-                    offered = _rebound_result_ids(origin, semantic, (self.lineage.selected_schema_id,))
-                    selectable = ()
-                else:
-                    offered = _rebound_result_ids(origin, semantic, origin.offered_semantic_schema_ids)
-                    selectable = _rebound_result_ids(origin, semantic, origin.selectable_semantic_schema_ids)
-                offered, selectable = _result_delivery(semantic, self.offers,
-                    retained=(offered, selectable))
-                outer = _bound_action_index(eligible, semantic, self.offers, offered, selectable)
-                corrective = origin.phase in {"repair", "replay_repair"}
-                phase = (("repair" if corrective else "ordinary") if self.lineage.kind == "selection"
-                         else "replay_repair" if corrective else "replay")
-        _require_delivery_capacity(offered, selectable, self.offers)
+                outer = _bound_action_index(eligible, semantic, self.offers)
+                phase = "replay_repair" if origin.phase in {"repair", "replay_repair"} else "replay"
         pairs = tuple((member.schema_id, owner.semantic_member.schema_id
                        if owner.semantic_member is not None else None)
                       for member, owner in zip(outer.contracts, outer.owners, strict=True))
-        physical_rules = _physical_action_rules(outer, phase)
         graph = SchemaRules.declare(
             hoist_schema_definitions(closed_rule(
-                {"agent_action": physical_rules.schema_value()},
+                {"agent_action": outer.rule_graph.schema_value()},
                 description=_CONTEXT_ACTION_ROOT_DESCRIPTION,
             )),
             maximum_bytes=MAX_PROVIDER_SCHEMA_UTF8_BYTES,
@@ -688,16 +650,13 @@ class BoundCallContract:
         object.__setattr__(self, "action_index", outer)
         object.__setattr__(self, "rule_graph", graph)
         object.__setattr__(self, "outer_inner_schema_ids", pairs)
-        object.__setattr__(self, "offered_semantic_schema_ids", offered)
-        object.__setattr__(self, "selectable_semantic_schema_ids", selectable)
-        object.__setattr__(self, "_delivery_anchor", (offered, selectable, phase))
         object.__setattr__(self, "logical_origin_call_id", semantic.policy.logical_origin_call_id)
         object.__setattr__(self, "phase", phase)
         object.__setattr__(self, "_semantic_anchor", semantic)
         object.__setattr__(self, "_action_anchor", outer)
         semantic.require_provenance()
         outer.require_provenance()
-        if graph.node_fingerprint(("agent_action",)) != physical_rules.node_fingerprint():
+        if graph.node_fingerprint(("agent_action",)) != outer.rule_graph.node_fingerprint():
             raise ValueError("actual call/graph/frozen owner provenance changed")
         self.require_current_offer(self.offers)
 
@@ -706,30 +665,14 @@ class BoundCallContract:
              lineage: BoundCallLineage | None = None) -> BoundCallContract:
         return cls(factory, offers, lineage)
 
-    @property
-    def offered_action_kinds(self) -> tuple[str, ...]:
-        """Actual physical action choices, from the same sealed owner graph."""
-        self.require_current_offer(self.offers)
-        names = {wire: logical for logical, wire in ACTION_TYPES.items()}
-        return tuple(dict.fromkeys(names[member.owner.rules.literal_at(("action_type",))]
-                                   for member in _physical_action_members(self.action_index, self.phase)))
-
     def require_current_offer(self, offers: ContextCallOffers) -> None:
         if (type(offers) is not ContextCallOffers or offers != self.offers
                 or offers.offer_digest != self.offers.offer_digest
                 or self.semantic_index is not self._semantic_anchor
                 or self.action_index is not self._action_anchor
-                or type(self.rule_graph) is not SchemaRules
-                or self._delivery_anchor != (self.offered_semantic_schema_ids, self.selectable_semantic_schema_ids, self.phase)):
+                or type(self.rule_graph) is not SchemaRules):
             raise ValueError("actual call/graph/frozen owner provenance changed")
         semantic_index = self.semantic_index
-        semantic_index.policy.require_funding_current()
-        self.action_index.policy.require_funding_current()
-        if self.action_index.policy.funding is not semantic_index.policy.funding:
-            raise ValueError("outer action changed its exact semantic funding")
-        if semantic_index.policy.funding is not None:
-            _result_delivery(semantic_index, self.offers, retained=(
-                self.offered_semantic_schema_ids, self.selectable_semantic_schema_ids))
         semantic_contracts = semantic_index.contracts
         if (type(semantic_contracts) is not tuple
                 or tuple(member.schema_id for member in semantic_contracts)
@@ -738,7 +681,7 @@ class BoundCallContract:
         if (self.semantic_index.policy.eligibility_offer_digest != self.eligibility_offers.offer_digest
                 or self.semantic_index.policy.logical_origin_call_id != self.logical_origin_call_id):
             raise ValueError("frozen logical eligibility snapshot changed")
-        if self.lineage is None or self.lineage.kind in {"replay", "selection"}:
+        if self.lineage is None or self.lineage.kind == "replay":
             if (self.semantic_index.policy.physical_call_id != self.offers.call_id
                     or self.semantic_index.policy.offer_digest != self.offers.offer_digest
                     or self.action_index.policy.physical_call_id != self.offers.call_id
@@ -757,7 +700,6 @@ class BoundCallContract:
                 if (type(member) is not BoundContract or member.owner is not owner
                         or member.identity != index.policy.identity_for(owner.owner_id)):
                     raise ValueError("current contract owner binding changed")
-                owner.declare_rules()
         pairs: list[tuple[str, str | None]] = []
         for member, owner in zip(self.action_index.contracts, self.action_index.owners, strict=True):
             if type(owner) is not ContextActionContractOwner or owner.eligibility_offers is not self.eligibility_offers:
@@ -771,13 +713,8 @@ class BoundCallContract:
                 pairs.append((member.schema_id, None))
         if (tuple(pairs) != self.outer_inner_schema_ids
                 or tuple(inner for _, inner in pairs if inner is not None)
-                != self.offered_semantic_schema_ids):
+                != self.semantic_index.expected_schema_ids):
             raise ValueError("incomplete/duplicate/current outer-inner relationship")
-        if (len(set(self.offered_semantic_schema_ids + self.selectable_semantic_schema_ids))
-                != len(self.offered_semantic_schema_ids + self.selectable_semantic_schema_ids)
-                or any(name not in semantic_index.expected_schema_ids
-                       for name in self.offered_semantic_schema_ids + self.selectable_semantic_schema_ids)):
-            raise ValueError("physical delivery lost its complete full-index membership")
 
     def schema_value(self) -> dict[str, object]:
         self.require_current_offer(self.offers)
@@ -842,14 +779,6 @@ class BoundCallContract:
             action_value = member.validate_value(action)
         except ContractRejection as failure:
             raise remap_validation(failure, {"$": action_root}) from None
-        if not any(current is member for current in _physical_action_members(self.action_index, self.phase)):
-            # Classify only an otherwise valid frozen action as exhausted.
-            try:
-                member.decode_validated(action_value)
-            except ContractRejection as failure:
-                raise remap_validation(failure, {"$": action_root}) from None
-            raise LeadContractRejection(_CORRECTIVE_ACTION_EXHAUSTED, member.schema_id,
-                (action_root + ".action_type: corrective call permits only submit_result or select_result",))
         inner, result_value = None, None
         if expected_inner is not None:
             inner = self.semantic_index.select(expected_inner)
@@ -959,26 +888,6 @@ class BoundCallContract:
             raise ValueError("one corrective request cannot grant another corrective request")
         return BoundCallLineage(self, "repair", seal=_CALL_PROOF_SEAL)
 
-    def selection_lineage(self, decoded: BoundCallDecodedAction) -> BoundCallLineage:
-        self.require_current_offer(self.offers)
-        if type(decoded) is not BoundCallDecodedAction or not decoded.belongs_to(self):
-            raise ValueError("result selection requires this exact validated action")
-        action = decoded.domain_value()["action"]
-        if (action.get("kind") != "select_result" or decoded.selected_result is not None
-                or action.get("selected_schema_id") not in self.selectable_semantic_schema_ids):
-            raise ValueError("result selection is not a current issued choice")
-        self.semantic_index.select(action["selected_schema_id"])
-        return BoundCallLineage(self, "selection", selected_schema_id=action["selected_schema_id"],
-                                seal=_CALL_PROOF_SEAL)
-
-    def _retrieval_lineage(self) -> BoundCallLineage | None:
-        self.require_current_offer(self.offers)
-        # Retrieval clears a normal selected member. It cannot expand a frozen
-        # corrective graph or grant another corrective request.
-        if self.phase in {"repair", "replay_repair"}:
-            return BoundCallLineage(self, "repair", seal=_CALL_PROOF_SEAL)
-        return None
-
     def replay_lineage(self) -> BoundCallLineage:
         return BoundCallLineage(self, "replay", seal=_CALL_PROOF_SEAL)
 
@@ -986,7 +895,7 @@ class BoundCallContract:
         self.require_current_offer(self.offers)
         if type(failure) is not LeadContractRejection:
             raise TypeError("corrective input requires trusted bound rejection")
-        semantic_id = failure.schema_id if failure.schema_id in self.offered_semantic_schema_ids else None
+        semantic_id = failure.schema_id if failure.schema_id in self.semantic_index.expected_schema_ids else None
         if semantic_id is not None:
             outer_id = next(outer for outer, inner in self.outer_inner_schema_ids if inner == semantic_id)
             outer_failure = LeadContractRejection(failure.code, outer_id, tuple(
@@ -1005,36 +914,6 @@ class BoundCallContract:
         payload["logical_origin_call_id"] = self.logical_origin_call_id
         payload["phase"] = self.phase
         return json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-
-
-_CORRECTIVE_ACTION_EXHAUSTED = "LEAD_CORRECTIVE_ACTION_EXHAUSTED"
-
-
-def _physical_action_members(index: LeadContractIndex[ContextActionValue],
-                             phase: str) -> tuple[BoundContract[ContextActionValue], ...]:
-    if phase not in {"repair", "replay_repair"}:
-        return index.contracts
-    return tuple(member for member, owner in zip(index.contracts, index.owners, strict=True)
-                 if owner.rules.literal_at(("action_type",)) in {"submit_result", "select_result"})
-
-
-def _physical_action_rules(index: LeadContractIndex[ContextActionValue], phase: str) -> SchemaRules:
-    members = _physical_action_members(index, phase)
-    if len(members) == len(index.contracts):
-        return index.rule_graph
-    if not members:
-        raise ValueError("corrective call has no frozen submit or selection member")
-    if len(members) == 1:
-        return members[0].rule_graph
-    schema = index.rule_graph.schema_value()
-    branches = schema.get("anyOf")
-    if type(branches) is not list or len(branches) != len(index.contracts):
-        raise ValueError("frozen complete action branch order is unavailable")
-    # Index construction and factoring retain this complete-member order. Keep
-    # original branch references and all definitions; never rebind issued IDs.
-    schema["anyOf"] = [branch for branch, member in zip(branches, index.contracts, strict=True)
-                       if any(current is member for current in members)]
-    return SchemaRules.declare(schema, maximum_bytes=index.policy.maximum_index_schema_bytes)
 
 
 def _bound_call_failure(failure: BaseException) -> tuple[BoundCallContract, LeadContractRejection]:
@@ -1061,147 +940,54 @@ def _bound_call_failure(failure: BaseException) -> tuple[BoundCallContract, Lead
     return contract, rejection
 
 
-def _result_delivery(semantic: LeadContractIndex[LeadDecodedResult], actual: ContextCallOffers,
-                     *, retained: tuple[tuple[str, ...], tuple[str, ...]] | None = None,
-                     ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    ids = semantic.expected_schema_ids
-    if retained is not None:
-        offered, selectable = retained
-    elif len(ids) == 1:
-        offered, selectable = ids, ()
-    else:
-        offered = tuple(member.schema_id for member, owner in zip(semantic.contracts, semantic.owners, strict=True)
-                        if type(owner) is LeadResultContractOwner and owner.variant.direct_delivery)
-        selectable = tuple(name for name in ids if name not in offered)
-    funding = semantic.policy.funding
-    if funding is not None:
-        semantic.policy.require_funding_current()
-        funding.require_request(actual.scope.session_id, actual.scope.subject_id,
-            actual.correlation.operation_id, actual.correlation.result_correlation_id)
-        def available(name: str) -> int:
-            owner = semantic.select(name).owner
-            if type(owner) is not LeadResultContractOwner:
-                raise ValueError("funding requires its complete declared result owner")
-            return funding.remaining_for(owner.variant.independent_premise,
-                                         actual.remaining_physical_calls)
-        funded_offered = tuple(name for name in offered if available(name) >= 1)
-        funded_selectable = tuple(name for name in selectable if available(name) >= 2
-            and dict(actual.action_limits)["nonterminal_actions"] >= 1)
-        if retained is not None and (funded_offered, funded_selectable) != retained:
-            # A retained repair/replay graph is never rewritten to spend another route.
-            raise _execution_error(ContextExecutionErrorCode.ACTION_EXHAUSTED,
-                                   detail=_ContextExecutionErrorDetail.RESULT_SELECTION_UNAVAILABLE)
-        offered, selectable = funded_offered, funded_selectable
-    elif retained is None:
-        if actual.remaining_physical_calls < 2 or dict(actual.action_limits)["nonterminal_actions"] < 1:
-            selectable = ()
-    _require_delivery_capacity(offered, selectable, actual)
-    return offered, selectable
-
-
-def _require_delivery_capacity(offered: tuple[str, ...], selectable: tuple[str, ...],
-                               actual: ContextCallOffers) -> None:
-    if ((not offered and not selectable) or (selectable and (
-            actual.remaining_physical_calls < 2
-            or dict(actual.action_limits)["nonterminal_actions"] < 1))):
-        raise _execution_error(ContextExecutionErrorCode.ACTION_EXHAUSTED,
-                               detail=_ContextExecutionErrorDetail.RESULT_SELECTION_UNAVAILABLE)
-
-
-def _rebound_result_ids(origin: BoundCallContract, current: LeadContractIndex[LeadDecodedResult],
-                        ids: tuple[str, ...]) -> tuple[str, ...]:
-    if current.owners is not origin.semantic_index.owners:
-        raise ValueError("selected full semantic owner index changed")
-    return tuple(current.contracts[origin.semantic_index.expected_schema_ids.index(name)].schema_id for name in ids)
-
-
-def _require_selection_successor(origin: BoundCallContract, actual: ContextCallOffers) -> None:
-    before = origin.offers
-    # Replay can charge more than one submission, but accepts exactly one action.
-    if (actual.scope != before.scope or actual.call_id == before.call_id
-            or actual.correlation.operation_id != before.correlation.operation_id
-            or actual.correlation.result_correlation_id != before.correlation.result_correlation_id
-            or actual.action_index != before.action_index + 1
-            or actual.remaining_physical_calls >= before.remaining_physical_calls
-            or dict(actual.action_limits)["nonterminal_actions"]
-               != dict(before.action_limits)["nonterminal_actions"] - 1
-            or actual.action_limits[1:] != before.action_limits[1:]
-            or actual.search_source_kinds != before.search_source_kinds
-            or actual.issued_handle_aliases != before.issued_handle_aliases
-            or actual.completed_read_facts + actual.delivery_read_facts
-               != before.completed_read_facts + before.delivery_read_facts
-            or actual.core_status_facts != before.core_status_facts
-            or actual.reference_read_digest != before.reference_read_digest):
-        raise ValueError("selection no longer belongs to the same current invocation facts")
-
-
 def _bound_action_index(
     eligible: ContextCallOffers,
     semantic: LeadContractIndex[LeadDecodedResult],
     actual: ContextCallOffers,
-    offered: tuple[str, ...],
-    selectable: tuple[str, ...],
 ) -> LeadContractIndex[ContextActionValue]:
-    # Only trusted complete ordinary owner declarations prove one-call terminal
-    # delivery after retrieval; a current physical singleton does not prove that.
-    direct_successor = any(type(owner) is LeadResultContractOwner and owner.variant.direct_delivery
-                           for owner in semantic.owners)
-    reserve = 1 if direct_successor else 2
-    retrieval = (actual.remaining_physical_calls > reserve
-                 and dict(actual.action_limits)["nonterminal_actions"] > 0)
-    # The mixed front has ordinary1 or premise SELECT+result2, never a retrieval grant.
-    if semantic.policy.funding is not None:
-        retrieval = False
-    allowed = tuple(kind for kind in eligible.allowed_actions if kind == "answer" or
-                    (retrieval and kind in actual.allowed_actions))
     templates = []
-    members = tuple(semantic.select(name) for name in offered) or semantic.contracts[:1]
-    for member in members:
+    for member in semantic.contracts:
         native = _context_action_schema(
-            allowed_actions=allowed, result_contract=member.rule_graph,
+            allowed_actions=eligible.allowed_actions,
+            result_contract=member.rule_graph,
             allowed_search_source_kinds=eligible.search_source_kinds,
-            action_limits=[value for _, value in actual.action_limits],
+            action_limits=[value for _, value in eligible.action_limits],
             issued_handle_aliases=eligible.issued_handle_aliases,
             preserve_action_definitions=True,
         )
         action_rule = native["properties"]["agent_action"]
-        templates.append((member, action_rule.get("anyOf", [action_rule])))
+        roots = action_rule.get("anyOf", [action_rule])
+        templates.append((member, roots))
     owners = []
     for number, branch in enumerate(templates[0][1]):
         terminal = branch["properties"]["action_type"]["enum"] == ["submit_result"]
-        candidates = templates if terminal and offered else () if terminal else templates[:1]
-        for captured_member, roots in candidates:
+        for captured_member, roots in templates if terminal else templates[:1]:
             member = captured_member if terminal else None
-            current = rebase_schema_definitions(hoist_schema_definitions(roots[number]), "a")
-            rules = SchemaRules.declare(factor_rule_schema(hoist_schema_definitions(current)), maximum_bytes=262144)
-            name = "lead.action." + str(number) + ("." + member.schema_id if member is not None else "")
+            current = hoist_schema_definitions(roots[number])
+            current = rebase_schema_definitions(current, "a")
+            rules = SchemaRules.declare(
+                factor_rule_schema(hoist_schema_definitions(current)),
+                maximum_bytes=262144,
+            )
+            name = "lead.action." + str(number) + (
+                "." + member.schema_id if member is not None else ""
+            )
             owners.append(ContextActionContractOwner(name, rules, eligible, member))
-    if selectable:
-        choices = []
-        for name in selectable:
-            member = semantic.select(name)
-            meaning = member.owner.declare_rules().schema_value().get("description", "")
-            if type(meaning) is not str or not meaning.strip():
-                raise ValueError("selectable result owner requires its declared meaning")
-            choices.append({"type": "string", "enum": [name], "description": meaning})
-        rules = closed_rule({
-            "action_type": {"type": "string", "enum": ["select_result"],
-                            "description": "Choose a complete result family for the next paid call; no story authority."},
-            "result_schema_id": (choices[0] if len(choices) == 1 else {"anyOf": choices,
-                "description": "Exact current member to deliver next; use its owning meaning."}),
-        }, description="Select one complete current result member. This consumes a call and action; it is not a result.")
-        owners.append(ContextActionContractOwner("lead.action.select_result",
-            SchemaRules.declare(rules, maximum_bytes=262144), eligible, None))
     policy = LeadStagePolicy(
-        semantic.policy.stage + ".context_action", actual.call_id,
-        semantic.policy.task_revisions, semantic.policy.language, actual.offer_digest,
-        semantic.policy.choices, eligible.offer_digest, semantic.policy.logical_origin_call_id,
-        maximum_schema_bytes=262144, maximum_index_schema_bytes=MAX_PROVIDER_SCHEMA_UTF8_BYTES,
-        wire_root_path="$.agent_action", owner_declarations=tuple(owners),
-        funding=semantic.policy.funding,
+        semantic.policy.stage + ".context_action",
+        actual.call_id,
+        semantic.policy.task_revisions,
+        semantic.policy.language,
+        actual.offer_digest,
+        semantic.policy.choices,
+        eligible.offer_digest,
+        semantic.policy.logical_origin_call_id,
+        maximum_schema_bytes=262144,
+        maximum_index_schema_bytes=MAX_PROVIDER_SCHEMA_UTF8_BYTES,
+        wire_root_path="$.agent_action",
+        owner_declarations=tuple(owners),
     )
     return LeadContractIndex.bind(policy)
-
 
 
 class ContextExecutionEventKind(StrEnum):
@@ -1711,7 +1497,6 @@ class _ContextExecutionErrorDetail(StrEnum):
     """Private allow-list for fixed, content-free execution diagnostics."""
 
     READ_SOURCE_HANDLES_REQUIRED = "read_source_handles_required"
-    RESULT_SELECTION_UNAVAILABLE = "result_selection_unavailable"
     RESPONSE_CORRELATION_MISMATCH = "response_correlation_mismatch"
 
 
@@ -1732,9 +1517,6 @@ _EXECUTION_ERROR_MESSAGES = {
 }
 
 _EXECUTION_ERROR_DETAIL_MESSAGES = {
-    (ContextExecutionErrorCode.ACTION_EXHAUSTED,
-     _ContextExecutionErrorDetail.RESULT_SELECTION_UNAVAILABLE):
-        "contextual result delivery requires a paid successor call within the remaining budget",
     (
         ContextExecutionErrorCode.MALFORMED_ACTION,
         _ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED,
@@ -2231,13 +2013,8 @@ class ContextProviderFailureFacts:
     submission_uncertain: bool = False
     response_rejection_code: ContextProviderTerminalCode | None = None
     continuation_rejection: ContextContinuationRejection | None = None
-    prelaunch_action_exhausted: bool = False
 
     def __post_init__(self) -> None:
-        if (type(self.prelaunch_action_exhausted) is not bool
-                or (self.prelaunch_action_exhausted and (self.response_rejection_code is not None
-                    or self.timed_out or self.submission_uncertain))):
-            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if self.continuation_rejection is not None and (
             type(self.continuation_rejection) is not ContextContinuationRejection
             or self.timed_out or self.submission_uncertain
@@ -2332,8 +2109,6 @@ def _context_provider_decode_terminal_code(
         _ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH,
     ):
         return ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH
-    if failure.code is ContextExecutionErrorCode.ACTION_EXHAUSTED:
-        return ContextProviderTerminalCode.ACTION_EXHAUSTED
     return ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE
 
 
@@ -2934,12 +2709,8 @@ class ContextInvocationSession:
         delivery_read: ContextReadReceipt | None = None,
         reference_prelude: ContextReferencePreludeResult | None = None,
         reference_request: ContextReferencePreludeRequest | None = None,
-        remaining_physical_calls: int,
     ) -> ContextCallOffers:
         with self._lock:
-            if (type(remaining_physical_calls) is not int or not 1 <= remaining_physical_calls
-                    <= self._physical_call_limit - self._next_action_index + 1):
-                raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
             if delivery_read is not None and delivery_read is not self._pending_receipt:
                 raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
             reference_facts = ()
@@ -3018,7 +2789,6 @@ class ContextInvocationSession:
                 call_id, self.binding.scope, self._next_action_index, allowed_actions, limits,
                 self._allowed_search_source_kinds, tuple(self._full_handle_by_wire),
                 completed, delivery, self._core_statuses,
-                remaining_physical_calls, _action_correlation(self.binding, self._next_action_index),
             )
             if reference_digest is not None:
                 object.__setattr__(offer, "reference_read_digest", reference_digest)
@@ -3361,8 +3131,6 @@ class ContextInvocationSession:
         elif action_kind == "read":
             self._nonterminal_actions += 1
             self._read_actions += 1
-        elif action_kind == "select_result":
-            self._nonterminal_actions += 1
 
     def fail(self) -> None:
         """Terminally invalidate this invocation and discard its handle table."""
@@ -3819,21 +3587,6 @@ class ContextInvocationSession:
                 self._fail_locked()
                 raise
 
-    def select_result(self, action: ContextResultSelectionAction) -> None:
-        """Account one validated selection, without adding evidence or authority."""
-        if type(action) is not ContextResultSelectionAction:
-            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-        with self._lock:
-            try:
-                self._require_open()
-                self._validate_correlation(action.correlation)
-                self._require_nonterminal_capacity()
-                self._nonterminal_actions += 1
-                self._next_action_index += 1
-            except BaseException:
-                self._fail_locked()
-                raise
-
     def authorize_answer(
         self,
         action: ContextAnswerAction,
@@ -4101,7 +3854,7 @@ def _decode_context_action(
     issued_handle_aliases: tuple[str, ...] = (),
     read_limit: int = 8,
     decoded_action: BoundCallDecodedAction | None = None,
-) -> ContextSearchAction | ContextReadAction | ContextAnswerAction | ContextResultSelectionAction:
+) -> ContextSearchAction | ContextReadAction | ContextAnswerAction:
     """Strictly decode typed wire v7 and retain the actual rejected property."""
     try:
         raw = _exact_object(decoded_action.domain_value() if decoded_action is not None
@@ -4111,10 +3864,6 @@ def _decode_context_action(
         if type(action) is not dict or type(action.get("kind")) is not str:
             raise validation_failure(ValueError(), "$.kind", "expected one of search, read, answer")
         action_kind = action["kind"]
-        if action_kind == "select_result":
-            if decoded_action is None or set(action) != {"kind", "selected_schema_id"}:
-                raise validation_failure(ValueError(), "$.kind", "expected a bound current result selection")
-            return ContextResultSelectionAction(correlation, action["selected_schema_id"])
         if action_kind not in {"answer", "read", "search"}:
             raise validation_failure(ValueError(), "$.kind", "expected one of search, read, answer")
         if action_kind == "search":
@@ -5886,7 +5635,6 @@ class AgentContextService:
         call_finalizer: ContextProviderCallFinalizer | None = None
         call_validation_details: tuple[str, ...] = ()
         response_rejection_code: ContextProviderTerminalCode | None = None
-        prelaunch_action_exhausted = False
 
         def execution_event(
             kind: ContextExecutionEventKind,
@@ -6255,30 +6003,19 @@ class AgentContextService:
                 correlation = _action_correlation(binding, action_index)
                 physical_reference_context = reference_context
                 def build_call_request(call_id: str, lineage: BoundCallLineage | None):
-                    nonlocal call_contract, prelaunch_action_exhausted
+                    nonlocal call_contract
                     if isinstance(request.result_contract, BoundCallFactory):
                         offers = action_session.contract_offers(
-                            call_id, allowed_actions=allowed_actions,
-                            remaining_physical_calls=physical_call_limit - len(calls), delivery_read=pending_read,
+                            call_id, allowed_actions=allowed_actions, delivery_read=pending_read,
                             reference_prelude=prelude, reference_request=prelude_request,
                         )
-                        try:
-                            call_contract = request.result_contract.for_offer(offers, lineage)
-                        except ContextExecutionError as failure:
-                            prelaunch_action_exhausted = (
-                                failure.code is ContextExecutionErrorCode.ACTION_EXHAUSTED
-                                and failure._detail is _ContextExecutionErrorDetail.RESULT_SELECTION_UNAVAILABLE)
-                            raise
+                        call_contract = request.result_contract.for_offer(offers, lineage)
                         schema = call_contract.schema_value()
                     else:
                         call_contract = None
                         schema = _context_action_schema(allowed_actions=allowed_actions, result_contract=phase_contract[1],
                             allowed_search_source_kinds=request.allowed_search_source_kinds, action_limits=action_session.action_limits())
-                    delivery_lineage = lineage
-                    while delivery_lineage is not None and delivery_lineage.kind == "replay":
-                        delivery_lineage = delivery_lineage.origin.lineage
-                    selected_continuation = delivery_lineage is not None and delivery_lineage.kind == "selection"
-                    if observation is None or selected_continuation:
+                    if observation is None:
                         payload, component_paths, reference_paths = _initial_payload(
                             binding,
                             projection,
@@ -6323,21 +6060,6 @@ class AgentContextService:
                                 else ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
                             )
                         )
-                    if selected_continuation:
-                        # Full-context reconstruction also supports stateless providers
-                        # and rejected native reuse. A selection is never a READ receipt.
-                        if observation is not None:
-                            observed, observed_paths = _continuation_payload(
-                                binding, action_session, phase_contract=phase_contract,
-                                action_index=action_index, allowed_actions=allowed_actions,
-                                observation=observation)
-                            payload["o"] = observed["o"]
-                            component_paths.update(observed_paths)
-                        call_kind = (ProviderCallKind.DEBATE if scope.subject_kind is ContextSubjectKind.DEBATE else
-                            ProviderCallKind.COLLABORATION_CONTINUATION if request.invocation_kind is not None else
-                            ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION)
-                    if call_contract is not None:
-                        payload["q"] = _action_query(phase_contract, action_session, call_contract.offered_action_kinds)
                     payload, component_paths, reference_paths = _render_context_payload(
                         payload, component_paths, reference_paths,
                         schema=schema, projection=projection,
@@ -6365,7 +6087,6 @@ class AgentContextService:
                                 if call_contract is not None:
                                     call_contract.require_current_offer(
                                         action_session.contract_offers(call_request.call_id, allowed_actions=allowed_actions,
-                                            remaining_physical_calls=call_contract.offers.remaining_physical_calls,
                                             delivery_read=pending_read,
                                             reference_prelude=prelude,
                                             reference_request=prelude_request))
@@ -6374,7 +6095,6 @@ class AgentContextService:
                             if call_contract is not None:
                                 call_contract.require_current_offer(
                                     action_session.contract_offers(call_request.call_id, allowed_actions=allowed_actions,
-                                            remaining_physical_calls=call_contract.offers.remaining_physical_calls,
                                         delivery_read=pending_read,
                                         reference_prelude=prelude,
                                         reference_request=prelude_request))
@@ -6537,13 +6257,10 @@ class AgentContextService:
                             call_decoded = call_contract.decode_response(result.response_text)
                             action = _decode_context_action(result.response_text, correlation=correlation, allowed_actions=allowed_actions, result_contract=phase_contract[1], allowed_search_source_kinds=request.allowed_search_source_kinds, resolve_handle=action_session.resolve_wire_handle, completed_handles=action_session.completed_handles, decoded_action=call_decoded)
                         except ContractRejection as bound_failure:
-                            execution_code = (ContextExecutionErrorCode.ACTION_EXHAUSTED
-                                if bound_failure.code == _CORRECTIVE_ACTION_EXHAUSTED
-                                else ContextExecutionErrorCode.MALFORMED_ACTION)
-                            rejected = carry_validation(_execution_error(execution_code), bound_failure)
+                            rejected = carry_validation(_execution_error(ContextExecutionErrorCode.MALFORMED_ACTION), bound_failure)
                             rejected.bound_contract_failure = bound_failure
                             raise rejected from None
-                        if type(action) not in {ContextSearchAction, ContextReadAction, ContextAnswerAction, ContextResultSelectionAction}:
+                        if type(action) not in {ContextSearchAction, ContextReadAction, ContextAnswerAction}:
                             raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
                     else:
                         schema_issues = diagnose_json_text(result.response_text, schema)
@@ -6609,7 +6326,6 @@ class AgentContextService:
                         if type(exhausted_action) in {
                             ContextSearchAction,
                             ContextReadAction,
-                            ContextResultSelectionAction,
                         }:
                             stage = "exhausted"
                             finalizer = call_finalizer
@@ -6631,24 +6347,6 @@ class AgentContextService:
                         )
                     raise
                 terminal_provider_succeeded = False
-                if type(action) is ContextResultSelectionAction:
-                    if call_contract is None or call_decoded is None:
-                        raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-                    # A charged authentication replay may have consumed the
-                    # successor slot since this exact selector graph was frozen.
-                    if physical_call_limit - len(calls) < 1:
-                        finalizer, call_finalizer = call_finalizer, None
-                        if finalizer is not None:
-                            reject_response(finalizer, ContextProviderTerminalCode.ACTION_EXHAUSTED)
-                        raise _execution_error(ContextExecutionErrorCode.ACTION_EXHAUSTED)
-                    contract_lineage = call_contract.selection_lineage(call_decoded)
-                    stage = "action"
-                    action_session.select_result(action)
-                    require_execution_workspace_current()
-                    finalizer, call_finalizer = call_finalizer, None
-                    if finalizer is not None:
-                        _accept_provider_call_without_replacing(finalizer)
-                    continue
                 if type(action) is ContextSearchAction:
                     history_advanced = True
                     stage = "action_observer"
@@ -6679,7 +6377,6 @@ class AgentContextService:
                     observation = action_session.serialize_observation(
                         search_observation
                     )
-                    contract_lineage = None if call_contract is None else call_contract._retrieval_lineage()
                     previous_action = "search"
                     previous_search_had_hits = bool(search_observation.hits)
                     stage = "action_observer"
@@ -6740,7 +6437,6 @@ class AgentContextService:
                     stage = "action"
                     read_observation, pending_read = action_session.read(action)
                     observation = action_session.serialize_observation(read_observation)
-                    contract_lineage = None if call_contract is None else call_contract._retrieval_lineage()
                     previous_action = "read"
                     previous_search_had_hits = False
                     record_count = _conversation_read_record_count(read_observation)
@@ -7164,11 +6860,9 @@ class AgentContextService:
                             stage == "provider"
                             and provider_failure
                             and existing_facts.accounting is None
-                            and not prelaunch_action_exhausted
                         )
                     ),
                     response_rejection_code=response_rejection_code,
-                    prelaunch_action_exhausted=prelaunch_action_exhausted,
                     continuation_rejection=existing_facts.continuation_rejection,
                 ),
             )

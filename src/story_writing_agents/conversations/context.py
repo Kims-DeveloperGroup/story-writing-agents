@@ -3541,31 +3541,11 @@ def _validate_premise_history(events):
                 scope = payload.authoring_scope
                 pair = PremiseAuthoringTaskRef(scope.task_id, scope.task_revision)
                 source = prior.get(payload.source_recommendation_event_id)
-                if admitted.ordinary_front_physical_call_limit == 0:
-                    if (source is None or not _is_fresh_drafting_preparation(payload, source, past)
-                            or pair not in admitted.offered_authoring_tasks
-                            or (admitted.selected_authoring_task is not None
-                                and pair != admitted.selected_authoring_task)):
-                        raise ValueError("fresh-work recommendation changed its exact prospectively admitted task")
-                else:
-                    if (source is None or pair not in admitted.offered_authoring_tasks
-                            or payload.kind not in {
-                                LeadRecommendationActionKind.PREPARE_ARTIFACT,
-                                LeadRecommendationActionKind.PREPARE_CONSULTATION}):
-                        raise ValueError(
-                            "ordinary recommendation changed its exact admitted task"
-                        )
-                    submitted = {
-                        old.payload.call_id for old in past
-                        if old.step_id == event.step_id
-                        and type(old.payload) is CollaborationProviderCallPayload
-                        and old.payload.invocation_id == admitted.provider_invocation_id
-                        and old.payload.state is CollaborationProviderCallState.SUBMITTED
-                    }
-                    if len(submitted) != 1:
-                        raise ValueError(
-                            "ordinary recommendation requires exactly one admitted submission"
-                        )
+                if (source is None or not _is_fresh_drafting_preparation(payload, source, past)
+                        or pair not in admitted.offered_authoring_tasks
+                        or (admitted.selected_authoring_task is not None
+                            and pair != admitted.selected_authoring_task)):
+                    raise ValueError("fresh-work recommendation changed its exact prospectively admitted task")
         if type(payload) is CollaborationProposal and payload.authoring_scope is not None:
             scope = payload.authoring_scope
             admitted = next((old.payload.admission for old in reversed(past)

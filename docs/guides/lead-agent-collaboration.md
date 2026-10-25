@@ -998,16 +998,6 @@ insufficient. Specialists cannot broaden their own assignment, source scope,
 or budget. A full-workspace read, arbitrary path, unbounded search, provider
 subagent, or hidden authority is never implied by a prompt.
 
-Lead can spend one provider call selecting the result contract needed for its
-reply, followed by a call that returns that result. Both calls count against the
-disclosed budget. Original owners can offer workflow answers, clarifications,
-draft conclusions, ordinary structured recommendations, and prepared proposals
-after exact confirmation directly. A result with one current
-eligible member is also direct. SEARCH or READ can require a fresh selection.
-The runtime reserves room within the existing five-call invocation limit and
-reports exhaustion when it cannot fit. Failed synthesis preserves completed
-specialist replies and keeps synthesis in a failed state.
-
 ### When exact context exceeds capacity
 
 The current complete provider-context JSON has a 262,144 UTF-8-byte limit,

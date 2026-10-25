@@ -46,7 +46,6 @@ __all__ = [
     "ContextAnswerAuthorization",
     "ContextEvidenceReceipt",
     "ContextReadAction",
-    "ContextResultSelectionAction",
     "ContextReadObservation",
     "ContextSearchAction",
     "ContextSearchHit",
@@ -142,12 +141,11 @@ _SOURCE_AUTHORITY = {
 
 
 class ContextActionKind(StrEnum):
-    """Typed actions one agent can request during a context session."""
+    """Substantive actions one agent can request during a context session."""
 
     SEARCH = "search"
     READ = "read"
     ANSWER = "answer"
-    SELECT_RESULT = "select_result"
 
 
 class ContextSourceBoundaryKind(StrEnum):
@@ -297,7 +295,6 @@ _ARTIFACT_PREFIX_CLASS, _ARTIFACT_PREFIX_NON_DOT = unicode_scalar_classes(
 
 SEARCH_NORMALIZATION_REVISION = "NFKC+casefold+Unicode-whitespace:" + unicodedata.unidata_version
 
-
 def search_text_rule(maximum_characters: int) -> dict[str, object]:
     # The limit is on normalization, not on raw code points.
     if type(maximum_characters) is not int or maximum_characters < 1:
@@ -309,7 +306,7 @@ def search_text_rule(maximum_characters: int) -> dict[str, object]:
 
 def artifact_directory_prefix_rule() -> dict[str, object]:
     segment = r"(?:\.{0,2}" + _ARTIFACT_PREFIX_NON_DOT + r"|\.\.\.)" + _ARTIFACT_PREFIX_CLASS + "*"
-    return {"type": "string", "minLength": 1,
+    return {"type": "string",
             "pattern": "^(?:core_documents/|manuscript/(?:" + segment + r"/)*)\z",
             "description": "Canonical core_documents/ or manuscript directory prefix; current physical-root and UTF-8 byte qualification remain required."}
 
@@ -689,23 +686,6 @@ class ContextReadAction:
 
 
 @dataclass(frozen=True, slots=True)
-class ContextResultSelectionAction:
-    """Choose one complete currently offered result member; grants no authority."""
-
-    correlation: ContextActionCorrelation
-    selected_schema_id: str
-
-    def __post_init__(self) -> None:
-        if type(self.correlation) is not ContextActionCorrelation:
-            raise validation_failure(_invalid(), '$', 'action correlation must match current request')
-        _safe_identity(self.selected_schema_id)
-
-    @property
-    def kind(self) -> ContextActionKind:
-        return ContextActionKind.SELECT_RESULT
-
-
-@dataclass(frozen=True, slots=True)
 class ContextAnswerAction:
     """Request terminal answer authorization using completed read handles."""
 
@@ -737,7 +717,7 @@ class ContextAnswerAction:
         return ContextActionKind.ANSWER
 
 
-ContextAction: TypeAlias = ContextSearchAction | ContextReadAction | ContextAnswerAction | ContextResultSelectionAction
+ContextAction: TypeAlias = ContextSearchAction | ContextReadAction | ContextAnswerAction
 
 
 @dataclass(frozen=True, slots=True)

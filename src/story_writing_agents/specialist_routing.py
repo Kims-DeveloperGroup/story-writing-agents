@@ -320,7 +320,7 @@ def artifact_path_rule(domains: tuple[ArtifactReviewDomain, ...]) -> dict[str, o
     if not choices:
         raise ValueError("artifact path rule requires a declared domain")
     return {"type": "string", "pattern": "^(?:" + "|".join(choices) + r")\z",
-            "description": "Normalized relative artifact path in declared specialist domains; current physical-root qualification remains required."}
+            "description": "Normalized relative artifact path in the declared specialist domains; current physical-root qualification remains required."}
 
 
 def artifact_domain(path: str) -> ArtifactReviewDomain | None:

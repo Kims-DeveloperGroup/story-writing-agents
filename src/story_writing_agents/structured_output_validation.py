@@ -546,7 +546,6 @@ def strict_json_member_text(text: str, member_path: tuple[str, ...]) -> str:
 _RULE_TYPES = frozenset({"object", "array", "string", "integer", "number", "boolean", "null"})
 # Explicit Python str.strip whitespace, without ECMAScript \s differences.
 # UTF-8 byte ceilings remain an owner check, distinct from character counts.
-
 # The exact table used by str.strip()/the existing source-owned nonblank rule.
 SCHEMA_PYTHON_WHITESPACE = "".join(chr(value) for first, last in (
     (0x09, 0x0D), (0x1C, 0x20), (0x85, 0x85), (0xA0, 0xA0), (0x1680, 0x1680),
@@ -637,58 +636,6 @@ def compile_schema_pattern(pattern: str) -> re.Pattern[str]:
             cursor = index + 2
     pieces.append(pattern[cursor:])
     return re.compile("".join(pieces))
-
-
-def require_provider_schema_patterns(schema: Mapping[str, object]) -> None:
-    """Reject known unsupported assertions, without certifying a regex dialect.
-
-    Pattern-property locations use source insertion ordinals, such as
-    $.patternProperties[0], so a regex map key never enters diagnostics.
-    Other locations retain their ordinary schema-member paths.
-    """
-    schema_maps = {"properties", "$defs", "definitions", "patternProperties",
-                   "dependentSchemas", "dependencies"}
-    schema_arrays = {"anyOf", "allOf", "oneOf", "prefixItems", "items"}
-    schema_values = {"items", "additionalProperties", "additionalItems", "contains",
-                     "not", "if", "then", "else", "propertyNames",
-                     "unevaluatedProperties", "unevaluatedItems", "contentSchema"}
-
-    def reject_lookaround(pattern, path):
-        if type(pattern) is str and any(
-            outside and token == "(" and (
-                pattern[index:index + 3] in {"(?=", "(?!"}
-                or pattern[index:index + 4] in {"(?<=", "(?<!"})
-            for index, token, outside in _schema_pattern_tokens(pattern)
-        ):
-            raise validation_failure(ValueError("schema rejected"), path,
-                                     "regex lookaround is not supported")
-
-    pending = [(schema, "$")]
-    seen = set()
-    while pending:
-        node, path = pending.pop()
-        if not isinstance(node, Mapping) or id(node) in seen:
-            continue
-        seen.add(id(node))
-        reject_lookaround(node.get("pattern"), _path(path, "pattern"))
-        children = []
-        for keyword, child in node.items():
-            if keyword in schema_maps and isinstance(child, Mapping):
-                for index, (name, value) in enumerate(child.items()):
-                    if keyword == "patternProperties":
-                        child_path = f"{_path(path, keyword)}[{index}]"
-                        reject_lookaround(name, child_path)
-                    else:
-                        child_path = _path(_path(path, keyword), name)
-                    # Schema-valued dependencies are visited; instance arrays
-                    # and strings are skipped by the Mapping guard above.
-                    children.append((value, child_path))
-            elif keyword in schema_arrays and type(child) in (list, tuple):
-                children.extend((value, f"{_path(path, keyword)}[{index}]")
-                                for index, value in enumerate(child))
-            elif keyword in schema_values:
-                children.append((child, _path(path, keyword)))
-        pending.extend(reversed(children))
 
 
 def unicode_scalar_classes(categories: tuple[str, ...], exclusions: tuple[str, ...]) -> tuple[str, ...]:
@@ -1614,10 +1561,13 @@ def _prepare_diagnostic_template(root: object) -> tuple | None:
                                all(name in variant.get("required", ()) for variant in resolved))
                         for name in names
                     })
+            pattern = node.get("pattern")
+            matcher = compile_schema_pattern(pattern) if type(pattern) is str else None
             nodes[id(node)] = (node, target, discriminators, common,
-                               _object_union_dispatch(variants, root) if variants else None)
+                               _object_union_dispatch(variants, root) if variants else None,
+                               matcher)
             pending.extend(node.values())
-    except (TypeError, ValueError, RecursionError):
+    except (TypeError, ValueError, RecursionError, re.error):
         # A new preparation must not surface an error from an unvisited branch.
         return None
     return (root, prefix[0], MappingProxyType(nodes))
@@ -1996,9 +1946,28 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str, root_schem
                         _successful = False
         elif type(value) is str:
             pattern = schema.get('pattern')
-            if type(pattern) is str and compile_schema_pattern(pattern).search(value) is None:
-                _successful = False
-                yield _issue(path, f'expected pattern {json.dumps(pattern, ensure_ascii=True)}')
+            if type(pattern) is str:
+                prepared = (_memo[4][2].get(id(schema)) if _memo is not None
+                            and len(_memo) == 5 and type(_memo[4]) is tuple else None)
+                if prepared is not None and prepared[0] is not schema:
+                    prepared = None
+                if prepared is not None and len(prepared) == 6 and prepared[5] is not None:
+                    matcher = prepared[5]
+                else:
+                    # Raw schemas retain fresh-query state and their current text.
+                    key = ("schema.pattern", id(schema))
+                    retained = None if _memo is None else _memo[2].get(key)
+                    if retained is not None and retained[0] is schema and retained[1] == pattern:
+                        matcher = retained[2]
+                    else:
+                        matcher = compile_schema_pattern(pattern)
+                        if (_memo is not None and len(_memo[2]) < 8192
+                                and _memo[3] + len(pattern) <= 1048576):
+                            _memo[2][key] = (schema, pattern, matcher)
+                            _memo[3] += len(pattern)
+                if matcher.search(value) is None:
+                    _successful = False
+                    yield _issue(path, f'expected pattern {json.dumps(pattern, ensure_ascii=True)}')
             minimum = schema.get('minLength')
             maximum = schema.get('maxLength')
             if type(minimum) is int and len(value) < minimum:

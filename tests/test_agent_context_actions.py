@@ -284,7 +284,6 @@ class ActionSurfaceAndPolicyTests(unittest.TestCase):
                 "ContextAnswerAuthorization",
                 "ContextEvidenceReceipt",
                 "ContextReadAction",
-            "ContextResultSelectionAction",
                 "ContextReadObservation",
                 "ContextSearchAction",
                 "ContextSearchHit",
@@ -302,7 +301,7 @@ class ActionSurfaceAndPolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             tuple(item.value for item in ContextActionKind),
-            ("search", "read", "answer", "select_result"),
+            ("search", "read", "answer"),
         )
         self.assertEqual(
             tuple(item.value for item in ContextSourceBoundaryKind),

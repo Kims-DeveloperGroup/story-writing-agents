@@ -1,6 +1,6 @@
 # Agent JSON contract and field guide
 
-Story sends agents the `agent-provider-wire-v11` contract. It uses named
+Story sends agents the `agent-provider-wire-v10` contract. It uses named
 objects, descriptive property names, and full-word enum values. The contract
 applies to contextual collaboration and direct conversation, retrieval, and
 consensus provider calls. Only this contract is accepted; no migration or
@@ -337,29 +337,7 @@ check explicitly and retains the applicable native field restrictions.
 | --- | --- | --- |
 | `search_context` | `queries`, each containing `search_text` and `source_types`; an artifact-only branch can include `artifact_directory_prefix` | Finds sources and issues READ handles. |
 | `read_context` | `read_handles` selected from returned SEARCH results | Retrieves exact authorized content and evidence. |
-| `select_result` | `result_schema_id` copied from the current explained choices | Selects one complete Lead result contract for a charged continuation. |
 | `submit_result` | `task_result` matching the invocation's result schema | Completes the current agent task. |
-
-For a Lead result-selection action, `schema_id` identifies the current outer
-action contract and `result_schema_id` identifies the complete semantic member to
-bind next. Selection does not return `task_result` or create a READ receipt. The
-runtime validates the choice against the full current semantic index and issues
-its own call-local selection capability; the provider never supplies that capability.
-
-Original owners may declare complete direct results: ordinary front answers and
-clarifications, consultation conclusions, ordinary structured recommendations,
-and prepared proposals after exact user confirmation. Existing source, revision,
-readiness and authority checks still apply to each result. Every physical partition
-of a declared owner remains complete. A current full-index
-singleton is also direct. Other results require a submitted selection call and a
-submitted result call within the existing allowance. The selected successor offers
-exactly the chosen terminal member. Ordinary SEARCH or READ refreshes current facts
-and invalidates selection. Repair preserves the rejected call's frozen semantic
-index and terminal subset. Its phase-derived physical action view excludes SEARCH
-and READ; SELECT remains only when already offered and its charged successor fits.
-Repair cannot broaden result delivery or grant another repair attempt.
-If no terminal result fits the remaining allocation, the runtime reports typed
-exhaustion before launch.
 
 These examples show specialist context responses. Lead responses use the
 offered IDs and finite choice encodings described below. The handle is a
@@ -385,33 +363,6 @@ last call can permit only `submit_result`. Never infer an action is available
 from an earlier call or an example in this guide.
 
 ## Result contracts
-
-### Native pattern compatibility
-
-Owning field rules preserve their exact text, identifier and path languages
-when exported to a provider. Canonical strict end-of-string uses `\z`;
-`compile_schema_pattern()` translates that token to Python 3.11's equivalent
-`\Z` for local evaluation. Literal escapes and character classes retain their
-meaning. Source-derived positive Unicode scalar classes preserve each owner's
-whitespace, NUL and category exclusions. Native support is checked separately
-from Python compilation.
-
-`require_provider_schema_patterns()` checks the final invocation schema for
-known unsupported lookarounds before adapter launch, including definitions,
-continuations and repair schemas. Existing validation diagnostics identify the
-schema location without printing pattern or story content. The guard does not
-certify the complete provider regex dialect or strip field restrictions.
-Regex keys under `patternProperties` use source insertion ordinals, such as
-`$.patternProperties[0]`, in diagnostics; child schemas and schema-valued
-dependencies are checked too.
-
-Existing owned primitives and canonical-path intersections require equivalent
-rewrites. An unproved implicit intersection fails explicitly before submission;
-its prior pattern is not discarded. Standalone supported custom patterns keep
-their normal interpretation. See the
-[compatibility design](../design/provider-regex-compatibility.md).
-
-### Bound rule ownership
 
 The code boundary uses a `ContractOwner[T]` for authoritative rule declarations,
 typed decoding, and named genuine host checks. A sealed immutable `BoundContract[T]`
@@ -852,3 +803,12 @@ captured effective response language; it does not substitute English prose.
 Accounting includes the final bound guide, per-call guidance, annotated schema,
 payload, and native rendering. Larger descriptive fields do not raise runtime
 resource limits.
+
+### Codex schema regex compatibility
+
+Built-in field patterns use equivalent Codex-compatible declarations while
+preserving their text, identifier and path restrictions. The existing evaluator
+handles the canonical strict-end representation using prepared matchers. No new
+per-invocation schema syntax scan, action type, call budget or authority is added.
+The fixed runtime-generated schemas require actual local provider verification.
+See the [regex compatibility boundary](../design/provider-regex-compatibility.md).

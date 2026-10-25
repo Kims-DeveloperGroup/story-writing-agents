@@ -685,16 +685,9 @@ two-round/twelve-call limits. Review, Apply, and Commit remain separate decision
 
 While a completed local scope-v3 draft is offered for continuation, ordinary
 Lead calls leave the preparation and full final-review minimum available,
-including required READs and corrections. When only one ordinary call remains,
-a separately admitted premise proposal can use two physical calls for selection
-and its terminal result. That allowance covers only the premise proposal;
-current-task results keep the ordinary ceiling, and retrieval, correction and
-authentication replay cannot borrow it. Analyst execution still requires its
-own confirmation, and task source/cost receipts remain distinct. The admission
-records the ordinary ceiling separately. An ordinary preparation recommendation
-must use one submitted call and an exact offered task; that task may differ from
-the completed task supplying the budget floor. The separate advisory-consultation
-API accepts historical scope1/2 only; scope3 uses the confirmed Lead flow.
+including required READs and corrections. Fresh alternatives in that invocation
+share this finite allowance. The separate advisory-consultation API accepts
+historical scope1/2 only; scope3 uses the confirmed Lead flow.
 
 ### Choosing an unresolved premise
 
@@ -1497,14 +1490,6 @@ provider calls. Each invocation receives a disjoint reservation; siblings
 cannot borrow each other's unused calls. A consultation reserves at least one
 lead-synthesis call; a direct advisory reserves zero synthesis calls.
 
-The shared minimum policy reserves the remaining workflow phases. A reference-free
-three-domain final review needs four calls: three reviewers and artifact synthesis.
-Confirmed preparation adds one call; a preceding standalone recommendation adds
-one more. The draft conclusion plus standalone recommendation and a paid inline
-recommendation each use a two-call envelope. Accepted recommendation submissions
-remain charged to their completed-draft lineage. Additional retrieval, corrections
-and follow-ups use the same remaining budget.
-
 Submitted calls include:
 
 - initial provider call;
@@ -1516,17 +1501,6 @@ invocation is capped at five physical calls and may receive less when the
 lineage has fewer calls left. Runtime constructs feasible allocations before
 confirmation, carries actual spend into round two, and makes round three and
 physical call thirteen unreachable.
-
-A Lead result can require a selection call before its final response. Selection is
-a submitted provider call and nonterminal context action; it creates no evidence
-or confirmation authority. Original owners can offer workflow answers,
-clarifications, draft conclusions, ordinary structured recommendations, and
-prepared proposals after exact confirmation directly. A current
-singleton result contract also needs no selection. Other results need room for
-selection and result within the same allocation. Ordinary SEARCH or READ
-invalidates prior selection; a corrective call retains its rejected contract and
-repair limit. Insufficient room produces typed budget exhaustion before launch
-and preserves completed specialist replies when synthesis fails.
 
 <a id="reviewed-now-versus-apply-and-commit-later"></a>
 

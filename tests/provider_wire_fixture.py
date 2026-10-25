@@ -4,16 +4,6 @@ from __future__ import annotations
 import copy
 from collections.abc import Mapping
 import json
-from contextlib import contextmanager
-
-@contextmanager
-def frozen_fixture_field(record, field, replacement, original, *, setter=object.__setattr__):
-    try:
-        setter(record, field, replacement)
-        yield
-    finally:
-        setter(record, field, original)
-
 
 _FIELDS = {'message': 'response_text', 'authoring_scope': 'writing_task_scope',
     'activity': 'activity_type', 'intent': 'writing_intent', 'domains': 'specialist_domains',
@@ -232,7 +222,7 @@ def direct_response(text, payload):
 
 def assert_guidance(test, payload, schema):
     """Check independently observable guidance, not the runtime's catalog helper."""
-    test.assertEqual(payload["protocol_version"], "agent-provider-wire-v11")
+    test.assertEqual(payload["protocol_version"], "agent-provider-wire-v10")
     guide = payload["contract_guidance"]
     test.assertEqual(set(guide), {"input_fields", "response_rules"})
     for name in payload:
@@ -276,33 +266,8 @@ def assert_schema_descriptions(test, schema):
     visit(schema, True)
 
 
-def capture_sample(call, name=None, *, finalizers=None):
+def capture_sample(call, name=None):
     """Optional synthetic fixture evidence, enabled only for an assigned test run."""
-    if finalizers is not None:
-        from story_writing_agents.agent_context import canonical_provider_json
-        from story_writing_agents.antigravity_adapter import AntigravityAdapter
-        assert name in ('conclude', 'ready', 'prepared')
-        bound = call.contract
-        assert [item.calls for item in finalizers] == [[('accepted', None)]]
-        witness = finalizers[0].response_text
-        assert not bound.structural_findings(witness)
-        assert bound.decode_response(witness).belongs_to(bound)
-        schemas = [canonical_provider_json(call.schema), canonical_provider_json(
-            AntigravityAdapter.native_output_schema(call.schema))]
-        good = len(witness.encode('utf-8')) <= 65536 and all(len(x) <= 524288 for x in schemas)
-        profile = {'profile': name, 'overflow': not good, 'native_admitted': False,
-            'semantic_members': len(bound.semantic_index.contracts),
-            'direct_members': sum(
-            x.owner.variant.direct_delivery for x in bound.semantic_index.contracts),
-            'offered_members': len(bound.offered_semantic_schema_ids),
-            'selectable_members': len(bound.selectable_semantic_schema_ids),
-            'remaining_physical_calls': bound.offers.remaining_physical_calls,
-            'schema_utf8_bytes': [len(x) for x in schemas]}
-        if good:
-            profile.update(witness=witness, codex_cli_schema_file_json=schemas[0].decode('utf-8'),
-                antigravity_response_schema_json=schemas[1].decode('utf-8'))
-        print('SWA_COOFFER_V1 ' + json.dumps(profile, ensure_ascii=False))
-        return good
     import os
     from pathlib import Path
     directory = os.environ.get("STORY_WIRE_TEST_CAPTURE_DIR")
@@ -389,32 +354,30 @@ def fixture_schema_node(schema, node):
     return node
 
 
-def fixture_schema_choices(schema, node):
-    node = fixture_schema_node(schema, node)
-    if 'anyOf' in node:
-        return tuple(choice for branch in node['anyOf'] for choice in fixture_schema_choices(schema, branch))
-    return (node,)
-
-
 def _fixture_partition_matches(schema, value):
     """Match finite action and scope selectors within one complete detail arm."""
+    def choices(node):
+        node = fixture_schema_node(schema, node)
+        if 'anyOf' in node:
+            return tuple(choice for branch in node['anyOf'] for choice in choices(branch))
+        return (node,)
     def literals(node):
-        return tuple(item for choice in fixture_schema_choices(schema, node) for item in choice.get('enum', ()))
+        return tuple(item for choice in choices(node) for item in choice.get('enum', ()))
     details = value.get('response_details', {}) if isinstance(value, Mapping) else {}
     request = details.get('proposal_drafting_request') if isinstance(details, Mapping) else None
     scope = details.get('task_scope', {}) if isinstance(details, Mapping) else {}
     if not isinstance(scope, Mapping):
         return False
     root = fixture_schema_node(schema, schema)
-    for detail in fixture_schema_choices(schema, root['properties']['response_details']):
+    for detail in choices(root['properties']['response_details']):
         if isinstance(request, Mapping) and isinstance(request.get('action_type'), str) and not any(
             request['action_type'] in literals(option.get('properties', {}).get('action_type', {}))
-            for option in fixture_schema_choices(schema, detail.get('properties', {}).get('proposal_drafting_request', {}))):
+            for option in choices(detail.get('properties', {}).get('proposal_drafting_request', {}))):
             continue
         scope_node = detail.get('properties', {}).get('task_scope')
         if scope_node is None:
             continue
-        for declared in fixture_schema_choices(schema, scope_node):
+        for declared in choices(scope_node):
             props = declared.get('properties', {})
             if any(name in scope and (name not in props or scope[name] not in literals(props[name]))
                    for name in ('intent', 'activity')):
@@ -440,6 +403,9 @@ def fixture_variant_value(schema, value):
     if not isinstance(details, dict) or 'variant_id' in details:
         return result
 
+    def choices(node):
+        node = fixture_schema_node(schema, node)
+        return tuple(arm for child in node['anyOf'] for arm in choices(child)) if 'anyOf' in node else (node,)
 
     def matches(node, supplied):
         node = fixture_schema_node(schema, node)
@@ -457,7 +423,7 @@ def fixture_variant_value(schema, value):
         return True
 
     root = fixture_schema_node(schema, schema)
-    arms = tuple(arm for arm in fixture_schema_choices(schema, root.get('properties', {}).get('response_details', {}))
+    arms = tuple(arm for arm in choices(root.get('properties', {}).get('response_details', {}))
                  if 'variant_id' in arm.get('properties', {}))
     if arms:
         # Malformed fixtures keep their authored values; only the offered route is supplied.
@@ -469,131 +435,41 @@ def fixture_variant_value(schema, value):
     return result
 
 
-def fixture_semantic_member(request, *, response_type, family, branch_key=None, value=None, offered_only=False):
-    """Resolve the caller's original full family before physical offer filtering."""
-    families = {}
-    for member in request.contract.semantic_index.contracts:
-        graph = member.rule_graph.schema_value()
-        root = fixture_schema_node(graph, graph)
-        declared = fixture_schema_node(graph, root['properties']['response_type'])
-        if response_type not in declared['enum']:
-            continue
-        key = member.owner.variant.branch_key
-        original = key.partition(':partition:')[0]
-        if branch_key is not None and branch_key not in (key, original):
-            continue
-        families.setdefault(original, []).append(member)
-    if type(family) is not int or not 0 <= family < len(families):
-        raise ValueError('The explicitly intended fixture family is not offered')
-    choices = list(families.values())[family]
-    if offered_only:
-        choices = [member for member in choices
-                   if member.schema_id in request.contract.offered_semantic_schema_ids]
-        if not choices:
-            raise ValueError('The explicitly intended fixture family is not offered')
-    if len(choices) > 1 and value is not None:
-        for member in choices:
-            if _fixture_partition_matches(member.rule_graph.schema_value(), value):
-                return member
-    return choices[0]
-
-
 def offered_fixture_bindings(
-    request, *, action_type, response_type, family, branch_key=None, value=None
-):
-    """Pair an explicit original family only when that current member is offered."""
+    request, *, action_type, response_type, family, branch_key=None, value=None):
+    """Look up an explicit original family, then route its unchanged finite fixture selectors."""
     if action_type != 'submit_result' and response_type is not None:
         raise ValueError('Context-action fixtures have no semantic result family')
     bound = request.contract
     pairs = dict(bound.outer_inner_schema_ids)
-    intended = None if action_type != 'submit_result' else fixture_semantic_member(
-        request, response_type=response_type, family=family, branch_key=branch_key, value=value, offered_only=True)
-    offered = []
+    results = {member.schema_id: member for member in bound.semantic_index.contracts}
+    offered = {}
     for member in bound.action_index.contracts:
         if member.rule_graph.literal_at(('action_type',)) != action_type:
             continue
         inner = pairs[member.schema_id]
-        if intended is None or inner == intended.schema_id:
-            offered.append((member.schema_id, inner))
-    ordinal = family if intended is None else 0
-    if type(ordinal) is not int or not 0 <= ordinal < len(offered):
-        raise ValueError('The explicitly intended fixture family is not offered')
-    return offered[ordinal]
+        if inner is None:
+            response_types = (None,)
+        else:
+            graph = results[inner].rule_graph.schema_value()
+            root = fixture_schema_node(graph, graph)
+            declared = fixture_schema_node(graph, root['properties']['response_type'])
+            response_types = tuple(declared['enum'])
+        if response_type in response_types:
+            key = member.schema_id if inner is None else results[inner].owner.variant.branch_key
+            original = key.partition(':partition:')[0]
+            if branch_key is not None and (inner is None or branch_key not in (key, original)):
+                continue
+            offered.setdefault(original, []).append((member.schema_id, inner))
+    if type(family) is not int or not 0 <= family < len(offered):
+        raise ValueError('The explicitly intended fixture family was not offered')
+    choices = list(offered.values())[family]
+    if len(choices) > 1 and value is not None:
+        for pair in choices:
+            if _fixture_partition_matches(results[pair[1]].rule_graph.schema_value(), value):
+                return pair
+    return choices[0]
 
-
-def selected_fixture_calls(builder, *args, reuse_response=False, **kwargs):
-    """Queue both paid callbacks explicitly; never submit or choose for the provider."""
-    if reuse_response:
-        respond = builder(*args, **kwargs)
-        return (lambda call, provider: respond(call, provider, select=True)), respond
-    return builder(*args, select=True, **kwargs), builder(*args, **kwargs)
-
-
-def result_selection(request, *, response_type, family, branch_key=None, value=None):
-    """Return one explicit paid selection response; never invoke or queue a provider."""
-    member = fixture_semantic_member(request, response_type=response_type, family=family,
-        branch_key=branch_key, value=value)
-    if member.schema_id not in request.contract.selectable_semantic_schema_ids:
-        raise ValueError('The explicitly intended fixture member is not selectable')
-    outer, inner = offered_fixture_bindings(request, action_type='select_result',
-        response_type=None, family=0)
-    return indexed_response({'action_type': 'select_result', 'result_schema_id': member.schema_id},
-        outer_schema_id=outer, inner_schema_id=inner)
-
-
-
-def modeled_selection_binding(bound, *, response_type, family, branch_key=None, value=None):
-    """PURE graph model: one selector and paid successor, never provider/ledger evidence."""
-    from dataclasses import replace
-    from types import SimpleNamespace
-    request = SimpleNamespace(contract=bound)
-    member = fixture_semantic_member(request, response_type=response_type, family=family,
-        branch_key=branch_key, value=value)
-    if member.schema_id in bound.offered_semantic_schema_ids:
-        return bound
-    response = result_selection(request, response_type=response_type, family=family,
-        branch_key=branch_key, value=value)
-    lineage = bound.selection_lineage(bound.decode_response(response))
-    offers = bound.offers
-    successor = replace(offers, call_id=offers.call_id + '-modeled-selection',
-        action_index=offers.action_index + 1,
-        correlation=replace(offers.correlation, action_index=offers.action_index + 1),
-        remaining_physical_calls=offers.remaining_physical_calls - 1,
-        action_limits=tuple((name, count - 1 if name == 'nonterminal_actions' else count)
-            for name, count in offers.action_limits))
-    return bound.factory.for_offer(successor, lineage)
-
-
-
-def modeled_fixture_response(bound, value, *, family, branch_key=None):
-    """PURE bound/frame model; no provider submission, ledger charge or authority."""
-    from types import SimpleNamespace
-    selected = modeled_selection_binding(bound, response_type=value['response_type'],
-        family=family, branch_key=branch_key, value=value)
-    frame = lead_fixture_response(SimpleNamespace(contract=selected), value,
-        family=family, branch_key=branch_key)
-    return selected, frame
-
-
-
-def modeled_fixture_members(bound):
-    """PURE owner-to-current-ID graph inventory; keys never authorize a response."""
-    rows = []
-    for original in bound.semantic_index.contracts:
-        graph = original.rule_graph.schema_value()
-        root = fixture_schema_node(graph, graph)
-        kind = fixture_schema_node(graph, root['properties']['response_type'])['enum'][0]
-        current = modeled_selection_binding(bound, response_type=kind, family=0,
-            branch_key=original.owner.variant.branch_key)
-        matches = [member for member in current.semantic_index.contracts
-                   if member.schema_id in current.offered_semantic_schema_ids
-                   and member.owner is original.owner]
-        if len(matches) != 1:
-            raise ValueError('Modeled physical scope must retain exactly one original owner')
-        rows.append((original.schema_id, current, matches[0].schema_id))
-    if len({current_id for _, _, current_id in rows}) != len(rows):
-        raise ValueError('Modeled owner-to-current-ID inventory must be injective')
-    return tuple(rows)
 
 def finite_fixture_selection(choices, selected):
     """Encode one explicit valid selection in issued order, including false leaves."""
@@ -612,14 +488,14 @@ def finite_fixture_selection(choices, selected):
     return tree(choices)
 
 
-def lead_fixture_assessment(value, *, source_choices, list_fields=('foundations', 'decisions')):
+def lead_fixture_assessment(value, *, source_choices):
     """Encode supplied assessment rows; preserve omissions and malformed values."""
     encoded = copy.deepcopy(value)
     if type(encoded) is not dict:
         return encoded
     rows = [encoded[name] for name in ('direction', 'creative_scope')
             if type(encoded.get(name)) is dict]
-    for name in list_fields:
+    for name in ('foundations', 'decisions'):
         supplied = encoded.get(name)
         if type(supplied) in (list, tuple):
             rows.extend(row for row in supplied if type(row) is dict)
@@ -805,34 +681,14 @@ def lead_fixture_assignments(rows, *, input_choices, review_choices, anchors, re
     return {'assignments': assignments, 'required_input_recipients': copy.deepcopy(recipients)}
 
 
-def lead_fixture_scoped_response(request, value, *, response_type, family=0,
-                                 allocation=None, branch_key=None, select=False):
-    """Project supplied scope/assessment only; caller authors every allocation edge."""
-    details = {'task_scope': lead_fixture_bound_scope(request, value['authoring_scope'], record=True)}
-    if allocation is not None or 'authoring_assessment' in value:
-        details['authoring_assessment'] = lead_fixture_assessment(
-            value.get('authoring_assessment'), source_choices=dict(request.contract.semantic_index.policy.choices)['input_ids'])
-    if allocation is not None:
-        details['specialist_consultation_proposal'] = {
-            'shared_premises': value['proposal']['shared_premises'], **allocation}
-    return lead_fixture_response(request, {'response_type': response_type,
-        'response_text': value['message'], 'response_details': details},
-        family=family, branch_key=branch_key, select=select)
-
-
-def lead_fixture_response(request, value, *, family, branch_key=None, response_type=None,
-                          select=False, raw=False, match_value=True):
+def lead_fixture_response(request, value, *, family, branch_key=None, response_type=None):
     """Pair caller-authored current wire values with one explicitly intended issued family."""
-    if select:
-        return result_selection(request, response_type=(
-            value['response_type'] if response_type is None else response_type),
-            family=family, branch_key=branch_key, value=value)
     outer, inner = offered_fixture_bindings(
         request, action_type='submit_result',
         response_type=value['response_type'] if response_type is None else response_type,
-        family=family, branch_key=branch_key, value=None if raw or not match_value else value)
+        family=family, branch_key=branch_key, value=value)
     return indexed_response({'action_type': 'submit_result', 'task_result': value},
-                            outer_schema_id=outer, inner_schema_id=inner, contract=None if raw else request.contract)
+                            outer_schema_id=outer, inner_schema_id=inner, contract=request.contract)
 
 
 def finite_fixture_read_selection(choices, selected):
