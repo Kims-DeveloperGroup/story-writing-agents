@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from dataclasses import replace
-from ..agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST
+from ..agents import AGENT_SPECS, LEAD_ORCHESTRATOR, PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST
 
 from ..core_document_readiness import AuthoringTarget, DEPENDENCIES, CoreDocumentReadiness, CoreDocumentReadinessNeeded, project_readiness
 
@@ -90,6 +90,166 @@ from ._model import (
     ViewState,
 )
 from ._response_usage import ResponseUsage, response_footer, response_usage
+
+
+def project_conversation_messages(
+    events: tuple[CollaborationEvent, ...],
+    *,
+    history_events: tuple[CollaborationEvent, ...] | None = None,
+) -> tuple[tuple[CollaborationEvent, Message], ...]:
+    """Project selected durable messages with one source anchor per response.
+
+    Complete history supplies response identity and usage context. Selection
+    never promotes physical provider observations or workflow records to chat.
+    """
+    validate_collaboration_event_order(events)
+    context = events if history_events is None else history_events
+    validate_collaboration_event_order(context)
+    by_id = {event.event_id: event for event in context}
+    if len(by_id) != len(context) or any(by_id.get(event.event_id) != event for event in events):
+        raise ValueError("conversation messages must belong to their exact history")
+    suppressed: set[str] = set()
+    batches: dict[str, list[CollaborationEvent]] = {}
+    for event in context:
+        batches.setdefault(event.batch_id, []).append(event)
+    finalized_sources: dict[str, CollaborationEvent] = {}
+    syntheses = tuple(event for event in context if type(event.payload) is CollaborationLeadSynthesisPayload)
+    for event in context:
+        payload = event.payload
+        if type(payload) is ArtifactReviewSynthesisPayload:
+            if any(_conversation_synthesis_identity(source) == (
+                event.session_id, event.conversation_id, event.step_id,
+                payload.consultation_proposal_id, payload.consultation_proposal_revision,
+                payload.consultation_proposal_digest, payload.execution_attempt_id,
+                payload.reply_event_ids,
+            ) for source in syntheses):
+                suppressed.add(event.event_id)
+        source = _conversation_finalized_source(event, tuple(batches[event.batch_id]), by_id)
+        if source is not None:
+            suppressed.add(source.event_id)
+            finalized_sources[event.event_id] = source
+    projected = []
+    for event in events:
+        if event.event_id in suppressed:
+            continue
+        message = _conversation_message(event, context, finalized_sources.get(event.event_id))
+        if message is not None:
+            projected.append((event, message))
+    return tuple(projected)
+
+
+def _conversation_synthesis_identity(event: CollaborationEvent) -> tuple:
+    payload = event.payload
+    return (event.session_id, event.conversation_id, event.step_id,
+            payload.proposal_id, payload.proposal_revision, payload.proposal_digest,
+            payload.execution_attempt_id, payload.reply_event_ids)
+
+
+def _conversation_finalized_source(
+    notice: CollaborationEvent,
+    events: tuple[CollaborationEvent, ...],
+    by_id: Mapping[str, CollaborationEvent],
+) -> CollaborationEvent | None:
+    """Bind a final notice through its batch's durable execution-result link."""
+    if (type(notice.payload) is not CollaborationMessagePayload
+            or notice.sender.agent_id != LEAD_ORCHESTRATOR
+            or notice.recipient.kind.value != "user"):
+        return None
+    source = _finalized_synthesis_source(notice, tuple(by_id.values()))
+    if source is not None:
+        return source
+    batch = tuple(event for event in events if event.batch_id == notice.batch_id)
+    notices = tuple(event for event in batch
+                    if type(event.payload) is CollaborationMessagePayload
+                    and event.sender.agent_id == LEAD_ORCHESTRATOR
+                    and event.recipient.kind.value == "user")
+    states = tuple(event for event in batch
+                   if type(event.payload) is CollaborationStepStatePayload
+                   and event.payload.execution_result_event_id is not None
+                   and (event.session_id, event.conversation_id, event.turn_id, event.step_id)
+                   == (notice.session_id, notice.conversation_id, notice.turn_id, notice.step_id))
+    if len(notices) != 1 or notices[0] != notice or len(states) != 1:
+        return None
+    state = states[0]
+    execution = by_id.get(state.payload.execution_result_event_id)
+    if execution is None or type(execution.payload) is not CollaborationExecutionResult:
+        return None
+    result = execution.payload
+    source = by_id.get(result.synthesis_result_event_id)
+    if source is None or type(source.payload) is not CollaborationLeadSynthesisPayload:
+        return None
+    synthesis = source.payload
+    identity = (result.proposal_id, result.proposal_revision, result.proposal_digest, result.execution_attempt_id)
+    if (source.sender.agent_id != LEAD_ORCHESTRATOR or source.recipient.kind.value != "user"
+            or any((event.session_id, event.conversation_id, event.step_id)
+                   != (notice.session_id, notice.conversation_id, notice.step_id)
+                   for event in (source, execution))
+            or (state.payload.proposal_id, state.payload.proposal_revision,
+                state.payload.proposal_digest) != identity[:3]
+            or (state.payload.execution_attempt_id is not None
+                and state.payload.execution_attempt_id != result.execution_attempt_id)
+            or (synthesis.proposal_id, synthesis.proposal_revision,
+                synthesis.proposal_digest, synthesis.execution_attempt_id) != identity
+            or not source.sequence < execution.sequence < notice.sequence < state.sequence
+            or (notice.payload.provider_invocation_id is not None
+                and synthesis.provider_invocation_id is not None
+                and notice.payload.provider_invocation_id != synthesis.provider_invocation_id)):
+        return None
+    return source
+
+
+def _conversation_message(
+    event: CollaborationEvent,
+    events: tuple[CollaborationEvent, ...],
+    finalized_source: CollaborationEvent | None,
+) -> Message | None:
+    payload = event.payload
+    agent_id = event.sender.agent_id
+    role = SemanticRole.AGENT
+    if type(payload) is CollaborationMessagePayload:
+        if payload.validation_details or event.sender.kind.value not in {"user", "lead", "specialist"}:
+            return None
+        if event.sender.kind.value != "user" and event.recipient.kind.value != "user":
+            return None
+        content = payload.content
+        if event.sender.kind.value == "user":
+            sender, role = "User", SemanticRole.DEFAULT
+        else:
+            sender = "Lead" if agent_id == LEAD_ORCHESTRATOR else AGENT_SPECS[agent_id].display_name
+    elif type(payload) in {CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload, ArtifactReviewSynthesisPayload}:
+        content, sender = payload.message, "Lead"
+    elif type(payload) is CollaborationLeadDiscussionPayload:
+        content, sender = payload.report.response_text, "Lead"
+    elif type(payload) is CollaborationLeadExplorationResultPayload:
+        content, sender = payload.report.message, "Lead"
+    elif type(payload) is CollaborationSpecialistReplyPayload:
+        content, sender = payload.message, AGENT_SPECS[agent_id].display_name
+    else:
+        return None
+    parts = [content]
+    if type(payload) is CollaborationLeadExplorationResultPayload:
+        parts.insert(0, "Exploration (provisional)")
+        for idea in payload.report.ideas:
+            parts.append(f"{idea.kind.value.replace('_', ' ')} (provisional)\n\n{idea.material_text}")
+        parts.extend(observation.text for observation in payload.report.grounded_observations)
+    if type(payload) is CollaborationSpecialistReplyPayload:
+        if payload.premise_analysis is not None:
+            parts.append("Premise alternatives (provisional)")
+            for alternative in payload.premise_analysis.alternatives:
+                parts.append("\n\n".join((alternative.alternative_key, alternative.premise_text,
+                                           alternative.rationale, *alternative.tradeoffs)))
+        parts.extend(f"Premise conflict: {conflict.reason}" for conflict in payload.premise_conflicts)
+    synthesis = finalized_source.payload if finalized_source is not None else payload
+    if type(synthesis) is CollaborationLeadSynthesisPayload and synthesis.premise_report is not None:
+        report = synthesis.premise_report
+        parts.extend(("Premise analysis (provisional)", report.spec.question))
+        if content != report.summary.message and not content.startswith(report.summary.message + "\n\n"):
+            parts.append(report.summary.message)
+        parts.extend("\n\n".join((option.option_key, option.premise_text, option.rationale)) for option in report.options)
+    usage_source = finalized_source or event
+    usage_content = usage_source.payload.message if usage_source is not event else content
+    message = _event_response_items((_message(sender, usage_content, role=role),), usage_source, events)[0]
+    return replace(message, content="\n\n".join(parts))
 
 
 _STATE_GUIDANCE = {

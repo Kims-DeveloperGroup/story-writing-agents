@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ._collaboration_view import project_conversation_messages
+
 from ._core import (  # noqa: F401
     AdvisoryProgressError,
     format_agent_reply_content,
@@ -99,10 +101,12 @@ _PUBLIC_TYPES = (
 for _public_type in _PUBLIC_TYPES:
     _public_type.__module__ = __name__
 sanitize_terminal_text.__module__ = __name__
+project_conversation_messages.__module__ = __name__
 del _public_type
 
 
 __all__ = [
+    "project_conversation_messages",
     "AttachmentKind",
     "ComposeMode",
     "ConfirmationResult",

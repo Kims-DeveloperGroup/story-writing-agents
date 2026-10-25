@@ -89,21 +89,27 @@ output.
 
 The optional `history_events` supplies the complete validated canonical call
 context when the displayed events are a bounded selection. This permits exact
-usage totals without estimating from a partial window. History and transcript
-presentation retains event/turn/sequence identity independently of Message
+usage totals without estimating from a partial window. Detailed history retains event/turn/sequence identity independently of Message
 details. The terminal opens no history storage itself.
 
-The controller restores the latest 20 canonical records after a conversation
-focus change, following scope orientation and before the next input prompt.
-Startup restoration, session switches, and archive-successor selection use the
-same path. Selection uses the full session/conversation identity, so a subject
-rename or selecting the current focus does not repeat history. The controller
-reads and validates one complete snapshot, passes its selected suffix and full
-historical context to the renderer, and reports `Restored N of M records.`
-Truncated windows include `/history` and `/transcript` guidance; empty histories
-produce no restoration output. A handled read failure or interruption is not
-retried at every prompt. Restoration neither calls providers nor executes any
-historical confirmation controls.
+The pure facade function `project_conversation_messages(events, *,
+history_events=None)` returns `(source_event, Message)` pairs, one per visible
+response. Full historical context supplies exact usage and finalization
+relationships; the source event retains its sequence for paging. It opens no
+storage, invokes no provider, and grants no historical confirmation authority.
+
+The controller restores the latest 20 user, Lead, and specialist messages after
+a conversation focus change, following scope orientation and before the next
+input prompt. Startup restoration, session switches, and archive-successor
+selection use the same path. Selection uses the full session/conversation
+identity, so renaming or selecting the current focus does not repeat history.
+The controller validates one complete snapshot, projects messages before
+selecting its suffix, and supplies full historical context for exact response
+attribution and deduplication. It reports `Restored N of M messages.` Truncated
+windows include `/transcript` guidance; `/history` retains detailed event
+inspection. Empty or diagnostics-only histories produce no restoration output.
+A handled read failure or interruption is not retried at every prompt.
+Restoration neither calls providers nor executes historical confirmation controls.
 
 ## Message frames, Markdown, and response metadata
 
@@ -201,8 +207,12 @@ error without a Lead call. Retired execution commands remain unavailable;
 
 `/history`, `/search`, `/transcript`, and the focused-history section of
 `/status` render the active schema-v2 service without a provider call.
-History/transcript rows identify sequence, turn, step, kind, direction, actors,
-and closed readable fields. Search rows identify:
+History rows identify sequence, turn, step, kind, direction, actors, and closed
+readable fields. Restoration and transcript views contain only message frames,
+including substantive exploration ideas and specialist alternatives. Provider
+accounting, physical call observations, validation details, and structured
+workflow controls remain in diagnostic inspection. This distinction does not
+depend on the Message details setting. Search rows identify:
 
 ```text
 Status: active
@@ -213,7 +223,7 @@ Snippet: consult specialists before recommending the next action.
 
 The subject is orientation only. `/search` matches event fields, and its exact
 result notice is `Search returned N of M matching readable fields.` An explicitly
-bounded transcript reports `Transcript page returned N records.` and, when more
+bounded transcript reports `Transcript page returned N messages.` and, when more
 are available, `Continue with /transcript HANDLE COUNT --from SEQUENCE.` These
 transcript components appear only inside its transient viewer.
 
@@ -240,9 +250,11 @@ selects a range, and closing the viewer restores the composer. The controls
 insert `${path}` or `${path}#Lstart-Lend`; file bytes are read later through
 runtime authorization rather than embedded by the control.
 
-`/transcript` opens an isolated, scrollable view of one validated conversation
-snapshot. Without `COUNT`, it includes the complete history from sequence 1 or
-`--from`; an explicit count keeps the existing bounded page. Message frames,
+`/transcript` opens an isolated, scrollable message view of one validated
+conversation snapshot. Without `COUNT`, it includes all conversation messages
+from sequence 1 or `--from`; an explicit count limits visible messages after
+filtering and deduplication. `--from` remains a stored-event sequence, and
+continuation points to the next undisplayed message's sequence. Message frames,
 request/result notices, and continuation hints all remain inside the viewer.
 Arrows or `j`/`k` scroll, `b`/Space move to the previous/next screen, and `g`/`G`
 reach the beginning/end (`G` is Shift+G). Page Up/Down and Home/End remain aliases.

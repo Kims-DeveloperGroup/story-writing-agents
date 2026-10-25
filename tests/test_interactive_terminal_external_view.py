@@ -278,7 +278,10 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
             transcript = "".join(output.records)
             self.assertEqual(transcript.count("\x1b[?1049h"), transcript.count("\x1b[?1049l"))
             if characters.startswith("\x1b[6~"):
-                self.assertTrue(all(event.event_id in transcript for event in history))
+                self.assertTrue(all(event.event_id not in transcript for event in history))
+                self.assertIn("Specialist review recommended before the next action.", transcript)
+                self.assertIn("Visible lead synthesis.", transcript)
+                self.assertNotIn("Provider call", transcript)
                 self.assertIn("Input tokens: 0 | Output tokens: 2", re.sub(r"\x1b\[[0-9;]*m", "", transcript))
                 self.assertIn("Continuation hint", transcript)
         plain_writes = []

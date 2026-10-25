@@ -38,7 +38,6 @@ from ..conversation_search import (
     CollaborationHistorySearchQuery,
     CollaborationHistorySearchScope,
     CollaborationHistoryService,
-    page_collaboration_history,
 )
 from ..conversation_storage.contracts import ConversationStorageServices
 from ..conversation_storage.selection import (
@@ -134,6 +133,7 @@ from ..interactive_terminal import (
     InteractiveSemanticOutput,
     InteractiveTerminal,
     InteractiveTranscriptViewer,
+    project_conversation_messages,
     ListView,
     Message,
     MessagePresentation,
@@ -187,7 +187,6 @@ from ._conversation_policy import (
     validate_conversation_reference,
     validate_history_snapshot,
     validate_search_result_handles,
-    validate_transcript_page,
     visible_conversation_handle,
 )
 from ._exchange_policy import (
@@ -5377,27 +5376,32 @@ class InteractiveController:
             self._present_transcript_service_failure(exc)
             return
 
-        if restoring and not records:
-            return
-        displayed = records if action.count is None else records[-action.count :]
-        self._terminal.write_collaboration_events(
-            tuple(self._canonical_readable_event(record) for record in displayed),
-            show_details=self._show_message_details,
-            history_events=tuple(self._canonical_readable_event(record) for record in records),
-        )
+        history_events = tuple(self._canonical_readable_event(record) for record in records)
         if restoring:
+            messages = project_conversation_messages(history_events)
+            displayed_messages = messages if action.count is None else messages[-action.count :]
+            if not displayed_messages:
+                return
+            for _, message in displayed_messages:
+                self._semantic_output.write_component(message)
             guidance = (
-                " Use /history for all records or /transcript to browse older history."
-                if len(displayed) < len(records)
+                " Use /transcript to browse older messages or /history for detailed records."
+                if len(displayed_messages) < len(messages)
                 else ""
             )
             self._write_notice(
-                f"Restored {len(displayed)} of {len(records)} records.{guidance}",
+                f"Restored {len(displayed_messages)} of {len(messages)} messages.{guidance}",
                 label="conversation",
                 role=SemanticRole.MUTED,
                 state=ViewState.COMPLETED,
             )
             return
+        displayed = records if action.count is None else records[-action.count :]
+        self._terminal.write_collaboration_events(
+            tuple(self._canonical_readable_event(record) for record in displayed),
+            show_details=self._show_message_details,
+            history_events=history_events,
+        )
         self._semantic_output.write_component(
             Record(
                 "context",
@@ -6144,45 +6148,32 @@ class InteractiveController:
                     conversation_id=metadata.conversation_id,
                 )
                 continuation = None
+                snapshot_last_sequence = snapshot[-1].sequence if snapshot else 0
+                if start_sequence > snapshot_last_sequence + 1:
+                    raise ValueError("conversation transcript start sequence is stale")
+                messages = tuple(
+                    item for item in project_conversation_messages(snapshot)
+                    if item[0].sequence >= start_sequence
+                )
                 if action.count is None:
-                    snapshot_last_sequence = snapshot[-1].sequence if snapshot else 0
-                    if start_sequence > snapshot_last_sequence + 1:
-                        raise ValueError("conversation transcript start sequence is stale")
-                    selected_events = snapshot[start_sequence - 1 :]
+                    selected_messages = messages
                     count_label = "All remaining"
-                    result_text = f"Transcript returned {len(selected_events)} records."
+                    result_text = f"Transcript returned {len(selected_messages)} messages."
                 else:
-                    page = validate_transcript_page(
-                        page_collaboration_history(
-                            snapshot,
-                            start_sequence=start_sequence,
-                            max_records=action.count,
-                        ),
-                        session_id=session_id,
-                        conversation_id=metadata.conversation_id,
-                        start_sequence=start_sequence,
-                        page_limit=action.count,
-                    )
-                    selected_events = tuple(
-                        self._canonical_readable_event(record) for record in page.records
-                    )
+                    selected_messages = messages[:action.count]
                     count_label = str(action.count)
-                    result_text = f"Transcript page returned {len(page.records)} records."
-                    if page.next_cursor is not None:
+                    result_text = f"Transcript page returned {len(selected_messages)} messages."
+                    if len(selected_messages) < len(messages):
                         continuation = Notice(
                             f"Continue with /transcript {handle} "
-                            f"{page.next_cursor.max_records} --from "
-                            f"{page.next_cursor.next_sequence}.",
+                            f"{action.count} --from "
+                            f"{messages[len(selected_messages)][0].sequence}.",
                             label="hint",
                             role=SemanticRole.INFO,
                             state=ViewState.COMPLETED,
                         )
-                context_end = (
-                    selected_events[-1].sequence
-                    if selected_events
-                    else start_sequence - 1
-                )
-                history_events = snapshot[:context_end]
+                selected_events = tuple(event for event, _ in selected_messages)
+                history_events = snapshot
                 self._transcript_viewer.open(
                     selected_events,
                     request=Record(

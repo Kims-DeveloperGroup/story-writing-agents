@@ -109,6 +109,7 @@ from story_writing_agents.interactive_terminal._render import (
 
 
 TERMINAL_EXPORTS = (
+    "project_conversation_messages",
     "AttachmentKind",
     "ComposeMode",
     "ConfirmationResult",
@@ -417,14 +418,8 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
         self,
     ) -> None:
         self.assertEqual(tuple(terminal_facade.__all__), TERMINAL_EXPORTS)
-        self.assertEqual(
-            tuple(editor_facade.__all__),
-            (
-                "SlashCommandSuggestion",
-                "slash_command_suggestions",
-                "InteractiveMainLineEditor",
-            ),
-        )
+        self.assertEqual(terminal_facade.project_conversation_messages.__module__, "story_writing_agents.interactive_terminal")
+        self.assertEqual(tuple(editor_facade.__all__), ('SlashCommandSuggestion', 'slash_command_suggestions', 'InteractiveMainLineEditor'))
         self.assertIs(terminal_facade.InteractiveTranscriptViewer, _core.InteractiveTranscriptViewer)
         self.assertEqual(terminal_facade.InteractiveTranscriptViewer.__module__, "story_writing_agents.interactive_terminal")
         defining_objects = (
@@ -443,39 +438,18 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
             with self.subTest(value=value.__name__):
                 self.assertIs(getattr(terminal_facade, value.__name__), value)
                 self.assertIs(getattr(_core, value.__name__), value)
-                self.assertEqual(
-                    value.__module__,
-                    "story_writing_agents.interactive_terminal",
-                )
-        self.assertIs(
-            terminal_facade.sanitize_terminal_text,
-            _model.sanitize_terminal_text,
-        )
-        self.assertEqual(
-            terminal_facade.sanitize_terminal_text.__module__,
-            "story_writing_agents.interactive_terminal",
-        )
+                self.assertEqual(value.__module__, 'story_writing_agents.interactive_terminal')
+        self.assertIs(terminal_facade.sanitize_terminal_text, _model.sanitize_terminal_text)
+        self.assertEqual(terminal_facade.sanitize_terminal_text.__module__, 'story_writing_agents.interactive_terminal')
         self.assertIs(SlashCommandSuggestion, _model.SlashCommandSuggestion)
         self.assertIs(terminal_facade.SlashCommandSuggestion, SlashCommandSuggestion)
-        self.assertEqual(
-            SlashCommandSuggestion.__module__,
-            "story_writing_agents.interactive_line_editor",
-        )
-        self.assertEqual(
-            InteractiveMainLineEditor.__module__,
-            "story_writing_agents.interactive_line_editor",
-        )
-        self.assertIs(
-            terminal_facade.InteractivePromptInput,
-            InteractivePromptInput,
-        )
+        self.assertEqual(SlashCommandSuggestion.__module__, 'story_writing_agents.interactive_line_editor')
+        self.assertEqual(InteractiveMainLineEditor.__module__, 'story_writing_agents.interactive_line_editor')
+        self.assertIs(terminal_facade.InteractivePromptInput, InteractivePromptInput)
         self.assertIs(InteractivePromptInput, _core.InteractivePromptInput)
         self.assertNotIn("InteractivePromptInput", terminal_facade.__all__)
         self.assertFalse(hasattr(__import__("story_writing_agents"), "InteractivePromptInput"))
-        self.assertIs(
-            terminal_facade.InteractiveMainInput,
-            InteractiveMainInput,
-        )
+        self.assertIs(terminal_facade.InteractiveMainInput, InteractiveMainInput)
         self.assertIs(InteractiveMainInput, _core.InteractiveMainInput)
         self.assertNotIn("InteractiveMainInput", terminal_facade.__all__)
         self.assertFalse(hasattr(__import__("story_writing_agents"), "InteractiveMainInput"))
@@ -628,6 +602,7 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
         self.assertEqual(shape(InteractiveInputLifecycle), (("terminal", positional, required),))
         self.assertEqual(shape(InteractiveInputLifecycle.session), ())
         self.assertEqual(shape(InteractiveInputLifecycle.native_handoff), ())
+        self.assertEqual(shape(terminal_facade.project_conversation_messages), (("events", positional, required), ("history_events", keyword, None)))
 
     def test_public_values_pickle_and_preserve_isinstance_compatibility(self) -> None:
         samples = (
@@ -3359,7 +3334,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         package_root = repository_root / "src" / "story_writing_agents"
         terminal_root = package_root / "interactive_terminal"
         expected_dependencies = {
-            '__init__.py': {'._advisory_progress', '._core'},
+            '__init__.py': {'._advisory_progress', '._collaboration_view', '._core'},
             '_advisory_progress.py': {'..agent_context.actions', '..agent_context.progress'},
             '_collaboration_view.py': {'..agents', '..conversations', '..core_document_readiness', '..editorial_state', '..lead_premise_decisions', '..lead_task_transitions', '..reply_trace', '..specialist_routing', '..writing_artifacts', '._model', '._response_usage'},
             '_external_view.py': set(), '_input_lifecycle.py': set(),

@@ -1948,7 +1948,7 @@ class InteractiveExternalViewer:
 
 
 class InteractiveTranscriptViewer:
-    """Bind transient rich transcript presentation without owning history storage."""
+    """Bind transient conversation presentation without owning history storage."""
 
     __slots__ = ("_viewer",)
 
