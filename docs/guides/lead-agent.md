@@ -690,9 +690,11 @@ a separately admitted premise proposal can use two physical calls for selection
 and its terminal result. That allowance covers only the premise proposal;
 current-task results keep the ordinary ceiling, and retrieval, correction and
 authentication replay cannot borrow it. Analyst execution still requires its
-own confirmation, and task source/cost receipts remain distinct. The separate
-advisory-consultation API accepts historical scope1/2 only; scope3 uses the
-confirmed Lead flow.
+own confirmation, and task source/cost receipts remain distinct. The admission
+records the ordinary ceiling separately. An ordinary preparation recommendation
+must use one submitted call and an exact offered task; that task may differ from
+the completed task supplying the budget floor. The separate advisory-consultation
+API accepts historical scope1/2 only; scope3 uses the confirmed Lead flow.
 
 ### Choosing an unresolved premise
 

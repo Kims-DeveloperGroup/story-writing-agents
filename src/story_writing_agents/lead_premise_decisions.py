@@ -223,6 +223,7 @@ class PremiseFreshWorkAdmission:
     prior_analysis_report_ref: PremiseReportRef | None = None
     prior_authoring_source_ref: PremiseAuthoringSourceRef | None = None
     schema_version: int = 1
+    ordinary_front_physical_call_limit: int = 0
 
     def __post_init__(self) -> None:
         if type(self.schema_version) is not int or self.schema_version != 1:
@@ -231,6 +232,7 @@ class PremiseFreshWorkAdmission:
             _identifier(value)
         _digest(self.source_user_event_digest)
         _integer(self.front_physical_call_limit, 1, 2)
+        _integer(self.ordinary_front_physical_call_limit, 0, 1)
         if self.offered_question_id is not None:
             _identifier(self.offered_question_id)
         if type(self.offered_authoring_tasks) is not tuple or any(
@@ -251,6 +253,16 @@ class PremiseFreshWorkAdmission:
                            (self.prior_authoring_source_ref, PremiseAuthoringSourceRef)):
             if value is not None and type(value) is not cls:
                 raise TypeError("premise admission parent is invalid")
+        if self.ordinary_front_physical_call_limit == 1 and (
+            self.front_physical_call_limit != 2
+            or self.offered_question_id is None
+            or self.selected_authoring_task is not None
+            or self.prior_authoring_source_ref is None
+            or self.prior_authoring_source_ref.task not in self.offered_authoring_tasks
+        ):
+            raise ValueError(
+                "ordinary front admission requires exact ordinary1 and fresh2 offers"
+            )
 
 
 @dataclass(frozen=True, slots=True)

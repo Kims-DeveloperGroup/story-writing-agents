@@ -1265,6 +1265,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         def checkpoint(name, status):
             print('WHOLE_FRONT_NEIGHBORS ' + json.dumps({'test_id': self.id(), 'invocation': invocation, 'packet': identity,
                 'phase': name, 'status': status,
+                'monotonic_seconds': time.perf_counter(),
                 'totals_kind': 'cumulative', 'final': status in ('complete', 'partial'),
                 'case_count': case_count, 'counts_wall_cpu': totals[name]}, separators=(',', ':')), flush=True)
         @contextmanager
@@ -1782,6 +1783,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
     async def test_front_schema_is_minimal_closed_and_provider_strict(self) -> None:
         # Ref spelling and lossless factoring preserve independently supplied neighboring values.
+        import time
         from story_writing_agents.lead_provider_contracts import factor_rule_schema
         from story_writing_agents.provider_wire import hoist_schema_definitions, require_schema_projection, WireShapeError
         from story_writing_agents.structured_output_validation import SchemaRules
@@ -2600,11 +2602,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         original_variant = owner.variant
         def replaced_owner_decode(_value):
             raise AssertionError("replaced owner field reached the decoder")
-        try:
-            object.__setattr__(owner, "variant", replace(original_variant, decode=replaced_owner_decode))
+        with frozen_fixture_field(owner, 'variant', replace(original_variant, decode=replaced_owner_decode), original_variant):
             with self.assertRaisesRegex(ValueError, '^frozen Lead owner declaration changed$'):
                 BoundContract.bind(owner, member.identity)
-        finally: object.__setattr__(owner, "variant", original_variant)
         self.assertEqual(current.decode_selected(current_value).value, original_value)
         # Pure decoder captures are frozen, including captures reached through defaults.
         for through_default in (False, True):
@@ -2776,16 +2776,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         for declaration, args, message in ( (TypedDecoder("matcher-defaults", "guard-v1", matcher_callback),
             (None, ), "frozen typed decoder hook provenance changed"), (replace(current.host_checks[0],
             check=matcher_callback), (None, None), "frozen named owner hook provenance changed")):
-            try:
-                matcher.__defaults__ = tuple(list(matcher_defaults))
+            with frozen_fixture_field(matcher, '__defaults__', tuple(list(matcher_defaults)), matcher_defaults, setter=setattr):
                 self.assertIsNot(matcher.__defaults__, matcher_defaults)
                 with self.assertRaisesRegex(ValueError, "^" + message + "$") as changed_matcher:
                     declaration.require_provenance()
                     matcher_callback(*args)
                 self.assertIs(type(changed_matcher.exception), ValueError)
                 self.assertEqual(matcher_calls, [])
-            finally:
-                matcher.__defaults__ = matcher_defaults
             declaration.require_provenance()
         dependency_state = ["current"]
         def matcher_dependency(value, choices=dependency_state):
@@ -3392,15 +3389,12 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         replacement_calls, before_authorization_calls = [], len(self.backend.calls)
         def replaced_authorization(_result, _authorization):
             replacement_calls.append(True)
-        original_authorization = bound.factory.authorized_validator
-        object.__setattr__(bound.factory, 'authorized_validator', replaced_authorization)
-        try:
+        with frozen_fixture_field(bound.factory, 'authorized_validator', replaced_authorization, bound.factory.authorized_validator):
             for operation in (lambda: bound.require_submission(call.payload, call.schema),
                               lambda: bound.require_authorized_answer(actual_decoded, front_authorization)):
                 self.assertIsNone(operation())
             self.assertEqual(replacement_calls, [])
             self.assertEqual(len(self.backend.calls), before_authorization_calls)
-        finally: object.__setattr__(bound.factory, 'authorized_validator', original_authorization)
         bound.require_submission(call.payload, call.schema)
         bound.require_authorized_answer(actual_decoded, front_authorization)
         workflow_record = {**profile_record, 'activity': 'workflow', 'domains': [],
@@ -3734,14 +3728,17 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                 continue
                             if semantic_kind == 'recommendation' and intent == 'authoring':
                                 extra['authoring_assessment'] = None; semantic_extra['authoring_assessment'] = None
+                            print('WHOLE_FRONT_MODEL_BEGIN', time.perf_counter(), getattr(self, '_neighbor_invocation', 0) + 1, family, intent, activity, domains, roles, flush=True)
                             profile_binding, modeled_frame = modeled_fixture_response(
                                 profile_origin, {**base, 'response_type': response_kind,
                                  'response_details': {'task_scope': native_scope, **extra}},
                                 family=0,
                                 branch_key=stem + ':family:' + str(family))
+                            print('WHOLE_FRONT_MODEL_END', time.perf_counter(), getattr(self, '_neighbor_invocation', 0) + 1, family, intent, activity, domains, roles, flush=True)
                             packet = json.loads(modeled_frame)
                             prepared_profile = (prepared_profile_projections if profile_binding is profile_origin
                                 else self._require_fixture_projections(profile_binding))
+                            print('WHOLE_FRONT_PROJECTIONS_END', time.perf_counter(), getattr(self, '_neighbor_invocation', 0) + 1, family, intent, activity, domains, roles, flush=True)
                             profile_projection_rules = tuple(item[2] for item in prepared_profile[1])
                             self.assertFalse(profile_binding.rule_graph.findings(packet))
                             decoded_profile = profile_binding.decode_response(json.dumps(packet))

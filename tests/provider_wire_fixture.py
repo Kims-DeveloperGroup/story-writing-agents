@@ -7,12 +7,12 @@ import json
 from contextlib import contextmanager
 
 @contextmanager
-def frozen_fixture_field(record, field, replacement, original):
+def frozen_fixture_field(record, field, replacement, original, *, setter=object.__setattr__):
     try:
-        object.__setattr__(record, field, replacement)
+        setter(record, field, replacement)
         yield
     finally:
-        object.__setattr__(record, field, original)
+        setter(record, field, original)
 
 
 _FIELDS = {'message': 'response_text', 'authoring_scope': 'writing_task_scope',

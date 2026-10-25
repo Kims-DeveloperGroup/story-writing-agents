@@ -15787,7 +15787,8 @@ class StoryRuntime:
         admission = PremiseFreshWorkAdmission(origin.event_id,
             "sha256:" + hashlib.sha256(encode_collaboration_event(origin)).hexdigest(),
             step_id, invocation_id, 2, question_id, offered_authoring_tasks, selected_authoring_task,
-            parent, report_ref, source_ref)
+            parent, report_ref, source_ref,
+            ordinary_front_physical_call_limit=0 if ordinary_source is None else 1)
         draft = self._draft(session_id=session_id, conversation_id=conversation_id,
             turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.PREMISE_FRESH_WORK_ADMISSION,
             sender=_RUNTIME_ACTOR, recipient=_LEAD_ACTOR,

@@ -363,6 +363,8 @@ class LeadResultFunding:
                 or not 1 <= self.allocated_call_limit <= 2
                 or type(self.premise_admission) is not PremiseFreshWorkAdmission
                 or self.premise_admission.front_physical_call_limit != 2
+                or type(self.premise_admission.ordinary_front_physical_call_limit) is not int
+                or self.premise_admission.ordinary_front_physical_call_limit != 1
                 or self.premise_admission.offered_question_id is None
                 or type(self.request_identity) is not tuple or len(self.request_identity) != 4
                 or any(type(item) is not str or not item for item in self.request_identity)):
@@ -384,7 +386,9 @@ class LeadResultFunding:
         return (self.ordinary_call_limit, self.allocated_call_limit, self.request_identity,
             admission, admission.source_user_event_id, admission.source_user_event_digest,
             admission.provider_step_id, admission.provider_invocation_id,
-            admission.front_physical_call_limit, admission.offered_question_id,
+            admission.front_physical_call_limit,
+            (type(admission.ordinary_front_physical_call_limit),
+             admission.ordinary_front_physical_call_limit), admission.offered_question_id,
             tuple(task(item) for item in admission.offered_authoring_tasks),
             task(admission.selected_authoring_task), admission.schema_version,
             None if parent is None else (parent, parent.event_id, parent.digest),

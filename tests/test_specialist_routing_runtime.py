@@ -131,7 +131,7 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
 class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
     def _assert_continuation(self, result, field, *, expected_next_action=c.CollaborationNextAction.CONTINUE_WITH_LEAD):
         self.assertIsNone(getattr(result, field))
-        self.assertIs(result.next_action, expected_next_action)
+        self.assertIs(result.next_action, expected_next_action, (result.kind, tuple((len(chunk), chunk[:2048]) for chunk in result.validation_details[:2])))
     def _native_scoped(self, *agents, **values):
         mutate = values.pop('mutate', None)
         def respond(call, provider, *, select=False):
@@ -549,11 +549,12 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.assertEqual((origin.offers.remaining_physical_calls, selected.offers.remaining_physical_calls), (2, 1))
             admission = funding.premise_admission
             source = admission.prior_authoring_source_ref
+            self.assertEqual(admission.ordinary_front_physical_call_limit, 1)
             self.assertEqual(source.task, premise.PremiseAuthoringTaskRef(
                 changed.proposal.authoring_scope.task_id, changed.proposal.authoring_scope.task_revision))
             self.assertEqual(source.cost.step_id, confirmed.turn.step_id)
             self.assertNotEqual(admission.offered_authoring_tasks[0], source.task)
-            self.assertTrue(any(member.rule_graph.literal_at(('response_type',)) == 'recommendation'
+            self.assertTrue(any(member.rule_graph.literal_at(('response_type',)) == 'proposal_drafting_recommendation'
                 for member in origin.semantic_index.contracts if member.schema_id in origin.offered_semantic_schema_ids))
             self.assertEqual(set(origin.selectable_semantic_schema_ids), {member.schema_id
                 for member in origin.semantic_index.contracts if member.owner.variant.independent_premise})
@@ -587,6 +588,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 if type(event.payload) is c.CollaborationPremiseFreshWorkAdmissionPayload
                 and event.payload.admission.provider_step_id != admission.provider_step_id)
             for record, field, value in ((funding, 'premise_admission', None),
+                    (admission, 'ordinary_front_physical_call_limit', 0),
+                    (admission, 'ordinary_front_physical_call_limit', True),
+                    (admission, 'ordinary_front_physical_call_limit', 1.0),
                 (funding, 'premise_admission', stale),
                 (origin.factory.constraints, 'premise_question_id', 'foreign-question'),
                 (origin.factory.rule_seed, 'independent_premise_roots', ())):
@@ -1191,15 +1195,15 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         old_source = c.project_collaboration_history(self.history(conversation)).offered_draft_sources[-1].event_id
         task_id=original.proposal.authoring_scope.task_id
         drift_prefix = len(self.history(conversation))
-        drifted = await self.proposal_for(conversation, recommendation(recommended_action=action(source_ids=(
-            old_source,), target_paths=(OUTLINE,), specialist_ids=ROSTER),
-            authoring_scope=lambda call: dict(next(t["current_scope"] for t in _workflow_material(call.payload)[
-            "authoring_tasks"] if t["task_id"] == task_id and t["task_revision"] == 1), domains=["plot_structure",
-            "character_world", "tone_execution"], contributions=[{"domain": domain,
-            "role": "draft_owner" if domain == "plot_structure" else "constraint_assessor"} for domain in (
-            "plot_structure", "character_world", "tone_execution")]),
-            mutate=lambda value: value.update(authoring_assessment=assessment),
-        ))
+        drift_response = recommendation(recommended_action=action(source_ids=(old_source,), target_paths=(OUTLINE,), specialist_ids=ROSTER),
+            authoring_scope=c.authoring_scope_to_dict(original.proposal.authoring_scope),
+            mutate=lambda value: value.update(authoring_assessment=assessment))
+        def drift_role(call, provider):
+            packet = json.loads(drift_response(call, provider))
+            roles = packet['agent_action']['task_result']['response_details']['task_scope']['roles']
+            roles['character_world']['role'] = 'constraint_assessor'
+            return json.dumps(packet, ensure_ascii=False, separators=(',', ':'))
+        drifted = await self.proposal_for(conversation, drift_role)
         self.assertEqual(len(_submitted_calls(self.history(conversation)[drift_prefix:])), 1)
         self.assertIsNone(drifted.recommendation_request, drifted)
         self._assert_continuation(drifted, "proposal", expected_next_action=c.CollaborationNextAction.RETRY_LEAD_TURN)
@@ -1335,6 +1339,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertCountEqual([(t.task_id, t.task_revision) for t in fresh_admission.offered_authoring_tasks], expected)
         self.assertIsNone(fresh_admission.selected_authoring_task)
         self.assertEqual(fresh_admission.front_physical_call_limit, 2)
+        self.assertEqual(fresh_admission.ordinary_front_physical_call_limit, 0)
         self.assertEqual(len(_submitted_calls(suffix)), 1)
         self.assertFalse(any(e.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for e in suffix))
         self.assertEqual(self.history(multiple)[:len(multi_prefix)], multi_prefix)

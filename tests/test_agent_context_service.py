@@ -583,22 +583,18 @@ class StructuredOutputValidationTests(unittest.TestCase):
                 field_decoder.require_provenance()
         self.assertIsNone(field_decoder.require_provenance())
         field_records = fields(FieldCapture); later_field = field_records[1]
-        try:
-            later_field.name = "undeclared-slot"
+        with frozen_fixture_field(later_field, 'name', 'undeclared-slot', 'right', setter=setattr):
             with self.assertRaisesRegex(
                     TypeError, "^typed decoder dataclass captures require only declared slot fields$"):
                 field_decoder.require_provenance()
-        finally: later_field.name = "right"
         self.assertIsNone(field_decoder.require_provenance())
         field_map = FieldCapture.__dataclass_fields__
-        try:
-            FieldCapture.__dataclass_fields__ = dict(field_map)
+        with frozen_fixture_field(FieldCapture, '__dataclass_fields__', dict(field_map), field_map, setter=setattr):
             self.assertIsNot(FieldCapture.__dataclass_fields__, field_map)
             self.assertIsNone(field_decoder.require_provenance())
             FieldCapture.__dataclass_fields__ = dict(reversed(tuple(field_map.items())))
             with self.assertRaisesRegex(ValueError, "^frozen typed decoder hook provenance changed$"):
                 field_decoder.require_provenance()
-        finally: FieldCapture.__dataclass_fields__ = field_map
         self.assertIsNone(field_decoder.require_provenance())
         field_name_slot, field_reads, field_armed = Field.name, [], [False]
         field_error = RuntimeError("fixture Field.name access")
