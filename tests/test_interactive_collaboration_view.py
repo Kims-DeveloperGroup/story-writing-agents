@@ -114,7 +114,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             dispositions = tuple(premise.PremiseReplyDisposition(ref.event_id, ("knows",), "used", "Keep the shared premise.", "No residual cost.") for ref in refs)
             option = premise.PremiseOption("option", premise.material_digest("The narrator knows."), "knows", "The narrator knows.", "Preserve ambiguity.", dispositions)
             report = premise.PremiseDecisionReport(premise.PremiseDecisionSpec("question", "slot", "Who knows?",
-                (premise.ArtifactReviewDomain.PLOT,), "user"), origin.conversation_id, synthesis.proposal_id,
+                (premise.ArtifactReviewDomain.PLOT_STRUCTURE,), "user"), origin.conversation_id, synthesis.proposal_id,
                 synthesis.proposal_revision, synthesis.proposal_digest, origin.step_id, synthesis.execution_attempt_id, refs,
                 premise.PremiseDecisionSummary("options", synthesis.message, (option.intent,), "knows"), (option,),
                 premise.PremiseDecisionCost(origin.step_id, ("call_synthesis",), 1, synthesis.proposal_id,
