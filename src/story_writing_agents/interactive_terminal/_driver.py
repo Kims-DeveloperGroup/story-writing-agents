@@ -845,7 +845,8 @@ class RawTerminalDriver:
         active = (self._timeline_enabled and not self._native_input_handoff_active
                   and self._timeline_suspended == self._timeline_inline_depth)
         if not active:
-            yield
+            with self._suspend_timeline():
+                yield
             return
         try:
             with self._output_history.review_context():
@@ -4131,7 +4132,7 @@ class RawTerminalDriver:
         control_state = initial_state
         ordinary_transition = transition
         is_main = type(initial_state) in {MainInputControlState, MainCommandControlState}
-        if is_main:
+        if is_main and not self._timeline_suspended:
             self._timeline_enabled = True
         display_state.history_enabled = (
             (is_main and not self._timeline_suspended) or bool(self._timeline_inline_depth)
@@ -4897,12 +4898,12 @@ class RawTerminalDriver:
         def render(current: PickerControlState) -> RenderedFrame:
             viewport = viewport_projector(current)
             if type(viewport) is not PickerViewport:
-                raise TypeError("viewport_projector must return PickerViewport")
+                raise TypeError("viewport_projector must return a PickerViewport")
             frame = viewport_renderer(viewport, render_capabilities)
             if type(frame) is not RenderedFrame:
-                raise TypeError("viewport_renderer must return RenderedFrame")
+                raise TypeError("viewport_renderer must return a RenderedFrame")
             if frame.width != render_width:
-                raise ValueError("rendered picker width must match live width")
+                raise ValueError("rendered picker width must match the live width")
             return frame
 
         frame = render(state)
@@ -5219,7 +5220,7 @@ class RawTerminalDriver:
                 _CURSOR_UP * state.rendered_cursor_row,
                 _CARRIAGE_RETURN,
                 _CLEAR_TO_END,
-                "\n" if line_break else "",
+                "\n" if line_break and not self._timeline_inline_depth else "",
             )
         )
         self._write_live_text(payload)

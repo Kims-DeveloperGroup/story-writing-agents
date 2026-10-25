@@ -2018,7 +2018,12 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                 self.assertEqual(outcome, expected)
                 self.assertEqual(len(decisions), 1)
                 self.assertEqual(len(wheel_offsets), 2 if reviewing else 0)
-                self.assertEqual(tuple(map(tuple, screen.primary)), before)
+                self.assertEqual(tuple(map(tuple, screen.primary)), before, {
+                    "case": case, "physical_cursor": screen.cursor,
+                    "timeline_cursor_row": managed._timeline_cursor_row, "timeline_origin": managed._timeline_origin,
+                    "changed_rows": [(index, "".join(old).rstrip(), "".join(new).rstrip())
+                                     for index, (old, new) in enumerate(zip(before, screen.primary)) if tuple(new) != old],
+                })
                 self.assertEqual(managed._output_history.frames[0].view.start_line, 2 if reviewing else 1)
                 self.assertEqual(sum(entry.component == user for entry in managed._output_history.entries), 1)
                 self.assertEqual(managed._history_state, MainInputHistoryState(("seed",)))

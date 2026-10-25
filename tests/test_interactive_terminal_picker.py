@@ -2625,7 +2625,12 @@ class PickerDriverTests(unittest.TestCase):
                 expected = ControlOutcome(ControlOutcomeKind.CANCEL) if blocked else ControlOutcome(ControlOutcomeKind.COMMIT, text="1" if shrinking else "reject")
                 self.assertEqual(outcome, expected)
                 self.assertEqual(len(decisions), 1)
-                self.assertEqual(tuple(map(tuple, screen.primary)), before)
+                self.assertEqual(tuple(map(tuple, screen.primary)), before, {
+                    "case": case, "physical_cursor": screen.cursor,
+                    "timeline_cursor_row": managed._timeline_cursor_row, "timeline_origin": managed._timeline_origin,
+                    "changed_rows": [(index, "".join(old).rstrip(), "".join(new).rstrip())
+                                     for index, (old, new) in enumerate(zip(before, screen.primary)) if tuple(new) != old],
+                })
                 if shrinking:
                     self.assertEqual(pending.picker.visible_choice_limit, 9)
                     self.assertEqual(managed._output_history.frames, ())
