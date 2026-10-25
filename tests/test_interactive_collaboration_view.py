@@ -104,13 +104,15 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(origin, tuple(event for event, _ in projected))
             self.assertEqual(project_conversation_messages((origin,), history_events=final_history), ())
             self.assertIn("Input tokens: 0 | Output tokens: 2", next(message.metadata for event, message in projected if event == finalization_notice))
-            legacy = tuple(replace(event, payload=replace(event.payload, provider_invocation_id=None))
-                if type(event.payload) in {CollaborationMessagePayload, CollaborationLeadSynthesisPayload} else event for event in final_history)
-            self.assertEqual(tuple(event.event_id for event, _ in project_conversation_messages(legacy)),
-                             tuple(event.event_id for event, _ in projected))
+            long_prose, budget_notice = "L" * 32_768, "The provider round ended. The requested second specialist round exceeds the remaining call budget."
+            for invocation_id in (origin.payload.provider_invocation_id, None):
+                overflow = tuple(replace(event, payload=replace(event.payload, message=long_prose, provider_invocation_id=invocation_id)) if event == origin else replace(event, payload=replace(event.payload, content=budget_notice, provider_invocation_id=invocation_id)) if event == finalization_notice else event for event in final_history)
+                retained = project_conversation_messages((next(event for event in overflow if event.event_id == finalization_notice.event_id),), history_events=overflow)
+                self.assertEqual(tuple(message.content for _, message in retained), (long_prose + "\n\n" + budget_notice,))
+            legacy = tuple(replace(event, payload=replace(event.payload, provider_invocation_id=None)) if type(event.payload) in {CollaborationMessagePayload, CollaborationLeadSynthesisPayload} else event for event in final_history)
+            self.assertEqual(tuple(event.event_id for event, _ in project_conversation_messages(legacy)), tuple(event.event_id for event, _ in projected))
             synthesis = origin.payload
-            refs = tuple(premise.PremiseReplyRef(reply_id, next(event.sender.agent_id for event in known if event.event_id == reply_id), "sha256:" + "1" * 64)
-                for reply_id in synthesis.reply_event_ids)
+            refs = tuple(premise.PremiseReplyRef(reply_id, next(event.sender.agent_id for event in known if event.event_id == reply_id), "sha256:" + "1" * 64) for reply_id in synthesis.reply_event_ids)
             dispositions = tuple(premise.PremiseReplyDisposition(ref.event_id, ("knows",), "used", "Keep the shared premise.", "No residual cost.") for ref in refs)
             option = premise.PremiseOption("option", premise.material_digest("The narrator knows."), "knows", "The narrator knows.", "Preserve ambiguity.", dispositions)
             report = premise.PremiseDecisionReport(premise.PremiseDecisionSpec("question", "slot", "Who knows?",
@@ -125,9 +127,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(option_view), 1)
             for text in (report.spec.question, option.premise_text, option.rationale):
                 self.assertIn(text, option_view[0][1].content)
-            repeated = replace(legacy[-2], event_id="repeated_prose", sequence=legacy[-1].sequence + 1,
-                turn_id="another_turn", batch_id="another_batch", batch_ordinal=0, batch_size=1,
-                kind=CollaborationEventKind.MESSAGE, sender=LEAD, recipient=USER,
+            repeated = replace(legacy[-2], event_id="repeated_prose", sequence=legacy[-1].sequence + 1, turn_id="another_turn", batch_id="another_batch", batch_ordinal=0, batch_size=1, kind=CollaborationEventKind.MESSAGE, sender=LEAD, recipient=USER,
                 payload=CollaborationMessagePayload(finalized.message))
             repeated_messages = project_conversation_messages(legacy + (repeated,))
             self.assertEqual(sum(message.content == finalized.message for _, message in repeated_messages), 2)

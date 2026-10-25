@@ -226,6 +226,10 @@ def _conversation_message(
         content, sender = payload.message, AGENT_SPECS[agent_id].display_name
     else:
         return None
+    if finalized_source is not None:
+        source_content = finalized_source.payload.message
+        if content != source_content and not content.startswith(source_content + "\n\n"):
+            content = f"{source_content}\n\n{content}"
     parts = [content]
     if type(payload) is CollaborationLeadExplorationResultPayload:
         parts.insert(0, "Exploration (provisional)")
