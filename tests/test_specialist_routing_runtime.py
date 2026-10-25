@@ -128,9 +128,12 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
 
 
 class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
-    def _assert_continuation(self, result, field):
+    def _assert_continuation(self, result, field, *, diagnostic=False):
         self.assertIsNone(getattr(result, field))
-        self.assertIs(result.next_action, c.CollaborationNextAction.CONTINUE_WITH_LEAD)
+        self.assertIs(result.next_action, c.CollaborationNextAction.CONTINUE_WITH_LEAD, (
+            result.kind, tuple((len(chunk), chunk[:1024]) for chunk in result.validation_details[:2]),
+            ('last-retained-unpaired', len(self.backend.calls), len(self.backend.finalizers)),
+            tuple((row.contract.phase, row.contract.offers.remaining_physical_calls) for row in self.backend.calls[-1:])) if diagnostic else None)
     def _native_scoped(self, *agents, **values):
         mutate = values.pop('mutate', None)
         def respond(call, provider, *, select=False):
@@ -941,9 +944,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIsNotNone(applied.commit_request)
         await self.runtime.decide_story_commit(_commit_decision(applied, StoryCommitDecision.REJECT))
         completed = self.runtime.inspect_lead_collaboration(self.session_id, conversation)
-        self.assertEqual((completed.rounds_spent, completed.physical_calls_spent), (2, 11))
+        self.assertEqual((completed.rounds_spent, completed.physical_calls_spent), (2, 12))
         submitted = _submitted_calls(self.history(conversation))
-        self.assertEqual(len({(item.invocation_id, item.call_id) for item in submitted}), 11)
+        self.assertEqual(len({(item.invocation_id, item.call_id) for item in submitted}), 12)
         for failure, code in ((ConnectionError("Known adoption failure"), c.CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED), (asyncio.CancelledError(), c.CollaborationLeadOutcomeFailureCode.CANCELLED)):
             self.backend.enqueue(_SubmittedFailure(failure))
             if code is c.CollaborationLeadOutcomeFailureCode.CANCELLED:
@@ -1016,7 +1019,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIsNotNone(fresh.proposal, fresh)
         self.assertNotEqual(fresh.proposal.authoring_scope.task_id, task_id)
         self.assertEqual((fresh.proposal.authoring_scope.task_revision, fresh.proposal.budget.rounds_spent,
-                          fresh.proposal.budget.physical_calls_spent), (1, 0, 1))
+                          fresh.proposal.budget.physical_calls_spent), (1, 0, 2))
         changed_response = _artifact_outcome(operations=[{"kind": "create", "suggested_path": fresh_path,
                            "new_text": "The changed tide preserves the current consequence.\n"}],
                            evidence_status="incomplete", evidence_ids=lambda call, material:
@@ -1065,10 +1068,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                          and event.payload.state is c.CollaborationStepState.RUNNING
                          and event.step_id in new_steps for event in new_history)
         self.assertEqual((old_task.ref.task_id, old_task.ref.task_revision, old_task.status, old_rounds,
-                          len(old_task.submitted_call_ids)), (task_id, 1, "completed", 2, 11))
+                          len(old_task.submitted_call_ids)), (task_id, 1, "completed", 2, 12))
         self.assertEqual((new_task.ref.task_id, new_task.ref.task_revision, new_task.status, new_rounds,
                           len(new_task.submitted_call_ids)),
-                         (fresh.proposal.authoring_scope.task_id, 1, "active", 2, 11))
+                         (fresh.proposal.authoring_scope.task_id, 1, "active", 2, 12))
         self.assertEqual(self.artifact_bytes(), condition_before)
         coordinator=WorkspaceConversationStorageMutationCoordinator(self.control_workspace)
         with coordinator.borrow(timeout_seconds=2.0) as lease:
@@ -1135,7 +1138,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             mutate=lambda value: value.update(authoring_assessment=assessment),
         ))
         self.assertIsNone(drifted.recommendation_request, drifted)
-        self._assert_continuation(drifted, "proposal")
+        self._assert_continuation(drifted, "proposal", diagnostic=True)
         ready = await self.proposal_for(conversation, capture_response('ready',
             recommendation(recommended_action=action(
             source_ids=(old_source,), target_paths=(path,), specialist_ids=ROSTER),

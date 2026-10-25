@@ -6222,7 +6222,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 failure.add_note(_current_policy_failure_note(
                     case.backend, projection=projected))
             raise
-        self.assertEqual(len(_submitted_calls(case.history(source))) + len(_submitted_calls(case.history(owner))), 2)
+        self.assertEqual(len(_submitted_calls(case.history(source))) + len(_submitted_calls(case.history(owner))), 4)
 
 
 

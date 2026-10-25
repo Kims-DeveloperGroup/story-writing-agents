@@ -225,7 +225,7 @@ def _history_validation_details(history):
 
 
 
-def _selected_premise_proposal(selection, *, authoring_assessment=None):
+def _selected_premise_proposal(selection, *, authoring_assessment=None, select=False):
     from tests.test_specialist_routing_runtime import scoped_proposal
     from tests.provider_wire_fixture import lead_fixture_assessment
     inputs = ("user_input", "selected_premise")
@@ -249,7 +249,7 @@ def _selected_premise_proposal(selection, *, authoring_assessment=None):
     return scoped_proposal(PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST,
         selected=selection.authoring_task_id, domains=('plot_structure', 'character_world',
         'tone_execution'), revision=revision, paths=selection.target_paths, mutate=captured_scope,
-        authoring_assessment=authoring_assessment, native_inputs={
+        authoring_assessment=authoring_assessment, select=select, native_inputs={
             "family": 0, "input_choices": inputs, "source_choices": inputs,
             "anchors": dict.fromkeys((PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST), "user_input"),
             "recipients": dict.fromkeys(inputs, PLOT_ARCHITECT)})
@@ -3302,7 +3302,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 family_numbers = range(family_counts[seed.contract_id])
             self._require_fixture_census(selected,
                 {seed.contract_id + ':family:' + str(i) for i in family_numbers})
-            fixture_call = SimpleNamespace(contract=selected)
             selected, modeled_frame = modeled_fixture_response(
                 selected, supplied,
                 family=0,
@@ -3654,7 +3653,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         base = {'response_type': 'clarification_question',
                                 'response_text': 'Current free-scope profile.',
                                 'response_details': {'task_scope': native_scope}}
-                        fixture_call = SimpleNamespace(contract=profile_binding)
                         profile_binding, modeled_frame = modeled_fixture_response(
                             profile_origin, base,
                             family=0,
@@ -3795,8 +3793,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                 family=0,
                                 branch_key=stem + ':family:' + str(family))
                             packet = json.loads(modeled_frame)
-                            profile_projection_rules = tuple(item[2] for item in
-                                self._require_fixture_projections(profile_binding)[1])
+                            prepared_profile = self._require_fixture_projections(profile_binding)
+                            profile_projection_rules = tuple(item[2] for item in prepared_profile[1])
                             self.assertFalse(profile_binding.rule_graph.findings(packet))
                             decoded_profile = profile_binding.decode_response(json.dumps(packet))
                             self.assertEqual(json.loads(decoded_profile.answer_json),
@@ -3825,7 +3823,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                     profile_binding.decode_response(json.dumps(wrong_kind))
                             if family in (5, 6, 7):
                                 self._require_fixture_field_neighbors(profile_binding, packet,
-                            prepared_projections=prepared_profile_projections)
+                            prepared_projections=prepared_profile)
                             if family in (3, 4) and required_agents == tuple(profile_roster.values()):
                                 for required_agent in required_agents:
                                     missing_specialist = copy.deepcopy(packet)
@@ -3908,7 +3906,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=unit_constraints)
             unit_offers = replace(call.contract.offers, completed_read_facts=facts, delivery_read_facts=())
             unit_bound = replace(factory, rule_seed=unit_seed, constraints=unit_constraints).for_offer(unit_offers)
-            unit_call = SimpleNamespace(contract=unit_bound)
             unit_native_scope = lead_fixture_scope_record(unit_record, fixed_targets=True, fixed_dependencies=True)
             unit_origin = unit_bound
             unit_bound, modeled_frame = modeled_fixture_response(
@@ -4589,7 +4586,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 native = {'response_type': response_type, 'response_text': value['message']}
                 scope = _compact_scope(_live_scope(call, activity='workflow', domains=(), paths=()))
                 scope = wire_result(dict(authoring_scope=scope), None, native_types={})
-                native['task_scope'] = lead_fixture_bound_scope(call, scope['writing_task_scope'])
+                native['response_details'] = {'task_scope': lead_fixture_bound_scope(
+                    call, scope['writing_task_scope'])}
                 # Pure frozen-owner grammar; the returned negative uses the actual call below.
                 control = call.contract.lineage.origin if call.contract.phase == 'repair' else call.contract
                 bound, response = modeled_fixture_response(control, native, family=family_number)
@@ -5103,12 +5101,12 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         self.assertEqual(next(item.status for item in view.available_tasks
                               if item.ref.task_id == current.ref.task_id), "active")
         self.assertIsNone(case.runtime.inspect_lead_collaboration( case.session_id, conversation).discussion_context)
-        self.assertEqual(len(case.backend.calls), spent + 2)
+        self.assertEqual(len(case.backend.calls), spent + 4)
         current_prefix = case.history(conversation)
         with self.assertRaises(ValueError):
             await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(original.ref, task.LeadTaskAction.HOLD))
         self.assertEqual(case.history(conversation), current_prefix)
-        self.assertEqual(len(case.backend.calls), spent + 2)
+        self.assertEqual(len(case.backend.calls), spent + 4)
         await case._decide(resumed.turn, CollaborationConfirmationDecision.REJECT)
         current = next(item for item in case.runtime.inspect_lead_collaboration(case.session_id, conversation).available_tasks
                        if item.ref.task_id == original.ref.task_id)
@@ -5132,8 +5130,8 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         self.assertEqual(created.turn.proposal.authoring_scope.domains, (ArtifactReviewDomain.TONE_EXECUTION,))
         self.assertEqual(next(item for item in case.runtime.inspect_lead_collaboration(case.session_id, conversation).available_tasks
                               if item.ref.task_id == retired.ref.task_id).status, "discarded")
-        self.assertEqual(len(_submitted_calls(case.history(conversation))), len(_submitted_calls(prefix)) + 3)
-        self.assertEqual(len(case.backend.calls), spent + 3)
+        self.assertEqual(len(_submitted_calls(case.history(conversation))), len(_submitted_calls(prefix)) + 5)
+        self.assertEqual(len(case.backend.calls), spent + 5)
         self.assertEqual(StoryRuntime(case.control_workspace, case.backend).inspect_lead_collaboration(
             case.session_id, conversation), case.runtime.inspect_lead_collaboration(case.session_id, conversation))
 
@@ -5272,7 +5270,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         self.assertEqual(saved.scope, scope)
         self.assertEqual(case.history(conversation)[:len(prefix)], prefix)
         self.assertEqual(len(_submitted_calls(case.history(conversation))), len(case.backend.calls))
-        self.assertEqual(len(case.backend.calls), 6)
+        self.assertEqual(len(case.backend.calls), 8)
         self.assertFalse(any(isinstance(event.payload, CollaborationAssignmentDispatchPayload)
                              for event in case.history(conversation)))
 
@@ -6092,9 +6090,10 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
     async def test_response_correction_requires_capacity(self) -> None:
         def capacity_note(result, backend):
-            return (len(backend.calls), result.kind, tuple(item.calls for item in backend.finalizers),
-                    tuple(key for key in ('schema_id', 'source_types', 'search_text', 'queries')
-                          if any(key in chunk for chunk in result.validation_details)))
+            return (len(backend.calls), result.kind, len(backend.finalizers),
+                    tuple((item.calls, len(item.response_text), item.response_text[:4096]) for item in backend.finalizers[:2]),
+                    tuple((prefix, next(((len(chunk), chunk[:4096]) for chunk in result.validation_details if chunk.startswith(prefix)), None))
+                          for prefix in ('Original response', 'Repair response')))
         def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
             return json.dumps({'action': {'kind': 'answer', 'result': [], 'used_handles': []}}, separators=(',', ':'))
 

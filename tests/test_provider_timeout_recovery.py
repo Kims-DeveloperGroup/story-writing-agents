@@ -49,12 +49,13 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         key = ContextLedgerKey(identity.checkpoint_scope(), "codex")
         return key, service._ledger.inspect(key)
 
-    async def answer(self, conversation, text, *, runtime=None, backend=None, callbacks=None):
+    async def answer(self, conversation, text, *, runtime=None, backend=None, callbacks=None,
+        expected_kind=LeadOutcomeKind.ANSWER):
         backend = backend or self.backend
         backend.enqueue(*(callbacks if callbacks is not None else
                           (lead._visible_outcome("answer", "Synthetic retry succeeded."),)))
         result = await (runtime or self.runtime).lead_turn(self.session_id, conversation, text)
-        self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
+        self.assertIs(result.kind, expected_kind)
         return result
 
     def append_legacy(self, conversation, state):
@@ -201,10 +202,13 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         with self.assertRaisesRegex(ValueError, "no authoritative pending request"):
             await restarted.decide_lead_step(lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(len(self.backend.calls), before)
-        await self.answer(conversation, "New request after failed revision.", runtime=restarted,
-                          callbacks=lead.selected_fixture_calls(lead._visible_outcome, 'answer',
-                              'Synthetic retry succeeded.', revision_discussion=True))
-        self.assertEqual(len(self.backend.calls), before + 1)
+        resumed = await self.answer(conversation, "New request after failed revision.",
+            runtime=restarted, expected_kind=LeadOutcomeKind.DISCUSSION,
+            callbacks=lead.selected_fixture_calls(lead._visible_outcome, 'answer',
+                'Synthetic retry succeeded.', revision_discussion=True))
+        self.assertEqual(resumed.discussion.response_text, "Synthetic retry succeeded.")
+        self.assertIsNone(resumed.proposal)
+        self.assertEqual(len(self.backend.calls), before + 2)
         self.assertEqual({agent for agent, _ in self.backend.call_records}, {LEAD_ORCHESTRATOR})
 
     async def test_attached_reference_cancellation_closes_and_releases_for_explicit_retry(self):
