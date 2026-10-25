@@ -495,88 +495,89 @@ class InteractiveLeadAdapter:
     def submit(self, conversation_id: str, text: str, *, interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION, adoption: ExplorationAdoptionSelection | None = None, premise_selection: PremiseDecisionSelection | None = None) -> bool:
         """Run one literal lead turn; return true only for call-local EOF."""
 
-        self._semantic_output.write_component(
-            Message("User", text, presentation=MessagePresentation.CHAT_BLOCK)
-        )
-        try:
-            turn = self._run_turn(
-                self._session.lead_turn(
-                    conversation_id,
-                    text,
-                    action_progress_sink=self._progress.observe,
-                    **({"interaction_mode": interaction_mode} if interaction_mode is LeadInteractionMode.EXPLORATION else {}),
-                **({"adoption": adoption} if adoption is not None else {}),
-                **({"premise_selection": premise_selection} if premise_selection is not None else {}),
+        with self._semantic_output.submission(
+            self._session.session_id, conversation_id,
+            Message("User", text, presentation=MessagePresentation.CHAT_BLOCK),
+        ):
+            try:
+                turn = self._run_turn(
+                    self._session.lead_turn(
+                        conversation_id,
+                        text,
+                        action_progress_sink=self._progress.observe,
+                        **({"interaction_mode": interaction_mode} if interaction_mode is LeadInteractionMode.EXPLORATION else {}),
+                    **({"adoption": adoption} if adoption is not None else {}),
+                    **({"premise_selection": premise_selection} if premise_selection is not None else {}),
+                    )
                 )
-            )
-            return self._present_and_decide(turn)
-        except ProviderAuthenticationRequiredError:
-            error_message = (
-                "Authentication recovery could not safely continue this request."
-            )
-            advice = "Inspect /history and /exchanges before continuing, or run /auth."
-            self._semantic_output.write_component(
-                project_lead_error_result(error_message, advice=advice)
-            )
-            self._semantic_output.write_component(
-                Notice(
-                    f"{error_message} {advice}",
-                    label="authentication required",
-                    role=SemanticRole.ERROR,
-                    state=ViewState.ERROR,
+                return self._present_and_decide(turn)
+            except ProviderAuthenticationRequiredError:
+                error_message = (
+                    "Authentication recovery could not safely continue this request."
                 )
-            )
-            self._write_elapsed()
-            return False
-        except SessionContextCapacityError as failure:
-            error_message = str(failure)
-            advice = (
-                "The oversized payload was not submitted to the provider. "
-                "Inspect /history and /exchanges before continuing."
-            )
-            self._semantic_output.write_component(
-                project_lead_error_result(error_message, advice=advice)
-            )
-            self._semantic_output.write_component(
-                Notice(
-                    f"{error_message} {advice}", label="context capacity",
-                    role=SemanticRole.ERROR, state=ViewState.ERROR,
+                advice = "Inspect /history and /exchanges before continuing, or run /auth."
+                self._semantic_output.write_component(
+                    project_lead_error_result(error_message, advice=advice)
                 )
-            )
-            self._write_elapsed()
-            return False
-        except BackendProtocolError as exc:
-            last_error = getattr(self._progress, "last_error_message", None)
-            exc_text = str(exc).strip()
-            if last_error and last_error not in exc_text:
-                error_message = f"{exc_text}\n{last_error}"
-            else:
-                error_message = exc_text or "Provider request failed."
-            self._semantic_output.write_component(
-                project_lead_error_result(error_message)
-            )
-            self._semantic_output.write_component(
-                Notice(
-                    f"Provider request failed: {error_message}. "
-                    "Inspect /history and /exchanges before continuing.",
-                    label="provider failure",
-                    role=SemanticRole.ERROR,
-                    state=ViewState.ERROR,
+                self._semantic_output.write_component(
+                    Notice(
+                        f"{error_message} {advice}",
+                        label="authentication required",
+                        role=SemanticRole.ERROR,
+                        state=ViewState.ERROR,
+                    )
                 )
-            )
-            self._write_elapsed()
-            return False
-        except (asyncio.CancelledError, KeyboardInterrupt):
-            self._semantic_output.write_component(
-                Notice(
-                    "The active Lead request was interrupted. Inspect /history "
-                    "and /exchanges before continuing.",
-                    label="interrupted", role=SemanticRole.WARNING,
-                    state=ViewState.CANCELLED,
+                self._write_elapsed()
+                return False
+            except SessionContextCapacityError as failure:
+                error_message = str(failure)
+                advice = (
+                    "The oversized payload was not submitted to the provider. "
+                    "Inspect /history and /exchanges before continuing."
                 )
-            )
-            self._write_elapsed()
-            return False
+                self._semantic_output.write_component(
+                    project_lead_error_result(error_message, advice=advice)
+                )
+                self._semantic_output.write_component(
+                    Notice(
+                        f"{error_message} {advice}", label="context capacity",
+                        role=SemanticRole.ERROR, state=ViewState.ERROR,
+                    )
+                )
+                self._write_elapsed()
+                return False
+            except BackendProtocolError as exc:
+                last_error = getattr(self._progress, "last_error_message", None)
+                exc_text = str(exc).strip()
+                if last_error and last_error not in exc_text:
+                    error_message = f"{exc_text}\n{last_error}"
+                else:
+                    error_message = exc_text or "Provider request failed."
+                self._semantic_output.write_component(
+                    project_lead_error_result(error_message)
+                )
+                self._semantic_output.write_component(
+                    Notice(
+                        f"Provider request failed: {error_message}. "
+                        "Inspect /history and /exchanges before continuing.",
+                        label="provider failure",
+                        role=SemanticRole.ERROR,
+                        state=ViewState.ERROR,
+                    )
+                )
+                self._write_elapsed()
+                return False
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                self._semantic_output.write_component(
+                    Notice(
+                        "The active Lead request was interrupted. Inspect /history "
+                        "and /exchanges before continuing.",
+                        label="interrupted", role=SemanticRole.WARNING,
+                        state=ViewState.CANCELLED,
+                    )
+                )
+                self._write_elapsed()
+                return False
 
     def _lead_turn_panel(self, turn: LeadTurnResult):
         panel = project_lead_turn_result(

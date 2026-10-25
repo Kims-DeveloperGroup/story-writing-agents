@@ -538,7 +538,8 @@ class InputLatchAndDriverTests(unittest.TestCase):
                     driver._output_history.retain(MultiAgentScrollState((view,), 0))
                 output.fileno.return_value = 8
                 driver._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=(7 if len(stream.calls) > cutoff else 40) if width == -7 else width, lines=height))
-                with mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True):
+                with (mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True),
+                      mock.patch.object(RawTerminalDriver, "_query_cursor_row", return_value=height)):
                     self.assertEqual(driver.read_main_line("main> ", lambda _: ()), expected)
                 rendered = "".join(call.args[0] for call in output.write.call_args_list)
                 self.assertEqual(rendered.count(driver_module._MOUSE_ENABLE), captures)
@@ -565,11 +566,48 @@ class InputLatchAndDriverTests(unittest.TestCase):
                     raise OSError("mouse release failed")
                 return len(text)
             output.write.side_effect = write
-            with mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True), self.assertRaisesRegex(OSError, "mouse release failed"):
+            with (mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True),
+                  mock.patch.object(RawTerminalDriver, "_query_cursor_row", return_value=250),
+                  self.assertRaisesRegex(OSError, "mouse release failed")):
                 driver.read_main_line("main> ", lambda _: ())
             self.assertEqual(output.write.call_args_list.count(mock.call(driver_module._MOUSE_DISABLE)), 2)
             self.assertEqual(termios.attributes, original)
             fallback.assert_not_called()
+
+        from story_writing_agents.interactive_terminal._model import Message
+        for interleaved in ("", "界"):
+            scripted = (prefix + f6 + "\x1b[H\x1b[<0;2;2M\x1b[B\rx\r"
+                        if not interleaved else "draft" + f6 + "x\r")
+            expected = "drafxt" if not interleaved else "draft界x"
+            with _session_driver(*(bytes([byte]) for byte in scripted.encode())) as (driver, termios, stream, output, fallback):
+                original = list(termios.attributes)
+                driver._output_history.retain(MultiAgentScrollState((view,), 0))
+                driver._output_history.append_component(Message("Lead", "\n".join(f"TAIL_{i}" for i in range(35))))
+                self.assertFalse(driver._output_history.render(_live_capabilities(), 22).hits)
+                output.fileno.return_value = 8
+                driver._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=40, lines=24))
+                observations = []
+                def write(text):
+                    if text == "\x1b[6n":
+                        reply = (interleaved if not observations else "") + "\x1b[24;1R"
+                        observations.append(reply)
+                        for byte in reversed(reply.encode()):
+                            stream.chunks.appendleft(bytes([byte]))
+                    return len(text)
+                output.write.side_effect = write
+                with (mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True),
+                      mock.patch.object(driver_module._select, "select", return_value=([7], [], []))):
+                    self.assertEqual(driver.read_main_line("main> ", lambda _: ()), expected)
+                rendered = "".join(call.args[0] for call in output.write.call_args_list)
+                self.assertTrue(observations)
+                self.assertEqual(rendered.count(driver_module._MOUSE_ENABLE), 1)
+                self.assertEqual(driver._history_state.entries, (expected,))
+                if not interleaved:
+                    self.assertIn("second", rendered)
+                    self.assertEqual(driver._output_history.frames[0].view.start_line, 2)
+                self.assertLess(rendered.rfind(driver_module._MOUSE_DISABLE), rendered.rfind(expected))
+                self.assertEqual(termios.attributes, original)
+                fallback.assert_not_called()
 
     def test_driver_construction_does_not_inspect_resources(self) -> None:
         fallback = mock.Mock(return_value="unused")

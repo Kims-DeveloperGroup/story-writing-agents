@@ -13,10 +13,12 @@ from collections import deque
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
+from functools import wraps
 from typing import TextIO, TypeAlias, TypeVar
 
-from ._output_history import HistoryLayout, OutputHistory
+from ._output_history import ConversationTimeline, HistoryLayout
 from ._pointer import PointerEvent, decode_pointer
+from ._render import render_component
 
 from ._input_lifecycle import (
     LiveDecoderSpec,
@@ -46,6 +48,8 @@ from ._external_view import (
 )
 from ._model import (
     CapabilityProfile,
+    Component,
+    Message,
     CommandCompletionProjection,
     ControlOutcome,
     ControlOutcomeKind,
@@ -501,6 +505,24 @@ def _live_reference_key_outcome(
         return failure
 
 
+def _timeline_borrowed(operation):
+    """Keep a borrowed picker/view outside the retained conversation surface."""
+    @wraps(operation)
+    def run(self, *args, **kwargs):
+        with self._suspend_timeline():
+            return operation(self, *args, **kwargs)
+    return run
+
+
+def _timeline_borrowed_async(operation):
+    """Keep the async live composer within the same borrowed-surface lifecycle."""
+    @wraps(operation)
+    async def run(self, *args, **kwargs):
+        with self._suspend_timeline():
+            return await operation(self, *args, **kwargs)
+    return run
+
+
 class RawTerminalDriver:
     """Own one stream pair's live editing and raw terminal resource lifecycle."""
 
@@ -510,6 +532,13 @@ class RawTerminalDriver:
         "_history_append",
         "_history_state",
         "_output_history",
+        "_timeline_enabled",
+        "_timeline_rows",
+        "_timeline_cursor_row",
+        "_timeline_origin",
+        "_timeline_geometry",
+        "_timeline_suspended",
+        "_timeline_operation",
         "_inspector_anchored",
         "_inspector_top",
         "_inspector_width",
@@ -577,7 +606,14 @@ class RawTerminalDriver:
         self._main_transition = main_transition
         self._history_append = history_append
         self._history_state = MainInputHistoryState()
-        self._output_history = OutputHistory()
+        self._output_history = ConversationTimeline()
+        self._timeline_enabled = False
+        self._timeline_rows = 0
+        self._timeline_cursor_row = 0
+        self._timeline_origin: int | None = None
+        self._timeline_geometry: tuple[int, int] | None = None
+        self._timeline_suspended = 0
+        self._timeline_operation: int | None = None
         self._inspector_anchored = False
         self._inspector_top = 1
         self._inspector_width = 1
@@ -627,11 +663,21 @@ class RawTerminalDriver:
                         self._live_configuration = configuration
                     self._input_session_configuration = None
                     self._input_session_active = False
-                    self._output_history = OutputHistory()
+                    self._output_history = ConversationTimeline()
+                    self._timeline_enabled = False
+                    self._timeline_rows = self._timeline_cursor_row = 0
+                    self._timeline_origin = None
                     self._native_input_handoff_active = False
 
     @contextmanager
     def native_input_handoff(self) -> Iterator[None]:
+        """Lend native input without capturing authentication in the timeline."""
+        with self._suspend_timeline():
+            with self._native_input_handoff_body():
+                yield
+
+    @contextmanager
+    def _native_input_handoff_body(self) -> Iterator[None]:
         """Lend original terminal settings to native login, then resume echo ownership."""
 
         configuration = self._input_session_configuration
@@ -672,6 +718,7 @@ class RawTerminalDriver:
                 )
                 raise
 
+    @_timeline_borrowed
     def read_line(self, prompt: str) -> str:
         """Read one history-free line through the driver's selected input."""
 
@@ -691,11 +738,153 @@ class RawTerminalDriver:
                 transient=True,
             )
 
+    @contextmanager
+    def submission(self, session_id: str, conversation_id: str, user: Message) -> Iterator[None]:
+        """Associate a complete Lead decision loop with one canonical User frame."""
+        if not self._timeline_enabled or self._input_latch.mode is not TerminalInputMode.LIVE:
+            self.write_component(user)
+            yield
+            return
+        render_component(user, self.semantic_capabilities())
+        origin = self._output_history.begin_submission(session_id, conversation_id, user)
+        try:
+            self._paint_timeline()
+            yield
+        finally:
+            self._output_history.end_submission(origin)
+
+    def write_component(self, component: Component) -> None:
+        """Retain semantic structure for width reflow without parsing terminal text."""
+        frame = render_component(component, self.semantic_capabilities())
+        if self._timeline_enabled and not self._native_input_handoff_active:
+            self._output_history.append_component(component)
+            self._paint_timeline()
+        else:
+            self.write_text(f"{frame.text}\n")
+
+    @contextmanager
+    def _timeline_operation_scope(self) -> Iterator[None]:
+        if not self._timeline_enabled or self._timeline_suspended:
+            yield
+            return
+        previous = self._timeline_operation
+        operation = self._output_history.begin_operation()
+        self._timeline_operation = operation
+        try:
+            yield
+        finally:
+            entry = next((entry for entry in self._output_history.entries if entry.identity == operation), None)
+            if entry is not None and not entry.frames:
+                self._output_history.discard_operation(operation)
+            self._timeline_operation = previous
+            self._paint_timeline()
+
+    def _render_inline_rows(self, lines: list[str] | tuple[str, ...], cursor_row: int, cursor_column: int = 0) -> None:
+        """Replace only owned rows relative to the actual current cursor."""
+        geometry = self._text_viewer_geometry(self.capabilities().width, bounded_height=False)
+        changed_geometry = self._timeline_geometry is not None and geometry != self._timeline_geometry
+        if changed_geometry:
+            # Terminal reflow invalidates old physical offsets. Establish a fresh
+            # surface instead of moving upward through unrelated terminal rows.
+            prefix = "\r\n" if self._timeline_rows else "\r"
+            self._timeline_cursor_row = 0
+            self._timeline_origin = None
+        else:
+            prefix = "\r" + _CURSOR_UP * self._timeline_cursor_row + "\r" + _CLEAR_TO_END
+        row = min(max(0, cursor_row), max(0, len(lines) - 1))
+        payload = (prefix + "\n".join(lines)
+                   + _CURSOR_UP * max(0, len(lines) - 1 - row)
+                   + "\r" + _CURSOR_RIGHT * max(0, cursor_column))
+        self._write_live_text(payload)
+        if self._timeline_origin is not None:
+            self._timeline_origin = min(self._timeline_origin, max(1, geometry[1] - len(lines) + 1))
+        self._timeline_geometry = geometry
+        self._timeline_rows = len(lines)
+        self._timeline_cursor_row = row
+
+    def _paint_timeline(self) -> None:
+        if not self._timeline_enabled or self._timeline_suspended or self._native_input_handoff_active:
+            return
+        width, height = self._text_viewer_geometry(self.capabilities().width, bounded_height=False)
+        capabilities = _capabilities_with_width(self.capabilities(), max(1, width - 1))
+        layout = self._output_history.render(capabilities, max(0, min(height, _MAX_VIEWER_HEIGHT) - 1))
+        self._render_inline_rows(layout.lines, max(0, len(layout.lines) - 1))
+
+    @contextmanager
+    def _suspend_timeline(self) -> Iterator[None]:
+        """Lend a clean surface and restore only fresh physical geometry afterwards."""
+        active = self._timeline_enabled and not self._timeline_suspended
+        if active and self._timeline_rows:
+            self._render_inline_rows((), 0)
+        self._timeline_suspended += 1
+        try:
+            yield
+        finally:
+            self._timeline_suspended -= 1
+            if active:
+                self._timeline_rows = self._timeline_cursor_row = 0
+                self._timeline_origin = None
+                self._paint_timeline()
+
+    def _query_cursor_row(self, configuration: _TerminalConfiguration) -> int | None:
+        """Observe inline geometry with one bounded, input-preserving CPR query."""
+        deadline = time.monotonic() + _ESCAPE_LOOKAHEAD_SECONDS
+        received = ""
+        consumed_response: tuple[int, int] | None = None
+        row: int | None = None
+        def before_read() -> None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("cursor observation expired")
+            ready, _, _ = _select.select((configuration.input_descriptor,), (), (), remaining)
+            if not ready:
+                raise TimeoutError("cursor observation expired")
+        try:
+            self._write_live_text("\x1b[6n")
+            while len(received) < _MAX_ESCAPE_SEQUENCE_LENGTH:
+                received += self._read_character(before_read=before_read, consume_typeahead=False)
+                match = re.search(r"\x1b\[([0-9]{1,5});([0-9]{1,5})R", received)
+                if match is not None:
+                    candidate = int(match.group(1))
+                    column = int(match.group(2))
+                    width, height = self._text_viewer_geometry(configuration.width, bounded_height=False)
+                    consumed_response = match.span()
+                    if 1 <= candidate <= height and 1 <= column <= width:
+                        row = candidate
+                    break
+        except KeyboardInterrupt:
+            # _read_character already discarded the interrupted input. Do not
+            # resurrect bytes consumed before that interruption in finally.
+            received = ""
+            raise
+        except (TimeoutError, EOFError, OSError, ValueError):
+            pass
+        finally:
+            if consumed_response is not None:
+                start, stop = consumed_response
+                received = received[:start] + received[stop:]
+            self._typeahead_buffer.extend(received)
+        return row
+
+    def _observe_timeline_origin(self, configuration: _TerminalConfiguration) -> int | None:
+        row = self._query_cursor_row(configuration)
+        self._timeline_origin = None if row is None else max(1, row - self._timeline_cursor_row)
+        return self._timeline_origin
+
     def write_text(self, text: str) -> None:
         """Write and flush one payload through the sole stream owner."""
 
         if type(text) is not str:
             raise TypeError("terminal output must be a string")
+        if self._timeline_enabled and not self._timeline_suspended and not self._native_input_handoff_active:
+            plain = sanitize_terminal_text(_EXTERNAL_VIEW_SGR.sub("", text))
+            lines = plain.split("\n")
+            if lines and not lines[-1]:
+                lines.pop()
+            if lines:
+                self._output_history.append_lines(tuple(lines))
+                self._paint_timeline()
+            return
         if self._progress_active:
             self._clear_progress_frame()
             try:
@@ -746,6 +935,11 @@ class RawTerminalDriver:
     def _clear_progress_frame(self) -> None:
         """Clear every physical row owned by the current indicator."""
 
+        if self._timeline_operation is not None:
+            self._output_history.update_operation(self._timeline_operation)
+            self._progress_rows = 0
+            self._paint_timeline()
+            return
         if self._progress_rows <= 0:
             return
         rows = self._progress_rows
@@ -788,10 +982,39 @@ class RawTerminalDriver:
         ):
             raise ValueError("progress frame must contain safe text rows")
         display_frame = frame if plain_frame != frame else "\n".join(lines)
-        self._progress_rows = len(lines)
-        self._write_raw_text("\r" + display_frame)
+        if self._timeline_operation is not None:
+            self._output_history.update_operation(self._timeline_operation, lines=tuple(lines))
+            self._progress_rows = 0
+            self._paint_timeline()
+        else:
+            self._progress_rows = len(lines)
+            self._write_raw_text("\r" + display_frame)
 
     async def run_advisory_progress(
+        self,
+        operation: Awaitable[_T],
+        frame_renderer: Callable[[int], str],
+        *,
+        scroll_state_provider: Callable[[], MultiAgentScrollState] | None = None,
+        is_failure: Callable[[_T], bool] | None = None,
+        nested_scroll_transition: Callable[
+            [MultiAgentScrollState, KeyEvent], MultiAgentScrollState
+        ]
+        | None = None,
+        nested_scroll_renderer: _NestedScrollRenderer | None = None,
+        toggle_callback: Callable[[], bool] | None = None,
+        keep_frame: bool | Callable[[], bool] | None = None,
+    ) -> _T:
+        """Keep the operation and its final preview in one chronological slot."""
+        with self._timeline_operation_scope():
+            return await self._run_advisory_progress(
+                operation, frame_renderer, scroll_state_provider=scroll_state_provider,
+                is_failure=is_failure, nested_scroll_transition=nested_scroll_transition,
+                nested_scroll_renderer=nested_scroll_renderer, toggle_callback=toggle_callback,
+                keep_frame=keep_frame,
+            )
+
+    async def _run_advisory_progress(
         self,
         operation: Awaitable[_T],
         frame_renderer: Callable[[int], str],
@@ -1063,7 +1286,7 @@ class RawTerminalDriver:
                                 toggle_callback=toggle_callback,
                                 keep_frame=True,
                             )
-                            self._output_history.retain(scroll_state)
+                            self._output_history.retain(scroll_state, operation_id=self._timeline_operation)
                         elif self._progress_rows > 0:
                             try:
                                 self._write_raw_text("\r\n")
@@ -1113,7 +1336,7 @@ class RawTerminalDriver:
                             nested_scroll_renderer,
                             toggle_callback=toggle_callback,
                         )
-                        self._output_history.retain(scroll_state)
+                        self._output_history.retain(scroll_state, operation_id=self._timeline_operation)
                 except BaseException as exc:
                     inspector_failure = exc
                 finally:
@@ -1222,6 +1445,16 @@ class RawTerminalDriver:
             if active:
                 width, height = self._text_viewer_geometry(capabilities.width, bounded_height=False)
                 active = bool(state.views) and width >= 8 and height >= 3
+                if active and not mouse_active:
+                    observed = self._query_cursor_row(configuration)
+                    active = observed is not None
+                    if observed is not None:
+                        if self._timeline_operation is not None:
+                            self._timeline_origin = max(1, observed - self._timeline_cursor_row)
+                            relative_top = self._output_history.entry_top(self._timeline_operation)
+                            self._inspector_top = self._timeline_origin + (relative_top or 1) - 1
+                        else:
+                            self._inspector_top = max(1, observed - self._progress_rows + 1)
             if mouse_active == active:
                 return
             if active:
@@ -1397,21 +1630,24 @@ class RawTerminalDriver:
             )
         ):
             raise ValueError("rendered frame must contain safe text rows within capability width")
+        if self._timeline_operation is not None:
+            self._output_history.update_operation(self._timeline_operation, preview=replace(state, views=tuple(bounded_views)))
+            self._progress_rows = 0
+            self._paint_timeline()
+            self._inspector_width = width
+            return
         old_count = self._progress_rows
         if old_count > 0:
             self._clear_progress_frame()
-        top = max(1, height - len(lines) + 1)
-        if self._inspector_anchored:
-            growth = max(0, len(lines) - old_count)
-            prefix = (f"\x1b[{height};1H" + "\r\n" * growth if growth else "") + f"\x1b[{top};1H"
-        else:
-            prefix = f"\x1b[{height};1H"
-            self._inspector_anchored = True
-        self._inspector_top = top
+        prefix = "\r"
+        self._inspector_anchored = True
+        if self._inspector_top > 1 and old_count:
+            self._inspector_top = min(self._inspector_top, max(1, height - len(lines) + 1))
         self._inspector_width = width
         self._progress_rows = len(lines)
         self._write_raw_text(prefix + rendered.text)
 
+    @_timeline_borrowed_async
     async def run_live_composer(
         self,
         operation: Awaitable[_T],
@@ -2396,6 +2632,7 @@ class RawTerminalDriver:
                 transient=transient,
             )
 
+    @_timeline_borrowed
     def read_prompt(
         self,
         view: InputPromptView,
@@ -2724,6 +2961,7 @@ class RawTerminalDriver:
             self._append_completed_main_history(line)
             return line
 
+    @_timeline_borrowed
     def read_reference_input_line(
         self,
         view: InputPromptView,
@@ -2974,6 +3212,7 @@ class RawTerminalDriver:
             bindings.write_failure(failure.kind)
             return origin
 
+    @_timeline_borrowed
     def read_picker(
         self,
         state: PickerControlState,
@@ -3088,6 +3327,7 @@ class RawTerminalDriver:
         assert outcome is not None
         return outcome
 
+    @_timeline_borrowed
     def read_text_viewer(
         self,
         state: TextViewerState,
@@ -3130,6 +3370,7 @@ class RawTerminalDriver:
                 viewport_renderer,
             )
 
+    @_timeline_borrowed
     def open_owned_external_view(self, operation: ExternalOwnedViewOperation) -> None:
         """Lend live transport while the external view alone owns its modes."""
 
@@ -3198,6 +3439,7 @@ class RawTerminalDriver:
             if active_failure is not None:
                 raise active_failure
 
+    @_timeline_borrowed
     def open_external_view(
         self,
         operation: ExternalViewOperation,
@@ -3810,10 +4052,10 @@ class RawTerminalDriver:
 
         control_state = initial_state
         ordinary_transition = transition
-        display_state.history_enabled = (
-            type(initial_state) in {MainInputControlState, MainCommandControlState}
-            and bool(self._output_history.frames)
-        )
+        is_main = type(initial_state) in {MainInputControlState, MainCommandControlState}
+        if is_main:
+            self._timeline_enabled = True
+        display_state.history_enabled = is_main and not self._timeline_suspended
         self._output_history.focused_id = None
 
         def redraw(state):
@@ -3844,7 +4086,7 @@ class RawTerminalDriver:
                     return state, None
                 focused = self._output_history.focused_id is not None
                 consumed = self._output_history.handle_key(event)
-                if event.kind in {KeyKind.ENTER, KeyKind.TEXT} or (focused and self._output_history.focused_id is None):
+                if event.kind in {KeyKind.ENTER, KeyKind.ESCAPE, KeyKind.TEXT}:
                     self._set_history_mouse_mode(display_state, False)
                 if consumed:
                     redraw(state)
@@ -3926,7 +4168,7 @@ class RawTerminalDriver:
                         local = replace(pointer, row=pointer.row - display_state.history_top + 1)
                         if display_state.history_mouse_active:
                             self._output_history.handle_pointer(local, display_state.history_layout)
-                            if pointer.pressed and pointer.button == 0 and self._output_history.focused_id is None:
+                            if pointer.pressed and pointer.button == 0 and not (1 <= local.row <= len(display_state.history_layout.lines)):
                                 self._set_history_mouse_mode(display_state, False)
                         display_state.rendered_cursor_row = self._redraw_live_display(
                             prompt, configuration.width, display_state, control_state,
@@ -4513,7 +4755,12 @@ class RawTerminalDriver:
 
     def _set_history_mouse_mode(self, state: _LiveEditorState, active: bool) -> None:
         """Own explicit call-local mouse capture; native scrolling is the default."""
-        active = active and bool(state.history_layout.hits)
+        active = active and bool(state.history_layout.lines)
+        if active and self._timeline_origin is None:
+            configuration = self._live_configuration
+            active = configuration is not None and self._observe_timeline_origin(configuration) is not None
+        if active:
+            state.history_top = self._timeline_origin or 1
         if state.history_mouse_active == active:
             return
         if active:
@@ -4524,6 +4771,7 @@ class RawTerminalDriver:
             self._write_live_text(_MOUSE_DISABLE)
             state.history_mouse_active = False
             self._output_history.focused_id = None
+            self._output_history.timeline_focused = False
 
     def _redraw_live_display(
         self,
@@ -4666,41 +4914,29 @@ class RawTerminalDriver:
         if display_state.history_enabled:
             available = max(0, min(history_screen_height, _MAX_VIEWER_HEIGHT) - len(output_lines) - 1)
             history_capabilities = live_capabilities or _capabilities_with_width(self.capabilities(), width)
-            layout = self._output_history.render(
-                history_capabilities, available, mouse_mode=display_state.history_mouse_active,
-            )
+            layout = self._output_history.render(history_capabilities, available, mouse_mode=display_state.history_mouse_active)
             display_state.history_layout = layout
-            if not layout.hits:
+            if not layout.lines:
                 self._set_history_mouse_mode(display_state, False)
-            if layout.lines:
-                if not display_state.history_anchored:
-                    self._write_live_text(f"\x1b[{history_screen_height};1H")
-                    display_state.history_anchored = True
-                output_lines = [*layout.lines, *output_lines]
-                cursor_row += len(layout.lines)
-                display_state.history_top = history_screen_height - len(output_lines) + 1
+            output_lines = [*layout.lines, *output_lines]
+            cursor_row += len(layout.lines)
+            self._render_inline_rows(output_lines, cursor_row, cursor_column)
+            display_state.history_line_count = len(output_lines)
+            if display_state.history_mouse_active:
+                configuration = self._live_configuration
+                origin = self._timeline_origin
+                if origin is None and configuration is not None:
+                    origin = self._observe_timeline_origin(configuration)
+                if origin is None:
+                    self._set_history_mouse_mode(display_state, False)
+                else:
+                    display_state.history_top = origin
+            return cursor_row
         move_to_top = _CURSOR_UP * display_state.rendered_cursor_row
         move_to_cursor = _CURSOR_UP * (len(output_lines) - 1 - cursor_row)
-        payload = "".join(
-            (
-                _CARRIAGE_RETURN, move_to_top, _CARRIAGE_RETURN, _CLEAR_TO_END,
-                "\n".join(output_lines), move_to_cursor, _CARRIAGE_RETURN,
-                _CURSOR_RIGHT * cursor_column,
-            )
-        )
-        if display_state.history_enabled and display_state.history_line_count:
-            old_count = display_state.history_line_count
-            growth = max(0, len(output_lines) - old_count)
-            top = max(1, history_screen_height - len(output_lines) + 1)
-            old_top = max(1, history_screen_height - old_count + 1)
-            payload = (
-                f"\x1b[{min(top, old_top)};1H{_CLEAR_TO_END}"
-                + (f"\x1b[{history_screen_height};1H" + "\r\n" * growth if growth else "")
-                + f"\x1b[{top};1H" + "\n".join(output_lines)
-                + move_to_cursor + _CARRIAGE_RETURN + _CURSOR_RIGHT * cursor_column
-            )
-        if display_state.history_enabled:
-            display_state.history_line_count = len(output_lines)
+        payload = "".join((_CARRIAGE_RETURN, move_to_top, _CARRIAGE_RETURN, _CLEAR_TO_END,
+                           "\n".join(output_lines), move_to_cursor, _CARRIAGE_RETURN,
+                           _CURSOR_RIGHT * cursor_column))
         self._write_live_text(payload)
         return cursor_row
 
@@ -4736,6 +4972,12 @@ class RawTerminalDriver:
             len(line_state.buffer),
             render_width,
         )
+        if display_state.history_enabled:
+            if line_state.buffer.startswith("/"):
+                self._output_history.append_lines(tuple(input_lines))
+            self._paint_timeline()
+            display_state.rendered_cursor_row = 0
+            return len(input_lines)
         move_to_top = _CURSOR_UP * display_state.rendered_cursor_row
         payload = "".join(
             (
@@ -4775,6 +5017,9 @@ class RawTerminalDriver:
         )
         self._write_live_text(payload)
         state.rendered_cursor_row = 0
+        if state.history_enabled:
+            self._timeline_rows = self._timeline_cursor_row = 0
+            self._timeline_origin = None
 
     def _write_live_text(self, text: str) -> None:
         """Write and flush one trusted redraw payload or raise on short output.
