@@ -126,8 +126,9 @@ Frames are left-aligned and use
 starts at 40 available frame columns; smaller terminals use compact decoration
 and stacked fields that fit the window. Compact messages use a speaker header
 and `│` body rail; the rail is omitted below three cells. Width is observed
-before new output and live redraws. Complete messages flow into ordinary terminal
-scrollback; earlier printed frames are not rewritten after a resize.
+before new output and live redraws. The inline conversation timeline retains
+complete semantic messages and reflows them on resize. Line-fallback output
+remains ordinary terminal scrollback.
 
 User headers and borders use magenta, Lead uses cyan, and specialists retain
 their role accents. Metadata labels/dividers use blue, with subdued values.
@@ -335,40 +336,63 @@ Partial UTF-8 and buffered input survive these nonfatal polling pauses.
 
 ## Retained agent-output history
 
-Agent JSON/progress frames kept by the existing `/progress` retention rules remain
-available in a scrollable output-history area above the main prompt. History
-includes each agent's retained frame from earlier operations in the current shell,
-including across conversation and session switches. It is discarded when the
-shell exits. These are the same bounded previews shown during inspection; opening
-an old frame does not reload files or call a provider.
+Capable terminals show one interactive conversation timeline above the main
+prompt. Each user message keeps its JSON/progress frames in their original
+chronological positions, followed by the resulting replies. Sending another
+message adds another turn below it. Terminal height does not insert empty rows
+between a user message and its frames.
+
+This abbreviated example illustrates the ordering, not the frame heights:
+
+```text
+User A: Review my outline.
+  JSON output A1
+  JSON output A2
+Lead: Review of the outline ...
+User B: Check character consistency.
+  JSON output B1
+Lead: Consistency findings ...
+
+Main prompt > next message_
+```
+
+The existing `/progress` retention rules determine which previews remain.
+Transient progress is replaced in its original slot when it becomes retained
+JSON. Confirmations and retries stay with their originating user message.
+Messages and retained previews remain available throughout the current shell,
+including across conversation and session switches. Opening an older frame does
+not reload files or call a provider. Timeline state is discarded on shell exit.
 
 The mouse wheel normally scrolls the terminal's own scrollback. Press `F6` to
-enter output mouse mode and focus the newest visible frame. Left-click another
-frame's header, border, or body to change focus. Enter immediately after F6
-returns to the prompt without submitting the draft. Press `F6` again or `Escape`
-to leave mouse mode and restore ordinary wheel scrolling. Mouse mode is available
-only while output frames are visible.
+enter timeline interaction and focus the newest visible JSON frame. Left-click
+another frame's header, border, or body to change focus. The selected-control
+accent, `Focused` marker, and `>` gutter marker identify frame focus even with
+`NO_COLOR` or clipped borders. A `T` in the gutter marks whole-timeline focus.
+In mouse mode, the wheel over a JSON frame scrolls
+its contents; the left gutter scrolls the whole timeline. `Tab` switches keyboard
+navigation between the timeline and selected frame. Arrows, paging keys, Home,
+and End act on that navigation target.
 
-The focused frame uses the selected-control accent and a `Focused` marker, which
-also appears with `NO_COLOR`. A `>` in the history gutter keeps focus visible when
-the frame's header and footer are clipped. Arrows and paging keys navigate the
-focused frame. In mouse mode, the wheel over a frame scrolls its content, while the
-left history gutter scrolls through earlier frames. New output follows the bottom
-only when you are already viewing the bottom.
+When reading an earlier turn, new output preserves the visible entry and
+position. The timeline follows new output only when already at the bottom.
+Completed frames outside the visible timeline are retained in place without
+waiting for an invisible inspector to be dismissed.
+Resizing reflows messages while keeping each JSON frame with its own user input.
 
-Click the prompt or press `Escape` to leave mouse mode and return to the unchanged
-input draft and cursor. Enter while an output frame is focused returns to input
-without submitting the draft. Printable text returns to input, releases mouse
-capture, and preserves the first character. History navigation does not add
-command-history entries or change conversation focus.
+Click the composer, press `Escape`, or press Enter while navigating to return to
+the unchanged draft and cursor without submitting it. Printable text returns to
+the composer, releases mouse capture, and preserves the first character. Press
+`F6` again to release capture and restore ordinary wheel scrolling. Navigation
+does not add command-history entries or change conversation focus.
 
-The history area fits above the prompt and is omitted when the terminal is too
-short or narrow to display it; omitting it releases mouse capture. Line-fallback
-terminals retain ordinary output behavior. The keyboard inspector also leaves
-wheel scrolling to the terminal until `F6` enables mouse interaction. Mouse
-reporting is released on exit and before native authentication or an external
-viewer. Ordinary input never re-enables capture merely because history exists.
-Terminal preferences and existing keyboard shortcuts are unchanged.
+Inline pickers and prompts keep the timeline visible, so proposal details remain
+available during confirmation. If a decision and its context cannot fit, enlarge
+the terminal or press Escape to leave without confirming. These controls remain
+transient. Native authentication and external viewers suspend timeline painting
+and release mouse capture; returning restores the timeline and draft with fresh
+terminal geometry.
+Very short, narrow, or unsupported terminals retain safe ordinary output behavior.
+Ordinary input never re-enables mouse capture merely because older frames exist.
 
 ## Safety
 

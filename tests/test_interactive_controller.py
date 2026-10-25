@@ -1768,7 +1768,7 @@ class ControllerContractTests(ControllerTestCase):
         for module_name in graph:
             visit(module_name)
         self.assertEqual(len(modules), 163)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 731)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 733)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6284,6 +6284,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
     """Verify the terminal adapter emits only exact runtime decisions."""
 
     def setUp(self) -> None:
+        self.enterContext(mock.patch.object(RuntimeSession, "session_id", "session", create=True))
         self.enterContext(mock.patch.object(
             RuntimeSession, "inspect_editorial_state",
             return_value=EditorialStateProjection("session", ())))
@@ -6317,9 +6318,21 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
     class _Output:
         def __init__(self) -> None:
             self.components: list[object] = []
+            self.submissions: list[tuple[object, ...]] = []
+            self.active_scope: object | None = None
 
         def write_component(self, component: object) -> None:
             self.components.append(component)
+
+        @contextmanager
+        def submission(self, session_id, conversation_id, user):
+            self.submissions.append((session_id, conversation_id, user))
+            previous, self.active_scope = self.active_scope, self.submissions[-1]
+            self.write_component(user)
+            try:
+                yield
+            finally:
+                self.active_scope = previous
 
     @staticmethod
     def _commit(text: str) -> ControlOutcome: return ControlOutcome(ControlOutcomeKind.COMMIT, text=text)
@@ -6650,12 +6663,15 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         session = RuntimeSession.__new__(RuntimeSession); runner = asyncio.Runner(); self.addCleanup(runner.close)
         progress, output, sinks = self._Progress(), self._Output(), []
         async def lead_turn(_session, cid, text, *, action_progress_sink):
+            self.assertEqual(output.active_scope[:2], ("session", _UNIQUE_C))
+            self.assertEqual(output.active_scope[2].content, "ordinary")
             sinks.append(action_progress_sink); return self._terminal_turn(CollaborationStepState.COMPLETED)
         with mock.patch.object(RuntimeSession, "lead_turn", lead_turn):
             adapter = lead_policy_module.InteractiveLeadAdapter(session, runner, progress,
                 self._Picker(), self._Prompt(), output)
             self.assertFalse(adapter.submit(_UNIQUE_C, "ordinary"))
         self.assertEqual(sinks, [progress.observe]); self.assertEqual(progress.begins, [()])
+        self.assertEqual(len(output.submissions), 1); self.assertIsNone(output.active_scope)
         self.assertIsInstance(output.components[-1], terminal_module.Panel)
         self.assertIn("Elapsed: 00:00:00", output.components[-1].items[0].metadata)
 

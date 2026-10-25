@@ -786,7 +786,9 @@ class InteractiveRecoveryTests(unittest.TestCase):
         self.addCleanup(runner.close)
         terminal_fixtures = interactive_controller_tests.InteractiveLeadAdapterTests
         output = terminal_fixtures._Output()
-        adapter = InteractiveLeadAdapter(RuntimeSession.__new__(RuntimeSession), runner,
+        session = RuntimeSession.__new__(RuntimeSession)
+        session.session_id = "session"
+        adapter = InteractiveLeadAdapter(session, runner,
             terminal_fixtures._Progress(), terminal_fixtures._Picker(), terminal_fixtures._Prompt(),
             output, recover_authentication=recover)
         return adapter, runner, output

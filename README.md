@@ -116,8 +116,11 @@ Chat prose uses distinct colored message frames with Markdown presentation and
 a labeled metadata footer. Frames adapt to new writes and live redraws, with a
 40-column full layout, a 120-column maximum, and compact layouts for narrower
 terminals. Input/output token counters come from provider response usage;
-missing counters are displayed as unavailable. Messages remain complete in
-ordinary terminal scrollback. See
+missing counters are displayed as unavailable. Capable terminals keep messages
+and retained JSON previews together in an interactive timeline above the prompt.
+Each JSON frame stays beneath its own user message as later turns arrive.
+F6 enables interaction with older frames; fallback output remains ordinary
+terminal scrollback. See
 [message frames and metadata](docs/reference/interactive-terminal.md#message-frames-markdown-and-response-metadata)
 for the layout, color fallback, and usage-attribution rules.
 

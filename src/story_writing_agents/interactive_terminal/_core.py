@@ -593,6 +593,8 @@ class InteractiveTerminal:
 
     __slots__ = (
         "_accepted_input_write",
+        "_component_write",
+        "_submission_scope",
         "_capability_provider",
         "_composition_read_line",
         "_composition_reference_read_line",
@@ -648,6 +650,8 @@ class InteractiveTerminal:
         if width < 20:
             raise ValueError("width must be at least 20")
         self._accepted_input_write: Callable[[str], None] = lambda _text: None
+        self._component_write: Callable[[Component], None] | None = None
+        self._submission_scope = None
         self._input_session: Callable[[], contextlib.AbstractContextManager[None]] = (
             contextlib.nullcontext
         )
@@ -1486,7 +1490,10 @@ class InteractiveTerminal:
         """Render and write one semantic component through the bound callback."""
 
         frame = render_component(component, self._capability_provider())
-        self._write_text(f"{frame.text}\n")
+        if self._component_write is None:
+            self._write_text(f"{frame.text}\n")
+        else:
+            self._component_write(component)
 
     def _write_accepted_input(self, component: Component) -> None:
         """Render one accepted input through the bound mode-aware callback."""
@@ -1537,7 +1544,7 @@ class InteractiveInputLifecycle:
 class InteractiveSemanticOutput:
     """Bind one terminal's ordinary and mode-gated semantic write paths."""
 
-    __slots__ = ("_write", "_write_accepted")
+    __slots__ = ("_write", "_write_accepted", "_submission")
 
     def __init__(self, terminal: InteractiveTerminal) -> None:
         """Bind semantic output without inspecting capabilities or streams."""
@@ -1548,6 +1555,19 @@ class InteractiveSemanticOutput:
         self._write_accepted: Callable[[Component], None] = (
             terminal._write_accepted_input
         )
+        self._submission = terminal._submission_scope
+
+    @contextlib.contextmanager
+    def submission(self, session_id: str, conversation_id: str, user: Message) -> Iterator[None]:
+        """Keep one User frame and all its operations in an explicit display scope."""
+        if type(user) is not Message:
+            raise TypeError("user must be a Message")
+        if self._submission is None:
+            self.write_component(user)
+            yield
+        else:
+            with self._submission(session_id, conversation_id, user):
+                yield
 
     def write_component(self, component: Component) -> None:
         """Delegate one closed semantic component to exactly one terminal write."""
@@ -3051,6 +3071,8 @@ def build_stream_terminal(
         main_read_line=lambda prompt: read_main_command_line(driver, prompt),
     )
     terminal._accepted_input_write = driver.write_accepted_input
+    terminal._component_write = driver.write_component
+    terminal._submission_scope = driver.submission
     terminal._input_session = driver.input_session
     terminal._native_input_handoff = driver.native_input_handoff
     terminal._main_choice_read_line = lambda prompt, provider: (
