@@ -362,6 +362,8 @@ and End act on that navigation target.
 
 When reading an earlier turn, new output preserves the visible entry and
 position. The timeline follows new output only when already at the bottom.
+Completed frames outside the visible timeline are retained in place without
+waiting for an invisible inspector to be dismissed.
 Resizing reflows messages while keeping each JSON frame with its own user input.
 
 Click the composer, press `Escape`, or press Enter while navigating to return to

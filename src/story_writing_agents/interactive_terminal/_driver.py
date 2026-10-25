@@ -1493,9 +1493,13 @@ class RawTerminalDriver:
                 lifecycle_failure = failure
             else:
                 self._inspector_anchored = False
-                self._redraw_nested_scroll_frame(state, capabilities, renderer)
+                managed = self._redraw_nested_scroll_frame(state, capabilities, renderer)
+                inspect_current = not (
+                    managed and self._timeline_operation is not None
+                    and not self._output_history.entry_visible(self._timeline_operation)
+                )
                 escape_sequence: _EscapeSequenceState = None
-                while True:
+                while inspect_current:
                     try:
                         character = self._read_character(consume_typeahead=False)
                     except (KeyboardInterrupt, EOFError):
@@ -1623,8 +1627,8 @@ class RawTerminalDriver:
         state: MultiAgentScrollState,
         capabilities: TerminalCapabilities,
         renderer: _NestedScrollRenderer,
-    ) -> None:
-        """Replace the retained progress frame with an updated nested scroll view."""
+    ) -> bool:
+        """Replace the frame and report successful managed timeline painting."""
 
         if not callable(renderer):
             raise TypeError("renderer must be callable")
@@ -1657,7 +1661,7 @@ class RawTerminalDriver:
             if self._paint_timeline():
                 self._progress_rows = 0
                 self._inspector_width = width
-                return
+                return True
         old_count = self._progress_rows
         if old_count > 0:
             self._clear_progress_frame()
@@ -1668,6 +1672,7 @@ class RawTerminalDriver:
         self._inspector_width = width
         self._progress_rows = len(lines)
         self._write_raw_text(prefix + rendered.text)
+        return False
 
     @_timeline_borrowed_async
     async def run_live_composer(
@@ -5051,7 +5056,9 @@ class RawTerminalDriver:
         the active editor boundary can restore terminal state.
         """
 
-        self.write_text(text)
+        if type(text) is not str:
+            raise TypeError("terminal output must be a string")
+        self._write_raw_text(text)
 
 
 def _startup_frame(

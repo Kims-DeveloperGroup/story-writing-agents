@@ -2751,6 +2751,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             mock.patch("story_writing_agents.interactive_terminal._driver._restore_terminal_or_raise"),
             mock.patch.object(RawTerminalDriver, "_read_character", side_effect=read_character),
             mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True),
+            mock.patch.object(RawTerminalDriver, "_query_cursor_row", return_value=250),
             mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as mock_clear,
         ):
             final_state = driver.run_nested_scroll_inspector(
@@ -2768,8 +2769,53 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         # Clear before Tab/pointer redraws, but NOT upon exit because keep_frame=True
         self.assertGreaterEqual(mock_clear.call_count, 3)
         self.assertTrue(out.getvalue().endswith("\r\n"))
-        self.assertIn("\x1b[250;1H", out.getvalue())
+        self.assertNotIn("\x1b[250;1H", out.getvalue())
         self.assertEqual(list(driver._typeahead_buffer), [])
+        from dataclasses import replace
+        from story_writing_agents.interactive_terminal._model import Message
+        for view_state in (ViewState.IDLE, ViewState.ERROR):
+            output = io.StringIO()
+            anchored = RawTerminalDriver(lambda _p: "", io.StringIO(), output,
+                                         transition_line_input, transition_main_input, append_main_input_history)
+            output.fileno = lambda: 8
+            anchored._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=40, lines=24))
+            anchored._timeline_enabled = True
+            timeline = anchored._output_history
+            older = timeline.begin_submission("session", "conversation", Message("User", "OLDER_INPUT"))
+            timeline.append_component(Message("Lead", "\n".join(f"OLDER_ROW_{row}" for row in range(40))))
+            timeline.end_submission(older)
+            timeline.focus_visible(timeline.render(replace(fake_caps, width=39), 23))
+            timeline.handle_key(KeyEvent(KeyKind.HOME)); timeline.handle_key(KeyEvent(KeyKind.ENTER))
+            before = timeline.render(replace(fake_caps, width=39), 23).lines
+            origin = timeline.begin_submission("session", "conversation", Message("User", "NEW_INPUT"))
+            retained = MultiAgentScrollState((replace(v1, state=view_state),), 0)
+            anchored._typeahead_buffer.extend("queued")
+            async def completed():
+                return view_state
+            with (mock.patch.object(RawTerminalDriver, "capabilities", return_value=fake_caps),
+                  mock.patch.object(RawTerminalDriver, "_observe_input_capabilities", return_value=fake_caps),
+                  mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(fake_caps, fake_config)),
+                  mock.patch.object(_driver, "_activate_terminal"),
+                  mock.patch.object(_driver, "_restore_terminal_or_raise") as restore,
+                  mock.patch.object(RawTerminalDriver, "_read_character", side_effect=AssertionError("offscreen inspector read input")) as read):
+                result = asyncio.run(anchored.run_advisory_progress(
+                    completed(), lambda _f: "Working...", scroll_state_provider=lambda _result: retained,
+                    is_failure=lambda value: value is ViewState.ERROR, nested_scroll_transition=transition_nested_scroll,
+                    nested_scroll_renderer=render_nested_scroll_view, keep_frame=True))
+            self.assertIs(result, view_state)
+            read.assert_not_called(); restore.assert_called_once_with(fake_config, None)
+            self.assertEqual(timeline.render(replace(fake_caps, width=39), 23).lines, before)
+            slots = tuple(entry for entry in timeline.entries if entry.frames)
+            self.assertEqual(len(slots), 1); self.assertEqual(slots[0].origin, origin)
+            self.assertEqual(len(slots[0].frames), 1); self.assertIs(slots[0].frames[0].view.state, view_state)
+            self.assertIsNone(slots[0].preview); self.assertEqual(slots[0].lines, ())
+            self.assertFalse(timeline.entry_visible(slots[0].identity))
+            self.assertIsNone(anchored._timeline_operation); self.assertFalse(anchored._progress_active)
+            self.assertEqual(anchored._progress_rows, 0); self.assertEqual(list(anchored._typeahead_buffer), list("queued"))
+            self.assertNotIn(_driver._MOUSE_ENABLE, output.getvalue())
+            timeline.end_submission(origin)
+            with anchored._input_latch.input_operation():
+                pass
 
     def test_provide_scroll_state_on_success_sets_idle_state_and_does_not_record_error(self) -> None:
         """Verify success response passes ViewState.IDLE and does not record result message as an error."""

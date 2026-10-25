@@ -229,6 +229,11 @@ class ConversationTimeline:
         top = self._entry_tops.get(identity)
         return None if top is None else top - self._visible_offset + 1
 
+    def entry_visible(self, identity: int) -> bool:
+        """Report intersection with the last rendered viewport without moving it."""
+        visible_keys = self._row_keys[self._visible_offset:self._visible_offset + self._height]
+        return any(entry_identity == identity for entry_identity, _ in visible_keys)
+
     def _frame_rows(self, frame: OutputFrame, capabilities: TerminalCapabilities, mouse_mode: bool) -> list[str]:
         view = frame.view
         visible_height = min(6, view.visible_height)
