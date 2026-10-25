@@ -609,7 +609,7 @@ class InputLatchAndDriverTests(unittest.TestCase):
                 self.assertEqual(termios.attributes, original)
                 fallback.assert_not_called()
 
-        with _session_driver(b"seed\r") as (driver, termios, _, output, fallback):
+        with _session_driver(*(bytes([byte]) for byte in b"seed\r")) as (driver, termios, _, output, fallback):
             size = [40, 24]
             output.fileno.return_value = 8
             driver._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=size[0], lines=size[1]))

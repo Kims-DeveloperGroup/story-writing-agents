@@ -2382,20 +2382,15 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                 ),
             ],
         )
-        self.assertEqual(
-            driver.write_text.call_args_list,
-            [
-                mock.call(
-                    "\x1b[36m[compose] Target: plot. Use /send to submit or "
-                    "/cancel to discard.\x1b[0m\n"
-                ),
-                mock.call(
-                    "\x1b[32m[compose] Sending 1 line, 16 characters to "
-                    "plot.\x1b[0m\n"
-                ),
-                mock.call("[result] ready\n"),
-            ],
-        )
+        self.assertEqual(driver.write_text.call_args_list, [mock.call("[result] ready\n")])
+        self.assertEqual(driver.write_component.call_args_list, [
+            mock.call(_model.Notice(
+                "Target: plot. Use /send to submit or /cancel to discard.",
+                label="compose", role=_model.SemanticRole.INFO, state=_model.ViewState.OPEN)),
+            mock.call(_model.Notice(
+                "Sending 1 line, 16 characters to plot.",
+                label="compose", role=_model.SemanticRole.SUCCESS, state=_model.ViewState.COMPLETED)),
+        ])
 
     def test_compatibility_editor_contains_only_delegation_not_a_second_driver(
         self,
