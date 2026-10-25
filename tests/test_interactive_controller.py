@@ -6174,7 +6174,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         report = next(e.payload.report for e in case.history(source)
                       if type(e.payload) is collaboration.CollaborationLeadExplorationResultPayload)
         idea = report.ideas[0]
-        def adopted_plot_proposal(call, provider):
+        def adopted_plot_proposal(call, provider, *, select=False):
             choices = dict(call.contract.semantic_index.policy.choices)
             required = choices['required_input_ids']
             self.assertEqual(set(required), {'user_input', 'adopted_idea'})
@@ -6189,11 +6189,12 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     'family': 0, 'source_choices': choices['input_ids'],
                     'anchors': {PLOT_ARCHITECT: 'adopted_idea'},
                     'recipients': {source: PLOT_ARCHITECT for source in required},
-                })(call, provider)
+                }, select=select)(call, provider)
             self.assertFalse(call.contract.structural_findings(frame))
             self.assertTrue(call.contract.decode_response(frame).belongs_to(call.contract))
             return frame
-        case.backend.enqueue(adopted_plot_proposal)
+        case.backend.enqueue(lambda call, provider: adopted_plot_proposal(call, provider, select=True),
+                                 adopted_plot_proposal)
         controller, _, callbacks = self.make_controller(case.control_workspace,
                         conversation_storage_services=case.runtime.conversation_storage_services, terminal_width=200)
         controller._runtime, controller._runner = case.runtime, runner

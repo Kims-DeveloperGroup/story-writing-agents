@@ -266,14 +266,15 @@ def assert_schema_descriptions(test, schema):
     visit(schema, True)
 
 
-def capture_sample(call, name=None, *, witness=None, finalizers=None):
+def capture_sample(call, name=None, *, finalizers=None):
     """Optional synthetic fixture evidence, enabled only for an assigned test run."""
-    if witness is not None:
+    if finalizers is not None:
         from story_writing_agents.agent_context import canonical_provider_json
         from story_writing_agents.antigravity_adapter import AntigravityAdapter
         assert name in ('conclude', 'ready', 'prepared')
         bound = call.contract
         assert [item.calls for item in finalizers] == [[('accepted', None)]]
+        witness = finalizers[0].response_text
         assert not bound.structural_findings(witness)
         assert bound.decode_response(witness).belongs_to(bound)
         schemas = [canonical_provider_json(call.schema), canonical_provider_json(
@@ -378,30 +379,32 @@ def fixture_schema_node(schema, node):
     return node
 
 
+def fixture_schema_choices(schema, node):
+    node = fixture_schema_node(schema, node)
+    if 'anyOf' in node:
+        return tuple(choice for branch in node['anyOf'] for choice in fixture_schema_choices(schema, branch))
+    return (node,)
+
+
 def _fixture_partition_matches(schema, value):
     """Match finite action and scope selectors within one complete detail arm."""
-    def choices(node):
-        node = fixture_schema_node(schema, node)
-        if 'anyOf' in node:
-            return tuple(choice for branch in node['anyOf'] for choice in choices(branch))
-        return (node,)
     def literals(node):
-        return tuple(item for choice in choices(node) for item in choice.get('enum', ()))
+        return tuple(item for choice in fixture_schema_choices(schema, node) for item in choice.get('enum', ()))
     details = value.get('response_details', {}) if isinstance(value, Mapping) else {}
     request = details.get('proposal_drafting_request') if isinstance(details, Mapping) else None
     scope = details.get('task_scope', {}) if isinstance(details, Mapping) else {}
     if not isinstance(scope, Mapping):
         return False
     root = fixture_schema_node(schema, schema)
-    for detail in choices(root['properties']['response_details']):
+    for detail in fixture_schema_choices(schema, root['properties']['response_details']):
         if isinstance(request, Mapping) and isinstance(request.get('action_type'), str) and not any(
             request['action_type'] in literals(option.get('properties', {}).get('action_type', {}))
-            for option in choices(detail.get('properties', {}).get('proposal_drafting_request', {}))):
+            for option in fixture_schema_choices(schema, detail.get('properties', {}).get('proposal_drafting_request', {}))):
             continue
         scope_node = detail.get('properties', {}).get('task_scope')
         if scope_node is None:
             continue
-        for declared in choices(scope_node):
+        for declared in fixture_schema_choices(schema, scope_node):
             props = declared.get('properties', {})
             if any(name in scope and (name not in props or scope[name] not in literals(props[name]))
                    for name in ('intent', 'activity')):
@@ -427,9 +430,6 @@ def fixture_variant_value(schema, value):
     if not isinstance(details, dict) or 'variant_id' in details:
         return result
 
-    def choices(node):
-        node = fixture_schema_node(schema, node)
-        return tuple(arm for child in node['anyOf'] for arm in choices(child)) if 'anyOf' in node else (node,)
 
     def matches(node, supplied):
         node = fixture_schema_node(schema, node)
@@ -447,7 +447,7 @@ def fixture_variant_value(schema, value):
         return True
 
     root = fixture_schema_node(schema, schema)
-    arms = tuple(arm for arm in choices(root.get('properties', {}).get('response_details', {}))
+    arms = tuple(arm for arm in fixture_schema_choices(schema, root.get('properties', {}).get('response_details', {}))
                  if 'variant_id' in arm.get('properties', {}))
     if arms:
         # Malformed fixtures keep their authored values; only the offered route is supplied.
@@ -602,14 +602,14 @@ def finite_fixture_selection(choices, selected):
     return tree(choices)
 
 
-def lead_fixture_assessment(value, *, source_choices):
+def lead_fixture_assessment(value, *, source_choices, list_fields=('foundations', 'decisions')):
     """Encode supplied assessment rows; preserve omissions and malformed values."""
     encoded = copy.deepcopy(value)
     if type(encoded) is not dict:
         return encoded
     rows = [encoded[name] for name in ('direction', 'creative_scope')
             if type(encoded.get(name)) is dict]
-    for name in ('foundations', 'decisions'):
+    for name in list_fields:
         supplied = encoded.get(name)
         if type(supplied) in (list, tuple):
             rows.extend(row for row in supplied if type(row) is dict)
@@ -795,8 +795,23 @@ def lead_fixture_assignments(rows, *, input_choices, review_choices, anchors, re
     return {'assignments': assignments, 'required_input_recipients': copy.deepcopy(recipients)}
 
 
+def lead_fixture_scoped_response(request, value, *, response_type, family=0,
+                                 allocation=None, branch_key=None, select=False):
+    """Project supplied scope/assessment only; caller authors every allocation edge."""
+    details = {'task_scope': lead_fixture_bound_scope(request, value['authoring_scope'], record=True)}
+    if allocation is not None or 'authoring_assessment' in value:
+        details['authoring_assessment'] = lead_fixture_assessment(
+            value.get('authoring_assessment'), source_choices=dict(request.contract.semantic_index.policy.choices)['input_ids'])
+    if allocation is not None:
+        details['specialist_consultation_proposal'] = {
+            'shared_premises': value['proposal']['shared_premises'], **allocation}
+    return lead_fixture_response(request, {'response_type': response_type,
+        'response_text': value['message'], 'response_details': details},
+        family=family, branch_key=branch_key, select=select)
+
+
 def lead_fixture_response(request, value, *, family, branch_key=None, response_type=None,
-                          select=False):
+                          select=False, raw=False):
     """Pair caller-authored current wire values with one explicitly intended issued family."""
     if select:
         return result_selection(request, response_type=(
@@ -805,9 +820,9 @@ def lead_fixture_response(request, value, *, family, branch_key=None, response_t
     outer, inner = offered_fixture_bindings(
         request, action_type='submit_result',
         response_type=value['response_type'] if response_type is None else response_type,
-        family=family, branch_key=branch_key, value=value)
+        family=family, branch_key=branch_key, value=None if raw else value)
     return indexed_response({'action_type': 'submit_result', 'task_result': value},
-                            outer_schema_id=outer, inner_schema_id=inner, contract=request.contract)
+                            outer_schema_id=outer, inner_schema_id=inner, contract=None if raw else request.contract)
 
 
 def finite_fixture_read_selection(choices, selected):

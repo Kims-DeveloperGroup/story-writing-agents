@@ -12759,7 +12759,7 @@ class StoryRuntime:
                         if provider is not None:
                             provider.publish_validation_messages()
                         assert correction_failure_code is not None
-                        self._lead_outcome_failure_result(
+                        failed = self._lead_outcome_failure_result(
                             session_id=session_id,
                             conversation_id=conversation_id,
                             turn_id=turn_id,
@@ -12769,6 +12769,15 @@ class StoryRuntime:
                             failure_code=correction_failure_code,
                             accounting_provider=provider,
                         )
+                        if (
+                            type(correction_failure) is ContextExecutionError
+                            and correction_failure.code is ContextExecutionErrorCode.ACTION_EXHAUSTED
+                            and correction_facts.prelaunch_action_exhausted
+                            and correction_facts.response_rejection_code is None
+                            and not correction_facts.timed_out
+                            and not correction_facts.submission_uncertain
+                        ):
+                            return replace(failed, validation_details=provider.validation_details)
                         return self._structured_fallback_lead_result(
                             session_id=session_id,
                             conversation_id=conversation_id,

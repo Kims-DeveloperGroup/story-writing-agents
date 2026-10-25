@@ -813,9 +813,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             self.assertNotIn("unresolved_input_ids", repr(call.schema))
             for message in ("Visible.", " \t\0"):
                 self.assertEqual(LeadProviderConstraints(continuation=True).diagnose(json.dumps({"message": message})), ())
-            frame = _synthesis_outcome(message="The concerns remain visible.")(call, _provider)
-            cooffer_profile.append((call, frame, len(self.backend.finalizers)))
-            return frame
+            cooffer_profile.append((call, len(self.backend.finalizers)))
+            return _synthesis_outcome(message="The concerns remain visible.")(call, _provider)
         conversation_id = self.conversation("Strict synthesis")
         proposed = (
             await self.proposal(conversation_id, assignments=_assignments(PLOT_ARCHITECT,
@@ -844,9 +843,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         result = _payloads(history, CollaborationExecutionResult)[0]
         self.assertIs(result.synthesis_outcome, CollaborationSynthesisOutcomeKind.SUCCEEDED)
         self.assertEqual(result.synthesis_submitted_physical_calls, 1)
-        [(profile_call, witness, baseline)] = cooffer_profile
-        self.assertTrue(capture_sample(profile_call, 'conclude', witness=witness,
-                                      finalizers=self.backend.finalizers[baseline:]))
+        [(profile_call, baseline)] = cooffer_profile
+        self.assertTrue(capture_sample(profile_call, 'conclude', finalizers=self.backend.finalizers[baseline:]))
         duplicate = {**_assignments(PLOT_ARCHITECT)[0], "mode": "review"}
         with self.assertRaises(BackendProtocolError) as caught:
             self.runtime._decode_lead_synthesis(json.dumps({"message": "Visible.", "next_intent": {

@@ -1,13 +1,13 @@
 """Exhaustive acceptance coverage for runtime-grounded lead judgments."""
 
 from __future__ import annotations
-from tests.provider_wire_fixture import selected_fixture_calls
+from tests.provider_wire_fixture import selected_fixture_calls, lead_fixture_assignments
 from story_writing_agents import authoring_admission as admission
 from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
 
 from tests.test_lead_orchestration import (
     _exploration_outcome, _current_exploration_outcome, _read_history_hit)
-from tests.provider_wire_fixture import indexed_response, offered_fixture_bindings
+from tests.provider_wire_fixture import indexed_response, offered_fixture_bindings, lead_fixture_scoped_response
 from story_writing_agents import lead_exploration as exploration
 import hashlib
 
@@ -424,10 +424,7 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None, selec
                 native['authoring_assessment'] = lead_fixture_assessment(
                     native['authoring_assessment'], source_choices=choices['input_ids'])
             return lead_fixture_response(call, lead_fixture_result(native), family=0, select=select)
-        from tests.provider_wire_fixture import (
-            lead_fixture_assignments, lead_fixture_bound_scope,
-            lead_fixture_assessment, lead_fixture_response,
-            author_positive_fixture_review_bases)
+        from tests.provider_wire_fixture import author_positive_fixture_review_bases
         choices = dict(call.contract.semantic_index.policy.choices)
         row = value["proposal"]["assignments"][0]
         allocated = lead_fixture_assignments(author_positive_fixture_review_bases([{
@@ -438,22 +435,14 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None, selec
             review_choices=choices["review_candidate_ids"],
             anchors={row["agent_id"]: row["input_ids"][0]},
             recipients={source: row["agent_id"] for source in row["input_ids"]})
-        return lead_fixture_response(call, {
-            "response_type": "specialist_consultation_proposal",
-            "response_text": value["message"], "response_details": {
-                "task_scope": lead_fixture_bound_scope(
-                    call, value["authoring_scope"], record=True),
-                "authoring_assessment": lead_fixture_assessment(
-                    value.get("authoring_assessment"), source_choices=choices["input_ids"]),
-                "specialist_consultation_proposal": {
-                    "shared_premises": value["proposal"]["shared_premises"], **allocated}}},
-            family=0, select=select)
+        return lead_fixture_scoped_response(
+            call, value, response_type='specialist_consultation_proposal', allocation=allocated, select=select)
 
     return respond
 
 
 def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
-                        authoring_assessment=None, native_proposal=False, select=False):
+                        authoring_assessment=None, native_proposal=False, select=False, required_recipients=None):
     def respond(call, _provider):
         aliases = call.payload["task_input"]["available_input_sources"]
         target_paths = tuple(
@@ -484,23 +473,11 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
             },
         }
         if factual:
-            from tests.provider_wire_fixture import (
-                lead_fixture_bound_scope, lead_fixture_response, lead_fixture_assessment)
-            details = {"task_scope": lead_fixture_bound_scope(
-                call, value["authoring_scope"], record=True)}
-            if "authoring_assessment" in value:
-                choices = dict(call.contract.semantic_index.policy.choices)
-                details["authoring_assessment"] = lead_fixture_assessment(
-                    value["authoring_assessment"], source_choices=choices["input_ids"])
-            return lead_fixture_response(call, {
-                "response_type": "clarification_question", "response_text": value["message"],
-                "response_details": details}, family=0,
-                branch_key=call.contract.factory.rule_seed.contract_id + ":family:1", select=select)
+            return lead_fixture_scoped_response(
+                call, value, response_type='clarification_question',
+                branch_key=call.contract.factory.rule_seed.contract_id + ':family:1', select=select)
         if not native_proposal:
             return _provider_envelope(call, value)
-        from tests.provider_wire_fixture import (
-            lead_fixture_assignments, lead_fixture_assessment, lead_fixture_response,
-            lead_fixture_bound_scope)
         choices = dict(call.contract.semantic_index.policy.choices)
         rows = []
         for row in value['proposal']['assignments']:
@@ -515,16 +492,10 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
             rows, input_choices=choices['allocation_input_ids'],
             review_choices=choices['review_candidate_ids'],
             anchors={row['agent_id']: row['input_source_ids'][0] for row in rows},
-            recipients={source: PLOT_ARCHITECT for source in choices['required_input_ids']})
-        return lead_fixture_response(call, {
-            'response_type': 'specialist_consultation_proposal',
-            'response_text': value['message'], 'response_details': {
-                'task_scope': lead_fixture_bound_scope(call, value['authoring_scope'], record=True),
-                'authoring_assessment': lead_fixture_assessment(
-                    value.get('authoring_assessment'), source_choices=choices['input_ids']),
-                'specialist_consultation_proposal': {
-                    'shared_premises': value['proposal']['shared_premises'], **allocated}}},
-            family=0, select=select)
+            recipients=({source: PLOT_ARCHITECT for source in choices['required_input_ids']}
+                        if required_recipients is None else required_recipients))
+        return lead_fixture_scoped_response(
+            call, value, response_type='specialist_consultation_proposal', allocation=allocated, select=select)
     return respond
 
 
@@ -655,7 +626,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Zero hit drift")
-        self.backend.enqueue(_search("phrase absent from every source", ["w"]), _missing_outcome(proposal=True,
+        self.backend.enqueue(_search("phrase absent from every source", ["w"]), *selected_fixture_calls(_missing_outcome,proposal=True,
             authoring_assessment=_fixture_assessment()),)
         proposed = await self.runtime.lead_turn(
             self.session_id,
@@ -769,10 +740,10 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self.assertEqual(result.evidence.receipts[0].utf8_bytes, 0)
         self.assertEqual(result.evidence.receipts[0].boundary_kind, "whole")
 
-        self.backend.enqueue(_referenced_outcome(
+        self.backend.enqueue(*selected_fixture_calls(_referenced_outcome,
             status="empty", evidence_ids=["reference_1"],
             authoring_assessment=_fixture_assessment(foundation_ids=("reference_1",)),
-            native_proposal=True))
+            native_proposal=True, required_recipients={'reference_1': EXECUTION_SPECIALIST, 'user_input': PLOT_ARCHITECT}))
         unqualified = await self.runtime.lead_turn(
             self.session_id, self.conversation("Empty READ foundation"),
             "Use ${manuscript/part-01/empty.md} as the sole foundation.\n" + _ADMISSION_BRIEF,
@@ -952,10 +923,11 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         def read_prior_turn(call, provider: _LeadContextProvider):
             return _read_history_hit(call, provider)
 
-        def answer_prior_turn(call, provider: _LeadContextProvider):
+        def answer_prior_turn(call, provider: _LeadContextProvider, *, select=False):
             observation = call.payload["context_observation"]
             evidence_id = observation["read_results"][0]["evidence_id"]
-            prior_evidence_ids.append(evidence_id)
+            if not select:
+                prior_evidence_ids.append(evidence_id)
             from story_writing_agents.agent_context.manifest import ContextSourceKind
             from story_writing_agents.lead_provider_contracts import lead_outcome_scope_paths
             from story_writing_agents.specialist_routing import (
@@ -981,11 +953,11 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 'response_type': 'answer',
                 'response_text': 'The current READ supports this answer.',
                 'response_details': {'task_scope': native_scope}}, family=0,
-                branch_key=call.contract.factory.rule_seed.contract_id + ':family:0')
+                branch_key=call.contract.factory.rule_seed.contract_id + ':family:0', select=select)
 
         conversation_id = self.conversation("Stale prior-turn evidence")
         self.backend.enqueue(_search("Outline", ["w"]), read_prior_turn,
-                             answer_prior_turn)
+            lambda call, provider: answer_prior_turn(call, provider, select=True), answer_prior_turn)
         first = await self.runtime.lead_turn(self.session_id, conversation_id, "Read current evidence.")
         self.assertIs(first.kind, LeadOutcomeKind.ANSWER)
         self.assertEqual(first.message, "The current READ supports this answer.")
@@ -1037,18 +1009,18 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     for path in (self.workspace.root / directory).rglob('*.md')}
 
         def check_native_delivery(conversation_id, call_start, finalizer_start,
-                                  expected_returns, expected_states):
+                                  expected_returns, expected_states, *, expected_calls=3):
             calls = self.backend.calls[call_start:]
-            self.assertEqual(len(calls), 3)
+            self.assertEqual(len(calls), expected_calls)
             self.assertTrue(all(
                 call.scope.session_id == self.session_id
                 and call.scope.subject_kind is ContextSubjectKind.CONVERSATION
                 and call.scope.subject_id == conversation_id
                 and call.scope.agent_id == LEAD_ORCHESTRATOR for call in calls))
             self.assertEqual(answer_returns, expected_returns)
-            self.assertEqual(len(_submitted_calls(self.history(conversation_id))), 3)
+            self.assertEqual(len(_submitted_calls(self.history(conversation_id))), expected_calls)
             finalizers = self.backend.finalizers[finalizer_start:]
-            self.assertEqual(len(finalizers), 3)
+            self.assertEqual(len(finalizers), expected_calls)
             states = []
             for finalizer in finalizers:
                 self.assertTrue(type(finalizer) is _Finalizer)
@@ -1192,12 +1164,13 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         read_evidence = []
         positive_message = 'The completed READ grounds this factual answer.'
 
-        def answer_without_using_read(call, _provider):
+        def answer_without_using_read(call, _provider, *, select=False):
             nonlocal answer_returns
             observation = call.payload['context_observation']
             self.assertEqual(observation['observation_type'], 'context_read_results')
             evidence_id = observation['read_results'][0]['evidence_id']
-            read_evidence.append(evidence_id)
+            if not select:
+                read_evidence.append(evidence_id)
             offers = call.contract.offers
             writing_facts = tuple((item.evidence_id, item.artifact_locator, item.whole_source)
                 for item in offers.completed_read_facts + offers.delivery_read_facts
@@ -1218,15 +1191,18 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             frame = lead_fixture_response(call, {
                 'response_type': 'answer', 'response_text': positive_message,
                 'response_details': {'task_scope': scope}}, family=0,
-                branch_key=call.contract.factory.rule_seed.contract_id + ':family:0')
+                branch_key=call.contract.factory.rule_seed.contract_id + ':family:0', select=select)
             self.assertFalse(call.contract.rule_graph.findings(json.loads(frame)))
             self.assertTrue(call.contract.decode_response(frame).belongs_to(call.contract))
-            answer_returns += 1
+            if not select:
+                answer_returns += 1
             return frame
 
         cases = (
             (_search('Outline', ['w']), answer_with_unread_id),
-            (_search('Outline', ['w']), read_first, answer_without_using_read),
+            (_search('Outline', ['w']), read_first,
+             lambda call, provider: answer_without_using_read(call, provider, select=True),
+             answer_without_using_read),
         )
         for index, scripts in enumerate(cases):
             conversation_id = self.conversation(f'Unread evidence {index}')
@@ -1242,7 +1218,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             check_native_delivery(
                 conversation_id, call_start, finalizer_start, 2 if index == 0 else 1,
                 ('accepted', 'rejected', 'rejected') if index == 0
-                else ('accepted', 'accepted', 'accepted'))
+                else ('accepted', 'accepted', 'accepted', 'accepted'),
+                expected_calls=3 if index == 0 else 4)
             if index == 0:
                 self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
                 require_terminal_fallback(

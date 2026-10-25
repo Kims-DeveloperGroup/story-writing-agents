@@ -2,7 +2,7 @@ from tests.provider_wire_fixture import selected_fixture_calls, capture_sample
 """Runtime routing accepts typed task facts and keeps draft/review authority separate."""
 from tests.provider_wire_fixture import ( result as wire_result, lead_fixture_bound_scope, lead_fixture_assignments,
     finite_fixture_selection, lead_fixture_result, lead_fixture_response,)
-from tests.provider_wire_fixture import author_positive_fixture_review_bases
+from tests.provider_wire_fixture import author_positive_fixture_review_bases, lead_fixture_assessment
 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id
 
 from functools import partial
@@ -107,16 +107,9 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
             body['task_scope'] = lead_fixture_bound_scope( call, body.pop('writing_task_scope'), record=True)
         assessment = body.get('authoring_assessment')
         if type(assessment) is dict:
-            for key in ('creative_scope', 'direction', 'foundations', 'decisions'):
-                value = assessment.get(key)
-                records = value if type(value) in (list, tuple) else (value,)
-                for record in records:
-                    if type(record) is dict and 'source_ids' in record:
-                        cells = record['source_ids']
-                        choices = native_inputs['source_choices']
-                        if (type(cells) in (list, tuple) and all(type(item) is str for item in cells)
-                                and len(set(cells)) == len(cells) and set(cells) <= set(choices)):
-                            record['source_ids'] = finite_fixture_selection(choices, tuple(cells))
+            body['authoring_assessment'] = lead_fixture_assessment(
+                assessment, source_choices=native_inputs['source_choices'],
+                list_fields=('creative_scope', 'direction', 'foundations', 'decisions'))
         proposal = body.get('specialist_consultation_proposal')
         if type(proposal) is dict and 'assignments' in proposal:
             choices = dict(call.contract.semantic_index.policy.choices)
@@ -398,7 +391,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
 
         text = "Write from the selected whole premise."
         path = selection.target_paths[0]
-        self.backend.enqueue(_selected_premise_proposal(selection, authoring_assessment=_fixture_assessment(
+        self.backend.enqueue(*selected_fixture_calls(_selected_premise_proposal,selection, authoring_assessment=_fixture_assessment(
             foundation_ids=(
                 "selected_premise",
             ),
@@ -500,7 +493,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             premise_selection=reused_selection, )
         commit = applied.commit_request or await self.runtime.reprepare_story_commit(boundary.story_commit_preparation_request)
         await self.runtime.decide_story_commit(_commit_decision(replace(applied, commit_request=commit), c.StoryCommitDecision.REJECT))
-        self.backend.enqueue(_selected_premise_proposal(reused_selection, authoring_assessment=_fixture_assessment(
+        self.backend.enqueue(*selected_fixture_calls(_selected_premise_proposal,reused_selection, authoring_assessment=_fixture_assessment(
             foundation_ids=(
                 "selected_premise",
             ),
@@ -518,7 +511,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         previous = self.history(conversation)
         changed_option = report.options[1]
         successor = replace(selection, request_id="change-whole-direction", option_id=changed_option.option_id, material_digest=changed_option.material_digest, authoring_task_id=reused.proposal.authoring_scope.task_id, expected_authoring_task_revision=reused.proposal.authoring_scope.task_revision)
-        self.backend.enqueue(_selected_premise_proposal(successor, authoring_assessment=_fixture_assessment(
+        self.backend.enqueue(*selected_fixture_calls(_selected_premise_proposal,successor, authoring_assessment=_fixture_assessment(
             foundation_ids=(
                 "selected_premise",
             ),
@@ -613,7 +606,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             PLOT_ARCHITECT, domains=("plot_structure",), activity="review",
             intent="review_only", candidate_ids=("adopted_idea",),
             mutate=lambda value, _material: value["proposal"]["assignments"][0].update(
-                input_ids=["adopted_idea"])), adoption=selection)
+                input_ids=["adopted_idea"])), adoption=selection, select=True)
         self.assertIsNotNone(selected.proposal, selected)
         self.assertEqual(selected.proposal.assignments[0].review_basis.candidate_input_ids, ("adopted_idea",))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
@@ -682,7 +675,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
 
         adopted = await self.proposal_for(foreign_focus, self._native_scoped(PLOT_ARCHITECT,
             domains=("plot_structure",), candidate_ids=("adopted_idea",),
-            authoring_assessment=_fixture_assessment(),), adoption=selection)
+            authoring_assessment=_fixture_assessment(),), adoption=selection, select=True)
         self.assertIsNotNone(adopted.proposal, adopted)
         capture = next(e.payload.capture for e in self.history(foreign_focus)
                        if type(e.payload) is c.CollaborationExplorationAdoptionPayload)
@@ -708,11 +701,12 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             evidence_ids=lambda call,m:[next(x["evidence_id"]
                 for x in call.payload["core_document_statuses"] if x["artifact_path"] == OUTLINE)],
             authoring_scope=selected_review_scope)
-        def selected_review(call, provider):
-            value = json.loads(response(call, provider))
-            value["agent_action"]["task_result"]["response_details"]["authoring_assessment"] = None
+        def selected_review(call, provider, *, select=False):
+            value = json.loads(response(call, provider, select=select))
+            if not select:
+                value["agent_action"]["task_result"]["response_details"]["authoring_assessment"] = None
             return json.dumps(value)
-        self.backend.enqueue(selected_review)
+        self.backend.enqueue(partial(selected_review, select=True), selected_review)
         result = await self.runtime.lead_turn(self.session_id, self.conversation(), "Integrate that pending task into the supplied candidate.")
         self._assert_continuation(result, 'artifact_proposal')
 
@@ -930,7 +924,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.backend.enqueue_for(assignment.specialist_id, _specialist_outcome("supports", "The exact integrated candidate preserves the assigned domain."))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _artifact_synthesis_outcome())
         reviewed = await self.runtime.decide_lead_step(_decision(proposed,c.CollaborationConfirmationDecision.CONFIRM))
-        self.assertEqual(len(_submitted_calls(self.history(conversation))), 11,
+        self.assertEqual(len(_submitted_calls(self.history(conversation))), 12,
                          [(actor, call.call_kind.value) for actor, call in self.backend.call_records])
         review_frames = [_workflow_material(call.payload) for actor, call in self.backend.call_records if actor in ROSTER][-3:]
         review_candidates = [next(item["artifact_candidate"] for item in frame["inputs"] if item["input_id"] == candidate_inputs[0].input_id) for frame in review_frames]
@@ -1107,16 +1101,14 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         cooffer_profiles = []
         def capture_response(label, producer):
             def respond(call, provider):
-                frame = producer(call, provider)
-                cooffer_profiles.append((label, call, frame, len(self.backend.finalizers)))
-                return frame
+                cooffer_profiles.append((label, call, len(self.backend.finalizers)))
+                return producer(call, provider)
             return respond
         def publish_profile(expected):
-            label, call, witness, baseline = cooffer_profiles[-1]
+            label, call, baseline = cooffer_profiles[-1]
             self.assertEqual((label, len(cooffer_profiles)),
                              (expected, 1 if expected == 'ready' else 2))
-            self.assertTrue(capture_sample(call, label, witness=witness,
-                                          finalizers=self.backend.finalizers[baseline:]))
+            self.assertTrue(capture_sample(call, label, finalizers=self.backend.finalizers[baseline:]))
         readiness = await self.record_book_readiness()
         conversation=self.conversation()
         assessment = asdict(_fixture_assessment())

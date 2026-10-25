@@ -354,8 +354,10 @@ of a declared owner remains complete. A current full-index
 singleton is also direct. Other results require a submitted selection call and a
 submitted result call within the existing allowance. The selected successor offers
 exactly the chosen terminal member. Ordinary SEARCH or READ refreshes current facts
-and invalidates selection. Repair keeps the rejected physical graph and its terminal
-subset through retrieval or selection, without granting another repair attempt.
+and invalidates selection. Repair preserves the rejected call's frozen semantic
+index and terminal subset. Its phase-derived physical action view excludes SEARCH
+and READ; SELECT remains only when already offered and its charged successor fits.
+Repair cannot broaden result delivery or grant another repair attempt.
 If no terminal result fits the remaining allocation, the runtime reports typed
 exhaustion before launch.
 

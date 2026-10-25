@@ -49,9 +49,10 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         key = ContextLedgerKey(identity.checkpoint_scope(), "codex")
         return key, service._ledger.inspect(key)
 
-    async def answer(self, conversation, text, *, runtime=None, backend=None):
+    async def answer(self, conversation, text, *, runtime=None, backend=None, callbacks=None):
         backend = backend or self.backend
-        backend.enqueue(lead._visible_outcome("answer", "Synthetic retry succeeded."))
+        backend.enqueue(*(callbacks if callbacks is not None else
+                          (lead._visible_outcome("answer", "Synthetic retry succeeded."),)))
         result = await (runtime or self.runtime).lead_turn(self.session_id, conversation, text)
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         return result
@@ -200,7 +201,9 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         with self.assertRaisesRegex(ValueError, "no authoritative pending request"):
             await restarted.decide_lead_step(lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(len(self.backend.calls), before)
-        await self.answer(conversation, "New request after failed revision.", runtime=restarted)
+        await self.answer(conversation, "New request after failed revision.", runtime=restarted,
+                          callbacks=lead.selected_fixture_calls(lead._visible_outcome, 'answer',
+                              'Synthetic retry succeeded.', revision_discussion=True))
         self.assertEqual(len(self.backend.calls), before + 1)
         self.assertEqual({agent for agent, _ in self.backend.call_records}, {LEAD_ORCHESTRATOR})
 
