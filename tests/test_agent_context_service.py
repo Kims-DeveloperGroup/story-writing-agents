@@ -145,7 +145,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
                      "$defs": {"pattern": {"type": "string", "pattern": r"^x\z"}}}
         self.assertEqual(check_schema(reference), ())
         reference["properties"]["allOf"]["$ref"] = "#/$defs/missing"
-        self.assertIn(("$.properties.allOf.$ref", "LOCAL_SCHEMA_REFERENCE"), check_schema(reference))
+        self.assertIn(('$.properties.allOf["$ref"]', "LOCAL_SCHEMA_REFERENCE"), check_schema(reference))
         recursive = {"type": "object", "properties": {"next": {"anyOf": [{"$ref": "#"}, {"type": "null"}]}},
                      "required": ["next"], "additionalProperties": False}
         self.assertEqual(check_schema(recursive), ())
