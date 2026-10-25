@@ -203,7 +203,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
         families = tuple(replace(history[0], event_id=f"family_{index}", sequence=index + 1, kind=kind,
             sender=sender, recipient=recipient, payload=payload) for index, (kind, sender, recipient, payload) in enumerate((
             (CollaborationEventKind.MESSAGE, USER, LEAD, CollaborationMessagePayload("Literal user input.")),
-            (CollaborationEventKind.LEAD_DISCUSSION, LEAD, USER, CollaborationLeadDiscussionPayload(task.LeadDiscussionReport(response_kind="answer", response_text="Discussion answer.", origin_control_event_id="control"))),
+            (CollaborationEventKind.LEAD_DISCUSSION, RUNTIME, USER, CollaborationLeadDiscussionPayload(task.LeadDiscussionReport(response_kind="answer", response_text="Discussion answer.", origin_control_event_id="control"))),
             (CollaborationEventKind.LEAD_EXPLORATION_RESULT, LEAD, USER, CollaborationLeadExplorationResultPayload(report)),
             (CollaborationEventKind.SPECIALIST_REPLY, specialist.sender, specialist.recipient, analysis.payload),
             (CollaborationEventKind.LEAD_PUBLIC_RESPONSE, RUNTIME, USER, CollaborationLeadPublicResponsePayload(physical)),
