@@ -1173,8 +1173,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         await case.runtime.lead_turn(case.session_id,
                             case.conversation("lead-conversation"), "Visible lead request.")
                         case.backend.enqueue(lead._current_exploration_outcome(
-                            "Native provisional 한글 possibility.", basis_input_ids=(), select=True))
-                        case.backend.enqueue(lead._current_exploration_outcome(
+                            "Native provisional 한글 possibility.", basis_input_ids=(), select=True), lead._current_exploration_outcome(
                             "Native provisional 한글 possibility.", basis_input_ids=()))
                         await case.runtime.lead_turn(case.session_id,
                             case.conversation("lead-exploration-parity"),

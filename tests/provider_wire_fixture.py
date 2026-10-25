@@ -511,8 +511,11 @@ def offered_fixture_bindings(
     return offered[ordinal]
 
 
-def selected_fixture_calls(builder, *args, **kwargs):
+def selected_fixture_calls(builder, *args, reuse_response=False, **kwargs):
     """Queue both paid callbacks explicitly; never submit or choose for the provider."""
+    if reuse_response:
+        respond = builder(*args, **kwargs)
+        return (lambda call, provider: respond(call, provider, select=True)), respond
     return builder(*args, select=True, **kwargs), builder(*args, **kwargs)
 
 

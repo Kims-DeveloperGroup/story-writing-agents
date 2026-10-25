@@ -47,8 +47,11 @@ the same frozen owners. An adapter cannot independently prune semantic authority
 
 Selection adds no source evidence, READ receipt or publication authority. Accepted
 Ordinary SEARCH or READ refreshes the eligible contracts and invalidates the selection.
-Repair retains the rejected physical graph and cannot broaden its terminal subset,
-including after retrieval or selection, or grant another repair attempt.
+Repair retains the rejected call's frozen semantic index and terminal subset.
+Its phase-derived physical action view excludes SEARCH and READ, while retaining
+SELECT only when it was already offered and its paid successor fits the remaining
+call limit. Repair cannot broaden result delivery after retrieval or selection,
+or grant another repair attempt.
 The existing physical-call and nonterminal-action limits still apply, including the
 selection call and its required successor. Insufficient room is reported before
 provider launch instead of increasing the budget or offering the failing monolith.

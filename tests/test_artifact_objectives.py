@@ -143,9 +143,8 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
                 selected=self.objective_tasks.get(objective_id), mutate=mutate,
                 authoring_assessment=task_assessment(foundation_ids=('user_input',),
                     actions=('scene transitions', 'supporting dialogue')))(call, provider)
-        if native_start or native_continuation or native_inputs is not None:
-            self.backend.enqueue(lambda call, provider: respond(call, provider, select=True))
-        self.backend.enqueue(respond)
+        first = (lambda call, provider: respond(call, provider, select=True), respond)
+        self.backend.enqueue(*(first if native_start or native_continuation or native_inputs is not None else (respond,)))
         proposed = await self.runtime.lead_turn(self.session_id, conversation_id,
             ((f"Draft {target_path or 'a synthetic scene'} from this brief: a lantern vanishes, its keeper is found, and it returns." + " Invent scene transitions and supporting dialogue; preserve the supplied brief facts."
             + (" Explicit authoring paths: " + ", ".join(authoring_paths) if authoring_paths is not None else ""))))

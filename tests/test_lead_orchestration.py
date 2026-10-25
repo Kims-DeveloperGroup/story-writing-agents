@@ -128,8 +128,7 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
             return result_selection(call, response_type='specialist_consultation_proposal',
                 family=0, branch_key=branch, value=lead_fixture_result(native))
         return lead_fixture_response(call, lead_fixture_result(native), family=0, branch_key=branch)
-    case.backend.enqueue(lambda call, provider: front(call, provider, select=True))
-    case.backend.enqueue(front)
+    case.backend.enqueue(lambda call, provider: front(call, provider, select=True), front)
     request = "Compare knowledge alternatives without drafting."
     if reference: request += " ${core_documents/global_outline.md}#L1-L2"
     proposed = await case.runtime.lead_turn(case.session_id, conversation, request)
@@ -184,8 +183,7 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
             call.contract.decode_response(json.dumps(unexpected, ensure_ascii=False))
         return response
     case.backend.enqueue_for(LEAD_ORCHESTRATOR,
-        lambda call, provider: summarize(call, provider, select=True))
-    case.backend.enqueue_for(LEAD_ORCHESTRATOR, summarize)
+        lambda call, provider: summarize(call, provider, select=True), summarize)
     finished = await case.runtime.decide_lead_step(_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
     turn = finished.turn
     case.assertEqual(turn.premise_report.options[0].premise_text, literal)
@@ -369,7 +367,9 @@ class _LeadContextProvider:
         except LookupError: pass
         if hasattr(self, "_live_material"):
             _LIVE_CONTEXT[request.payload["request_correlation_token"]] = self._live_material
-        if not self.responses: raise AssertionError("unexpected lead provider call")
+        if not self.responses:
+            self.backend._record_fixture_failure('script_empty', 'assertion')
+            raise AssertionError("unexpected lead provider call")
         scripted = self.responses.pop(0)
         accounting = self._account(request.schema, request.payload, call_kind=request.call_kind,
             component_paths=request.component_paths,mandatory_reference_paths=request.mandatory_reference_paths)
@@ -381,7 +381,12 @@ class _LeadContextProvider:
             raise scripted.failure
         response: str | BaseException = scripted
         if callable(response):
-            response = response(request, self)
+            try:
+                response = response(request, self)
+            except (AssertionError, IndexError, KeyError, TypeError, ValueError) as failure:
+                labels = {AssertionError: 'assertion', IndexError: 'index', KeyError: 'key', TypeError: 'type', ValueError: 'value'}
+                self.backend._record_fixture_failure('callback', labels.get(type(failure), 'unsupported'))
+                raise
             if inspect.isawaitable(response):
                 try: response = await response
                 except asyncio.CancelledError as failure:
@@ -456,11 +461,17 @@ class _LeadBackend:
         self.reference_contexts: list[tuple[dict[str, object], ...]] = []
         self.reference_records: list[tuple[str, tuple[dict[str, object], ...]]] = []
         self.finalizers: list[_Finalizer] = []
+        self.fixture_failures: list[tuple[str, str]] = []
         self.providers: list[_LeadContextProvider] = []
         self.definitions: list[object] = []
         self.context_threads: dict[tuple[object, str], str] | None = {} if persist_context_threads else None
         self.tainted_thread_ids: list[str] = []
         self.execution_workspaces: list[object | None] = []
+
+    def _record_fixture_failure(self, stage, label):
+        if len(self.fixture_failures) < 3:
+            self.fixture_failures.append((stage, label))
+            print(('lead_fixture_v1', stage, label))
 
     def enqueue(self, *responses: _Response | _SubmittedFailure) -> None:
         self.scripts.append(tuple(responses))
@@ -1034,9 +1045,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         return await self.runtime.lead_turn(self.session_id, conversation_id, message, **kwargs)
 
     async def _rejected_pair(self, conversation_id, message, response, *, selection=None):
-        if selection is not None:
-            self.backend.enqueue(selection)
-        self.backend.enqueue(response)
+        self.backend.enqueue(*((response,) if selection is None else (selection, response)))
         self.backend.enqueue(response)
         before = len(self.backend.calls)
         result = await self._lead_turn(conversation_id, message)
@@ -1105,22 +1114,23 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                           for item in bound.semantic_index.contracts}, expected_families)
         pairs = dict(bound.outer_inner_schema_ids)
         self.assertEqual(set(pairs), set(bound.action_index.expected_schema_ids))
-        actions = Counter((item.owner.rules.literal_at(('action_type',)), item.owner.rules.property_names())
-                          for item in bound.action_index.contracts)
         signatures = {'search': ('search_context', ('action_type', 'queries')),
                       'read': ('read_context', ('action_type', 'read_handles')),
-                      'answer': ('submit_result', ('action_type', 'task_result'))}
-        offers = bound.eligibility_offers
-        physical_results = len(bound.semantic_index.expected_schema_ids)
-        expected = Counter({signatures[name]: (physical_results if name == 'answer' else 1)
-                            for name in offers.allowed_actions})
-        if ('search' in offers.allowed_actions
-                and ContextSourceKind.WRITING_ARTIFACT in offers.search_source_kinds):
+                      'answer': ('submit_result', ('action_type', 'task_result')),
+                      'select_result': ('select_result', ('action_type', 'result_schema_id'))}
+        physical_types = {signatures[name][0] for name in bound.offered_action_kinds}
+        members = tuple(item for item in bound.action_index.contracts
+                        if item.owner.rules.literal_at(('action_type',)) in physical_types)
+        expected = Counter({signatures[name]: (len(bound.offered_semantic_schema_ids) if name == 'answer' else 1)
+                            for name in bound.offered_action_kinds})
+        if ('search' in bound.offered_action_kinds
+                and ContextSourceKind.WRITING_ARTIFACT in bound.eligibility_offers.search_source_kinds):
             expected['search_context', ('action_type', 'artifact_directory_prefix', 'queries')] = 1
-        self.assertEqual(actions, expected)
+        self.assertEqual(Counter((item.owner.rules.literal_at(('action_type',)), item.owner.rules.property_names())
+                                 for item in members), expected)
         self.assertEqual(Counter(value for value in pairs.values() if value is not None),
-                         Counter(bound.semantic_index.expected_schema_ids))
-        self.assertEqual(sum(value is None for value in pairs.values()),
+                         Counter(bound.offered_semantic_schema_ids))
+        self.assertEqual(sum(pairs[item.schema_id] is None for item in members),
                          sum(total for (action, _), total in expected.items()
                              if action != 'submit_result'))
 
@@ -2549,7 +2559,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         unsupported = copy.deepcopy(integer); unsupported['properties']['n']['exclusiveMinimum'] = 0
         with self.assertRaises(ValueError):
             SchemaRules.declare(unsupported)
-        search_id, _ = offered_fixture_bindings(call, action_type='search_context', response_type=None, family=0)
+        bound = call.contract
         for query, valid in (('  A  ', True), ('a' * 200, True), ('a' * 201, False), ('   ', False), ('a\x00b', False)):
             encoded_search = indexed_response({'action_type': 'search_context', 'queries': [{'search_text': query,
                              'source_types': {'conversation_history': True}}]},
@@ -4385,8 +4395,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             invalid = json.loads(_current_exploration_outcome()(call, provider))
             invalid["agent_action"]["task_result"]["response_details"]["ideas"] = "not an array"
             return json.dumps(invalid)
-        self.backend.enqueue(_current_exploration_outcome(select=True))
-        self.backend.enqueue(invalid_exploration)
+        self.backend.enqueue(_current_exploration_outcome(select=True), invalid_exploration)
         self.backend.enqueue(_current_exploration_outcome("Repaired provisional idea."))
         explored = await self.runtime.lead_turn(self.session_id, exploration_conversation, "Explore possibilities.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         self.assertIs(explored.kind, LeadOutcomeKind.EXPLORATION)
@@ -4875,8 +4884,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 if label in ('duplicate-specialist', 'duplicate-input'): response = duplicate_control(label)
                 else: response = value_control(label, assignments)
 
-                self.backend.enqueue(lambda call, provider: response(call, provider, select=True))
-                self.backend.enqueue(response)
+                self.backend.enqueue(lambda call, provider: response(call, provider, select=True), response)
                 self.backend.enqueue(response)
                 calls = len(self.backend.calls)
                 result = await self.runtime.lead_turn(self.session_id, conversation_id, (text + (
@@ -5930,7 +5938,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         history = self.history(conversation_id)
         self.assertFalse(any(type(event.payload) is CollaborationProposal for event in history))
         self.assertNotIn("PRIVATE_PROPOSAL_TEXT", repr(result.validation_details))
-        self.assertEqual(len(self.backend.calls), 2)
+        self.assertEqual(len(self.backend.calls), 3)
 
     async def test_untrusted_answer_diagnostic_cannot_publish_private_text(self) -> None:
         private = "PRIVATE_CALLBACK_SECRET_한🙂"
@@ -6089,7 +6097,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT",3 if label == "action_exhausted" else 1):
                     result = await runtime.lead_turn(self.session_id, conversation_id,
                         'Do not exceed the remaining capacity.')
-                self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN,)
+                self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN, (len(backend.calls), result.kind, tuple(item.calls for item in backend.finalizers)))
                 self.assertEqual(len(backend.calls), 2 if label == "action_exhausted" else 1)
                 self.assertEqual(len(backend.providers), 2 if label == "action_exhausted" else 1)
                 finalized = [[("rejected", expected_code)]]
@@ -6106,7 +6114,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         backend.enqueue(_search_history)
         with mock.patch.object(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 2):
             result = await runtime.lead_turn(self.session_id, conversation_id, "Visible budget.")
-        self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN, (len(backend.calls), result.kind, tuple(item.calls for item in backend.finalizers)))
         self.assertEqual((len(backend.calls), len(_submitted_calls(self.history(conversation_id)))), (1, 1))
         self.assertEqual([item.calls for item in backend.finalizers],
                          [[("rejected", ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)]])

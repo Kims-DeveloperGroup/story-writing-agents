@@ -1009,8 +1009,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             return encoded
         private = "PRIVATE_CONTINUATION_SYNTHESIS_VALUE"
         self.backend.enqueue_for(LEAD_ORCHESTRATOR,
-            lambda call, provider: continue_lineage(call, provider, select=True))
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _raw_outcome({"message": "", private: private}))
+            lambda call, provider: continue_lineage(call, provider, select=True), _raw_outcome({"message": "", private: private}))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, continue_lineage)
         first_decision = await self.runtime.decide_lead_step(_decision(first, CollaborationConfirmationDecision.CONFIRM))
         second = first_decision.turn

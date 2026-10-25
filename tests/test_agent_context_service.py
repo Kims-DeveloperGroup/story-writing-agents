@@ -1410,8 +1410,8 @@ class CompactWireDecoderTests(unittest.TestCase):
         corrective = multiple.for_offer(replace(offers, call_id=offers.call_id + '-repair',
             remaining_physical_calls=offers.remaining_physical_calls - 1),
             selected_bound.repair_lineage())
-        self.assertEqual(corrective.rule_graph.schema_value(),
-                         selected_bound.rule_graph.schema_value())
+        self.assertEqual(corrective.action_index.rule_graph.schema_value(),
+                         selected_bound.action_index.rule_graph.schema_value())
         selected_repair = modeled_selection_binding(corrective, response_type='answer', family=1)
         self.assertEqual(selected_repair.phase, 'repair')
         self.assertEqual(len(selected_repair.offered_semantic_schema_ids), 1)

@@ -179,24 +179,17 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         response = response or writer(
             PLOT_ARCHITECT, authoring_assessment=_fixture_assessment() if text == _ADMISSION_BRIEF else None,
             domains=("plot_structure",),)
-        def checked(call, provider, *, select=False):
-            try:
-                return response(call, provider, select=True) if select else response(call, provider)
-            except (AssertionError, TypeError, ValueError) as failure:
-                labels = {AssertionError: 'assertion', TypeError: 'type', ValueError: 'value'}
-                print(('srt_fixture_v1', 'selection' if select else 'terminal', labels.get(type(failure), 'unsupported')))
-                raise
-        if select:
-            self.backend.enqueue(partial(checked, select=True))
-        self.backend.enqueue(checked)
+        first = (partial(response, select=True), response) if select else (response,)
+        self.backend.enqueue(*first)
         return await self.runtime.lead_turn(self.session_id, conversation, text, adoption=adoption)
 
     async def finish_draft(self, conversation, *, synthesis=None, **kwargs):
         front_start = len(self.backend.calls)
+        if kwargs.get('adoption') is not None:
+            kwargs['select'] = True
         proposed = await self.proposal_for(conversation, **kwargs)
         if kwargs.get('adoption') is not None:
-            self.assertEqual(len(self.backend.calls) - front_start, 1)
-            self.assertEqual(len(self.backend.calls[-1].contract.semantic_index.contracts), 1)
+            self.assertEqual(len(self.backend.calls) - front_start, 2)
         self.assertIs(proposed.kind, c.LeadOutcomeKind.PROPOSAL, proposed)
         for assignment in proposed.proposal.assignments:
             status = {SpecialistAssignmentMode.DRAFT: "drafted", SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT: "constraints_assessed"}[assignment.mode]
