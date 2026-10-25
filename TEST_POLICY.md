@@ -35,6 +35,25 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
 
 ## Verification rule
 
+### Provider schema changes
+
+Changes to schema producers, native projection, or pattern syntax must check the final
+provider-facing schema with the development harness documented in
+[Native schema regex compatibility](docs/design/provider-regex-compatibility.md).
+Existing canonical schema-export tests enforce the documented provider subset and the
+supported regex grammar. This checker stays in development code; normal provider calls
+do not run a syntax scan. Count its helper source in the effective test-source budget.
+
+Before accepting such a change, also record an actual local call through the configured
+provider with the final runtime-generated schema. Retain the exact source revision,
+provider/CLI/model/settings, schema hash, native response or error, typed outcome, attempted
+call count and process cleanup. A fake response, smaller substitute schema, Python regex
+compilation, or an offline harness pass does not establish native acceptance. Preserve
+failed calls and incomplete outcomes as verification gaps. Keep credential-bearing checks
+outside the canonical deterministic suite and ordinary CI.
+
+### Canonical CI
+
 `pr-validation` runs the fast tier and all five full shards for any change under
 `src/`, `config/`, or `tests/`, or to the runtime dependency and test-policy
 files. It runs static validation for documentation-only changes. Local runtime

@@ -1,6 +1,7 @@
 """End-to-end Antigravity parity tests with a deterministic fake CLI."""
 
 from __future__ import annotations
+from tests.test_provider_schema_spec import check_schema
 from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome, _premise_native_contract
 
 import asyncio
@@ -1140,6 +1141,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                                     backend._antigravity_adapter, "invoke", new=invoke):
                                 result = await provider.invoke_context(request)
                             current = invocations[-1][1]
+                            for final_schema in (request.schema, current.schema):
+                                self.assertEqual(check_schema(final_schema), ())
                             metadata = (type(request), request.scope.agent_id, stage, kind)
                             if index == 0:
                                 self.assertEqual((metadata, current.payload_json),

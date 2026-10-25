@@ -30,6 +30,7 @@ _SCOPE = ContextScope("workspace", "session", ContextSubjectKind.CONVERSATION, "
 
 
 from tests.provider_wire_fixture import assert_schema_descriptions
+from tests.test_provider_schema_spec import check_schema
 
 
 class StructuredOutputValidationTests(unittest.TestCase):
@@ -118,6 +119,95 @@ class StructuredOutputValidationTests(unittest.TestCase):
             rules = SchemaRules.declare(_owned_visible_text_rule(discussion, nonblank=nonblank))
             for value, expected in zip(values, accepted, strict=True):
                 self.assertEqual(not rules.findings(value), expected, repr(value))
+
+        def exported(pattern=r"^x\z"):
+            return {"type": "object", "properties": {"slot_id": {"type": "string", "pattern": pattern}},
+                    "required": ["slot_id"], "additionalProperties": False}
+        for pattern in (r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z", r"[\s\S]", r"[\\z]",
+                        r"^(?:ok|yes)\z", r"^\(\?=literal\)\z", r"[-a-z_0-9]+",
+                        "^[\x01-\ud7ff\ue000-\U0010ffff]+\\z"):
+            self.assertEqual(check_schema(exported(pattern)), ())
+        rejected_slot = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$(?![\s\S])"
+        self.assertEqual(check_schema(exported(rejected_slot)),
+                         (("$.properties.slot_id.pattern", "REGEX_LOOKAROUND"),))
+        for pattern in (r"(?=x)x", r"(?!x)y", r"(?<=x)y", r"(?<!x)y", r"(x)\1",
+                        r"\k<name>", r"(?P<name>x)", r"(?i)x", r"\p{Letter}", "[a", "(x",
+                        r"[z-a]", r"x{2,1}", r"[a&&]", r"[a--b]", r"[a~~b]", r"[[:alpha:]]"):
+            self.assertTrue(check_schema(exported(pattern)), pattern)
+        literal = exported(".*")
+        literal["properties"]["slot_id"].update(enum=["(?=literal)"], const="(?=literal)",
+                                                 description="(?=literal)", title="pattern")
+        self.assertEqual(check_schema(literal), ())
+        literal["examples"] = [{"pattern": "(?=instance literal)"}]
+        self.assertEqual(check_schema(literal), (("$.examples", "SCHEMA_UNREVIEWED_KEYWORD"),))
+        reference = {"type": "object", "properties": {"allOf": {"$ref": "#/$defs/pattern"}},
+                     "required": ["allOf"], "additionalProperties": False,
+                     "$defs": {"pattern": {"type": "string", "pattern": r"^x\z"}}}
+        self.assertEqual(check_schema(reference), ())
+        reference["properties"]["allOf"]["$ref"] = "#/$defs/missing"
+        self.assertIn(("$.properties.allOf.$ref", "LOCAL_SCHEMA_REFERENCE"), check_schema(reference))
+        recursive = {"type": "object", "properties": {"next": {"anyOf": [{"$ref": "#"}, {"type": "null"}]}},
+                     "required": ["next"], "additionalProperties": False}
+        self.assertEqual(check_schema(recursive), ())
+        for change, rule in (({"required": []}, "ALL_FIELDS_REQUIRED"),
+                             ({"additionalProperties": True}, "CLOSED_OBJECT"),
+                             ({"allOf": []}, "SCHEMA_UNREVIEWED_KEYWORD")):
+            self.assertIn(rule, {r for _path, r in check_schema({**exported(), **change})})
+        for field, value, rule in (("description", 3, "STRING_ANNOTATION"), ("title", {}, "STRING_ANNOTATION"),
+                                   ("enum", [True], "PRIMITIVE_LITERAL_TYPE"),
+                                   ("const", {}, "PRIMITIVE_LITERAL_TYPE"), ("type", {}, "SCHEMA_TYPE"),
+                                   ("format", [], "STRING_FORMAT"), ("minLength", True, "NONNEGATIVE_INTEGER")):
+            invalid = exported()
+            invalid["properties"]["slot_id"][field] = value
+            self.assertIn(rule, {r for _path, r in check_schema(invalid)})
+        invalid = exported()
+        invalid["properties"]["slot_id"].update(minLength=2, maxLength=1)
+        self.assertIn("SCHEMA_RANGE", {r for _path, r in check_schema(invalid)})
+        numeric = {"type": "object", "properties": {"n": {"type": "integer", "enum": [True]}},
+                   "required": ["n"], "additionalProperties": False}
+        self.assertIn("PRIMITIVE_LITERAL_TYPE", {r for _path, r in check_schema(numeric)})
+        numeric["properties"]["n"] = {"type": "number", "exclusiveMinimum": 1, "maximum": 1}
+        self.assertIn("SCHEMA_RANGE", {r for _path, r in check_schema(numeric)})
+        limits = exported(".*")
+        limits["properties"]["slot_id"]["enum"] = [str(i) for i in range(1000)]
+        self.assertEqual(check_schema(limits), ())
+        limits["properties"]["slot_id"]["enum"].append("1000")
+        self.assertIn(("$", "ENUM_LIMIT"), check_schema(limits))
+        limits["properties"]["slot_id"]["enum"] = [str(i).zfill(3) + "a" * 60 for i in range(250)]
+        self.assertEqual(check_schema(limits), ())
+        limits["properties"]["slot_id"]["enum"].append("250" + "a" * 60)
+        self.assertIn("LARGE_ENUM_STRING_LIMIT", {r for _path, r in check_schema(limits)})
+        limits = exported(".*")
+        limits["properties"]["slot_id"]["const"] = "a" * 119993
+        self.assertEqual(check_schema(limits), ())
+        limits["properties"]["slot_id"]["const"] += "a"
+        self.assertIn(("$", "SCHEMA_STRING_LIMIT"), check_schema(limits))
+        limits = {"type": "object", "properties": {str(i): {"type": "string"} for i in range(5000)},
+                  "required": [str(i) for i in range(5000)], "additionalProperties": False}
+        self.assertEqual(check_schema(limits), ())
+        limits["properties"]["extra"] = {"type": "string"}
+        limits["required"].append("extra")
+        self.assertIn(("$", "PROPERTY_LIMIT"), check_schema(limits))
+        nested = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+        for _ in range(9):
+            nested = {"type": "object", "properties": {"child": nested}, "required": ["child"], "additionalProperties": False}
+        self.assertEqual(check_schema(nested), ())
+        nested = {"type": "object", "properties": {"child": nested}, "required": ["child"], "additionalProperties": False}
+        self.assertIn("INLINE_NESTING_LIMIT", {r for _path, r in check_schema(nested)})
+        from contextlib import redirect_stdout
+        from pathlib import Path
+        from tests.test_provider_schema_spec import main
+        import io
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "schema.json"
+            for raw, code in ((json.dumps(exported()), 0), (json.dumps(exported(rejected_slot)), 1),
+                              ('{"type":"object","type":"string"}', 2), ('{"x":NaN}', 2),
+                              ('{"x":Infinity}', 2), ('{"x":-Infinity}', 2), ('{', 2)):
+                path.write_text(raw, encoding="utf-8")
+                with redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(main([str(path)]), code)
+                self.assertIs(json.loads(output.getvalue())["native_admitted"], False)
 
     def test_union_selects_matching_branch_without_other_branch_noise(self) -> None:
         schema = {"anyOf": [{"type": "object", "properties": { "kind": {"type": "string", "enum": ["search"]},

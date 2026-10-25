@@ -157,7 +157,7 @@ def _scope_wire_rule(rule: AuthoringScopeRuleSet, template: Mapping[str, object]
             }) for slot in scope.dependency_slots})
         elif draft_domains:
             properties["dependency_slots"] = {"type": "array", "minItems": 0, "items": closed_object({
-                "slot_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$(?![\s\S])"},
+                "slot_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z"},
                 "dependent_domains": _small_nonempty_selection(
                     draft_domains, meaning=field_description("dependent_domains"),
                 ),
