@@ -30,6 +30,7 @@ _SCOPE = ContextScope("workspace", "session", ContextSubjectKind.CONVERSATION, "
 
 
 from tests.provider_wire_fixture import assert_schema_descriptions
+from tests.test_provider_schema_spec import check_schema
 
 
 class StructuredOutputValidationTests(unittest.TestCase):
@@ -53,6 +54,160 @@ class StructuredOutputValidationTests(unittest.TestCase):
             '$.mode: expected one of ["draft", "review"] (string), got string',
             "$.items[0]: expected at least 1 characters, got 0", "$.items[1]: expected string, got integer", ))
         self.assertNotIn(secret, repr(issues))
+
+        # Independent character boundaries, not expected patterns copied from their producers.
+        from story_writing_agents.lead_provider_contracts import (
+            LeadDiscussionConstraints, _owned_visible_text_rule)
+        from story_writing_agents import lead_exploration, lead_premise_decisions
+        from story_writing_agents.structured_output_validation import SchemaRules
+        values = ("", " ", "\t\n", "\x00", "x\x00", "x\n", "포기😀", "\ud800", "\udfff")
+        for nonblank, accepted in (
+            (False, (False, True, True, True, True, True, True, False, False)),
+            (True, (False, False, False, False, False, True, True, False, False)),
+        ):
+            rules = SchemaRules.declare(_owned_visible_text_rule(
+                {"type": "string"}, nonblank=nonblank))
+            for value, expected in zip(values, accepted, strict=True):
+                self.assertEqual(not rules.findings(value), expected, repr(value))
+        for declaration in (lead_exploration._result_text_rule(),
+                LeadDiscussionConstraints("control").schema()["properties"]["message"]):
+            rules = SchemaRules.declare(declaration)
+            for value, expected in zip(values[:-2],
+                    (False, True, True, False, False, True, True), strict=True):
+                self.assertEqual(not rules.findings(value), expected, repr(value))
+        for value in (" ", "\n", "x\n", "포기😀"):
+            self.assertIsNone(lead_exploration._text(value))
+        for value in ("", "x\x00"):
+            with self.assertRaises(ValueError): lead_exploration._text(value)
+        with self.assertRaises(UnicodeEncodeError): lead_exploration._text("\ud800")
+        analysis = lead_premise_decisions.premise_analysis_schema(("user_input",))
+        identity = analysis["anyOf"][0]["properties"]["alternatives"]["items"][
+            "properties"]["alternative_key"]
+        rules = SchemaRules.declare(identity)
+        for value, expected in (("A", True), ("0", True), ("a_b-9", True), ("a" * 64, True),
+                ("_a", False), (".a", False), ("a.b", False), ("포기", False),
+                ("a" * 65, False), ("a\n", False), ("a\r", False), ("a\x00", False)):
+            self.assertEqual(not rules.findings(value), expected, repr(value))
+
+        from story_writing_agents.structured_output_validation import compile_schema_pattern
+        strict = r"^ok\z"
+        rules = SchemaRules.declare({"type": "string", "pattern": strict})
+        self.assertEqual(rules.schema_value()["pattern"], strict)
+        self.assertFalse(rules.findings("ok"))
+        self.assertTrue(rules.findings("ok\n"))
+        self.assertIsNotNone(compile_schema_pattern(r"^ok$").search("ok\n"))
+        for pattern, text in ((r"\\z", "\\z"), (r"[\\z]", "\\"), (r"[\\z]", "z"),
+                              (r"^\(\?=literal\)\z", "(?=literal)"),
+                              (r"[(?=]", "?"), (r"^(?:ok|yes)\z", "yes"),
+                              (r"(?=ok)ok", "ok")):
+            self.assertIsNotNone(compile_schema_pattern(pattern).fullmatch(text))
+        custom = SchemaRules.declare(_owned_visible_text_rule(
+            {"type": "string", "pattern": r"^A+$"}))
+        self.assertFalse(custom.findings("A"))
+        self.assertFalse(custom.findings("A\n"))
+        self.assertTrue(custom.findings("B"))
+        generic = SchemaRules.declare({"type": "string", "pattern": r"^A+$"})
+        self.assertFalse(generic.findings("A"))
+        self.assertTrue(generic.findings("B"))
+
+        discussion = LeadDiscussionConstraints("control").schema()["properties"]["message"]
+        self.assertEqual(discussion["pattern"], r"^[^\u0000]+\z")
+        for nonblank, accepted in (
+            (False, (False, True, True, False, False, True, True, False, False)),
+            (True, (False, False, False, False, False, True, True, False, False)),
+        ):
+            rules = SchemaRules.declare(_owned_visible_text_rule(discussion, nonblank=nonblank))
+            for value, expected in zip(values, accepted, strict=True):
+                self.assertEqual(not rules.findings(value), expected, repr(value))
+
+        def exported(pattern=r"^x\z"):
+            return {"type": "object", "properties": {"slot_id": {"type": "string", "pattern": pattern}},
+                    "required": ["slot_id"], "additionalProperties": False}
+        for pattern in (r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z", r"[\s\S]", r"[\\z]",
+                        r"^(?:ok|yes)\z", r"^\(\?=literal\)\z", r"[-a-z_0-9]+",
+                        "^[\x01-\ud7ff\ue000-\U0010ffff]+\\z"):
+            self.assertEqual(check_schema(exported(pattern)), ())
+        rejected_slot = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$(?![\s\S])"
+        self.assertEqual(check_schema(exported(rejected_slot)),
+                         (("$.properties.slot_id.pattern", "REGEX_LOOKAROUND"),))
+        for pattern in (r"(?=x)x", r"(?!x)y", r"(?<=x)y", r"(?<!x)y", r"(x)\1",
+                        r"\k<name>", r"(?P<name>x)", r"(?i)x", r"\p{Letter}", "[a", "(x",
+                        r"[z-a]", r"x{2,1}", r"[a&&]", r"[a--b]", r"[a~~b]", r"[[:alpha:]]"):
+            self.assertTrue(check_schema(exported(pattern)), pattern)
+        literal = exported(".*")
+        literal["properties"]["slot_id"].update(enum=["(?=literal)"], const="(?=literal)",
+                                                 description="(?=literal)", title="pattern")
+        self.assertEqual(check_schema(literal), ())
+        literal["examples"] = [{"pattern": "(?=instance literal)"}]
+        self.assertEqual(check_schema(literal), (("$.examples", "SCHEMA_UNREVIEWED_KEYWORD"),))
+        reference = {"type": "object", "properties": {"allOf": {"$ref": "#/$defs/pattern"}},
+                     "required": ["allOf"], "additionalProperties": False,
+                     "$defs": {"pattern": {"type": "string", "pattern": r"^x\z"}}}
+        self.assertEqual(check_schema(reference), ())
+        reference["properties"]["allOf"]["$ref"] = "#/$defs/missing"
+        self.assertIn(('$.properties.allOf["$ref"]', "LOCAL_SCHEMA_REFERENCE"), check_schema(reference))
+        recursive = {"type": "object", "properties": {"next": {"anyOf": [{"$ref": "#"}, {"type": "null"}]}},
+                     "required": ["next"], "additionalProperties": False}
+        self.assertEqual(check_schema(recursive), ())
+        for change, rule in (({"required": []}, "ALL_FIELDS_REQUIRED"),
+                             ({"additionalProperties": True}, "CLOSED_OBJECT"),
+                             ({"allOf": []}, "SCHEMA_UNREVIEWED_KEYWORD")):
+            self.assertIn(rule, {r for _path, r in check_schema({**exported(), **change})})
+        for field, value, rule in (("description", 3, "STRING_ANNOTATION"), ("title", {}, "STRING_ANNOTATION"),
+                                   ("enum", [True], "PRIMITIVE_LITERAL_TYPE"),
+                                   ("const", {}, "PRIMITIVE_LITERAL_TYPE"), ("type", {}, "SCHEMA_TYPE"),
+                                   ("format", [], "STRING_FORMAT"), ("minLength", True, "NONNEGATIVE_INTEGER")):
+            invalid = exported()
+            invalid["properties"]["slot_id"][field] = value
+            self.assertIn(rule, {r for _path, r in check_schema(invalid)})
+        invalid = exported()
+        invalid["properties"]["slot_id"].update(minLength=2, maxLength=1)
+        self.assertIn("SCHEMA_RANGE", {r for _path, r in check_schema(invalid)})
+        numeric = {"type": "object", "properties": {"n": {"type": "integer", "enum": [True]}},
+                   "required": ["n"], "additionalProperties": False}
+        self.assertIn("PRIMITIVE_LITERAL_TYPE", {r for _path, r in check_schema(numeric)})
+        numeric["properties"]["n"] = {"type": "number", "exclusiveMinimum": 1, "maximum": 1}
+        self.assertIn("SCHEMA_RANGE", {r for _path, r in check_schema(numeric)})
+        limits = exported(".*")
+        limits["properties"]["slot_id"]["enum"] = [str(i) for i in range(1000)]
+        self.assertEqual(check_schema(limits), ())
+        limits["properties"]["slot_id"]["enum"].append("1000")
+        self.assertIn(("$", "ENUM_LIMIT"), check_schema(limits))
+        limits["properties"]["slot_id"]["enum"] = [str(i).zfill(3) + "a" * 60 for i in range(250)]
+        self.assertEqual(check_schema(limits), ())
+        limits["properties"]["slot_id"]["enum"].append("250" + "a" * 60)
+        self.assertIn("LARGE_ENUM_STRING_LIMIT", {r for _path, r in check_schema(limits)})
+        limits = exported(".*")
+        limits["properties"]["slot_id"]["const"] = "a" * 119993
+        self.assertEqual(check_schema(limits), ())
+        limits["properties"]["slot_id"]["const"] += "a"
+        self.assertIn(("$", "SCHEMA_STRING_LIMIT"), check_schema(limits))
+        limits = {"type": "object", "properties": {str(i): {"type": "string"} for i in range(5000)},
+                  "required": [str(i) for i in range(5000)], "additionalProperties": False}
+        self.assertEqual(check_schema(limits), ())
+        limits["properties"]["extra"] = {"type": "string"}
+        limits["required"].append("extra")
+        self.assertIn(("$", "PROPERTY_LIMIT"), check_schema(limits))
+        nested = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+        for _ in range(9):
+            nested = {"type": "object", "properties": {"child": nested}, "required": ["child"], "additionalProperties": False}
+        self.assertEqual(check_schema(nested), ())
+        nested = {"type": "object", "properties": {"child": nested}, "required": ["child"], "additionalProperties": False}
+        self.assertIn("INLINE_NESTING_LIMIT", {r for _path, r in check_schema(nested)})
+        from contextlib import redirect_stdout
+        from pathlib import Path
+        from tests.test_provider_schema_spec import main
+        import io
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "schema.json"
+            for raw, code in ((json.dumps(exported()), 0), (json.dumps(exported(rejected_slot)), 1),
+                              ('{"type":"object","type":"string"}', 2), ('{"x":NaN}', 2),
+                              ('{"x":Infinity}', 2), ('{"x":-Infinity}', 2), ('{', 2)):
+                path.write_text(raw, encoding="utf-8")
+                with redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(main([str(path)]), code)
+                self.assertIs(json.loads(output.getvalue())["native_admitted"], False)
 
     def test_union_selects_matching_branch_without_other_branch_noise(self) -> None:
         schema = {"anyOf": [{"type": "object", "properties": { "kind": {"type": "string", "enum": ["search"]},
@@ -1357,6 +1512,35 @@ class CompactWireDecoderTests(unittest.TestCase):
             ContextSearchAction(self.correlation, ( ContextSearchQuery("one",
                         (ContextSourceKind.WRITING_ARTIFACT,), "manuscript/part-01/", ), ContextSearchQuery("two",
                         (ContextSourceKind.WRITING_ARTIFACT,), "manuscript/part-02/", ), ), )
+
+        from story_writing_agents.agent_context.actions import (
+            artifact_directory_prefix_rule, search_text_rule)
+        from story_writing_agents.structured_output_validation import SchemaRules
+        prefix_rules = SchemaRules.declare(artifact_directory_prefix_rule())
+        for prefix in valid + ("manuscript/.../", "manuscript/..name/"):
+            self.assertEqual(prefix_rules.findings(prefix), (), repr(prefix))
+        for prefix in invalid + ("manuscript/a/\n",):
+            self.assertTrue(prefix_rules.findings(prefix), repr(prefix))
+        query_rules = SchemaRules.declare(search_text_rule(200))
+        for text, normalized in (("needle", "needle"), ("포기😀", "포기😀"),
+                ("A\u2028B", "a b"), (" \u00a0ﬃß ", "ffiss"), ("", None), (" ", None),
+                ("\u00a0", None), ("x\x00", None), ("x\n", None), ("x\u200d", None),
+                ("\ue000", None), ("\u0378", None), ("\ud800", None)):
+            self.assertEqual(not query_rules.findings(text), normalized is not None, repr(text))
+            if normalized is None:
+                with self.assertRaises(ContextActionError):
+                    ContextSearchQuery(text, (ContextSourceKind.WRITING_ARTIFACT,))
+            else:
+                query = ContextSearchQuery(text, (ContextSourceKind.WRITING_ARTIFACT,))
+                self.assertEqual(query.normalized_text, normalized)
+        for text, normalized in (("ﬃ" * 66 + "ff", "ffi" * 66 + "ff"),
+                                  ("ß" * 100, "ss" * 100)):
+            query = ContextSearchQuery(text, (ContextSourceKind.WRITING_ARTIFACT,))
+            self.assertEqual(query.normalized_text, normalized)
+        for text in ("ﬃ" * 67, "ß" * 101):
+            self.assertEqual(query_rules.findings(text), ())
+            with self.assertRaises(ContextActionError):
+                ContextSearchQuery(text, (ContextSourceKind.WRITING_ARTIFACT,))
 
     def test_malformed_exact_shape_types_routes_duplicates_and_limits_reject(self) -> None:
         base = _answer_wire(self.token, {"kind": "answer", "message": "Visible.", "proposal": None})

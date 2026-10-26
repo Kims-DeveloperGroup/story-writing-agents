@@ -61,6 +61,9 @@ from .structured_output_validation import (
     strict_json_object, diagnose_value, failure_findings, failure_issues, nonempty_text_rule,
     nonempty_text_value, visible_text_rule, finite_selection_rule, decode_finite_selection,
     schema_fragment_findings,
+    SCHEMA_PYTHON_WHITESPACE,
+    nonblank_text_rule,
+    unicode_scalar_classes,
 )
 
 
@@ -154,7 +157,7 @@ def _scope_wire_rule(rule: AuthoringScopeRuleSet, template: Mapping[str, object]
             }) for slot in scope.dependency_slots})
         elif draft_domains:
             properties["dependency_slots"] = {"type": "array", "minItems": 0, "items": closed_object({
-                "slot_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$(?![\s\S])"},
+                "slot_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z"},
                 "dependent_domains": _small_nonempty_selection(
                     draft_domains, meaning=field_description("dependent_domains"),
                 ),
@@ -1481,10 +1484,18 @@ def alternatives(variants: list[dict[str, object]]) -> dict[str, object]:
     return variants[0] if len(variants) == 1 else {"anyOf": variants}
 
 
+_OWNED_SCALAR, _OWNED_NONNUL, _OWNED_NONBLANK, _OWNED_NONBLANK_WITH_NUL = unicode_scalar_classes(
+    (), ("", "\x00", "\x00" + SCHEMA_PYTHON_WHITESPACE, SCHEMA_PYTHON_WHITESPACE))
+_NUL_FREE_TEXT_PATTERN = r"^[^\u0000]+\z"
+_OWNED_NUL_FREE_PATTERN = "^" + _OWNED_NONNUL + r"+\z"
+_OWNED_VISIBLE_PATTERN = "^" + _OWNED_SCALAR + r"+\z"
+_OWNED_NONEMPTY_PATTERN = "^" + _OWNED_NONNUL + "*" + _OWNED_NONBLANK + _OWNED_NONNUL + r"*\z"
+_OWNED_NONBLANK_PATTERN = "^" + _OWNED_SCALAR + "*" + _OWNED_NONBLANK_WITH_NUL + _OWNED_SCALAR + r"*\z"
+
 def _owned_visible_text_rule(
     template: Mapping[str, object], *, nonblank: bool = False,
 ) -> dict[str, object]:
-    """Project necessities of the existing strict UTF-8 visible-text predicate."""
+    """Intersect only declared, proved text primitives without implicit lookaround."""
     result = deepcopy(dict(template))
     if result.get("type") != "string":
         raise ValueError("owned visible text requires a string rule")
@@ -1494,13 +1505,25 @@ def _owned_visible_text_rule(
         raise ValueError("owned visible text requires declared nonnegative length bounds")
     result["minLength"] = max(1, minimum)
     result["maxLength"] = min(COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES, maximum)
-    visible = visible_text_rule()["pattern"]
-    required = nonempty_text_rule()["pattern"] if nonblank else visible
     prior = result.get("pattern")
-    prefix = r"^(?=[^\ud800-\udfff]*$(?![\s\S]))"
-    if prior is not None and prior not in (visible, required):
-        prefix += r"(?=[\s\S]*(?:" + prior + "))"
-    result["pattern"] = prefix + required
+    visible = visible_text_rule()["pattern"]
+    nonempty = nonempty_text_rule()["pattern"]
+    if prior is None or prior in (visible, _OWNED_VISIBLE_PATTERN):
+        selected = _OWNED_NONEMPTY_PATTERN if nonblank else _OWNED_VISIBLE_PATTERN
+    elif prior in (_NUL_FREE_TEXT_PATTERN, r"^[^\u0000]+$(?![\s\S])", _OWNED_NUL_FREE_PATTERN):
+        selected = _OWNED_NONEMPTY_PATTERN if nonblank else _OWNED_NUL_FREE_PATTERN
+    elif prior in (nonempty, _OWNED_NONEMPTY_PATTERN):
+        selected = _OWNED_NONEMPTY_PATTERN
+    elif prior in (nonblank_text_rule()["pattern"], _OWNED_NONBLANK_PATTERN):
+        selected = _OWNED_NONEMPTY_PATTERN if nonblank else _OWNED_NONBLANK_PATTERN
+    else:
+        # Preserve an unproved custom prior's exact host conjunction.
+        required = nonempty if nonblank else visible
+        prefix = r"^(?=[^\ud800-\udfff]*$(?![\s\S]))"
+        if prior is not None and prior not in (visible, required):
+            prefix += r"(?=[\s\S]*(?:" + prior + "))"
+        selected = prefix + required
+    result["pattern"] = selected
     return result
 
 
@@ -2061,30 +2084,27 @@ class LeadProviderConstraints:
                                 for field in ("proposed_artifact_path", "proposed_destination_path"):
                                     if field in fields:
                                         guidance = artifact_path_rule(target_domains)
-                                        if (
-                                            field == "proposed_destination_path"
-                                            and rename_kind is None
-                                        ):
+                                        if field == "proposed_destination_path" and rename_kind is None:
                                             raise ValueError("missing rename kind")
-                                        path_kinds = (
-                                            (rename_kind,) if rename_kind is not None
-                                            else tuple(ArtifactKind)
-                                        )
-                                        path_rules = tuple(
-                                            artifact_kind_path_rule(kind) for kind in path_kinds
-                                        )
-                                        canonical = path_rules[0]
-                                        kind_pattern = canonical["pattern"]
-                                        if len(path_rules) > 1:
-                                            kind_pattern = "(?:" + "|".join(
-                                                item["pattern"] for item in path_rules
-                                            ) + ")"
-                                        scoped_pattern = (
-                                            "(?=" + guidance["pattern"] + ")" + kind_pattern
-                                        )
-                                        fields[field] = {
-                                            **guidance, **canonical, "pattern": scoped_pattern,
-                                        }
+                                        path_kinds = (rename_kind,) if rename_kind is not None else tuple(ArtifactKind)
+                                        path_rules = []
+                                        for kind in path_kinds:
+                                            canonical = {
+                                                **artifact_kind_path_rule(kind),
+                                                "description": guidance["description"],
+                                            }
+                                            if kind is ArtifactKind.MANUSCRIPT:
+                                                if ArtifactReviewDomain.TONE_EXECUTION in target_domains:
+                                                    path_rules.append(canonical)
+                                            else:
+                                                allowed = [path for path in CORE_ARTIFACT_PATHS
+                                                           if artifact_domain(path) in target_domains]
+                                                if allowed:
+                                                    path_rules.append({**canonical, "enum": allowed})
+                                        if not path_rules:
+                                            raise ValueError("current artifact path has no qualified member")
+                                        path_rule = path_rules[0] if len(path_rules) == 1 else {"anyOf": path_rules}
+                                        fields[field] = {**path_rule, "description": guidance["description"]}
                                 eligible.append(operation)
                             if not eligible:
                                 raise ValueError("current artifact operations have no qualified member")
@@ -3193,7 +3213,7 @@ class LeadDiscussionConstraints:
     def schema(self) -> dict[str, object]:
         schema = closed_object({
             "kind": {"type": "string", "enum": ["answer", "question"]},
-            "message": {"type": "string", "pattern": r"^[^\u0000]+$(?![\s\S])",
+            "message": {"type": "string", "pattern": _NUL_FREE_TEXT_PATTERN,
                         "maxLength": COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES},
             "used_evidence_ids": string_array(),
         })

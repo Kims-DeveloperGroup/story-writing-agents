@@ -52,12 +52,31 @@ class SuiteBudgetTests(unittest.TestCase):
     def test_new_id_increased_subtests_and_relaxed_time_are_rejected(self) -> None:
         hourly = dict(self.budget, max_sequential_wall_seconds=18000, max_shard_wall_seconds=3600)
         self.assertIsNone(suite_budget.check_monotonic(hourly, self.budget))
+        source_base = dict(hourly, max_test_source_lines=142474)
+        source = dict(source_base, max_test_source_lines=142604)
+        self.assertIsNone(suite_budget.check_monotonic(source, source_base))
+        for old, limit in ((142474, 142603), (142474, 142605),
+                           (142473, 142604), (142475, 142604), (142604, 142605)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                              dict(source, max_test_source_lines=limit),
+                              dict(source_base, max_test_source_lines=old))
+        for key, value in (
+            ("max_sequential_wall_seconds", 17999),
+            ("max_shard_wall_seconds", 3599),
+            ("subtest_caps", {**source_base["subtest_caps"], "a.test": 1}),
+            ("subtest_caps", {key: cap for key, cap in source_base["subtest_caps"].items() if key != "b.test"}),
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                              {**source, key: value}, source_base)
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                          source, dict(self.budget, max_test_source_lines=142474))
         for change in [lambda value: value["subtest_caps"].update({"c.test": 0}),
                 lambda value: value["subtest_caps"].update({"a.test": 3}),
                 lambda value: value.update(max_shard_wall_seconds=value["max_shard_wall_seconds"] + 1),
                 lambda value: value.update(max_sequential_wall_seconds=value["max_sequential_wall_seconds"] + 1)]:
             with self.subTest(change=change):
-                for base, origin in ((self.budget, self.budget), (self.budget, hourly), (hourly, hourly)):
+                for base, origin in ((self.budget, self.budget), (self.budget, hourly), (hourly, hourly),
+                                     (source_base, source)):
                     candidate = json.loads(json.dumps(origin))
                     change(candidate)
                     with self.assertRaises(suite_budget.BudgetError):

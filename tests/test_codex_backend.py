@@ -1,6 +1,7 @@
 """Concrete Codex CLI backend tests with no credentials or network access."""
 
 from __future__ import annotations
+from tests.test_provider_schema_spec import check_schema
 from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome, _premise_native_contract
 
 import asyncio
@@ -4180,6 +4181,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             ],
         )
         schema = invocation["schema"]
+        self.assertEqual(check_schema(schema), ())
         self.assertEqual(set(schema["properties"]), {"response_type", "response_text"})
         self.assertEqual(schema["required"], ["response_type", "response_text"])
         self.assertFalse(schema["additionalProperties"])
@@ -4290,6 +4292,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             explored = await bound_call(
                 "codex-exploration-parity-call", "lead-exploration-response-v1")
         self.assertEqual((invocations[0].schema, invocations[0].payload_json), (schema, canonical_provider_json(payload)))
+        self.assertEqual(check_schema(invocations[0].schema), ())
         self.assertEqual((explored.response_text, explored.accounting.state), (response, ProviderCallState.SUBMITTED))
 
 
@@ -4305,6 +4308,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     "premise-decision-summary-v1" if summary else "premise-analysis-response-v1",
                     summary)
             self.assertEqual((native_calls[0].schema, native_calls[0].payload_json), (schema, canonical_provider_json(payload)))
+            self.assertEqual(check_schema(native_calls[0].schema), ())
             self.assertEqual((returned.response_text, returned.accounting.state), (response, ProviderCallState.SUBMITTED))
 
     async def test_conversation_request_snapshots_derived_event_content(self) -> None:
@@ -6231,6 +6235,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         for invocation, control in zip(invocations, controls):
             schema = invocation["schema"]
+            self.assertEqual(check_schema(schema), ())
             self.assertEqual(schema["required"], ["agent_action"])
             self.assertIs(schema["additionalProperties"], False)
             branches = schema["properties"]["agent_action"]["anyOf"]

@@ -803,3 +803,14 @@ captured effective response language; it does not substitute English prose.
 Accounting includes the final bound guide, per-call guidance, annotated schema,
 payload, and native rendering. Larger descriptive fields do not raise runtime
 resource limits.
+
+### Codex schema regex compatibility
+
+Built-in field patterns use equivalent Codex-compatible declarations while
+preserving their text, identifier and path restrictions. The existing evaluator
+handles the canonical strict-end representation using prepared matchers. No new
+per-invocation schema syntax scan, action type, call budget or authority is added.
+The development harness checks final projected schemas before publication; it is not
+part of provider invocation. Schema-producing changes also require an actual local
+provider check with the final runtime-generated schema.
+See the [regex compatibility boundary](../design/provider-regex-compatibility.md).
