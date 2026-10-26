@@ -888,10 +888,10 @@ class RawTerminalDriver:
         def before_read() -> None:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError("cursor observation expired")
+                raise LiveInputIdle
             ready, _, _ = _select.select((configuration.input_descriptor,), (), (), remaining)
             if not ready:
-                raise TimeoutError("cursor observation expired")
+                raise LiveInputIdle
         try:
             self._write_live_text("\x1b[6n")
             while len(received) < _MAX_ESCAPE_SEQUENCE_LENGTH:
@@ -910,7 +910,7 @@ class RawTerminalDriver:
             # resurrect bytes consumed before that interruption in finally.
             received = ""
             raise
-        except (TimeoutError, EOFError, OSError, ValueError):
+        except (LiveInputIdle, TimeoutError, EOFError, OSError, ValueError):
             pass
         finally:
             if consumed_response is not None:
