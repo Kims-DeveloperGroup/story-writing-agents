@@ -393,11 +393,14 @@ picker, in catalog order. Choices show `Subject (conversation_id)` with full IDs
 Selection resolves the ID again before reading one fresh validated snapshot.
 An empty catalog, picker cancellation, Ctrl-C, or EOF reads no transcript and
 preserves attachment, focus, and history. An explicit ID skips the picker.
-Without `COUNT`, browse the complete conversation from sequence 1 or `--from`;
-with a count, browse the existing bounded page. Close with `q`, Escape, Ctrl-C,
-or EOF. Like `/exchanges`, closing clears the viewer and restores the preceding
-shell screen without transcript rows, headings, results, or hints in scrollback.
-Unsupported terminals receive only a content-free notice.
+Without `COUNT`, browse all user, Lead, and specialist messages from sequence 1
+or `--from`; a count limits visible messages after filtering. `--from` remains a
+stored-event sequence, and continuation points to the next undisplayed message.
+Provider and workflow records remain available through `/history` and
+`/exchanges`. Close with `q`, Escape, Ctrl-C, or EOF. Closing clears the viewer
+and restores the preceding shell screen without transcript rows, headings,
+results, or hints in scrollback. Unsupported terminals receive only a
+content-free notice.
 
 Ordinary non-slash text is literal Lead input. It requires an attached session
 and focused active conversation; no agent selector is accepted. The retired

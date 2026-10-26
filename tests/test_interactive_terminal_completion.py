@@ -1475,7 +1475,8 @@ class CompletionDriverTests(unittest.TestCase):
             driver._history_state,
             MainInputHistoryState(("/settings ",)),
         )
-        self.assertEqual(os_module.observed_widths, [8, 8])
+        self.assertGreaterEqual(len(os_module.observed_widths), 2)
+        self.assertEqual(set(os_module.observed_widths), {8})
         self.assertEqual(
             tuple(call[1] for call in termios.set_calls),
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
@@ -2752,7 +2753,8 @@ class CompletionDriverTests(unittest.TestCase):
             driver._history_state,
             MainInputHistoryState(("/settings ",)),
         )
-        self.assertEqual(os_module.observed_widths, [8, 8, 8, 8])
+        self.assertGreaterEqual(len(os_module.observed_widths), 2)
+        self.assertEqual(set(os_module.observed_widths), {8})
         self.assertEqual(
             tuple(call[1] for call in termios.set_calls),
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),

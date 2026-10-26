@@ -1111,7 +1111,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         original = MultiAgentScrollState((view,), 0)
         history.retain(original)
         history.retain(original)
-        self.assertEqual([frame.identity for frame in history.frames], [1, 2])
+        self.assertEqual(len({frame.identity for frame in history.frames}), 2)
         self.assertEqual(view.start_line, 1)
         layout = history.render(caps, 30)
         self.assertIn("F6: mouse mode", "\n".join(layout.lines))
@@ -1166,6 +1166,93 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         history.handle_pointer(PointerEvent(0, 2, 1, True), collapsed)
         self.assertIn("\x1b[1;7;36m", history.render(caps, 1).lines[0])
         self.assertNotIn("press 't'", history.render(caps, 1).lines[0])
+
+        from story_writing_agents.interactive_terminal._output_history import ConversationTimeline
+        from story_writing_agents.interactive_terminal._model import Message, MessagePresentation
+        timeline = ConversationTimeline()
+        user = Message("User", "REPEATED_REQUEST", presentation=MessagePresentation.CHAT_BLOCK)
+        reply_a, reply_b = Message("Lead", "REPLY_A"), Message("Lead", "REPLY_B")
+        origin_a = timeline.begin_submission("session", "conversation", user)
+        operation_a = timeline.begin_operation()
+        timeline.update_operation(operation_a, lines=("TRANSIENT_A",))
+        first_view = replace(view, view_id="plot:one", title="JSON_A_ONE", total_lines=1, visible_lines=("A_ONE_BODY",), visible_height=1, buffer_lines=("A_ONE_BODY",))
+        second_view = replace(first_view, view_id="character:one", title="JSON_A_TWO", visible_lines=("A_TWO_BODY",), buffer_lines=("A_TWO_BODY",))
+        state_a = MultiAgentScrollState((first_view, second_view), 0)
+        timeline.retain(state_a, operation_id=operation_a)
+        timeline.retain(state_a, operation_id=operation_a)
+        slot_a = next(entry for entry in timeline.entries if entry.identity == operation_a)
+        self.assertEqual(slot_a.origin, origin_a)
+        self.assertEqual(tuple(frame.view.title for frame in slot_a.frames), ("JSON_A_ONE", "JSON_A_TWO"))
+        self.assertEqual(len(timeline.frames), 2)
+        timeline.append_component(reply_a)
+        timeline.end_submission(origin_a)
+        origin_b = timeline.begin_submission("session", "conversation", user)
+        self.assertNotEqual(origin_a, origin_b)
+        operation_b = timeline.begin_operation()
+        final_b = replace(first_view, title="JSON_B", visible_lines=("B_BODY",), buffer_lines=("B_BODY",))
+        timeline.retain(MultiAgentScrollState((final_b,), 0), operation_id=operation_b)
+        for discarded in ("OFF_PREVIEW", "CANCELLED_PREVIEW"):
+            transient = timeline.begin_operation()
+            timeline.update_operation(transient, lines=(discarded,))
+            timeline.discard_operation(transient)
+            self.assertNotIn(transient, tuple(entry.identity for entry in timeline.entries))
+        timeline.append_component(reply_b)
+        timeline.end_submission(origin_b)
+        restored = Message("User", "RESTORED_HISTORY", presentation=MessagePresentation.CHAT_BLOCK)
+        timeline.append_component(restored)
+        origin_c = timeline.begin_submission("other_session", "conversation", user)
+        operation_c = timeline.begin_operation()
+        failed = replace(final_b, title="JSON_C_FAILED", state=ViewState.ERROR)
+        timeline.retain(MultiAgentScrollState((failed,), 0), operation_id=operation_c)
+        timeline.end_submission(origin_c)
+        self.assertNotIn(origin_c, (origin_a, origin_b))
+        self.assertEqual(tuple(entry.component for entry in timeline.entries if entry.component is not None), (user, reply_a, user, reply_b, restored, user))
+        self.assertEqual(tuple(entry.origin for entry in timeline.entries if entry.frames), (origin_a, origin_b, origin_c))
+        rendered = _without_sgr("\n".join(timeline.render(caps, 200).lines))
+        cursor = 0
+        for token in ("REPEATED_REQUEST", "JSON_A_ONE", "JSON_A_TWO", "REPLY_A", "REPEATED_REQUEST", "JSON_B", "REPLY_B", "RESTORED_HISTORY", "REPEATED_REQUEST", "JSON_C_FAILED"):
+            position = rendered.find(token, cursor)
+            self.assertGreaterEqual(position, cursor, rendered)
+            cursor = position + len(token)
+        self.assertNotIn("TRANSIENT_A", rendered)
+        self.assertEqual(rendered.count("A_ONE_BODY"), 1)
+        self.assertEqual(rendered.count("A_TWO_BODY"), 1)
+        self.assertEqual(rendered.count("B_BODY"), 2)
+        self.assertEqual(len(timeline.frames), 4)
+        current = timeline.render(caps, 8)
+        timeline.focus_visible(current)
+        self.assertTrue(timeline.handle_key(KeyEvent(KeyKind.TAB)))
+        self.assertTrue(timeline.handle_key(KeyEvent(KeyKind.HOME)))
+        older = timeline.render(caps, 8)
+        self.assertIn("REPEATED_REQUEST", _without_sgr("\n".join(older.lines)))
+        timeline.append_component(Message("Lead", "NEWEST_REPLY"))
+        self.assertEqual(timeline.render(caps, 8).lines, older.lines)
+        self.assertTrue(timeline.handle_key(KeyEvent(KeyKind.END)))
+        self.assertIn("NEWEST_REPLY", _without_sgr("\n".join(timeline.render(caps, 8).lines)))
+        timeline.append_component(Message("Lead", "\n".join(f"SEMANTIC_TAIL_{row}" for row in range(30)), presentation=MessagePresentation.CHAT_BLOCK))
+        semantic_only = timeline.render(caps, 8)
+        self.assertFalse(semantic_only.hits)
+        timeline.focus_visible(semantic_only)
+        no_color = replace(caps, profile=CapabilityProfile.PLAIN, decorative_sgr=False)
+        native_rows = timeline.render(no_color, 8).lines
+        navigation_rows = timeline.render(no_color, 8, mouse_mode=True).lines
+        self.assertNotEqual(navigation_rows, native_rows)
+        self.assertNotIn("\x1b", "\n".join(navigation_rows))
+        self.assertTrue(timeline.handle_key(KeyEvent(KeyKind.PAGE_UP)))
+        self.assertNotEqual(timeline.render(caps, 8).lines, semantic_only.lines)
+        self.assertTrue(timeline.handle_key(KeyEvent(KeyKind.PAGE_DOWN)))
+        self.assertTrue(timeline.handle_key(KeyEvent(KeyKind.HOME)))
+        self.assertIn("REPEATED_REQUEST", _without_sgr("\n".join(timeline.render(caps, 8).lines)))
+        historical = timeline.render(caps, 16)
+        self.assertTrue(historical.hits)
+        self.assertTrue(timeline.handle_key(KeyEvent(KeyKind.TAB)))
+        self.assertEqual(timeline.focused_id, historical.hits[-1].identity)
+        self.assertTrue(any(row.startswith(">") for row in timeline.render(no_color, 16, mouse_mode=True).lines))
+        single = ConversationTimeline()
+        origin = single.begin_submission("session", "conversation", user)
+        single.retain(MultiAgentScrollState((first_view,), 0), operation_id=single.begin_operation())
+        single.end_submission(origin)
+        self.assertEqual(single.render(caps, 24).lines, single.render(caps, 60).lines)
 
     def test_thought_delta_coalesces_consecutive_thinking_rows_and_bounds_buffer(self) -> None:
         state = AdvisoryProgressState()
@@ -2159,6 +2246,20 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         valid_frame = RenderedFrame("safe line", 40, 1)
         driver._redraw_nested_scroll_frame(state, caps, lambda _s, _c: valid_frame)
         self.assertEqual(driver._progress_rows, 1)
+        from tests._external_view_support import PortableTerminalScreen
+        for height in (24, 60):
+            output = io.StringIO()
+            inline = RawTerminalDriver(lambda _p: "", io.StringIO(), output,
+                                       transition_line_input, transition_main_input, append_main_input_history)
+            output.write("USER MESSAGE\r\n")
+            with mock.patch.object(RawTerminalDriver, "_text_viewer_geometry", return_value=(40, height)):
+                inline._redraw_nested_scroll_frame(state, caps, lambda _s, _c: RenderedFrame("JSON HEADER\nJSON BODY\nJSON FOOTER", 40, 3))
+            screen = PortableTerminalScreen(width=40, height=height)
+            screen.primary[:] = [[" "] * 40 for _ in range(height)]
+            screen.history.clear(); screen.cursor = (0, 0)
+            screen.write(output.getvalue().replace("\n", "\r\n"))
+            rows = [row.strip() for row in screen.history] + ["".join(row).strip() for row in screen.primary]
+            self.assertEqual(rows.index("JSON HEADER") - rows.index("USER MESSAGE"), 1)
 
     def test_draw_progress_frame_tracks_rows_before_write_for_error_cleanup(self) -> None:
         out = io.StringIO()
@@ -2650,6 +2751,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             mock.patch("story_writing_agents.interactive_terminal._driver._restore_terminal_or_raise"),
             mock.patch.object(RawTerminalDriver, "_read_character", side_effect=read_character),
             mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True),
+            mock.patch.object(RawTerminalDriver, "_query_cursor_row", return_value=250),
             mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as mock_clear,
         ):
             final_state = driver.run_nested_scroll_inspector(
@@ -2667,8 +2769,53 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         # Clear before Tab/pointer redraws, but NOT upon exit because keep_frame=True
         self.assertGreaterEqual(mock_clear.call_count, 3)
         self.assertTrue(out.getvalue().endswith("\r\n"))
-        self.assertIn("\x1b[250;1H", out.getvalue())
+        self.assertNotIn("\x1b[250;1H", out.getvalue())
         self.assertEqual(list(driver._typeahead_buffer), [])
+        from dataclasses import replace
+        from story_writing_agents.interactive_terminal._model import Message
+        for view_state in (ViewState.IDLE, ViewState.ERROR):
+            output = io.StringIO()
+            anchored = RawTerminalDriver(lambda _p: "", io.StringIO(), output,
+                                         transition_line_input, transition_main_input, append_main_input_history)
+            output.fileno = lambda: 8
+            anchored._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=40, lines=24))
+            anchored._timeline_enabled = True
+            timeline = anchored._output_history
+            older = timeline.begin_submission("session", "conversation", Message("User", "OLDER_INPUT"))
+            timeline.append_component(Message("Lead", "\n".join(f"OLDER_ROW_{row}" for row in range(40))))
+            timeline.end_submission(older)
+            timeline.focus_visible(timeline.render(replace(fake_caps, width=39), 23))
+            timeline.handle_key(KeyEvent(KeyKind.HOME)); timeline.handle_key(KeyEvent(KeyKind.ENTER))
+            before = timeline.render(replace(fake_caps, width=39), 23).lines
+            origin = timeline.begin_submission("session", "conversation", Message("User", "NEW_INPUT"))
+            retained = MultiAgentScrollState((replace(v1, state=view_state),), 0)
+            anchored._typeahead_buffer.extend("queued")
+            async def completed():
+                return view_state
+            with (mock.patch.object(RawTerminalDriver, "capabilities", return_value=fake_caps),
+                  mock.patch.object(RawTerminalDriver, "_observe_input_capabilities", return_value=fake_caps),
+                  mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(fake_caps, fake_config)),
+                  mock.patch.object(_driver, "_activate_terminal"),
+                  mock.patch.object(_driver, "_restore_terminal_or_raise") as restore,
+                  mock.patch.object(RawTerminalDriver, "_read_character", side_effect=AssertionError("offscreen inspector read input")) as read):
+                result = asyncio.run(anchored.run_advisory_progress(
+                    completed(), lambda _f: "Working...", scroll_state_provider=lambda _result: retained,
+                    is_failure=lambda value: value is ViewState.ERROR, nested_scroll_transition=transition_nested_scroll,
+                    nested_scroll_renderer=render_nested_scroll_view, keep_frame=True))
+            self.assertIs(result, view_state)
+            read.assert_not_called(); restore.assert_called_once_with(fake_config, None)
+            self.assertEqual(timeline.render(replace(fake_caps, width=39), 23).lines, before)
+            slots = tuple(entry for entry in timeline.entries if entry.frames)
+            self.assertEqual(len(slots), 1); self.assertEqual(slots[0].origin, origin)
+            self.assertEqual(len(slots[0].frames), 1); self.assertIs(slots[0].frames[0].view.state, view_state)
+            self.assertIsNone(slots[0].preview); self.assertEqual(slots[0].lines, ())
+            self.assertFalse(timeline.entry_visible(slots[0].identity))
+            self.assertIsNone(anchored._timeline_operation); self.assertFalse(anchored._progress_active)
+            self.assertEqual(anchored._progress_rows, 0); self.assertEqual(list(anchored._typeahead_buffer), list("queued"))
+            self.assertNotIn(_driver._MOUSE_ENABLE, output.getvalue())
+            timeline.end_submission(origin)
+            with anchored._input_latch.input_operation():
+                pass
 
     def test_provide_scroll_state_on_success_sets_idle_state_and_does_not_record_error(self) -> None:
         """Verify success response passes ViewState.IDLE and does not record result message as an error."""

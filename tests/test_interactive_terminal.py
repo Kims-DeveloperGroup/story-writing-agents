@@ -55,18 +55,13 @@ from story_writing_agents.interactive_terminal._render import render_plain
 
 
 PUBLIC_EXPORTS = (
-    "AttachmentKind",
-    "ComposeMode",
+    "project_conversation_messages",
+    "AttachmentKind", "ComposeMode",
     "ConfirmationResult",
-    "TerminalActionKind",
-    "TerminalMessageKind",
-    "InteractiveErrorCode",
-    "TerminalAction",
-    "InteractiveErrorSpec",
-    "INTERACTIVE_ERROR_SPECS",
-    "InteractiveError",
-    "sanitize_terminal_text",
-    "InteractiveTerminal",
+    "TerminalActionKind", "TerminalMessageKind",
+    "InteractiveErrorCode", "TerminalAction", "InteractiveErrorSpec",
+    "INTERACTIVE_ERROR_SPECS", "InteractiveError",
+    "sanitize_terminal_text", "InteractiveTerminal",
     "InteractiveTranscriptViewer",
 )
 
@@ -392,11 +387,12 @@ def visible_escape(character: str) -> str:
 class PublicContractTests(unittest.TestCase):
     def test_direct_module_public_surface_is_exact_and_ordered(self) -> None:
         self.assertEqual(tuple(terminal_module.__all__), PUBLIC_EXPORTS)
+        self.assertTrue(callable(terminal_module.project_conversation_messages))
         self.assertNotIn("build_contextual_terminal", terminal_module.__all__)
         self.assertIs(terminal_module.InteractiveTranscriptViewer, InteractiveTranscriptViewer)
         self.assertEqual(tuple(inspect.signature(InteractiveTranscriptViewer.open).parameters),
             ("self", "events", "request", "result", "continuation", "show_details", "history_events"))
-        for name in PUBLIC_EXPORTS[:-1]:
+        for name in PUBLIC_EXPORTS[1:-1]:
             with self.subTest(name=name):
                 self.assertIs(getattr(terminal_module, name), globals()[name])
         for changed_callable in (
@@ -2492,7 +2488,7 @@ class TerminalBoundaryTests(unittest.TestCase):
         )
         self.assertNotIn("interactive_terminal", story_writing_agents.__all__)
         self.assertFalse(hasattr(story_writing_agents, "InteractiveTranscriptViewer"))
-        for name in PUBLIC_EXPORTS[:-1]:
+        for name in PUBLIC_EXPORTS[1:-1]:
             with self.subTest(name=name):
                 self.assertNotIn(name, story_writing_agents.__all__)
                 self.assertFalse(hasattr(story_writing_agents, name))

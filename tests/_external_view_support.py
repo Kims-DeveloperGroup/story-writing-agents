@@ -184,6 +184,17 @@ class PortableTerminalScreen:
                 elif final in "Hf":
                     parts = [int(p or "1") for p in parameters.split(";")]
                     self.cursor = (min((parts[0] if parts else 1) - 1, self.height - 1), min((parts[1] if len(parts) > 1 else 1) - 1, self.width - 1))
+                elif final in "ABCD":
+                    count = int(parameters or "1") or 1
+                    row, col = self.cursor
+                    row += count if final == "B" else -count if final == "A" else 0
+                    col += count if final == "C" else -count if final == "D" else 0
+                    self.cursor = (max(0, min(self.height - 1, row)), max(0, min(self.width - 1, col)))
+                elif final == "J" and parameters in {"", "0"}:
+                    row, col = self.cursor
+                    self.screen[row][col:] = [" "] * (self.width - col)
+                    for cleared in range(row + 1, self.height):
+                        self.screen[cleared] = [" "] * self.width
                 elif final == "J" and parameters == "2":
                     occupied = ["".join(row).rstrip() for row in self.screen]
                     if any(occupied):

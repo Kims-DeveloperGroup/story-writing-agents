@@ -1781,7 +1781,7 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
         self.assertEqual(len(modules), 163)
-        self.assertEqual(len(edges), 731)
+        self.assertEqual(len(edges), 733)
         relationship_name = "story_writing_agents.writing_artifacts.relationship_policy"
         lead = 'story_writing_agents.lead_provider_contracts'
         self.assertIn((lead, 'story_writing_agents.writing_artifacts.change_sets'), edges)

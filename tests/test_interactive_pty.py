@@ -1569,6 +1569,17 @@ class InteractiveCliPtyTests(unittest.TestCase):
 
     def _exercise_external_library_pty(self, *, edit_query: bool, termination_signal: int | None = None, termination_during_view: bool = False) -> None:
         gate = self.temporary_root / f"viewer-ready-{edit_query}-{termination_signal}"
+        def assert_accepted_message_visible_once():
+            from tests._external_view_support import PortableTerminalScreen
+            screen = PortableTerminalScreen(width=120, height=24)
+            screen.primary[:] = [[" "] * 120 for _ in range(24)]
+            screen.cursor = (0, 0); screen.history.clear()
+            screen.write(bytes(process.raw_bytes).decode("utf-8", errors="replace"))
+            visible = "\n".join("".join(row) for row in screen.primary)
+            self.assertFalse(screen.alternate)
+            self.assertEqual(visible.count("LEGITIMATE_ACCEPTED_MESSAGE"), 1, visible)
+            self.assertFalse(any("LEGITIMATE_ACCEPTED_MESSAGE" in row for row in screen.history), "\n".join(screen.history))
+
         def viewer_rows(data: bytes) -> list[str]:
             frame = data[data.rfind(b"\x1b[1;1H\x1b[2K"):]
             return [_ANSI_SGR_BYTES.sub(b"", line).removesuffix(b"\x1b[H").decode("utf-8") for line in re.split(rb"\x1b\[\d+;1H\x1b\[2K", frame)[1:]]
@@ -1586,13 +1597,14 @@ source = b"".join((json.dumps({"content": "개요 개요 " + str(i)}, ensure_asc
 original = bytes(source)
 operation = prepare_agent_exchange_view(source, session_id="s", scope_kind=AgentExchangeScopeKind.CONVERSATION, scope_id="c", scope_subject="Subject", agent_id="lead_orchestrator")
 terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+output = InteractiveSemanticOutput(terminal)
 for signum in (signal.SIGTERM, signal.SIGHUP):
     signal.signal(signum, signal.SIG_DFL)
 lifecycle = InteractiveInputLifecycle(terminal)
 with lifecycle.session():
     assert terminal.read_main().text == "seed"
-    InteractiveSemanticOutput(terminal).write_accepted_input(Message("user", "LEGITIMATE_ACCEPTED_MESSAGE"))
-    print("INTER_READER_READY", flush=True)
+    output.write_accepted_input(Message("user", "LEGITIMATE_ACCEPTED_MESSAGE"))
+    output.write_component(Message("probe", "INTER_READER_READY"))
     deadline = time.monotonic() + 10
     while not Path(os.environ["STORY_PTY_VIEWER_GATE"]).is_file():
         if time.monotonic() > deadline:
@@ -1600,9 +1612,9 @@ with lifecycle.session():
         time.sleep(0.01)
     assert terminal.read_main().text.rstrip() == "/exchanges"
     InteractiveExternalViewer(terminal).open_owned(operation)
-    print("VIEWER_CLOSED", flush=True)
+    output.write_component(Message("probe", "VIEWER_CLOSED"))
     assert terminal.read_main().text == "after-viewer"
-    print("AFTER_VIEWER=after-viewer", flush=True)
+    output.write_component(Message("probe", "AFTER_VIEWER=after-viewer"))
     with lifecycle.native_handoff():
         print(f"NATIVE_VALUE={input('native> ')}", flush=True)
     assert terminal.read_main().text == "after-native"
@@ -1616,6 +1628,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
         process.wait_for_text("story[lobby]> ")
         process.send_line("seed")
         process.wait_for_text("INTER_READER_READY")
+        assert_accepted_message_visible_once()
         assert termios is not None
         flags = termios.tcgetattr(process.master_fd)[3]
         self.assertFalse(flags & (termios.ECHO | termios.ECHONL))
@@ -1694,6 +1707,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
         mark = process.output_mark()
         process.send_line("opaque-native-input")
         process.wait_for_text("story[lobby]> ", after=mark)
+        assert_accepted_message_visible_once()
         self.assertFalse(termios.tcgetattr(process.master_fd)[3] & termios.ECHO)
         process.send_line("after-native")
         process.wait_for_text("shell> ")
@@ -1702,7 +1716,6 @@ print(f"SHELL_VALUE={input('shell> ')}")
         process.wait_for_text("SHELL_VALUE=after-view")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertIn("SOURCE_UNCHANGED=True", process.normalized_text)
-        self.assertEqual(process.normalized_text.count("LEGITIMATE_ACCEPTED_MESSAGE"), 1)
         self.assertIn("NATIVE_VALUE=opaque-native-input", process.normalized_text)
         self.assertNotIn("U0015", process.normalized_text)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)

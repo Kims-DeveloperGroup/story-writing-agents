@@ -8,8 +8,9 @@ from dataclasses import fields, replace
 from pathlib import Path
 
 from story_writing_agents.agent_context.accounting import ProviderUsage
+from story_writing_agents import lead_exploration as exploration, lead_premise_decisions as premise, lead_task_transitions as task
 from story_writing_agents.interactive_terminal._response_usage import ResponseUsage, response_footer, response_usage
-from story_writing_agents.interactive_terminal import InteractiveTerminal
+from story_writing_agents.interactive_terminal import InteractiveTerminal, project_conversation_messages
 from story_writing_agents.interactive_terminal import _collaboration_view
 from story_writing_agents.interactive_terminal._model import CapabilityProfile
 from story_writing_agents.interactive_terminal._render import (
@@ -17,10 +18,12 @@ from story_writing_agents.interactive_terminal._render import (
     strip_decorative_sgr,
 )
 from story_writing_agents.reply_trace import ReplyTrace, ReplyTraceOrigin
+from story_writing_agents.specialist_routing import SpecialistAssignmentMode
 
 from tests.collaboration_contract_fixture import (
     RUNTIME,
     USER,
+    LEAD,
     awaiting_history,
     executed_history,
     contract_batches, measured_batch,
@@ -35,6 +38,7 @@ from story_writing_agents.conversations import (
     CollaborationLeadSynthesisPayload,
     CollaborationEventKind,
     CollaborationMessagePayload,
+    CollaborationLeadDiscussionPayload, CollaborationLeadExplorationResultPayload, CollaborationLeadPublicResponsePayload,
     CollaborationProviderCallPayload, CollaborationProviderCallState, CollaborationProviderCallKind,
     CollaborationStepStatePayload,
     CollaborationStepState,
@@ -54,21 +58,12 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         from tests.test_lead_story_commit import LeadStoryCommitTests
 
-        case = LeadStoryCommitTests(
-            "test_request_is_inspectable_and_reject_is_zero_git_mutation"
-        )
+        case = LeadStoryCommitTests("test_request_is_inspectable_and_reject_is_zero_git_mutation")
         case.setUp()
         try:
             reviewed = await case.reviewed_create("Presentation fixture", readiness=True, user_brief='The narrative rule should use a close-third viewpoint and a restrained voice, preserving the existing story facts.')
-            applied = await case.runtime.decide_artifact_application(
-                _application_decision(
-                    reviewed,
-                    ArtifactApplicationDecisionKind.APPLY,
-                )
-            )
-            committed = await case.runtime.decide_story_commit(
-                _commit_decision(applied, StoryCommitDecision.COMMIT)
-            )
+            applied = await case.runtime.decide_artifact_application(_application_decision(reviewed, ArtifactApplicationDecisionKind.APPLY))
+            committed = await case.runtime.decide_story_commit(_commit_decision(applied, StoryCommitDecision.COMMIT))
             conversation_id = reviewed.conversation_id
             events = case.history(conversation_id)
             artifact = next(event for event in events if type(event.payload) is ArtifactReviewSynthesisPayload)
@@ -104,25 +99,54 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(finalization_notice.payload.content, finalized.message)
             result_event = next(event for event in known if type(event.payload) is CollaborationExecutionResult and event.payload.synthesis_result_event_id == origin.event_id)
             self.assertLess(result_event.sequence, finalization_notice.sequence)
+            projected = project_conversation_messages(final_history)
+            self.assertIn(finalization_notice, tuple(event for event, _ in projected))
+            self.assertNotIn(origin, tuple(event for event, _ in projected))
+            self.assertEqual(project_conversation_messages((origin,), history_events=final_history), ())
+            self.assertIn("Input tokens: 0 | Output tokens: 2", next(message.metadata for event, message in projected if event == finalization_notice))
+            long_prose, budget_notice = "L" * 32_768, "The provider round ended. The requested second specialist round exceeds the remaining call budget."
+            for invocation_id in (origin.payload.provider_invocation_id, None):
+                overflow = tuple(replace(event, payload=replace(event.payload, message=long_prose, provider_invocation_id=invocation_id)) if event == origin else replace(event, payload=replace(event.payload, content=budget_notice, provider_invocation_id=invocation_id)) if event == finalization_notice else event for event in final_history)
+                retained = project_conversation_messages((next(event for event in overflow if event.event_id == finalization_notice.event_id),), history_events=overflow)
+                self.assertEqual(tuple(message.content for _, message in retained), (long_prose + "\n\n" + budget_notice,))
+            legacy = tuple(replace(event, payload=replace(event.payload, provider_invocation_id=None)) if type(event.payload) in {CollaborationMessagePayload, CollaborationLeadSynthesisPayload} else event for event in final_history)
+            self.assertEqual(tuple(event.event_id for event, _ in project_conversation_messages(legacy)), tuple(event.event_id for event, _ in projected))
+            synthesis = origin.payload
+            refs = tuple(premise.PremiseReplyRef(reply_id, next(event.sender.agent_id for event in known if event.event_id == reply_id), "sha256:" + "1" * 64) for reply_id in synthesis.reply_event_ids)
+            dispositions = tuple(premise.PremiseReplyDisposition(ref.event_id, ("knows",), "used", "Keep the shared premise.", "No residual cost.") for ref in refs)
+            option = premise.PremiseOption("option", premise.material_digest("The narrator knows."), "knows", "The narrator knows.", "Preserve ambiguity.", dispositions)
+            report = premise.PremiseDecisionReport(premise.PremiseDecisionSpec("question", "slot", "Who knows?",
+                (premise.ArtifactReviewDomain.PLOT_STRUCTURE,), "user"), origin.conversation_id, synthesis.proposal_id,
+                synthesis.proposal_revision, synthesis.proposal_digest, origin.step_id, synthesis.execution_attempt_id, refs,
+                premise.PremiseDecisionSummary("options", synthesis.message, (option.intent,), "knows"), (option,),
+                premise.PremiseDecisionCost(origin.step_id, ("call_synthesis",), 1, synthesis.proposal_id,
+                    synthesis.proposal_revision, synthesis.proposal_digest, synthesis.execution_attempt_id))
+            with_options = tuple(replace(event, payload=replace(synthesis, premise_report=report, authoring_scope=None, next_intent=None,
+                evidence=replace(synthesis.evidence, scope=type(synthesis.evidence.scope).PREMISE_ANALYSIS))) if event == origin else event for event in final_history)
+            option_view = project_conversation_messages((finalization_notice,), history_events=with_options)
+            self.assertEqual(len(option_view), 1)
+            for text in (report.spec.question, option.premise_text, option.rationale):
+                self.assertIn(text, option_view[0][1].content)
+            repeated = replace(legacy[-2], event_id="repeated_prose", sequence=legacy[-1].sequence + 1, turn_id="another_turn", batch_id="another_batch", batch_ordinal=0, batch_size=1, kind=CollaborationEventKind.MESSAGE, sender=LEAD, recipient=USER,
+                payload=CollaborationMessagePayload(finalized.message))
+            repeated_messages = project_conversation_messages(legacy + (repeated,))
+            self.assertEqual(sum(message.content == finalized.message for _, message in repeated_messages), 2)
+            prose = project_conversation_messages(events)
+            self.assertNotIn(artifact, tuple(event for event, _ in prose))
+            for event in events:
+                if type(event.payload) is CollaborationSpecialistReplyPayload:
+                    self.assertIn(event.payload.message, tuple(message.content for _, message in prose))
 
             records: list[str] = []
-            cursor = InteractiveTerminal(input, records.append).write_collaboration_events(
-                events
-            )
+            cursor = InteractiveTerminal(input, records.append).write_collaboration_events(events)
             rendered = "".join(records)
 
             self.assertEqual(cursor, events[-1].sequence)
             self.assertEqual(len(records), len(events))
-            self.assertIn("Changes awaiting application", rendered)
-            self.assertIn("applies artifacts only", rendered)
-            self.assertIn("Artifact state: proposed", rendered)
-            self.assertIn("Artifact state: reviewed", rendered)
-            self.assertIn("Artifact state: applied", rendered)
-            self.assertIn("Artifact state: committed", rendered)
-            self.assertIn("Git index: not staged", rendered)
-            self.assertIn("Local commit", rendered)
-            self.assertIn("local commit only", rendered)
-            self.assertIn("paired remote push", rendered)
+            for text in ("Changes awaiting application", "applies artifacts only", "Artifact state: proposed",
+                "Artifact state: reviewed", "Artifact state: applied", "Artifact state: committed",
+                "Git index: not staged", "Local commit", "local commit only", "paired remote push"):
+                self.assertIn(text, rendered)
             self.assertNotIn("Use restrained close-third narration.", rendered)
             self.assertNotIn("provider_private", rendered)
             details = ("Original response:\n$.action.result.message: expected nonempty text",
@@ -144,20 +168,10 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(issue, text)
                     self.assertTrue(any(label in line and issue not in line for line in text.splitlines()))
 
-            lead_rendered = render_component(
-                _collaboration_view.project_lead_turn_result(reviewed),
-                _capability(CapabilityProfile.LINE, width=120),
-            ).text
-            application_rendered = render_component(
-                _collaboration_view.project_artifact_application_decision_result(
-                    applied
-                ),
-                _capability(CapabilityProfile.LINE, width=120),
-            ).text
-            commit_rendered = render_component(
-                _collaboration_view.project_story_commit_decision_result(committed),
-                _capability(CapabilityProfile.LINE, width=120),
-            ).text
+            capability = _capability(CapabilityProfile.LINE, width=120)
+            lead_rendered = render_component(_collaboration_view.project_lead_turn_result(reviewed), capability).text
+            application_rendered = render_component(_collaboration_view.project_artifact_application_decision_result(applied), capability).text
+            commit_rendered = render_component(_collaboration_view.project_story_commit_decision_result(committed), capability).text
             self.assertIn("Outcome:", lead_rendered)
             self.assertIn("╭─ Lead ", lead_rendered)
             self.assertIn("Next action:", lead_rendered)
@@ -167,20 +181,44 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Local story commit", commit_rendered)
             self.assertIn("Artifact state: committed", commit_rendered)
         finally:
-            common_git = subprocess.run(
-                ("git", "rev-parse", "--path-format=absolute", "--git-common-dir"),
-                cwd=case.workspace.root,
-                capture_output=True,
-                check=True,
-                text=True,
-            ).stdout.strip()
-            subprocess.run(
-                ("git", "worktree", "remove", "--", str(case.workspace.root)),
-                cwd=Path(common_git).parent,
-                check=True,
-            )
+            common_git = subprocess.run(("git", "rev-parse", "--path-format=absolute", "--git-common-dir"),
+                cwd=case.workspace.root, capture_output=True, check=True, text=True).stdout.strip()
+            subprocess.run(("git", "worktree", "remove", "--", str(case.workspace.root)), cwd=Path(common_git).parent, check=True)
             case.doCleanups()
         history, _, _ = executed_history()
+        idea = exploration.ExplorationIdea("idea", exploration.ExplorationIdeaKind.ALTERNATIVE,
+            "A courier loses the letter.", exploration.material_sha256("A courier loses the letter."))
+        observation = exploration.ExplorationObservation("The outline is provisional.", (
+            exploration.ExplorationArtifactRead("read", "source", "core_documents/global_outline.md", "r1", "sha256:" + "1" * 64, "sha256:" + "2" * 64),))
+        report = exploration.LeadExplorationReport("request", "call", exploration.ExplorationReportStatus.IDEAS,
+            "Provisional possibilities.", (idea,), (observation,))
+        alternative = premise.PremiseAlternative("knows", "The narrator knows.", "Preserve ambiguity.", ("The reader remains uncertain.",), ("user_input",))
+        specialist = next(event for event in history if type(event.payload) is CollaborationSpecialistReplyPayload)
+        analysis = replace(specialist, payload=replace(specialist.payload, mode=SpecialistAssignmentMode.PREMISE_ANALYSIS,
+            assessment=CollaborationSpecialistAssessment.ALTERNATIVES_ASSESSED, message="No candidate reviewed.",
+            premise_analysis=premise.PremiseAnalysis("alternatives_assessed", "No candidate reviewed.", (alternative,))))
+        physical = task.LeadPublicResponse(invocation_id="physical", call_id="call", ordinal=1, call_kind="initial",
+            acceptance=task.LeadPublicResponseAcceptance.ACCEPTED, response_text="PRIVATE physical observation",
+            material_digest=exploration.material_sha256("PRIVATE physical observation"))
+        families = tuple(replace(history[0], event_id=f"family_{index}", sequence=index + 1, kind=kind,
+            sender=sender, recipient=recipient, payload=payload) for index, (kind, sender, recipient, payload) in enumerate((
+            (CollaborationEventKind.MESSAGE, USER, LEAD, CollaborationMessagePayload("Literal user input.")),
+            (CollaborationEventKind.LEAD_DISCUSSION, RUNTIME, USER, CollaborationLeadDiscussionPayload(task.LeadDiscussionReport(response_kind="answer", response_text="Discussion answer.", origin_control_event_id="control"))),
+            (CollaborationEventKind.LEAD_EXPLORATION_RESULT, LEAD, USER, CollaborationLeadExplorationResultPayload(report)),
+            (CollaborationEventKind.SPECIALIST_REPLY, specialist.sender, specialist.recipient, analysis.payload),
+            (CollaborationEventKind.LEAD_PUBLIC_RESPONSE, RUNTIME, USER, CollaborationLeadPublicResponsePayload(physical)),
+            (CollaborationEventKind.MESSAGE, RUNTIME, USER, CollaborationMessagePayload("PRIVATE diagnostic")))))
+        visible = project_conversation_messages(families)
+        self.assertEqual(tuple(event for event, _ in visible), families[:4])
+        self.assertEqual(tuple(message.sender for _, message in visible[:3]), ("User", "Lead", "Lead"))
+        combined = "\n".join(message.content for _, message in visible)
+        for text in ("Literal user input.", "Discussion answer.", idea.material_text, observation.text, alternative.premise_text):
+            self.assertIn(text, combined)
+        self.assertNotIn("PRIVATE", combined)
+        self.assertIn("provisional", combined.lower())
+        for malformed in (tuple(reversed(families)), (replace(families[0], session_id="foreign"),)):
+            with self.assertRaises((TypeError, ValueError)):
+                project_conversation_messages((families[0],), history_events=malformed)
         awaiting = next(event for event in history if type(event.payload) is CollaborationStepStatePayload and event.payload.state is CollaborationStepState.AWAITING_CONFIRMATION)
         writes = []
         terminal = InteractiveTerminal(lambda _prompt: "unused", writes.append)

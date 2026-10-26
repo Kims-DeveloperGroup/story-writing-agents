@@ -176,7 +176,7 @@ from story_writing_agents.workspace.initialization import (
     require_ready_session_resources,
 )
 
-from tests.collaboration_contract_fixture import STEP_ID, contract_batches, make_proposal, measured_batch, make_batch, make_draft, store_batch, RUNTIME, USER
+from tests.collaboration_contract_fixture import STEP_ID, contract_batches, make_proposal, measured_batch, make_batch, make_draft, store_batch, RUNTIME, USER, LEAD
 from tests.helpers import pristine_initialized_workspace
 from story_writing_agents.core_document_readiness import CoreDocumentReadinessNeeded
 
@@ -1165,29 +1165,14 @@ class ControllerContractTests(ControllerTestCase):
             component_start = len(components)
             record_start = len(callbacks.records)
             method()
-            return (
-                tuple(components[component_start:]),
-                tuple(callbacks.records[record_start:]),
-            )
+            return tuple(components[component_start:]), tuple(callbacks.records[record_start:])
 
         with _autospec_effect_patch(terminal_module.InteractiveSemanticOutput, "write_component",
                  capture_component):
-            agents_off = projection(
-                controller._write_agent_roster,
-                details=False,
-            )
-            agents_on = projection(
-                controller._write_agent_roster,
-                details=True,
-            )
-            status_off = projection(
-                controller._write_runtime_status,
-                details=False,
-            )
-            status_on = projection(
-                controller._write_runtime_status,
-                details=True,
-            )
+            agents_off = projection(controller._write_agent_roster, details=False)
+            agents_on = projection(controller._write_agent_roster, details=True)
+            status_off = projection(controller._write_runtime_status, details=False)
+            status_on = projection(controller._write_runtime_status, details=True)
 
         self.assertEqual(agents_off, agents_on)
         self.assertEqual(status_off, status_on)
@@ -1195,42 +1180,13 @@ class ControllerContractTests(ControllerTestCase):
         self.assertIs(type(agent_view), terminal_module.ListView)
         self.assertEqual(agent_view.title, "Agents")
         self.assertEqual(len(agent_view.items), 4)
-        self.assertTrue(
-            all(
-                tuple(field.label for field in item.fields)
-                == (
-                    "ID",
-                    "Advisory domain",
-                    "Execution",
-                    "Confirmation",
-                )
-                for item in agent_view.items
-            )
-        )
-        execution_view = next(
-            component
-            for component in status_off[0]
-            if type(component) is terminal_module.ListView
-            and component.title == "Execution profiles"
-        )
+        self.assertEqual(tuple(tuple(field.label for field in item.fields) for item in agent_view.items),
+                         (("ID", "Advisory domain", "Execution", "Confirmation"),) * 4)
+        execution_view = next(component for component in status_off[0]
+            if type(component) is terminal_module.ListView and component.title == "Execution profiles")
         self.assertEqual(len(execution_view.items), 4)
-        self.assertTrue(
-            all(
-                tuple(field.label for field in item.fields)
-                == (
-                    "Provider",
-                    "Provider source",
-                    "Model",
-                    "Model source",
-                    "Effort",
-                    "Effort source",
-                    "Confirmation",
-                    "Thread",
-                    "Route generation",
-                )
-                for item in execution_view.items
-            )
-        )
+        expected_fields = ("Provider", "Provider source", "Model", "Model source", "Effort", "Effort source", "Confirmation", "Thread", "Route generation")
+        self.assertEqual(tuple(tuple(field.label for field in item.fields) for item in execution_view.items), (expected_fields,) * 4)
         self.seed_session(workspace, "session_a", durable_state=SessionDurableState.READY)
         services = controller._runtime.conversation_storage_services
         metadata = services.catalog.create("session_a", "Measured history")
@@ -1259,32 +1215,46 @@ class ControllerContractTests(ControllerTestCase):
         plain = ()
         for index in range(25):
             plain = store_batch(plain, make_batch(plain, f"restored_{index}", replace(make_draft(
-                f"restored_{index}", collaboration.CollaborationEventKind.MESSAGE, RUNTIME, USER,
-                collaboration.CollaborationMessagePayload(f"Saved message {index}")), conversation_id=metadata.conversation_id)))
+                f"restored_{index}", collaboration.CollaborationEventKind.MESSAGE,
+                USER if index % 2 else LEAD, LEAD if index % 2 else USER,
+                collaboration.CollaborationMessagePayload(f"Saved message {index}")), conversation_id=metadata.conversation_id),
+                replace(make_draft(f"diagnostic_{index}", collaboration.CollaborationEventKind.MESSAGE, RUNTIME, USER,
+                    collaboration.CollaborationMessagePayload("PRIVATE provider diagnostic")), conversation_id=metadata.conversation_id)))
         with mock.patch.object(controller._runtime, "lead_turn", side_effect=AssertionError("provider call")), \
                 mock.patch.object(services.event_store, "append_batch") as append:
-            for size in (0, 7, 20, 25):
+            for size, details in ((0, False), (7, False), (20, False), (25, False), (25, True)):
                 callbacks.records.clear()
-                with mock.patch.object(services.event_store, "read", return_value=plain[:size]) as read, \
-                        mock.patch.object(type(controller._terminal), "write_collaboration_events",
-                                          wraps=controller._terminal.write_collaboration_events) as write:
+                controller._show_message_details = details
+                with mock.patch.object(services.event_store, "read", return_value=plain[:size * 2]) as read, \
+                        mock.patch.object(type(controller._terminal), "write_collaboration_events") as write:
                     controller._write_focused_conversation_history(restore, restoring=True)
                 read.assert_called_once_with("session_a", metadata.conversation_id)
+                write.assert_not_called()
                 if size:
-                    self.assertEqual(tuple(event.event_id for event in write.call_args.args[0]),
-                                     tuple(event.event_id for event in plain[:size][-20:]))
-                    self.assertEqual(len(write.call_args.kwargs["history_events"]), size)
                     text = "".join(callbacks.records)
-                    self.assertIn(f"Restored {min(size, 20)} of {size} records.", text)
+                    self.assertEqual(len(callbacks.records), min(size, 20) + 1)
+                    self.assertIn(f"Restored {min(size, 20)} of {size} messages.", text)
+                    self.assertNotIn("PRIVATE", text)
+                    self.assertNotIn("Sequence:", text)
+                    self.assertEqual([int(value.split("Saved message ")[1].split()[0]) for value in callbacks.records[:-1]],
+                                     list(range(max(0, size - 20), size)))
                     self.assertEqual("/transcript" in "".join(text.split()), size > 20)
                 else:
-                    write.assert_not_called()
                     self.assertEqual(callbacks.records, [])
+            callbacks.records.clear()
+            diagnostic = store_batch((), make_batch((), "diagnostics_only", replace(make_draft(
+                "diagnostic_only", collaboration.CollaborationEventKind.MESSAGE, RUNTIME, USER,
+                collaboration.CollaborationMessagePayload("PRIVATE diagnostic")), conversation_id=metadata.conversation_id)))
+            with mock.patch.object(services.event_store, "read", return_value=diagnostic):
+                controller._write_focused_conversation_history(restore, restoring=True)
+            self.assertEqual(callbacks.records, [])
+            callbacks.records.clear()
             with mock.patch.object(services.event_store, "read", return_value=history), \
                     mock.patch.object(type(controller._terminal), "write_collaboration_events") as write:
                 controller._write_focused_conversation_history(replace(restore, count=1), restoring=True)
-            self.assertEqual(len(write.call_args.args[0]), 1)
-            self.assertEqual(len(write.call_args.kwargs["history_events"]), len(history))
+            write.assert_not_called()
+            self.assertEqual(len(callbacks.records), 2)
+            self.assertIn("Visible lead synthesis.", callbacks.records[0])
             for snapshot in (tuple(reversed(plain)), (replace(plain[0], session_id="foreign"),)):
                 callbacks.records.clear()
                 with mock.patch.object(services.event_store, "read", return_value=snapshot), \
@@ -1321,6 +1291,9 @@ class ControllerContractTests(ControllerTestCase):
         self.assertEqual(restored, [("session_a", metadata.conversation_id),
                                     ("session_b", metadata.conversation_id), ("session_a", metadata.conversation_id)])
         start = next(event.sequence for event in history if type(event.payload) is collaboration.CollaborationLeadJudgmentPayload)
+        messages = tuple(event for event in history if type(event.payload) in (
+            collaboration.CollaborationLeadJudgmentPayload, collaboration.CollaborationSpecialistReplyPayload,
+            collaboration.CollaborationLeadSynthesisPayload))
         future = store_batch(history, make_batch(history, "concurrent_history", replace(make_draft(
             "future_notice", collaboration.CollaborationEventKind.MESSAGE, RUNTIME, USER,
             collaboration.CollaborationMessagePayload("Concurrent private notice.")), conversation_id=metadata.conversation_id)))
@@ -1332,17 +1305,17 @@ class ControllerContractTests(ControllerTestCase):
                     f"/transcript {metadata.conversation_id} 2 --from {start}"))
             read.assert_called_once_with("session_a", metadata.conversation_id)
             self.assertEqual(callbacks.records, [])
-            self.assertEqual(view.call_args.args[1], history[start - 1:start + 1])
-            self.assertEqual(view.call_args.kwargs["history_events"], history[:start + 1])
-            self.assertFalse(view.call_args.kwargs["show_details"])
-            self.assertIn(f"Continue with /transcript {handle} 2 --from {start + 2}.", view.call_args.kwargs["continuation"].text)
+            self.assertEqual(view.call_args.args[1], messages[:2])
+            self.assertEqual(view.call_args.kwargs["history_events"], history)
+            self.assertIn(f"Continue with /transcript {handle} 2 --from {messages[2].sequence}.", view.call_args.kwargs["continuation"].text)
             # Exceed both legacy record and byte caps without changing persisted history.
             long_history = store_batch(history, make_batch(history, "large_history", *(replace(make_draft(
-                f"large_{index}", collaboration.CollaborationEventKind.MESSAGE, RUNTIME, USER,
+                f"large_{index}", collaboration.CollaborationEventKind.MESSAGE, LEAD, USER,
                 collaboration.CollaborationMessagePayload("**개요** e\u0301🙂 " + "x" * 600)),
                 conversation_id=metadata.conversation_id) for index in range(101))))
-            for command, expected in ((f"/transcript {metadata.conversation_id}", long_history),
-                    (f"/transcript {metadata.conversation_id} --from {start}", long_history[start - 1:])):
+            long_messages = messages + long_history[len(history):]
+            for command, expected in ((f"/transcript {metadata.conversation_id}", long_messages),
+                    (f"/transcript {metadata.conversation_id} --from {messages[1].sequence}", long_messages[1:])):
                 with mock.patch.object(services.event_store, "read", return_value=long_history) as read:
                     controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line(command))
                 read.assert_called_once_with("session_a", metadata.conversation_id)
@@ -1352,11 +1325,22 @@ class ControllerContractTests(ControllerTestCase):
                 self.assertEqual(callbacks.records, [])
             with mock.patch.object(services.event_store, "read", return_value=long_history):
                 controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line(f"/transcript {metadata.conversation_id} 100"))
-            self.assertLess(len(view.call_args.args[1]), 100)
+            self.assertEqual(len(view.call_args.args[1]), 100)
             self.assertIsNotNone(view.call_args.kwargs["continuation"])
+            self.assertIn(f"--from {long_messages[100].sequence}.", view.call_args.kwargs["continuation"].text)
+            with mock.patch.object(services.event_store, "read", return_value=long_history):
+                controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line(
+                    f"/transcript {metadata.conversation_id} --from {long_history[-1].sequence + 1}"))
+            self.assertEqual(view.call_args.args[1], ())
+            before = view.call_count
+            with mock.patch.object(services.event_store, "read", return_value=long_history):
+                controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line(
+                    f"/transcript {metadata.conversation_id} --from {long_history[-1].sequence + 2}"))
+            self.assertEqual(view.call_count, before)
+            callbacks.records.clear()
             services.catalog.archive("session_a", metadata.conversation_id)
             controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line(f"/transcript {metadata.conversation_id}"))
-            self.assertEqual(view.call_args.args[1], history)
+            self.assertEqual(view.call_args.args[1], messages)
             empty = services.catalog.create("session_a", "Empty transcript")
             controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line(f"/transcript {empty.conversation_id}"))
             self.assertEqual(view.call_args.args[1], ())
@@ -1784,7 +1768,7 @@ class ControllerContractTests(ControllerTestCase):
         for module_name in graph:
             visit(module_name)
         self.assertEqual(len(modules), 163)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 731)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 733)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6300,6 +6284,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
     """Verify the terminal adapter emits only exact runtime decisions."""
 
     def setUp(self) -> None:
+        self.enterContext(mock.patch.object(RuntimeSession, "session_id", "session", create=True))
         self.enterContext(mock.patch.object(
             RuntimeSession, "inspect_editorial_state",
             return_value=EditorialStateProjection("session", ())))
@@ -6333,9 +6318,21 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
     class _Output:
         def __init__(self) -> None:
             self.components: list[object] = []
+            self.submissions: list[tuple[object, ...]] = []
+            self.active_scope: object | None = None
 
         def write_component(self, component: object) -> None:
             self.components.append(component)
+
+        @contextmanager
+        def submission(self, session_id, conversation_id, user):
+            self.submissions.append((session_id, conversation_id, user))
+            previous, self.active_scope = self.active_scope, self.submissions[-1]
+            self.write_component(user)
+            try:
+                yield
+            finally:
+                self.active_scope = previous
 
     @staticmethod
     def _commit(text: str) -> ControlOutcome: return ControlOutcome(ControlOutcomeKind.COMMIT, text=text)
@@ -6666,12 +6663,15 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         session = RuntimeSession.__new__(RuntimeSession); runner = asyncio.Runner(); self.addCleanup(runner.close)
         progress, output, sinks = self._Progress(), self._Output(), []
         async def lead_turn(_session, cid, text, *, action_progress_sink):
+            self.assertEqual(output.active_scope[:2], ("session", _UNIQUE_C))
+            self.assertEqual(output.active_scope[2].content, "ordinary")
             sinks.append(action_progress_sink); return self._terminal_turn(CollaborationStepState.COMPLETED)
         with mock.patch.object(RuntimeSession, "lead_turn", lead_turn):
             adapter = lead_policy_module.InteractiveLeadAdapter(session, runner, progress,
                 self._Picker(), self._Prompt(), output)
             self.assertFalse(adapter.submit(_UNIQUE_C, "ordinary"))
         self.assertEqual(sinks, [progress.observe]); self.assertEqual(progress.begins, [()])
+        self.assertEqual(len(output.submissions), 1); self.assertIsNone(output.active_scope)
         self.assertIsInstance(output.components[-1], terminal_module.Panel)
         self.assertIn("Elapsed: 00:00:00", output.components[-1].items[0].metadata)
 
