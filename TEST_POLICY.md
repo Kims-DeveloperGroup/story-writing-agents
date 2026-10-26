@@ -18,7 +18,7 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
   budget file records a maximum for each canonical ID. Reducing a count or
   deleting an ID is allowed.
 - Keep the total nonblank, noncomment lines in `tests/test*.py` at or below
-  the post-cut baseline. Changes to an existing representative test can trade
+  the frozen source ceiling. Changes to an existing representative test can trade
   lines with deletions elsewhere, without expanding the overall test source.
 - Do not raise either time ceiling. The base-commit comparison rejects increases
   except the exact maintainer-approved #872 transition from the paired
@@ -32,6 +32,20 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
   policy change with measured cost and an explicit exception to the monotonic
   gate. Otherwise, extend an existing representative case or replace a more
   expensive check while respecting the current inventory.
+
+## Maintainer-approved source allocation
+
+Issue #881 permits the exact source-ceiling transition from **142474 to 142604** under
+the maintainer's authorization to exceed the test budget when needed. Current-main
+changes consumed 431 counted lines of headroom while the provider-schema development
+harness still requires all its checks. The allocation covers the 107-line collision,
+19 added policy-regression lines, and four net policy-helper lines: 142600 raw lines
+plus four charged helper lines. No helper growth is excluded from this accounting.
+
+This source-only transition requires unchanged sequential and per-shard time ceilings
+and an identical complete subtest-cap mapping. It preserves the separate #872 time
+transition. Other source-ceiling increases remain rejected; test IDs, subtest caps,
+runtime behavior, and workflow limits are unchanged.
 
 ## Verification rule
 
