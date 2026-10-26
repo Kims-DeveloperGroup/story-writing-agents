@@ -364,14 +364,17 @@ including across conversation and session switches. Opening an older frame does
 not reload files or call a provider. Timeline state is discarded on shell exit.
 
 The mouse wheel normally scrolls the terminal's own scrollback. Press `F6` to
-enter timeline interaction and focus the newest visible JSON frame. Left-click
-another frame's header, border, or body to change focus. The selected-control
-accent, `Focused` marker, and `>` gutter marker identify frame focus even with
-`NO_COLOR` or clipped borders. A `T` in the gutter marks whole-timeline focus.
-In mouse mode, the wheel over a JSON frame scrolls
-its contents; the left gutter scrolls the whole timeline. `Tab` switches keyboard
-navigation between the timeline and selected frame. Arrows, paging keys, Home,
-and End act on that navigation target.
+enter keyboard timeline review and focus the newest visible JSON frame. `Tab`
+switches navigation between the timeline and selected frame. Arrows, paging keys,
+Home, and End act on that target. Keyboard review remains available when the
+terminal cannot enable pointer interaction; the wheel then keeps its normal
+terminal behavior.
+
+When pointer interaction is available, left-click a frame's header, border, or
+body to change focus. The wheel over a JSON frame scrolls its contents; the left
+gutter scrolls the whole timeline. The selected-control accent, `Focused` marker,
+and `>` gutter marker identify frame focus even with `NO_COLOR` or clipped
+borders. A `T` in the gutter marks whole-timeline focus.
 
 When reading an earlier turn, new output preserves the visible entry and
 position. The timeline follows new output only when already at the bottom.
@@ -382,7 +385,7 @@ Resizing reflows messages while keeping each JSON frame with its own user input.
 Click the composer, press `Escape`, or press Enter while navigating to return to
 the unchanged draft and cursor without submitting it. Printable text returns to
 the composer, releases mouse capture, and preserves the first character. Press
-`F6` again to release capture and restore ordinary wheel scrolling. Navigation
+`F6` again to leave review and release any mouse capture. Navigation
 does not add command-history entries or change conversation focus.
 
 Inline pickers and prompts keep the timeline visible, so proposal details remain

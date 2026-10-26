@@ -2558,8 +2558,9 @@ class PickerDriverTests(unittest.TestCase):
             self.assertNotIn(forbidden, rendered)
 
         from tests._external_view_support import _raw_driver, PortableTerminalScreen
-        for case in ("plain", "reviewing", "choices", "blocked", "blocked_form"):
-            reviewing, shrinking, blocked = case == "reviewing", case == "choices", case.startswith("blocked")
+        for case in ("plain", "reviewing", "reviewing_no_cpr", "choices", "blocked", "blocked_form"):
+            reviewing, shrinking, blocked = case.startswith("reviewing"), case == "choices", case.startswith("blocked")
+            cpr_available = case != "reviewing_no_cpr"
             navigation = "\x1b[17~\x1b[B\x1b" if reviewing else ""
             decision = "\r\x1b" if blocked else "\x1b[B\r"
             height = 18 if shrinking else 24
@@ -2573,7 +2574,7 @@ class PickerDriverTests(unittest.TestCase):
             def paint(value):
                 result = original_write(value)
                 screen.write(value.replace("\n", "\r\n"))
-                if "\x1b[6n" in value:
+                if "\x1b[6n" in value and cpr_available:
                     row, column = screen.cursor
                     incoming.characters[:0] = list(f"\x1b[{row + 1};{column + 1}R".encode())
                 return result
@@ -2613,9 +2614,9 @@ class PickerDriverTests(unittest.TestCase):
                         self.assertLess(sum(choice.label in visible for choice in choices), 9)
                     self.assertFalse(any("USER_VISIBLE" in row for row in screen.history))
                     character = original_read(owner, **kwargs)
-                    if character == "\r":
+                    if character == "\r" and kwargs.get("before_read") is None:
                         decisions.append(visible)
-                        if reviewing:
+                        if reviewing and cpr_available:
                             transcript = "".join(output.records)
                             self.assertGreater(transcript.rfind(driver_module._MOUSE_DISABLE), transcript.rfind(driver_module._MOUSE_ENABLE))
                     return character
@@ -2641,7 +2642,7 @@ class PickerDriverTests(unittest.TestCase):
                 self.assertEqual(list(managed._typeahead_buffer), [])
                 fallback.assert_not_called()
                 self.assertEqual(termios.events.count("activate"), termios.events.count("restore"))
-                self.assertEqual("".join(output.records).count(driver_module._MOUSE_ENABLE), int(reviewing))
+                self.assertEqual("".join(output.records).count(driver_module._MOUSE_ENABLE), int(reviewing and cpr_available))
 
     def test_control_terminated_and_parameterized_sequences_are_discarded(self) -> None:
         state = initialize_picker(

@@ -2817,6 +2817,138 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             with anchored._input_latch.input_operation():
                 pass
 
+        from tests._external_view_support import _raw_driver, PortableTerminalScreen
+        from story_writing_agents.interactive_terminal._model import MessagePresentation
+        for height, response in ((60, "none"), (60, "valid"), (16, "none"), (16, "valid"), (16, "invalid"), (16, "late"), (16, "queued")):
+            managed, incoming, output, fallback, termios = _raw_driver("", width=100, height=height)
+            screen = PortableTerminalScreen(width=100, height=height)
+            screen.primary[:] = [[" "] * 100 for _ in range(height)]
+            screen.cursor = (0, 0); screen.history.clear()
+            phase = {"name": "main", "queried": False, "navigation_sent": False, "pointer_pending": False}
+            navigation = "\t\x1b[H\x1b[<65;100;1M\x1b[H\rx\r"
+            inspector_enters, review_enters, pointer_screens = [], [], []
+            original_write, original_read = output.write, RawTerminalDriver._read_character
+            original_inspector = RawTerminalDriver.run_nested_scroll_inspector
+            def visible():
+                return "\n".join("".join(row) for row in screen.primary)
+            def retained():
+                return tuple((entry.identity, entry.origin, tuple((frame.identity, frame.view.view_id, frame.view.buffer_lines)
+                             for frame in entry.frames)) for entry in managed._output_history.entries if entry.frames)
+            def messages():
+                return tuple((entry.identity, entry.origin, entry.component) for entry in managed._output_history.entries if entry.component is not None)
+            def assert_fitting(text):
+                previous = -1
+                for token in ("USER_A", "JSON_A", "A_ROW_1", "LEAD_A", "USER_B", "JSON_B", "B_ROW_1", "LEAD_B"):
+                    self.assertEqual(text.count(token), 1, (height, response, text))
+                    self.assertGreater(text.index(token), previous)
+                    previous = text.index(token)
+            def paint(value):
+                result = original_write(value)
+                screen.write(value.replace("\n", "\r\n"))
+                if "\x1b[6n" in value:
+                    phase["queried"] = True
+                    row, column = screen.cursor
+                    if response in {"valid", "invalid"}:
+                        reply = f"\x1b[{row + 1 if response == 'valid' else height + 1};{column + 1}R"
+                        incoming.characters[:0] = list(reply.encode())
+                    elif response == "queued":
+                        incoming.characters[:0] = list(navigation.encode())
+                        phase["navigation_sent"] = True
+                return result
+            output.write = paint
+            def inspect(owner, *args, **kwargs):
+                phase["name"] = "inspect_" + phase["turn"]
+                incoming.characters.extend(b"\r")
+                return original_inspector(owner, *args, **kwargs)
+            def checked_read(owner, **kwargs):
+                observation = kwargs.get("before_read") is not None
+                if not observation and phase["name"] == "review" and phase["queried"] and not phase["navigation_sent"]:
+                    row, column = screen.cursor
+                    late = f"\x1b[{row + 1};{column + 1}R" if response == "late" else ""
+                    incoming.characters.extend((late + navigation).encode())
+                    phase["navigation_sent"] = True
+                text, cursor = visible(), screen.cursor
+                if not observation and phase["pointer_pending"]:
+                    pointer_screens.append(text); phase["pointer_pending"] = False
+                    if response == "valid" and height == 16:
+                        self.assertNotEqual(pointer_screens[-1], pointer_screens[-2], (height, response))
+                    else:
+                        self.assertEqual(pointer_screens[-1], pointer_screens[-2], (height, response))
+                character = original_read(owner, **kwargs)
+                if observation:
+                    return character
+                if phase["name"].startswith("inspect_") and character == "\r":
+                    inspector_enters.append(phase["turn"])
+                    for token in ("USER_" + phase["turn"], "JSON_" + phase["turn"], phase["turn"] + "_ROW_1"):
+                        self.assertIn(token, text, (height, response, text))
+                    if phase["turn"] == "B" and height == 60:
+                        self.assertLess(text.index("USER_A"), text.index("JSON_A"))
+                        self.assertLess(text.index("JSON_A"), text.index("USER_B"))
+                    if phase["turn"] == "B":
+                        self.assertEqual(retained()[:1], first)
+                        self.assertEqual(messages()[:len(first_messages)], first_messages)
+                if phase["name"] == "review":
+                    if character == "d" and not phase["queried"] and height == 60:
+                        assert_fitting(text)
+                    if character == "M":
+                        pointer_screens.append(text); phase["pointer_pending"] = True
+                    if character == "\r":
+                        review_enters.append(text)
+                        if len(review_enters) == 1:
+                            for token in ("USER_A", "JSON_A", "A_ROW_1"):
+                                self.assertIn(token, text, (height, response, text))
+                            self.assertLess(text.index("USER_A"), text.index("JSON_A"))
+                    if character == "x":
+                        self.assertIn("main> draft", text)
+                        self.assertEqual(cursor[1], len("main> dra"))
+                return character
+            with (mock.patch.object(RawTerminalDriver, "_read_character", autospec=True, side_effect=checked_read),
+                  mock.patch.object(RawTerminalDriver, "run_nested_scroll_inspector", autospec=True, side_effect=inspect),
+                  mock.patch.object(_driver._select, "select", side_effect=lambda read, write, error, _timeout: (read if incoming.characters else (), write, error)),
+                  managed.input_session()):
+                for label in ("A", "B"):
+                    phase["name"], phase["turn"] = "main", label
+                    incoming.characters.extend(f"USER_{label}\r".encode())
+                    self.assertEqual(managed.read_main_line("main> ", lambda _: ()), "USER_" + label)
+                    user = Message("User", "USER_" + label, presentation=MessagePresentation.CHAT_BLOCK)
+                    with managed.submission("session", "conversation", user):
+                        lines = tuple(f"{label}_ROW_{row}" for row in range(1, 7))
+                        view = NestedScrollViewport("agent:" + label, "JSON_" + label, len(lines), 1, lines[:2], 2, True, buffer_lines=lines)
+                        state = MultiAgentScrollState((view,), 0)
+                        async def completed(): return label
+                        self.assertEqual(asyncio.run(managed.run_advisory_progress(
+                            completed(), lambda _frame: "Working...", scroll_state_provider=lambda _result: state,
+                            nested_scroll_transition=transition_nested_scroll, nested_scroll_renderer=render_nested_scroll_view,
+                            keep_frame=True)), label)
+                        managed.write_component(Message("Lead", "LEAD_" + label))
+                    if label == "A":
+                        first, first_messages = retained(), messages()
+                    else:
+                        self.assertEqual(retained()[:1], first)
+                        if height == 60:
+                            assert_fitting(visible())
+                            self.assertFalse(any("USER_A" in row for row in screen.history))
+                saved, saved_messages = retained(), messages()
+                self.assertEqual(len(saved), 2)
+                self.assertNotEqual(saved[0][1], saved[1][1])
+                self.assertEqual(tuple((origin, component.content) for _, origin, component in saved_messages),
+                                 ((saved[0][1], "USER_A"), (saved[0][1], "LEAD_A"), (saved[1][1], "USER_B"), (saved[1][1], "LEAD_B")))
+                phase["name"] = "review"
+                incoming.characters.extend(b"draft\x1b[D\x1b[D\x1b[17~")
+                self.assertEqual(managed.read_main_line("main> ", lambda _: ()), "draxft")
+                self.assertTrue(phase["queried"], (height, response))
+                self.assertEqual(inspector_enters, ["A", "B"])
+                self.assertEqual(len(review_enters), 2)
+                self.assertEqual(len(pointer_screens), 2)
+                self.assertEqual(retained(), saved)
+                self.assertEqual(messages(), saved_messages)
+                self.assertEqual(managed._history_state.entries, ("USER_A", "USER_B", "draxft"))
+                self.assertEqual(list(managed._typeahead_buffer), [])
+                self.assertEqual(incoming.characters, [])
+                self.assertFalse(screen.alternate)
+                fallback.assert_not_called()
+            self.assertEqual(termios.events.count("activate"), termios.events.count("restore"))
+
     def test_provide_scroll_state_on_success_sets_idle_state_and_does_not_record_error(self) -> None:
         """Verify success response passes ViewState.IDLE and does not record result message as an error."""
         from story_writing_agents.interactive_terminal._core import build_stream_terminal
