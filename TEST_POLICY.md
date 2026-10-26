@@ -18,7 +18,7 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
   budget file records a maximum for each canonical ID. Reducing a count or
   deleting an ID is allowed.
 - Keep the total nonblank, noncomment lines in `tests/test*.py` at or below
-  the post-cut baseline. Changes to an existing representative test can trade
+  the frozen source ceiling. Changes to an existing representative test can trade
   lines with deletions elsewhere, without expanding the overall test source.
 - Do not raise either time ceiling. The base-commit comparison rejects increases
   except the exact maintainer-approved #872 transition from the paired
@@ -33,7 +33,40 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
   gate. Otherwise, extend an existing representative case or replace a more
   expensive check while respecting the current inventory.
 
+## Maintainer-approved source allocation
+
+Issue #881 permits the exact source-ceiling transition from **142474 to 142604** under
+the maintainer's authorization to exceed the test budget when needed. Current-main
+changes consumed 431 counted lines of headroom while the provider-schema development
+harness still requires all its checks. The allocation covers the 107-line collision,
+19 added policy-regression lines, and four net policy-helper lines: 142600 raw lines
+plus four charged helper lines. No helper growth is excluded from this accounting.
+
+This source-only transition requires unchanged sequential and per-shard time ceilings
+and an identical complete subtest-cap mapping. It preserves the separate #872 time
+transition. Other source-ceiling increases remain rejected; test IDs, subtest caps,
+runtime behavior, and workflow limits are unchanged.
+
 ## Verification rule
+
+### Provider schema changes
+
+Changes to schema producers, native projection, or pattern syntax must check the final
+provider-facing schema with the development harness documented in
+[Native schema regex compatibility](docs/design/provider-regex-compatibility.md).
+Existing canonical schema-export tests enforce the documented provider subset and the
+supported regex grammar. This checker stays in development code; normal provider calls
+do not run a syntax scan. Count its helper source in the effective test-source budget.
+
+Before accepting such a change, also record an actual local call through the configured
+provider with the final runtime-generated schema. Retain the exact source revision,
+provider/CLI/model/settings, schema hash, native response or error, typed outcome, attempted
+call count and process cleanup. A fake response, smaller substitute schema, Python regex
+compilation, or an offline harness pass does not establish native acceptance. Preserve
+failed calls and incomplete outcomes as verification gaps. Keep credential-bearing checks
+outside the canonical deterministic suite and ordinary CI.
+
+### Canonical CI
 
 `pr-validation` runs the fast tier and all five full shards for any change under
 `src/`, `config/`, or `tests/`, or to the runtime dependency and test-policy

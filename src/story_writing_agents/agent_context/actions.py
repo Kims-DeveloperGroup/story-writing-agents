@@ -11,7 +11,8 @@ import json
 import re
 import unicodedata
 from ..structured_output_validation import (
-    unicode_category_exclusion,
+    SCHEMA_PYTHON_WHITESPACE,
+    unicode_scalar_classes,
     validation_failure,
     validation_call,
 )
@@ -286,8 +287,10 @@ def _strict_text(value: object, *, allow_empty: bool = False) -> str:
     return value
 
 
-_SEARCH_TEXT_EXCLUDED = unicode_category_exclusion(("Cc", "Cf", "Cs", "Co", "Cn"))
-_ARTIFACT_PREFIX_EXCLUDED = unicode_category_exclusion(("Cc", "Cf", "Cs")) + r"\\}\u2028\u2029"
+_SEARCH_CLASS, _SEARCH_NONBLANK_CLASS = unicode_scalar_classes(
+    ("Cc", "Cf", "Co", "Cn"), ("", SCHEMA_PYTHON_WHITESPACE))
+_ARTIFACT_PREFIX_CLASS, _ARTIFACT_PREFIX_NON_DOT = unicode_scalar_classes(
+    ("Cc", "Cf"), ("/\\}\u2028\u2029", "/\\}\u2028\u2029."))
 
 
 SEARCH_NORMALIZATION_REVISION = "NFKC+casefold+Unicode-whitespace:" + unicodedata.unidata_version
@@ -297,14 +300,14 @@ def search_text_rule(maximum_characters: int) -> dict[str, object]:
     if type(maximum_characters) is not int or maximum_characters < 1:
         raise ValueError("invalid normalized SEARCH bound")
     return {"type": "string", "minLength": 1,
-            "pattern": r"^(?=[\s\S]*" + nonblank_text_rule()["pattern"] + ")[^" + _SEARCH_TEXT_EXCLUDED + r"]+$(?![\s\S])",
+            "pattern": "^" + _SEARCH_CLASS + "*" + _SEARCH_NONBLANK_CLASS + _SEARCH_CLASS + r"*\z",
             "description": "Literal nonblank query; NFKC+casefold+Unicode whitespace folding and resulting character bound remain owner-qualified."}
 
 
 def artifact_directory_prefix_rule() -> dict[str, object]:
-    segment = "(?!\\.{1,2}/)[^/" + _ARTIFACT_PREFIX_EXCLUDED + "]+"
+    segment = r"(?:\.{0,2}" + _ARTIFACT_PREFIX_NON_DOT + r"|\.\.\.)" + _ARTIFACT_PREFIX_CLASS + "*"
     return {"type": "string",
-            "pattern": "^(?:core_documents/|manuscript/(?:" + segment + r"/)*)$(?![\s\S])",
+            "pattern": "^(?:core_documents/|manuscript/(?:" + segment + r"/)*)\z",
             "description": "Canonical core_documents/ or manuscript directory prefix; current physical-root and UTF-8 byte qualification remain required."}
 
 

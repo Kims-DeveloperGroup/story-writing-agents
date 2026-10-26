@@ -1,6 +1,7 @@
 """Workspace-scoped provider contextual execution verification."""
 
 from __future__ import annotations
+from tests.test_provider_schema_spec import check_schema
 
 import asyncio
 import hashlib
@@ -535,7 +536,9 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         with mock.patch.object(BoundCallContract, 'decode_response', side_effect=verified, autospec= True):
             result = await self.invoke(provider, request)
         self.assertEqual(verified_schemas, [call.schema for call in provider.calls])
-        for call in provider.calls: assert_schema_descriptions(self, call.schema)
+        for call in provider.calls:
+            assert_schema_descriptions(self, call.schema)
+            self.assertEqual(check_schema(call.schema), ())
         final_schema = provider.calls[-1].schema
         final_action = fixture_schema_node(final_schema, final_schema['properties']['agent_action'])
         members = [fixture_schema_node(final_schema, member) for member in final_action.get('anyOf', [final_action])]
