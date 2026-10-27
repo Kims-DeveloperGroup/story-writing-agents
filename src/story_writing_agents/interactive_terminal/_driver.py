@@ -173,6 +173,7 @@ class _LiveEditorState:
     history_layout: HistoryLayout = HistoryLayout()
     history_top: int = 1
     history_enabled: bool = False
+    history_review_active: bool = False
     history_mouse_active: bool = False
     history_anchored: bool = False
     history_line_count: int = 0
@@ -887,10 +888,10 @@ class RawTerminalDriver:
         def before_read() -> None:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError("cursor observation expired")
+                raise LiveInputIdle
             ready, _, _ = _select.select((configuration.input_descriptor,), (), (), remaining)
             if not ready:
-                raise TimeoutError("cursor observation expired")
+                raise LiveInputIdle
         try:
             self._write_live_text("\x1b[6n")
             while len(received) < _MAX_ESCAPE_SEQUENCE_LENGTH:
@@ -909,7 +910,7 @@ class RawTerminalDriver:
             # resurrect bytes consumed before that interruption in finally.
             received = ""
             raise
-        except (TimeoutError, EOFError, OSError, ValueError):
+        except (LiveInputIdle, TimeoutError, EOFError, OSError, ValueError):
             pass
         finally:
             if consumed_response is not None:
@@ -3393,9 +3394,9 @@ class RawTerminalDriver:
                 # the collaborator that already failed.
                 pass
 
-        if display_state.history_mouse_active:
+        if display_state.history_review_active or display_state.history_mouse_active:
             try:
-                self._set_history_mouse_mode(display_state, False)
+                self._set_history_review_mode(display_state, False)
             except BaseException as failure:
                 active_failure = active_failure or failure
         _restore_terminal_or_raise(configuration, active_failure)
@@ -4093,9 +4094,9 @@ class RawTerminalDriver:
                 # cannot use the same failed output collaborator.
                 pass
 
-        if display_state.history_mouse_active:
+        if display_state.history_review_active or display_state.history_mouse_active:
             try:
-                self._set_history_mouse_mode(display_state, False)
+                self._set_history_review_mode(display_state, False)
             except BaseException as failure:
                 active_failure = active_failure or failure
         _restore_terminal_or_raise(configuration, active_failure)
@@ -4163,28 +4164,28 @@ class RawTerminalDriver:
                         updated, outcome = ordinary_transition(state, event)
                         return updated, outcome or ControlOutcome(ControlOutcomeKind.INTERRUPT)
                     return state, None
-            if display_state.history_mouse_active:
+            if display_state.history_review_active:
                 width, height = self._text_viewer_geometry(configuration.width, bounded_height=False)
                 prompt_rows = display_state.history_line_count - len(display_state.history_layout.lines)
                 if width - 1 < 8 or min(height, _MAX_VIEWER_HEIGHT) <= prompt_rows + 1:
-                    self._set_history_mouse_mode(display_state, False)
+                    self._set_history_review_mode(display_state, False)
             if display_state.history_enabled and event.kind is KeyKind.F6:
-                if display_state.history_mouse_active:
-                    self._set_history_mouse_mode(display_state, False)
+                if display_state.history_review_active:
+                    self._set_history_review_mode(display_state, False)
                 else:
                     redraw(state)
-                    self._set_history_mouse_mode(display_state, True)
+                    self._set_history_review_mode(display_state, True)
                 redraw(state)
                 return state, None
-            if display_state.history_mouse_active:
+            if display_state.history_review_active:
                 if event.kind is KeyKind.ESCAPE:
-                    self._set_history_mouse_mode(display_state, False)
+                    self._set_history_review_mode(display_state, False)
                     redraw(state)
                     return state, None
                 focused = self._output_history.focused_id is not None
                 consumed = self._output_history.handle_key(event)
                 if event.kind in {KeyKind.ENTER, KeyKind.ESCAPE, KeyKind.TEXT}:
-                    self._set_history_mouse_mode(display_state, False)
+                    self._set_history_review_mode(display_state, False)
                 if consumed:
                     redraw(state)
                     return state, None
@@ -4266,7 +4267,7 @@ class RawTerminalDriver:
                         if display_state.history_mouse_active:
                             self._output_history.handle_pointer(local, display_state.history_layout)
                             if pointer.pressed and pointer.button == 0 and not (1 <= local.row <= len(display_state.history_layout.lines)):
-                                self._set_history_mouse_mode(display_state, False)
+                                self._set_history_review_mode(display_state, False)
                                 if self._timeline_inline_depth:
                                     self._output_history.reveal_latest()
                         display_state.rendered_cursor_row = self._redraw_live_display(
@@ -4405,7 +4406,7 @@ class RawTerminalDriver:
         if type(outcome) is ReferenceInputFailure:
             bindings.write_failure(outcome.kind)
             return state, None, True
-        self._set_history_mouse_mode(display_state, False)
+        self._set_history_review_mode(display_state, False)
         try:
             updated = self._run_live_reference_activation(
                 state, outcome, configuration, display_state, capabilities, bindings,
@@ -4816,11 +4817,12 @@ class RawTerminalDriver:
             cursor_row, cursor_column = len(control_lines) - 1, 0
         available = max(0, min(screen_height, _MAX_VIEWER_HEIGHT) - len(control_lines) - 1)
         layout = self._output_history.render(
-            capabilities, available, mouse_mode=display_state.history_mouse_active,
+            capabilities, available, mouse_mode=display_state.history_review_active,
+            pointer_mode=display_state.history_mouse_active,
         )
         display_state.history_layout = layout
         if not layout.lines:
-            self._set_history_mouse_mode(display_state, False)
+            self._set_history_review_mode(display_state, False)
         rows = [*layout.lines, *control_lines]
         cursor_row += len(layout.lines)
         self._render_inline_rows(rows, cursor_row, cursor_column)
@@ -4830,7 +4832,7 @@ class RawTerminalDriver:
             if origin is None and self._live_configuration is not None:
                 origin = self._observe_timeline_origin(self._live_configuration)
             if origin is None:
-                self._set_history_mouse_mode(display_state, False)
+                self._set_history_pointer_capture(display_state, False)
             else:
                 display_state.history_top = origin
         return cursor_row
@@ -4842,24 +4844,24 @@ class RawTerminalDriver:
         """Route explicit disclosure review before a picker can accept a choice."""
         if not display_state.history_enabled:
             return False
-        if display_state.history_mouse_active:
+        if display_state.history_review_active:
             width, height = self._text_viewer_geometry(configuration.width, bounded_height=False)
             control_rows = display_state.history_line_count - len(display_state.history_layout.lines)
             if width - 1 < 8 or min(height, _MAX_VIEWER_HEIGHT) <= control_rows + 1:
-                self._set_history_mouse_mode(display_state, False)
+                self._set_history_review_mode(display_state, False)
         if event.kind is KeyKind.F6:
-            if display_state.history_mouse_active:
-                self._set_history_mouse_mode(display_state, False)
+            if display_state.history_review_active:
+                self._set_history_review_mode(display_state, False)
                 self._output_history.reveal_latest()
             else:
                 redraw()
-                self._set_history_mouse_mode(display_state, True)
+                self._set_history_review_mode(display_state, True)
             redraw()
             return True
-        if display_state.history_mouse_active:
+        if display_state.history_review_active:
             consumed = self._output_history.handle_key(event)
             if event.kind in {KeyKind.ENTER, KeyKind.ESCAPE, KeyKind.TEXT}:
-                self._set_history_mouse_mode(display_state, False)
+                self._set_history_review_mode(display_state, False)
                 self._output_history.reveal_latest()
             if consumed:
                 redraw()
@@ -4877,8 +4879,9 @@ class RawTerminalDriver:
         local = replace(pointer, row=pointer.row - display_state.history_top + 1)
         if display_state.history_mouse_active:
             self._output_history.handle_pointer(local, display_state.history_layout)
-        if pointer.pressed and pointer.button == 0 and not (1 <= local.row <= len(display_state.history_layout.lines)):
-            self._set_history_mouse_mode(display_state, False)
+        if (display_state.history_mouse_active and pointer.pressed and pointer.button == 0
+                and not (1 <= local.row <= len(display_state.history_layout.lines))):
+            self._set_history_review_mode(display_state, False)
             self._output_history.reveal_latest()
         redraw()
 
@@ -4910,7 +4913,7 @@ class RawTerminalDriver:
         if display_state.history_enabled:
             _, height = self._text_viewer_geometry(observed.width, bounded_height=False)
             hint = ("Reviewing conversation • Enter/Esc: return to decision"
-                    if display_state.history_mouse_active else "F6: inspect conversation before deciding")
+                    if display_state.history_review_active else "F6: inspect conversation before deciding")
             hint_lines = _wrap_editor_text(hint, render_width)
             budget = self._inline_control_budget(render_capabilities, height)
             limit = state.picker.visible_choice_limit
@@ -4976,25 +4979,36 @@ class RawTerminalDriver:
             raise TypeError("input reader must return one character")
         return character
 
-    def _set_history_mouse_mode(self, state: _LiveEditorState, active: bool) -> None:
-        """Own explicit call-local mouse capture; native scrolling is the default."""
-        active = active and bool(state.history_layout.lines)
-        if active and self._timeline_origin is None:
-            configuration = self._live_configuration
-            active = configuration is not None and self._observe_timeline_origin(configuration) is not None
-        if active:
-            state.history_top = self._timeline_origin or 1
+    def _set_history_pointer_capture(self, state: _LiveEditorState, active: bool) -> None:
+        """Change reporting only when a trusted physical origin permits targeting."""
         if state.history_mouse_active == active:
             return
         if active:
             state.history_mouse_active = True
-            self._output_history.focus_visible(state.history_layout)
             self._write_live_text(_MOUSE_ENABLE)
         else:
             self._write_live_text(_MOUSE_DISABLE)
             state.history_mouse_active = False
+
+    def _set_history_review_mode(self, state: _LiveEditorState, active: bool) -> None:
+        """Enable keyboard review independently of optional pointer reporting."""
+        active = active and bool(state.history_layout.lines)
+        if not active:
+            self._set_history_pointer_capture(state, False)
+            state.history_review_active = False
             self._output_history.focused_id = None
             self._output_history.timeline_focused = False
+            return
+        entering = not state.history_review_active
+        state.history_review_active = True
+        if entering:
+            self._output_history.focus_visible(state.history_layout)
+        origin = self._timeline_origin
+        if origin is None and self._live_configuration is not None:
+            origin = self._observe_timeline_origin(self._live_configuration)
+        if origin is not None:
+            state.history_top = origin
+        self._set_history_pointer_capture(state, origin is not None)
 
     def _redraw_live_display(
         self,

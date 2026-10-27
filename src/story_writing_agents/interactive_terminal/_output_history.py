@@ -180,7 +180,7 @@ class ConversationTimeline:
                 return index
         raise ValueError("unknown timeline operation")
 
-    def render(self, capabilities: TerminalCapabilities, height: int, *, mouse_mode: bool = False) -> HistoryLayout:
+    def render(self, capabilities: TerminalCapabilities, height: int, *, mouse_mode: bool = False, pointer_mode: bool | None = None) -> HistoryLayout:
         """Concatenate real message/output rows; never pad between turn entries."""
         if height <= 0 or capabilities.width < 8 or not self._entries:
             self.focused_id = None
@@ -188,6 +188,7 @@ class ConversationTimeline:
             self._row_keys = ()
             self._visible_frame_ids = ()
             return HistoryLayout()
+        pointer_mode = mouse_mode if pointer_mode is None else pointer_mode
         frame_capabilities = replace(capabilities, width=capabilities.width - 1)
         rows: list[str] = []
         keys: list[tuple[int, int]] = []
@@ -211,7 +212,7 @@ class ConversationTimeline:
             base = len(rows)
             for frame in entry.frames:
                 start = base + len(entry_rows)
-                frame_rows = self._frame_rows(frame, frame_capabilities, mouse_mode)
+                frame_rows = self._frame_rows(frame, frame_capabilities, mouse_mode, pointer_mode)
                 entry_rows.extend(frame_rows)
                 rectangles.append((frame.identity, start, start + len(frame_rows)))
             rows.extend(" " + row for row in entry_rows)
@@ -254,7 +255,7 @@ class ConversationTimeline:
         visible_keys = self._row_keys[self._visible_offset:self._visible_offset + self._height]
         return any(entry_identity == identity for entry_identity, _ in visible_keys)
 
-    def _frame_rows(self, frame: OutputFrame, capabilities: TerminalCapabilities, mouse_mode: bool) -> list[str]:
+    def _frame_rows(self, frame: OutputFrame, capabilities: TerminalCapabilities, mouse_mode: bool, pointer_mode: bool) -> list[str]:
         view = frame.view
         visible_height = min(6, view.visible_height)
         buffer = view.buffer_lines or view.visible_lines
@@ -265,7 +266,9 @@ class ConversationTimeline:
                             if view.buffer_lines else view.visible_lines[:visible_height], is_focused=focused)
         rows = render_nested_scroll_view(MultiAgentScrollState((projected,), collapsed=frame.collapsed), capabilities).text.split("\n")
         if not frame.collapsed:
-            hint = ("Focused • Tab: timeline • Enter/Esc: input" if focused else "Click: focus • Tab: timeline") if mouse_mode else "F6: mouse mode • wheel: terminal scroll"
+            hint = ("Focused • Tab: timeline • Enter/Esc: input" if focused else "Click: focus • Tab: timeline") if mouse_mode else "F6: review • wheel: terminal scroll"
+            if mouse_mode and not pointer_mode and not focused:
+                hint = "Keyboard review • Tab: timeline • Enter/Esc: input"
             if mouse_mode and self.timeline_focused:
                 hint = "Timeline focused • Tab: JSON • Enter/Esc: input"
             footer = Box(max(1, capabilities.width - 1)).bottom(hint)

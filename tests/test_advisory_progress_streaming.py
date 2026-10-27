@@ -1114,7 +1114,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertEqual(len({frame.identity for frame in history.frames}), 2)
         self.assertEqual(view.start_line, 1)
         layout = history.render(caps, 30)
-        self.assertIn("F6: mouse mode", "\n".join(layout.lines))
+        self.assertIn("F6: review • wheel: terminal scroll", "\n".join(layout.lines))
         first, second = layout.hits
         self.assertFalse(history.handle_pointer(PointerEvent(0, 2, first.top, False), layout))
         history.handle_pointer(PointerEvent(0, 2, first.top, True), layout)
@@ -2720,102 +2720,113 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             self.assertTrue(inspector_called[0]["keep_frame"])
 
     def test_nested_scroll_inspector_focus_cycling_and_frame_retention_on_success(self) -> None:
-        """Verify inspector cycles focus across viewports on Tab and retains frame with newline when keep_frame=True."""
-        out = io.StringIO()
-        driver = RawTerminalDriver(lambda _p: "", io.StringIO(), out,
-                                   lambda s, e: (s, None), lambda s, e, h: (s, None), lambda h, t: h)
-        v1 = NestedScrollViewport('a1:1', 'Agent 1', 3, 1, ('agent 1 line',), 1, True)
-        v2 = NestedScrollViewport('a2:1', 'Agent 2', 3, 1, ('agent 2 line',), 1, False)
-        out.fileno = lambda: 8
-        driver._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=40, lines=250))
-        self.assertEqual(driver._text_viewer_geometry(80), (40, 200))
-        self.assertEqual(driver._text_viewer_geometry(80, bounded_height=False), (40, 250))
-        initial_state = MultiAgentScrollState((v1, v2), 0)
-
-        fake_config = mock.MagicMock()
-        fake_caps = _ansi_terminal_capabilities()
-        keys = iter("\t\x1b[17~\x1b[<0;5;248M\x1bxq")
-        def read_character(*_args, **_kwargs):
-            character = next(keys)
-            if character == "\t":
-                self.assertNotIn(_driver._MOUSE_ENABLE, out.getvalue())
-            if character == "q":
-                self.assertGreater(out.getvalue().rfind(_driver._MOUSE_DISABLE), out.getvalue().rfind(_driver._MOUSE_ENABLE))
-            return character
-
-        # User presses Tab (cycle focus to Agent 2) then q (exit inspector)
-        with (
-            mock.patch.object(RawTerminalDriver, "_observe_input_capabilities", return_value=fake_caps),
-            mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(fake_caps, fake_config)),
-            mock.patch("story_writing_agents.interactive_terminal._driver._activate_terminal"),
-            mock.patch("story_writing_agents.interactive_terminal._driver._restore_terminal_or_raise"),
-            mock.patch.object(RawTerminalDriver, "_read_character", side_effect=read_character),
-            mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True),
-            mock.patch.object(RawTerminalDriver, "_query_cursor_row", return_value=250),
-            mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as mock_clear,
-        ):
-            final_state = driver.run_nested_scroll_inspector(
-                initial_state,
-                transition_nested_scroll,
-                render_nested_scroll_view,
-                keep_frame=True,
-            )
-
-        # Mouse coordinates must use physical row 248, not the capped viewer height.
-        self.assertEqual(final_state.focused_index, 0)
-        self.assertTrue(final_state.views[0].is_focused)
-        self.assertFalse(final_state.views[1].is_focused)
-
-        # Clear before Tab/pointer redraws, but NOT upon exit because keep_frame=True
-        self.assertGreaterEqual(mock_clear.call_count, 3)
-        self.assertTrue(out.getvalue().endswith("\r\n"))
-        self.assertNotIn("\x1b[250;1H", out.getvalue())
-        self.assertEqual(list(driver._typeahead_buffer), [])
+        """Retain completed turns and review them with optional pointer geometry."""
         from dataclasses import replace
-        from story_writing_agents.interactive_terminal._model import Message
+        from tests._external_view_support import recording_driver
+        from story_writing_agents.interactive_terminal._model import Message, MessagePresentation
+        views = tuple(NestedScrollViewport(f"a{i}:1", f"Agent {i}", 3, 1, (f"agent {i} line",), 1, i == 1) for i in (1, 2))
+        with recording_driver("\t\x1b[17~\x1b[<0;5;248M\x1bxq", width=40, height=250) as rig:
+            rig.screen.cursor = (249, 0)
+            self.assertEqual(rig.driver._text_viewer_geometry(80), (40, 200))
+            self.assertEqual(rig.driver._text_viewer_geometry(80, bounded_height=False), (40, 250))
+            with mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as clear:
+                final = rig.driver.run_nested_scroll_inspector(MultiAgentScrollState(views, 0), transition_nested_scroll, render_nested_scroll_view, keep_frame=True)
+            self.assertEqual((final.focused_index, tuple(view.is_focused for view in final.views)), (0, (True, False)))
+            self.assertGreaterEqual(clear.call_count, 3)
+            self.assertFalse(next(read.mouse for read in rig.reads if read.character == "\t"))
+            self.assertFalse(next(read.mouse for read in rig.reads if read.character == "q"))
+            self.assertTrue("".join(rig.output.records).endswith("\r\n"))
+            self.assertNotIn("\x1b[250;1H", "".join(rig.output.records))
+            self.assertEqual(list(rig.driver._typeahead_buffer), [])
+            self.assertEqual(rig.termios.attributes, rig.termios.original)
         for view_state in (ViewState.IDLE, ViewState.ERROR):
-            output = io.StringIO()
-            anchored = RawTerminalDriver(lambda _p: "", io.StringIO(), output,
-                                         transition_line_input, transition_main_input, append_main_input_history)
-            output.fileno = lambda: 8
-            anchored._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=40, lines=24))
-            anchored._timeline_enabled = True
-            timeline = anchored._output_history
-            older = timeline.begin_submission("session", "conversation", Message("User", "OLDER_INPUT"))
-            timeline.append_component(Message("Lead", "\n".join(f"OLDER_ROW_{row}" for row in range(40))))
-            timeline.end_submission(older)
-            timeline.focus_visible(timeline.render(replace(fake_caps, width=39), 23))
-            timeline.handle_key(KeyEvent(KeyKind.HOME)); timeline.handle_key(KeyEvent(KeyKind.ENTER))
-            before = timeline.render(replace(fake_caps, width=39), 23).lines
-            origin = timeline.begin_submission("session", "conversation", Message("User", "NEW_INPUT"))
-            retained = MultiAgentScrollState((replace(v1, state=view_state),), 0)
-            anchored._typeahead_buffer.extend("queued")
-            async def completed():
-                return view_state
-            with (mock.patch.object(RawTerminalDriver, "capabilities", return_value=fake_caps),
-                  mock.patch.object(RawTerminalDriver, "_observe_input_capabilities", return_value=fake_caps),
-                  mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(fake_caps, fake_config)),
-                  mock.patch.object(_driver, "_activate_terminal"),
-                  mock.patch.object(_driver, "_restore_terminal_or_raise") as restore,
-                  mock.patch.object(RawTerminalDriver, "_read_character", side_effect=AssertionError("offscreen inspector read input")) as read):
-                result = asyncio.run(anchored.run_advisory_progress(
-                    completed(), lambda _f: "Working...", scroll_state_provider=lambda _result: retained,
-                    is_failure=lambda value: value is ViewState.ERROR, nested_scroll_transition=transition_nested_scroll,
-                    nested_scroll_renderer=render_nested_scroll_view, keep_frame=True))
-            self.assertIs(result, view_state)
-            read.assert_not_called(); restore.assert_called_once_with(fake_config, None)
-            self.assertEqual(timeline.render(replace(fake_caps, width=39), 23).lines, before)
-            slots = tuple(entry for entry in timeline.entries if entry.frames)
-            self.assertEqual(len(slots), 1); self.assertEqual(slots[0].origin, origin)
-            self.assertEqual(len(slots[0].frames), 1); self.assertIs(slots[0].frames[0].view.state, view_state)
-            self.assertIsNone(slots[0].preview); self.assertEqual(slots[0].lines, ())
-            self.assertFalse(timeline.entry_visible(slots[0].identity))
-            self.assertIsNone(anchored._timeline_operation); self.assertFalse(anchored._progress_active)
-            self.assertEqual(anchored._progress_rows, 0); self.assertEqual(list(anchored._typeahead_buffer), list("queued"))
-            self.assertNotIn(_driver._MOUSE_ENABLE, output.getvalue())
-            timeline.end_submission(origin)
-            with anchored._input_latch.input_operation():
-                pass
+            with recording_driver(width=40) as rig:
+                driver, timeline = rig.driver, rig.driver._output_history
+                driver._timeline_enabled = True
+                older = timeline.begin_submission("session", "conversation", Message("User", "OLDER_INPUT"))
+                timeline.append_component(Message("Lead", "\n".join(f"OLDER_ROW_{row}" for row in range(40))))
+                timeline.end_submission(older)
+                caps = replace(driver.semantic_capabilities(), width=39)
+                timeline.focus_visible(timeline.render(caps, 23))
+                timeline.handle_key(KeyEvent(KeyKind.HOME))
+                timeline.handle_key(KeyEvent(KeyKind.ENTER))
+                before = timeline.render(caps, 23).lines
+                origin = timeline.begin_submission("session", "conversation", Message("User", "NEW_INPUT"))
+                driver._typeahead_buffer.extend("queued")
+                async def completed(): return view_state
+                state = MultiAgentScrollState((replace(views[0], state=view_state),), 0)
+                result = asyncio.run(driver.run_advisory_progress(completed(), lambda _: "Working...", scroll_state_provider=lambda _: state,
+                    is_failure=lambda value: value is ViewState.ERROR, nested_scroll_transition=transition_nested_scroll, nested_scroll_renderer=render_nested_scroll_view, keep_frame=True))
+                self.assertIs(result, view_state)
+                self.assertEqual(rig.attempts, 0)
+                self.assertEqual(rig.termios.events.count("restore"), 1)
+                self.assertEqual(timeline.render(caps, 23).lines, before)
+                slot, = (entry for entry in timeline.entries if entry.frames)
+                self.assertEqual((slot.origin, len(slot.frames), slot.frames[0].view.state, slot.preview, slot.lines), (origin, 1, view_state, None, ()))
+                self.assertFalse(timeline.entry_visible(slot.identity))
+                self.assertEqual((driver._timeline_operation, driver._progress_active, driver._progress_rows), (None, False, 0))
+                self.assertEqual(list(driver._typeahead_buffer), list("queued"))
+                self.assertFalse(rig.mouse)
+                timeline.end_submission(origin)
+                with driver._input_latch.input_operation():
+                    pass
+        expected = ["USER_A", "JSON_A", "A_ROW_1", "LEAD_A", "USER_B", "JSON_B", "B_ROW_1", "LEAD_B"]
+        tokens = lambda text: re.findall(r"USER_[AB]|JSON_[AB]|[AB]_ROW_1|LEAD_[AB]", text)
+        for height, response in ((60, "none"), (60, "valid"), (16, "none"), (16, "valid"), (16, "invalid"), (16, "late"), (16, "queued")):
+            with recording_driver(height=height, response=response) as rig, rig.driver.input_session():
+                driver, timeline = rig.driver, rig.driver._output_history
+                def snapshot():
+                    return tuple((e.identity, e.origin, e.component, tuple((f.identity, f.view.view_id, f.view.buffer_lines) for f in e.frames)) for e in timeline.entries)
+                rig.observe = snapshot
+                for label in "AB":
+                    rig.phase = "main"
+                    rig.incoming.characters.extend(f"USER_{label}\r".encode())
+                    self.assertEqual(driver.read_main_line("main> ", lambda _: ()), "USER_" + label)
+                    with driver.submission("session", "conversation", Message("User", "USER_" + label, presentation=MessagePresentation.CHAT_BLOCK)):
+                        lines = tuple(f"{label}_ROW_{row}" for row in range(1, 7))
+                        state = MultiAgentScrollState((NestedScrollViewport("agent:" + label, "JSON_" + label, 6, 1, lines[:2], 2, True, buffer_lines=lines),), 0)
+                        def final_state(_):
+                            rig.phase = "inspect_" + label
+                            rig.incoming.characters.extend(b"\r")
+                            return state
+                        async def completed(): return label
+                        self.assertEqual(asyncio.run(driver.run_advisory_progress(completed(), lambda _: "Working...", scroll_state_provider=final_state,
+                            nested_scroll_transition=transition_nested_scroll, nested_scroll_renderer=render_nested_scroll_view, keep_frame=True)), label)
+                        driver.write_component(Message("Lead", "LEAD_" + label))
+                    if label == "A":
+                        first = snapshot()
+                saved = snapshot()
+                self.assertEqual([entry[1] for entry in saved], [saved[0][1]] * 3 + [saved[3][1]] * 3)
+                self.assertNotEqual(saved[0][1], saved[3][1])
+                navigation = "\t\x1b[H\x1b[<65;100;1M\x1b[H\rx\r"
+                rig.phase = "review"
+                rig.query_input, rig.after_query = (navigation, "") if response == "queued" else ("", navigation)
+                rig.incoming.characters.extend(b"draft\x1b[D\x1b[D\x1b[17~")
+                self.assertEqual(driver.read_main_line("main> ", lambda _: ()), "draxft")
+                inspections = [read for read in rig.reads if read.phase.startswith("inspect_") and read.character == "\r"]
+                self.assertEqual([read.phase for read in inspections], ["inspect_A", "inspect_B"])
+                self.assertEqual(inspections[1].data[:len(first)], first)
+                for label, read in zip("AB", inspections):
+                    self.assertEqual(re.findall(f"USER_{label}|JSON_{label}|{label}_ROW_1", read.text), ["USER_" + label, "JSON_" + label, label + "_ROW_1"])
+                review = [read for read in rig.reads if read.phase == "review"]
+                enters = [read for read in review if read.character == "\r"]
+                self.assertEqual(len(enters), 2)
+                self.assertEqual(re.findall(r"USER_A|JSON_A|A_ROW_1", enters[0].text), ["USER_A", "JSON_A", "A_ROW_1"])
+                if height == 60:
+                    self.assertEqual(tokens(inspections[1].text), expected[:-1])
+                    self.assertEqual(tokens(next(read.text for read in review if read.character == "d")), expected)
+                    self.assertFalse(any("USER_A" in row for row in rig.screen.history))
+                pointer = next(index for index, read in enumerate(review) if read.character == "M")
+                self.assertEqual(review[pointer + 1].text != review[pointer].text, response == "valid" and height == 16)
+                typed = next(read for read in review if read.character == "x")
+                self.assertIn("main> draft", typed.text)
+                self.assertEqual(typed.cursor[1], len("main> dra"))
+                self.assertEqual(snapshot(), saved)
+                self.assertEqual(driver._history_state.entries, ("USER_A", "USER_B", "draxft"))
+                self.assertEqual((list(driver._typeahead_buffer), rig.incoming.characters), ([], []))
+                self.assertFalse(rig.screen.alternate)
+                rig.fallback.assert_not_called()
+            self.assertEqual((rig.termios.events.count("activate"), rig.termios.attributes), (rig.termios.events.count("restore"), rig.termios.original))
 
     def test_provide_scroll_state_on_success_sets_idle_state_and_does_not_record_error(self) -> None:
         """Verify success response passes ViewState.IDLE and does not record result message as an error."""
