@@ -223,7 +223,7 @@ def _group_result(call, value):
 
 def _group_request(request):
     from story_writing_agents.lead_schema_groups import LeadGroupRequestBasis
-    factory = replace(request.result_contract, schema_group_protocol=True)
+    factory = replace(request.result_contract, stage="lead.front", schema_group_protocol=True)
     scope = factory.constraints.scope
     basis = LeadGroupRequestBasis(request.operation_id, request.result_correlation_id,
                                  f"trusted-host:{scope.task_id}@{scope.task_revision}")
