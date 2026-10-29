@@ -670,7 +670,7 @@ def _bound_rejection_envelope(call, value):
     return indexed_response({'action_type': 'submit_result', 'task_result': value},
                             outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
 
-def _visible_outcome(kind: str, message: str = "Visible lead response.", *, recommended_action=None):
+def _visible_outcome(kind: str, message: str = "Visible lead response.", *, recommended_action=None, grouped=False):
     def respond(
         call: ContextProviderCallRequest,
         _provider: _LeadContextProvider,
@@ -685,6 +685,9 @@ def _visible_outcome(kind: str, message: str = "Visible lead response.", *, reco
                           'target_artifact_paths': [], 'specialist_domains': [],
                           'contributions': [], 'dependency_slots': [], 'task_reference': {
                               'task_id': task['task_id'], 'task_revision': task['task_revision']}})}
+            if grouped:
+                from tests.test_agent_context_execution import _group_result
+                return _group_result(call, lead_fixture_result(native))
             response_type = {'answer': 'answer', 'question': 'clarification_question', 'critique': 'critique'}[kind]
             outer, inner = offered_fixture_bindings(
                 call, action_type='submit_result', response_type=response_type, family=0)
@@ -4578,6 +4581,87 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertTrue(any('$.agent_action.task_result.response_details.task_scope.slots[1].id' in item and
             'dependency slot IDs must be unique within one authoring scope' in item for item in original.validation_details))
 
+        from dataclasses import replace
+        from unittest import mock
+        from story_writing_agents.agent_context.service import AgentContextService
+        from tests.test_agent_context_execution import _group_control
+        original_factory = orchestrator_module._lead_call_contract_factory
+        def grouped_factory(*args, **kwargs):
+            return replace(original_factory(*args, **kwargs), schema_group_protocol=True)
+        def invalid_selection(call, provider):
+            packet = json.loads(_group_control("answer.workflow")(call, provider))
+            packet["agent_action"]["task_result"]["group_id"] = "not-in-current-catalog"
+            return json.dumps(packet)
+        def invalid_generation(call, provider):
+            packet = json.loads(_visible_outcome("answer", grouped=True)(call, provider))
+            del packet["agent_action"]["task_result"]["response_text"]
+            return json.dumps(packet)
+        original_invoke = AgentContextService.invoke
+        invocations, context_results = [], []
+        async def capture_grouped(service, request, provider, **kwargs):
+            invocations.append(request)
+            result = await original_invoke(service, request, provider, **kwargs)
+            context_results.append(result)
+            return result
+        for label, responses, failed_index in (
+                ("select", (invalid_selection, _group_control("answer.workflow"), _visible_outcome("answer", grouped=True)), 0),
+                ("generate", (_group_control("answer.workflow"), invalid_generation, _visible_outcome("answer", grouped=True)), 1)):
+            conversation = self.conversation("Grouped repair " + label)
+            start = len(self.backend.calls)
+            self.backend.enqueue(*responses)
+            with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory), \
+                    mock.patch.object(AgentContextService, "invoke", capture_grouped):
+                repaired_group = await self.runtime.lead_turn(self.session_id, conversation, "Explain group workflow.")
+            calls = self.backend.calls[start:]
+            self.assertIs(repaired_group.kind, LeadOutcomeKind.ANSWER)
+            self.assertEqual(len(calls), 3)
+            failed, correction = calls[failed_index].contract, calls[failed_index + 1].contract
+            self.assertEqual(correction.phase, "repair")
+            self.assertEqual(correction.logical_origin_call_id, failed.offers.call_id)
+            self.assertEqual(correction.eligibility_offers, failed.eligibility_offers)
+            self.assertEqual(tuple(member.owner.declare_rules().canonical_bytes for member in correction.semantic_index.contracts),
+                             tuple(member.owner.declare_rules().canonical_bytes for member in failed.semantic_index.contracts))
+            self.assertEqual(len(context_results[-1].group_state.workflow.history), 1)
+        real_request = invocations[-1]
+        constraints = real_request.result_contract.constraints
+        self.assertTrue(constraints.task_revisions)
+        revised_scope = None if constraints.scope is None else replace(
+            constraints.scope, task_revision=constraints.scope.task_revision + 1)
+        revised = replace(constraints, scope=revised_scope,
+                          task_revisions=tuple((task, revision + 1) for task, revision in constraints.task_revisions))
+        revised_factory = replace(real_request.result_contract, constraints=revised)
+        revised_request = replace(real_request, result_contract=revised_factory)
+        minted = self.runtime._lead_group_invocation_state(
+            revised_request, original_text="Explain group workflow.", constraints=revised)
+        self.assertNotEqual(minted.request_basis.scope_ref, real_request.group_state.request_basis.scope_ref)
+        self.assertIs(minted.workflow, real_request.group_state.workflow)
+        self.assertIs(minted.prepared_compilation, real_request.group_state.prepared_compilation)
+        with self.assertRaises(ValueError):
+            failed.factory.for_offer(failed.offers, failed.repair_lineage(), request_basis=minted.request_basis)
+        reading = self.conversation("Context during grouped repair")
+        self.backend.enqueue(_visible_outcome("answer", "A prior lead response for grouped repair."))
+        await self.runtime.lead_turn(self.session_id, reading, "Seed group repair context.")
+        retained = []
+        def reject_with_snapshot(call, provider):
+            selected = call.contract.group_workflow.active_selection
+            retained.append((call.contract, selected, selected.as_object(), call.contract.prepared_compilation))
+            return invalid_generation(call, provider)
+        start = len(self.backend.calls)
+        self.backend.enqueue(_group_control("answer.workflow"), reject_with_snapshot,
+                             _search_history, _read_history_hit, _visible_outcome("answer", grouped=True))
+        with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory):
+            refreshed = await self.runtime.lead_turn(self.session_id, reading, "Explain group repair context.")
+        calls = self.backend.calls[start:]
+        failed, selection, snapshot, old_plan = retained[0]
+        self.assertIs(refreshed.kind, LeadOutcomeKind.ANSWER)
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(calls[2].contract.phase, "repair")
+        self.assertEqual(calls[2].contract.eligibility_offers, failed.eligibility_offers)
+        self.assertIs(calls[-1].contract.group_workflow.active_selection, selection)
+        self.assertEqual(selection.as_object(), snapshot)
+        self.assertIsNot(calls[-1].contract.prepared_compilation, old_plan)
+        self.assertTrue(calls[-1].contract.offers.completed_read_facts)
+
     async def test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing(
         self,
     ) -> None:
@@ -6147,6 +6231,60 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertTrue(any("Original response" in message for message in messages))
         self.assertFalse(any(type(event.payload) is CollaborationProposal for event in history))
         self.assertNotIn(private, repr(history))
+
+        from dataclasses import replace
+        from story_writing_agents.agent_context.service import AgentContextService, context_provider_failure_facts
+        from story_writing_agents.lead_schema_groups import LeadGroupPhase
+        from tests.test_agent_context_execution import _group_control
+        original_factory = orchestrator_module._lead_call_contract_factory
+        def grouped_factory(*args, **kwargs):
+            return replace(original_factory(*args, **kwargs), schema_group_protocol=True)
+        private_group = "PRIVATE_GROUP_REJECTION_한🙂"
+        def rejected_select(call, provider):
+            packet = json.loads(_group_control("answer.workflow")(call, provider))
+            packet["agent_action"]["task_result"]["group_id"] = private_group
+            return json.dumps(packet)
+        def rejected_generate(call, provider):
+            packet = json.loads(_visible_outcome("answer", grouped=True)(call, provider))
+            packet["agent_action"]["task_result"]["unexpected"] = private_group
+            return json.dumps(packet)
+        original_invoke = AgentContextService.invoke
+        stopped_states = []
+        async def retain_failure(service, request, provider, **kwargs):
+            try:
+                return await original_invoke(service, request, provider, **kwargs)
+            except BaseException as failure:
+                facts = context_provider_failure_facts(failure)
+                if facts is not None and facts.group_state is not None:
+                    stopped_states.append(facts.group_state)
+                raise
+        for label, responses, expected_calls, history_count, limit in (
+                ("select", (rejected_select,), 1, 0, 2),
+                ("select-frozen-context", (rejected_select,), 1, 0, 3),
+                ("generate", (_group_control("answer.workflow"), rejected_generate), 2, 1, 2)):
+            conversation = self.conversation("Grouped exhausted correction " + label)
+            start = len(self.backend.calls)
+            stopped_states.clear()
+            self.backend.enqueue(*responses)
+            with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory), \
+                    mock.patch.object(AgentContextService, "invoke", retain_failure), \
+                    mock.patch.object(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", limit):
+                exhausted = await self.runtime.lead_turn(self.session_id, conversation, "Explain bounded group workflow.")
+            self.assertIs(exhausted.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+            self.assertEqual(len(self.backend.calls) - start, expected_calls)
+            self.assertTrue(exhausted.validation_details)
+            self.assertTrue(exhausted.validation_details[0].startswith("Original"))
+            self.assertNotIn(private_group, repr(exhausted.validation_details))
+            self.assertTrue(any(state.workflow.phase is LeadGroupPhase.STOP and
+                                len(state.workflow.history) == history_count for state in stopped_states))
+            if label == "select-frozen-context":
+                self.assertTrue(any(state.workflow.stop_reason == "frozen_contract_budget_exhausted"
+                                    for state in stopped_states))
+            history = self.history(conversation)
+            self.assertEqual(project_collaboration_history(history).physical_calls_spent, expected_calls)
+            self.assertFalse(any(type(event.payload) is CollaborationProposal for event in history))
+            self.assertTrue(all(value is None for value in (exhausted.proposal, exhausted.recommendation_request,
+                exhausted.artifact_application_request, exhausted.story_commit_request)))
 
     async def test_restart_after_completed_execution_accepts_a_new_lead_turn(self) -> None:
         from tests.recommendation_fixture import task_assessment
