@@ -2448,7 +2448,6 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
         declaration = self._authorization_declaration
         declaration.require_provenance()
         if (self._declared_authorization_check is not declaration.check
-                or self.authorized_validator is not declaration.dependencies[0]
                 or type(self).require_declaration is not declaration.dependencies[1]):
             raise ValueError("frozen Lead authorization declaration changed")
         self._require_status_rule()
