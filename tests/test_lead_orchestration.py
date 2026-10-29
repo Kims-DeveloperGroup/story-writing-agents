@@ -4608,7 +4608,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 ("generate", (_group_control("answer.workflow"), invalid_generation, _visible_outcome("answer", grouped=True)), 1)):
             conversation = self.conversation("Grouped repair " + label)
             start = len(self.backend.calls)
-            self.backend.enqueue(*responses)
+            self.backend.enqueue(*responses[:failed_index + 1])
+            self.backend.enqueue(*responses[failed_index + 1:])
             with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory), \
                     mock.patch.object(AgentContextService, "invoke", capture_grouped):
                 repaired_group = await self.runtime.lead_turn(self.session_id, conversation, "Explain group workflow.")
@@ -4647,8 +4648,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             retained.append((call.contract, selected, selected.as_object(), call.contract.prepared_compilation))
             return invalid_generation(call, provider)
         start = len(self.backend.calls)
-        self.backend.enqueue(_group_control("answer.workflow"), reject_with_snapshot,
-                             _search_history, _read_history_hit, _visible_outcome("answer", grouped=True))
+        self.backend.enqueue(_group_control("answer.workflow"), reject_with_snapshot)
+        self.backend.enqueue(_search_history, _read_history_hit, _visible_outcome("answer", grouped=True))
         with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory):
             refreshed = await self.runtime.lead_turn(self.session_id, reading, "Explain group repair context.")
         calls = self.backend.calls[start:]
@@ -6249,14 +6250,14 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             packet["agent_action"]["task_result"]["unexpected"] = private_group
             return json.dumps(packet)
         original_invoke = AgentContextService.invoke
-        stopped_states = []
+        failures = []
         async def retain_failure(service, request, provider, **kwargs):
             try:
                 return await original_invoke(service, request, provider, **kwargs)
             except BaseException as failure:
                 facts = context_provider_failure_facts(failure)
                 if facts is not None and facts.group_state is not None:
-                    stopped_states.append(facts.group_state)
+                    failures.append(failure)
                 raise
         for label, responses, expected_calls, history_count, limit in (
                 ("select", (rejected_select,), 1, 0, 2),
@@ -6264,8 +6265,10 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 ("generate", (_group_control("answer.workflow"), rejected_generate), 2, 1, 2)):
             conversation = self.conversation("Grouped exhausted correction " + label)
             start = len(self.backend.calls)
-            stopped_states.clear()
+            failures.clear()
             self.backend.enqueue(*responses)
+            if label == "select-frozen-context":
+                self.backend.enqueue()
             with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory), \
                     mock.patch.object(AgentContextService, "invoke", retain_failure), \
                     mock.patch.object(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", limit):
@@ -6275,6 +6278,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             self.assertTrue(exhausted.validation_details)
             self.assertTrue(exhausted.validation_details[0].startswith("Original"))
             self.assertNotIn(private_group, repr(exhausted.validation_details))
+            stopped_states = tuple(context_provider_failure_facts(failure).group_state
+                                   for failure in failures)
             self.assertTrue(any(state.workflow.phase is LeadGroupPhase.STOP and
                                 len(state.workflow.history) == history_count for state in stopped_states))
             if label == "select-frozen-context":

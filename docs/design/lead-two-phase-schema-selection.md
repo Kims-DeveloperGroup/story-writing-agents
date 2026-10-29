@@ -186,7 +186,7 @@ SELECT→GENERATE의 두 번, 유효한 직접 재선택은 SELECT→GENERATE(�
 발행하거나 완료 checkpoint를 만들지 않고, 실제 업무 결과에서만 기존 승인 경계를 지난다.
 READ 뒤에도 원래 선택 기록을 보존하고 현재 그룹의 유효성과 fresh binding을 다시 확인한다.
 
-실행 연결은 구현했으며 실제 회귀 검증은 아직 수행 전이다. #895만으로 사용자 프로필을 활성화하지 않으며,
+실행 연결은 구현했고 첫 회귀의 fixture·API 기대값 오류를 보완해 재검증한다. #895만으로 사용자 프로필을 활성화하지 않으며,
 #896의 전송·짧은 현재 Phase 안내가 모두 갖춰질 때 안전하게 연결한다. 부모의
 59개 조건 전체와 원래 입력의 종단 검증은 계속 후속 작업이다.
 
@@ -230,9 +230,23 @@ SELECT 교정과 GENERATE를 마칠 수 있다. 전체 허용량이 2회라면 �
 그 경로를 시작하지 않고 원래 거절을 보존한다. 최초 호출 한도는 그대로이며,
 유효한 마지막 재선택으로 STOP한 흐름을 이 교정 예약으로 다시 시작하지 않는다.
 
-#895의 테스트 배정은 raw143362와 청구 helper8을 합친143370이다. 기존 대표 사례를
-보존하며468행, 정책 회귀13행과 helper2행을 추가한 정확한 배정이다. ID2527·전체
+#895의 테스트 배정은 raw143367와 청구 helper8을 합친143375이다. 기존 대표 사례를
+보존하며473행, 정책 회귀13행과 helper2행을 추가한 정확한 배정이다. ID2527·전체
 subTest mapping·18000/3600초와 Whole Front 사례는 유지한다.
+
+### #895 첫 CI와 fixture 보완
+
+`d55e0b34`의 [전체 CI](https://github.com/Kims-DeveloperGroup/story-writing-agents/actions/runs/40884771932)는
+Fast10개와 Whole Front를 통과했다. Whole Front는1153.550초였으며 timeout은 없었다.
+정규1∼4 shard는 새 fixture의 stage 오류6개, 교정 script·불변 상태 관측 오류2개,
+새 `group_state` 필드가 빠진 API 기대값2개로 실패했다. 모든 보고서는 실제 실행·환경·
+정리를 확인했으며 이 실행을 전체 통과 증거로 쓰지 않는다.
+
+[Codex R1의 clean receipt](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/900#issuecomment-6498575068)는
+검토 commit `d55e0b3435`와 일치한다. 생산 guard를 유지하고 ordinary front fixture,
+교정 invocation별 응답 묶음, 반환 후 원본 오류의 최신 STOP facts를 보완한다.
+명시적인 필드 목록에는 새 API 필드만 추가한다. 기존 호출 수·STOP 기대와 assert·
+ID·subTest·Whole Front 사례는 유지하며, 보완 소스의 영향11개 및 전체 CI는 다시 확인한다.
 
 ## 남은 작업
 

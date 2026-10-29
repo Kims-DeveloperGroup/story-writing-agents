@@ -462,7 +462,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
             'result_correlation_id', 'materials', 'result_contract', 'source_classifications',
             'reference_operation_id', 'mandatory_references', 'fresh',
             'allowed_search_source_kinds', 'invocation_kind', 'physical_call_limit',
-            'include_core_statuses', 'session_state_json', 'execution_workspace'))
+            'include_core_statuses', 'session_state_json', 'execution_workspace', 'group_state'))
         request = self.request()
         self.assertFalse(hasattr(request, "__dict__"))
         with self.assertRaises((FrozenInstanceError, TypeError)):
