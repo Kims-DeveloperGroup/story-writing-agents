@@ -745,6 +745,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversations.session_context",
                 "story_writing_agents.errors",
                 "story_writing_agents.lead_provider_contracts",
+                "story_writing_agents.lead_schema_groups",
                 "story_writing_agents.provider_auth_recovery",
                 "story_writing_agents.provider_execution_workspace",
                 "story_writing_agents.structured_output_validation",

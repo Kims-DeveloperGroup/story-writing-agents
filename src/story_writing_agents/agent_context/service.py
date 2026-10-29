@@ -764,6 +764,8 @@ class BoundCallContract:
                    prepared_compilation=prepared_compilation)
 
     def require_current_offer(self, offers: ContextCallOffers) -> None:
+        if self.factory.require_declaration() is not None:
+            raise TypeError("frozen owner declaration guard must return None")
         if any(current is not expected for current, expected in zip(
                 (self.request_basis, self.group_workflow, self.group_stage, self.prepared_compilation),
                 self._group_anchor, strict=True)):
