@@ -55,6 +55,12 @@ class SuiteBudgetTests(unittest.TestCase):
         source_base = dict(hourly, max_test_source_lines=142474)
         source = dict(source_base, max_test_source_lines=142604)
         self.assertIsNone(suite_budget.check_monotonic(source, source_base))
+        group_source = dict(source, max_test_source_lines=142886)
+        self.assertIsNone(suite_budget.check_monotonic(group_source, source))
+        for old, limit in ((142603, 142886), (142605, 142886), (142604, 142885),
+                           (142604, 142887), (142886, 142887)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                dict(group_source, max_test_source_lines=limit), dict(source, max_test_source_lines=old))
         for old, limit in ((142474, 142603), (142474, 142605),
                            (142473, 142604), (142475, 142604), (142604, 142605)):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
@@ -68,6 +74,8 @@ class SuiteBudgetTests(unittest.TestCase):
         ):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
                               {**source, key: value}, source_base)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                {**group_source, key: value}, {**source, key: value} if key != "subtest_caps" else source)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
                           source, dict(self.budget, max_test_source_lines=142474))
         for change in [lambda value: value["subtest_caps"].update({"c.test": 0}),

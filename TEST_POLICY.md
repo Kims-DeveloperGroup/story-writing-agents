@@ -47,6 +47,18 @@ and an identical complete subtest-cap mapping. It preserves the separate #872 ti
 transition. Other source-ceiling increases remain rejected; test IDs, subtest caps,
 runtime behavior, and workflow limits are unchanged.
 
+### Issue #894의 소스 배정
+
+사용자의 필요시 테스트 예산 초과 허용을 이번의 정확한 **142604→142886** 전환에
+적용한다. 기준 raw142556에 그룹·계약 검증316행과 정책 회귀8행을 더하면
+raw142880이다. 기존 #881 helper4행과 이번 정책 helper2행도 청구하여 최종 비용은
+142886이다. 기존 effective 여유44행을 사용한 뒤 ceiling 순증은282행이다.
+
+새 전환은 기존 18000/3600초와 전체 subTest mapping이 동일할 때만 허용한다.
+기존 #881 소스·#872 시간 전환을 보존하고 다른 증가는 계속 거절한다. 기존
+2527개 ID와 Whole Front의 모든 기존 assert를 유지한다. 소스 비용은 정적으로
+실측했으며 실행 시간·통과 여부는 정확한 소스의 영향 테스트와 전체 CI로 검증한다.
+
 ## Verification rule
 
 ### Provider schema changes
@@ -82,6 +94,14 @@ The timing-weight manifest balances shards; it is not evidence of actual run
 time. The budget gate uses the wall time in the current Python 3.11 runner
 reports. Report the observed full and shard times and any platform limitation
 when recalibrating weights.
+
+### Actions의 지정 영향 검증
+
+`pr-validation` 수동 실행의 `validation_scope: affected`와 줄바꿈으로 구분한
+`test_ids`로 정확한 정규 ID를 선택한다. 잠긴 Python3.11·ARM64 4CPU 환경에서
+기존 runner의 반복 `--id` 인자로 실행하며 선택 인자·JSON 결과·로그·하드웨어를
+`runtime-affected` artifact에 보관한다. 입력을 shell 코드로 평가하지 않는다.
+이 부분 검증은 전체5개 shard의 완주·결과 조정·예산·정리 증거를 대신하지 않는다.
 
 ## Dedicated whole-front shard
 
