@@ -443,12 +443,13 @@ class ContextActionContractOwner(ContractOwner[ContextActionValue]):
                 CONTEXT_ACTION_POLICY.max_handles_per_read, len(issued_handle_aliases))
             if self.rules.literal_at(("action_type",)) == "read_context" else 0
         )
+        is_group_control = (self.semantic_member is not None
+                            and type(self.semantic_member.owner) is SchemaGroupControlOwner)
 
         def decode_typed(value: ValidatedValue) -> ContextActionValue:
             if type(value) is not ValidatedValue:
                 raise TypeError("action codec requires complete selected graph validation")
-            if (self.semantic_member is not None
-                    and type(self.semantic_member.owner) is SchemaGroupControlOwner):
+            if is_group_control:
                 return ContextActionValue({"action": {"kind": "schema_group_control"}})
             domain = normalize_context_action({"agent_action": value.as_object()}, finite_source_kinds=True)
             action = domain["action"]
