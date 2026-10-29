@@ -16,7 +16,8 @@ from typing import Generic, TypeVar
 from types import MappingProxyType
 from dataclasses import dataclass, field, replace
 
-from .agent_context.actions import ContextSourceStatusKind, ContextSourceStatusReceipt
+from .agent_context.actions import ContextCallReadFact, ContextSourceStatusKind, ContextSourceStatusReceipt
+from .agent_context.manifest import ContextSourceKind
 from .writing_artifacts.catalog import (
     CORE_ARTIFACT_PATHS, ArtifactKind, artifact_kind_path_rule, canonical_artifact_kind,
 )
@@ -30,6 +31,11 @@ from .provider_wire import (
 )
 from .provider_wire import share_schema_descriptions
 from .provider_wire import CHANGE_TYPES, ENUM_MEANINGS, field_description
+from .provider_wire import DRAFTING_ACTIONS, LEAD_RESPONSES
+from .lead_schema_groups import (
+    LEAD_SCHEMA_GROUPS, LeadGroupCatalog, LeadGroupRequestBasis, LeadResultSemantics,
+    LeadSchemaGroup, SchemaGroupControlOwner, schema_group_for,
+)
 from .structured_output_validation import closed_rule, closed_map_rule, finite_subset_rule, schema_rule_fingerprint, schema_rule_fingerprints
 from .lead_exploration import exploration_result_schema
 from .authoring_admission import assessment_from_dict
@@ -84,6 +90,8 @@ class LeadWireVariant:
     branch_key: str
     rules: SchemaRules
     decode: Callable[[dict[str, object]], dict[str, object]] = field(repr=False, compare=False)
+    group_id: str | None = field(default=None, kw_only=True)
+    logical_root: int | None = field(default=None, kw_only=True)
 
 
 def _small_nonempty_selection(
@@ -497,6 +505,7 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
                       *(item for check in self._declared_checks
                         for item in (check, check.check, check.dependencies)))
         values = (self.owner_id, self.owner_revision, self.variant.branch_key,
+                  self.variant.group_id, self.variant.logical_root,
                   self.variant.rules.canonical_bytes, self.variant.rules.maximum_bytes,
                   COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
                   tuple((check.name, check.revision, check.phase, check.context_type,
@@ -522,17 +531,7 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
     def typed_decoder(self) -> TypedDecoder[LeadDecodedResult]:
         self._require_declaration()
         return TypedDecoder("lead.current_codec", "848-v3:typed-family-owner", self._declared_decode,
-                            (self.variant.decode, schema_fragment_findings,
-             artifact_source_operation_rule, artifact_kind_path_rule, canonical_artifact_kind,
-             artifact_domain,
-             authoring_scope_rules, finite_authoring_scope_rules, legal_specialist_rosters,
-             assignment_rule, AuthoringScopeRuleSet.__post_init__,
-             LeadProviderConstraints._allocation_input_ids, lead_outcome_scope_paths, normalize_result,
-             map_current_task_literals,
-            _require_intrinsic_lead_result,
-             project_lead_scope_schema, restore_lead_scope_result, project_lead_scope_diagnostic,
-             diagnostic_to_wire, AuthoringScopeRuleSet.dependency_slot_id_rule,
-             _has_free_dependency_slots, _require_dependency_slot_ids))
+                            (self.variant.decode, *_lead_codec_dependencies()))
 
     def named_host_checks(self) -> tuple[NamedHostCheck[LeadDecodedResult], ...]:
         self._require_declaration()
@@ -541,6 +540,19 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
     def _require_visible_text(self, value: LeadDecodedResult, context: HostCheckContext) -> None:
         if not visible_text(value.domain_value().get("message")):
             raise validation_failure(ValueError(), "$.response_text", "strict UTF8 visible text within existing byte limit")
+
+
+def _lead_codec_dependencies() -> tuple[Callable, ...]:
+    """Prepared semantic codecs and final owners attest the same domain sources."""
+    return (schema_fragment_findings, artifact_source_operation_rule,
+            artifact_kind_path_rule, canonical_artifact_kind, artifact_domain,
+            authoring_scope_rules, finite_authoring_scope_rules, legal_specialist_rosters,
+            assignment_rule, AuthoringScopeRuleSet.__post_init__,
+            LeadProviderConstraints._allocation_input_ids, lead_outcome_scope_paths,
+            normalize_result, map_current_task_literals, _require_intrinsic_lead_result,
+            project_lead_scope_schema, restore_lead_scope_result, project_lead_scope_diagnostic,
+            diagnostic_to_wire, AuthoringScopeRuleSet.dependency_slot_id_rule,
+            _has_free_dependency_slots, _require_dependency_slot_ids)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1691,6 +1703,216 @@ def empty_core_status_evidence(
     )
 
 
+def _current_lead_rule_schema(contract: LeadResultRuleSeed) -> dict[str, object]:
+    """계획용 seed를 기존 wire 규칙으로 한 번 투영한다."""
+    projected = contract.schema_value()
+    if "writing_task_scope" not in projected.get("properties", {}) and any(
+            "authoring_scope" in item.get("properties", {}) or "kind" in item.get("properties", {})
+            for item in projected.get("anyOf", [projected])):
+        projected = project_result_schema(projected, contract.contract_id)
+    return projected
+
+
+def _compile_lead_families(
+    contract_id: str,
+    roots: tuple[dict[str, object], ...] | list[dict[str, object]],
+    variants: tuple[LeadWireVariant, ...] | list[LeadWireVariant],
+    container_description: str | None,
+    tasks: tuple[tuple[str, int], ...],
+    *, selected_group_id: str | None = None,
+) -> tuple[LeadWireVariant, ...]:
+    """검증된 의미 변형을 기존 공통화와 완전한 물리 분할로 구성한다."""
+    grouped = selected_group_id is not None
+    families = []
+    for root_number, root in enumerate(roots):
+        root_members = tuple(item for item in variants if item.logical_root == root_number)
+        if not root_members:
+            continue
+        sources = tuple(
+            rebase_schema_definitions(member.rules.schema_value(), f"g{number}")
+            for number, member in enumerate(root_members)
+        )
+        scalar_groups = {}
+        for source, member in zip(sources, root_members, strict=True):
+            names = tuple(name for name in source["properties"] if name == "response_text" or
+                          name == "response_type" or name.endswith("_result_type"))
+            key = tuple((name, member.rules.node_fingerprint((name,))) for name in names)
+            scalar_groups.setdefault(key, []).append((source, member))
+        family_partitions = []
+        for common_key, group in scalar_groups.items():
+            sources, members = tuple(zip(*group, strict=True))
+            first = sources[0]
+            common_names = tuple(name for name, _ in common_key)
+            common = {name: first["properties"][name] for name in common_names}
+            common_fingerprints = {
+                name: members[0].rules.node_fingerprint((name,)) for name in common_names
+            }
+            details = []
+            guidance = []
+            for source, source_member in zip(sources, members, strict=True):
+                for name in common_names:
+                    if source_member.rules.node_fingerprint((name,)) != common_fingerprints[name]:
+                        raise ValueError("Lead family has incompatible common scalar rules")
+                detail_properties = {name: value for name, value in source["properties"].items() if name not in common_names}
+                if len(members) > 1:
+                    detail_properties["variant_id"] = {"type": "string", "enum": [source_member.branch_key],
+                                                       "description": "Required offered family variant identity; use this exact literal."}
+                scope_node = detail_properties.get("writing_task_scope")
+                if type(scope_node) is dict and "description" in scope_node:
+                    notice = "writing_task_scope: " + scope_node["description"]
+                    if notice not in guidance: guidance.append(notice)
+                detail = {
+                **closed_object(detail_properties, required=tuple(
+                    name for name in source["required"] if name not in common_names
+                ) + (("variant_id",) if len(members) > 1 else ())),
+                    "description": source["description"],
+                }
+                if "$defs" in source: detail["$defs"] = source["$defs"]
+                details.append(detail)
+            detail_graph = alternatives(details)
+            if guidance: detail_graph["description"] = " ".join(guidance)
+            family_graph = closed_object({**common, "response_details": detail_graph})
+            if "description" in root: family_graph["description"] = root["description"]
+            if container_description is not None:
+                family_graph["description"] = container_description
+                if "description" in root and root["description"] != container_description:
+                    family_graph["description"] += "\n" + root["description"]
+            family_graph = project_lead_scope_schema(factor_rule_schema(
+                _compile_closed_choices(hoist_schema_definitions(family_graph))))
+            family_graph = factor_rule_schema(family_graph)
+            maximum_bytes = root_members[0].rules.maximum_bytes
+            if any(member.rules.maximum_bytes != maximum_bytes for member in root_members):
+                raise ValueError("Lead family has incompatible member budgets")
+
+            def complete_size(graph: dict[str, object]) -> int:
+                bound = deepcopy(graph)
+                bound["properties"]["schema_id"] = {
+                    "type": "string", "enum": ["lead_v11_" + "0" * 32],
+                }
+                bound["required"] = [*bound["required"], "schema_id"]
+                return len(json.dumps(bound, ensure_ascii=False, sort_keys=True,
+                                      separators=(",", ":")).encode("utf-8"))
+
+            def references(node: object) -> set[str]:
+                if type(node) is list:
+                    return set().union(*(references(child) for child in node))
+                if type(node) is not dict:
+                    return set()
+                names = {node["$ref"].removeprefix("#/$defs/")} if "$ref" in node else set()
+                return names.union(*(references(child) for key, child in node.items()
+                                     if key != "$defs"))
+
+            definitions = family_graph.get("$defs", {})
+
+            def closure(names: set[str]) -> set[str]:
+                pending = list(names)
+                while pending:
+                    name = pending.pop()
+                    if name not in definitions:
+                        raise ValueError("Lead family refers to an undeclared definition")
+                    extra = references(definitions[name]) - names
+                    names.update(extra)
+                    pending.extend(extra)
+                return names
+
+            retained = set(definitions) - closure(references(family_graph))
+            detail_rule = family_graph["properties"]["response_details"]
+            clauses = tuple(detail_rule.get("anyOf", (detail_rule,)))
+
+            def part_graph(first: int, last: int) -> dict[str, object]:
+                part = deepcopy(family_graph)
+                detail = part["properties"]["response_details"]
+                if "anyOf" in detail:
+                    selected = deepcopy(clauses[first:last])
+                    if len(selected) > 1:
+                        detail["anyOf"] = list(selected)
+                    else:
+                        annotation = {key: value for key, value in detail.items()
+                                      if key != "anyOf"}
+                        target = selected[0]
+                        if all(key not in target or target[key] == value
+                               for key, value in annotation.items()):
+                            part["properties"]["response_details"] = {**target, **annotation}
+                        else:
+                            name = f"family_part_{first}_{last}"
+                            while name in part.get("$defs", {}):
+                                name += "_"
+                            part.setdefault("$defs", {})[name] = target
+                            part["properties"]["response_details"] = {
+                                "$ref": f"#/$defs/{name}", **annotation,
+                            }
+                local_definitions = part.pop("$defs", {})
+                needed = references(part) | retained
+                pending = list(needed)
+                while pending:
+                    name = pending.pop()
+                    extra = references(local_definitions[name]) - needed
+                    needed.update(extra)
+                    pending.extend(extra)
+                if needed:
+                    part["$defs"] = {name: rule for name, rule in local_definitions.items()
+                                     if name in needed}
+                return part
+
+            pending = [(0, len(clauses))]
+            partitions = []
+            while pending:
+                first, last = pending.pop(0)
+                part = part_graph(first, last)
+                if complete_size(part) <= maximum_bytes:
+                    partitions.append((first, last, part))
+                elif last - first > 1:
+                    middle = (first + last) // 2
+                    pending[:0] = [(first, middle), (middle, last)]
+                else:
+                    raise ValueError("complete Lead clause exceeds its member schema budget")
+            if tuple(index for first, last, _ in partitions for index in range(first, last)) != (
+                    tuple(range(len(clauses)))):
+                raise ValueError("Lead family partition lost an ordered clause")
+            for name, rule in definitions.items():
+                if not any(part.get("$defs", {}).get(name) == rule for _, _, part in partitions):
+                    raise ValueError("Lead family partition lost a declared definition")
+            family_partitions.extend(
+                (part, members, common_names) for _, _, part in partitions
+            )
+        for part_number, (part, members, common_names) in enumerate(family_partitions):
+            family_rules = SchemaRules.declare(part, maximum_bytes=maximum_bytes)
+            member_by_variant = MappingProxyType({member.branch_key: member for member in members})
+            if len(member_by_variant) != len(members):
+                raise ValueError("duplicate Lead family variant identity")
+
+            def family_decode(body: dict[str, object], *, candidates=members, by_variant=member_by_variant,
+                              names=common_names, scope_schema=family_rules,
+                              offered_tasks=tasks, restore=restore_lead_scope_result
+                              ) -> dict[str, object]:
+                declared = scope_schema.schema_value()
+                details = dict(declared["properties"]["response_details"])
+                if "$defs" in declared:
+                    details["$defs"] = declared["$defs"]
+                supplied = body["response_details"].get("variant_id")
+                candidate = (candidates[0] if len(candidates) == 1 else
+                             by_variant.get(supplied) if type(supplied) is str else None)
+                if candidate is None:
+                    raise ValueError("selected family requires its offered variant identity")
+                expanded = {name: body[name] for name in names}
+                restored = restore(body["response_details"], details)
+                if len(candidates) > 1:
+                    restored.pop("variant_id")
+                expanded.update(restored)
+                map_current_task_literals(expanded, offered_tasks)
+                if candidate.rules.findings(expanded):
+                    raise ValueError("selected family details violate its bound choice graph")
+                return candidate.decode(expanded)
+            branch_key = f"{contract_id}:family:{root_number}"
+            if grouped:
+                branch_key += ":group:" + selected_group_id
+            if len(family_partitions) > 1:
+                branch_key += f":partition:{part_number}"
+            families.append(LeadWireVariant(branch_key, family_rules, family_decode,
+                                            group_id=selected_group_id, logical_root=root_number))
+    return tuple(families)
+
+
 @dataclass(frozen=True, slots=True)
 class LeadProviderConstraints:
     """One immutable set of offered choices shared by schema, prompt and guard."""
@@ -1800,7 +2022,16 @@ class LeadProviderConstraints:
         writing_read_ids: tuple[str, ...] = (),
         writing_read_facts: tuple[tuple[str, str, bool], ...] = (),
         core_status_facts: tuple[ContextSourceStatusReceipt, ...] = (),
+        selected_group_id: str | None = None,
+        collect_schema_groups: bool = False,
     ) -> tuple[LeadWireVariant, ...]:
+        if (type(collect_schema_groups) is not bool
+                or selected_group_id is not None and
+                (type(selected_group_id) is not str
+                 or selected_group_id not in tuple(group.group_id for group in LEAD_SCHEMA_GROUPS))
+                or collect_schema_groups and selected_group_id is not None):
+            raise ValueError("현재 의미 그룹의 카탈로그 또는 전체 생성 계약을 요청해야 합니다")
+        grouped = collect_schema_groups or selected_group_id is not None
         function, code = _LEAD_OUTCOME_SCOPE_DECLARATION
         if lead_outcome_scope_paths is not function or function.__code__ is not code:
             raise ValueError("frozen Lead outcome scope rule changed")
@@ -1813,13 +2044,7 @@ class LeadProviderConstraints:
                 and self.scope_rule.schema_version != AUTHORING_SCOPE_SCHEMA_VERSION):
             raise ValueError("current Lead wire requires current scope rule version")
         allocation_inputs = self._allocation_input_ids()
-        source_schema = contract.schema_value()
-        # Existing callers already project the provider vocabulary. Preserve their complete graph.
-        projected = source_schema
-        if "writing_task_scope" not in projected.get("properties", {}) and any(
-                "authoring_scope" in item.get("properties", {}) or "kind" in item.get("properties", {})
-                for item in projected.get("anyOf", [projected])):
-            projected = project_result_schema(projected, contract.contract_id)
+        projected = _current_lead_rule_schema(contract)
         roots = projected.get("anyOf", [projected])
         container_description = (
             projected.get("description") if "anyOf" in projected else None
@@ -1892,7 +2117,32 @@ class LeadProviderConstraints:
                     and type(minimum) is int and minimum >= 1)
         tasks = self.task_revisions or (() if self.scope is None else ((self.scope.task_id, self.scope.task_revision),))
         variants = []
+        root_declarations = []
         for root_number, root in enumerate(roots):
+            request = root.get("properties", {}).get("proposal_drafting_request")
+            if not grouped or type(request) is not dict:
+                root_declarations.append((root_number, root, None))
+                continue
+            preparation_kinds = {native: domain for domain, native in DRAFTING_ACTIONS.items()}
+            for preparation in request.get("anyOf", (request,)):
+                choices = preparation.get("properties", {}).get("action_type", {}).get("enum", ())
+                if len(choices) != 1 or choices[0] not in preparation_kinds:
+                    raise ValueError("준비 추천의 의미 변형에는 소유자의 정확한 작업 타입이 필요합니다")
+                selected_root = deepcopy(root)
+                selected_request = deepcopy(preparation)
+                for name, value in request.items():
+                    if name == "anyOf":
+                        continue
+                    if name == "description" and name in selected_request:
+                        if value != selected_request[name]:
+                            selected_request[name] = value + "\n" + selected_request[name]
+                    elif name in selected_request and selected_request[name] != value:
+                        raise ValueError("준비 추천의 공통 규칙을 의미 분류에서 잃을 수 없습니다")
+                    else:
+                        selected_request[name] = deepcopy(value)
+                selected_root["properties"]["proposal_drafting_request"] = selected_request
+                root_declarations.append((root_number, selected_root, preparation_kinds[choices[0]]))
+        for root_number, root, preparation_kind in root_declarations:
             properties = root.get("properties", {})
             ordinary_answer = (
                 set(properties) - {"document_change_request_update"} == {"response_type", "response_text", "writing_task_scope"}
@@ -1958,6 +2208,38 @@ class LeadProviderConstraints:
                             if ordinary_answer:
                                 scope_paths = paths
                     if not eligible_kinds:
+                        continue
+                group_id = None
+                if grouped:
+                    response_types = properties.get("response_type", {}).get("enum", ())
+                    if len(response_types) != 1:
+                        raise ValueError("그룹 분류에는 소유자의 정확한 업무 응답 타입이 필요합니다")
+                    native_type = response_types[0]
+                    if "core_document_assessment" in properties:
+                        kind = "readiness"
+                    elif "artifact_change_proposal" in properties:
+                        kind = "artifact"
+                    elif "specialist_consultation_proposal" in properties:
+                        proposal = properties["specialist_consultation_proposal"]
+                        kind = "premise" if "premise_decision" in proposal.get("properties", {}) else "consultation"
+                    else:
+                        kinds = {native: domain for domain, native in LEAD_RESPONSES.items()}
+                        if native_type not in kinds:
+                            raise ValueError("ordinary Lead가 아닌 결과를 그룹 프로토콜에 넣을 수 없습니다")
+                        kind = kinds[native_type]
+                    semantics = LeadResultSemantics(
+                        kind, None if rule is None else rule.intent.value,
+                        None if rule is None else rule.activity.value, preparation_kind,
+                    )
+                    # The original typed outcome rejects artifact preparation in
+                    # review_only. Remove that ineligible semantic combination,
+                    # rather than letting it invalidate every other offered group.
+                    if (kind == "recommendation" and rule is not None
+                            and rule.intent is AuthoringIntent.REVIEW_ONLY
+                            and preparation_kind != "prepare_consultation"):
+                        continue
+                    group_id = schema_group_for(semantics).group_id
+                    if selected_group_id is not None and group_id != selected_group_id:
                         continue
                 root_schema = deepcopy(root)
                 if scope_kinds:
@@ -2469,194 +2751,19 @@ class LeadProviderConstraints:
                             parent[assessment_path[-1]] = decode_current_assessment(parent[assessment_path[-1]])
                         map_current_task_literals(result, tasks)
                         return normalize_result(result, contract.contract_id)
-                    variants.append(LeadWireVariant(f"{contract.contract_id}:{root_number}:{scope_number}:{roster_number}", encoded_rules, decode))
+                    branch_key = f"{contract.contract_id}:{root_number}:{scope_number}:{roster_number}"
+                    if grouped:
+                        branch_key += ":group:" + group_id
+                    variants.append(LeadWireVariant(branch_key, encoded_rules, decode,
+                                                    group_id=group_id, logical_root=root_number))
         if not variants:
             raise ValueError("current Lead stage has no eligible response branch")
-        families = []
-        for root_number, root in enumerate(roots):
-            root_members = tuple(item for item in variants if item.branch_key.split(":")[-3] == str(root_number))
-            if not root_members:
-                continue
-            sources = tuple(
-                rebase_schema_definitions(member.rules.schema_value(), f"g{number}")
-                for number, member in enumerate(root_members)
-            )
-            scalar_groups = {}
-            for source, member in zip(sources, root_members, strict=True):
-                names = tuple(name for name in source["properties"] if name == "response_text" or
-                              name == "response_type" or name.endswith("_result_type"))
-                key = tuple((name, member.rules.node_fingerprint((name,))) for name in names)
-                scalar_groups.setdefault(key, []).append((source, member))
-            family_partitions = []
-            for common_key, group in scalar_groups.items():
-                sources, members = tuple(zip(*group, strict=True))
-                first = sources[0]
-                common_names = tuple(name for name, _ in common_key)
-                common = {name: first["properties"][name] for name in common_names}
-                common_fingerprints = {
-                    name: members[0].rules.node_fingerprint((name,)) for name in common_names
-                }
-                details = []
-                guidance = []
-                for source, source_member in zip(sources, members, strict=True):
-                    for name in common_names:
-                        if source_member.rules.node_fingerprint((name,)) != common_fingerprints[name]:
-                            raise ValueError("Lead family has incompatible common scalar rules")
-                    detail_properties = {name: value for name, value in source["properties"].items() if name not in common_names}
-                    if len(members) > 1:
-                        detail_properties["variant_id"] = {"type": "string", "enum": [source_member.branch_key],
-                                                           "description": "Required offered family variant identity; use this exact literal."}
-                    scope_node = detail_properties.get("writing_task_scope")
-                    if type(scope_node) is dict and "description" in scope_node:
-                        notice = "writing_task_scope: " + scope_node["description"]
-                        if notice not in guidance: guidance.append(notice)
-                    detail = {
-                    **closed_object(detail_properties, required=tuple(
-                        name for name in source["required"] if name not in common_names
-                    ) + (("variant_id",) if len(members) > 1 else ())),
-                        "description": source["description"],
-                    }
-                    if "$defs" in source: detail["$defs"] = source["$defs"]
-                    details.append(detail)
-                detail_graph = alternatives(details)
-                if guidance: detail_graph["description"] = " ".join(guidance)
-                family_graph = closed_object({**common, "response_details": detail_graph})
-                if "description" in root: family_graph["description"] = root["description"]
-                if container_description is not None:
-                    family_graph["description"] = container_description
-                    if "description" in root and root["description"] != container_description:
-                        family_graph["description"] += "\n" + root["description"]
-                family_graph = project_lead_scope_schema(factor_rule_schema(
-                    _compile_closed_choices(hoist_schema_definitions(family_graph))))
-                family_graph = factor_rule_schema(family_graph)
-                maximum_bytes = root_members[0].rules.maximum_bytes
-                if any(member.rules.maximum_bytes != maximum_bytes for member in root_members):
-                    raise ValueError("Lead family has incompatible member budgets")
-
-                def complete_size(graph: dict[str, object]) -> int:
-                    bound = deepcopy(graph)
-                    bound["properties"]["schema_id"] = {
-                        "type": "string", "enum": ["lead_v11_" + "0" * 32],
-                    }
-                    bound["required"] = [*bound["required"], "schema_id"]
-                    return len(json.dumps(bound, ensure_ascii=False, sort_keys=True,
-                                          separators=(",", ":")).encode("utf-8"))
-
-                def references(node: object) -> set[str]:
-                    if type(node) is list:
-                        return set().union(*(references(child) for child in node))
-                    if type(node) is not dict:
-                        return set()
-                    names = {node["$ref"].removeprefix("#/$defs/")} if "$ref" in node else set()
-                    return names.union(*(references(child) for key, child in node.items()
-                                         if key != "$defs"))
-
-                definitions = family_graph.get("$defs", {})
-
-                def closure(names: set[str]) -> set[str]:
-                    pending = list(names)
-                    while pending:
-                        name = pending.pop()
-                        if name not in definitions:
-                            raise ValueError("Lead family refers to an undeclared definition")
-                        extra = references(definitions[name]) - names
-                        names.update(extra)
-                        pending.extend(extra)
-                    return names
-
-                retained = set(definitions) - closure(references(family_graph))
-                detail_rule = family_graph["properties"]["response_details"]
-                clauses = tuple(detail_rule.get("anyOf", (detail_rule,)))
-
-                def part_graph(first: int, last: int) -> dict[str, object]:
-                    part = deepcopy(family_graph)
-                    detail = part["properties"]["response_details"]
-                    if "anyOf" in detail:
-                        selected = deepcopy(clauses[first:last])
-                        if len(selected) > 1:
-                            detail["anyOf"] = list(selected)
-                        else:
-                            annotation = {key: value for key, value in detail.items()
-                                          if key != "anyOf"}
-                            target = selected[0]
-                            if all(key not in target or target[key] == value
-                                   for key, value in annotation.items()):
-                                part["properties"]["response_details"] = {**target, **annotation}
-                            else:
-                                name = f"family_part_{first}_{last}"
-                                while name in part.get("$defs", {}):
-                                    name += "_"
-                                part.setdefault("$defs", {})[name] = target
-                                part["properties"]["response_details"] = {
-                                    "$ref": f"#/$defs/{name}", **annotation,
-                                }
-                    local_definitions = part.pop("$defs", {})
-                    needed = references(part) | retained
-                    pending = list(needed)
-                    while pending:
-                        name = pending.pop()
-                        extra = references(local_definitions[name]) - needed
-                        needed.update(extra)
-                        pending.extend(extra)
-                    if needed:
-                        part["$defs"] = {name: rule for name, rule in local_definitions.items()
-                                         if name in needed}
-                    return part
-
-                pending = [(0, len(clauses))]
-                partitions = []
-                while pending:
-                    first, last = pending.pop(0)
-                    part = part_graph(first, last)
-                    if complete_size(part) <= maximum_bytes:
-                        partitions.append((first, last, part))
-                    elif last - first > 1:
-                        middle = (first + last) // 2
-                        pending[:0] = [(first, middle), (middle, last)]
-                    else:
-                        raise ValueError("complete Lead clause exceeds its member schema budget")
-                if tuple(index for first, last, _ in partitions for index in range(first, last)) != (
-                        tuple(range(len(clauses)))):
-                    raise ValueError("Lead family partition lost an ordered clause")
-                for name, rule in definitions.items():
-                    if not any(part.get("$defs", {}).get(name) == rule for _, _, part in partitions):
-                        raise ValueError("Lead family partition lost a declared definition")
-                family_partitions.extend(
-                    (part, members, common_names) for _, _, part in partitions
-                )
-            for part_number, (part, members, common_names) in enumerate(family_partitions):
-                family_rules = SchemaRules.declare(part, maximum_bytes=maximum_bytes)
-                member_by_variant = MappingProxyType({member.branch_key: member for member in members})
-                if len(member_by_variant) != len(members):
-                    raise ValueError("duplicate Lead family variant identity")
-
-                def family_decode(body: dict[str, object], *, candidates=members, by_variant=member_by_variant,
-                                  names=common_names, scope_schema=family_rules,
-                                  offered_tasks=tasks, restore=restore_lead_scope_result
-                                  ) -> dict[str, object]:
-                    declared = scope_schema.schema_value()
-                    details = dict(declared["properties"]["response_details"])
-                    if "$defs" in declared:
-                        details["$defs"] = declared["$defs"]
-                    supplied = body["response_details"].get("variant_id")
-                    candidate = (candidates[0] if len(candidates) == 1 else
-                                 by_variant.get(supplied) if type(supplied) is str else None)
-                    if candidate is None:
-                        raise ValueError("selected family requires its offered variant identity")
-                    expanded = {name: body[name] for name in names}
-                    restored = restore(body["response_details"], details)
-                    if len(candidates) > 1:
-                        restored.pop("variant_id")
-                    expanded.update(restored)
-                    map_current_task_literals(expanded, offered_tasks)
-                    if candidate.rules.findings(expanded):
-                        raise ValueError("selected family details violate its bound choice graph")
-                    return candidate.decode(expanded)
-                branch_key = f"{contract.contract_id}:family:{root_number}"
-                if len(family_partitions) > 1:
-                    branch_key += f":partition:{part_number}"
-                families.append(LeadWireVariant(branch_key, family_rules, family_decode))
-        return tuple(families)
+        if collect_schema_groups:
+            return tuple(variants)
+        return _compile_lead_families(
+            contract.contract_id, roots, variants, container_description, tasks,
+            selected_group_id=selected_group_id,
+        )
 
     def prompt_facts(self) -> dict[str, object]:
         return {
@@ -3109,6 +3216,237 @@ class LeadProviderConstraints:
             }
             rules = [continuation_rules.get(rule, rule) for rule in rules]
         return tuple(dict.fromkeys(rules))
+
+
+@dataclass(frozen=True, slots=True)
+class LeadGroupCompilation:
+    """현재 소유자의 의미 변형을 보존하고 선택 그룹만 완전히 컴파일한다."""
+    constraints: LeadProviderConstraints
+    rule_seed: LeadResultRuleSeed
+    read_ids: tuple[str, ...] = ()
+    writing_read_ids: tuple[str, ...] = ()
+    writing_read_facts: tuple[tuple[str, str, bool], ...] = ()
+    core_status_facts: tuple[ContextSourceStatusReceipt, ...] = ()
+    read_facts: tuple[ContextCallReadFact, ...] = field(default=(), kw_only=True)
+    semantic_variants: tuple[LeadWireVariant, ...] = field(init=False, repr=False, compare=False)
+    _semantic_decoders: tuple[TypedDecoder, ...] = field(init=False, repr=False, compare=False)
+    group_ids: tuple[str, ...] = field(init=False)
+    _root_source: bytes = field(init=False, repr=False)
+    _declaration: tuple = field(init=False, repr=False, compare=False)
+
+    def __init_subclass__(cls, **kwargs):
+        raise TypeError("의미 그룹 compiler의 소유 경계를 바꿀 수 없습니다")
+
+    def __post_init__(self) -> None:
+        if (type(self.constraints) is not LeadProviderConstraints
+                or type(self.rule_seed) is not LeadResultRuleSeed
+                or self.constraints.allow_read_sources
+                or any(type(value) is not tuple for value in
+                       (self.read_ids, self.writing_read_ids, self.writing_read_facts,
+                        self.core_status_facts, self.read_facts))
+                or any(type(item) is not ContextCallReadFact for item in self.read_facts)
+                or len({item.evidence_id for item in self.read_facts}) != len(self.read_facts)):
+            raise TypeError("현재 소유자가 고정한 전체 의미 변형 근거가 필요합니다")
+        writing_facts = tuple(item for item in self.read_facts
+                              if item.source_kind is ContextSourceKind.WRITING_ARTIFACT)
+        if (self.read_ids != tuple(item.evidence_id for item in self.read_facts)
+                or self.writing_read_ids != tuple(item.evidence_id for item in writing_facts)
+                or self.writing_read_facts != tuple(
+                    (item.evidence_id, item.artifact_locator, item.whole_source)
+                    for item in writing_facts)):
+            raise ValueError("READ 별칭과 현재 전체 source 사실이 일치해야 합니다")
+        variants = self.constraints.current_wire_variants(
+            self.rule_seed, read_ids=self.read_ids, writing_read_ids=self.writing_read_ids,
+            writing_read_facts=self.writing_read_facts, core_status_facts=self.core_status_facts,
+            collect_schema_groups=True,
+        )
+        if any(item.group_id is None for item in variants):
+            raise ValueError("ordinary Lead의 모든 의미 변형을 분류해야 합니다")
+        ids = {item.group_id for item in variants}
+        object.__setattr__(self, "semantic_variants", variants)
+        decoders = []
+        for variant in variants:
+            def decode(value: ValidatedValue, *, source=variant.decode) -> dict[str, object]:
+                return source(value.as_object())
+            decoders.append(TypedDecoder(
+                "lead.prepared_semantic_codec", "894-v1:prepared-owner-source", decode,
+                (variant.decode, *_lead_codec_dependencies()),
+            ))
+        object.__setattr__(self, "_semantic_decoders", tuple(decoders))
+        object.__setattr__(self, "group_ids", tuple(
+            group.group_id for group in LEAD_SCHEMA_GROUPS if group.group_id in ids))
+        object.__setattr__(self, "_root_source", json.dumps(
+            _current_lead_rule_schema(self.rule_seed), sort_keys=True, ensure_ascii=False,
+            allow_nan=False, separators=(",", ":")).encode("utf-8"))
+        object.__setattr__(self, "_declaration", self._snapshot())
+
+    def _snapshot(self) -> tuple:
+        functions = (LeadProviderConstraints.current_wire_variants, _compile_lead_families,
+                     _current_lead_rule_schema, _lead_codec_dependencies,
+                     schema_group_for, LeadSchemaGroup.accepts,
+                     type(self).matches_current, type(self).catalog, type(self).compile)
+        return (repr(self.constraints), self.rule_seed.contract_id, self.rule_seed.domain_rules,
+                self.read_ids, self.writing_read_ids, self.writing_read_facts,
+                tuple(tuple(item.snapshot_value().items()) for item in self.read_facts),
+                repr(self.core_status_facts), self.group_ids, self._root_source,
+                tuple((id(item), item.branch_key, item.group_id, item.logical_root,
+                       id(item.rules), item.rules.canonical_bytes, item.rules.maximum_bytes, id(item.decode))
+                      for item in self.semantic_variants),
+                tuple((id(item), item.binding_fingerprint) for item in self._semantic_decoders),
+                tuple((function, function.__code__) for function in functions),
+                json.dumps(tuple((group.card(), group.membership_identity()) for group in LEAD_SCHEMA_GROUPS),
+                           ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+    def require_provenance(self) -> None:
+        if self._snapshot() != self._declaration:
+            raise ValueError("동결된 의미 그룹 compiler 또는 선택 근거가 변경됐습니다")
+        for decoder in self._semantic_decoders:
+            decoder.require_provenance()
+
+    def catalog(self, *, request_basis: Mapping[str, object]) -> LeadGroupCatalog:
+        self.require_provenance()
+        request = {
+            "request": dict(request_basis), "contract_id": self.rule_seed.contract_id,
+            "rule_seed_digest": hashlib.sha256(self.rule_seed.domain_rules).hexdigest(),
+            "task_revisions": self.constraints.task_revisions,
+            "scope": repr(self.constraints.scope), "scope_rule": repr(self.constraints.scope_rule),
+            "adoption_intent": self.constraints.adoption_intent,
+            "preparation_kind": self.constraints.preparation_kind,
+            "preparation_objective_id": self.constraints.preparation_objective_id,
+            "preparation_targets": self.constraints.preparation_targets,
+            "preparation_specialists": self.constraints.preparation_specialists,
+            "recommendation_only": self.constraints.recommendation_only,
+            "continuation": self.constraints.continuation,
+            "premise_question_id": self.constraints.premise_question_id,
+            "readiness_source_basis_ref": self.constraints.readiness_source_basis_ref,
+        }
+        context = {
+            "choices": self.constraints.choice_snapshot(), "read_ids": self.read_ids,
+            "writing_read_ids": self.writing_read_ids, "writing_read_facts": self.writing_read_facts,
+            "read_facts": [item.snapshot_value() for item in self.read_facts],
+            "core_status_facts": repr(self.core_status_facts),
+        }
+        return LeadGroupCatalog.build(self.group_ids, request_basis=request, context_basis=context)
+
+    def matches_current(
+        self, constraints: LeadProviderConstraints, rule_seed: LeadResultRuleSeed, *,
+        read_facts: tuple[ContextCallReadFact, ...],
+        core_status_facts: tuple[ContextSourceStatusReceipt, ...],
+    ) -> bool:
+        """Allow caller-owned reuse only for the same complete semantic inputs."""
+        self.require_provenance()
+        return (self.constraints == constraints and self.rule_seed is rule_seed
+                and self.read_facts == read_facts and self.core_status_facts == core_status_facts)
+
+    def compile(self, group_id: str) -> tuple[LeadWireVariant, ...]:
+        self.require_provenance()
+        if type(group_id) is not str or group_id not in self.group_ids:
+            raise ValueError("현재 소유자가 제공하지 않은 그룹을 컴파일할 수 없습니다")
+        projected = json.loads(self._root_source)
+        roots = projected.get("anyOf", [projected])
+        tasks = self.constraints.task_revisions or (() if self.constraints.scope is None else (
+            (self.constraints.scope.task_id, self.constraints.scope.task_revision),))
+        members = tuple(item for item in self.semantic_variants if item.group_id == group_id)
+        return _compile_lead_families(
+            self.rule_seed.contract_id, roots, members,
+            projected.get("description") if "anyOf" in projected else None,
+            tasks, selected_group_id=group_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LeadGroupedStage:
+    """하나의 현재 의미 계획에서 카탈로그·선택·그룹 업무 owner를 결합한다."""
+    compilation: LeadGroupCompilation
+    request_basis: LeadGroupRequestBasis
+    selection_policy: LeadStagePolicy
+    authorization_check: NamedHostCheck[LeadDecodedResult] = field(repr=False, compare=False)
+    catalog: LeadGroupCatalog = field(init=False)
+    _declaration: tuple = field(init=False, repr=False, compare=False)
+
+    def __init_subclass__(cls, **kwargs):
+        raise TypeError("그룹 국면의 owner 결합을 독립된 구현으로 바꿀 수 없습니다")
+
+    @staticmethod
+    def catalog_for(
+        compilation: LeadGroupCompilation, request_basis: LeadGroupRequestBasis, *,
+        stage: str, language: str, authorization_check: NamedHostCheck,
+    ) -> LeadGroupCatalog:
+        """Bind request/task facts to the actual trusted factory's authority owner."""
+        if (type(compilation) is not LeadGroupCompilation
+                or type(request_basis) is not LeadGroupRequestBasis
+                or type(authorization_check) is not NamedHostCheck
+                or authorization_check.name != "owner.authorized_final"
+                or authorization_check.phase != "authorized"
+                or any(type(value) is not str or not value for value in (stage, language))):
+            raise TypeError("현재 요청과 실제 factory의 업무 권한 선언이 필요합니다")
+        authorization_check.require_provenance()
+        return compilation.catalog(request_basis={
+            **request_basis.as_object(), "stage": stage, "language": language,
+            "authorization_owner": {
+                "name": authorization_check.name, "revision": authorization_check.revision,
+                "binding_fingerprint": authorization_check.binding_fingerprint,
+                "context_type": (authorization_check.context_type.__module__ + "."
+                                 + authorization_check.context_type.__qualname__),
+            },
+        })
+
+    def __post_init__(self) -> None:
+        if (type(self.compilation) is not LeadGroupCompilation
+                or type(self.request_basis) is not LeadGroupRequestBasis
+                or type(self.selection_policy) is not LeadStagePolicy
+                or type(self.authorization_check) is not NamedHostCheck
+                or self.authorization_check.name != "owner.authorized_final"
+                or self.authorization_check.phase != "authorized"):
+            raise TypeError("현재 의미 계획과 실제 업무 권한 검사가 결합된 국면이 필요합니다")
+        owners = self.selection_policy.owner_declarations
+        tasks = self.compilation.constraints.task_revisions or (() if self.compilation.constraints.scope is None else (
+            (self.compilation.constraints.scope.task_id, self.compilation.constraints.scope.task_revision),))
+        if (len(owners) != 1 or type(owners[0]) is not SchemaGroupControlOwner
+                or owners[0].current_group_id is not None
+                or self.selection_policy.task_revisions != tasks
+                or self.selection_policy.choices != self.compilation.constraints.choice_snapshot()):
+            raise ValueError("선택 국면은 해당 의미 계획의 단일 공통 제어 owner여야 합니다")
+        catalog = self.catalog_for(
+            self.compilation, self.request_basis, stage=self.selection_policy.stage,
+            language=self.selection_policy.language, authorization_check=self.authorization_check)
+        if catalog != owners[0].catalog:
+            raise ValueError("선택 카탈로그와 실제 업무 구성원 계획의 근거가 다릅니다")
+        object.__setattr__(self, "catalog", owners[0].catalog)
+        object.__setattr__(self, "_declaration", (
+            self.compilation, self.request_basis, self.selection_policy,
+            self.authorization_check, self.catalog, owners,
+            self.selection_policy.identity_for(owners[0].owner_id).canonical_bytes,
+            tuple((function, function.__code__) for function in
+                  (type(self).catalog_for, type(self).result_policy))))
+
+    def require_provenance(self) -> None:
+        expected = self._declaration
+        if (self.compilation is not expected[0] or self.request_basis is not expected[1]
+                or self.selection_policy is not expected[2]
+                or self.authorization_check is not expected[3] or self.catalog is not expected[4]
+                or self.selection_policy.owner_declarations is not expected[5]
+                or self.selection_policy.identity_for(expected[5][0].owner_id).canonical_bytes != expected[6]
+                or tuple((function, function.__code__) for function in
+                         (type(self).catalog_for, type(self).result_policy)) != expected[7]):
+            raise ValueError("동결된 그룹 국면 선언이 변경됐습니다")
+        self.compilation.require_provenance()
+        self.authorization_check.require_provenance()
+        self.selection_policy.owner_declarations[0].require_declaration()
+        if self.catalog_for(
+                self.compilation, self.request_basis, stage=self.selection_policy.stage,
+                language=self.selection_policy.language,
+                authorization_check=self.authorization_check) != self.catalog:
+            raise ValueError("현재 선택 국면의 카탈로그 근거가 변경됐습니다")
+
+    def result_policy(self, group_id: str) -> LeadStagePolicy:
+        self.require_provenance()
+        tasks = self.selection_policy.task_revisions
+        owners = tuple(LeadResultContractOwner(variant, tasks, (self.authorization_check,))
+                       for variant in self.compilation.compile(group_id))
+        if len(self.catalog.group_ids) > 1:
+            owners += (SchemaGroupControlOwner(self.catalog, group_id),)
+        return replace(self.selection_policy, owner_declarations=owners)
 
 
 @dataclass(frozen=True, slots=True)

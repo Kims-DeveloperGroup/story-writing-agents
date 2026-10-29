@@ -58,6 +58,8 @@ from .conversations.events import (
     CollaborationPremiseFreshWorkAdmissionPayload, encode_collaboration_event,
 )
 from .lead_provider_contracts import PremiseDecisionConstraints
+from .lead_provider_contracts import LeadGroupCompilation, LeadGroupedStage
+from .lead_schema_groups import LeadGroupRequestBasis, SchemaGroupControlOwner
 
 from .editorial_scope import (
     EditorialScope, EditorialScopeKind, editorial_scope_contains, intersect_editorial_scopes,
@@ -2375,6 +2377,9 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
     language: str
     authorized_validator: Callable[[str, object], object] = field(repr=False, compare=False)
     reviewer_for_locator: Callable[[str], str] = field(repr=False, compare=False)
+    schema_group_protocol: bool = field(default=False, kw_only=True)
+    _factory_profile: tuple = field(init=False, repr=False, compare=False)
+    _factory_sources: tuple = field(init=False, repr=False, compare=False)
     _declared_authorization_check: Callable[[LeadDecodedResult, HostCheckContext], None] = field(init=False, repr=False, compare=False)
     _authorization_declaration: NamedHostCheck[LeadDecodedResult] = field(init=False, repr=False, compare=False)
     _status_rule: tuple[object, object] = field(
@@ -2396,6 +2401,20 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
                 or not callable(self.authorized_validator) or inspect.iscoroutinefunction(self.authorized_validator)
                 or not callable(self.reviewer_for_locator) or inspect.iscoroutinefunction(self.reviewer_for_locator)):
             raise TypeError("Lead factory requires its exact current owner declaration")
+        if (type(self.schema_group_protocol) is not bool
+                or self.schema_group_protocol and (
+                    self.stage != "lead.front" or self.constraints.preparation_kind is not None
+                    or self.constraints.continuation
+                    or self.rule_seed.contract_id not in {
+                        "lead-response-v6", "lead-response-v7", "lead-response-v8"})):
+            raise ValueError("두 국면 선택은 ordinary Lead front에만 적용합니다")
+        object.__setattr__(self, "_factory_profile", (
+            self.constraints, self.rule_seed, self.stage, self.language,
+            self.schema_group_protocol, self.reviewer_for_locator))
+        object.__setattr__(self, "_factory_sources", tuple(
+            (method, method.__code__) for method in (
+                type(self)._current_owner_declaration, type(self).declare_result_owners,
+                type(self).declare_schema_groups)))
         TypedDecoder.require_hook_shape(self.authorized_validator, 2)
         TypedDecoder.require_hook_shape(self.reviewer_for_locator, 1)
         validator = self.authorized_validator
@@ -2418,6 +2437,14 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
         ))
 
     def require_declaration(self) -> None:
+        profile = self._factory_profile
+        if (self.constraints is not profile[0] or self.rule_seed is not profile[1]
+                or (self.stage, self.language, self.schema_group_protocol) != profile[2:5]
+                or self.reviewer_for_locator is not profile[5]
+                or self._factory_sources != tuple((method, method.__code__) for method in (
+                    type(self)._current_owner_declaration, type(self).declare_result_owners,
+                    type(self).declare_schema_groups))):
+            raise ValueError("동결된 Lead 호출 프로필이 변경됐습니다")
         declaration = self._authorization_declaration
         declaration.require_provenance()
         if (self._declared_authorization_check is not declaration.check
@@ -2430,14 +2457,14 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
     def contract_id(self) -> str:
         return self.rule_seed.contract_id
 
-    def declare_result_owners(self, offers: ContextCallOffers) -> LeadStagePolicy:
+    def _current_owner_declaration(self, offers: ContextCallOffers):
         self._authorization_declaration.require_provenance()
         self._authorization_declaration.dependencies[1](self)
         if type(offers) is not ContextCallOffers:
             raise TypeError("Lead declaration requires actual service-owned physical offers")
         if self.constraints.continuation and self.constraints.review_candidate_ids is None:
             raise ValueError("physical continuation requires frozen review candidates")
-        facts = offers.completed_read_facts + offers.delivery_read_facts
+        facts = tuple(dict.fromkeys(offers.completed_read_facts + offers.delivery_read_facts))
         read_ids = tuple(dict.fromkeys(item.evidence_id for item in facts))
         writing_ids = tuple(dict.fromkeys(item.evidence_id for item in facts
                                         if item.source_kind is ContextSourceKind.WRITING_ARTIFACT))
@@ -2452,11 +2479,6 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
             (item.evidence_id, item.artifact_locator, item.whole_source)
             for item in facts if item.source_kind is ContextSourceKind.WRITING_ARTIFACT
         )
-        variants = current.current_wire_variants(
-            self.rule_seed, read_ids=read_ids, writing_read_ids=writing_ids,
-            writing_read_facts=writing_reads, core_status_facts=offers.core_status_facts,
-        )
-        tasks = current.task_revisions or (() if current.scope is None else ((current.scope.task_id, current.scope.task_revision),))
         facts_bytes = json.dumps({"requirements": [{"path": "$", "rule": "ACTUAL_CURRENT_OWNER_AUTHORIZATION",
             "expected": {"physical_call_id": offers.call_id, "input_ids": current.input_ids,
                 "review_candidate_ids": current.review_candidate_ids,
@@ -2466,10 +2488,49 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
                 "admission": "EXISTING_OWNER_STATE_AND_FINAL_ADMISSION"}}]},
             sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
         check = replace(self._authorization_declaration, corrective_facts=facts_bytes)
+        return current, read_ids, writing_ids, writing_reads, check
+
+    def declare_result_owners(self, offers: ContextCallOffers) -> LeadStagePolicy:
+        current, read_ids, writing_ids, writing_reads, check = self._current_owner_declaration(offers)
+        variants = current.current_wire_variants(
+            self.rule_seed, read_ids=read_ids, writing_read_ids=writing_ids,
+            writing_read_facts=writing_reads, core_status_facts=offers.core_status_facts,
+        )
+        tasks = current.task_revisions or (() if current.scope is None else ((current.scope.task_id, current.scope.task_revision),))
         owners = tuple(LeadResultContractOwner(variant, tasks, (check,)) for variant in variants)
         return LeadStagePolicy(self.stage, offers.call_id, tasks, self.language, offers.offer_digest,
                                current.choice_snapshot(), offers.offer_digest, offers.call_id,
                                owner_declarations=owners)
+
+    def declare_schema_groups(self, offers: ContextCallOffers,
+                              request_basis: LeadGroupRequestBasis, *,
+                              prepared_compilation: LeadGroupCompilation | None = None) -> LeadGroupedStage | None:
+        self.require_declaration()
+        if not self.schema_group_protocol:
+            return None
+        if type(request_basis) is not LeadGroupRequestBasis:
+            raise TypeError("그룹 선택에는 서비스의 정확한 논리 요청 참조가 필요합니다")
+        current, read_ids, writing_ids, writing_reads, check = self._current_owner_declaration(offers)
+        read_facts = tuple(dict.fromkeys(offers.completed_read_facts + offers.delivery_read_facts))
+        if prepared_compilation is not None and type(prepared_compilation) is not LeadGroupCompilation:
+            raise TypeError("재사용할 의미 계획은 정확한 현재 compiler여야 합니다")
+        compilation = prepared_compilation
+        if compilation is None or not compilation.matches_current(
+                current, self.rule_seed, read_facts=read_facts,
+                core_status_facts=offers.core_status_facts):
+            compilation = LeadGroupCompilation(
+                current, self.rule_seed, read_ids, writing_ids, writing_reads, offers.core_status_facts,
+                read_facts=read_facts)
+        catalog = LeadGroupedStage.catalog_for(
+            compilation, request_basis, stage=self.stage, language=self.language,
+            authorization_check=check)
+        tasks = current.task_revisions or (() if current.scope is None else (
+            (current.scope.task_id, current.scope.task_revision),))
+        policy = LeadStagePolicy(
+            self.stage, offers.call_id, tasks, self.language, offers.offer_digest,
+            current.choice_snapshot(), offers.offer_digest, offers.call_id,
+            owner_declarations=(SchemaGroupControlOwner(catalog),))
+        return LeadGroupedStage(compilation, request_basis, policy, check)
 
     def _require_status_rule(self) -> None:
         function, code = self._status_rule

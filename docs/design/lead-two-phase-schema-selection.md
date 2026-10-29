@@ -4,7 +4,7 @@
 
 ## 기준과 적용 범위
 
-현재 기준은 2026-10-29 개정 설계 1.3과 AC-01∼AC-59다. [Lead 전용 인지 정책 전문](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/890#issuecomment-6488708035)도 구현 요구에 포함한다. 기존 56개 조건만으로 완료를 판단하지 않는다.
+현재 기준은 2026-10-29 개정 설계 1.4와 AC-01∼AC-59다. [Lead 전용 인지 정책](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/890#issuecomment-6488708035)에는 매 요청의 명시적 Phase와 짧은 안내 요구를 반영했다. 기존 56개 조건만으로 완료를 판단하지 않는다.
 
 기준 소스는 `05980c814b17bcfbe83a1f7da9b356654018ad17`이다. ordinary Lead front에 적용하며, 현재 허용되는 업무 결과·호출 예산·권한 경계를 보존한다. 준비 또는 discussion profile을 내부 그룹 선택만으로 활성화하지 않는다. 마이그레이션이나 이전 버전 호환 계층은 추가하지 않는다.
 
@@ -60,7 +60,7 @@ SELECT·GENERATE·컨텍스트·교정·인증 replay·반복 재선택은 기�
 
 전송 정책의 추가 경계는 context 서비스의 continuation 적격성·체크포인트·전달 스냅샷과 복구, renderer/provider_wire의 전체·증분 필드·검사·guidance, Codex adapter의 실제 continuation과 호출별 schema 전달이다. Lead의 신뢰된 bound 역할/프로토콜 지시와 호출별 안내를 구분하고, 전문가와 기존 단일 국면 프로필에는 새 선택 계약을 적용하지 않는다. 기존 그룹 도메인의 순수성·권한 경계를 유지한다.
 
-정상 역할은 Root의 요구사항·문서·GitHub·통합, `runtime_implementer`의 생산 코드·모듈 경계·인덱스, `test_engineer`의 테스트다. 이전 두 분석 에이전트의 모델 용량 오류와 허용된 재시도 실패로 Root가 임시 책임을 맡았으나, #894의 두 전문 담당은 현재 읽기 전용 분석을 실제 수행 중이다. 소스 이관과 분석이 끝난 깨끗한 경계에서 정상 역할에 구현 소유권을 반환한다. 모델 전환이나 동일 실패의 추가 재시도는 하지 않는다.
+정상 역할은 Root의 요구사항·문서·GitHub·통합, `runtime_implementer`의 생산 코드·모듈 경계·인덱스, `test_engineer`의 테스트다. 이전 모델 용량 오류 동안의 Root 임시 책임은 #894 소스 이관과 두 전문 분석의 종료 지점에서 정상 담당에게 반환했다. 런타임 담당은 기반 결함을 수정하고 정적 검증을 마쳤으며 테스트 담당은 기존 두 대표 ID에 검증을 추가 중이다. 런타임 실행 통과 증거는 아직 없다.
 
 경계 검토의 대상은 그룹 레지스트리와 명시적 제어 타입, 의미 변형 단계의 compiler, 현재 catalog/selection/binding, 기존 `BoundCallFactory`·`BoundCallContract`의 owner 연결, ordinary front와 context 실행 루프다. 새 그룹 도메인은 Provider 프로세스·저장소·사용자 권한을 소유하지 않는다. 기존 서비스가 호출·교정·예산 생명주기를 소유한다.
 
@@ -80,7 +80,7 @@ SELECT·GENERATE·컨텍스트·교정·인증 replay·반복 재선택은 기�
 
 59개 조건에는 각각 하나의 주 담당 자식이 있고 후속 자식의 통합 증거를 함께 요구할 수 있다. 자식 완료를 부모 전체 조건 통과로 간주하지 않는다. 선행 자식이 통합되어 차단이 해소된 실행 가능 자식만 Ready로 전환하고 구현 시작 시 In progress로 옮긴다.
 
-현재 #894의 기준은 부모 tip `02743ec3ae326e7bb74c7ac61e564cc018c4d82b`다. 이 문서의 개정과 작업 분해가 시작 Draft PR의 첫 변경이며 생산 코드·테스트는 아직 게시하지 않았다. 부모의 6개 소유 미커밋 파일은 패치와 파일별 해시로 보관되어 있다. 검증된 바이트 동일 이관 뒤 기반 결함을 수정하고, 실제 ordinary front 활성화는 실행·전송 자식이 완성할 때까지 보류한다.
+현재 #894의 기준은 부모 tip `02743ec3ae326e7bb74c7ac61e564cc018c4d82b`다. 문서 시작 커밋 `a590ed48`과 [Draft PR #899](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/899)를 먼저 만들었다. 부모의 6개 소유 미커밋 파일은 패치와 파일별 해시로 보관한 뒤 자식에 이관했고, 읽기 작업과 바이트 대조를 마친 부모는 clean 통합 베이스로 복구했다. 실제 ordinary front 활성화는 실행·전송 자식이 완성할 때까지 보류한다.
 
 ## 완료 조건별 증거 표
 
@@ -152,15 +152,26 @@ SELECT·GENERATE·컨텍스트·교정·인증 replay·반복 재선택은 기�
 
 입력은 `ProviderInvocation.payload_json`의 UTF-8 stdin, 전체 출력 스키마는 별도 `ProviderInvocation.schema`의 `--output-schema` 파일이다. 내부 selector만 전체 출력 스키마로 쓰거나 API 래퍼를 덧붙이지 않는다. 현재 출력 스키마는 닫힌 `agent_action` 루트이며 최종 투영의 모든 object는 properties 전체를 required에 포함한다. 실제 의미상 부재/null 규칙과 동적 맵의 제공 키는 기존 owner가 보존한다.
 
+사용자 지시에 따라 Codex 구조화 출력은 `strict: true` 경로를 유지한다. 확인한 로컬 CLI는 `0.164.0`이며, 대응 버전의 요청 생성 코드와 CLI 회귀 테스트는 `--output-schema`의 원래 스키마를 `text.format`의 `type: "json_schema"`, `strict: true`와 결합한다. Host의 스키마 파일 자체에 요청 옵션을 섞지 않는다. [공식 Structured Outputs 사양](https://developers.openai.com/api/docs/guides/structured-outputs)에 따라 strict 모드의 지원 범위를 벗어난 스키마는 오류로 거절된다. strict 설정이 지원되지 않는 키워드나 정규식을 자동 변환하지는 않는다. 개발 guardrail로 최종 스키마의 지원 범위를 검사하고 실제 로컬 Provider 호출로 native 수용과 타입 결과를 별도 확인한다.
+
 Host 제어 위치는 정확히 `response_contract.schema_selection`이다. 매 호출의 phase·issued_contract·remaining_provider_calls·context_delivery를 현재 bound 계약과 일치시킨다. 최초 bootstrap과 카탈로그 갱신은 전체 카드를, 변경 없는 적격 delta는 catalog_id를 제공한다. GENERATE에는 원래 선택을 참조하는 active_selection을 포함한다. 새 필드와 값은 wire 정의·입력 검사·guidance에 함께 등록한다. 사용자·문서 본문의 phase 문자열을 제어로 승격하지 않고 불일치는 호출 전 구성 오류로 처리한다.
 
 정상 GENERATE와 재선택은 검증된 스레드·adapter/원장 적격성·보존된 checkpoint 맥락을 사용해 변경분과 현재 계약만 보낸다. 변경 없는 요청·근거·전체 카탈로그를 새 stdin에 반복하지 않는다. 생략은 삭제가 아니며 실제 추가·교체·제거는 명시한다. 독립 호출·복구는 필요한 원래 자료를 실제로 재전달하고 사유·비용을 기록한다. ID를 모델의 자료 조회 기능으로 간주하지 않는다. 제출 불확실성을 자동 replay로 해결하지 않는다.
 
 Lead 공통 지시는 신뢰된 bound 역할/프로토콜 지시에 둔다. 호출별 안내는 현재 phase·허용 액션·스키마에서 생성한다. SELECT의 선택 제출과 GENERATE의 재선택은 물리 호출의 종료이며 업무 완료가 아니다. 전문가 및 기존 단일 국면 호출은 기존 계약과 종료 방식을 유지한다. 역할 지시가 호출마다 실제 재전달되는 비용도 관측하며 증분 전송량 감소를 모델 토큰·비용 감소로 단정하지 않는다.
 
+각 실제 요청에는 현재 단계가 Phase 1/2 중 무엇인지 명시한 짧은 안내를 전달한다. 컨텍스트 후속·교정·재선택 후 생성·복구도 같은 기준을 적용한다. Phase 1은 두 단계의 기능을, Phase 2는 현재 생성 기능만 설명하며 긴 지시문과 체크리스트를 반복하지 않는다.
+
+| 현재 단계 | 매 요청의 안내 |
+|---|---|
+| Phase 1 / SELECT | 현재 단계는 Phase 1(그룹 선택)입니다. Phase 2에서는 선택한 그룹의 상세 계약에 따라 실제 답변을 작성합니다. |
+| Phase 2 / GENERATE | 현재 단계는 Phase 2(답변 생성)입니다. 선택한 그룹의 상세 계약에 따라 실제 답변을 작성하세요. |
+
 ## 검증 기록
 
-부모 작업트리의 미커밋 구현에 순수한 `lead_schema_groups` 도메인과 의미상 변형 단계의 그룹 분류를 추가했다. 레지스트리 15개가 설명과 구성원 판정을 함께 소유하고, 카탈로그·선택 기록·현재 생성 연결은 불변 값이다. 제어 owner는 중앙 `BoundContract`가 정확한 `schema_id`를 더할 규칙과 명시적 선택/재선택 decoder를 제공한다. compiler는 카탈로그용 의미 변형 수집과 선택 그룹의 전체 factoring/partition을 구분한다. 해당 소스는 구문·의존 경계만 정적으로 확인했으며 런타임 통과 증거는 없다. 전문 분석이 발견한 기반 결함의 수정과 회귀 테스트, 실제 ordinary front 및 호출 루프 연결이 남아 있다.
+#894 자식에서 순수한 `lead_schema_groups` 도메인과 의미 변형 단계의 그룹 분류를 구현했다. 레지스트리 15개가 설명과 구성원 판정을 함께 소유한다. 카탈로그·선택 기록은 불변이며 현재 생성 연결은 실제 outer/inner 계약 전체와 offer·호출·교정/replay 근거를 보존한다. 제어 owner는 중앙 `BoundContract`의 정확한 `schema_id`와 선택/재선택 decoder를 결합한다. compiler는 준비된 의미 계획과 선택 그룹 전체의 factoring/partition을 구분한다. 공통 compiler 인자, 추천 eligibility, 전체 READ 사실, 정확한 member 소속과 decoder source drift를 보완했다. 구문·의존 경계·인덱스 정적 검토와 기존 대표 테스트의 oracle 작성은 마쳤으나 런타임 통과 증거는 아직 없다.
+
+정확한 소스 배정은 [테스트 정책](../../TEST_POLICY.md)의142604→142886 전환이다. 기존 ID·subTest·시간 한도와 모든 기존 assert를 보존한다. 추가 Whole Front 경로의 정적 최대는 plan11개·그룹 factoring24회이며91×15 재컴파일을 추가하지 않는다. 실제 실행 비용·성공 여부는 영향 테스트와 전체 CI에서 측정한다. 로컬 격리4건은 보존하며 Actions의 수동 affected 경로로 정확한 정규 ID를 실행한다.
 
 현재 문서 준비 중 설계의 JSON 예시 16개를 JSON으로 파싱했고, 예시 selector의 필수 필드 다섯 개·닫힌 객체 및 카탈로그 카드 15개의 네 필드를 정적으로 대조했다. 이 검사는 예시의 구문·기본 형태 검토이며 실제 compiler/decoder/권한/상태 전이의 통과 증거가 아니다.
 
