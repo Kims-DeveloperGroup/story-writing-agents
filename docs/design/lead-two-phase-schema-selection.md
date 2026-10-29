@@ -169,9 +169,31 @@ Lead 공통 지시는 신뢰된 bound 역할/프로토콜 지시에 둔다. 호�
 
 ## 검증 기록
 
+### #894 통합 완료와 #895의 시작 경계
+
+#894는 부모 브랜치의 `934340c8548f50cdbcc26e58d0868aaf18c0387e`에
+squash 통합했고 완료 조건7개와 종료·Project Done을 확인했다. 검증 소스
+`d87884a2`와 통합 tree는 동일하다. 전체5개 CI shard와 집중3개 ID가 통과했고,
+실제 Codex CLI0.164.0/Python3.11의 SELECT·GEN 두 요청도 typed 검증을 통과했다.
+현재 설정의 모델·effort 기본값을 유지했으며 실제 resolved model은 추정하지 않는다.
+프로세스 종료 후 PID·공유 그룹 소멸을 별도 감사했다.
+[최종7조건 증거](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/894#issuecomment-6495921983)에
+실패 이력·원본 정리 결과·추가 감사와 실제 schema/input 해시를 함께 보존한다.
+
+#895는 이 기반에서 실행 엔진을 연결한다. 예를 들어 인사 요청은
+SELECT→GENERATE의 두 번, 유효한 직접 재선택은 SELECT→GENERATE(재선택)→GENERATE의
+세 번을 같은 기존 한도에서 사용해야 한다. 선택 제어를 받은 시점에는 업무 결과를
+발행하거나 완료 checkpoint를 만들지 않고, 실제 업무 결과에서만 기존 승인 경계를 지난다.
+READ 뒤에도 원래 선택 기록을 보존하고 현재 그룹의 유효성과 fresh binding을 다시 확인한다.
+
+현재 이 실행 연결은 구현 전이다. #895만으로 사용자 프로필을 활성화하지 않으며,
+#896의 전송·짧은 현재 Phase 안내가 모두 갖춰질 때 안전하게 연결한다. 부모의
+59개 조건 전체와 원래 입력의 종단 검증은 계속 후속 작업이다.
+
+
 #894 자식에서 순수한 `lead_schema_groups` 도메인과 의미 변형 단계의 그룹 분류를 구현했다. 레지스트리 15개가 설명과 구성원 판정을 함께 소유한다. 카탈로그·선택 기록은 불변이며 현재 생성 연결은 실제 outer/inner 계약 전체와 offer·호출·교정/replay 근거를 보존한다. 제어 owner는 중앙 `BoundContract`의 정확한 `schema_id`와 선택/재선택 decoder를 결합한다. compiler는 준비된 의미 계획과 선택 그룹 전체의 factoring/partition을 구분한다. 공통 compiler 인자, 추천 eligibility, 전체 READ 사실, 정확한 member 소속과 decoder source drift를 보완했다. 구문·의존 경계·인덱스 정적 검토와 기존 대표 테스트의 oracle 작성은 마쳤으나 런타임 통과 증거는 아직 없다.
 
-정확한 소스 배정은 [테스트 정책](../../TEST_POLICY.md)의142604→142886 전환이다. 기존 ID·subTest·시간 한도와 모든 기존 assert를 보존한다. 추가 Whole Front 경로의 정적 최대는 plan11개·그룹 factoring24회이며91×15 재컴파일을 추가하지 않는다. 실제 실행 비용·성공 여부는 영향 테스트와 전체 CI에서 측정한다. 로컬 격리4건은 보존하며 Actions의 수동 affected 경로로 정확한 정규 ID를 실행한다.
+정확한 소스 배정은 [테스트 정책](../../TEST_POLICY.md)의142604→142887 전환이다. 기존 ID·subTest·시간 한도와 모든 기존 assert를 보존한다. 추가 Whole Front 경로의 정적 최대는 plan11개·그룹 factoring24회이며91×15 재컴파일을 추가하지 않는다. 실제 실행 비용·성공 여부는 영향 테스트와 전체 CI에서 측정한다. 로컬 격리4건은 보존하며 Actions의 수동 affected 경로로 정확한 정규 ID를 실행한다.
 
 현재 문서 준비 중 설계의 JSON 예시 16개를 JSON으로 파싱했고, 예시 selector의 필수 필드 다섯 개·닫힌 객체 및 카탈로그 카드 15개의 네 필드를 정적으로 대조했다. 이 검사는 예시의 구문·기본 형태 검토이며 실제 compiler/decoder/권한/상태 전이의 통과 증거가 아니다.
 
