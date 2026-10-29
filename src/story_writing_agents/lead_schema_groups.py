@@ -13,7 +13,7 @@ from enum import StrEnum
 
 from .structured_output_validation import (
     BoundContract, ContractOwner, NamedHostCheck, SchemaRules, SelectedContract, TypedDecoder, ValidatedValue,
-    closed_rule,
+    closed_map_rule,
 )
 
 LEAD_GROUP_CATALOG_VERSION = "lead-groups-v1"
@@ -357,7 +357,7 @@ class SchemaGroupControlOwner(ContractOwner[SchemaGroupControl]):
         response_type = ("schema_group_selection" if self.current_group_id is None
                          else "schema_group_reselection")
         object.__setattr__(self, "owner_id", "lead." + response_type + "." + self.catalog.catalog_id)
-        graph = closed_rule({
+        graph = closed_map_rule({
             "response_type": {"type": "string", "enum": [response_type],
                               "description": "이번 제어 계약에 제공된 고정 응답 타입을 그대로 반환합니다."},
             "catalog_id": {"type": "string", "enum": [self.catalog.catalog_id],

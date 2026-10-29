@@ -338,8 +338,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 163)
-        self.assertEqual(len(edges), 733)
+        self.assertEqual(len(modules), 164)
+        self.assertEqual(len(edges), 738)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {

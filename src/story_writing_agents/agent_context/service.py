@@ -896,6 +896,10 @@ class BoundCallContract:
                         "LEAD_RESULT_UTF8_LIMIT", member.schema_id,
                         ("$.task_result: semantic result UTF8 limit 65536",)),
                     {"$": action_root})
+            if type(self.semantic_index.select(expected_inner).owner) is SchemaGroupControlOwner:
+                findings = self.rule_graph.findings(value)
+                if findings:
+                    raise LeadContractRejection("LEAD_SCHEMA_RULE_REJECTED", member.schema_id, findings)
         try:
             action_value = member.validate_value(action)
         except ContractRejection as failure:
