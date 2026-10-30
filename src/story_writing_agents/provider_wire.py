@@ -1917,6 +1917,11 @@ LEAD_GROUP_PHASE_GUIDES = MappingProxyType({
     "select": "현재 단계는 Phase 1(그룹 선택)입니다. Phase 2에서는 선택한 그룹의 상세 계약에 따라 실제 답변을 작성합니다.",
     "generate": "현재 단계는 Phase 2(답변 생성)입니다. 선택한 그룹의 상세 계약에 따라 실제 답변을 작성하세요.",
 })
+ENUM_MEANINGS.update({
+    "select": "Phase 1 selects an offered response group; selection is internal control, not business completion or authority.",
+    "generate": "Phase 2 generates the actual answer under the selected group's exact current contract.",
+})
+_catalog("phase", "Current phase of the enclosing runtime protocol or exact historical Apply record. Supplied choices state its meaning; no phase grants new authority.")
 
 
 @dataclass(frozen=True, slots=True)
