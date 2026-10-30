@@ -41,11 +41,12 @@ def rewrite_history(events, event_id, **changes):
     return tuple(result)
 
 
-def _native_objective_response(call, *, response_type, message, scope, update, branch):
+def _native_objective_response(call, *, response_type, message, scope, update, branch, selection_group=None):
     from tests.provider_wire_fixture import ( lead_fixture_bound_scope, lead_fixture_result, lead_fixture_response)
     fields = {'task_scope': lead_fixture_bound_scope(call, scope, record=True),
               'response_type': response_type, 'response_text': message,'document_change_request_update': update}
-    return lead_fixture_response(call, lead_fixture_result(fields), family=0, branch_key=branch)
+    return lead_fixture_response(call, lead_fixture_result(fields), family=0,
+        branch_key=branch if selection_group is None else branch + ":group:" + selection_group)
 
 
 class ObjectiveCase(lead.LeadOrchestrationTestCase):
@@ -75,12 +76,12 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             subprocess.check_output(["git", "diff", "--cached", "--binary"], cwd=self.workspace.root),
         )
 
-    def question(self, *, intent=None, message=DRAFT, native_update=None):
+    def question(self, *, intent=None, message=DRAFT, native_update=None, selection_group=None):
         def respond(call, _provider):
             if native_update is not None:
                 return _native_objective_response(call, response_type='clarification_question', message=message,
                     scope={**self.scope(call, intent=intent, activity='draft'), 'domains': ['plot_structure']},
-                    update=native_update, branch='lead-response-v8:family:1')
+                    update=native_update, branch='lead-response-v8:family:1', selection_group=selection_group)
             return lead._provider_envelope(call, {"recommended_action": None,
                 "scope": "story_specific", "evidence_status": "empty",
                 "evidence_ids": [artifact._status_id(_provider.callback_payload(call), OUTLINE)],
@@ -178,7 +179,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
                     'next_step': 'clarify',
                     'draft_source_event_ids': [],}, message=message,
                 native_update={'update_type': 'start_request',
-                    'target_artifact_paths': [OUTLINE],'requested_workflow_step': 'ask_clarification'}),
+                    'target_artifact_paths': [OUTLINE],'requested_workflow_step': 'ask_clarification'}, selection_group='question.authoring'),
                              control_plan=selection_plan("question.authoring"))
         turn = await self.runtime.lead_turn(self.session_id, conversation_id, f"Help me clarify the ending before drafting {OUTLINE}.")
         self.assertIs(turn.kind, c.LeadOutcomeKind.QUESTION)
@@ -330,7 +331,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.backend.enqueue(lambda call, _provider: _native_objective_response(call, response_type='answer',
             message='Objective cancelled.', scope=lead._live_scope(call),
             update={'update_type': 'cancel_request', 'document_change_request_id': objective_id},
-            branch='lead-response-v8:family:0'),
+            branch='lead-response-v8:family:0', selection_group='answer.workflow'),
                              control_plan=selection_plan("answer.workflow"))
         cancelled = await self.runtime.lead_turn(self.session_id, conversation_id, "Cancel this writing objective.")
         self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.CANCELLED, cancelled)

@@ -4587,7 +4587,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             return json.dumps(native)
         clarify_pending = case.question(intent=intent, message=question_text, native_update={
             'update_type': 'continue_request', 'document_change_request_id': pending.facts.objective_id,
-            'requested_workflow_step': 'ask_clarification'})
+            'requested_workflow_step': 'ask_clarification'}, selection_group="question.authoring")
         def repair_pending_question(call, provider):
             self.assertEqual(current_pending_scope(call), captured_scopes[0])
             return clarify_pending(call, provider)

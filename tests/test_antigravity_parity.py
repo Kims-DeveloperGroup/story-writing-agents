@@ -1102,6 +1102,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.antigravity_adapter import AntigravityAdapter as AG
         from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
         invocations, setup_calls, front_call_kinds = [], [], []
+        front_provider_results = []
         original = lead._LeadContextProvider.invoke_context
         expected = (
             (BoundContextProviderCallRequest, LEAD_ORCHESTRATOR, "lead.front", "lead-response-v8"),
@@ -1138,9 +1139,11 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         invocations.append((index, invocation))
                         if index < 2:
                             assert invocation.payload_json is not None
-                        return ProviderResult(scripted.thread_id, response,
+                        native_result = ProviderResult(scripted.thread_id, response,
                             usage=ProviderUsage(input_tokens=1, output_tokens=1),
                             actual_transport_utf8_bytes=len(invocation.payload_json))
+                        if index == 0: front_provider_results.append(native_result)
+                        return native_result
                     definition = assembler.build_definition(session_id=case.session_id,
                                                             agent_id=request.scope.agent_id)
                     bound = await backend.bind(definition)
@@ -1164,6 +1167,16 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                                                  (response, scripted.thread_id))
                                 self.assertIs(result.accounting.state, ProviderCallState.SUBMITTED)
                                 front_call_kinds.append(result.accounting.payload.call_kind)
+                                selection = request.payload["response_contract"]["schema_selection"]
+                                self.assertEqual(selection["context_delivery"]["mode"], "bootstrap")
+                                self.assertNotIn("base_context_ref", selection["context_delivery"])
+                                self.assertNotIn("context_changes", request.payload)
+                                self.assertEqual(selection["catalog"], request.contract.group_stage.catalog.as_object())
+                                self.assertIn("core_document_statuses", request.payload)
+                                self.assertEqual(lead._expanded_context_payload(request.payload)["task_input"]["user_request_text"],
+                                                 "Visible lead request.")
+                                self.assertIsNone(request.context_witness)
+                                self.assertIsNone(request.context_anchor)
                                 self.assertEqual(result.accounting.usage,
                                                  ProviderUsage(input_tokens=1, output_tokens=1))
                             elif index == 1:
@@ -1195,7 +1208,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 setup_calls.append(len(case.backend.calls))
         self.assertEqual(([index for index, _ in invocations], setup_calls), ([0, 0, 1, 2, 3], [3, 5]))
         self.assertEqual(front_call_kinds, [ProviderCallKind.COLLABORATION_INITIAL,
-                                           ProviderCallKind.COLLABORATION_CONTINUATION])
+                                           ProviderCallKind.COLLABORATION_INITIAL])
+        self.assertEqual([result.context_witness for result in front_provider_results], [None, None])
         self.assertEqual([json.loads(invocation.payload_json)["response_contract"]["schema_selection"]["phase"]
             for index, invocation in invocations if index == 0], ["select", "generate"])
 

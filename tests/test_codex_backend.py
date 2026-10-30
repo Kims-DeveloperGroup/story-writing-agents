@@ -2775,6 +2775,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             nonlocal reader_faults_checked
             self.assertLess(len(invocations), len(phases))
             assert_phase_guide(self, requests[-1], phases[len(invocations)])
+            if not invocations:
+                self.assertIsNone(invocation.context_witness)
+                self.assertIsNone(invocation.context_anchor)
             invocations.append(invocation)
             if not reader_faults_checked:
                 self._assert_owned_native_context_witness(invocation)
@@ -2858,7 +2861,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             return json.dumps(packet)
         responses = [_group_control("answer.workflow"), no_hit_search, rejected_generate, _group_answer]
         phases = (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE)
-        rejected_request = _group_request(replace(request, group_state=None, fresh=True,
+        rejected_request = _group_request(replace(request, group_state=None,
             operation_id="grouped-reader-reject", result_correlation_id="grouped-reader-reject-result", physical_call_limit=3))
         authorities = dict(writing_artifacts=WritingArtifactSourceAdapter(repository, scope),
             focused_conversation=FocusedConversationSourceAdapter(storage.catalog, storage.event_store, scope, None),
