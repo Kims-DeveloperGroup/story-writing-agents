@@ -211,7 +211,10 @@ class RecommendationActionContractTests(RecommendationCase):
         wire = c.encode_collaboration_event(objective_event)
         self.assertIn(b'"payload_type":"artifact_objective_v2"', wire)
         self.assertEqual(c.decode_collaboration_event(wire), objective_event)
-        other, completed = await self.start()
+        other, completed_turn = await self.start()
+        completed = self.projection(other).current_proposal
+        self.assertIsNotNone(completed)
+        self.assertEqual(completed.step_id, completed_turn.step_id)
         before = self.objective(other).facts
         old_event = self.payload_events(other, c.ArtifactObjectivePayload)[0]
         old_wire = c.encode_collaboration_event(old_event)

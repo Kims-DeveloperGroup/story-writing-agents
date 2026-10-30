@@ -250,7 +250,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         retried = await restarted.lead_turn(
             self.session_id, conversation, "New request after failed revision.")
         self.assertEqual(retry_findings, [()])
-        self.assertIs(retried.kind, LeadOutcomeKind.ANSWER)
+        self.assertIs(retried.kind, LeadOutcomeKind.DISCUSSION)
         self.assertEqual(retried.message, "Synthetic retry succeeded.")
         self.assertEqual(len(self.backend.calls), before + 1)
         self.assertIsNone(self.backend.calls[-1].contract.schema_group_phase)

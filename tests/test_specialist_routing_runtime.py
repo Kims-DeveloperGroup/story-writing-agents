@@ -359,7 +359,18 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 for member in call.contract.semantic_index.contracts
                 if type(member.owner) is LeadResultContractOwner and member.owner.variant.group_id == "premise.analysis"
                 and member.rule_graph.literal_at(("response_type",)) == "specialist_consultation_proposal"}
-            return lead_fixture_response(call, lead_fixture_result(native), family=0, branch_key=branch)
+            raw = lead_fixture_response(call, lead_fixture_result(native), family=0, branch_key=branch)
+            action = json.loads(raw)["agent_action"]
+            body = action["task_result"]
+            self.assertIn("authoring_assessment", body["response_details"], raw)
+            self.assertIsNone(body["response_details"]["authoring_assessment"], raw)
+            self.assertEqual(dict(call.contract.outer_inner_schema_ids)[action["schema_id"]], body["schema_id"])
+            owner = call.contract.semantic_index.select(body["schema_id"]).owner
+            self.assertIs(type(owner), LeadResultContractOwner)
+            self.assertEqual(owner.variant.group_id, call.contract.group_workflow.active_selection.group_id)
+            self.assertTrue(findings := call.contract.structural_findings(raw), "current contract allows authoring_assessment=None")
+            self.assertTrue(any("authoring_assessment" in item for item in findings), findings)
+            return raw
         refused = await self._rejected_pair(self.conversation(), "Explore who knows the motive.",
             premise_with_extra, selection_group='premise.analysis')
         self.assertIsNone(refused.proposal)
