@@ -284,12 +284,17 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                           offers.issued_handle_aliases)
             self.assertEqual(offers.completed_read_facts, ())
             self.assertEqual(offers.delivery_read_facts, ())
+            self.assertEqual(call.contract.semantic_index.policy.task_revisions,
+                             ((proposed.proposal.authoring_scope.task_id, 2),))
+            ((task_id, task_revision),) = call.contract.semantic_index.policy.task_revisions
+            scope = {"activity": "draft", "intent": "authoring", "target_paths": [OUTLINE],
+                     "domains": ["plot_structure"], "task_id": task_id, "task_revision": task_revision,
+                     "contributions": [{"domain": "plot_structure", "role": "draft_owner"}],
+                     "dependency_slots": []}
             return lead_fixture_response(call, {
                 "response_type": "clarification_question",
                 "response_text": "Please provide the matching prior response so I can inspect it before offering fresh work.",
-                "response_details": {"task_scope": lead_fixture_bound_scope(call, _live_scope(
-                    call, activity="draft", domains=("plot_structure",), paths=(OUTLINE,)),
-                    record=True)},
+                "response_details": {"task_scope": lead_fixture_bound_scope(call, scope, record=True)},
             }, family=0, branch_key=call.contract.factory.rule_seed.contract_id + ":family:1")
 
         self.backend.enqueue(

@@ -2739,6 +2739,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             FocusedConversationSourceAdapter, OwnAgentStateSourceAdapter, WritingArtifactSourceAdapter)
         from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
+        from story_writing_agents.lead_provider_contracts import LeadContractRejection
         from tests.test_agent_context_execution import (_LEAD_CALL_FACTORY, _PRIVATE_INPUT, _materials,
             _group_request, _group_control, _group_answer, _search)
         from story_writing_agents.provider_process import ProcessResult
@@ -2929,17 +2930,20 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         responses = [_group_control("answer.workflow"), _group_answer]
         phases = (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE)
         host_rejection = ValueError("Host rejected the valid typed result.")
+        host_callback_reached = []
         def reject_business(answer, authorization):
             _LEAD_CALL_FACTORY.authorized_validator(answer, authorization)
             self.assertEqual(provider.inspect_context_thread(scope, requests[-1].policy_fingerprint), history.thread_id)
+            host_callback_reached.append(True)
             raise host_rejection
         host_factory = replace(_LEAD_CALL_FACTORY, authorized_validator=reject_business)
         host_request = _group_request(replace(request, group_state=None, result_contract=host_factory,
             operation_id="grouped-reader-host", result_correlation_id="grouped-reader-host-result", physical_call_limit=2))
         with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
-            with self.assertRaises(ValueError) as denied:
+            with self.assertRaises(LeadContractRejection) as denied:
                 await service.invoke(host_request, ObservedProvider(), **authorities)
-        self.assertIs(denied.exception, host_rejection)
+        self.assertEqual(denied.exception.code, "LEAD_OWNER_RULE_REJECTED")
+        self.assertEqual(host_callback_reached, [True])
         host_facts = context_provider_failure_facts(denied.exception)
         self.assertEqual((len(invocations), len(native_commands), len(host_facts.submitted_accountings)), (2, 2, 2))
         self.assertEqual(requests[1].contract.structural_findings(raw_responses[1]), ())
