@@ -1314,11 +1314,14 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             selected_profile(call, (task_id, 2))
             return successor_writer(call, provider)
         self.backend.enqueue(successor_frame)
+        expected_aliases = ["current_response",
+            *(source.event_id for source in c.project_collaboration_history(self.history(conversation)).offered_draft_sources), "user_input"]
         pending = await self._lead_turn(conversation, _ADMISSION_BRIEF)
         self.assertEqual(len(successor_material), 1, pending)
         observed_successor = json.loads(successor_material[0])
         self.assertEqual([(t["task_id"], t["task_revision"]) for t in observed_successor["authoring_tasks"]], [(task_id, 2)], pending)
-        self.assertEqual(observed_successor["available_proposal_drafting_source_ids"], [], pending)
+        self.assertEqual([item["input_id"] for item in observed_successor["input_aliases"]], ["user_input"], pending)
+        self.assertEqual(observed_successor["available_proposal_drafting_source_ids"], expected_aliases, pending)
         self.assertIs(pending.kind, c.LeadOutcomeKind.PROPOSAL, pending)
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("drafted", "Summons leads choice; choice causes consequence."))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome(message="The draft material is available for integration; no artifact changed."))
