@@ -1190,12 +1190,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.assertEqual(event.payload.receipt.action, decision.action)
             self.assertEqual(event.payload.receipt.source_task_ref, decision.task_ref)
             return event
-        positive_sources = []
         def initial_recommendation(call, provider):
-            replies = _workflow_material(provider.callback_payload(call))["replies"]
-            positive_sources.append([reply["reply_event_id"] for reply in replies if reply["mode"] == "draft"][-1])
+            self.assertIn("current_response", dict(call.contract.semantic_index.policy.choices)["source_ids"])
             return _synthesis_outcome(message="The draft material is available for integration; no artifact changed.",
-                recommendation_family=1, recommended_action=action(source_ids=(positive_sources[-1],),
+                recommendation_family=1, recommended_action=action(source_ids=("current_response",),
                     target_paths=(path,), specialist_ids=ROSTER))(call, provider)
         original, drafted = await self.finish_draft(conversation, response=self._native_scoped(
             *ROSTER, domains=("plot_structure", "character_world", "tone_execution"),
@@ -1206,7 +1204,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         task_id=original.proposal.authoring_scope.task_id
         ready = drafted.turn
         self.assertIsNotNone(ready.recommendation_request, ready)
-        self.assertEqual(tuple(source.event_id for source in ready.recommendation_request.draft_sources), (positive_sources[-1],))
+        self.assertEqual(tuple(source.event_id for source in ready.recommendation_request.draft_sources), (old_source,))
+        self.assertEqual(ready.recommendation_request.source_recommendation_event_id, old_source)
+        self.assertEqual(ready.recommendation_request.draft_sources[0].content_digest, "sha256:" + hashlib.sha256("The draft material is available for integration; no artifact changed.".encode("utf-8")).hexdigest())
         response = _artifact_outcome(operations=[{"kind": "create", "suggested_path": path, "new_text": "Synthetic chronology remains explicit.\n"}],
             evidence_status="incomplete", evidence_ids=lambda call, material, *, input_payload: [input_payload["core_document_statuses"][0]["evidence_id"]],
             objective_intent={"action": "start", "target_paths": {path: True}, "next_step": "prepare"},
@@ -1332,12 +1332,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         multiple = self.conversation()
         before_multiple = self.artifact_bytes()
         multi_path = "manuscript/part-01/nonfirst-successor.md"
-        multiple_sources = []
         def multiple_recommendation(call, provider):
-            replies = _workflow_material(provider.callback_payload(call))["replies"]
-            multiple_sources.append([reply["reply_event_id"] for reply in replies if reply["mode"] == "draft"][-1])
+            self.assertIn("current_response", dict(call.contract.semantic_index.policy.choices)["source_ids"])
             return _synthesis_outcome(message="The draft material is available for integration; no artifact changed.",
-                recommendation_family=1, recommended_action=action(source_ids=(multiple_sources[-1],),
+                recommendation_family=1, recommended_action=action(source_ids=("current_response",),
                     target_paths=(multi_path,), specialist_ids=ROSTER))(call, provider)
         first_draft, first_drafted = await self.finish_draft(multiple, response=self._native_scoped(
             *ROSTER, domains=("plot_structure", "character_world", "tone_execution"),
@@ -1346,7 +1344,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         first_source = c.project_collaboration_history(self.history(multiple)).offered_draft_sources[-1].event_id
         first_ready = first_drafted.turn
         self.assertIsNotNone(first_ready.recommendation_request, first_ready)
-        self.assertEqual(tuple(source.event_id for source in first_ready.recommendation_request.draft_sources), (multiple_sources[-1],))
+        self.assertEqual(tuple(source.event_id for source in first_ready.recommendation_request.draft_sources), (first_source,))
+        self.assertEqual(first_ready.recommendation_request.source_recommendation_event_id, first_source)
+        self.assertEqual(first_ready.recommendation_request.draft_sources[0].content_digest, "sha256:" + hashlib.sha256("The draft material is available for integration; no artifact changed.".encode("utf-8")).hexdigest())
         first_response = _artifact_outcome(operations=[{"kind": "create", "suggested_path": multi_path, "new_text": "Synthetic chronology remains explicit.\n"}],
             evidence_status="incomplete", evidence_ids=lambda call, material, *, input_payload: [input_payload["core_document_statuses"][0]["evidence_id"]],
             objective_intent={"action": "start", "target_paths": {multi_path: True},
