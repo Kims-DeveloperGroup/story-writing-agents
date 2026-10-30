@@ -327,8 +327,9 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         preserved_history = (self.history(first), self.history(second))
         preserved_approval = self.runtime.inspect_editorial_state(self.session_id)
         submitted_before = tuple(self.backend.call_records)
+        self.backend.enqueue(control_plan=())
         with self.assertRaises(SessionContextCapacityError) as initial_capacity:
-            await self.say(capacity_conversation, "Review ${core_documents/global_outline.md} before answering.")
+            await self.runtime.lead_turn(self.session_id, capacity_conversation, "Review ${core_documents/global_outline.md} before answering.")
         self.assertEqual(initial_capacity.exception.stage, "provider_payload")
         self.assertGreater(initial_capacity.exception.actual_utf8_bytes, MAX_SESSION_CONTEXT_UTF8_BYTES)
         self.assertEqual(initial_capacity.exception.maximum_utf8_bytes, MAX_SESSION_CONTEXT_UTF8_BYTES)
@@ -355,9 +356,10 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             if row.metadata.conversation_id == capacity_conversation)
         self.assertEqual(archived_row.metadata.status.value, "archived")
         self.assertEqual(restart_storage.event_store.read(self.session_id, capacity_conversation), capacity_history)
+        self.backend.enqueue(control_plan=())
         with self.assertRaises(SessionContextCapacityError) as restarted_capacity:
-            await self.say(restart_conversation, "Review ${core_documents/global_outline.md} before answering.",
-                runtime=capacity_restart)
+            await capacity_restart.lead_turn(self.session_id, restart_conversation,
+                "Review ${core_documents/global_outline.md} before answering.")
         self.assertEqual(restarted_capacity.exception.stage, "provider_payload")
         self.assertGreater(restarted_capacity.exception.actual_utf8_bytes, MAX_SESSION_CONTEXT_UTF8_BYTES)
         self.assertNotIn(marker.strip(), str(restarted_capacity.exception))

@@ -333,6 +333,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         for path in (OUTLINE, CHARACTER, "core_documents/narrative_rules.md", "core_documents/part_outlines.md"):
             self.workspace.path(path).write_bytes(b"")
         before_premise = len(self.backend.calls)
+        native_findings = []
         def premise_with_extra(call, provider):
             initial = self.backend.calls[before_premise]
             self.assertIs(initial.contract.factory, call.contract.factory)
@@ -368,11 +369,15 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             owner = call.contract.semantic_index.select(body["schema_id"]).owner
             self.assertIs(type(owner), LeadResultContractOwner)
             self.assertEqual(owner.variant.group_id, call.contract.group_workflow.active_selection.group_id)
-            self.assertTrue(findings := call.contract.structural_findings(raw), "current contract allows authoring_assessment=None")
-            self.assertTrue(any("authoring_assessment" in item for item in findings), findings)
+            native_findings.append(call.contract.structural_findings(raw))
             return raw
-        refused = await self._rejected_pair(self.conversation(), "Explore who knows the motive.",
-            premise_with_extra, selection_group='premise.analysis')
+        try:
+            refused = await self._rejected_pair(self.conversation(), "Explore who knows the motive.",
+                premise_with_extra, selection_group='premise.analysis')
+        finally:
+            self.assertTrue(native_findings, native_findings)
+            self.assertTrue(all(native_findings), native_findings)
+            self.assertTrue(all(any("authoring_assessment" in item for item in findings) for findings in native_findings), native_findings)
         self.assertIsNone(refused.proposal)
         single = await self.proposal_for(self.conversation())
         self.assertEqual(single.proposal.participants, (PLOT_ARCHITECT,))
