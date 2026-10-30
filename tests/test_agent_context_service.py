@@ -1235,7 +1235,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             service_module.ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED, )
         self.assertEqual( tuple(field.name for field in fields(service_module.ContextProviderFailureFacts) ),
             ( "accounting", "timed_out", "taint_existing_thread", "submitted_accountings",
-            "submission_uncertain", "response_rejection_code", "continuation_rejection", ), )
+            "submission_uncertain", "response_rejection_code", "continuation_rejection", "group_state", ), )
         for code in rejection_codes:
             with self.subTest(code=code):
                 facts = service_module.ContextProviderFailureFacts(

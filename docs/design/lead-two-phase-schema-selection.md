@@ -169,15 +169,118 @@ Lead 공통 지시는 신뢰된 bound 역할/프로토콜 지시에 둔다. 호�
 
 ## 검증 기록
 
+### #894 통합 완료와 #895의 시작 경계
+
+#894는 부모 브랜치의 `934340c8548f50cdbcc26e58d0868aaf18c0387e`에
+squash 통합했고 완료 조건7개와 종료·Project Done을 확인했다. 검증 소스
+`d87884a2`와 통합 tree는 동일하다. 전체5개 CI shard와 집중3개 ID가 통과했고,
+실제 Codex CLI0.164.0/Python3.11의 SELECT·GEN 두 요청도 typed 검증을 통과했다.
+현재 설정의 모델·effort 기본값을 유지했으며 실제 resolved model은 추정하지 않는다.
+프로세스 종료 후 PID·공유 그룹 소멸을 별도 감사했다.
+[최종7조건 증거](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/894#issuecomment-6495921983)에
+실패 이력·원본 정리 결과·추가 감사와 실제 schema/input 해시를 함께 보존한다.
+
+#895는 이 기반에서 실행 엔진을 연결한다. 예를 들어 인사 요청은
+SELECT→GENERATE의 두 번, 유효한 직접 재선택은 SELECT→GENERATE(재선택)→GENERATE의
+세 번을 같은 기존 한도에서 사용해야 한다. 선택 제어를 받은 시점에는 업무 결과를
+발행하거나 완료 checkpoint를 만들지 않고, 실제 업무 결과에서만 기존 승인 경계를 지난다.
+READ 뒤에도 원래 선택 기록을 보존하고 현재 그룹의 유효성과 fresh binding을 다시 확인한다.
+
+실행 연결은 구현했고 첫 회귀의 fixture·API 기대값 오류를 보완해 재검증한다. #895만으로 사용자 프로필을 활성화하지 않으며,
+#896의 전송·짧은 현재 Phase 안내가 모두 갖춰질 때 안전하게 연결한다. 부모의
+59개 조건 전체와 원래 입력의 종단 검증은 계속 후속 작업이다.
+
+
 #894 자식에서 순수한 `lead_schema_groups` 도메인과 의미 변형 단계의 그룹 분류를 구현했다. 레지스트리 15개가 설명과 구성원 판정을 함께 소유한다. 카탈로그·선택 기록은 불변이며 현재 생성 연결은 실제 outer/inner 계약 전체와 offer·호출·교정/replay 근거를 보존한다. 제어 owner는 중앙 `BoundContract`의 정확한 `schema_id`와 선택/재선택 decoder를 결합한다. compiler는 준비된 의미 계획과 선택 그룹 전체의 factoring/partition을 구분한다. 공통 compiler 인자, 추천 eligibility, 전체 READ 사실, 정확한 member 소속과 decoder source drift를 보완했다. 구문·의존 경계·인덱스 정적 검토와 기존 대표 테스트의 oracle 작성은 마쳤으나 런타임 통과 증거는 아직 없다.
 
-정확한 소스 배정은 [테스트 정책](../../TEST_POLICY.md)의142604→142886 전환이다. 기존 ID·subTest·시간 한도와 모든 기존 assert를 보존한다. 추가 Whole Front 경로의 정적 최대는 plan11개·그룹 factoring24회이며91×15 재컴파일을 추가하지 않는다. 실제 실행 비용·성공 여부는 영향 테스트와 전체 CI에서 측정한다. 로컬 격리4건은 보존하며 Actions의 수동 affected 경로로 정확한 정규 ID를 실행한다.
+정확한 소스 배정은 [테스트 정책](../../TEST_POLICY.md)의142604→142887 전환이다. 기존 ID·subTest·시간 한도와 모든 기존 assert를 보존한다. 추가 Whole Front 경로의 정적 최대는 plan11개·그룹 factoring24회이며91×15 재컴파일을 추가하지 않는다. 실제 실행 비용·성공 여부는 영향 테스트와 전체 CI에서 측정한다. 로컬 격리4건은 보존하며 Actions의 수동 affected 경로로 정확한 정규 ID를 실행한다.
 
 현재 문서 준비 중 설계의 JSON 예시 16개를 JSON으로 파싱했고, 예시 selector의 필수 필드 다섯 개·닫힌 객체 및 카탈로그 카드 15개의 네 필드를 정적으로 대조했다. 이 검사는 예시의 구문·기본 형태 검토이며 실제 compiler/decoder/권한/상태 전이의 통과 증거가 아니다.
 
 런타임 변경 후에는 기존 정규 ID의 영향 테스트와 전체 다섯 shard CI가 필요하다. Whole Front의 기존 시나리오와 음성 대조를 최대한 유지하고 새 시간 초과 발생 시 즉시 작업을 중단한다. 테스트 소스 증가가 불가피하면 기존 사용자 허용에 따라 측정한 정확한 정책 배정을 먼저 기록한다.
 
 실제 Codex 검증은 최종 소스·현재 Provider/model·원래 두 입력·실제 전체 생성 스키마를 사용하는 별도 유한 캠페인으로 수행한다. 소스/CLI/모델/설정, 스키마 해시, 요청한 한도와 실제 인식/실효 한도, native 결과와 타입 결과, 호출·사용량·지연·실패 및 소유 프로세스 정리를 기록한다. 관측 불가 사용량을 0으로 적지 않는다.
+
+### #895에서 수용한 실행 경계
+
+현재 구현은 진행 중이다. 서비스가 불변 `ContextGroupInvocationState`로 요청 근거,
+선택 이력, 준비된 계약을 함께 전달한다. 정상 결과와 실패 사실에도 같은 상태를
+전달하므로 복구나 교정이 새 호출 예산을 만드는 것을 막는다. 현재 작업·리비전·권한
+근거의 생성은 오케스트레이터가 맡고, 실제 호출 수는 기존 서비스 원장이 집계한다.
+
+| 예 | 필요한 호출과 결과 |
+| --- | --- |
+| 첫 선택 후 답변 | SELECT와 GENERATE가 각각 한 번이다. 선택만으로 업무를 승인하지 않는다. |
+| 상세 계약을 본 뒤 다른 그룹 선택 | 현재 GENERATE가 재선택을 반환하고 다음 GENERATE로 이어진다. 별도 SELECT는 추가하지 않는다. |
+| SELECT 시작 시 잔여 한 번 | 답변 생성까지 갈 수 없으므로 Provider 제출 전에 중단한다. |
+| 마지막 GENERATE가 유효한 재선택을 반환 | 새 선택을 이력에 기록한 뒤 예산 소진으로 STOP한다. 답변이나 승인·완료 체크포인트를 만들지 않는다. |
+| READ로 자료가 추가됨 | 원래 선택 기록은 보존한다. 현재 그룹이 유효하면 새 binding으로 생성하고, 요청 근거나 그룹 자격이 달라지면 SELECT로 돌아간다. |
+
+교정은 거절 당시의 정확한 계약을 사용하고, 새 자료를 반영하는 fresh 호출과 구별한다.
+인증 replay도 기존 공유 한도에 포함한다. 원래 계약에 SEARCH/READ가 허용됐다면
+재실행에서 그 계약을 축소하지 않는다. 잔여 예산이 조회와 이후 단계까지 감당하지
+못하면 원래 인증 실패와 선택 이력을 보존하고 재실행 전에 중단한다.
+기존 호출 상한과 교정 예약을 유지하며,
+한 번만 허용된 일반 경로를 자동으로 두 번으로 늘리지 않는다. 사용자 경로 활성화와
+매 요청의 짧은 Phase 안내는 #896에서 전송 계약과 함께 연결한다.
+
+교정은 기존 일반 호출 상한과 별도 예약 1회를 합친 범위 안에서 한 번만 진입한다.
+예를 들어 최초 한도 2회·전체 허용량 3회에서 첫 SELECT가 거절됐다면 남은 2회로
+SELECT 교정과 GENERATE를 마칠 수 있다. 전체 허용량이 2회라면 남은 1회로는
+그 경로를 시작하지 않고 원래 거절을 보존한다. 최초 호출 한도는 그대로이며,
+유효한 마지막 재선택으로 STOP한 흐름을 이 교정 예약으로 다시 시작하지 않는다.
+
+#895의 테스트 배정은 raw143435와 청구 helper8을 합친143443이다. 기존 대표 사례를
+보존하며541행, 정책 회귀13행과 helper2행을 추가한 정확한 배정이다. ID2527·전체
+subTest mapping·18000/3600초와 Whole Front 사례는 유지한다.
+
+### #895 첫 CI와 fixture 보완
+
+`d55e0b34`의 [전체 CI](https://github.com/Kims-DeveloperGroup/story-writing-agents/actions/runs/40884771932)는
+Fast10개와 Whole Front를 통과했다. Whole Front는1153.550초였으며 timeout은 없었다.
+정규1∼4 shard는 새 fixture의 stage 오류6개, 교정 script·불변 상태 관측 오류2개,
+새 `group_state` 필드가 빠진 API 기대값2개로 실패했다. 모든 보고서는 실제 실행·환경·
+정리를 확인했으며 이 실행을 전체 통과 증거로 쓰지 않는다.
+
+[Codex R1의 clean receipt](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/900#issuecomment-6498575068)는
+검토 commit `d55e0b3435`와 일치한다. 생산 guard를 유지하고 ordinary front fixture,
+교정 invocation별 응답 묶음, 반환 후 원본 오류의 최신 STOP facts를 보완한다.
+명시적인 필드 목록에는 새 API 필드만 추가한다. 기존 호출 수·STOP 기대와 assert·
+ID·subTest·Whole Front 사례는 유지하며, 보완 소스의 영향11개 및 전체 CI는 다시 확인한다.
+
+### #895 READ 전달·인증 재생 fixture의 추가 교정
+
+`2fe8806f`의 영향11개는6개 통과·5개 실패였다. READ 다음 호출의 동결 offer에는
+완료 목록과 이번 전달 목록을 구분하므로 delivery 사실과 prepared plan의 전체
+READ 입력이 일치하는지 검증한다. ordinary record가 제거하는 unknown key 대신
+기존 string 필드의 타입을 위반해 실제 거절을 검증한다. 빈 검색 종류나 0 정책은
+생산 가드가 허용하지 않으므로 실제 0-hit SEARCH를 소진한 후 SELECT→GEN의 인증
+실패·재생을 진행한다. 앞선 호출도 같은 예산에 포함해4회 성공/3회 중단을 대조한다.
+기존 Source drift callback은 실제 helper의 positional 인자로 전달한다. 생산 코드는
+Codex 검토 소스와 동일하고, 보완한 테스트의 통과 여부는 새 CI에서 확인한다.
+
+### #895 grouped STOP 반환과 실제 callback 계약
+
+`fd0de712`의 영향11개는8개 통과·3개 실패였다. 새 revision seed에는 실제 input ID와
+revision을 모두 명시하고, 인증 hook은 동기 함수에서 실제 승인을 반환해 source-veto를
+검증한다. 행 label과 최초 호출 한도도 관측한다. frozen 교정이 새 제출 없이 STOP한
+경우에는 원래 거절 사실을 전달한 뒤 일반 CONTINUE fallback으로 가던 분기를 확인했다.
+이 grouped STOP만 기존 바깥 거절 처리로 올려 원래 accounting·불확실성·참조 정리와
+RETRY 의미를 보존한다. 일반 fallback은 유지하며 예산식·API·schema는 변경하지 않는다.
+이후 소스의 영향·전체 CI와 후속 검토를 확인하기 전에는 완료로 계산하지 않는다.
+
+### #895 domain 결과의 revision 확인
+
+revision이 바뀐 사례의 결과는 wire 필드 이름이 아니라 기존 정규화된 domain 결과로
+검사한다. 예를 들어 `context-task@2`는 `authoring_scope.task`에서 확인한다.
+잘못 사용한 `scope` 키만 바로잡고 revision 변경 시 새 SELECT와 원래 이력 보존
+검증은 유지한다. 생산 코드나 소스 배정은 추가 변경하지 않는다.
+
+### #895 검토 입력과 계약의 일치
+
+검토 요청에 `current-input` 자료가 있으면 계약의 `input_ids`에도 같은 ID를 선언한다.
+실제 자료 목록과 계약 입력 목록의 일치를 검증하고, 이후 실제 READ 근거가 추가되거나
+handoff에서 제거되는 기존 사례를 유지한다. 이 보완은 READ나 권한을 새로 만들지 않는다.
 
 ## 남은 작업
 

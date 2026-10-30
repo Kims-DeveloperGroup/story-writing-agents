@@ -2028,6 +2028,26 @@ class ContextSourceClassification:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextGroupInvocationState:
+    """한 논리 호출에서 선택 이력과 현재 준비 계획을 전달한다."""
+
+    request_basis: LeadGroupRequestBasis
+    workflow: LeadGroupWorkflow | None = None
+    prepared_compilation: LeadGroupCompilation | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if (type(self.request_basis) is not LeadGroupRequestBasis
+                or (self.workflow is not None and type(self.workflow) is not LeadGroupWorkflow)
+                or (self.prepared_compilation is not None
+                    and type(self.prepared_compilation) is not LeadGroupCompilation)
+                or ((self.workflow is None) != (self.prepared_compilation is None))):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if self.workflow is not None:
+            self.workflow.catalog.require_snapshot()
+            self.prepared_compilation.require_provenance()
+
+
+@dataclass(frozen=True, slots=True)
 class ContextInvocationRequest:
     """Domain facts and transient caller-owned material for one invocation."""
 
@@ -2055,9 +2075,18 @@ class ContextInvocationRequest:
         repr=False,
         compare=False,
     )
+    group_state: ContextGroupInvocationState | None = field(default=None, kw_only=True, repr=False)
 
     def __post_init__(self) -> None:
         _safe_identity(self.session_id)
+        if self.group_state is not None and (
+            type(self.group_state) is not ContextGroupInvocationState
+            or not isinstance(self.result_contract, BoundCallFactory)
+            or self.agent_id != LEAD_ORCHESTRATOR
+            or self.group_state.request_basis.operation_id != self.operation_id
+            or self.group_state.request_basis.result_correlation_id != self.result_correlation_id
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if type(self.subject_kind) is not ContextSubjectKind:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if self.subject_kind is ContextSubjectKind.SESSION:
@@ -2167,8 +2196,11 @@ class ContextProviderFailureFacts:
     submission_uncertain: bool = False
     response_rejection_code: ContextProviderTerminalCode | None = None
     continuation_rejection: ContextContinuationRejection | None = None
+    group_state: ContextGroupInvocationState | None = field(default=None, kw_only=True, repr=False)
 
     def __post_init__(self) -> None:
+        if self.group_state is not None and type(self.group_state) is not ContextGroupInvocationState:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if self.continuation_rejection is not None and (
             type(self.continuation_rejection) is not ContextContinuationRejection
             or self.timed_out or self.submission_uncertain
@@ -2213,6 +2245,10 @@ def record_context_provider_failure(
         ContextProviderFailureFacts
     ):
         raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+    previous = getattr(failure, _PROVIDER_FAILURE_FACTS_ATTRIBUTE, None)
+    if (facts.group_state is None and type(previous) is ContextProviderFailureFacts
+            and previous.group_state is not None):
+        facts = replace(facts, group_state=previous.group_state)
     try:
         setattr(failure, _PROVIDER_FAILURE_FACTS_ATTRIBUTE, facts)
     except (AttributeError, TypeError):
@@ -2622,8 +2658,15 @@ class ContextInvocationResult:
     provider_calls: tuple[ContextLedgerProviderCall, ...]
     ledger_generation: int
     checkpoint_pending: bool = False
+    group_state: ContextGroupInvocationState | None = field(default=None, kw_only=True, repr=False)
 
     def __post_init__(self) -> None:
+        if self.group_state is not None and (
+            type(self.group_state) is not ContextGroupInvocationState
+            or self.group_state.workflow is None
+            or self.group_state.workflow.phase is not LeadGroupPhase.DONE
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if type(self.answer) is not str or not self.answer:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if type(self.authorization) is not ContextAnswerAuthorization:
@@ -2805,6 +2848,8 @@ class ContextInvocationSession:
             if physical_call_limit is None
             else physical_call_limit
         )
+        self._remaining_provider_calls: int | None = None
+        self._minimum_completion_calls = 1
         self.binding = binding
         self._sources = sources
         self._action_policy = action_policy
@@ -3174,6 +3219,13 @@ class ContextInvocationSession:
         if self._nonterminal_actions >= self._action_policy.max_nonterminal_actions:
             raise _action_error(ContextActionErrorCode.ACTION_LIMIT_EXCEEDED)
 
+    def advance_group_control(self, correlation: ContextActionCorrelation) -> None:
+        """선택 제어의 순번만 진행하고 업무·컨텍스트 권한은 만들지 않는다."""
+        with self._lock:
+            self._require_open()
+            self._validate_correlation(correlation)
+            self._next_action_index += 1
+
     def _fail_locked(self) -> None:
         self._state = ContextInvocationState.FAILED
         self._clear_sensitive_locked()
@@ -3190,6 +3242,25 @@ class ContextInvocationSession:
         self._pending_receipt = None
         self._completed_receipts.clear()
 
+    def set_remaining_provider_calls(
+        self, remaining: int, *, minimum_completion_calls: int = 1,
+    ) -> None:
+        """실제 호출 원장에서 계산한 잔여량과 현재 국면의 완료 비용만 반영한다."""
+        with self._lock:
+            if (type(remaining) is not int or remaining < 0 or remaining > self._physical_call_limit
+                    or type(minimum_completion_calls) is not int or minimum_completion_calls < 1
+                    or (self._remaining_provider_calls is not None
+                        and remaining > self._remaining_provider_calls)):
+                raise _action_error(ContextActionErrorCode.INVALID_VALUE)
+            self._remaining_provider_calls = remaining
+            self._minimum_completion_calls = minimum_completion_calls
+
+    @property
+    def remaining_provider_calls(self) -> int:
+        with self._lock:
+            return (max(0, self._physical_call_limit - self._next_action_index + 1)
+                    if self._remaining_provider_calls is None else self._remaining_provider_calls)
+
     def allowed_actions(
         self,
         *,
@@ -3205,9 +3276,10 @@ class ContextInvocationSession:
             ):
                 raise _action_error(ContextActionErrorCode.INVALID_VALUE)
             nonterminal_capacity = (
-                self._next_action_index < self._physical_call_limit
-                and self._nonterminal_actions
-                < self._action_policy.max_nonterminal_actions
+                (self._physical_call_limit - self._next_action_index
+                 if self._remaining_provider_calls is None
+                 else self._remaining_provider_calls - self._minimum_completion_calls) > 0
+                and self._nonterminal_actions < self._action_policy.max_nonterminal_actions
             )
             if not nonterminal_capacity:
                 return ("answer",)
@@ -3241,7 +3313,9 @@ class ContextInvocationSession:
                     min(
                         self._action_policy.max_nonterminal_actions
                         - self._nonterminal_actions,
-                        self._physical_call_limit - self._next_action_index,
+                        (self._physical_call_limit - self._next_action_index
+                     if self._remaining_provider_calls is None else max(
+                         0, self._remaining_provider_calls - self._minimum_completion_calls)),
                     ),
                 ),
                 max(
@@ -5736,6 +5810,8 @@ class AgentContextService:
     ) -> ContextInvocationResult:
         call_contract = None
         call_decoded = None
+        group_state = request.group_state
+        current_lineage = contract_lineage
         policy_fingerprint = self._execution_policy_fingerprint
         operation_id = request.operation_id
 
@@ -5839,7 +5915,19 @@ class AgentContextService:
             _reject_provider_call_without_replacing(finalizer, code)
             response_rejection_code = code
 
+        def completed_group_state() -> ContextGroupInvocationState | None:
+            if group_state is None:
+                return None
+            if call_contract is None or call_decoded is None or group_state.workflow is None:
+                raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+            return replace(group_state, workflow=group_state.workflow.complete(
+                call_contract.generation_binding(), call_decoded.selected_result))
+
         try:
+            if (group_state is not None and group_state.workflow is not None
+                    and group_state.workflow.phase in {LeadGroupPhase.STOP, LeadGroupPhase.DONE}):
+                stage = "exhausted"
+                raise _execution_error(ContextExecutionErrorCode.ACTION_EXHAUSTED)
             stage = "source"
             registry, manifest, materials = self._compose_context(
                 request,
@@ -6149,6 +6237,8 @@ class AgentContextService:
                 if len(calls) >= physical_call_limit:
                     break
                 action_index = action_session.next_action_index
+                if group_state is not None:
+                    call_decoded = None
                 allowed_actions = action_session.allowed_actions(
                     after=previous_action,
                     search_had_hits=previous_search_had_hits,
@@ -6157,13 +6247,63 @@ class AgentContextService:
                 correlation = _action_correlation(binding, action_index)
                 physical_reference_context = reference_context
                 def build_call_request(call_id: str, lineage: BoundCallLineage | None):
-                    nonlocal call_contract
+                    nonlocal call_contract, group_state, allowed_actions, stage
+                    if (group_state is not None and group_state.workflow is not None
+                            and group_state.workflow.phase in {LeadGroupPhase.STOP, LeadGroupPhase.DONE}):
+                        stage = "exhausted"
+                        raise _execution_error(ContextExecutionErrorCode.ACTION_EXHAUSTED)
+                    if group_state is not None:
+                        action_session.set_remaining_provider_calls(
+                            physical_call_limit - len(calls), minimum_completion_calls=(
+                                2 if group_state.workflow is None
+                                else group_state.workflow.minimum_remaining_calls))
+                        if lineage is None:
+                            allowed_actions = action_session.allowed_actions(
+                                after=previous_action, search_had_hits=previous_search_had_hits)
                     if isinstance(request.result_contract, BoundCallFactory):
                         offers = action_session.contract_offers(
                             call_id, allowed_actions=allowed_actions, delivery_read=pending_read,
                             reference_prelude=prelude, reference_request=prelude_request,
                         )
-                        call_contract = request.result_contract.for_offer(offers, lineage)
+                        group_arguments = {} if group_state is None else {
+                            "request_basis": group_state.request_basis,
+                            "group_workflow": group_state.workflow,
+                            "prepared_compilation": group_state.prepared_compilation,
+                        }
+                        call_contract = request.result_contract.for_offer(offers, lineage, **group_arguments)
+                        if group_state is not None:
+                            group_state = ContextGroupInvocationState(
+                                call_contract.request_basis, call_contract.group_workflow,
+                                call_contract.prepared_compilation)
+                            remaining = physical_call_limit - len(calls)
+                            minimum = group_state.workflow.minimum_remaining_calls
+                            action_session.set_remaining_provider_calls(
+                                remaining, minimum_completion_calls=minimum)
+                            if lineage is not None and any(
+                                    value in {"search", "read"}
+                                    for value in call_contract.eligibility_offers.allowed_actions):
+                                minimum += 1
+                            if remaining < minimum:
+                                group_state = replace(group_state, workflow=group_state.workflow.stop(
+                                    "frozen_contract_budget_exhausted" if lineage is not None
+                                    else "provider_call_budget_exhausted"))
+                                stage = "exhausted"
+                                raise _execution_error(ContextExecutionErrorCode.ACTION_EXHAUSTED)
+                            if lineage is None:
+                                current_actions = action_session.allowed_actions(
+                                    after=previous_action, search_had_hits=previous_search_had_hits)
+                                current_offers = action_session.contract_offers(
+                                    call_id, allowed_actions=current_actions, delivery_read=pending_read,
+                                    reference_prelude=prelude, reference_request=prelude_request)
+                                if current_offers != offers:
+                                    allowed_actions = current_actions
+                                    call_contract = request.result_contract.for_offer(
+                                        current_offers, request_basis=group_state.request_basis,
+                                        group_workflow=group_state.workflow,
+                                        prepared_compilation=group_state.prepared_compilation)
+                                    group_state = ContextGroupInvocationState(
+                                        call_contract.request_basis, call_contract.group_workflow,
+                                        call_contract.prepared_compilation)
                         schema = call_contract.schema_value()
                     else:
                         call_contract = None
@@ -6227,7 +6367,7 @@ class AgentContextService:
                             stage="provider_payload",
                         )
                     return call_request
-                call_request = build_call_request(call_id, contract_lineage)
+                call_request = build_call_request(call_id, current_lineage)
                 reference_context = set()
                 schema, call_kind = call_request.schema, call_request.call_kind
                 call_decoded = None
@@ -6274,6 +6414,16 @@ class AgentContextService:
                             or auth_attempt
                         ):
                             raise
+                        if group_state is not None and group_state.workflow is not None:
+                            replay_minimum = group_state.workflow.minimum_remaining_calls
+                            if call_contract is not None and any(
+                                    value in {"search", "read"}
+                                    for value in call_contract.eligibility_offers.allowed_actions):
+                                replay_minimum += 1
+                            if physical_call_limit - len(calls) < replay_minimum:
+                                group_state = replace(group_state, workflow=group_state.workflow.stop(
+                                    "authentication_replay_budget_exhausted"))
+                                raise
                         try:
                             authenticated = await request_authentication(failure)
                         except BaseException:
@@ -6409,12 +6559,13 @@ class AgentContextService:
                     if call_contract is not None:
                         try:
                             call_decoded = call_contract.decode_response(result.response_text)
-                            action = _decode_context_action(result.response_text, correlation=correlation, allowed_actions=allowed_actions, result_contract=phase_contract[1], allowed_search_source_kinds=request.allowed_search_source_kinds, resolve_handle=action_session.resolve_wire_handle, completed_handles=action_session.completed_handles, decoded_action=call_decoded)
+                            action = None if call_decoded.group_control is not None else _decode_context_action(result.response_text, correlation=correlation, allowed_actions=allowed_actions, result_contract=phase_contract[1], allowed_search_source_kinds=request.allowed_search_source_kinds, resolve_handle=action_session.resolve_wire_handle, completed_handles=action_session.completed_handles, decoded_action=call_decoded)
                         except ContractRejection as bound_failure:
                             rejected = carry_validation(_execution_error(ContextExecutionErrorCode.MALFORMED_ACTION), bound_failure)
                             rejected.bound_contract_failure = bound_failure
                             raise rejected from None
-                        if type(action) not in {ContextSearchAction, ContextReadAction, ContextAnswerAction}:
+                        if (type(action) not in {ContextSearchAction, ContextReadAction, ContextAnswerAction}
+                                and not (action is None and call_decoded.group_control is not None)):
                             raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
                     else:
                         schema_issues = diagnose_json_text(result.response_text, schema)
@@ -6501,6 +6652,24 @@ class AgentContextService:
                         )
                     raise
                 terminal_provider_succeeded = False
+                if call_decoded is not None and call_decoded.group_control is not None:
+                    if group_state is None or call_contract.group_workflow is not group_state.workflow:
+                        raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+                    record = call_contract.record_group_control(call_decoded)
+                    group_state = replace(group_state, workflow=group_state.workflow.accept(
+                        record, remaining_calls=physical_call_limit - len(calls)))
+                    action_session.advance_group_control(correlation)
+                    history_advanced = True
+                    require_execution_workspace_current()
+                    finalizer = call_finalizer
+                    call_finalizer = None
+                    if finalizer is not None:
+                        _accept_provider_call_without_replacing(finalizer)
+                    current_lineage = None
+                    if group_state.workflow.phase is LeadGroupPhase.STOP:
+                        stage = "exhausted"
+                        raise _execution_error(ContextExecutionErrorCode.ACTION_EXHAUSTED)
+                    continue
                 if type(action) is ContextSearchAction:
                     history_advanced = True
                     stage = "action_observer"
@@ -6532,6 +6701,8 @@ class AgentContextService:
                         search_observation
                     )
                     previous_action = "search"
+                    if group_state is not None:
+                        current_lineage = None
                     previous_search_had_hits = bool(search_observation.hits)
                     stage = "action_observer"
                     _emit_context_event(
@@ -6592,6 +6763,8 @@ class AgentContextService:
                     read_observation, pending_read = action_session.read(action)
                     observation = action_session.serialize_observation(read_observation)
                     previous_action = "read"
+                    if group_state is not None:
+                        current_lineage = None
                     previous_search_had_hits = False
                     record_count = _conversation_read_record_count(read_observation)
                     stage = "action_observer"
@@ -6639,6 +6812,7 @@ class AgentContextService:
                 terminal_provider_succeeded = True
                 terminal_call_id = call_id
                 stage = "answer"
+                proposed_group_state = completed_group_state()
                 authorization = action_session.authorize_answer(action)
                 stage = "source_revalidation"
                 if request.include_core_statuses and (
@@ -6806,9 +6980,14 @@ class AgentContextService:
                     )
                     require_execution_workspace_current()
                     return ContextInvocationResult(
-                        action.answer, authorization, projection.accounting,
-                        current_thread_id, tuple(calls), generation,
+                        action.answer,
+                        authorization,
+                        projection.accounting,
+                        current_thread_id,
+                        tuple(calls),
+                        generation,
                         checkpoint_pending=True,
+                        group_state=proposed_group_state,
                     )
                 commit = self._ledger.commit_attempt(
                     key, expected_generation=generation,
@@ -6853,10 +7032,18 @@ class AgentContextService:
                     current_thread_id,
                     tuple(calls),
                     commit.generation,
+                    group_state=proposed_group_state,
                 )
             stage = "exhausted"
             raise _execution_error(ContextExecutionErrorCode.ACTION_EXHAUSTED)
         except BaseException as failure:
+            if group_state is not None:
+                if (stage == "exhausted" and group_state.workflow is not None
+                        and group_state.workflow.phase in {LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE}):
+                    group_state = replace(group_state, workflow=group_state.workflow.stop(
+                        "provider_call_budget_exhausted"))
+                record_context_provider_failure(failure, replace(
+                    context_provider_failure_facts(failure), group_state=group_state))
             if call_contract is not None:
                 call_contract.bind_failure(failure, call_decoded)
             if checkpoint_committed:
@@ -7018,6 +7205,7 @@ class AgentContextService:
                     ),
                     response_rejection_code=response_rejection_code,
                     continuation_rejection=existing_facts.continuation_rejection,
+                    group_state=group_state,
                 ),
             )
             raise

@@ -59,7 +59,7 @@ from .conversations.events import (
 )
 from .lead_provider_contracts import PremiseDecisionConstraints
 from .lead_provider_contracts import LeadGroupCompilation, LeadGroupedStage
-from .lead_schema_groups import LeadGroupRequestBasis, SchemaGroupControlOwner
+from .lead_schema_groups import LeadGroupPhase, LeadGroupRequestBasis, SchemaGroupControlOwner
 
 from .editorial_scope import (
     EditorialScope, EditorialScopeKind, editorial_scope_contains, intersect_editorial_scopes,
@@ -145,6 +145,7 @@ from .structured_output_validation import (
 from .conversations.session_context import SessionContextCapacityError, SessionHistorySnapshot
 from .agent_context.service import (
     AgentContextService,
+    ContextGroupInvocationState,
     ContextAnswerAuthorization,
     ContextEvidenceReceipt,
     ContextExecutionEvent,
@@ -12575,11 +12576,19 @@ class StoryRuntime:
                     ),
                     execution_workspace=execution_workspace,
                 )
+                contextual_request = replace(contextual_request, group_state=self._lead_group_invocation_state(
+                    contextual_request, original_text=text, constraints=lead_factory.constraints))
                 result = None
                 correction_call_limit = 1
                 corrective_rejection_code: ContextProviderTerminalCode | None = None
                 if admission is not None:
                     remaining = min(remaining, admission.front_physical_call_limit)
+                group_front_envelope = None
+                if contextual_request.group_state is not None:
+                    # 기존 normal + 교정 한 번의 범위만 공유하고 최초 호출 한도는 늘리지 않는다.
+                    group_front_envelope = min(contextual_request.physical_call_limit + 1, remaining)
+                    contextual_request = replace(contextual_request, physical_call_limit=min(
+                        contextual_request.physical_call_limit, remaining))
                 correction_failure_code: CollaborationLeadOutcomeFailureCode | None = None
                 rejected_call_id: str | None = None
                 try:
@@ -12607,7 +12616,15 @@ class StoryRuntime:
                 except BaseException as captured_failure:
                     first_failure = captured_failure
                     facts = context_provider_failure_facts(first_failure)
+                    if facts.group_state is not None:
+                        contextual_request = replace(contextual_request, group_state=facts.group_state)
+                        if (facts.group_state.workflow is not None
+                                and facts.group_state.workflow.phase in {LeadGroupPhase.STOP, LeadGroupPhase.DONE}):
+                            raise
                     rejection_code = facts.response_rejection_code
+                    if group_front_envelope is not None:
+                        correction_call_limit = min(_CONTEXT_INVOCATION_CALL_LIMIT, max(
+                            0, group_front_envelope - provider.submitted_physical_calls))
                     correction_available = (
                         rejection_code in _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES
                         and not facts.submission_uncertain
@@ -12615,6 +12632,13 @@ class StoryRuntime:
                         and provider.submitted_physical_calls + correction_call_limit
                         <= remaining
                     )
+                    if (correction_available and facts.group_state is not None
+                            and facts.group_state.workflow is not None
+                            and correction_call_limit < facts.group_state.workflow.minimum_remaining_calls):
+                        facts = replace(facts, group_state=replace(facts.group_state,
+                            workflow=facts.group_state.workflow.stop("provider_call_budget_exhausted")))
+                        record_context_provider_failure(first_failure, facts)
+                        raise
                     if not correction_available:
                         raise
                     if _lead_is_source_owner_rejection(first_failure):
@@ -12769,6 +12793,12 @@ class StoryRuntime:
                             > submitted_before_correction
                         ):
                             raise
+                        if correction_facts.group_state is not None:
+                            record_context_provider_failure(first_failure, replace(
+                                context_provider_failure_facts(first_failure), group_state=correction_facts.group_state))
+                            if (correction_facts.group_state.workflow is not None
+                                    and correction_facts.group_state.workflow.phase is LeadGroupPhase.STOP):
+                                raise first_failure
                         self._fail_reference_operation(
                             reference_operation,
                             correction_failure,
@@ -15708,6 +15738,46 @@ class StoryRuntime:
             payload=CollaborationPremiseFreshWorkAdmissionPayload(admission))
         self._append_drafts(projection.last_sequence, (draft,))
         return admission
+
+    @staticmethod
+    def _lead_group_invocation_state(
+        request: ContextInvocationRequest, *, original_text: str,
+        constraints: LeadProviderConstraints,
+    ) -> ContextGroupInvocationState | None:
+        """현재 요청·작업·범위에서 선택 근거를 발급하며 READ와 호출 예산은 제외한다."""
+        factory = request.result_contract
+        if type(factory) is not OrchestrationLeadCallFactory:
+            return None
+        if not factory.schema_group_protocol:
+            if request.group_state is not None:
+                raise BackendProtocolError("비활성 그룹 프로필에 선택 상태를 전달할 수 없습니다")
+            return None
+        if factory.constraints is not constraints or type(original_text) is not str:
+            raise BackendProtocolError("현재 Lead 소유자가 발급한 요청·범위가 필요합니다")
+        basis_value = {
+            "request_sha256": hashlib.sha256(original_text.encode("utf-8")).hexdigest(),
+            "task_revisions": constraints.task_revisions,
+            "scope": None if constraints.scope is None else authoring_scope_to_dict(constraints.scope),
+            "objective_ids": constraints.objective_ids,
+            "review_candidate_ids": constraints.review_candidate_ids,
+            "preparation_kind": constraints.preparation_kind,
+            "preparation_objective_id": constraints.preparation_objective_id,
+            "preparation_targets": constraints.preparation_targets,
+            "preparation_specialists": constraints.preparation_specialists,
+            "premise_question_id": constraints.premise_question_id,
+            "adoption_intent": None if constraints.adoption_intent is None else constraints.adoption_intent.value,
+            "adoption_targets": constraints.adoption_targets,
+            "readiness_source_basis_ref": constraints.readiness_source_basis_ref,
+        }
+        scope_ref = "lead-group-request-" + hashlib.sha256(json.dumps(
+            basis_value, sort_keys=True, ensure_ascii=False, allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        basis = LeadGroupRequestBasis(request.operation_id, request.result_correlation_id, scope_ref)
+        previous = request.group_state
+        return ContextGroupInvocationState(
+            basis, None if previous is None else previous.workflow,
+            None if previous is None else previous.prepared_compilation)
 
     def _ordinary_front_call_cap(self, session_id: str, conversation_id: str) -> int | None:
         """Keep every offered completed v3 task's preparation/review floor intact."""
@@ -18666,6 +18736,11 @@ class StoryRuntime:
             return await self._agent_context_service.invoke(request, provider, **arguments)
         except BaseException as failure:
             facts = context_provider_failure_facts(failure)
+            if facts.group_state is not None:
+                if (facts.group_state.workflow is not None
+                        and facts.group_state.workflow.phase in {LeadGroupPhase.STOP, LeadGroupPhase.DONE}):
+                    raise
+                request = replace(request, group_state=facts.group_state)
             spent = provider.submitted_physical_calls - submitted_before
             limit = request.physical_call_limit
             if (
