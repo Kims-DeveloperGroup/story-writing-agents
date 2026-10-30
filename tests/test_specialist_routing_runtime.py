@@ -599,6 +599,23 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(self.history(conversation)[:len(previous)], previous)
         self.assertEqual(self.workspace.path(path).read_bytes(), b"The selected knowledge remains intentionally uncertain.\n")
         self.assertLessEqual(len(_submitted_calls(self.history(conversation)[len(previous):])), 12)
+        # A completed draft remains active until final review and Apply.
+        # Hold it before independent premise reports, retaining its limit of twelve calls.
+        completed_scope = changed.proposal.authoring_scope
+        completed_task, = (item for item in self.runtime.inspect_lead_collaboration(self.session_id, conversation).available_tasks
+                           if (item.ref.task_id, item.ref.task_revision) == (completed_scope.task_id, completed_scope.task_revision))
+        self.assertEqual(completed_task.status, "active")
+        hold_history = self.history(conversation)
+        hold_selection = c.project_collaboration_history(hold_history).premise_selection
+        hold_artifacts = self.artifact_bytes()
+        hold_call_count = len(self.backend.calls)
+        held = await self.runtime.decide_lead_task(task.LeadTaskDecision.from_task(completed_task.ref, task.LeadTaskAction.HOLD))
+        self.assertEqual(held.task_ref, completed_task.ref)
+        self.assertIsNone(held.turn)
+        self.assertEqual(len(self.backend.calls), hold_call_count)
+        self.assertEqual(c.project_collaboration_history(self.history(conversation)).premise_selection, hold_selection)
+        self.assertEqual(self.history(conversation)[:len(hold_history)], hold_history)
+        self.assertEqual(self.artifact_bytes(), hold_artifacts)
         for decision in (premise.PremiseDecisionAction.REJECT, premise.PremiseDecisionAction.DEFER):
             retained_choice = c.project_collaboration_history(self.history(conversation)).premise_selection
             _, later = await _confirmed_premise(self, conversation)
@@ -1283,9 +1300,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         direct_review = await self._rejected_pair(conversation, _ADMISSION_BRIEF, direct_frame)
         self._assert_continuation(direct_review, "proposal")
         self.assertFalse(any(e.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for e in self.history(conversation)[len(completed_prefix):]))
+        successor_material = []
         def successor(value, material):
-            self.assertEqual([(t["task_id"], t["task_revision"]) for t in material["authoring_tasks"]], [(task_id, 2)])
-            self.assertEqual(material["available_proposal_drafting_source_ids"], [])
+            successor_material.append(json.dumps(material, ensure_ascii=False))
         successor_writer = self._native_scoped(
             PLOT_ARCHITECT,
             domains=("plot_structure",), selected=task_id,
@@ -1298,6 +1315,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             return successor_writer(call, provider)
         self.backend.enqueue(successor_frame)
         pending = await self._lead_turn(conversation, _ADMISSION_BRIEF)
+        self.assertEqual(len(successor_material), 1, pending)
+        observed_successor = json.loads(successor_material[0])
+        self.assertEqual([(t["task_id"], t["task_revision"]) for t in observed_successor["authoring_tasks"]], [(task_id, 2)], pending)
+        self.assertEqual(observed_successor["available_proposal_drafting_source_ids"], [], pending)
         self.assertIs(pending.kind, c.LeadOutcomeKind.PROPOSAL, pending)
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("drafted", "Summons leads choice; choice causes consequence."))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome(message="The draft material is available for integration; no artifact changed."))
