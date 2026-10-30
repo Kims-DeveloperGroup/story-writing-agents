@@ -1506,7 +1506,7 @@ physical call thirteen unreachable.
 
 ## Exact context capacity
 
-Lead context is limited to 262,144 UTF-8 bytes of the complete serialized provider
+Lead context is limited to 524,288 UTF-8 bytes of the complete serialized provider
 payload. Equality is allowed. This is a byte limit on the current JSON payload,
 including its envelope and JSON escaping; it is separate from token/cost budgets,
 the separately delivered output schema, and a provider's model context window.

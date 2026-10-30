@@ -113,7 +113,7 @@ current evidence receipt, confirmation, replay, artifact-write, or Git
 authority. Explicit references and SEARCH/READ evidence rules still apply.
 
 Exact delivery permits at most 4,096 conversations and an inclusive limit of
-262,144 UTF-8 bytes for the complete canonically serialized contextual payload,
+524,288 UTF-8 bytes for the complete canonically serialized contextual payload,
 including framing, JSON escaping and any reference observation it carries.
 Equality is allowed. This current payload cap excludes the separately delivered
 output schema and native transport bytes; it is not a token budget or a guarantee

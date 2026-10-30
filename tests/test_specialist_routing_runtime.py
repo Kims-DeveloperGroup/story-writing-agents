@@ -1469,8 +1469,16 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             if (item.ref.task_id, item.ref.task_revision) == (task_id, 2))
         stale_resume = task.LeadTaskDecision.from_task(latest_ref, task.LeadTaskAction.RESUME,
             text=_ADMISSION_BRIEF + "\nUse the earlier draft for this revised candidate.")
+        from story_writing_agents.agent_context.accounting import account_provider_payload
+        from story_writing_agents.conversations.session_context import MAX_PROVIDER_PAYLOAD_UTF8_BYTES, MAX_PROVIDER_SCHEMA_UTF8_BYTES
+        stale_measurements = []
         def stale(call, provider):
             selected_profile(call, (task_id, 3))
+            payload_json, accounting = account_provider_payload(call.schema, call.payload, call_kind=call.call_kind,
+                component_paths=call.component_paths, mandatory_reference_paths=call.mandatory_reference_paths)
+            self.assertLessEqual(len(payload_json), MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
+            self.assertLessEqual(accounting.schema_utf8_bytes, MAX_PROVIDER_SCHEMA_UTF8_BYTES)
+            stale_measurements.append((len(payload_json), accounting.schema_utf8_bytes))
             receipt = transition_receipt(stale_resume).payload.receipt
             self.assertEqual((receipt.target_task_id, receipt.target_task_revision), (task_id, 3))
             self.assertIn(old_source, _workflow_material(provider.callback_payload(call))["available_proposal_drafting_source_ids"])
@@ -1495,13 +1503,12 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.backend.enqueue(stale)
         self.backend.enqueue(stale)
         before_stale = len(self.backend.calls)
-        import traceback
-        with mock.patch.object(self.runtime, "_fail_reference_operation", wraps=self.runtime._fail_reference_operation) as failed_references:
-            stale_result = await self.runtime.decide_lead_task(stale_resume)
+        stale_result = await self.runtime.decide_lead_task(stale_resume)
         rejected = stale_result.turn
-        failures = tuple((type(entry.args[1]).__name__, getattr(entry.args[1], "code", None),
-            "".join(traceback.format_exception(entry.args[1]))[-2400:]) for entry in failed_references.call_args_list)
-        self.assertEqual(len(self.backend.calls) - before_stale, 2, (rejected, failures))
+        self.assertEqual(len(self.backend.calls) - before_stale, 2, rejected)
+        self.assertEqual(len(stale_measurements), 2, stale_measurements)
+        self.assertGreater(stale_measurements[1][0], 262_144, stale_measurements)
+        self.assertEqual(stale_measurements[1][1], stale_measurements[0][1], stale_measurements)
         self.assertIs(rejected.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
         self.assertEqual(stale_result.transition_event_id, transition_receipt(stale_resume).event_id)
         self.assertIsNone(rejected.recommendation_request, rejected)

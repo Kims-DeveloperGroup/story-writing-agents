@@ -393,8 +393,8 @@ schema share the existing 524,288-byte provider-schema limit. The semantic
 aggregate previously had a separate 262,144-byte ceiling; aligning it with the
 final schema allowance supports the offered variant declarations without changing
 the physical provider limit. Final assembly still enforces that limit.
-The service retains its 262,144-byte serialized request/context-frame limit, while
-transport counts rendered schema plus payload against the 786,432-byte
+The service uses a 524,288-byte serialized request/context-frame limit, while
+transport counts rendered schema plus payload against the 1,048,576-byte
 invocation-input limit. Aggregate allowances do not widen member, action,
 history, or generic-contract limits. Action templates compose the frozen semantic
 rules; generic result contracts keep their existing defaults.

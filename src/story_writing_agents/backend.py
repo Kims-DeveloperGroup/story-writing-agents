@@ -81,8 +81,8 @@ from .codex_adapter import CodexAdapter
 from .conversations import CollaborationEventStore
 from .conversations.session_context import (
     MAX_PROVIDER_INPUT_UTF8_BYTES,
+    MAX_PROVIDER_PAYLOAD_UTF8_BYTES,
     MAX_PROVIDER_SCHEMA_UTF8_BYTES,
-    MAX_SESSION_CONTEXT_UTF8_BYTES,
     SessionContextCapacityError,
 )
 from .conversation_retrieval import (
@@ -5388,8 +5388,10 @@ class AgentBackend:
                 > MAX_PROVIDER_INPUT_UTF8_BYTES
             ):
                 raise SessionContextCapacityError()
-        elif continuation_identity is not None and len(invocation.payload_json) > MAX_SESSION_CONTEXT_UTF8_BYTES:
-            raise SessionContextCapacityError()
+        elif continuation_identity is not None and len(invocation.payload_json) > MAX_PROVIDER_PAYLOAD_UTF8_BYTES:
+            raise SessionContextCapacityError(
+                stage="provider_payload", actual_utf8_bytes=len(invocation.payload_json)
+            )
 
         replay_validator = self._context_replay_validator(
             bound_agent,

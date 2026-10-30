@@ -6738,8 +6738,10 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                         self.assertLess(rendered.index("User"), rendered.index("working")); self.assertEqual(driver._progress_rows, 0)
             self.assertEqual(stream.getvalue().count("User"), 3); self.assertIn("503 Overloaded", rendered); self.assertIn("provider failure", rendered); self.assertIn("Elapsed: 00:00:00", rendered)
 
-        from story_writing_agents.conversations.session_context import SessionContextCapacityError
-        capacity = SessionContextCapacityError(stage="provider_payload", actual_utf8_bytes=262_145)
+        from story_writing_agents.conversations.session_context import (
+            MAX_PROVIDER_PAYLOAD_UTF8_BYTES, SessionContextCapacityError,
+        )
+        capacity = SessionContextCapacityError(stage="provider_payload", actual_utf8_bytes=MAX_PROVIDER_PAYLOAD_UTF8_BYTES + 1)
         capacity_call = mock.AsyncMock(side_effect=capacity)
         self.enterContext(_object_new_patch(RuntimeSession, "lead_turn", capacity_call))
         output, progress, picker = self._Output(), self._Progress(), self._Picker()

@@ -460,7 +460,7 @@ value; otherwise the field is `None`. No estimate is labeled exact.
 Provider-native cache, conversation history, and compaction may improve
 performance but are never correctness authority. Thread loss selects a
 bootstrap from local authoritative data on the next safe authorized work.
-For Lead session delivery, the inclusive canonical payload cap is 262,144
+For Lead session delivery, the inclusive canonical payload cap is 524,288
 UTF-8 bytes and the history inventory cap is 4,096 conversations. Known input,
 history, current state, and framing are preflighted before provider work;
 generated reference observations are checked before substantive submission.

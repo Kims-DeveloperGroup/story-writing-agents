@@ -1671,7 +1671,8 @@ separate exact Apply and Commit decision methods can perform those effects.
 `conversations.session_context.SessionContextCapacityError` is the existing
 `ValueError` boundary for exact context capacity. Its host-owned diagnostic facts
 are `stage`, `actual_utf8_bytes`, `maximum_utf8_bytes` and `excess_utf8_bytes`.
-The maximum remains 262,144. Actual/excess measurements can be unavailable when an
+The maximum is 524,288 for `known_envelope` and `provider_payload`; other
+context stages retain 262,144. Actual/excess measurements can be unavailable when an
 early allocation fails before the final payload exists; inspect the stage before
 interpreting a measurement as complete provider-payload size.
 

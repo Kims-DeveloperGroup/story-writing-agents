@@ -1000,7 +1000,7 @@ subagent, or hidden authority is never implied by a prompt.
 
 ### When exact context exceeds capacity
 
-The current complete provider-context JSON has a 262,144 UTF-8-byte limit,
+The current complete provider-context JSON has a 524,288 UTF-8-byte limit,
 including envelope and escaping. A capacity notice identifies the measurement
 stage and shows actual/maximum/excess bytes when available, without quoting story
 or conversation content. The rejected submission does not invoke the provider;

@@ -34,6 +34,10 @@ from story_writing_agents import ( AgentBackend,
     SessionPausedError, Verdict,
 )
 from story_writing_agents.config import ConfigManager
+from story_writing_agents.conversations.session_context import (
+    MAX_PROVIDER_INPUT_UTF8_BYTES,
+    MAX_PROVIDER_PAYLOAD_UTF8_BYTES,
+)
 from story_writing_agents.workspace.initialization import provision_session_resources
 from story_writing_agents.conversations import select_bounded_collaboration_context
 from story_writing_agents.agent_context import (
@@ -1022,7 +1026,10 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             for call in case.backend.calls])
         self.assertIs(response.accounting.state, ProviderCallState.SUBMITTED)
         self.assertEqual(response.accounting.payload.schema_utf8_bytes, len(expected))
-        self.assertLessEqual(response.accounting.payload.payload_utf8_bytes, 262144)
+        self.assertLessEqual(response.accounting.payload.payload_utf8_bytes, MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
+        self.assertLessEqual(
+            response.accounting.payload.serialized_input_utf8_bytes,
+            MAX_PROVIDER_INPUT_UTF8_BYTES)
         self.assertEqual(response.accounting.payload.payload_utf8_bytes,
                          len(canonical_provider_json(request.payload)))
         decoded = request.contract.decode_response(response.response_text)

@@ -2123,7 +2123,7 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
 - Agent-context planning, source inventory, SEARCH/READ rounds, observations,
   references, and non-session delta depth have independent finite limits.
   Required Lead memory is separate from SEARCH-first optional P3 material:
-  exact delivery allows 4,096 conversations and at most 262,144 canonical
+  exact delivery allows 4,096 conversations and at most 524,288 canonical
   payload UTF-8 bytes, without summary or silent omission. Excess reports
   `exact session context exceeds the delivery capacity`. Known material is
   checked before provider work; generated observations are checked before

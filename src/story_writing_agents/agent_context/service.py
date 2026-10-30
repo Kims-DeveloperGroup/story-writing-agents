@@ -51,6 +51,7 @@ from ..writing_artifacts.read_actions import (
     AuthorizedArtifactReference, ReferenceReadRequest, ReferenceReadResult,
 )
 from ..conversations.session_context import (
+    MAX_PROVIDER_PAYLOAD_UTF8_BYTES,
     MAX_PROVIDER_SCHEMA_UTF8_BYTES,
     MAX_SESSION_CONTEXT_UTF8_BYTES,
     SessionContextCapacityError,
@@ -1060,8 +1061,10 @@ class BoundCallContract:
                 raise ValueError("schema_selection current phase guide is invalid")
         self.require_projection(native_schema, declared_lowering=declared_lowering)
         input_json, _ = account_provider_payload(native_schema, payload)
-        if len(input_json) > 262_144:
-            raise SessionContextCapacityError("Lead final projected request exceeds existing capacity")
+        if len(input_json) > MAX_PROVIDER_PAYLOAD_UTF8_BYTES:
+            raise SessionContextCapacityError(
+                stage="provider_payload", actual_utf8_bytes=len(input_json)
+            )
 
     def repair_lineage(self) -> BoundCallLineage:
         if self.phase in {"repair", "replay_repair"}:
@@ -1422,7 +1425,7 @@ def _require_context_capacity(
     """Check actual provider payload JSON without changing delivery or accounting."""
     payload_json, _ = account_provider_payload(schema, payload)
     actual_utf8_bytes = len(payload_json)
-    if actual_utf8_bytes > MAX_SESSION_CONTEXT_UTF8_BYTES:
+    if actual_utf8_bytes > MAX_PROVIDER_PAYLOAD_UTF8_BYTES:
         raise SessionContextCapacityError(
             stage=stage, actual_utf8_bytes=actual_utf8_bytes,
         )

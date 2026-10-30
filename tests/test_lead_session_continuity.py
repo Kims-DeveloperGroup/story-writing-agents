@@ -18,7 +18,11 @@ from dataclasses import asdict, replace
 from unittest import mock
 
 from story_writing_agents import ReplyTraceOrigin, StoryRuntime
+from story_writing_agents.agent_context import canonical_provider_json, service as service_module
 from story_writing_agents.agent_context.continuation import ContextContinuationTransaction
+from story_writing_agents.agent_context.planning import (
+    MAX_MANDATORY_REFERENCE_RESERVATION_UTF8_BYTES,
+)
 from story_writing_agents.agent_context.ledger import ContextLedgerKey, ContextLedgerRecordState
 from story_writing_agents.agent_context.manifest import ContextContinuationIdentity, ContextScope, ContextSubjectKind
 from story_writing_agents.agent_context.service import AgentContextService, ContextContinuationRejection
@@ -43,6 +47,7 @@ from story_writing_agents.conversations import (
 )
 from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
 from story_writing_agents.conversations.session_context import (
+    MAX_PROVIDER_PAYLOAD_UTF8_BYTES,
     MAX_SESSION_CONTEXT_UTF8_BYTES,
     SessionContextCapacityError,
     SessionContextHistoryChangedError,
@@ -320,27 +325,53 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
 
         capacity_conversation = self.conversation("Complete payload overflow")
         source_path = self.workspace.path("core_documents/global_outline.md")
+        second_source_path = self.workspace.path("core_documents/character_sheets.md")
         marker = "PRIVATE_CAPACITY_SOURCE\n"
         source_text = marker + '\\"' * ((131_072 - len(marker.encode("utf-8"))) // 2)
+        second_marker = marker.replace("SOURCE", "SECOND")
+        second_source_text = source_text.replace(marker, second_marker, 1)
+        self.assertEqual(len(second_marker.encode("utf-8")), len(marker.encode("utf-8")))
         source_path.write_text(source_text, encoding="utf-8")
+        second_source_path.write_text(second_source_text, encoding="utf-8")
         self.assertLessEqual(len(source_text.encode("utf-8")), 131_072)
+        self.assertLessEqual(len(second_source_text.encode("utf-8")), 131_072)
+        self.assertLessEqual(
+            len(source_text.encode("utf-8")) + len(second_source_text.encode("utf-8")),
+            MAX_MANDATORY_REFERENCE_RESERVATION_UTF8_BYTES)
+        capacity_observations = []
+        capacity_check = service_module._require_context_capacity
+        def observe_capacity(schema, payload, *, stage):
+            capacity_observations.append((stage, canonical_provider_json(payload)))
+            return capacity_check(schema, payload, stage=stage)
         preserved_history = (self.history(first), self.history(second))
         preserved_approval = self.runtime.inspect_editorial_state(self.session_id)
         submitted_before = tuple(self.backend.call_records)
         self.backend.enqueue(control_plan=())
-        with self.assertRaises(SessionContextCapacityError) as initial_capacity:
-            await self.runtime.lead_turn(self.session_id, capacity_conversation, "Review ${core_documents/global_outline.md} before answering.")
+        with mock.patch.object(service_module, "_require_context_capacity", new=observe_capacity):
+            with self.assertRaises(SessionContextCapacityError) as initial_capacity:
+                await self.runtime.lead_turn(self.session_id, capacity_conversation,
+                    "Review ${core_documents/global_outline.md} and ${core_documents/character_sheets.md} before answering.")
+        self.assertEqual(tuple(stage for stage, _ in capacity_observations),
+                         ("known_envelope", "provider_payload"))
+        self.assertEqual(initial_capacity.exception.actual_utf8_bytes, len(capacity_observations[-1][1]))
+        for full_text in (source_text, second_source_text):
+            encoded_text = json.dumps(full_text, ensure_ascii=False).encode("utf-8")
+            self.assertNotIn(encoded_text, capacity_observations[0][1])
+            self.assertIn(encoded_text, capacity_observations[-1][1])
         self.assertEqual(initial_capacity.exception.stage, "provider_payload")
-        self.assertGreater(initial_capacity.exception.actual_utf8_bytes, MAX_SESSION_CONTEXT_UTF8_BYTES)
-        self.assertEqual(initial_capacity.exception.maximum_utf8_bytes, MAX_SESSION_CONTEXT_UTF8_BYTES)
+        self.assertGreater(initial_capacity.exception.actual_utf8_bytes, MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
+        self.assertEqual(initial_capacity.exception.maximum_utf8_bytes, MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
         self.assertEqual(initial_capacity.exception.excess_utf8_bytes,
-            initial_capacity.exception.actual_utf8_bytes - MAX_SESSION_CONTEXT_UTF8_BYTES)
+            initial_capacity.exception.actual_utf8_bytes - MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
         self.assertNotIn(marker.strip(), str(initial_capacity.exception))
         self.assertNotIn(marker.strip(), repr(initial_capacity.exception))
+        self.assertNotIn(second_marker.strip(), str(initial_capacity.exception))
+        self.assertNotIn(second_marker.strip(), repr(initial_capacity.exception))
         self.assertEqual(tuple(self.backend.call_records), submitted_before)
         self.assertEqual((self.history(first), self.history(second)), preserved_history)
         self.assertEqual(self.runtime.inspect_editorial_state(self.session_id), preserved_approval)
         self.assertNotIn(marker.strip(), repr(self.history(capacity_conversation)))
+        self.assertNotIn(second_marker.strip(), repr(self.history(capacity_conversation)))
         failed_capacity = self.checkpoint()
         self.assertIsNone(failed_capacity.record.ready_checkpoint)
         self.assertEqual(failed_capacity.record.attempt.provider_calls, ())
@@ -357,12 +388,23 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(archived_row.metadata.status.value, "archived")
         self.assertEqual(restart_storage.event_store.read(self.session_id, capacity_conversation), capacity_history)
         self.backend.enqueue(control_plan=())
-        with self.assertRaises(SessionContextCapacityError) as restarted_capacity:
-            await capacity_restart.lead_turn(self.session_id, restart_conversation,
-                "Review ${core_documents/global_outline.md} before answering.")
+        capacity_observations.clear()
+        with mock.patch.object(service_module, "_require_context_capacity", new=observe_capacity):
+            with self.assertRaises(SessionContextCapacityError) as restarted_capacity:
+                await capacity_restart.lead_turn(self.session_id, restart_conversation,
+                    "Review ${core_documents/global_outline.md} and ${core_documents/character_sheets.md} before answering.")
+        self.assertEqual(tuple(stage for stage, _ in capacity_observations),
+                         ("known_envelope", "provider_payload"))
+        self.assertEqual(restarted_capacity.exception.actual_utf8_bytes, len(capacity_observations[-1][1]))
+        for full_text in (source_text, second_source_text):
+            encoded_text = json.dumps(full_text, ensure_ascii=False).encode("utf-8")
+            self.assertNotIn(encoded_text, capacity_observations[0][1])
+            self.assertIn(encoded_text, capacity_observations[-1][1])
         self.assertEqual(restarted_capacity.exception.stage, "provider_payload")
-        self.assertGreater(restarted_capacity.exception.actual_utf8_bytes, MAX_SESSION_CONTEXT_UTF8_BYTES)
+        self.assertGreater(restarted_capacity.exception.actual_utf8_bytes, MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
         self.assertNotIn(marker.strip(), str(restarted_capacity.exception))
+        self.assertNotIn(second_marker.strip(), str(restarted_capacity.exception))
         self.assertEqual(tuple(self.backend.call_records), submitted_before)
         self.assertEqual(capacity_restart.inspect_editorial_state(self.session_id), preserved_approval)
         self.assertEqual(source_path.read_text(encoding="utf-8"), source_text)
+        self.assertEqual(second_source_path.read_text(encoding="utf-8"), second_source_text)
