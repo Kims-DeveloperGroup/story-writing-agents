@@ -12796,6 +12796,9 @@ class StoryRuntime:
                         if correction_facts.group_state is not None:
                             record_context_provider_failure(first_failure, replace(
                                 context_provider_failure_facts(first_failure), group_state=correction_facts.group_state))
+                            if (correction_facts.group_state.workflow is not None
+                                    and correction_facts.group_state.workflow.phase is LeadGroupPhase.STOP):
+                                raise first_failure
                         self._fail_reference_operation(
                             reference_operation,
                             correction_failure,

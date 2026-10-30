@@ -230,8 +230,8 @@ SELECT 교정과 GENERATE를 마칠 수 있다. 전체 허용량이 2회라면 �
 그 경로를 시작하지 않고 원래 거절을 보존한다. 최초 호출 한도는 그대로이며,
 유효한 마지막 재선택으로 STOP한 흐름을 이 교정 예약으로 다시 시작하지 않는다.
 
-#895의 테스트 배정은 raw143422와 청구 helper8을 합친143430이다. 기존 대표 사례를
-보존하며528행, 정책 회귀13행과 helper2행을 추가한 정확한 배정이다. ID2527·전체
+#895의 테스트 배정은 raw143431와 청구 helper8을 합친143439이다. 기존 대표 사례를
+보존하며537행, 정책 회귀13행과 helper2행을 추가한 정확한 배정이다. ID2527·전체
 subTest mapping·18000/3600초와 Whole Front 사례는 유지한다.
 
 ### #895 첫 CI와 fixture 보완
@@ -258,6 +258,16 @@ READ 입력이 일치하는지 검증한다. ordinary record가 제거하는 unk
 실패·재생을 진행한다. 앞선 호출도 같은 예산에 포함해4회 성공/3회 중단을 대조한다.
 기존 Source drift callback은 실제 helper의 positional 인자로 전달한다. 생산 코드는
 Codex 검토 소스와 동일하고, 보완한 테스트의 통과 여부는 새 CI에서 확인한다.
+
+### #895 grouped STOP 반환과 실제 callback 계약
+
+`fd0de712`의 영향11개는8개 통과·3개 실패였다. 새 revision seed에는 실제 input ID와
+revision을 모두 명시하고, 인증 hook은 동기 함수에서 실제 승인을 반환해 source-veto를
+검증한다. 행 label과 최초 호출 한도도 관측한다. frozen 교정이 새 제출 없이 STOP한
+경우에는 원래 거절 사실을 전달한 뒤 일반 CONTINUE fallback으로 가던 분기를 확인했다.
+이 grouped STOP만 기존 바깥 거절 처리로 올려 원래 accounting·불확실성·참조 정리와
+RETRY 의미를 보존한다. 일반 fallback은 유지하며 예산식·API·schema는 변경하지 않는다.
+이후 소스의 영향·전체 CI와 후속 검토를 확인하기 전에는 완료로 계산하지 않는다.
 
 ## 남은 작업
 

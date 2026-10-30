@@ -522,8 +522,9 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
             invocation_kind=context.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
             agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=4))
         grouped_provider = AuthContextProvider((auth_failure(), context._group_control("answer.workflow"), context._group_answer))
-        async def change_group_source(_key):
+        def change_group_source(_key):
             self.workspace.path("core_documents/global_outline.md").write_text("Changed typed group source.")
+            return True
         with self.assertRaises(ProviderAuthenticationRequiredError):
             await drive_recovery(self.invoke(grouped_provider, grouped_request), change_group_source)
         self.assertEqual(len(grouped_provider.calls), 1)

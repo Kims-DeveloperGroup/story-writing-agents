@@ -6252,8 +6252,9 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             packet["agent_action"]["task_result"]["response_text"] = {"private": private_group}
             return json.dumps(packet)
         original_invoke = AgentContextService.invoke
-        failures = []
+        failures, invoked_limits = [], []
         async def retain_failure(service, request, provider, **kwargs):
+            invoked_limits.append(request.physical_call_limit)
             try:
                 return await original_invoke(service, request, provider, **kwargs)
             except BaseException as failure:
@@ -6268,6 +6269,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             conversation = self.conversation("Grouped exhausted correction " + label)
             start = len(self.backend.calls)
             failures.clear()
+            invoked_limits.clear()
             self.backend.enqueue(*responses)
             if label == "select-frozen-context":
                 self.backend.enqueue()
@@ -6275,7 +6277,9 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     mock.patch.object(AgentContextService, "invoke", retain_failure), \
                     mock.patch.object(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", limit):
                 exhausted = await self.runtime.lead_turn(self.session_id, conversation, "Explain bounded group workflow.")
-            self.assertIs(exhausted.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+            self.assertTrue(invoked_limits, label)
+            self.assertEqual(invoked_limits[0], limit, label)
+            self.assertIs(exhausted.next_action, CollaborationNextAction.RETRY_LEAD_TURN, (label, tuple(invoked_limits)))
             self.assertEqual(len(self.backend.calls) - start, expected_calls)
             self.assertTrue(exhausted.validation_details)
             self.assertTrue(exhausted.validation_details[0].startswith("Original"))

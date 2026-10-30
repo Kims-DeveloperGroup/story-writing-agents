@@ -690,7 +690,9 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
                 raise LeadContractError(findings)
             StoryRuntime._decode_lead_outcome(answer)
         revised_factory = replace(_LEAD_CALL_FACTORY, constraints=revised_constraints,
-            rule_seed=_lead_front_result_contract(LeadProposalRelation.NEW_STEP, constraints=revised_constraints),
+            rule_seed=_lead_front_result_contract(
+                LeadProposalRelation.NEW_STEP, revised_constraints.input_ids,
+                revised_constraints.task_revisions, constraints=revised_constraints),
             authorized_validator=validate_revision)
         revised_request = _group_request(replace(read_request, operation_id="group-revision",
             result_correlation_id="group-revision-result", result_contract=revised_factory,
@@ -722,7 +724,9 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         def no_review_business(_answer, _authorization):
             raise AssertionError("This fixture permits only context/control before handoff")
         review_factory = replace(_LEAD_CALL_FACTORY, constraints=review_facts,
-            rule_seed=_lead_front_result_contract(LeadProposalRelation.NEW_STEP, constraints=review_facts),
+            rule_seed=_lead_front_result_contract(
+                LeadProposalRelation.NEW_STEP, review_facts.input_ids,
+                review_facts.task_revisions, constraints=review_facts),
             authorized_validator=no_review_business)
         self.workspace.path("core_documents/global_outline.md").write_text("PRIVATE_PLOT_GROUP_SOURCE: current outline.")
         review_request = _group_request(self.request(
