@@ -711,7 +711,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertIsNot(first_current.prepared_compilation, original_plan)
         self.assertEqual(selected.as_object(), original_selection)
         self.assertEqual(len(revised_result.group_state.workflow.history), 2)
-        self.assertEqual(json.loads(revised_result.answer)["scope"]["task"], "context-task@2")
+        self.assertEqual(json.loads(revised_result.answer)["authoring_scope"]["task"], "context-task@2")
 
         from story_writing_agents.specialist_routing import (
             ArtifactReviewDomain, AuthoringContribution, AuthoringContributionRole, AuthoringIntent)
