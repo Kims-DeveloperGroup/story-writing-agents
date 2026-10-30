@@ -4661,7 +4661,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertIs(calls[-1].contract.group_workflow.active_selection, selection)
         self.assertEqual(selection.as_object(), snapshot)
         self.assertIsNot(calls[-1].contract.prepared_compilation, old_plan)
-        self.assertTrue(calls[-1].contract.offers.completed_read_facts)
+        self.assertEqual(calls[-1].contract.offers.completed_read_facts, ())
+        self.assertEqual(len(calls[-1].contract.offers.delivery_read_facts), 1)
+        self.assertEqual(calls[-1].contract.prepared_compilation.read_facts, calls[-1].contract.offers.delivery_read_facts)
 
     async def test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing(
         self,
@@ -6247,7 +6249,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             return json.dumps(packet)
         def rejected_generate(call, provider):
             packet = json.loads(_visible_outcome("answer", grouped=True)(call, provider))
-            packet["agent_action"]["task_result"]["unexpected"] = private_group
+            packet["agent_action"]["task_result"]["response_text"] = {"private": private_group}
             return json.dumps(packet)
         original_invoke = AgentContextService.invoke
         failures = []

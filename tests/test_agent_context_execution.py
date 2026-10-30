@@ -677,7 +677,9 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertIsNot(fresh.prepared_compilation, original_plan)
         self.assertNotEqual(fresh.group_stage.catalog.catalog_id, selected.catalog.catalog_id)
         self.assertEqual(fresh.group_stage.catalog.request_basis_ref, selected.catalog.request_basis_ref)
-        self.assertEqual(len(fresh.offers.completed_read_facts), 1)
+        self.assertEqual(fresh.offers.completed_read_facts, ())
+        self.assertEqual(len(fresh.offers.delivery_read_facts), 1)
+        self.assertEqual(fresh.prepared_compilation.read_facts, fresh.offers.delivery_read_facts)
         self.assertEqual(len(read_result.provider_calls), 4)
 
         revised_scope = replace(_LEAD_SCOPE, task_revision=2)

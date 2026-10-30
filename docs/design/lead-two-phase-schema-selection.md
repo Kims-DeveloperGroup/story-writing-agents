@@ -230,8 +230,8 @@ SELECT 교정과 GENERATE를 마칠 수 있다. 전체 허용량이 2회라면 �
 그 경로를 시작하지 않고 원래 거절을 보존한다. 최초 호출 한도는 그대로이며,
 유효한 마지막 재선택으로 STOP한 흐름을 이 교정 예약으로 다시 시작하지 않는다.
 
-#895의 테스트 배정은 raw143367와 청구 helper8을 합친143375이다. 기존 대표 사례를
-보존하며473행, 정책 회귀13행과 helper2행을 추가한 정확한 배정이다. ID2527·전체
+#895의 테스트 배정은 raw143422와 청구 helper8을 합친143430이다. 기존 대표 사례를
+보존하며528행, 정책 회귀13행과 helper2행을 추가한 정확한 배정이다. ID2527·전체
 subTest mapping·18000/3600초와 Whole Front 사례는 유지한다.
 
 ### #895 첫 CI와 fixture 보완
@@ -247,6 +247,17 @@ Fast10개와 Whole Front를 통과했다. Whole Front는1153.550초였으며 tim
 교정 invocation별 응답 묶음, 반환 후 원본 오류의 최신 STOP facts를 보완한다.
 명시적인 필드 목록에는 새 API 필드만 추가한다. 기존 호출 수·STOP 기대와 assert·
 ID·subTest·Whole Front 사례는 유지하며, 보완 소스의 영향11개 및 전체 CI는 다시 확인한다.
+
+### #895 READ 전달·인증 재생 fixture의 추가 교정
+
+`2fe8806f`의 영향11개는6개 통과·5개 실패였다. READ 다음 호출의 동결 offer에는
+완료 목록과 이번 전달 목록을 구분하므로 delivery 사실과 prepared plan의 전체
+READ 입력이 일치하는지 검증한다. ordinary record가 제거하는 unknown key 대신
+기존 string 필드의 타입을 위반해 실제 거절을 검증한다. 빈 검색 종류나 0 정책은
+생산 가드가 허용하지 않으므로 실제 0-hit SEARCH를 소진한 후 SELECT→GEN의 인증
+실패·재생을 진행한다. 앞선 호출도 같은 예산에 포함해4회 성공/3회 중단을 대조한다.
+기존 Source drift callback은 실제 helper의 positional 인자로 전달한다. 생산 코드는
+Codex 검토 소스와 동일하고, 보완한 테스트의 통과 여부는 새 CI에서 확인한다.
 
 ## 남은 작업
 
