@@ -321,12 +321,48 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.assertNotIn(prepared.turn_id, source_by_id)
 
     async def test_empty_continuation_retains_selection_and_cancel_is_terminal(self):
-        conversation_id, _ = await self.start()
-        first = await self.prepare(conversation_id)
-        selected = self.objective(conversation_id).draft_sources
-        await self.runtime.decide_lead_step(lead._decision(first, c.CollaborationConfirmationDecision.REJECT))
-        await self.prepare(conversation_id, select=False)
-        self.assertEqual(self.objective(conversation_id).draft_sources, selected)
+        from story_writing_agents import orchestrator as orchestration
+        from story_writing_agents.lead_schema_groups import LeadGroupPhase
+        factory, enqueue = orchestration._lead_call_contract_factory, self.backend.enqueue
+        source_front_flags, source_enqueues = [], []
+        def source_factory(**values):
+            if values["stage"] == "lead.front":
+                source_front_flags.append(values["schema_group_protocol"])
+                if values["schema_group_protocol"]:
+                    self.assertIn(len(source_front_flags), (1, 2, 4))
+                    values = {**values, "schema_group_protocol": False}
+                else:
+                    self.assertIn(len(source_front_flags), (3, 5))
+            return factory(**values)
+        def source_enqueue(*responses, **values):
+            ordinal = len(source_enqueues)
+            source_enqueues.append(ordinal)
+            if ordinal in (0, 1, 3):
+                self.assertEqual(tuple((cursor, phase) for cursor, phase, _response in values["control_plan"]),
+                                 ((0, LeadGroupPhase.SELECT),))
+                values = {**values, "control_plan": ()}
+            else:
+                self.assertIn(ordinal, (2, 4))
+                self.assertNotIn("control_plan", values)
+            return enqueue(*responses, **values)
+        source_call_start = len(self.backend.calls)
+        with (mock.patch.object(orchestration, "_lead_call_contract_factory", new=source_factory),
+              mock.patch.object(self.backend, "enqueue", new=source_enqueue)):
+            conversation_id, _ = await self.start()
+            self.assertEqual(len(self.backend.calls) - source_call_start, 3)
+            first = await self.prepare(conversation_id)
+            self.assertEqual(len(self.backend.calls) - source_call_start, 5)
+            selected = self.objective(conversation_id).draft_sources
+            await self.runtime.decide_lead_step(lead._decision(first, c.CollaborationConfirmationDecision.REJECT))
+            await self.prepare(conversation_id, select=False)
+            self.assertEqual(len(self.backend.calls) - source_call_start, 7)
+            self.assertEqual(self.objective(conversation_id).draft_sources, selected)
+        self.assertIs(orchestration._lead_call_contract_factory, factory)
+        self.assertEqual(self.backend.enqueue, enqueue)
+        self.assertEqual(source_front_flags, [True, True, False, True, False])
+        self.assertEqual(source_enqueues, [0, 1, 2, 3, 4])
+        self.assertEqual(tuple(self.backend.calls[source_call_start + index].contract.schema_group_phase
+                               for index in (0, 3, 4, 5, 6)), (None,) * 5)
         objective_id = self.objective(conversation_id).facts.objective_id
         self.backend.enqueue(lambda call, _provider: _native_objective_response(call, response_type='answer',
             message='Objective cancelled.', scope=lead._live_scope(call),
@@ -334,6 +370,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
             branch='lead-response-v8:family:0', selection_group='answer.workflow'),
                              control_plan=selection_plan("answer.workflow"))
         cancel_call_start = len(self.backend.calls)
+        cancel_event_start = len(self.history(conversation_id))
         cancelled = await self.runtime.lead_turn(self.session_id, conversation_id, "Cancel this writing objective.")
         selects = [call for call in self.backend.calls[cancel_call_start:]
                    if call.contract.group_workflow is not None and call.contract.group_workflow.phase.value == "select"]
@@ -344,6 +381,9 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
             "remaining_provider_calls": current.contract.offers.remaining_provider_calls,
         }
         self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.CANCELLED, diagnostic)
+        self.assertEqual(tuple(call.contract.schema_group_phase for call in self.backend.calls[cancel_call_start:]),
+                         (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
+        self.assertEqual(len(lead._submitted_calls(self.history(conversation_id)[cancel_event_start:])), 2)
         before = self.objective(conversation_id)
         bad = self.question(intent={"action": "continue", "objective_id": objective_id, "next_step": "clarify", "draft_source_event_ids": []})
         self.backend.enqueue(bad, control_plan=selection_plan("question.authoring"))

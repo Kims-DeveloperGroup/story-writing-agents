@@ -280,7 +280,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 "response_details": {"task_scope": lead_fixture_bound_scope(call, _live_scope(
                     call, activity="draft", domains=("plot_structure",), paths=(OUTLINE,)),
                     record=True)},
-            }, family=0, branch_key=call.contract.factory.rule_seed.contract_id + ":family:1")
+            }, family=0, branch_key=call.contract.factory.rule_seed.contract_id + ":family:1:group:question.authoring")
 
         self.backend.enqueue(
             partial(_search_history, text="Nora must recover her brother's letter"),

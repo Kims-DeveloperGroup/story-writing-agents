@@ -2920,6 +2920,43 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertRaises(FixturePhasePlanError, unknown.for_request, requests[0])
         self.assertRaises(FixturePhasePlanError, unknown.require_fixture_valid)
 
+        # 유효한 native/ledger 근거가 있어도 Host의 업무 거절은 thread를 taint한다.
+        requests, invocations, raw_responses, native_witnesses, native_commands = [], [], [], [], []
+        history = OwnedNativeHistory(self, thread_id="77777777-7777-4777-8777-777777777777")
+        responses = [_group_control("answer.workflow"), _group_answer]
+        phases = (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE)
+        host_rejection = ValueError("Host rejected the valid typed result.")
+        def reject_business(answer, authorization):
+            _LEAD_CALL_FACTORY.authorized_validator(answer, authorization)
+            self.assertEqual(provider.inspect_context_thread(scope, requests[-1].policy_fingerprint), history.thread_id)
+            raise host_rejection
+        host_factory = replace(_LEAD_CALL_FACTORY, authorized_validator=reject_business)
+        host_request = _group_request(replace(request, group_state=None, result_contract=host_factory,
+            operation_id="grouped-reader-host", result_correlation_id="grouped-reader-host-result", physical_call_limit=2))
+        with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
+            with self.assertRaises(ValueError) as denied:
+                await service.invoke(host_request, ObservedProvider(), **authorities)
+        self.assertIs(denied.exception, host_rejection)
+        host_facts = context_provider_failure_facts(denied.exception)
+        self.assertEqual((len(invocations), len(native_commands), len(host_facts.submitted_accountings)), (2, 2, 2))
+        self.assertEqual(requests[1].contract.structural_findings(raw_responses[1]), ())
+        self.assertIs(host_facts.response_rejection_code, ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED)
+        self.assertIs(host_facts.group_state.workflow.phase, LeadGroupPhase.GENERATE)
+        self.assertIs(invocations[1].context_witness, native_witnesses[0])
+        self.assertIs(invocations[1].context_anchor, native_witnesses[0])
+        self.assertIs(host_facts.group_state.transport_delivery.witness, native_witnesses[1])
+        self.assertIs(host_facts.group_state.accepted_delivery.witness, native_witnesses[0])
+        host_record = ContextLedger(self.workspace).inspect(ContextLedgerKey(scope, provider.provider_id)).record
+        self.assertIs(host_record.state, ContextLedgerRecordState.TAINTED)
+        self.assertIs(host_record.attempt.outcome, ContextLedgerAttemptOutcome.OUTPUT_INVALID)
+        self.assertEqual(tuple(call.call_id for call in host_record.attempt.provider_calls),
+                         tuple(call.call_id for call in requests))
+        self.assertTrue(host_facts.group_state.transport_delivery.matches_ledger(host_record, latest=True))
+        self.assertTrue(host_facts.group_state.accepted_delivery.matches_ledger(host_record))
+        async with provider.invocation(scope, requests[-1].policy_fingerprint):
+            self.assertIsNone(provider.inspect_context_thread(scope, requests[-1].policy_fingerprint))
+        self.assertTrue(any(record["content"] == raw_responses[1] for record in _agent_exchange_records(self.workspace)))
+
     def _assert_owned_native_context_witness(self, invocation) -> None:
         import sqlite3
         from story_writing_agents import codex_adapter

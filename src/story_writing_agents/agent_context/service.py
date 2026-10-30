@@ -2153,6 +2153,55 @@ class ContextGroupInvocationState:
             self.prepared_compilation.require_provenance()
 
 
+def _group_native_deliveries(
+    state: ContextGroupInvocationState | None, conditions: ContextPlanningConditions,
+    provider_thread_id: str | None,
+) -> tuple[ContextDeliverySnapshot, ...]:
+    """같은 요청·조건과 실제 native 계보를 가진 수락·전송 쌍만 반환한다."""
+    if (state is None or state.workflow is None
+            or state.workflow.phase not in {LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE}
+            or state.accepted_delivery is None or state.transport_delivery is None):
+        return ()
+    accepted, transport = state.accepted_delivery, state.transport_delivery
+    for snapshot in (accepted, transport):
+        if (snapshot.witness is None or snapshot.request_basis != state.request_basis
+                or snapshot.conditions != conditions or not snapshot.source_valid()):
+            return ()
+    anchor, witness = accepted.witness, transport.witness
+    if (witness.thread_id != provider_thread_id or anchor.thread_id != witness.thread_id
+            or anchor.rollout_path != witness.rollout_path or anchor.rollout_id != witness.rollout_id
+            or anchor.file_identity != witness.file_identity or anchor.scope_digest != witness.scope_digest
+            or anchor.settings_digest != witness.settings_digest
+            or anchor.prefix_utf8_bytes > witness.prefix_utf8_bytes
+            or anchor.prefix_utf8_bytes == witness.prefix_utf8_bytes and anchor.prefix_sha256 != witness.prefix_sha256):
+        return ()
+    return accepted, transport
+
+
+def _verified_group_deliveries(
+    state: ContextGroupInvocationState | None, conditions: ContextPlanningConditions,
+    record: ContextLedgerRecord | None, provider_thread_id: str | None, *,
+    incoming: tuple[ContextDeliverySnapshot, ...] = (),
+) -> tuple[ContextDeliverySnapshot, ...]:
+    """실제 원장 prefix/latest 또는 reserve 전에 검증한 같은 쌍만 인계한다."""
+    deliveries = _group_native_deliveries(state, conditions, provider_thread_id)
+    if (not deliveries or type(record) is not ContextLedgerRecord or record.attempt is None
+            or record.key.scope != conditions.scope or record.key.provider_id != conditions.provider_id
+            or record.state not in {ContextLedgerRecordState.INCOMPLETE, ContextLedgerRecordState.TAINTED}
+            or record.ready_checkpoint is not None):
+        return ()
+    for snapshot, latest in zip(deliveries, (False, True), strict=True):
+        if snapshot.matches_ledger(record, latest=latest):
+            continue
+        original = snapshot.ledger_record
+        if (not any(snapshot is item for item in incoming)
+                or record.key != original.key or record.created_at != original.created_at
+                or record.generation < original.generation
+                or latest and record.attempt.provider_calls):
+            return ()
+    return deliveries
+
+
 @dataclass(frozen=True, slots=True)
 class ContextInvocationRequest:
     """Domain facts and transient caller-owned material for one invocation."""
@@ -5413,17 +5462,9 @@ def _render_group_context_payload(
                                          "selection_request_basis_ref": current_basis_ref})
     context_ref = "ctx_" + hashlib.sha256(envelope).hexdigest()
     delta = bool(ledger_verified and not fresh and compatible and accepted_compatible
+                 and _group_native_deliveries(state, conditions, provider_thread_id)
                  and old_envelope.get("selection_request_basis_ref") == current_basis_ref
-                 and accepted_envelope.get("selection_request_basis_ref") == current_basis_ref
-                 and prior.witness is not None
-                 and accepted.witness is not None and prior.witness.thread_id == provider_thread_id
-                 and accepted.witness.thread_id == prior.witness.thread_id
-                 and accepted.witness.rollout_path == prior.witness.rollout_path
-                 and accepted.witness.rollout_id == prior.witness.rollout_id
-                 and accepted.witness.file_identity == prior.witness.file_identity
-                 and accepted.witness.scope_digest == prior.witness.scope_digest
-                 and accepted.witness.settings_digest == prior.witness.settings_digest
-                 and accepted.witness.prefix_utf8_bytes <= prior.witness.prefix_utf8_bytes)
+                 and accepted_envelope.get("selection_request_basis_ref") == current_basis_ref)
     current = full
     if delta:
         fresh_keys = {"protocol_version", "request_correlation_token", "response_contract"}
@@ -6197,6 +6238,20 @@ class AgentContextService:
                 policy_fingerprint=self._planning_policy.fingerprint,
             )
             inspection = self._ledger.inspect(key)
+            incoming_deliveries = ()
+            if not request.fresh and contract_lineage is not None:
+                incoming_deliveries = _verified_group_deliveries(
+                    group_state, planning_conditions, inspection.record, active_thread_id)
+                if incoming_deliveries:
+                    origin = contract_lineage.origin
+                    transport = incoming_deliveries[-1]
+                    if (origin.request_basis != group_state.request_basis
+                            or origin.group_workflow is not group_state.workflow
+                            or origin.prepared_compilation is not group_state.prepared_compilation
+                            or transport.call_id != origin.offers.call_id
+                            or transport.schema_sha256 != hashlib.sha256(
+                                canonical_provider_json(origin.schema_value())).hexdigest()):
+                        incoming_deliveries = ()
             planning_checkpoint = inspection.checkpoint_view
             if planning_checkpoint.state is ContextCheckpointState.READY:
                 checkpoint_conditions = planning_checkpoint.conditions
@@ -6279,6 +6334,7 @@ class AgentContextService:
                         ),
                     )
                 except SessionContextHistoryChangedError:
+                    incoming_deliveries = ()
                     inspection = self._ledger.invalidate(
                         key, expected_generation=inspection.generation,
                     )
@@ -6350,7 +6406,7 @@ class AgentContextService:
                 )
                 _require_context_capacity({}, known_payload, stage="known_envelope")
 
-            if projection.mode is ContextDeliveryMode.BOOTSTRAP:
+            if projection.mode is ContextDeliveryMode.BOOTSTRAP and not incoming_deliveries:
                 retired_thread_id = active_thread_id
                 if retired_thread_id is not None:
                     stage = "thread_reset"
@@ -6418,12 +6474,6 @@ class AgentContextService:
                 reference_operation_id=request.reference_operation_id,
                 projection_accounting=projection.accounting,
             )
-            incoming_deliveries = ()
-            if (group_state is not None and group_state.accepted_delivery is not None
-                    and group_state.transport_delivery is not None
-                    and group_state.accepted_delivery.matches_ledger(inspection.record)
-                    and group_state.transport_delivery.matches_ledger(inspection.record, latest=True)):
-                incoming_deliveries = (group_state.accepted_delivery, group_state.transport_delivery)
             reserved = self._ledger.reserve_attempt(
                 key,
                 expected_generation=inspection.generation,
@@ -6447,8 +6497,6 @@ class AgentContextService:
                     return False
 
             def group_delivery_ledger_verified() -> bool:
-                if group_state is None or group_state.accepted_delivery is None or group_state.transport_delivery is None:
-                    return False
                 current = self._ledger.inspect(key)
                 record = current.record
                 if (current.generation != generation or record is None or record.attempt is None
@@ -6456,14 +6504,9 @@ class AgentContextService:
                         or record.key != key or record.ready_checkpoint is not None
                         or record.state is not ContextLedgerRecordState.INCOMPLETE):
                     return False
-                for snapshot, latest in ((group_state.accepted_delivery, False), (group_state.transport_delivery, True)):
-                    if snapshot.matches_ledger(record, latest=latest):
-                        continue
-                    if not any(snapshot is item for item in incoming_deliveries):
-                        return False
-                    if latest and record.attempt.provider_calls:
-                        return False
-                return True
+                return bool(_verified_group_deliveries(
+                    group_state, planning_conditions, record, current_thread_id,
+                    incoming=incoming_deliveries))
 
             current_thread_id = active_thread_id
             reference_context: tuple[Mapping[str, object], ...] = ()
@@ -7429,6 +7472,30 @@ class AgentContextService:
                 history_advanced=history_advanced,
                 terminal_provider_succeeded=terminal_provider_succeeded,
             )
+            # 구조 거절은 완료된 입력 전달을 취소하지 않는다. Host 검사 실패에는 이 예외를 적용하지 않는다.
+            if (should_taint and not request.fresh and call_contract is not None
+                    and call_contract.schema_group_phase is not None
+                    and stage == "decode" and type(failure) is ContextExecutionError
+                    and outcome is ContextLedgerAttemptOutcome.MALFORMED
+                    and response_rejection_code in {
+                        ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                        ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH,
+                    }):
+                try:
+                    facts = context_provider_failure_facts(failure)
+                    require_execution_workspace_current()
+                    transport = group_state.transport_delivery
+                    if (not facts.timed_out and not facts.submission_uncertain
+                            and not facts.taint_existing_thread and facts.continuation_rejection is None
+                            and transport is not None and transport.call_id == call_request.call_id
+                            and transport.payload_json == pending_group_payload == canonical_provider_json(call_request.payload)
+                            and transport.schema_sha256 == hashlib.sha256(canonical_provider_json(call_request.schema)).hexdigest()
+                            and inspect_provider_thread() == current_thread_id
+                            and call_contract.structural_findings(result.response_text)
+                            and replay_sources_unchanged() and group_delivery_ledger_verified()):
+                        should_taint = False
+                except BaseException:
+                    pass
             if should_taint:
                 try:
                     taint_provider_thread()

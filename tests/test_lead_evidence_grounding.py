@@ -14,6 +14,7 @@ import hashlib
 import json
 import unittest
 from dataclasses import asdict, replace
+from types import SimpleNamespace
 
 from story_writing_agents import StoryRuntime
 from story_writing_agents.agent_context.service import (
@@ -453,7 +454,7 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None):
 
 
 def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
-                        authoring_assessment=None, native_proposal=False):
+                        authoring_assessment=None, native_proposal=False, selection_group=None):
     def respond(call, _provider):
         aliases = _provider.callback_payload(call)["task_input"]["available_input_sources"]
         target_paths = tuple(
@@ -495,7 +496,7 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
             return lead_fixture_response(call, {
                 "response_type": "clarification_question", "response_text": value["message"],
                 "response_details": details}, family=0,
-                branch_key=call.contract.factory.rule_seed.contract_id + ":family:1")
+                branch_key=call.contract.factory.rule_seed.contract_id + ":family:1" + (":group:" + selection_group if selection_group is not None else ""))
         if not native_proposal:
             return _provider_envelope(call, value)
         from tests.provider_wire_fixture import (
@@ -751,7 +752,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         empty = self.workspace.path("manuscript/part-01/empty.md")
         empty.write_bytes(b"")
         conversation_id = self.conversation("Empty whole")
-        self.backend.enqueue(_referenced_outcome(status="empty", evidence_ids=["reference_1"], factual=True), control_plan=selection_plan('question.authoring'))
+        self.backend.enqueue(_referenced_outcome(status="empty", evidence_ids=["reference_1"], factual=True, selection_group='question.authoring'), control_plan=selection_plan('question.authoring'))
         result = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
@@ -976,7 +977,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 'response_type': 'answer',
                 'response_text': 'The current READ supports this answer.',
                 'response_details': {'task_scope': native_scope}}, family=0,
-                branch_key=call.contract.factory.rule_seed.contract_id + ':family:0')
+                branch_key=call.contract.factory.rule_seed.contract_id + ':family:0:group:answer.observed_facts')
 
         conversation_id = self.conversation("Stale prior-turn evidence")
         self.backend.enqueue(_search("Outline", ["w"]), read_prior_turn,
@@ -1135,23 +1136,27 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             workflow_scope = lead_fixture_bound_scope(
                 call, _live_scope(call, activity='workflow'), record=True)
             stem = call.contract.factory.rule_seed.contract_id
-            seed = json.loads(lead_fixture_response(call, {
+            baseline = SimpleNamespace(contract=replace(
+                call.contract.factory, schema_group_protocol=False).for_offer(offers))
+            seed = json.loads(lead_fixture_response(baseline, {
                 'response_type': 'answer', 'response_text': message,
                 'response_details': {'task_scope': workflow_scope}},
                 family=0, branch_key=stem + ':family:0'))
-            self.assertFalse(call.contract.rule_graph.findings(seed))
-            self.assertTrue(call.contract.decode_response(
-                json.dumps(seed)).belongs_to(call.contract))
-            question = json.loads(lead_fixture_response(call, {
+            self.assertFalse(baseline.contract.rule_graph.findings(seed))
+            self.assertTrue(baseline.contract.decode_response(
+                json.dumps(seed)).belongs_to(baseline.contract))
+            question = json.loads(lead_fixture_response(baseline, {
                 'response_type': 'clarification_question',
                 'response_text': 'Clarify the concrete review source.',
                 'response_details': {'task_scope': scope}},
                 family=0, branch_key=stem + ':family:1'))
-            self.assertFalse(call.contract.rule_graph.findings(question))
-            self.assertTrue(call.contract.decode_response(
-                json.dumps(question)).belongs_to(call.contract))
-            negative = json.loads(json.dumps(seed))
-            negative['agent_action']['task_result']['response_details']['task_scope'] = scope
+            self.assertFalse(baseline.contract.rule_graph.findings(question))
+            self.assertTrue(baseline.contract.decode_response(
+                json.dumps(question)).belongs_to(baseline.contract))
+            negative = json.loads(lead_fixture_response(call, {
+                'response_type': 'answer', 'response_text': message,
+                'response_details': {'task_scope': scope}}, family=0,
+                branch_key=stem + ':family:0:group:answer.observed_facts'))
             self.assertTrue(call.contract.rule_graph.findings(negative))
             frame = json.dumps(negative, ensure_ascii=False, separators=(',', ':'))
             with self.assertRaises(LeadContractRejection) as rejected:
@@ -1213,7 +1218,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             frame = lead_fixture_response(call, {
                 'response_type': 'answer', 'response_text': positive_message,
                 'response_details': {'task_scope': scope}}, family=0,
-                branch_key=call.contract.factory.rule_seed.contract_id + ':family:0')
+                branch_key=call.contract.factory.rule_seed.contract_id + ':family:0:group:answer.observed_facts')
             self.assertFalse(call.contract.rule_graph.findings(json.loads(frame)))
             self.assertTrue(call.contract.decode_response(frame).belongs_to(call.contract))
             answer_returns += 1
