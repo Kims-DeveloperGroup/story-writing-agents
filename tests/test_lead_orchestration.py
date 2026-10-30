@@ -1046,7 +1046,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
             self.backend.enqueue(response, control_plan=())
         before = len(self.backend.calls)
         result = await self._lead_turn(conversation_id, message)
-        self.assertEqual(len(self.backend.calls) - before, 2 + int(selection_group is not None))
+        self.assertEqual(len(self.backend.calls) - before, 2 + int(selection_group is not None), result)
         self.assertIs(result.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
         return result
 

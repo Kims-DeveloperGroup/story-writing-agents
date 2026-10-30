@@ -4,6 +4,7 @@ from __future__ import annotations
 import story_writing_agents.lead_task_transitions as task
 from story_writing_agents import conversations as collaboration
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
+from story_writing_agents.agent_context.manifest import ContextSourceKind
 from story_writing_agents import lead_exploration as exploration
 import hashlib
 
@@ -6593,7 +6594,8 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             self.assertEqual(forwarded[-1]["premise_selection"].report_event_id, unranked.premise_report_ref.report_event_id)
 
         from tests.test_lead_orchestration import _task_fixture, _discussion_reply
-        from tests.provider_wire_fixture import offered_fixture_bindings, indexed_response, lead_fixture_result
+        from tests.provider_wire_fixture import (
+            offered_fixture_bindings, indexed_response, lead_fixture_result, finite_fixture_selection)
         case = _task_fixture(self)
         task_conversation = case.conversation("Shell task choices")
         runner.run(case.proposal(task_conversation, text=(
@@ -6610,6 +6612,13 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             outer, inner = offered_fixture_bindings(
                 call, action_type="submit_result", response_type="answer", family=0)
             action = json.loads(_discussion_reply(discussion_text))["agent_action"]
+            evidence_offers = call.contract.eligibility_offers
+            writing_ids = tuple(dict.fromkeys(
+                fact.evidence_id
+                for fact in evidence_offers.completed_read_facts + evidence_offers.delivery_read_facts
+                if fact.source_kind is ContextSourceKind.WRITING_ARTIFACT))
+            action["task_result"]["used_evidence_ids"] = finite_fixture_selection(
+                writing_ids, action["task_result"]["used_evidence_ids"])
             action["task_result"] = lead_fixture_result(action["task_result"])
             return indexed_response(action, outer_schema_id=outer,
                                     inner_schema_id=inner, contract=call.contract)

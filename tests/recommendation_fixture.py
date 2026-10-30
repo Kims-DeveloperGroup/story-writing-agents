@@ -697,9 +697,11 @@ class RecommendationCase(ObjectiveCase):
 
     async def recommend(self, conversation_id=None, *, recommended_action=None,
                         message=DRAFT, text="Recommend preparing this finished user-supplied outline for separate review.",
-                        selection_group="prepare.artifact"):
+                        selection_group="prepare.artifact",
+                        authoring_scope=_RECOMMENDATION_SCOPE_DEFAULT):
         conversation_id = conversation_id or self.conversation("Synthetic recommendation")
         self.backend.enqueue(recommendation(message=message, recommended_action=recommended_action,
+            authoring_scope=authoring_scope,
             authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded review judgments", "separate proposal preparation"))),
                              control_plan=selection_plan(selection_group))
         turn = await self.runtime.lead_turn(self.session_id, conversation_id, text + "\nYou may make bounded review judgments and prepare a separate proposal; preserve supplied facts." + "\nFinished candidate:\n" + message)

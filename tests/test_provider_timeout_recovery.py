@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 from tests.provider_wire_fixture import (
-    selection_plan, offered_fixture_bindings, indexed_response, lead_fixture_result)
+    selection_plan, offered_fixture_bindings, indexed_response, lead_fixture_result,
+    finite_fixture_selection)
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
 
 import asyncio
@@ -12,6 +13,7 @@ from unittest import mock
 
 from story_writing_agents import StoryRuntime
 from story_writing_agents.agent_context.ledger import ContextLedgerKey, ContextLedgerRecordState
+from story_writing_agents.agent_context.manifest import ContextSourceKind
 from story_writing_agents.agent_context.planning import ContextCheckpointState
 from story_writing_agents.agent_context.service import (
     ContextProviderFailureFacts,
@@ -230,6 +232,13 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         retry_findings = []
         def retry_answer(call, provider):
             action = json.loads(lead._discussion_reply("Synthetic retry succeeded."))["agent_action"]
+            evidence_offers = call.contract.eligibility_offers
+            writing_ids = tuple(dict.fromkeys(
+                fact.evidence_id
+                for fact in evidence_offers.completed_read_facts + evidence_offers.delivery_read_facts
+                if fact.source_kind is ContextSourceKind.WRITING_ARTIFACT))
+            action["task_result"]["used_evidence_ids"] = finite_fixture_selection(
+                writing_ids, action["task_result"]["used_evidence_ids"])
             action["task_result"] = lead_fixture_result(action["task_result"])
             outer, inner = offered_fixture_bindings(
                 call, action_type="submit_result", response_type="answer", family=0)

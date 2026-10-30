@@ -293,6 +293,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(reports, (explored.exploration,))
         self.backend.enqueue(_visible_outcome("answer", "Ordinary workflow remains active."), control_plan=selection_plan('answer.workflow'))
         normal = await restarted.lead_turn(self.session_id, provisional, "Explain the ordinary workflow.")
+        self.assertEqual(normal.message, "Ordinary workflow remains active.", normal)
         self.assertIs(normal.interaction_mode, exploration.LeadInteractionMode.ORCHESTRATION)
         self.assertIsNone(normal.exploration)
 
