@@ -1000,11 +1000,10 @@ subagent, or hidden authority is never implied by a prompt.
 
 ### When exact context exceeds capacity
 
-The current complete provider-context JSON has a 524,288 UTF-8-byte limit,
-including envelope and escaping. A capacity notice identifies the measurement
-stage and shows actual/maximum/excess bytes when available, without quoting story
-or conversation content. The rejected submission does not invoke the provider;
-existing history and failure records remain available for inspection.
+현재 완전한 provider-context JSON의 한도는 envelope와 escaping을 포함해
+524,288 UTF-8 bytes다. 용량 안내는 측정 단계와 확인 가능한 actual/maximum/excess
+bytes를 표시하며 작품이나 대화 내용을 인용하지 않는다. 거절된 제출은 provider를
+호출하지 않으며 기존 이력과 실패 기록은 계속 확인할 수 있다.
 
 Editorial-memory bounds are separate from the complete required-history payload.
 Archive, a conversation change or restart can keep that history in delivery and

@@ -1506,10 +1506,10 @@ physical call thirteen unreachable.
 
 ## Exact context capacity
 
-Lead context is limited to 524,288 UTF-8 bytes of the complete serialized provider
-payload. Equality is allowed. This is a byte limit on the current JSON payload,
-including its envelope and JSON escaping; it is separate from token/cost budgets,
-the separately delivered output schema, and a provider's model context window.
+Lead의 완전한 직렬화 provider payload 한도는 524,288 UTF-8 bytes이며 같은 값도
+허용한다. 현재 JSON payload의 envelope와 escaping을 포함하는 byte 한도다.
+Token/비용 예산, 별도로 전달하는 출력 schema, provider 모델의 context window와는
+구분한다.
 
 A capacity stop reports its stage, actual bytes, maximum and excess when that
 stage has an exact measurement. An early editorial-allocation stop can occur

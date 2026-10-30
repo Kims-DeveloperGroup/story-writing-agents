@@ -2122,12 +2122,12 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
 - Owner history has no compaction, expiry, or retention policy.
 - Agent-context planning, source inventory, SEARCH/READ rounds, observations,
   references, and non-session delta depth have independent finite limits.
-  Required Lead memory is separate from SEARCH-first optional P3 material:
-  exact delivery allows 4,096 conversations and at most 524,288 canonical
-  payload UTF-8 bytes, without summary or silent omission. Excess reports
-  `exact session context exceeds the delivery capacity`. Known material is
-  checked before provider work; generated observations are checked before
-  their subsequent substantive submission. Checkpoint
+  필수 Lead memory는 SEARCH-first의 선택적 P3 자료와 구분한다. 정확한 전달은
+  최대 4,096개 대화와 canonical payload 524,288 UTF-8 bytes까지 허용하며 필요한
+  내용을 요약하거나 조용히 생략하지 않는다. 초과하면
+  `exact session context exceeds the delivery capacity`를 보고한다. 알려진 자료는
+  provider 실행 전에, 생성된 observation은 후속 실질적인 제출 전에 확인한다.
+  Checkpoint
   absence/corruption/mismatch/taint/thread loss selects bootstrap on the next
   safe authorized work; corrupt canonical history fails closed, and uncertain
   specialist/synthesis or authoritative write outcomes remain blocked. Eligible

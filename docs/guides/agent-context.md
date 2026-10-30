@@ -112,12 +112,11 @@ its history from Lead memory or prevent provider disclosure. Memory grants no
 current evidence receipt, confirmation, replay, artifact-write, or Git
 authority. Explicit references and SEARCH/READ evidence rules still apply.
 
-Exact delivery permits at most 4,096 conversations and an inclusive limit of
-524,288 UTF-8 bytes for the complete canonically serialized contextual payload,
-including framing, JSON escaping and any reference observation it carries.
-Equality is allowed. This current payload cap excludes the separately delivered
-output schema and native transport bytes; it is not a token budget or a guarantee
-that the selected model's context window can hold the request.
+정확한 전달은 최대 4,096개 대화와 완전히 canonical 직렬화된 context payload
+524,288 UTF-8 bytes까지 허용한다. Framing, JSON escaping과 포함된 reference
+observation도 이 크기에 들어가며 한도와 같은 값은 허용한다. 별도로 전달하는 출력
+schema와 native transport bytes는 이 payload 한도에 포함되지 않는다. 이 값은 token
+예산이 아니며 선택한 모델의 context window에 요청이 들어간다는 보장도 아니다.
 
 Excess raises `SessionContextCapacityError`. The content-free diagnostic identifies
 its stage and reports actual/maximum/excess UTF-8 bytes when measured. An early

@@ -1668,13 +1668,12 @@ separate exact Apply and Commit decision methods can perform those effects.
 
 ### Session context capacity failures
 
-`conversations.session_context.SessionContextCapacityError` is the existing
-`ValueError` boundary for exact context capacity. Its host-owned diagnostic facts
-are `stage`, `actual_utf8_bytes`, `maximum_utf8_bytes` and `excess_utf8_bytes`.
-The maximum is 524,288 for `known_envelope` and `provider_payload`; other
-context stages retain 262,144. Actual/excess measurements can be unavailable when an
-early allocation fails before the final payload exists; inspect the stage before
-interpreting a measurement as complete provider-payload size.
+`conversations.session_context.SessionContextCapacityError`는 정확한 맥락의 용량을
+검사하는 기존 `ValueError` 경계다. Host가 제공하는 진단 필드는 `stage`,
+`actual_utf8_bytes`, `maximum_utf8_bytes`, `excess_utf8_bytes`다.
+`known_envelope`와 `provider_payload`의 최대값은 524,288이며 다른 context 단계는
+262,144를 유지한다. 최종 payload 생성 전에 할당이 실패하면 actual/excess를 알 수
+없을 수 있다. 측정값을 완성된 provider payload 크기로 해석하기 전에 단계를 확인한다.
 
 History/editorial preflight and the final `provider_payload` guard have distinct
 stages. The final guard uses the existing canonical payload encoding after context
