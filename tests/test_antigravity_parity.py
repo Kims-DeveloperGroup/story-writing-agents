@@ -34,6 +34,10 @@ from story_writing_agents import ( AgentBackend,
     SessionPausedError, Verdict,
 )
 from story_writing_agents.config import ConfigManager
+from story_writing_agents.conversations.session_context import (
+    MAX_PROVIDER_INPUT_UTF8_BYTES,
+    MAX_PROVIDER_PAYLOAD_UTF8_BYTES,
+)
 from story_writing_agents.workspace.initialization import provision_session_resources
 from story_writing_agents.conversations import select_bounded_collaboration_context
 from story_writing_agents.agent_context import (
@@ -60,7 +64,7 @@ from story_writing_agents.writing_artifacts import (
 from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository, )
 
-from tests.provider_wire_fixture import direct_response, direct_reply, assert_schema_descriptions
+from tests.provider_wire_fixture import direct_response, direct_reply, assert_schema_descriptions, selection_plan
 from tests.helpers import (
     SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE,
     pristine_initialized_workspace, )
@@ -912,16 +916,22 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_wire import WireShapeError
         from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
         case = lead._task_fixture(self)
-        raw_frames = []
+        raw_frames, wire_responses = [], []
+        invoke_context = lead._LeadContextProvider.invoke_context
+        async def record_response(provider, call):
+            result = await invoke_context(provider, call)
+            wire_responses.append(result.response_text)
+            return result
         emit = lead._visible_outcome('answer', 'Current bound native frame.')
         def original_frame(request, provider):
             raw = emit(request, provider)
             raw_frames.append(raw)
             return raw
-        case.backend.enqueue(original_frame)
+        case.backend.enqueue(original_frame, control_plan=selection_plan("answer.workflow"))
         conversation = case.conversation('Current bound native transport')
-        outcome = await case.runtime.lead_turn(
-            case.session_id, conversation, 'Explain the workflow.')
+        with mock.patch.object(lead._LeadContextProvider, 'invoke_context', new=record_response):
+            outcome = await case.runtime.lead_turn(
+                case.session_id, conversation, 'Explain the workflow.')
         self.assertIsNone(outcome.state)
         self.assertIs(outcome.next_action, lead.CollaborationNextAction.CONTINUE_WITH_LEAD)
         self.assertEqual(outcome.message, 'Current bound native frame.')
@@ -931,7 +941,9 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(judgments), 1)
         self.assertEqual(judgments[0].payload.message, 'Current bound native frame.')
         self.assertEqual(judgments[0].payload.kind, outcome.kind)
-        self.assertEqual(len(case.backend.calls), 1)
+        self.assertEqual(len(case.backend.calls), 2)
+        self.assertEqual([call.payload["response_contract"]["schema_selection"]["phase"]
+            for call in case.backend.calls], ["select", "generate"])
         self.assertEqual(len(raw_frames), 1)
         request = case.backend.calls[-1]
         self.assertIs(type(request), BoundContextProviderCallRequest)
@@ -971,6 +983,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((caught.exception.wire_path, caught.exception.wire_requirement),
                              ('$', 'native schema projection changed bound restrictions'))
         expected = canonical_provider_json(projected)
+        native_thread = request.expected_thread_id
+        self.assertIsNotNone(native_thread)
         self.assertLessEqual(len(canonical_provider_json(declared)), 524288)
         backend = AgentBackend(case.control_workspace,
                                executable=str(Path(sys.executable).resolve(strict=True)),
@@ -989,14 +1003,14 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 frames.append(argv[argv.index('--json-schema') + 1].encode('utf-8'))
                 bodies.append(argv[argv.index('--print') + 1].encode('utf-8'))
                 stdout = canonical_provider_json({'json_schema': json.loads(frames[-1]),
-                    'status': 'SUCCESS', 'conversation_id': 'bound-native-thread',
-                    'structured_output': json.loads(raw_frames[0])})
+                    'status': 'SUCCESS', 'conversation_id': native_thread,
+                    'structured_output': json.loads(wire_responses[len(frames) - 1])})
             else:
                 frames.append(Path(argv[argv.index('--output-schema') + 1]).read_bytes())
                 Path(argv[argv.index('--output-last-message') + 1]).write_text(
-                    raw_frames[0], encoding='utf-8')
+                    wire_responses[len(frames) - 1], encoding='utf-8')
                 stdout = canonical_provider_json({
-                    'type': 'thread.started', 'thread_id': 'bound-native-thread'}) + b'\n'
+                    'type': 'thread.started', 'thread_id': native_thread}) + b'\n'
             return ProcessResult(stdout=stdout, stderr=b'', returncode=0)
         provider = bound._context_provider(reference_read=None)
         with mock.patch(f'story_writing_agents.{vendor}_adapter.run_process', new=completed):
@@ -1005,11 +1019,17 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     request.scope, request.policy_fingerprint,
                     continuation_identity=request.continuation_identity,
                     execution_workspace=execution):
-                    response = await provider.invoke_context(request)
-        self.assertEqual(frames, [expected])
+                    for physical_request in case.backend.calls:
+                        response = await provider.invoke_context(physical_request)
+        self.assertEqual(frames, [canonical_provider_json(
+            AntigravityAdapter.native_output_schema(call.schema) if vendor == 'antigravity' else call.schema)
+            for call in case.backend.calls])
         self.assertIs(response.accounting.state, ProviderCallState.SUBMITTED)
         self.assertEqual(response.accounting.payload.schema_utf8_bytes, len(expected))
-        self.assertLessEqual(response.accounting.payload.payload_utf8_bytes, 262144)
+        self.assertLessEqual(response.accounting.payload.payload_utf8_bytes, MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
+        self.assertLessEqual(
+            response.accounting.payload.serialized_input_utf8_bytes,
+            MAX_PROVIDER_INPUT_UTF8_BYTES)
         self.assertEqual(response.accounting.payload.payload_utf8_bytes,
                          len(canonical_provider_json(request.payload)))
         decoded = request.contract.decode_response(response.response_text)
@@ -1017,8 +1037,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(decoded.selected_result.schema_id,
                       request.contract.semantic_index.expected_schema_ids)
         if vendor == 'antigravity':
-            self.assertEqual(len(bodies), 1)
-            self.assertEqual(bodies[0], canonical_provider_json(request.payload))
+            self.assertEqual(len(bodies), 2)
+            self.assertEqual(bodies, [canonical_provider_json(call.payload) for call in case.backend.calls])
         else:
             self.assertEqual(bodies, [])
 
@@ -1088,7 +1108,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         from contextlib import ExitStack
         from story_writing_agents.antigravity_adapter import AntigravityAdapter as AG
         from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
-        invocations, setup_calls = [], []
+        invocations, setup_calls, front_call_kinds = [], [], []
+        front_provider_results = []
         original = lead._LeadContextProvider.invoke_context
         expected = (
             (BoundContextProviderCallRequest, LEAD_ORCHESTRATOR, "lead.front", "lead-response-v8"),
@@ -1125,9 +1146,11 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         invocations.append((index, invocation))
                         if index < 2:
                             assert invocation.payload_json is not None
-                        return ProviderResult(scripted.thread_id, response,
+                        native_result = ProviderResult(scripted.thread_id, response,
                             usage=ProviderUsage(input_tokens=1, output_tokens=1),
                             actual_transport_utf8_bytes=len(invocation.payload_json))
+                        if index == 0: front_provider_results.append(native_result)
+                        return native_result
                     definition = assembler.build_definition(session_id=case.session_id,
                                                             agent_id=request.scope.agent_id)
                     bound = await backend.bind(definition)
@@ -1150,8 +1173,17 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                                 self.assertEqual((result.response_text, result.thread_id),
                                                  (response, scripted.thread_id))
                                 self.assertIs(result.accounting.state, ProviderCallState.SUBMITTED)
-                                self.assertIs(result.accounting.payload.call_kind,
-                                              ProviderCallKind.COLLABORATION_INITIAL)
+                                front_call_kinds.append(result.accounting.payload.call_kind)
+                                selection = request.payload["response_contract"]["schema_selection"]
+                                self.assertEqual(selection["context_delivery"]["mode"], "bootstrap")
+                                self.assertNotIn("base_context_ref", selection["context_delivery"])
+                                self.assertNotIn("context_changes", request.payload)
+                                self.assertEqual(selection["catalog"], request.contract.group_stage.catalog.as_object())
+                                self.assertIn("core_document_statuses", request.payload)
+                                self.assertEqual(lead._expanded_context_payload(request.payload)["task_input"]["user_request_text"],
+                                                 "Visible lead request.")
+                                self.assertIsNone(request.context_witness)
+                                self.assertIsNone(request.context_anchor)
                                 self.assertEqual(result.accounting.usage,
                                                  ProviderUsage(input_tokens=1, output_tokens=1))
                             elif index == 1:
@@ -1169,7 +1201,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     return result
                 with mock.patch.object(lead._LeadContextProvider, "invoke_context", new=observe):
                     if workflow == "front":
-                        case.backend.enqueue(lead._visible_outcome("answer", "Visible."))
+                        case.backend.enqueue(lead._visible_outcome("answer", "Visible."), control_plan=selection_plan("answer.workflow"))
                         await case.runtime.lead_turn(case.session_id,
                             case.conversation("lead-conversation"), "Visible lead request.")
                         case.backend.enqueue(lead._current_exploration_outcome(
@@ -1181,7 +1213,12 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     else:
                         await lead._confirmed_premise(case, case.conversation("native-premise"))
                 setup_calls.append(len(case.backend.calls))
-        self.assertEqual(([index for index, _ in invocations], setup_calls), ([0, 1, 2, 3], [2, 4]))
+        self.assertEqual(([index for index, _ in invocations], setup_calls), ([0, 0, 1, 2, 3], [3, 5]))
+        self.assertEqual(front_call_kinds, [ProviderCallKind.COLLABORATION_INITIAL,
+                                           ProviderCallKind.COLLABORATION_INITIAL])
+        self.assertEqual([result.context_witness for result in front_provider_results], [None, None])
+        self.assertEqual([json.loads(invocation.payload_json)["response_contract"]["schema_selection"]["phase"]
+            for index, invocation in invocations if index == 0], ["select", "generate"])
 
     @staticmethod
     def _process_is_running(pid: int) -> bool:
@@ -1823,7 +1860,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             'executable', 'model', 'timeout_seconds', 'backend_overrides', 'antigravity_executable',
             'antigravity_model', 'antigravity_effort'))
         self.assertEqual(tuple(inspect.signature(ProviderResult).parameters), ('thread_id',
-            'response_text', 'usage', 'actual_transport_utf8_bytes', 'response_diagnostic'))
+            'response_text', 'usage', 'actual_transport_utf8_bytes', 'response_diagnostic', 'context_witness'))
         owner = WorkspaceProviderErrorArtifacts(self.workspace)
         self.assertFalse(owner.directory.exists())
         backend = self.backend()

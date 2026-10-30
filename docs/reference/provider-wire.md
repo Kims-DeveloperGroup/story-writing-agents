@@ -386,18 +386,15 @@ values, bounds, and branch order. Current bound contract IDs use `lead_v11_` and
 include `swa-annotation-rules-v2` provenance. Copy only the IDs offered by the
 current call.
 
-Budget declarations are frozen call policy. For bound Lead calls, each semantic
-member stays within 65,536 UTF-8 bytes and each inner action contract stays within
-262,144 bytes. The intermediate semantic aggregate and final contextual/provider
-schema share the existing 524,288-byte provider-schema limit. The semantic
-aggregate previously had a separate 262,144-byte ceiling; aligning it with the
-final schema allowance supports the offered variant declarations without changing
-the physical provider limit. Final assembly still enforces that limit.
-The service retains its 262,144-byte serialized request/context-frame limit, while
-transport counts rendered schema plus payload against the 786,432-byte
-invocation-input limit. Aggregate allowances do not widen member, action,
-history, or generic-contract limits. Action templates compose the frozen semantic
-rules; generic result contracts keep their existing defaults.
+예산 선언은 호출 시점에 동결된다. bound Lead 호출의 각 의미 계약은
+65,536 UTF-8 bytes, 내부 action 계약은 262,144 bytes 이하여야 한다. 중간 의미
+계약의 합성과 최종 contextual/provider schema는 기존 524,288-byte schema 한도를
+공유한다. 중간 합성에 별도로 적용하던 262,144-byte 한도를 최종 schema와 맞췄으며,
+최종 조립에서도 같은 provider-schema 한도를 검사한다.
+서비스의 직렬화된 요청/context frame 한도는 524,288 bytes다. 전송에서는 렌더링된
+schema와 payload의 합을 1,048,576 bytes로 제한한다. 이 합산 한도로 개별 의미 계약,
+action, 이력 또는 일반 계약의 한도가 늘어나지는 않는다. Action template은 동결된
+의미 규칙을 조합하며 일반 결과 계약은 기존 기본값을 유지한다.
 
 Every built-in semantic result includes `response_type`. Objects and their nested
 variants are closed: return every required field and no extra properties.

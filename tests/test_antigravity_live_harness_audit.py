@@ -1,5 +1,6 @@
 """Offline contracts for live evidence acceptance; no provider execution."""
 from __future__ import annotations
+from tests.provider_wire_fixture import selection_plan
 
 import asyncio
 import copy
@@ -421,7 +422,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
             recommended_action=action(kind='prepare_consultation', purpose='Prepare a separately confirmed chronology review.', instruction='Prepare a Plot REVIEW proposal for the supplied finished outline.'),
             authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded chronology review",)),
             authoring_scope=lambda call: _live_scope(call, activity="review",
-                domains=("plot_structure",), paths=("core_documents/global_outline.md",))))
+                domains=("plot_structure",), paths=("core_documents/global_outline.md",))), control_plan=selection_plan('prepare.consultation.authoring'))
         observer = SimpleNamespace(calls=[])
         turns = []
 

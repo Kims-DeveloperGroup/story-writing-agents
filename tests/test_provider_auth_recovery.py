@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.provider_wire_fixture import selection_plan
+from story_writing_agents.lead_schema_groups import LeadGroupPhase
 import asyncio
 import json
 import os
@@ -274,12 +276,16 @@ class AuthContextProvider(context._ScriptedProvider):
 
 
 class ContextRecoveryTests(context.ContextExecutionTestCase):
-    async def _bound_replay(self, responses, *, seed):
+    async def _bound_replay(self, responses, *, seed, before_script_response, action_policy=None):
         from story_writing_agents.agent_context.service import AgentContextService
         case = lead._task_fixture(self)
+        if action_policy is not None:
+            case.runtime._agent_context_service = AgentContextService(
+                case.workspace, action_policy=action_policy)
         conversation_id = lead.LeadOrchestrationTestCase.conversation(case, "Bound authority replay")
         if seed is not None:
-            case.backend.enqueue(lead._visible_outcome("answer", seed))
+            case.backend.enqueue(lead._visible_outcome("answer", seed),
+                                 control_plan=selection_plan("answer.workflow"))
             await case.runtime.lead_turn(case.session_id, conversation_id, seed)
         start = len(case.backend.calls)
         remaining, captured, failed = list(responses), [], []
@@ -295,14 +301,16 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
                     record_context_provider_failure(response, ContextProviderFailureFacts(
                         accounting, taint_existing_thread=False, submission_uncertain=False))
                     failed.append(request.call_id)
-                    raise response
+                    return response
                 return response(request, provider)
         invoke = AgentContextService.invoke
         async def capture(service, *args, **kwargs):
             result = await invoke(service, *args, **kwargs)
             captured.append(result)
             return result
-        case.backend.enqueue(*(guarded for _ in responses))
+        case.backend.enqueue(*(guarded for _ in responses),
+                             control_plan=selection_plan("answer.workflow",
+                                                         before_script_response=before_script_response))
         with mock.patch.object(AgentContextService, "invoke", capture):
             outcome, keys = await drive_recovery(case.runtime.lead_turn(
                 case.session_id, conversation_id, "Explain bounded workflow."), progress_timeout=120)
@@ -329,9 +337,9 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertEqual(first.contract.eligibility_offers, replay.contract.eligibility_offers)
         self.assertIs(first.contract.factory, replay.contract.factory)
         self.assertEqual(
-            tuple((m.owner.variant.branch_key, m.owner.variant.rules.canonical_bytes)
+            tuple(m.owner.declare_rules().canonical_bytes
                   for m in first.contract.semantic_index.contracts),
-            tuple((m.owner.variant.branch_key, m.owner.variant.rules.canonical_bytes)
+            tuple(m.owner.declare_rules().canonical_bytes
                   for m in replay.contract.semantic_index.contracts))
         self.assertNotEqual(first.contract.semantic_index.expected_schema_ids,
                             replay.contract.semantic_index.expected_schema_ids)
@@ -352,8 +360,8 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertEqual(provider.application_bytes[0], provider.application_bytes[1])
         self.assertEqual(len({call.call_id for call in result.provider_calls}), 2)
         calls, bound_result, failed = await self._bound_replay(
-            (auth_failure(), lead._visible_outcome("answer")), seed=None)
-        self._require_bound_replay(calls, bound_result, failed, count=2, failure_index=0)
+            (auth_failure(), lead._visible_outcome("answer")), seed=None, before_script_response=1)
+        self._require_bound_replay(calls, bound_result, failed, count=3, failure_index=0)
         self.assertEqual(calls[0].contract.eligibility_offers.completed_read_facts, ())
         self.assertEqual(calls[0].contract.eligibility_offers.delivery_read_facts, ())
 
@@ -366,7 +374,11 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
                 invocation_kind=context.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
                 agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=cap)
             grouped_request = context._group_request(plain_request)
-            grouped_provider = AuthContextProvider((auth_failure(), context._group_control("answer.workflow"), context._group_answer))
+            pending = () if succeeds else (context._group_control("answer.workflow"),)
+            controls = ((0, LeadGroupPhase.SELECT, auth_failure()),)
+            if succeeds:
+                controls += ((0, LeadGroupPhase.SELECT, context._group_control("answer.workflow")),)
+            grouped_provider = AuthContextProvider((*pending, context._group_answer), control_plan=controls)
             if succeeds:
                 grouped, keys = await drive_recovery(self.invoke(grouped_provider, grouped_request))
                 self.assertEqual(len(keys), 1)
@@ -396,6 +408,9 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
             offered = {member.rule_graph.literal_at(("action_type",))
                        for member in grouped_provider.calls[0].contract.action_index.contracts}
             self.assertIn("search_context", offered)
+            phases = (LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE) if succeeds else (LeadGroupPhase.SELECT,)
+            for call, phase in zip(grouped_provider.calls, phases, strict=True):
+                context.assert_phase_guide(self, call, phase)
         no_context_service = context.AgentContextService(
             self.workspace, action_policy=replace(context.CONTEXT_ACTION_POLICY, max_search_actions=1))
         def zero_hit_search(call, provider):
@@ -403,7 +418,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
             packet["agent_action"]["queries"][0]["search_text"] = "GROUP_AUTH_ZERO_HIT_895"
             return json.dumps(packet)
         def select_after_empty_search(call, provider):
-            self.assertEqual(call.payload["context_observation"]["search_results"], [])
+            self.assertEqual(provider.callback_payload(call)["context_observation"]["search_results"], [])
             self.assertEqual(call.contract.offers.issued_handle_aliases, ())
             return context._group_control("answer.workflow")(call, provider)
         for cap, succeeds, expected_limits in ((4, True, (2, 1, 1, 0)), (3, False, (1, 0, 0))):
@@ -412,8 +427,9 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
                 operation_id=label, result_correlation_id=label + "-result",
                 invocation_kind=context.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
                 agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=cap))
-            grouped_provider = AuthContextProvider((zero_hit_search, select_after_empty_search,
-                                                   auth_failure(), context._group_answer))
+            grouped_provider = AuthContextProvider((zero_hit_search, auth_failure(), context._group_answer),
+                control_plan=(*selection_plan("answer.workflow", before_script_response=1)[:-1],
+                    (1, LeadGroupPhase.SELECT, select_after_empty_search)))
             if succeeds:
                 grouped, keys = await drive_recovery(self.invoke(
                     grouped_provider, grouped_request, service=no_context_service))
@@ -449,6 +465,11 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
                               for member in original_generate.action_index.contracts}, {"submit_result"})
             self.assertEqual(tuple(dict(call.contract.offers.action_limits)["nonterminal_actions"]
                                    for call in grouped_provider.calls), expected_limits)
+            phases = (LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE)
+            if succeeds:
+                phases += (LeadGroupPhase.GENERATE,)
+            for call, phase in zip(grouped_provider.calls, phases, strict=True):
+                context.assert_phase_guide(self, call, phase)
 
     def reference_request(self, limit=5):
         reference_operation_id = f"reference-operation-{limit}"
@@ -480,13 +501,21 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertEqual(provider.calls[2].expected_thread_id, provider.calls[3].expected_thread_id)
         search = lambda call, provider: lead._search_history(call, provider, "Bound history evidence")
         calls, bound_result, failed = await self._bound_replay(
-            (search, lead._read_history_hit, auth_failure(), lead._answer_from_history),seed="Bound history evidence")
-        self._require_bound_replay(calls, bound_result, failed, count=4, failure_index=2)
-        self.assertEqual([call.contract.offers.action_index for call in calls], [1, 2, 3, 3])
-        self.assertEqual(calls[2].contract.eligibility_offers.completed_read_facts,
-                         calls[3].contract.eligibility_offers.completed_read_facts)
-        self.assertEqual(calls[2].contract.eligibility_offers.delivery_read_facts,
-                         calls[3].contract.eligibility_offers.delivery_read_facts)
+            (search, lead._read_history_hit, auth_failure(), lead._answer_from_history),
+            seed="Bound history evidence", before_script_response=2,
+            action_policy=replace(context.CONTEXT_ACTION_POLICY,
+                                  max_search_actions=1, max_read_actions=1))
+        self._require_bound_replay(calls, bound_result, failed, count=5, failure_index=3)
+        self.assertEqual([call.contract.offers.action_index for call in calls], [1, 2, 3, 4, 4])
+        limits = dict(calls[2].contract.offers.action_limits)
+        self.assertEqual((limits["search_actions"], limits["read_actions"]), (0, 0))
+        self.assertEqual(calls[3].contract.eligibility_offers.allowed_actions, ("answer",))
+        self.assertEqual(tuple(call.contract.offers.remaining_provider_calls for call in calls),
+                         (5, 4, 3, 2, 1))
+        self.assertEqual(calls[3].contract.eligibility_offers.completed_read_facts,
+                         calls[4].contract.eligibility_offers.completed_read_facts)
+        self.assertEqual(calls[3].contract.eligibility_offers.delivery_read_facts,
+                         calls[4].contract.eligibility_offers.delivery_read_facts)
         self.assertEqual(len(bound_result.authorization.used_evidence), 1)
         self.assertEqual(bound_result.authorization.used_evidence[0].source_kind.value, "conversation")
 
@@ -521,7 +550,8 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
             operation_id="group-auth-source", result_correlation_id="group-auth-source-result",
             invocation_kind=context.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
             agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=4))
-        grouped_provider = AuthContextProvider((auth_failure(), context._group_control("answer.workflow"), context._group_answer))
+        grouped_provider = AuthContextProvider((context._group_control("answer.workflow"), context._group_answer),
+            control_plan=((0, LeadGroupPhase.SELECT, auth_failure()),))
         def change_group_source(_key):
             self.workspace.path("core_documents/global_outline.md").write_text("Changed typed group source.")
             return True
@@ -759,18 +789,20 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
     async def test_partial_timeout_auth_is_assisted_without_replay_and_closes_lead(self):
         from story_writing_agents.conversations import project_collaboration_history
 
-        self.backend = lead._LeadBackend(persist_context_threads=True)
+        self.backend = lead._LeadBackend(persist_context_threads=True, test_case=self)
         self.runtime = StoryRuntime(self.workspace, self.backend)
         conversation = self.conversation("Authentication and timeout")
         with (mock.patch.object(lead._LeadContextProvider, 'provider_id', 'antigravity')):
-            self.backend.enqueue(lead._visible_outcome("answer"))
+            self.backend.enqueue(lead._visible_outcome("answer"),
+                                 control_plan=selection_plan("answer.workflow"))
             await self.runtime.lead_turn(self.session_id, conversation, 'Seed the existing provider thread.')
             assert self.backend.context_threads is not None
             retained_thread = next(iter(self.backend.context_threads.values()))
             before_calls = len(self.backend.calls)
 
             failure = auth_failure("antigravity", safe=True)
-            self.backend.enqueue(lead._SubmittedFailure(failure, timed_out=True, submission_uncertain=True))
+            self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT,
+                lead._SubmittedFailure(failure, timed_out=True, submission_uncertain=True)),))
             assisted = []
             with self.assertRaises(ProviderAuthenticationRequiredError) as caught:
                 await drive_recovery(self.runtime.lead_turn(self.session_id, conversation,

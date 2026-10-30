@@ -1,6 +1,7 @@
 """Contextual draft follow-through and exact operation authority at public APIs."""
 
 from __future__ import annotations
+from tests.provider_wire_fixture import selection_plan
 
 import hashlib
 from tests.test_collaboration_events import editorial, editorial_request
@@ -9,7 +10,7 @@ import json
 from dataclasses import replace
 from unittest import mock
 
-from story_writing_agents import StoryRuntime, editorial_scope as scopes
+from story_writing_agents import StoryRuntime, orchestrator as orchestration, editorial_scope as scopes
 from story_writing_agents import conversations as c
 from story_writing_agents.agents import PLOT_ARCHITECT
 from story_writing_agents.writing_artifacts import ArtifactApplicationError, ArtifactApplicationErrorCode
@@ -24,6 +25,87 @@ from tests.test_specialist_routing_runtime import ROSTER
 
 class LeadArtifactObjectiveTests(RecommendationCase):
 
+
+    async def _source_setup_start(self, *arguments, **keywords):
+        """Downstream Apply fixture only; default grouped budget refusal is checked separately."""
+        factory = orchestration._lead_call_contract_factory
+        enqueue = self.backend.enqueue
+        source_front_flags = []
+        source_enqueues = []
+        call_start = len(self.backend.calls)
+        def source_factory(**values):
+            if values.get("stage") == "lead.front":
+                self.assertIs(values["schema_group_protocol"], True)
+                source_front_flags.append(values["schema_group_protocol"])
+                values = {**values, "schema_group_protocol": False}
+            return factory(**values)
+        def source_enqueue(*responses, **values):
+            source_enqueues.append(1)
+            self.assertEqual(len(source_enqueues), 1)
+            return enqueue(*responses, **{**values, "control_plan": ()})
+        with mock.patch.object(orchestration, "_lead_call_contract_factory", new=source_factory), \
+                mock.patch.object(self.backend, "enqueue", new=source_enqueue):
+            result = await self.start(*arguments, **keywords)
+        self.assertEqual(source_front_flags, [True])
+        self.assertEqual(len(source_enqueues), 1)
+        self.assertEqual(len(self.backend.calls) - call_start, 5)
+        self.assertFalse(self.backend.calls[call_start].contract.factory.schema_group_protocol)
+        self.assertIsNone(self.backend.calls[call_start].contract.schema_group_phase)
+        return result
+
+    async def _assert_default_budget_refusal(self, path, text, brief, native_inputs):
+        """Same three-role source under DEFAULT grouping has six calls and cannot buy the next two."""
+        case = RecommendationCase()
+        case.addCleanup = self.addCleanup
+        case.setUp()
+        await case.record_book_readiness(seed_before_capture=True)
+        conversation_id = case.conversation("Default grouped budget boundary")
+        call_start = len(case.backend.calls)
+        original_result = lead._live_result
+        with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(
+                call, {**value, "message": brief} if value.get("kind") == "proposal" else value)):
+            await case.start(conversation_id, message=text, target_path=None, specialist_ids=ROSTER,
+                             authoring_paths=(path,), native_inputs=native_inputs, response_text=brief)
+        self.assertEqual(len(case.backend.calls) - call_start, 6)
+        first = case.backend.calls[call_start:call_start + 2]
+        self.assertEqual(tuple(call.contract.schema_group_phase.value for call in first), ("select", "generate"))
+        self.assertTrue(all(call.contract.factory.schema_group_protocol for call in first))
+        source = case.projection(conversation_id).offered_draft_sources[-1]
+        history = case.history(conversation_id)
+        source_event = next(event for event in history if event.event_id == source.event_id)
+        scope = source_event.payload.authoring_scope
+        source_task = next(task for task in case.runtime.inspect_lead_collaboration(
+            case.session_id, conversation_id).available_tasks if task.ref.task_id == scope.task_id)
+        self.assertEqual((source_task.ref.task_id, source_task.ref.task_revision), (scope.task_id, scope.task_revision))
+        self.assertEqual(source.content_digest, objectives.digest(text))
+        self.assertEqual(case.projection(conversation_id).physical_calls_spent, 6)
+        before_calls, before_files = len(case.backend.calls), case.snapshots()
+        case.backend.enqueue(control_plan=())
+        refused = await case.runtime.lead_turn(case.session_id, conversation_id,
+            "Approve the previous draft and prepare it as a new document." + f" Target: {path}. {brief}"
+            + "\nSupplied selected draft:\n" + text
+            + "\nYou may give bounded artifact review judgments and prepare a separate exact proposal; preserve supplied facts. Execution requires separate confirmation.")
+        self.assertEqual(len(case.backend.calls), before_calls)
+        self.assertEqual((refused.kind, refused.next_action),
+                         (c.LeadOutcomeKind.RECOMMENDATION, c.CollaborationNextAction.RETRY_LEAD_TURN))
+        self.assertIsNone(refused.recommendation_request)
+        self.assertIsNone(refused.proposal)
+        self.assertIsNone(refused.artifact_application_request)
+        self.assertIsNone(refused.story_commit_request)
+        self.assertEqual(tuple(event.payload.code for event in case.payload_events(
+            conversation_id, c.CollaborationLeadOutcomeFailurePayload)),
+            (c.CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED,))
+        self.assertEqual(case.history(conversation_id)[:len(history)], history)
+        self.assertEqual(next(event for event in case.history(conversation_id)
+                              if event.event_id == source.event_id), source_event)
+        self.assertEqual(case.projection(conversation_id).offered_draft_sources[-1], source)
+        retained = next(task for task in case.runtime.inspect_lead_collaboration(
+            case.session_id, conversation_id).available_tasks if task.ref.task_id == scope.task_id)
+        self.assertEqual(retained.ref.task_revision, scope.task_revision)
+        self.assertEqual(retained.ref, source_task.ref)
+        self.assertEqual((retained.status, len(retained.submitted_call_ids)), (source_task.status, 6))
+        self.assertEqual(case.projection(conversation_id).artifact_objectives, ())
+        self.assertEqual(case.snapshots(), before_files)
 
     async def test_only_matching_successful_apply_satisfies_objective(self):
         path = "manuscript/part-01/approved-draft.md"
@@ -45,24 +127,30 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             return {'input_choices': choices['input_ids'], 'source_choices': choices['input_ids'],
                     'anchors': dict.fromkeys(ROSTER, 'user_input'),
                     'recipients': {'user_input': PLOT_ARCHITECT}, 'family': 0}
+        await self._assert_default_budget_refusal(path, text, brief, source_inputs)
+        source_positive_call_start = len(self.backend.calls)
         original_result = lead._live_result
         with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(call, {**value, "message": brief} if value.get("kind") == "proposal" else value)):
-            conversation_id, _ = await self.start(
+            conversation_id, _ = await self._source_setup_start(
                 conversation_id, message=text, target_path=None, specialist_ids=ROSTER,
                 authoring_paths=(path,), native_inputs=source_inputs, response_text=brief)
         source = self.projection(conversation_id).offered_draft_sources[-1]
         scope = next(e.payload.authoring_scope for e in self.history(conversation_id) if e.event_id == source.event_id)
         self.assertEqual(scope.target_paths, (path,))
         self.assertEqual(self.projection(conversation_id).artifact_objectives, ())
+        followup_call_start = len(self.backend.calls)
         self.backend.enqueue(recommendation(message=brief,
             recommended_action=action(source_ids=(source.event_id,),
                 target_paths=(path,), instruction="Preserve the exact approved draft.", specialist_ids=ROSTER),
-            authoring_scope=lambda call: lead._workflow_material(call.payload)["authoring_tasks"][0]["current_scope"],
-            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded artifact review judgments", "separate exact proposal preparation"))))
+            authoring_scope=lambda call: lead._live_material(call)["authoring_tasks"][0]["current_scope"],
+            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded artifact review judgments", "separate exact proposal preparation"))), control_plan=selection_plan('prepare.artifact'))
         offered = await self.runtime.lead_turn(self.session_id, conversation_id,
             ("Approve the previous draft and prepare it as a new document." + f" Target: {path}. {brief}"
              + "\nSupplied selected draft:\n" + text
              + "\nYou may give bounded artifact review judgments and prepare a separate exact proposal; preserve supplied facts. Execution requires separate confirmation."))
+        followup_calls = self.backend.calls[followup_call_start:]
+        self.assertEqual(tuple(call.contract.schema_group_phase.value for call in followup_calls), ("select", "generate"))
+        self.assertTrue(all(call.contract.factory.schema_group_protocol for call in followup_calls))
         self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
         request = offered.recommendation_request
         self.assertEqual(request.basis.editorial_refs, (memory.record_ref,))
@@ -100,6 +188,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.backend.enqueue_for(lead.LEAD_ORCHESTRATOR, artifact._artifact_synthesis_outcome(message=account))
         reviewed = (await self.runtime.decide_lead_step(lead._decision(prepared, c.CollaborationConfirmationDecision.CONFIRM))).turn
         self.assertIsNotNone(reviewed.artifact_application_request, reviewed)
+        self.assertEqual(len(self.backend.calls) - source_positive_call_start, 12)
         review = self.projection(conversation_id).current_reviewed_artifact_proposal
         self.assertEqual([item.assessment.value for item in review.reviews], ["supports", "supports", "concern"])
         self.assertEqual(review.unresolved_input_ids, prepared.proposal.assignments[-1].input_ids)
@@ -113,11 +202,11 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertFalse(self.workspace.path(path).exists())
         self.assertIsNone(reviewed.story_commit_request)
         for call in self.backend.calls:
-            self.assertNotIn("response_correction", lead._workflow_material(call.payload))
+            self.assertNotIn("response_correction", lead._workflow_material(self.backend.callback_payload(call)))
             self.assertNotIn("structured_response_repair", call.payload)
             if "replies" in lead._live_material(call):
                 self.assertIn("residual costs", json.dumps(call.schema, default=dict))
-        materials = [lead.scenario_input((lead._expanded_context_payload(call.payload) if "shared_context_objects" in call.payload else call.payload)["task_input"]) for call in self.backend.calls]
+        materials = [lead.scenario_input((self.backend.callback_payload(call))["task_input"]) for call in self.backend.calls]
         for is_review, expected_scope in ((False, scope), (True, replace(request.authoring_scope, activity=lead.AuthoringActivity.REVIEW))):
             phase = [item for item in materials if ("assignment" in item or "replies" in item) and (item.get("assignment", {}).get("mode") == "review" or "artifact_candidate" in item) == is_review]
             self.assertEqual(len(phase), len(ROSTER) + 1)

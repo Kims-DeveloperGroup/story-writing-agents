@@ -81,8 +81,8 @@ from .codex_adapter import CodexAdapter
 from .conversations import CollaborationEventStore
 from .conversations.session_context import (
     MAX_PROVIDER_INPUT_UTF8_BYTES,
+    MAX_PROVIDER_PAYLOAD_UTF8_BYTES,
     MAX_PROVIDER_SCHEMA_UTF8_BYTES,
-    MAX_SESSION_CONTEXT_UTF8_BYTES,
     SessionContextCapacityError,
 )
 from .conversation_retrieval import (
@@ -5376,8 +5376,7 @@ class AgentBackend:
             component_paths=component_paths,
             mandatory_reference_paths=mandatory_reference_paths,
             binding_components=bound_agent._provider_binding.binding_components,
-            execution_workspace=execution_workspace,
-        )
+            execution_workspace=execution_workspace, context_witness=request.context_witness, context_anchor=request.context_anchor, context_call_id=(request.call_id if type(request) is BoundContextProviderCallRequest and request.contract.schema_group_phase is not None else None))
         if invocation.call_accounting is None or invocation.payload_json is None:
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         if bound_agent.definition.agent_id == LEAD_ORCHESTRATOR and "agent_action" in schema.get("properties", {}):
@@ -5389,8 +5388,10 @@ class AgentBackend:
                 > MAX_PROVIDER_INPUT_UTF8_BYTES
             ):
                 raise SessionContextCapacityError()
-        elif continuation_identity is not None and len(invocation.payload_json) > MAX_SESSION_CONTEXT_UTF8_BYTES:
-            raise SessionContextCapacityError()
+        elif continuation_identity is not None and len(invocation.payload_json) > MAX_PROVIDER_PAYLOAD_UTF8_BYTES:
+            raise SessionContextCapacityError(
+                stage="provider_payload", actual_utf8_bytes=len(invocation.payload_json)
+            )
 
         replay_validator = self._context_replay_validator(
             bound_agent,
@@ -5616,6 +5617,15 @@ class AgentBackend:
                 AgentExchangeTerminalCode.RESPONSE_CORRELATION_MISMATCH,
             )
             raise failure
+        if invocation.context_witness is not None and result.context_witness is None:
+            failure = ContextExecutionError(ContextExecutionErrorCode.CONTINUATION_MISMATCH)
+            record_context_provider_failure(failure, ContextProviderFailureFacts(
+                accounting, taint_existing_thread=True,
+                continuation_rejection=ContextContinuationRejection.UNAVAILABLE))
+            self._taint_context_thread_without_replacing(
+                storage_scope, bound_agent.vendor, definition_fingerprint, effective_policy_fingerprint)
+            self._capture_rejected_without_replacing(exchange, AgentExchangeTerminalCode.CONTEXT_RUNTIME_FAILED)
+            raise failure
         try:
             self._require_postsubmission_workspace(invocation)
             self._store_context_thread(
@@ -5657,8 +5667,7 @@ class AgentBackend:
                 result.response_text,
                 result.thread_id,
                 accounting,
-                _ContextExchangeFinalizer(exchange),
-            )
+                _ContextExchangeFinalizer(exchange), context_witness=result.context_witness)
         except asyncio.CancelledError:
             self._capture_cancelled_without_replacing(exchange)
             raise

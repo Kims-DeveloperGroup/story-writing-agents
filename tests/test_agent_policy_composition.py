@@ -136,7 +136,7 @@ class AgentPolicyCompositionTests(unittest.TestCase):
     def test_provider_bindings_use_captured_composed_bytes_after_source_mutation(self) -> None:
         definition = self._definitions()[LEAD_ORCHESTRATOR]
         captured = definition.system_prompt_file.content
-        current_expected_sizes = (17850, 19228, 19293)
+        current_expected_sizes = (18060, 19438, 19503)
         self.assertEqual(captured.count(b"# Lead Orchestrator Policy"), 1)
         self.assertEqual(len(captured), current_expected_sizes[0])
         for component in definition.behavior_policy_components:

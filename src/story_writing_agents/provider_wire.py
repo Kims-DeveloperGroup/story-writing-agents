@@ -6,6 +6,8 @@ and public persistence serializers are never rewritten by this module.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from collections.abc import Mapping
 from copy import deepcopy
 import hashlib
@@ -78,6 +80,9 @@ INPUT_FIELDS = {
     "offered_source_ids": "available_proposal_drafting_source_ids", "runtime_input_ids": "runtime_input_source_ids",
     "scope": "writing_task_scope", "task_revision": "task_revision", "query": "search_query",
 }
+
+_SCHEMA_SELECTION_NAMES = 'schema_selection issued_contract contracts call_id outer_schema_id result_schema_id remaining_provider_calls context_delivery context_ref base_context_ref catalog catalog_id catalog_version groups group_id definition selection_criteria result_effect active_selection origin_catalog_id context_changes add replace remove context_observations read_fact_ids observation'
+INPUT_FIELDS.update({name: name for name in _SCHEMA_SELECTION_NAMES.split() if name not in INPUT_FIELDS})
 TOP_LEVEL_FIELDS = {"c": "request_correlation_token", "q": "response_contract", "i": "task_input",
                     "h": "session_history", "n": "current_draft", "docs": "context_documents",
                     "p": "context_record_updates", "t": "context_removals", "o": "context_observation",
@@ -1077,6 +1082,9 @@ def project_context_payload(payload: Mapping, component_paths: Mapping, mandator
             return path_aliases[value]
         return (TOP_LEVEL_FIELDS.get(value[0], value[0]), *value[1:]) if value else value
     result["protocol_version"] = WIRE_VERSION
+    selection = result.get("response_contract", {}).get("schema_selection")
+    if selection is not None:
+        SchemaSelectionInput.from_value(selection)
     return result, {path(key): val for key, val in component_paths.items()}, tuple(path(key) for key in mandatory_paths)
 
 
@@ -1266,6 +1274,8 @@ FIELD_CATALOG = {
 def _catalog(names: str, meaning: str) -> None:
     for name in names.split():
         FIELD_CATALOG.setdefault(name, meaning)
+
+_catalog(_SCHEMA_SELECTION_NAMES, "현재 Host 계약과 검증된 맥락 변경이다. 생략은 보존이며 remove만 삭제다.")
 
 
 _catalog("session_id conversation_id turn_id event_id step_id batch_id agent_id specialist_id assignment_id input_id input_source_id source_id source_reference_id record_reference_id operation_id reference_operation_id result_correlation_id task_id document_change_request_id proposal_id candidate_id review_id reviewed_proposal_id source_citation_id citation_id fragment_id document_id start_turn_id end_turn_id first_record_id last_record_id provider_thread_id originating_conversation_id request_event_id decision_event_id start_event_id originating_turn_id originating_event_id originating_request_event_id execution_attempt_id reply_event_id", "Opaque identity issued by the runtime for the enclosing source, task, or event. Copy exactly; never invent or infer an identity.")
@@ -1728,6 +1738,8 @@ _catalog("required_input_recipients", "For each required offered source, name an
 _catalog("optional_inputs", "Closed offered-input membership cells. Selected inputs are the union of true cells, the anchor, and required-source recipient edges, in offered order.")
 
 STRUCTURED_INPUT_FIELDS = frozenset("authoring_assessment authoring_admission foundations direction creative_scope decisions interaction_mode exploration_request exploration_adoption response_contract action_limits task_input session_history conversations records provider_constraints writing_task_scope confirmed_scope available_writing_tasks available_input_sources assignment assignments inputs selected_inputs replies document_change_requests requests offered_draft_sources document_change_request_update confirmed_proposal_drafting_context confirmed_proposal_drafting_constraints document_change_workflow_steps mandatory_reviewer_inputs specialist_consultation_proposal artifact_change_proposal proposal_drafting_request follow_up_consultation artifact_changes current_draft context_documents context_record_updates context_removals core_document_statuses context_observation search_results read_results source source_range provenance zero_hit_receipt untrusted_attached_references artifact_reference line_range context_reuse base_candidate_reference target_candidate_reference text_splice task_reference story_session_context owner_outcomes focused_context core_documents prior_agent_outcomes debate_history conversation_history bootstrap conversation_retrieval_control retrieval_limits expected_reviewed_proposal structured_response_repair request decision started basis selected_action constraints rag_context excerpts citation document reference".split())
+
+STRUCTURED_INPUT_FIELDS |= frozenset('schema_selection issued_contract contracts context_delivery catalog groups active_selection context_changes add replace remove context_observations read_fact_ids observation'.split())
 OPAQUE_FIELDS = frozenset("details record_content conversation_event metadata core_updates "
                           "source_data shared_context_objects response_correction".split())
 
@@ -1861,7 +1873,7 @@ _catalog("coverage", "Editorial scope coverage is a structured scope with exact 
 _catalog("editorial_context_digest expected_editorial_context_digest context_refs", "Host-pinned relevant editorial coverage and relation topology. Preserve the original pin; changing a related record can stale authority even if a cited revision stays identical.")
 _catalog("relation_decisions scope_relations relations origin_ref other_ref decision_index", "Exact explicit USER relation receipts and causal provenance. Geometric overlap alone is not semantic conflict. A partial relation applies only to its declared coverage.")
 _catalog("scope_states explicit_conflicts unclassified_overlaps", "Derived residual coverage, explicit unresolved USER conflicts, and unclassified geometric overlaps. Do not silently resolve any relation or mint approval.")
-_catalog("application_attempts request_event result_event application_id application_request_digest phase", "Exact historical Apply request/result association. Pending, failed, uncertain or recovery states do not prove current manuscript or delivery of editorial intent.")
+_catalog("application_attempts request_event result_event application_id application_request_digest", "Exact historical Apply request/result association. Pending, failed, uncertain or recovery states do not prove current manuscript or delivery of editorial intent.")
 _catalog("verified_coverage", "Exact verified application extent when available; null means coverage is unverified even when a target path matches or Apply historically succeeded.")
 _catalog("omitted_scope_state_count omitted_relation_count omitted_attempt_count", "Exact bounded-view omission counts; do not infer absent relations or application evidence.")
 _catalog("schema", "Runtime-issued context-view format identifier, not provider authority or a response choice.")
@@ -1897,6 +1909,124 @@ def _schema_response_rules(schema: Mapping) -> list[str]:
         if values:
             rules.append("Current schema offers " + name + ": " + ", ".join(sorted(values)) + ".")
     return rules
+
+
+LEAD_GROUP_COMMON_POLICY = "Host의 현재 계약과 허용 액션을 따르세요. 선택·재선택은 내부 제어이며 업무 완료가 아닙니다. delta에서 생략된 맥락은 유지하고 명시된 변경만 반영하세요."
+LEAD_GROUP_REASON_GUIDE = "선택·재선택 이유는 제공된 사실과 현재 카탈로그 기준을 연결한 짧은 1~2문장으로 설명하고, 읽지 않은 자료·도구 실행·승인을 만들지 마세요."
+LEAD_GROUP_PHASE_GUIDES = MappingProxyType({
+    "select": "현재 단계는 Phase 1(그룹 선택)입니다. Phase 2에서는 선택한 그룹의 상세 계약에 따라 실제 답변을 작성합니다.",
+    "generate": "현재 단계는 Phase 2(답변 생성)입니다. 선택한 그룹의 상세 계약에 따라 실제 답변을 작성하세요.",
+})
+ENUM_MEANINGS.update({
+    "select": "Phase 1 selects an offered response group; selection is internal control, not business completion or authority.",
+    "generate": "Phase 2 generates the actual answer under the selected group's exact current contract.",
+})
+_catalog("phase", "Current phase of the enclosing runtime protocol or exact historical Apply record. Supplied choices state its meaning; no phase grants new authority.")
+
+
+@dataclass(frozen=True, slots=True)
+class SchemaSelectionInput:
+    """현재 호출의 닫힌 입력 선언이며 업무 권한을 부여하지 않는다."""
+
+    phase: str
+    call_id: str
+    contracts: tuple[tuple[str, str | None], ...]
+    remaining_provider_calls: int
+    context_ref: str
+    base_context_ref: str | None = None
+    catalog: bytes | None = field(default=None, repr=False)
+    catalog_id: str | None = None
+    active_selection: tuple[str, str] | None = None
+
+    def __post_init__(self) -> None:
+        def identity(value):
+            return type(value) is str and bool(value) and len(value) <= 512
+        if (type(self.phase) is not str or self.phase not in LEAD_GROUP_PHASE_GUIDES or not identity(self.call_id)
+                or not identity(self.context_ref) or self.base_context_ref is not None and not identity(self.base_context_ref)
+                or type(self.remaining_provider_calls) is not int or self.remaining_provider_calls < 0
+                or type(self.contracts) is not tuple or not self.contracts
+                or any(type(p) is not tuple or len(p) != 2 or not identity(p[0])
+                       or p[1] is not None and not identity(p[1]) for p in self.contracts)
+                or len(set(self.contracts)) != len(self.contracts)):
+            raise ValueError("schema_selection has invalid current call facts")
+        if (self.catalog is None) == (self.catalog_id is None):
+            raise ValueError("schema_selection needs one exact catalog representation")
+        if self.catalog is not None:
+            if type(self.catalog) is not bytes:
+                raise TypeError("schema_selection catalog must be immutable bytes")
+            value = json.loads(self.catalog)
+            if (type(value) is not dict or set(value) != {"catalog_id", "catalog_version", "groups"}
+                    or not identity(value["catalog_id"]) or not identity(value["catalog_version"])
+                    or type(value["groups"]) is not list or not value["groups"]):
+                raise ValueError("schema_selection catalog is invalid")
+            ids = []
+            for card in value["groups"]:
+                if (type(card) is not dict or set(card) != {"group_id", "definition", "selection_criteria", "result_effect"}
+                        or any(type(v) is not str or not v for v in card.values())):
+                    raise ValueError("schema_selection card is invalid")
+                ids.append(card["group_id"])
+            if len(ids) != len(set(ids)):
+                raise ValueError("schema_selection catalog repeats a group")
+            object.__setattr__(self, "catalog", json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode())
+        elif not identity(self.catalog_id):
+            raise ValueError("schema_selection catalog identity is invalid")
+        if self.base_context_ref is None and self.catalog is None:
+            raise ValueError("bootstrap needs the complete catalog")
+        if self.phase == "generate":
+            if (type(self.active_selection) is not tuple or len(self.active_selection) != 2
+                    or not all(identity(v) for v in self.active_selection)):
+                raise ValueError("generate needs the original selection identity")
+        elif self.active_selection is not None:
+            raise ValueError("select cannot carry an active selection")
+
+    def as_object(self) -> dict:
+        value = {
+            "phase": self.phase, "remaining_provider_calls": self.remaining_provider_calls,
+            "issued_contract": {"call_id": self.call_id, "contracts": [
+                {"outer_schema_id": outer, "result_schema_id": inner} for outer, inner in self.contracts]},
+            "context_delivery": {"mode": "bootstrap" if self.base_context_ref is None else "delta",
+                                 "context_ref": self.context_ref},
+        }
+        if self.base_context_ref is not None:
+            value["context_delivery"]["base_context_ref"] = self.base_context_ref
+        if self.catalog is not None:
+            value["catalog"] = json.loads(self.catalog)
+        else:
+            value["catalog_id"] = self.catalog_id
+        if self.active_selection is not None:
+            value["active_selection"] = dict(zip(("origin_catalog_id", "group_id"), self.active_selection))
+        return value
+
+    @classmethod
+    def from_value(cls, value: Mapping) -> SchemaSelectionInput:
+        required = {"phase", "remaining_provider_calls", "issued_contract", "context_delivery"}
+        optional = {"catalog", "catalog_id", "active_selection"}
+        if (not isinstance(value, Mapping) or not required <= value.keys()
+                or set(value) - required - optional):
+            raise ValueError("schema_selection is not a closed current input")
+        if ("catalog" in value) == ("catalog_id" in value) or value["phase"] == "select" and "active_selection" in value:
+            raise ValueError("schema_selection conditional fields are invalid")
+        issued, delivery = value["issued_contract"], value["context_delivery"]
+        if type(issued) is not dict or set(issued) != {"call_id", "contracts"} or type(issued["contracts"]) is not list:
+            raise ValueError("issued_contract is invalid")
+        pairs = []
+        for pair in issued["contracts"]:
+            if type(pair) is not dict or set(pair) != {"outer_schema_id", "result_schema_id"}:
+                raise ValueError("issued_contract member is invalid")
+            pairs.append((pair["outer_schema_id"], pair["result_schema_id"]))
+        if type(delivery) is not dict or type(delivery.get("mode")) is not str or delivery["mode"] not in {"bootstrap", "delta"}:
+            raise ValueError("context_delivery is invalid")
+        keys = {"mode", "context_ref"} | ({"base_context_ref"} if delivery["mode"] == "delta" else set())
+        if set(delivery) != keys:
+            raise ValueError("context_delivery is not closed")
+        active = value.get("active_selection")
+        if active is not None and (type(active) is not dict or set(active) != {"origin_catalog_id", "group_id"}):
+            raise ValueError("active_selection is invalid")
+        return cls(value["phase"], issued["call_id"], tuple(pairs), value["remaining_provider_calls"],
+                   delivery["context_ref"], delivery.get("base_context_ref"),
+                   json.dumps(value["catalog"], ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+                   if "catalog" in value else None, value.get("catalog_id"),
+                   None if active is None else (active["origin_catalog_id"], active["group_id"]))
 
 
 def add_contract_guidance(payload: Mapping, schema: Mapping) -> dict:
@@ -1952,7 +2082,7 @@ def add_contract_guidance(payload: Mapping, schema: Mapping) -> dict:
                             raise ValueError(f"provider wire catalog has no input enum meaning for {name}")
                         meanings.add(choice + ": " + ENUM_MEANINGS[choice])
                 known_record = name == "record_content" and value.get("record_type") in {"agent_outcome", "conversation_event"}
-                known_text_reference = (name == "content_text" and path.startswith("$.context_record_updates")
+                known_text_reference = (name == "content_text" and path.startswith(("$.context_record_updates", "$.context_changes.add.context_record_updates", "$.context_changes.replace.context_record_updates"))
                                         and isinstance(item, Mapping) and set(item) in ({"content_reference"}, {"candidate_text_reference"}))
                 if path.endswith(".document_change_workflow_steps") or (not known_record and not known_text_reference and ((name not in STRUCTURED_INPUT_FIELDS and not ((".confirmed_proposal_drafting_context" in path) and name in {"request", "decision", "start", "basis", "evidence", "agent_profiles", "draft_sources"})) or name in OPAQUE_FIELDS)):
                     continue
@@ -2025,6 +2155,12 @@ def add_contract_guidance(payload: Mapping, schema: Mapping) -> dict:
         "input_fields": fields,
         "response_rules": response_rules + ([legend_rule, *legend] if legend else []),
     }
+    selection_value = result.get("response_contract", {}).get("schema_selection")
+    if selection_value is not None:
+        selection = SchemaSelectionInput.from_value(selection_value)
+        guide = result["contract_guidance"]
+        rules = [r for r in guide.get("response_rules", []) if r not in LEAD_GROUP_PHASE_GUIDES.values() and r != LEAD_GROUP_REASON_GUIDE]
+        guide["response_rules"] = [LEAD_GROUP_PHASE_GUIDES[selection.phase], LEAD_GROUP_REASON_GUIDE, *rules]
     return result
 
 
