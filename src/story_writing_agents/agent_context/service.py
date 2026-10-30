@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from ..provider_adapter import ProviderContextWitness
+from ..provider_wire import SchemaSelectionInput, LEAD_GROUP_PHASE_GUIDES
+from .accounting import canonical_provider_json
+
 import asyncio
 import base64
 import hashlib
@@ -130,6 +134,8 @@ from .progress import (
 from .ledger import (
     MAX_CONTEXT_LEDGER_SOURCES,
     ContextLedger,
+    ContextLedgerRecord,
+    ContextLedgerRecordState,
     ContextLedgerAttemptOutcome,
     ContextLedgerAttemptPlan,
     ContextLedgerCommitAuthorization,
@@ -329,7 +335,11 @@ class ContextCallOffers:
     reference_read_digest: str | None = field(default=None, init=False)
     offer_digest: str = field(init=False)
 
+    remaining_provider_calls: int | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
+        if self.remaining_provider_calls is not None and (type(self.remaining_provider_calls) is not int or self.remaining_provider_calls < 0):
+            raise ValueError("current physical remaining is invalid")
         _safe_identity(self.call_id)
         if (type(self.scope) is not ContextScope or type(self.action_index) is not int or self.action_index < 1
                 or type(self.allowed_actions) is not tuple or not self.allowed_actions
@@ -371,6 +381,8 @@ class ContextCallOffers:
         }
         if self.reference_read_digest is not None:
             value["reference_read_digest"] = self.reference_read_digest
+        if self.remaining_provider_calls is not None:
+            value["remaining_provider_calls"] = self.remaining_provider_calls
         return value
 
 
@@ -1032,6 +1044,20 @@ class BoundCallContract:
         *,
         declared_lowering: str = "identity",
     ) -> None:
+        if self.group_stage is not None:
+            current = SchemaSelectionInput.from_value(payload.get("response_contract", {}).get("schema_selection", {}))
+            catalog = self.group_stage.catalog
+            active = self.group_workflow.active_selection
+            if (current.phase != self.schema_group_phase.value or current.call_id != self.offers.call_id
+                    or current.contracts != self.outer_inner_schema_ids
+                    or current.remaining_provider_calls != self.offers.remaining_provider_calls
+                    or (json.loads(current.catalog) != catalog.as_object() if current.catalog is not None else current.catalog_id != catalog.catalog_id)
+                    or current.active_selection != (None if active is None else (active.catalog.catalog_id, active.group_id))):
+                raise ValueError("schema_selection does not match the exact current bound call")
+            rules = payload.get("contract_guidance", {}).get("response_rules", [])
+            if (rules.count(LEAD_GROUP_PHASE_GUIDES[current.phase]) != 1
+                    or any(guide in rules for phase, guide in LEAD_GROUP_PHASE_GUIDES.items() if phase != current.phase)):
+                raise ValueError("schema_selection current phase guide is invalid")
         self.require_projection(native_schema, declared_lowering=declared_lowering)
         input_json, _ = account_provider_payload(native_schema, payload)
         if len(input_json) > 262_144:
@@ -1897,16 +1923,14 @@ def _emit_context_event_without_replacing(
         pass
 
 
-def _accept_provider_call_without_replacing(
-    finalizer: ContextProviderCallFinalizer,
-) -> None:
-    """Best-effort accept one response without changing runtime behavior."""
-
+def _accept_provider_call_without_replacing(finalizer: ContextProviderCallFinalizer) -> bool:
+    """기존 best-effort 정책을 유지하며 관측 가능한 수락 여부만 반환한다."""
     try:
         callback = cast(Callable[[], object], finalizer.accepted)
         _require_sync_none(callback())
+        return True
     except BaseException:
-        pass
+        return False
 
 
 def _reject_provider_call_without_replacing(
@@ -2028,14 +2052,96 @@ class ContextSourceClassification:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextDeliverySnapshot:
+    """실제 한 입력의 논리 내용과 전송 근거를 보존하며 업무 승인은 소유하지 않는다."""
+
+    request_basis: LeadGroupRequestBasis
+    conditions: ContextPlanningConditions
+    attempt_id: str
+    ledger_generation: int
+    call_id: str
+    logical_context: bytes = field(repr=False)
+    payload_json: bytes = field(repr=False)
+    payload_sha256: str
+    schema_sha256: str
+    ledger_record: ContextLedgerRecord = field(repr=False)
+    witness: ProviderContextWitness | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if (type(self.request_basis) is not LeadGroupRequestBasis
+                or type(self.conditions) is not ContextPlanningConditions
+                or type(self.logical_context) is not bytes
+                or type(json.loads(self.logical_context)) is not dict
+                or type(self.ledger_generation) is not int or self.ledger_generation < 0
+                or self.witness is not None and type(self.witness) is not ProviderContextWitness):
+            raise ValueError("context delivery snapshot is invalid")
+        record = self.ledger_record
+        if (type(record) is not ContextLedgerRecord or record.generation != self.ledger_generation
+                or record.key.scope != self.conditions.scope or record.key.provider_id != self.conditions.provider_id
+                or record.state is not ContextLedgerRecordState.INCOMPLETE or record.ready_checkpoint is not None
+                or record.attempt is None or record.attempt.outcome is not ContextLedgerAttemptOutcome.IN_PROGRESS or record.attempt.plan.attempt_id != self.attempt_id
+                or record.attempt.plan.operation_id != self.request_basis.operation_id
+                or record.attempt.plan.result_correlation_id != self.request_basis.result_correlation_id
+                or not record.attempt.provider_calls or record.attempt.provider_calls[-1].call_id != self.call_id
+                or record.attempt.provider_calls[-1].accounting.state is not ProviderCallState.SUBMITTED):
+            raise ValueError("delivery snapshot does not match its actual ledger append")
+        _safe_identity(self.attempt_id)
+        _safe_identity(self.call_id)
+        for digest in (self.payload_sha256, self.schema_sha256):
+            if type(digest) is not str or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                raise ValueError("context delivery snapshot digest is invalid")
+        if (type(self.payload_json) is not bytes
+                or hashlib.sha256(self.payload_json).hexdigest() != self.payload_sha256):
+            raise ValueError("delivery snapshot payload is not the actual encoded input")
+        selection = SchemaSelectionInput.from_value(json.loads(self.payload_json)["response_contract"]["schema_selection"])
+        if selection.context_ref != self.context_ref or selection.call_id != self.call_id:
+            raise ValueError("delivery snapshot logical input is not bound to the physical input")
+        if self.witness is not None and (self.witness.call_id != self.call_id
+                or self.witness.payload_sha256 != self.payload_sha256):
+            raise ValueError("context delivery snapshot belongs to another physical input")
+
+    def source_valid(self) -> bool:
+        try:
+            self.__post_init__()
+            return True
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return False
+
+    def matches_ledger(self, record: ContextLedgerRecord | None, *, latest: bool = False) -> bool:
+        """저장된 실제 append와 현재 authoritative 이력의 허용된 prefix만 비교한다."""
+        if not self.source_valid():
+            return False
+        original = self.ledger_record
+        if (type(record) is not ContextLedgerRecord or record.key != original.key
+                or record.generation < original.generation or record.created_at != original.created_at
+                or record.state not in {ContextLedgerRecordState.INCOMPLETE, ContextLedgerRecordState.TAINTED}
+                or record.ready_checkpoint != original.ready_checkpoint or record.attempt is None
+                or record.attempt.plan != original.attempt.plan
+                or record.attempt.outcome not in {ContextLedgerAttemptOutcome.IN_PROGRESS,
+                    ContextLedgerAttemptOutcome.MALFORMED, ContextLedgerAttemptOutcome.OUTPUT_INVALID}):
+            return False
+        calls = original.attempt.provider_calls
+        return (record.attempt.provider_calls[:len(calls)] == calls
+                and (not latest or len(record.attempt.provider_calls) == len(calls)))
+
+    @property
+    def context_ref(self) -> str:
+        return "ctx_" + hashlib.sha256(self.logical_context).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
 class ContextGroupInvocationState:
     """한 논리 호출에서 선택 이력과 현재 준비 계획을 전달한다."""
 
     request_basis: LeadGroupRequestBasis
     workflow: LeadGroupWorkflow | None = None
     prepared_compilation: LeadGroupCompilation | None = field(default=None, repr=False)
+    transport_delivery: ContextDeliverySnapshot | None = field(default=None, repr=False)
+    accepted_delivery: ContextDeliverySnapshot | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
+        if any(value is not None and type(value) is not ContextDeliverySnapshot for value in (self.transport_delivery, self.accepted_delivery)):
+            raise TypeError("group delivery snapshot has an invalid type")
         if (type(self.request_basis) is not LeadGroupRequestBasis
                 or (self.workflow is not None and type(self.workflow) is not LeadGroupWorkflow)
                 or (self.prepared_compilation is not None
@@ -2366,7 +2472,15 @@ class ContextProviderCallRequest:
         compare=False,
     )
 
+    context_witness: ProviderContextWitness | None = field(default=None, kw_only=True, repr=False)
+    context_anchor: ProviderContextWitness | None = field(default=None, kw_only=True, repr=False)
+
     def __post_init__(self) -> None:
+        if (self.context_anchor is not None and type(self.context_anchor) is not ProviderContextWitness
+                or (self.context_anchor is None) != (self.context_witness is None)):
+            raise TypeError("delta needs exact accepted and transport witnesses")
+        if self.context_witness is not None and type(self.context_witness) is not ProviderContextWitness:
+            raise TypeError("context provider witness has an invalid type")
         if type(self.scope) is not ContextScope:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if self.continuation_identity is not None and (
@@ -2419,7 +2533,15 @@ class BoundContextProviderCallRequest:
     continuation_identity: ContextContinuationIdentity | None = None
     execution_workspace: ProviderExecutionWorkspace | None = field(default=None, repr=False, compare=False)
 
+    context_witness: ProviderContextWitness | None = field(default=None, kw_only=True, repr=False)
+    context_anchor: ProviderContextWitness | None = field(default=None, kw_only=True, repr=False)
+
     def __post_init__(self) -> None:
+        if (self.context_anchor is not None and type(self.context_anchor) is not ProviderContextWitness
+                or (self.context_anchor is None) != (self.context_witness is None)):
+            raise TypeError("delta needs exact accepted and transport witnesses")
+        if self.context_witness is not None and type(self.context_witness) is not ProviderContextWitness:
+            raise TypeError("context provider witness has an invalid type")
         if type(self.contract) is not BoundCallContract:
             raise TypeError("physical Lead request requires its concrete bound contract")
         self.contract.require_current_offer(self.contract.offers)
@@ -2429,7 +2551,7 @@ class BoundContextProviderCallRequest:
             call_id=self.call_id, call_kind=self.call_kind, schema=self.contract.schema_value(), payload=self.payload,
             component_paths=self.component_paths, mandatory_reference_paths=self.mandatory_reference_paths,
             expected_thread_id=self.expected_thread_id, continuation_identity=self.continuation_identity,
-            execution_workspace=self.execution_workspace)
+            execution_workspace=self.execution_workspace, context_witness=self.context_witness, context_anchor=self.context_anchor)
         object.__setattr__(self, "payload", metadata.payload)
         object.__setattr__(self, "component_paths", metadata.component_paths)
         object.__setattr__(self, "mandatory_reference_paths", metadata.mandatory_reference_paths)
@@ -2457,7 +2579,13 @@ class ContextProviderCallResult:
     accounting: ProviderCallAccounting
     finalizer: ContextProviderCallFinalizer = field(repr=False, compare=False)
 
+    context_witness: ProviderContextWitness | None = field(default=None, kw_only=True, repr=False)
+
     def __post_init__(self) -> None:
+        if self.context_witness is not None and (type(self.context_witness) is not ProviderContextWitness or self.context_witness.thread_id != self.thread_id):
+            raise TypeError("context result witness belongs to another thread")
+        if self.context_witness is not None and type(self.context_witness) is not ProviderContextWitness:
+            raise TypeError("context provider witness has an invalid type")
         if type(self.response_text) is not str:
             raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         _safe_identity(self.thread_id)
@@ -2987,8 +3115,7 @@ class ContextInvocationSession:
             offer = ContextCallOffers(
                 call_id, self.binding.scope, self._next_action_index, allowed_actions, limits,
                 self._allowed_search_source_kinds, tuple(self._full_handle_by_wire),
-                completed, delivery, self._core_statuses,
-            )
+                completed, delivery, self._core_statuses, remaining_provider_calls=self._remaining_provider_calls)
             if reference_digest is not None:
                 object.__setattr__(offer, "reference_read_digest", reference_digest)
                 offer.__post_init__()
@@ -5226,6 +5353,114 @@ def _attempt_identifier() -> str:
     return f"context_attempt_{value}"
 
 
+def _render_group_context_payload(
+    payload: dict[str, object], component_paths: Mapping[JsonPath, ContextComponentKind],
+    mandatory_paths: tuple[JsonPath, ...], *, schema: Mapping[str, object],
+    contract: BoundCallContract, state: ContextGroupInvocationState, remaining: int,
+    observation: str | None, conditions: ContextPlanningConditions, fresh: bool,
+    ledger_verified: bool, provider_thread_id: str | None,
+) -> tuple[dict, dict, tuple, bytes]:
+    """논리 입력을 비교한 뒤 현재 요청 안에서만 공유 pool을 다시 만든다."""
+    full, paths, references = project_context_payload(payload, component_paths, mandatory_paths)
+    prior = state.transport_delivery
+    compatible = prior is not None and prior.source_valid() and prior.request_basis == state.request_basis and prior.conditions == conditions
+    old_envelope = json.loads(prior.logical_context) if compatible else {}
+    current_basis_ref = contract.group_stage.catalog.request_basis_ref
+    accepted = state.accepted_delivery
+    accepted_compatible = (accepted is not None and accepted.source_valid() and accepted.request_basis == state.request_basis
+                           and accepted.conditions == conditions)
+    accepted_envelope = json.loads(accepted.logical_context) if accepted_compatible else {}
+    transport_input = old_envelope.get("input", {})
+    old = accepted_envelope.get("input", {})
+    evidence_offers = contract.eligibility_offers if contract.lineage is not None else contract.offers
+    read_facts = {f.evidence_id: f for f in (*evidence_offers.completed_read_facts, *evidence_offers.delivery_read_facts)}
+    facts = {identity: fact.snapshot_value() for identity, fact in read_facts.items()}
+    previous_facts = old_envelope.get("read_facts", {})
+    observations = []
+    for item in transport_input.get("context_observations", []):
+        if all(facts.get(identity) == previous_facts.get(identity) for identity in item["read_fact_ids"]):
+            observations.append(item)
+    if observation is not None:
+        projected, _, _ = project_context_payload({"o": json.loads(observation)}, {}, ())
+        value = projected["context_observation"]
+        # READ 묶음을 evidence별로 보유하여 한 자료의 교체/제거가 다른 자료를 지우지 않게 한다.
+        read_key = "read_results" if "read_results" in value else "evidence" if value.get("kind") == "read_observation" else None
+        entries = []
+        if read_key is not None:
+            for evidence in value[read_key]:
+                fact = read_facts.get(evidence.get("evidence_id"))
+                if fact is None:
+                    continue
+                source = evidence.get("source", evidence)
+                boundary = evidence.get("source_range", evidence)
+                if (source.get("source_id") != fact.source_id
+                        or source.get("source_revision", source.get("revision")) != fact.revision
+                        or source.get("source_digest") != fact.source_digest
+                        or boundary.get("range_digest") != fact.boundary_digest):
+                    continue
+                entries.append({"read_fact_ids": [fact.evidence_id],
+                                "observation": {**value, read_key: [evidence]}})
+        else:
+            entries.append({"read_fact_ids": [], "observation": value})
+        for entry in entries:
+            if not any(item["observation"] == entry["observation"] for item in observations):
+                observations.append(entry)
+    if observations:
+        full["context_observations"] = observations
+        paths[("context_observations",)] = ContextComponentKind.RETRIEVED_OBSERVATION
+    catalog = contract.group_stage.catalog.as_object()
+    envelope = canonical_provider_json({"input": full, "catalog": catalog, "read_facts": facts,
+                                         "selection_request_basis_ref": current_basis_ref})
+    context_ref = "ctx_" + hashlib.sha256(envelope).hexdigest()
+    delta = bool(ledger_verified and not fresh and compatible and accepted_compatible
+                 and old_envelope.get("selection_request_basis_ref") == current_basis_ref
+                 and accepted_envelope.get("selection_request_basis_ref") == current_basis_ref
+                 and prior.witness is not None
+                 and accepted.witness is not None and prior.witness.thread_id == provider_thread_id
+                 and accepted.witness.thread_id == prior.witness.thread_id
+                 and accepted.witness.rollout_path == prior.witness.rollout_path
+                 and accepted.witness.rollout_id == prior.witness.rollout_id
+                 and accepted.witness.file_identity == prior.witness.file_identity
+                 and accepted.witness.scope_digest == prior.witness.scope_digest
+                 and accepted.witness.settings_digest == prior.witness.settings_digest
+                 and accepted.witness.prefix_utf8_bytes <= prior.witness.prefix_utf8_bytes)
+    current = full
+    if delta:
+        fresh_keys = {"protocol_version", "request_correlation_token", "response_contract"}
+        add = {k: v for k, v in full.items() if k not in old and k not in fresh_keys}
+        changed = {k: v for k, v in full.items() if k in old and (old[k] != v or transport_input.get(k) != v) and k not in fresh_keys}
+        removed = [k for k in dict.fromkeys((*old, *transport_input)) if k not in full and k not in fresh_keys]
+        current = {k: v for k, v in full.items() if k in fresh_keys}
+        current["context_changes"] = {"add": add, "replace": changed, "remove": removed}
+        rebased = {}
+        for path, kind in paths.items():
+            if path[0] in fresh_keys:
+                rebased[path] = kind
+            elif path[0] in add or path[0] in changed:
+                rebased[("context_changes", "add" if path[0] in add else "replace", *path)] = kind
+        references = tuple(("context_changes", "add" if p[0] in add else "replace", *p)
+                           for p in references if p[0] in add or p[0] in changed)
+        paths = rebased
+    active = state.workflow.active_selection
+    include_catalog = not delta or accepted_envelope.get("catalog", {}).get("catalog_id") != catalog["catalog_id"] or old_envelope.get("catalog", {}).get("catalog_id") != catalog["catalog_id"]
+    selection = SchemaSelectionInput(
+        contract.schema_group_phase.value, contract.offers.call_id, contract.outer_inner_schema_ids,
+        remaining, context_ref, accepted.context_ref if delta else None,
+        canonical_provider_json(catalog) if include_catalog else None,
+        None if include_catalog else catalog["catalog_id"],
+        None if active is None else (active.catalog.catalog_id, active.group_id))
+    current["response_contract"]["schema_selection"] = selection.as_object()
+    # 현재 제어 슬롯은 공유 pool에 넘기지 않아 정확한 닫힌 타입을 보존한다.
+    control = current["response_contract"].pop("schema_selection")
+    rendered = add_contract_guidance(current, schema)
+    rendered, paths = compact_context_payload(rendered, paths, references)
+    rendered["response_contract"]["schema_selection"] = control
+    rendered = add_contract_guidance(rendered, schema)
+    if SchemaSelectionInput.from_value(rendered["response_contract"]["schema_selection"]) != selection:
+        raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+    return rendered, paths, references, envelope
+
+
 class AgentContextService:
     """Own workspace-scoped contextual composition, execution, and commit."""
 
@@ -5811,6 +6046,8 @@ class AgentContextService:
         call_contract = None
         call_decoded = None
         group_state = request.group_state
+        pending_group_input: bytes | None = None
+        pending_group_payload: bytes | None = None
         current_lineage = contract_lineage
         policy_fingerprint = self._execution_policy_fingerprint
         operation_id = request.operation_id
@@ -5920,8 +6157,7 @@ class AgentContextService:
                 return None
             if call_contract is None or call_decoded is None or group_state.workflow is None:
                 raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-            return replace(group_state, workflow=group_state.workflow.complete(
-                call_contract.generation_binding(), call_decoded.selected_result))
+            return replace(group_state, workflow=group_state.workflow.complete(call_contract.generation_binding(), call_decoded.selected_result))
 
         try:
             if (group_state is not None and group_state.workflow is not None
@@ -5988,7 +6224,7 @@ class AgentContextService:
                 checkpoint=planning_checkpoint,
                 active_provider_thread_id=active_thread_id,
                 mandatory_references=request.mandatory_references,
-                fresh=request.fresh,
+                fresh=request.fresh or group_state is not None,
             )
             history_delivery = None
             history_records = None
@@ -6054,7 +6290,7 @@ class AgentContextService:
                         checkpoint=planning_checkpoint,
                         active_provider_thread_id=active_thread_id,
                         mandatory_references=request.mandatory_references,
-                        fresh=request.fresh,
+                        fresh=request.fresh or group_state is not None,
                     )
                     history_delivery = session_history.delivery()
                 if request.session_state_json is not None:
@@ -6182,6 +6418,12 @@ class AgentContextService:
                 reference_operation_id=request.reference_operation_id,
                 projection_accounting=projection.accounting,
             )
+            incoming_deliveries = ()
+            if (group_state is not None and group_state.accepted_delivery is not None
+                    and group_state.transport_delivery is not None
+                    and group_state.accepted_delivery.matches_ledger(inspection.record)
+                    and group_state.transport_delivery.matches_ledger(inspection.record, latest=True)):
+                incoming_deliveries = (group_state.accepted_delivery, group_state.transport_delivery)
             reserved = self._ledger.reserve_attempt(
                 key,
                 expected_generation=inspection.generation,
@@ -6203,6 +6445,25 @@ class AgentContextService:
                     ) == manifest
                 except Exception:
                     return False
+
+            def group_delivery_ledger_verified() -> bool:
+                if group_state is None or group_state.accepted_delivery is None or group_state.transport_delivery is None:
+                    return False
+                current = self._ledger.inspect(key)
+                record = current.record
+                if (current.generation != generation or record is None or record.attempt is None
+                        or record.attempt.plan.attempt_id != attempt_id
+                        or record.key != key or record.ready_checkpoint is not None
+                        or record.state is not ContextLedgerRecordState.INCOMPLETE):
+                    return False
+                for snapshot, latest in ((group_state.accepted_delivery, False), (group_state.transport_delivery, True)):
+                    if snapshot.matches_ledger(record, latest=latest):
+                        continue
+                    if not any(snapshot is item for item in incoming_deliveries):
+                        return False
+                    if latest and record.attempt.provider_calls:
+                        return False
+                return True
 
             current_thread_id = active_thread_id
             reference_context: tuple[Mapping[str, object], ...] = ()
@@ -6247,7 +6508,7 @@ class AgentContextService:
                 correlation = _action_correlation(binding, action_index)
                 physical_reference_context = reference_context
                 def build_call_request(call_id: str, lineage: BoundCallLineage | None):
-                    nonlocal call_contract, group_state, allowed_actions, stage
+                    nonlocal call_contract, group_state, allowed_actions, stage, pending_group_input, pending_group_payload
                     if (group_state is not None and group_state.workflow is not None
                             and group_state.workflow.phase in {LeadGroupPhase.STOP, LeadGroupPhase.DONE}):
                         stage = "exhausted"
@@ -6274,7 +6535,8 @@ class AgentContextService:
                         if group_state is not None:
                             group_state = ContextGroupInvocationState(
                                 call_contract.request_basis, call_contract.group_workflow,
-                                call_contract.prepared_compilation)
+                                call_contract.prepared_compilation,
+                                transport_delivery=group_state.transport_delivery, accepted_delivery=group_state.accepted_delivery)
                             remaining = physical_call_limit - len(calls)
                             minimum = group_state.workflow.minimum_remaining_calls
                             action_session.set_remaining_provider_calls(
@@ -6303,17 +6565,18 @@ class AgentContextService:
                                         prepared_compilation=group_state.prepared_compilation)
                                     group_state = ContextGroupInvocationState(
                                         call_contract.request_basis, call_contract.group_workflow,
-                                        call_contract.prepared_compilation)
+                                        call_contract.prepared_compilation,
+                                transport_delivery=group_state.transport_delivery, accepted_delivery=group_state.accepted_delivery)
                         schema = call_contract.schema_value()
                     else:
                         call_contract = None
                         schema = _context_action_schema(allowed_actions=allowed_actions, result_contract=phase_contract[1],
                             allowed_search_source_kinds=request.allowed_search_source_kinds, action_limits=action_session.action_limits())
-                    if observation is None:
+                    if observation is None or group_state is not None:
                         payload, component_paths, reference_paths = _initial_payload(
                             binding,
                             projection,
-                            planning_checkpoint,
+                            planning_checkpoint if group_state is None else ContextCheckpointView(ContextCheckpointState.MISSING),
                             action_session,
                             materials,
                             phase_contract=phase_contract,
@@ -6354,12 +6617,18 @@ class AgentContextService:
                                 else ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
                             )
                         )
-                    payload, component_paths, reference_paths = _render_context_payload(
-                        payload, component_paths, reference_paths,
-                        schema=schema, projection=projection,
-                    )
-                    call_request = (BoundContextProviderCallRequest(contract=call_contract, policy_fingerprint=policy_fingerprint, call_kind=call_kind, payload=payload, component_paths=component_paths, mandatory_reference_paths=reference_paths, expected_thread_id=current_thread_id, continuation_identity=None if continuation is None else continuation.identity, execution_workspace=request.execution_workspace)
+                    if group_state is not None:
+                        payload, component_paths, reference_paths, pending_group_input = _render_group_context_payload(
+                            payload, component_paths, reference_paths, schema=schema, contract=call_contract,
+                            state=group_state, remaining=physical_call_limit - len(calls), observation=observation, conditions=planning_conditions, fresh=request.fresh,
+                            ledger_verified=group_delivery_ledger_verified(), provider_thread_id=current_thread_id)
+                    else:
+                        payload, component_paths, reference_paths = _render_context_payload(
+                            payload, component_paths, reference_paths, schema=schema, projection=projection)
+                    call_request = (BoundContextProviderCallRequest(contract=call_contract, policy_fingerprint=policy_fingerprint, call_kind=call_kind, payload=payload, component_paths=component_paths, mandatory_reference_paths=reference_paths, expected_thread_id=current_thread_id, continuation_identity=None if continuation is None else continuation.identity, execution_workspace=request.execution_workspace, context_witness=(None if group_state is None or group_state.transport_delivery is None or payload["response_contract"]["schema_selection"]["context_delivery"]["mode"] != "delta" else group_state.transport_delivery.witness), context_anchor=(group_state.accepted_delivery.witness if group_state is not None and group_state.accepted_delivery is not None and payload["response_contract"]["schema_selection"]["context_delivery"]["mode"] == "delta" else None))
                                     if call_contract is not None else ContextProviderCallRequest(scope=scope, policy_fingerprint=policy_fingerprint, call_id=call_id, call_kind=call_kind, schema=schema, payload=payload, component_paths=component_paths, mandatory_reference_paths=reference_paths, expected_thread_id=current_thread_id, continuation_identity=None if continuation is None else continuation.identity, execution_workspace=request.execution_workspace))
+                    if group_state is not None:
+                        pending_group_payload = canonical_provider_json(call_request.payload)
                     if call_contract is not None or history_delivery is not None or continuation is not None:
                         _require_context_capacity(
                             schema=call_request.schema,
@@ -6549,6 +6818,12 @@ class AgentContextService:
                     raise failure
                 provider_failure = False
                 current_thread_id = result.thread_id
+                if group_state is not None and pending_group_input is not None:
+                    group_state = replace(group_state, transport_delivery=ContextDeliverySnapshot(
+                        group_state.request_basis, planning_conditions, attempt_id, generation, call_id,
+                        pending_group_input, pending_group_payload, hashlib.sha256(pending_group_payload).hexdigest(),
+                        hashlib.sha256(canonical_provider_json(call_request.schema)).hexdigest(),
+                        self._ledger.inspect(key).record, result.context_witness))
                 if pending_read is not None:
                     stage = "observation_delivery"
                     action_session.complete_read(pending_read)
@@ -6664,7 +6939,9 @@ class AgentContextService:
                     finalizer = call_finalizer
                     call_finalizer = None
                     if finalizer is not None:
-                        _accept_provider_call_without_replacing(finalizer)
+                        finalized = _accept_provider_call_without_replacing(finalizer)
+                        if finalized and group_state is not None:
+                            group_state = replace(group_state, accepted_delivery=group_state.transport_delivery)
                     current_lineage = None
                     if group_state.workflow.phase is LeadGroupPhase.STOP:
                         stage = "exhausted"
@@ -6736,7 +7013,9 @@ class AgentContextService:
                     finalizer = call_finalizer
                     call_finalizer = None
                     if finalizer is not None:
-                        _accept_provider_call_without_replacing(finalizer)
+                        finalized = _accept_provider_call_without_replacing(finalizer)
+                        if finalized and group_state is not None:
+                            group_state = replace(group_state, accepted_delivery=group_state.transport_delivery)
                     continue
                 if type(action) is ContextReadAction:
                     history_advanced = True
@@ -6806,7 +7085,9 @@ class AgentContextService:
                     finalizer = call_finalizer
                     call_finalizer = None
                     if finalizer is not None:
-                        _accept_provider_call_without_replacing(finalizer)
+                        finalized = _accept_provider_call_without_replacing(finalizer)
+                        if finalized and group_state is not None:
+                            group_state = replace(group_state, accepted_delivery=group_state.transport_delivery)
                     continue
 
                 terminal_provider_succeeded = True

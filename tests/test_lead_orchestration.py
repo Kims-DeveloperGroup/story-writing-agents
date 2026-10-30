@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from tests.provider_wire_fixture import lead_fixture_scope_record, lead_fixture_response
+from tests.provider_wire_fixture import CallbackContextViews, ExplicitPhaseScript, FixturePhasePlanError, assert_phase_guide, selection_plan
 from tests.provider_wire_fixture import ( fixture_schema_node, indexed_response, lead_fixture_result,
     lead_fixture_scope, offered_fixture_bindings, finite_fixture_selection,)
 from tests.provider_wire_fixture import lead_fixture_bound_scope
@@ -19,6 +20,7 @@ from story_writing_agents import lead_premise_decisions as premise
 import copy
 import inspect
 import json
+from story_writing_agents.lead_schema_groups import LeadGroupPhase
 import story_writing_agents.lead_task_transitions as task
 from story_writing_agents import provider_wire as wire
 from story_writing_agents.conversations.events import COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
@@ -90,7 +92,7 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
     literal = "Éither the narrator knows.\r\nThe reader learns later.  "
     agents = (PLOT_ARCHITECT, CHARACTER_CUSTODIAN)
     def front(call, provider):
-        facts = _workflow_material(call.payload)["provider_constraints"]
+        facts = _workflow_material(provider.callback_payload(call))["provider_constraints"]
         spec = {"question_id": facts["offered_premise_question_id"], "slot_id": "knowledge",
                 "question": "Who knows the concealed motive?", "dependent_domains": ["plot_structure", "character_world"]}
         assignments = [{"agent_id": agent, "instruction": "Compare alternatives and their residual costs.",
@@ -146,7 +148,7 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
         case.backend.enqueue_for(agent, lambda call, provider: wire_answer(analysis, wire_contract_id(call.payload)))
     def summarize(call, provider):
         from tests.provider_wire_fixture import lead_fixture_response
-        replies = _workflow_material(call.payload)["replies"]
+        replies = _workflow_material(provider.callback_payload(call))["replies"]
         dispositions = {item["reply_event_id"]: {"reply_event_id": item["reply_event_id"],
             "alternative_keys": finite_fixture_selection(("knows",), ("knows",)),
             "disposition": "used", "reason": "Retain the actual alternative.",
@@ -276,11 +278,12 @@ class _LeadContextProvider:
     provider_id = "codex"
 
     def __init__(self, backend: '_LeadBackend', agent_id: str, definition_fingerprint: str,
-        responses: tuple[_Response | _SubmittedFailure, ...], reference_read: object | None) -> None:
+        responses: ExplicitPhaseScript, reference_read: object | None) -> None:
         self.backend = backend
         self.agent_id = agent_id
         self.definition_fingerprint = definition_fingerprint
-        self.responses = list(responses)
+        self.script = responses
+        self.responses = self.script.responses
         self.reference_read = reference_read
         request = getattr(reference_read, "request", None)
         self.reference_operation_id = None if request is None else request.correlation.operation_id
@@ -299,7 +302,9 @@ class _LeadContextProvider:
         self.backend.execution_workspaces.append(execution_workspace)
         self._active = (scope, policy_fingerprint)
         self._continuation_identity = continuation_identity
-        try: yield
+        try:
+            yield
+            self.script.require_controls_consumed()
         finally:
             self._active = None
             self._continuation_identity = None
@@ -347,34 +352,42 @@ class _LeadContextProvider:
         self.backend.reference_records.append((self.agent_id, context))
         return carrier
 
+    def callback_payload(self, request):
+        return self.backend.callback_views.for_request(request)
+
     async def invoke_context(self, request: ContextProviderCallRequest) -> ContextProviderCallResult:
         self._require_active(request.scope, request.policy_fingerprint)
         self.backend.calls.append(request)
         capture_sample(request)
         self.backend.call_records.append((self.agent_id, request))
-        try: self._live_material = _workflow_material(request.payload)
-        except LookupError: pass
+        self.backend.callback_views.observe(request)
+        try:
+            self._live_material = _workflow_material(self.callback_payload(request))
+        except LookupError:
+            if hasattr(self, "_live_material"):
+                del self._live_material
         if hasattr(self, "_live_material"):
             _LIVE_CONTEXT[request.payload["request_correlation_token"]] = self._live_material
-        if not self.responses: raise AssertionError("unexpected lead provider call")
-        scripted = self.responses.pop(0)
+        scripted = self.script.next_response(request, missing_message="unexpected lead provider call")
         accounting = self._account(request.schema, request.payload, call_kind=request.call_kind,
             component_paths=request.component_paths,mandatory_reference_paths=request.mandatory_reference_paths)
-        if type(scripted) is _SubmittedFailure:
-            record_context_provider_failure(scripted.failure, ContextProviderFailureFacts(
-                accounting, timed_out=scripted.timed_out, taint_existing_thread=True,
-                submission_uncertain=scripted.submission_uncertain,
-                continuation_rejection=scripted.continuation_rejection))
-            raise scripted.failure
-        response: str | BaseException = scripted
-        if callable(response):
-            response = response(request, self)
+        response = scripted
+        try:
+            if callable(response):
+                response = response(request, self)
             if inspect.isawaitable(response):
-                try: response = await response
-                except asyncio.CancelledError as failure:
-                    record_context_provider_failure(failure, ContextProviderFailureFacts(accounting,
-                        taint_existing_thread=True))
-                    raise
+                response = await response
+        except asyncio.CancelledError as failure:
+            record_context_provider_failure(failure, ContextProviderFailureFacts(accounting, taint_existing_thread=True))
+            raise
+        except Exception as failure:
+            self.script.callback_failed(failure)
+        if type(response) is _SubmittedFailure:
+            record_context_provider_failure(response.failure, ContextProviderFailureFacts(
+                accounting, timed_out=response.timed_out, taint_existing_thread=True,
+                submission_uncertain=response.submission_uncertain,
+                continuation_rejection=response.continuation_rejection))
+            raise response.failure
         if isinstance(response, BaseException): raise response
         thread_id = request.expected_thread_id or f'thread-lead-{len(self.backend.finalizers) + 1}'
         self._threads[self._thread_key(request.scope, request.policy_fingerprint)] = thread_id
@@ -419,7 +432,7 @@ class _LeadBoundAgent:
         queue = self.backend.scripts_by_agent.get(agent_id)
         if queue: script = queue.pop(0)
         elif self.backend.scripts: script = self.backend.scripts.pop(0)
-        else: raise AssertionError(f"no scripted invocation for {agent_id}")
+        else: self.backend.fail_fixture("missing_script")
         provider = _LeadContextProvider(self.backend, agent_id, f"sha256:{self.definition.fingerprint}", script,
             reference_read,)
         self.backend.providers.append(provider)
@@ -431,12 +444,16 @@ class _LeadBackend:
 
     backend_overrides: dict[str, str] = {}
 
-    def __init__(self, *, bind_failure: BaseException | None=None,
+    def __init__(self, *, test_case: unittest.TestCase, bind_failure: BaseException | None=None,
         persist_context_threads: bool=False, vendor: str='antigravity') -> None:
+        self._all_scripts = []
+        self.callback_views = CallbackContextViews()
+        self._fixture_error_code = None
+        test_case.addCleanup(self.require_fixture_valid)
         self.vendor = vendor
         self.bind_failure = bind_failure
-        self.scripts: list[tuple[_Response | _SubmittedFailure, ...]] = []
-        self.scripts_by_agent: dict[str, list[tuple[_Response | _SubmittedFailure, ...]]] = {}
+        self.scripts: list[ExplicitPhaseScript] = []
+        self.scripts_by_agent: dict[str, list[ExplicitPhaseScript]] = {}
         self.calls: list[ContextProviderCallRequest] = []
         self.call_records: list[tuple[str, ContextProviderCallRequest]] = []
         self.reference_calls: list[ContextReferencePreludeRequest] = []
@@ -449,11 +466,30 @@ class _LeadBackend:
         self.tainted_thread_ids: list[str] = []
         self.execution_workspaces: list[object | None] = []
 
-    def enqueue(self, *responses: _Response | _SubmittedFailure) -> None:
-        self.scripts.append(tuple(responses))
+    def enqueue(self, *responses: _Response | _SubmittedFailure, control_plan=None) -> None:
+        script = ExplicitPhaseScript(responses, control_plan)
+        self._all_scripts.append(script)
+        self.scripts.append(script)
 
-    def enqueue_for(self, agent_id: str, *responses: _Response | _SubmittedFailure) -> None:
-        self.scripts_by_agent.setdefault(agent_id, []).append(tuple(responses))
+    def enqueue_for(self, agent_id: str, *responses: _Response | _SubmittedFailure, control_plan=None) -> None:
+        script = ExplicitPhaseScript(responses, control_plan)
+        self._all_scripts.append(script)
+        self.scripts_by_agent.setdefault(agent_id, []).append(script)
+
+    def callback_payload(self, request):
+        return self.callback_views.for_request(request)
+
+    def fail_fixture(self, code):
+        if self._fixture_error_code is None:
+            self._fixture_error_code = code
+        raise FixturePhasePlanError("fixture-phase-plan:backend-" + self._fixture_error_code)
+
+    def require_fixture_valid(self):
+        if self._fixture_error_code is not None:
+            self.fail_fixture(self._fixture_error_code)
+        self.callback_views.require_fixture_valid()
+        for script in self._all_scripts:
+            script.require_fixture_valid()
 
     def execution_profile_fingerprint(self, agent_id: str) -> str:
         return 'sha256:' + {LEAD_ORCHESTRATOR: '1', PLOT_ARCHITECT: '2', CHARACTER_CUSTODIAN: '3',
@@ -709,7 +745,7 @@ def _proposal_outcome(assignments: list[dict[str, object]], *, relation: str='ne
         call: ContextProviderCallRequest,
         _provider: _LeadContextProvider,
     ) -> str:
-        core_statuses = call.payload.get("core_document_statuses", [])
+        core_statuses = _provider.callback_payload(call).get("core_document_statuses", [])
         value = {
                     "recommended_action": None, "kind": "proposal", "message": "Specialist review would resolve the open question.", "scope": "story_specific",
                     "evidence_status": "incomplete", "evidence_ids": ( [core_statuses[0]["evidence_id"]] if core_statuses else [] ), "artifact_intent": None,
@@ -859,7 +895,7 @@ def _search_history(call, _provider, text="A prior lead response"):
 
 
 def _read_history_hit(call: ContextProviderCallRequest, provider: _LeadContextProvider):
-    observation = call.payload["context_observation"]
+    observation = provider.callback_payload(call)["context_observation"]
     assert isinstance(observation, dict) and observation["observation_type"] == "context_search_results"
     handle = observation["search_results"][0]["read_handle"]
     provider.used_handles = (handle,)
@@ -870,9 +906,11 @@ def _read_history_hit(call: ContextProviderCallRequest, provider: _LeadContextPr
                             outer_schema_id=outer, inner_schema_id=None)
 
 
-def _answer_from_history(call: ContextProviderCallRequest, provider: _LeadContextProvider):
-    observation = call.payload["context_observation"]
+def _answer_from_history(call: ContextProviderCallRequest, provider: _LeadContextProvider, *, message_only=False):
+    observation = provider.callback_payload(call)["context_observation"]
     assert isinstance(observation, dict) and observation["observation_type"] == "context_read_results"
+    if message_only:
+        return "A prior lead response supplies enough evidence."
     return _visible_outcome("answer", "A prior lead response supplies enough evidence.")(call, provider)
 
 
@@ -945,7 +983,7 @@ def _whole_book_assessment(call, answer, *, offered_inputs, logical_transform: C
         outer, inner = offered_fixture_bindings(call, action_type='submit_result',
             response_type='core_document_readiness_assessment', family=0)
         value = {'response_type': 'core_document_readiness_assessment',
-            'response_text': answer['agent_action']['task_result']['response_text'],
+            'response_text': (answer if type(answer) is str else answer['agent_action']['task_result']['response_text']),
             'response_details': {'writing_task_scope': None, 'core_document_assessment': native_assessment}}
         return indexed_response({'action_type': 'submit_result', 'task_result': value},
             outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
@@ -970,7 +1008,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         part = self.workspace.path("manuscript/part-01")
         part.mkdir(parents=True, exist_ok=True)
         (part / "opening.md").write_text("Opening one.\nOpening two.\nOpening three.\n", encoding="utf-8",)
-        self.backend = _LeadBackend()
+        self.backend = _LeadBackend(test_case=self)
         # This orchestration fake has no native provider process or role file.
         boundary_patch = mock.patch('story_writing_agents.orchestrator._provider_execution_workspace_manager',
             return_value=None)
@@ -983,12 +1021,16 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
     async def _lead_turn(self, conversation_id, message, **kwargs):
         return await self.runtime.lead_turn(self.session_id, conversation_id, message, **kwargs)
 
-    async def _rejected_pair(self, conversation_id, message, response):
-        self.backend.enqueue(response)
-        self.backend.enqueue(response)
+    async def _rejected_pair(self, conversation_id, message, response, *, selection_group=None):
+        if selection_group is None:
+            self.backend.enqueue(response)
+            self.backend.enqueue(response)
+        else:
+            self.backend.enqueue(response, control_plan=selection_plan(selection_group))
+            self.backend.enqueue(response, control_plan=())
         before = len(self.backend.calls)
         result = await self._lead_turn(conversation_id, message)
-        self.assertEqual(len(self.backend.calls) - before, 2)
+        self.assertEqual(len(self.backend.calls) - before, 2 + int(selection_group is not None))
         self.assertIs(result.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
         return result
 
@@ -1010,16 +1052,16 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         call_count, read_count = len(self.backend.calls), len(self.backend.reference_calls)
 
         def assess(call, provider):
-            answer = json.loads(_visible_outcome("answer")(call, provider))
+            answer = "Visible lead response."
             return _whole_book_assessment(call, answer,
-                                          offered_inputs=call.payload["task_input"]["available_input_sources"])
+                                          offered_inputs=provider.callback_payload(call)["task_input"]["available_input_sources"])
 
-        self.backend.enqueue(assess)
+        self.backend.enqueue(assess, control_plan=selection_plan("readiness.core_documents"))
         user = _READINESS_USER + " " + " ".join("${" + path + "}" for path, _ in _READINESS_DOCUMENTS)
         result = await self.runtime.lead_turn(self.session_id, conversation_id, user)
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         self.assertIsNone(result.proposal)
-        self.assertEqual((len(self.backend.calls) - call_count, len(self.backend.reference_calls) - read_count), (1, 1))
+        self.assertEqual((len(self.backend.calls) - call_count, len(self.backend.reference_calls) - read_count), (2, 1))
         self.assertEqual(tuple(item["content"] for item in self.backend.reference_contexts[-1]),
                          tuple(content for _, content in documents))
         readiness = self.runtime.inspect_core_document_readiness(self.session_id)
@@ -1041,7 +1083,8 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
             PLOT_ARCHITECT, 'instruction': 'Check the story direction against the request.',
             'input_ids': ['user_input']}], relation=relation, domains=domains,
             author_review_basis=True,
-            authoring_assessment=authoring_assessment)))
+            authoring_assessment=authoring_assessment),
+            control_plan=selection_plan("consultation.authoring.review")))
         return await self.runtime.lead_turn(self.session_id, conversation_id, text,)
 
 
@@ -1368,7 +1411,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
     async def test_direct_search_read_answer_uses_bounded_history_without_proposal(self) -> None:
         self.backend.context_threads = {}
         conversation_id = self.conversation("Searchable lead history")
-        self.backend.enqueue(_visible_outcome("answer", "A prior lead response"))
+        self.backend.enqueue(_visible_outcome("answer", "A prior lead response"), control_plan=selection_plan("answer.workflow"))
         await self.runtime.lead_turn(self.session_id, conversation_id, "Create one prior visible answer.",)
         session_definition = self.backend.definitions[-1]
         control_policy = self.control_workspace.path(behavior_policy_files(LEAD_ORCHESTRATOR)[-1])
@@ -1383,12 +1426,12 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.workspace.path(path).write_text(content, encoding="utf-8")
         offered_inputs = []
         def search_with_offered_inputs(call, provider, **search_options):
-            offered_inputs[:] = call.payload["task_input"]["available_input_sources"]
+            offered_inputs[:] = provider.callback_payload(call)["task_input"]["available_input_sources"]
             return _search_history(call, provider, **search_options)
         def assessed_book(call, provider):
-            return _whole_book_assessment(call, json.loads(_answer_from_history(call, provider)),
+            return _whole_book_assessment(call, _answer_from_history(call, provider, message_only=True),
                                           offered_inputs=offered_inputs)
-        self.backend.enqueue(search_with_offered_inputs, _read_history_hit, assessed_book)
+        self.backend.enqueue(search_with_offered_inputs, _read_history_hit, assessed_book, control_plan=selection_plan("readiness.core_documents", before_script_response=2))
 
         with mock.patch.object(self.runtime.prompts, "build_contextual_definition", side_effect=poisoned_legacy_build):
             result = await self._lead_turn(conversation_id,
@@ -1399,7 +1442,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertNotIn(b"CONTROL_ROOT_INJECTION", self.backend.definitions[-1].system_prompt_file.content)
         self.assertIsNotNone(calls[0].expected_thread_id)
         self.assertEqual({call.expected_thread_id for call in calls}, {calls[0].expected_thread_id})
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
+        from story_writing_agents.lead_schema_groups import LeadGroupPhase
+        self.assertEqual(tuple(item.contract.schema_group_phase for item in calls),
+            (LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
         from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
         for physical in calls:
             self.assertIs(type(physical), BoundContextProviderCallRequest)
@@ -1420,13 +1466,16 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertTrue(calls[1].contract.offers.issued_handle_aliases)
         self.assertEqual(calls[1].contract.offers.completed_read_facts, preflight)
         self.assertTrue(calls[2].contract.offers.delivery_read_facts)
-        read_bound = calls[2].contract
+        self.assertFalse(calls[3].contract.offers.delivery_read_facts)
+        self.assertEqual(calls[3].contract.offers.completed_read_facts,
+            preflight + calls[2].contract.offers.delivery_read_facts)
+        read_bound = calls[3].contract
         read_choices = dict(read_bound.semantic_index.policy.choices)
         original_candidates = dict(calls[0].contract.semantic_index.policy.choices)['review_candidate_ids']
         fixed_read_owner = replace(read_bound.factory, constraints=replace(
             read_bound.factory.constraints, input_ids=read_choices['input_ids'],
             required_input_ids=read_choices['required_input_ids'], review_candidate_ids=original_candidates))
-        fixed_read = fixed_read_owner.for_offer(read_bound.offers)
+        fixed_read = fixed_read_owner.for_offer(read_bound.offers, request_basis=read_bound.request_basis)
         fixed_read_choices = dict(fixed_read.semantic_index.policy.choices)
         self.assertEqual(read_choices['review_candidate_ids'], read_choices['input_ids'])
         self.assertEqual(fixed_read_choices['review_candidate_ids'], original_candidates)
@@ -1437,18 +1486,18 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(fixed_read.offers, read_bound.offers)
         self.assertEqual(fixed_read.offers.delivery_read_facts,
                          read_bound.offers.delivery_read_facts)
-        delivered = tuple(row['evidence_id'] for row in calls[2].payload['context_observation']['read_results'])
+        delivered = tuple(row['evidence_id'] for row in self.backend.callback_payload(calls[2])['context_observation']['read_results'])
         self.assertEqual(tuple(fact.evidence_id for fact in calls[2].contract.offers.delivery_read_facts), delivered)
-        current_frame = json.loads(_visible_outcome('answer')(calls[2], None))
+        current_frame = json.loads(assessed_book(calls[3], self.backend.providers[-1]))
         earlier = {outer for outer, _ in calls[0].contract.outer_inner_schema_ids}
-        current_ids = {outer for outer, _ in calls[2].contract.outer_inner_schema_ids}
+        current_ids = {outer for outer, _ in calls[3].contract.outer_inner_schema_ids}
         stale_ids = earlier - current_ids
         self.assertTrue(stale_ids)
         for stale_id in stale_ids:
             wrong_binding = copy.deepcopy(current_frame)
             wrong_binding['agent_action']['schema_id'] = stale_id
             with self.assertRaises(ValueError):
-                calls[2].contract.decode_response(json.dumps(wrong_binding))
+                calls[3].contract.decode_response(json.dumps(wrong_binding))
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         self.assertIsNone(result.proposal)
         self.assertIsNone(result.confirmation_request_id)
@@ -1460,8 +1509,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                       json.dumps(dict(calls[0].payload), ensure_ascii=False),)
         self.assertIn("a prior lead response",
                       json.dumps(dict(calls[1].payload), ensure_ascii=False).lower(),)
-        self.assertEqual(project_collaboration_history(self.history(conversation_id)).physical_calls_spent, 3,)
-        self.assertEqual(len(_submitted_calls(self.history(conversation_id))), 4,)
+        self.assertEqual(project_collaboration_history(self.history(conversation_id)).physical_calls_spent, 4,)
+        self.assertEqual(len(_submitted_calls(self.history(conversation_id))), 6,)
         basis = _event_payloads(
             self.history(conversation_id), CollaborationLeadJudgmentPayload)[-1].core_document_readiness
         self.assertIsNotNone(basis, result)
@@ -1561,7 +1610,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertIs(selection.record.approval_state, editorial.EditorialApprovalState.SELECTED)
 
         def assess_selected_plan(call, provider):
-            receipt = call.payload["context_observation"]["read_results"][0]["evidence_id"]
+            receipt = provider.callback_payload(call)["context_observation"]["read_results"][0]["evidence_id"]
             choice = core_readiness.AuthorDecision( "courier_plan", plan_text, "supplied", ("departure",),
                 (receipt,), "Actual READ of the USER-selected character plan.")
             def with_selected_plan(value):
@@ -1573,7 +1622,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 return replace(value,
                     book_basis=replace(value.book_basis, author_decisions=(choice,)),
                     document_judgments=rows)
-            answer = json.loads(_whole_book_assessment( call, json.loads(_answer_from_history(call, provider)),
+            answer = json.loads(_whole_book_assessment( call, _answer_from_history(call, provider, message_only=True),
                 offered_inputs=offered_inputs, logical_transform=with_selected_plan))
             result = answer['agent_action']['task_result']
             result['response_text'] = ( 'Readiness includes the acquired USER-selected'
@@ -1583,13 +1632,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         assessment_owner = services.catalog.create(self.session_id, "Read selected character plan").conversation_id
         physical_before, references_before = len(self.backend.calls), len(self.backend.reference_calls)
         self.backend.enqueue(lambda call, provider: search_with_offered_inputs(call, provider, text=plan_text),
-                             _read_history_hit, assess_selected_plan)
+                             _read_history_hit, assess_selected_plan, control_plan=selection_plan("readiness.core_documents", before_script_response=2))
         planned = await restarted.lead_turn(self.session_id, assessment_owner,
             _READINESS_USER + " " + " ".join("${" + path + "}" for path, _ in _READINESS_DOCUMENTS))
         self.assertIs(planned.kind, LeadOutcomeKind.ANSWER)
         self.assertIsNone(planned.proposal)
         self.assertEqual((len(self.backend.calls) - physical_before,
-                          len(self.backend.reference_calls) - references_before), (3, 1))
+                          len(self.backend.reference_calls) - references_before), (4, 1))
         captured_event = next(event for event in services.event_store.read(self.session_id, assessment_owner)
                               if getattr(event.payload, "core_document_readiness", None) is not None)
         captured = captured_event.payload.core_document_readiness
@@ -1622,10 +1671,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         assessment = asdict(_fixture_assessment())
         qualified_request = _ADMISSION_BRIEF + "\nPlease check story direction."
         from tests.recommendation_fixture import action
-        cases = (('answer', CollaborationNextAction.CONTINUE_WITH_LEAD), ('question',
-            CollaborationNextAction.REPLY_TO_LEAD), ('critique', CollaborationNextAction.CONTINUE_WITH_LEAD),
-            ('recommendation', CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION))
-        for kind, next_action in cases:
+        cases = (('answer', CollaborationNextAction.CONTINUE_WITH_LEAD, 'answer.workflow'), ('question',
+            CollaborationNextAction.REPLY_TO_LEAD, 'question.workflow'), ('critique', CollaborationNextAction.CONTINUE_WITH_LEAD, 'critique.workflow'),
+            ('recommendation', CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION, 'prepare.consultation.authoring'))
+        for kind, next_action, selection_group in cases:
             with self.subTest(kind=kind):
                 conversation_id = self.conversation(f"Outcome {kind}")
                 from tests.recommendation_fixture import recommendation
@@ -1633,7 +1682,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     kind="prepare_consultation", source_ids=("user_input",),
                     specialist_ids=( PLOT_ARCHITECT , CHARACTER_CUSTODIAN , EXECUTION_SPECIALIST , ),
                 ), mutate=lambda value: value.update(authoring_assessment=assessment),)
-                    if kind == "recommendation" else _visible_outcome(kind))
+                    if kind == "recommendation" else _visible_outcome(kind),
+                    control_plan=selection_plan(selection_group))
                 result = await self.runtime.session(self.session_id).lead_turn(conversation_id, (
                     _ADMISSION_BRIEF + '\n' if kind == 'recommendation' else '') +
                     f'Return a {kind}. Finished candidate: ' 'a summons causes a choice and its consequence.')
@@ -1645,9 +1695,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.assertEqual(tuple((event.kind for event in history)), (
                     CollaborationEventKind.MESSAGE, CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
                     CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+                    CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+                    CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
                     CollaborationEventKind.LEAD_PUBLIC_RESPONSE, CollaborationEventKind.MESSAGE) + (
                     (CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST,) if kind == 'recommendation' else ()))
-                self.assertEqual(project_collaboration_history(history).physical_calls_spent, 1,)
+                self.assertEqual(project_collaboration_history(history).physical_calls_spent, 2,)
 
         proposal_id = self.conversation("Proposal")
         proposed = await self.proposal(proposal_id, text=qualified_request, authoring_assessment=assessment,)
@@ -1679,8 +1731,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         for index, script in enumerate(scripts):
             with self.subTest(index=index):
                 conversation_id = self.conversation(f"Invalid {index}")
-                self.backend.enqueue(script)
-                self.backend.enqueue(script)
+                self.backend.enqueue(script, control_plan=selection_plan("answer.workflow"))
+                self.backend.enqueue(script, control_plan=())
                 result = await self.runtime.lead_turn(self.session_id, conversation_id,
                     'Reject a noncanonical outcome.')
                 self.assertIsNone(result.state)
@@ -1705,7 +1757,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
     async def test_kind_bearing_lead_result_reports_common_anyof_issues(self) -> None:
         conversation_id = self.conversation("Lead result schema diagnostics")
-        self.backend.enqueue(_visible_outcome("answer"))
+        self.backend.enqueue(_visible_outcome("answer", grouped=True), control_plan=selection_plan("answer.workflow"))
         await self._lead_turn(conversation_id, 'Explain the collaboration workflow.')
         result_schema = self.backend.calls[-1].contract.semantic_index.schema_value()
         result_schema["anyOf"] = [
@@ -1723,7 +1775,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
     async def test_non_string_lead_kind_reports_exact_type_and_common_issues(self) -> None:
         conversation_id = self.conversation("Non-string Lead result discriminator")
-        self.backend.enqueue(_visible_outcome("answer"))
+        self.backend.enqueue(_visible_outcome("answer", grouped=True), control_plan=selection_plan("answer.workflow"))
         await self.runtime.lead_turn(self.session_id, conversation_id, 'Explain the collaboration workflow.')
         result_schema = self.backend.calls[-1].contract.semantic_index.schema_value()
         result_schema["anyOf"] = [
@@ -1857,7 +1909,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             result = await original_invoke(service, *args, **kwargs)
             front_results.append(result)
             return result
-        with mock.patch.object(AgentContextService, 'invoke', retain_front_authority):
+        original_factory = orchestrator_module._lead_call_contract_factory
+        def baseline_factory(*args, **kwargs):
+            return original_factory(*args, **{**kwargs, "schema_group_protocol": False})
+        with mock.patch.object(AgentContextService, 'invoke', retain_front_authority), \
+                mock.patch.object(orchestrator_module, '_lead_call_contract_factory', side_effect=baseline_factory):
             outcome = await self.runtime.lead_turn( self.session_id, conversation_id, "Explain collaboration workflow.")
         self.assertTrue(self.backend.calls, outcome)
         def plain(value):
@@ -3163,6 +3219,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             LEAD_SCHEMA_GROUPS, LeadGroupRequestBasis, SchemaGroupControlOwner, LeadGroupPhase)
         from tests.test_provider_schema_spec import check_schema
         group_contexts, typed_groups = {}, set()
+        semantic_examples = {}
         expected_groups = {"answer.workflow", "answer.observed_facts", "question.workflow", "question.authoring",
             "question.review_only", "critique.workflow", "prepare.artifact", "prepare.consultation.authoring",
             "prepare.consultation.review_only", "consultation.authoring.content", "consultation.authoring.review",
@@ -3232,6 +3289,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             current = generations[group]
             frame = lead_fixture_response(SimpleNamespace(contract=current), supplied, family=0)
             self.assertFalse(current.rule_graph.findings(json.loads(frame)), (group, expected))
+            semantic_examples.setdefault(group, (current, json.loads(frame), expected))
             if typed and group not in typed_groups:
                 self.assertEqual(check_schema(current.schema_value()), ())
                 self._require_fixture_projections(current)
@@ -4398,16 +4456,64 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 branch='artifact-review-summary-v4:family:0', constraints=synthesis_constraints)
 
         self.assertEqual(typed_groups, expected_groups)
+        # 설계의 16 JSON 중 1~5는 위 전체 schema/선택/업무 frame과 B1 full 입력으로 검증한다.
+        # 6~9, 11~14는 실제 준비된 동일 그룹 binding을 재사용하며 자연어 분류기를 만들지 않는다.
+        for label, group, native_type in (
+                ("원문 평가와 개선 의견", "consultation.review_only", "specialist_consultation_proposal"),
+                ("개정 작업 안의 검토", "consultation.authoring.review", "specialist_consultation_proposal"),
+                ("변경안 준비 추천", "prepare.artifact", "proposal_drafting_recommendation"),
+                ("직접 변경 제안", "artifact.changes", "artifact_change_proposal"),
+                ("위임된 전환과 조연 이름", "consultation.authoring.content", "specialist_consultation_proposal"),
+                ("사용자가 정할 화자 미정", "question.authoring", "clarification_question"),
+                ("실제 완료된 개요 READ", "answer.observed_facts", "answer"),
+                ("전체 핵심문서 준비도", "readiness.core_documents", "core_document_readiness_assessment")):
+            current, complete, expected = semantic_examples[group]
+            native_types = {member.rule_graph.literal_at(("response_type",))
+                for member in current.semantic_index.contracts if type(member.owner) is not SchemaGroupControlOwner}
+            self.assertEqual(native_types, {native_type}, label)
+            selector = next(context[0] for context in group_contexts.values() if context[2].get(group) is current)
+            raw = group_control_packet(selector, group)
+            raw["agent_action"]["task_result"]["selection_reason"] = label + "에 해당하는 현재 계약을 선택합니다."
+            record = selector.record_group_control(selector.decode_value(raw))
+            self.assertEqual((record.group_id, record.catalog.catalog_id), (group, selector.group_stage.catalog.catalog_id))
+            self.assertIs(selector.group_workflow.accept(record, remaining_calls=1).phase, LeadGroupPhase.GENERATE)
+        # 예시 10의 operation 조각은 현재 정확한 IDs가 있어도 필수 전체 scope를 대신하지 못한다.
+        artifact_binding, complete, _expected = semantic_examples["artifact.changes"]
+        partial = copy.deepcopy(complete)
+        del partial["agent_action"]["task_result"]["response_details"]["task_scope"]
+        self.assertTrue(artifact_binding.rule_graph.findings(partial))
+        self.assertRaises(ValueError, artifact_binding.decode_response, json.dumps(partial))
+        # 예시 15는 같은 catalog에서 둘 다 유효하며 단일 정답으로 축소하지 않는다.
+        alternatives = {"prepare.consultation.authoring", "consultation.authoring.review"}
+        shared = [context for context in group_contexts.values() if alternatives <= set(context[0].group_stage.catalog.group_ids)]
+        self.assertTrue(shared)
+        selector, _members, generations = shared[0]
+        for group in sorted(alternatives):
+            record = selector.record_group_control(selector.decode_value(group_control_packet(selector, group)))
+            self.assertEqual(record.group_id, group)
+        # 예시 16은 이미 선택한 생성 계약에서 다른 그룹의 직접 재선택이다.
+        current = next(context[2]["prepare.consultation.authoring"] for context in shared if "prepare.consultation.authoring" in context[2])
+        record = current.record_group_control(current.decode_value(group_control_packet(current, "consultation.authoring.review")))
+        original = current.group_workflow.active_selection
+        reselected = current.group_workflow.accept(record, remaining_calls=1)
+        self.assertEqual(tuple(item.group_id for item in reselected.history), (original.group_id, "consultation.authoring.review"))
+        self.assertIs(reselected.history[0], original)
+        self.assertIs(reselected.phase, LeadGroupPhase.GENERATE)
+
 
     async def test_front_schema_rejection_is_repaired_once(self) -> None:
+        from story_writing_agents.lead_schema_groups import LeadGroupPhase
+        from tests.test_agent_context_execution import _group_control
+        def select(group):
+            return ((0, LeadGroupPhase.SELECT, _group_control(group)),)
         conversation_id = self.conversation("Repair schema")
 
         def missing_message(call: ContextProviderCallRequest, _provider: object) -> str:
             return json.dumps({'action': {'kind': 'answer', 'result': {'kind': 'answer',
                 'authoring_scope': _compact_scope(_live_scope(call))}, 'used_handles': []}})
 
-        self.backend.enqueue(missing_message)
-        self.backend.enqueue(_visible_outcome("answer", "Repaired visible answer."))
+        self.backend.enqueue(missing_message, control_plan=select("answer.workflow"))
+        self.backend.enqueue(_visible_outcome("answer", "Repaired visible answer.", grouped=True), control_plan=())
         result = await self._lead_turn(conversation_id, 'Explain the collaboration workflow.')
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         self.assertEqual(result.message, "Repaired visible answer.")
@@ -4418,11 +4524,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         persisted = next((event.payload for event in reopened.read(self.session_id,
             conversation_id) if type(event.payload) is CollaborationLeadJudgmentPayload))
         self.assertEqual(persisted.trace, result.trace)
-        self.assertEqual(len(self.backend.calls), 2)
-        self.assertEqual(result.public_responses[0].response.call_id, self.backend.calls[1].call_id)
-        self.assertEqual(result.public_responses[0].response.repair_of_call_id, self.backend.calls[0].call_id)
+        self.assertEqual(len(self.backend.calls), 3)
+        self.assertEqual(result.public_responses[0].response.call_id, self.backend.calls[2].call_id)
+        self.assertEqual(result.public_responses[0].response.repair_of_call_id, self.backend.calls[1].call_id)
         for call in self.backend.calls: assert_guidance(self, dict(call.payload), dict(call.schema))
-        repair = _workflow_material(self.backend.calls[-1].payload)
+        repair = _workflow_material(self.backend.callback_payload(self.backend.calls[-1]))
         self.assertIn("response_correction", repair)
         exploration_conversation = self.conversation("Repair provisional exploration")
         def invalid_exploration(call, provider):
@@ -4447,7 +4553,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         case.setUp()
         self.addCleanup(case.doCleanups)
         initial_question_text = "Which ending should the outline use?"
-        pending_conversation, _ = await case.clarify(message=initial_question_text)
+        original_enqueue = case.backend.enqueue
+        def enqueue_initial_question(*responses):
+            return original_enqueue(*responses, control_plan=select("question.authoring"))
+        with mock.patch.object(case.backend, "enqueue", side_effect=enqueue_initial_question):
+            pending_conversation, _ = await case.clarify(message=initial_question_text)
         pending = case.objective(pending_conversation)
         prefix = case.history(pending_conversation)
         initial_judgment = next(event for event in reversed(prefix)
@@ -4483,15 +4593,16 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             return clarify_pending(call, provider)
         call_start = len(case.backend.calls)
         # Schema repair starts a new provider invocation with its own script.
-        case.backend.enqueue(invalid_pending_proposal)
-        case.backend.enqueue(repair_pending_question)
+        case.backend.enqueue(invalid_pending_proposal, control_plan=select("consultation.authoring.content"))
+        case.backend.enqueue(repair_pending_question, control_plan=(
+            (0, LeadGroupPhase.GENERATE, _group_control("question.authoring")),))
         repaired = await case.runtime.lead_turn(case.session_id, pending_conversation,
             "Continue the pending outline request; the ending is still unspecified.")
         self.assertIs(repaired.kind, LeadOutcomeKind.QUESTION)
         self.assertEqual(repaired.message, question_text)
         self.assertIs(repaired.trace.origin, ReplyTraceOrigin.RECOVERED)
-        self.assertEqual(len(case.backend.calls) - call_start, 2)
-        self.assertEqual(len(_submitted_calls(case.history(pending_conversation))), 3)
+        self.assertEqual(len(case.backend.calls) - call_start, 4)
+        self.assertEqual(len(_submitted_calls(case.history(pending_conversation))), 6)
         current = case.objective(pending_conversation)
         self.assertEqual(current.facts, pending.facts)
         self.assertEqual(current.draft_sources, pending.draft_sources + (
@@ -4537,7 +4648,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             return json.dumps(packet)
         def repair_slot_question(call, provider):
             failed, packet = slot_calls[0]
-            guidance = _workflow_material(call.payload)['response_correction']['bound_contract']
+            guidance = _workflow_material(provider.callback_payload(call))['response_correction']['bound_contract']
             self.assertEqual((guidance['current_physical_call_id'], guidance['current_offer_digest'], guidance['selected_schema_id']),
                              (failed.call_id, failed.contract.offers.offer_digest, packet['agent_action']['schema_id']))
             self.assertEqual(guidance['task_revisions'], [list(pair) for pair in failed.contract.action_index.policy.task_revisions])
@@ -4552,12 +4663,12 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertTrue(call.contract.decode_response(json.dumps(corrected)).belongs_to(call.contract))
             return json.dumps(corrected)
         call_start = len(case.backend.calls)
-        case.backend.enqueue(duplicate_slot_question)
-        case.backend.enqueue(repair_slot_question)
+        case.backend.enqueue(duplicate_slot_question, control_plan=select("question.authoring"))
+        case.backend.enqueue(repair_slot_question, control_plan=())
         slot_repaired = await case.runtime.lead_turn(case.session_id, pending_conversation, 'Retain the pending outline and clarify its ending.')
         self.assertEqual((slot_repaired.kind, slot_repaired.message, getattr(slot_repaired.trace, 'origin', None)),
                          (LeadOutcomeKind.QUESTION, question_text, ReplyTraceOrigin.RECOVERED))
-        self.assertEqual(len(case.backend.calls) - call_start, 2)
+        self.assertEqual(len(case.backend.calls) - call_start, 3)
         retained, slot_history = case.objective(pending_conversation), case.history(pending_conversation)
         self.assertEqual(retained.facts, pending.facts)
         self.assertEqual((retained.state, retained.next_step), (collaboration.ArtifactObjectiveState.OPEN, collaboration.ArtifactObjectiveNextStep.CLARIFY))
@@ -4608,14 +4719,22 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 ("generate", (_group_control("answer.workflow"), invalid_generation, _visible_outcome("answer", grouped=True)), 1)):
             conversation = self.conversation("Grouped repair " + label)
             start = len(self.backend.calls)
-            self.backend.enqueue(*responses[:failed_index + 1])
-            self.backend.enqueue(*responses[failed_index + 1:])
+            if label == "select":
+                self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, responses[0]),))
+                self.backend.enqueue(responses[2], control_plan=((0, LeadGroupPhase.SELECT, responses[1]),))
+            else:
+                self.backend.enqueue(responses[1], control_plan=select("answer.workflow"))
+                self.backend.enqueue(responses[2], control_plan=())
             with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory), \
                     mock.patch.object(AgentContextService, "invoke", capture_grouped):
                 repaired_group = await self.runtime.lead_turn(self.session_id, conversation, "Explain group workflow.")
             calls = self.backend.calls[start:]
             self.assertIs(repaired_group.kind, LeadOutcomeKind.ANSWER)
             self.assertEqual(len(calls), 3)
+            phases = (LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE) if label == "select" else (
+                LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE)
+            for call, phase in zip(calls, phases, strict=True):
+                assert_phase_guide(self, call, phase)
             failed, correction = calls[failed_index].contract, calls[failed_index + 1].contract
             self.assertEqual(correction.phase, "repair")
             self.assertEqual(correction.logical_origin_call_id, failed.offers.call_id)
@@ -4640,7 +4759,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         with self.assertRaises(ValueError):
             failed.factory.for_offer(failed.offers, failed.repair_lineage(), request_basis=minted.request_basis)
         reading = self.conversation("Context during grouped repair")
-        self.backend.enqueue(_visible_outcome("answer", "A prior lead response for grouped repair."))
+        self.backend.enqueue(_visible_outcome("answer", "A prior lead response for grouped repair.", grouped=True), control_plan=select("answer.workflow"))
         await self.runtime.lead_turn(self.session_id, reading, "Seed group repair context.")
         retained = []
         def reject_with_snapshot(call, provider):
@@ -4648,7 +4767,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             retained.append((call.contract, selected, selected.as_object(), call.contract.prepared_compilation))
             return invalid_generation(call, provider)
         start = len(self.backend.calls)
-        self.backend.enqueue(_group_control("answer.workflow"), reject_with_snapshot)
+        self.backend.enqueue(reject_with_snapshot, control_plan=select("answer.workflow"))
         self.backend.enqueue(_search_history, _read_history_hit, _visible_outcome("answer", grouped=True))
         with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory):
             refreshed = await self.runtime.lead_turn(self.session_id, reading, "Explain group repair context.")
@@ -4656,6 +4775,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         failed, selection, snapshot, old_plan = retained[0]
         self.assertIs(refreshed.kind, LeadOutcomeKind.ANSWER)
         self.assertEqual(len(calls), 5)
+        phases = (LeadGroupPhase.SELECT,) + (LeadGroupPhase.GENERATE,) * 4
+        for call, phase in zip(calls, phases, strict=True):
+            assert_phase_guide(self, call, phase)
         self.assertEqual(calls[2].contract.phase, "repair")
         self.assertEqual(calls[2].contract.eligibility_offers, failed.eligibility_offers)
         self.assertIs(calls[-1].contract.group_workflow.active_selection, selection)
@@ -4668,6 +4790,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
     async def test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing(
         self,
     ) -> None:
+        from story_writing_agents.lead_schema_groups import LeadGroupPhase
+        from tests.test_agent_context_execution import _group_control
         defaults = json.loads(self.control_workspace.path("config/system_defaults.json").read_text(encoding="utf-8"))
         overrides = json.loads(self.control_workspace.path("config/agent_configs.json").read_text(encoding="utf-8"))
         self.assertEqual(defaults["language"], "KO")
@@ -4721,31 +4845,33 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 return response
             return respond
 
-        for label, response_type, family_number, value in (('answer', 'answer', 0, {"message": "Unscoped answer."}),
+        for label, response_type, family_number, value, selection_group in (('answer', 'answer', 0, {"message": "Unscoped answer."}, "answer.workflow"),
             ('question', 'clarification_question', 0,
-             {"kind": "question", "message": "Unscoped question?"}),
-            ('critique', 'critique', 0, {"kind": "critique", "message": "Unscoped critique."}),):
+             {"kind": "question", "message": "Unscoped question?"}, "question.workflow"),
+            ('critique', 'critique', 0, {"kind": "critique", "message": "Unscoped critique."}, "critique.workflow"),):
             with self.subTest(label=label):
                 conversation_id = self.conversation(f"Unscoped {label}")
                 response = current_result(value, response_type, family_number)
-                result = await self._rejected_pair(conversation_id, 'Explain the collaboration workflow.', response)
+                result = await self._rejected_pair(conversation_id, 'Explain the collaboration workflow.', response, selection_group=selection_group)
                 require_terminal_notice(result, paths=["$.agent_action.task_result.response_details.task_scope"])
                 self.assertFalse(any((type(event.payload) is CollaborationLeadJudgmentPayload for event in self.history(
                     conversation_id))))
-                correction = _workflow_material(self.backend.calls[-1].payload)
+                correction = _workflow_material(self.backend.callback_payload(self.backend.calls[-1]))
                 self.assertIn("response_correction", correction)
                 hint = correction['response_correction']
                 self.assertIn('response_correction.bound_contract', hint['instruction'])
                 requirements = hint['bound_contract']['requirements']['schema_requirements']
                 self.assertIn('task_scope', json.dumps(requirements))
-                self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer."))
+                self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer.", grouped=True),
+                    control_plan=selection_plan("answer.workflow"))
                 await self.runtime.lead_turn(self.session_id, conversation_id, "Explain collaboration workflow.")
 
         conversation_id = self.conversation("Scoped workflow answer")
-        self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer."))
+        self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer.", grouped=True),
+                    control_plan=selection_plan("answer.workflow"))
         before = len(self.backend.calls)
         accepted = await self._lead_turn(conversation_id, 'Explain the collaboration workflow.')
-        self.assertEqual(len(self.backend.calls) - before, 1)
+        self.assertEqual(len(self.backend.calls) - before, 2)
         self.assertEqual(accepted.message, "Scoped workflow answer.")
         self.assertIs(accepted.trace.origin, ReplyTraceOrigin.PROVIDER)
         self.assertIs(accepted.evidence.scope, LeadOutcomeScope.WORKFLOW_META)
@@ -4761,22 +4887,24 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
             return respond
 
-        for kind, activity in (("answer", "draft"), ("critique", "review")):
+        for kind, activity, selection_group in (("answer", "draft", "answer.workflow"), ("critique", "review", "critique.workflow")):
             with self.subTest(substantive_kind=kind):
                 conversation_id = self.conversation(f"Substantive {kind}")
                 response = substantive(kind, activity)
                 rejected = await self._rejected_pair(conversation_id,
-                    'Draft core_documents/global_outline.md as three beats.', response)
+                    'Draft core_documents/global_outline.md as three beats.', response, selection_group=selection_group)
                 self.assertIsNone(rejected.proposal)
                 require_terminal_notice(rejected)
-                self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer."))
+                self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer.", grouped=True),
+                    control_plan=selection_plan("answer.workflow"))
                 await self.runtime.lead_turn(self.session_id, conversation_id, "Explain collaboration workflow.")
         ordinary_conversation = self.conversation("Mode cannot be provider-selected")
         ordinary = await self._rejected_pair(
-            ordinary_conversation, "Explore possible directions.", _exploration_outcome())
+            ordinary_conversation, "Explore possible directions.", _exploration_outcome(), selection_group="answer.workflow")
         self.assertEqual(ordinary.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
         self.assertIsNone(ordinary.exploration)
-        self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer."))
+        self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer.", grouped=True),
+                    control_plan=selection_plan("answer.workflow"))
         await self.runtime.lead_turn(self.session_id, ordinary_conversation, "Explain collaboration workflow.")
         self.backend.enqueue(lambda call, _provider: lead_fixture_response(call, { "response_type": "lead_exploration",
             "response_text": "Which ending should we explore?", "response_details": {"status": "clarification"}},
@@ -4817,7 +4945,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT))
         self.assertEqual(proposal.side_effects, (CollaborationSideEffect.PROVIDER_INVOCATION,))
         self.assertIn("cannot change writing artifacts", proposal.user_impact.lower())
-        self.assertEqual(proposal.budget.physical_calls_spent, 1)
+        self.assertEqual(proposal.budget.physical_calls_spent, 2)
         self.assertLessEqual(proposal.budget.physical_calls_spent + proposal.budget.max_additional_physical_calls,
             proposal.budget.physical_call_limit)
         self.assertEqual(tuple((item.agent_id for item in proposal.basis.agent_profiles)), (
@@ -4829,9 +4957,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         history = self.history(conversation_id)
         call_payloads = _event_payloads(history, CollaborationProviderCallPayload)
         self.assertEqual(tuple((item.state for item in call_payloads)), (
-            CollaborationProviderCallState.PREPARED, CollaborationProviderCallState.SUBMITTED))
+            CollaborationProviderCallState.PREPARED, CollaborationProviderCallState.SUBMITTED) * 2)
         self.assertEqual(tuple((item.invocation_kind for item in call_payloads)), (
-            CollaborationInvocationKind.LEAD,) * 2)
+            CollaborationInvocationKind.LEAD,) * 4)
 
     async def test_runtime_repairs_then_safely_ignores_invalid_proposals(self) -> None:
         from tests.recommendation_fixture import task_assessment
@@ -4992,8 +5120,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 response = _proposal_outcome(assignments, authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
                 if label in ('duplicate-specialist', 'duplicate-input'): response = duplicate_control(label)
                 else: response = value_control(label, assignments)
-                self.backend.enqueue(response)
-                self.backend.enqueue(response)
+                self.backend.enqueue(response, control_plan=selection_plan("consultation.authoring.review"))
+                self.backend.enqueue(response, control_plan=())
                 calls = len(self.backend.calls)
                 result = await self.runtime.lead_turn(self.session_id, conversation_id, (text + (
                 '\nSupplied story facts: Mara wants safety and fears exposure. Review the story direction against '
@@ -5002,7 +5130,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 'confirmation.')))
                 self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
                 self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
-                self.assertEqual(len(self.backend.calls) - calls, 2)
+                self.assertEqual(len(self.backend.calls) - calls, 3)
                 self.assertFalse(any(type(e.payload) is CollaborationProposal for e in self.history(conversation_id)))
                 failures = tuple(e.payload for e in self.history(conversation_id)
                                  if type(e.payload) is CollaborationLeadOutcomeFailurePayload)
@@ -5098,7 +5226,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
 
         free_id = self.conversation("Free text")
         pending = await self.proposal(free_id, text=qualified_request, authoring_assessment=assessment,)
-        self.backend.enqueue(_visible_outcome("answer", "Yes is ordinary prose."))
+        self.backend.enqueue(_visible_outcome("answer", "Yes is ordinary prose."), control_plan=selection_plan("answer.workflow"))
         answered = await self.runtime.lead_turn(self.session_id, free_id, "Yes")
         self.assertIs(answered.kind, LeadOutcomeKind.ANSWER)
         history = self.history(free_id)
@@ -5158,10 +5286,10 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         case.backend.enqueue(lambda call, _provider: lead_fixture_response(call, {
             'response_type': 'clarification_question',
             'response_text': "Which direction should the resumed task pursue?",
-            'response_details': {'used_evidence_ids': {}}}, family=0))
+            'response_details': {'used_evidence_ids': {}}}, family=0), control_plan=selection_plan("question.authoring"))
         case.backend.enqueue(native_scoped(PLOT_ARCHITECT, paths=(OUTLINE,), domains=(
             'plot_structure',), activity='draft', mutate=lambda value, _: value.update(
-            message=original.goal), authoring_assessment=_fixture_assessment()))
+            message=original.goal), authoring_assessment=_fixture_assessment()), control_plan=selection_plan("consultation.authoring.content"))
         resumed = await case.runtime.decide_lead_task(resume)
         self.assertIsNone(resumed.turn.proposal)
         receipt = case.runtime.inspect_lead_collaboration(case.session_id, conversation).discussion_context
@@ -5171,13 +5299,13 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         repeated = await case.runtime.decide_lead_task(resume)
         self.assertEqual(repeated.transition_event_id, resumed.transition_event_id)
         self.assertEqual(case.history(conversation), question_prefix)
-        self.assertEqual(len(case.backend.calls), spent + 1)
+        self.assertEqual(len(case.backend.calls), spent + 2)
         resumed = replace(resumed, turn=await case.runtime.lead_turn(
             case.session_id, conversation,
             _ADMISSION_BRIEF + "\n" + ("The selected direction stays on this same fresh revision. "
             "Draft the three outline scenes at core_documents/global_outline.md; execution needs separate confirmation."),
         ))
-        self.assertEqual(len(_submitted_calls(case.history(conversation)[len(unchanged):])), 2)
+        self.assertEqual(len(_submitted_calls(case.history(conversation)[len(unchanged):])), 4)
         self.assertEqual({event.step_id for event in case.history(conversation)[len(unchanged):]
             if type(event.payload) is CollaborationProviderCallPayload
             and event.payload.state is CollaborationProviderCallState.SUBMITTED}, {receipt.planning_step_id})
@@ -5190,12 +5318,12 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         self.assertEqual(next(item.status for item in view.available_tasks
                               if item.ref.task_id == current.ref.task_id), "active")
         self.assertIsNone(case.runtime.inspect_lead_collaboration( case.session_id, conversation).discussion_context)
-        self.assertEqual(len(case.backend.calls), spent + 2)
+        self.assertEqual(len(case.backend.calls), spent + 4)
         current_prefix = case.history(conversation)
         with self.assertRaises(ValueError):
             await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(original.ref, task.LeadTaskAction.HOLD))
         self.assertEqual(case.history(conversation), current_prefix)
-        self.assertEqual(len(case.backend.calls), spent + 2)
+        self.assertEqual(len(case.backend.calls), spent + 4)
         await case._decide(resumed.turn, CollaborationConfirmationDecision.REJECT)
         current = next(item for item in case.runtime.inspect_lead_collaboration(case.session_id, conversation).available_tasks
                        if item.ref.task_id == original.ref.task_id)
@@ -5209,7 +5337,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                                                                              text="Cannot revive discarded authority."))
         case.backend.enqueue(native_scoped(
             EXECUTION_SPECIALIST, paths=("manuscript/part-01/opening.md",), domains=("tone_execution",), activity="draft",
-            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded prose drafting",)),))
+            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded prose drafting",)),), control_plan=selection_plan("consultation.authoring.content"))
         created = await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(
             retired.ref, task.LeadTaskAction.NEW_TASK,
             text=_ADMISSION_BRIEF + "\n" + ("Start separate prose work. Draft the opening prose at "
@@ -5219,8 +5347,8 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         self.assertEqual(created.turn.proposal.authoring_scope.domains, (ArtifactReviewDomain.TONE_EXECUTION,))
         self.assertEqual(next(item for item in case.runtime.inspect_lead_collaboration(case.session_id, conversation).available_tasks
                               if item.ref.task_id == retired.ref.task_id).status, "discarded")
-        self.assertEqual(len(_submitted_calls(case.history(conversation))), len(_submitted_calls(prefix)) + 3)
-        self.assertEqual(len(case.backend.calls), spent + 3)
+        self.assertEqual(len(_submitted_calls(case.history(conversation))), len(_submitted_calls(prefix)) + 6)
+        self.assertEqual(len(case.backend.calls), spent + 6)
         self.assertEqual(StoryRuntime(case.control_workspace, case.backend).inspect_lead_collaboration(
             case.session_id, conversation), case.runtime.inspect_lead_collaboration(case.session_id, conversation))
 
@@ -5358,7 +5486,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         self.assertEqual(saved.scope, scope)
         self.assertEqual(case.history(conversation)[:len(prefix)], prefix)
         self.assertEqual(len(_submitted_calls(case.history(conversation))), len(case.backend.calls))
-        self.assertEqual(len(case.backend.calls), 4)
+        self.assertEqual(len(case.backend.calls), 5)
         self.assertFalse(any(isinstance(event.payload, CollaborationAssignmentDispatchPayload)
                              for event in case.history(conversation)))
 
@@ -5367,11 +5495,11 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
 class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
     async def test_domain_rejection_without_repair_persists_safe_notice(self) -> None:
         conversation_id = self.conversation("Direct lead domain rejection")
-        self.backend.enqueue(_visible_outcome("answer", ""))
-        with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 1):
+        self.backend.enqueue(_visible_outcome("answer", ""), control_plan=selection_plan("answer.workflow"))
+        with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 2):
             result = await self.runtime.lead_turn(self.session_id, conversation_id, "Reject an empty answer.",)
         self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
-        self.assertEqual(len(self.backend.calls), 1)
+        self.assertEqual(len(self.backend.calls), 2)
         self.assertTrue(result.validation_details)
         self.assertIn(("$.agent_action.task_result.response_text: "
                       "expected at least 1 characters, got 0"), result.validation_details[0])
@@ -5393,11 +5521,11 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         reopened = compose_filesystem_conversation_storage(self.control_workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
         submitted = _submitted_calls(history)
-        self.assertEqual(len(submitted), 1)
-        self.assertEqual(submitted[0].validation_details, result.validation_details)
+        self.assertEqual(len(submitted), 2)
+        self.assertEqual(submitted[1].validation_details, result.validation_details)
         notices = _history_validation_details(history)
         self.assertEqual(notices, result.validation_details)
-        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 1)
+        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 2)
         def rejected(value, path, requirement, error=BackendProtocolError):
             with self.assertRaises(error) as caught: self.runtime._decode_lead_outcome(json.dumps(value))
             issues = failure_issues(caught.exception, path="$.action.result")
@@ -5466,8 +5594,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
     async def test_republishing_domain_notice_is_idempotent(self) -> None:
         conversation_id = self.conversation("Idempotent domain notice")
-        self.backend.enqueue(_visible_outcome("answer", ""))
-        self.backend.enqueue(_visible_outcome("answer", "Accepted after repair."))
+        self.backend.enqueue(_visible_outcome("answer", ""), control_plan=selection_plan("answer.workflow"))
+        self.backend.enqueue(_visible_outcome("answer", "Accepted after repair."), control_plan=())
         original_publish = orchestrator_module._AccountingContextProvider.publish_validation_messages
         publish_attempts = 0
 
@@ -5482,13 +5610,13 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             result = await self.runtime.lead_turn(self.session_id, conversation_id, "Repair an empty answer.",)
         self.assertEqual(publish_attempts, 1)
         self.assertEqual(result.message, "Accepted after repair.")
-        self.assertEqual(len(self.backend.calls), 2)
+        self.assertEqual(len(self.backend.calls), 3)
         reopened = compose_filesystem_conversation_storage(self.control_workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
         notices = _history_validation_details(history)
         self.assertEqual(len(notices), 1)
         self.assertEqual(notices, result.validation_details)
-        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 2)
+        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 3)
 
     async def _leave_genuine_confirmation_before_dispatch(self, proposed) -> None:
         with (mock.patch.object(self.runtime, '_execute_confirmed_step_locked',
@@ -5510,7 +5638,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         await self._leave_genuine_confirmation_before_dispatch(proposed)
         self.assertEqual(len(self.backend.calls), before_calls)
         confirmed_history = self.history(conversation_id)
-        restart_backend = _LeadBackend()
+        restart_backend = _LeadBackend(test_case=self)
         restarted = StoryRuntime(self.control_workspace, restart_backend)  # type: ignore[arg-type]
 
         restored = await restarted.lead_turn(self.session_id, conversation_id, "Resume safely.")
@@ -5595,7 +5723,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 await self._leave_genuine_confirmation_before_dispatch(proposed)
                 calls = len(self.backend.calls)
                 retained = await self.runtime.lead_turn(self.session_id, conversation_id, "Inspect confirmation.")
-                restart_backend = _LeadBackend()
+                restart_backend = _LeadBackend(test_case=self)
                 restarted = StoryRuntime(self.control_workspace, restart_backend)  # type: ignore[arg-type]
                 restored = await restarted.lead_turn(self.session_id, conversation_id, "Resume confirmation.")
                 self.assertEqual(len(self.backend.calls), calls)
@@ -5659,14 +5787,14 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         for label, initial_script, rejection_code in cases:
             with self.subTest(label=label):
                 rejected_body = f"REJECTED_BODY_MUST_NOT_PERSIST_OR_BE_RESENT_{label}"
-                backend = _LeadBackend(persist_context_threads=True)
+                backend = _LeadBackend(persist_context_threads=True, test_case=self)
                 runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
                 conversation_id = self.conversation(f"Same-turn correction {label}")
-                backend.enqueue(*initial_script)
+                backend.enqueue(*initial_script, control_plan=selection_plan("answer.workflow"))
                 correction_records: list[tuple[str, str, str]] = []
 
                 def corrected(call: ContextProviderCallRequest, _provider: object) -> str:
-                    material = _workflow_material(call.payload)
+                    material = _workflow_material(_provider.callback_payload(call))
                     correction = material["response_correction"]
                     correction_records.append( (
                             correction["rejection_code"],  # type: ignore[index]
@@ -5675,7 +5803,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                         ))
                     return _visible_outcome('answer', f'Corrected {label} answer.')(call, _provider)
 
-                backend.enqueue(corrected)
+                backend.enqueue(corrected, control_plan=())
                 result = await runtime.lead_turn(self.session_id, conversation_id, "One ordinary user message.",)
 
                 history = self.history(conversation_id)
@@ -5687,10 +5815,11 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
                 self.assertEqual(result.message, f"Corrected {label} answer.")
                 self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD,)
-                self.assertEqual(len(backend.calls), len(initial_script) + 1)
+                self.assertEqual(len(backend.calls), len(initial_script) + 2)
                 self.assertEqual(len(backend.providers), 2)
                 self.assertIn("Return submit_result now", correction_records[0][1])
                 self.assertIsNone(backend.calls[-1].expected_thread_id)
+                self.assertEqual(backend.finalizers[0].calls, [("accepted", None)])
                 self.assertEqual(backend.finalizers[-2].calls, [("rejected", rejection_code)],)
                 self.assertEqual(backend.finalizers[-1].calls, [("accepted", None)])
                 self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
@@ -5717,14 +5846,14 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     item.response.validation_details for item in result.public_responses)))
                 self.assertNotIn(rejected_body, json.dumps(dict(backend.calls[-1].payload), ensure_ascii=False),)
 
-        backend = _LeadBackend()
+        backend = _LeadBackend(test_case=self)
         runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
         conversation_id = self.conversation("No correction needed")
-        backend.enqueue(_visible_outcome("answer", "First response accepted."))
+        backend.enqueue(_visible_outcome("answer", "First response accepted."), control_plan=selection_plan("answer.workflow"))
         result = await runtime.lead_turn(self.session_id, conversation_id, "Accept the first valid answer.",)
         self.assertEqual(result.message, "First response accepted.")
-        self.assertEqual(len(backend.calls), 1)
-        self.assertEqual(backend.finalizers[0].calls, [("accepted", None)])
+        self.assertEqual(len(backend.calls), 2)
+        self.assertEqual([item.calls for item in backend.finalizers], [[("accepted", None)], [("accepted", None)]])
 
 
         for failure in (_SubmittedFailure(RuntimeError("known selected-premise failure")), _SubmittedFailure(asyncio.CancelledError("selected-premise cancellation"))):
@@ -5732,7 +5861,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             _, reported = await _confirmed_premise(self, conversation)
             selection = _premise_choice(reported, ("core_documents/global_outline.md",))
             prefix = self.history(conversation)
-            self.backend.enqueue(failure)
+            self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, failure),))
             if isinstance(failure.failure, asyncio.CancelledError):
                 with self.assertRaises(asyncio.CancelledError):
                     await self.runtime.lead_turn(self.session_id, conversation, "Draft from the selected premise.", premise_selection=selection)
@@ -5743,10 +5872,10 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             self.assertIsNotNone(project_collaboration_history(history).premise_selection)
             with self.assertRaises(ValueError):
                 project_collaboration_history(tuple(event for event in history if event.kind is not CollaborationEventKind.PREMISE_SELECTION))
-            self.backend.enqueue(_visible_outcome("answer", "The known failure is closed; this is a fresh ordinary turn."))
+            self.backend.enqueue(_visible_outcome("answer", "The known failure is closed; this is a fresh ordinary turn."), control_plan=selection_plan("answer.workflow"))
             continued = await self.runtime.lead_turn(self.session_id, conversation, "Report current workflow state.")
             self.assertIs(continued.kind, LeadOutcomeKind.ANSWER)
-            self.assertEqual(len(_submitted_calls(self.history(conversation)[len(history):])), 1)
+            self.assertEqual(len(_submitted_calls(self.history(conversation)[len(history):])), 2)
             self.assertEqual(self.history(conversation)[:len(history)], history)
 
 
@@ -5756,7 +5885,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             if isinstance(failure.failure, asyncio.CancelledError):
                 renewed = replace(renewed, choice_policy=premise.PremiseChoicePolicy.DELEGATED_MINOR, option_id=None, material_digest=None, allowed_choices=(premise.PremiseAllowedChoice(reported.premise_report.options[0].option_id, reported.premise_report.options[0].material_digest),))
             self.backend.enqueue(_selected_premise_proposal(renewed,
-                authoring_assessment=_fixture_assessment(foundation_ids=('selected_premise',))))
+                authoring_assessment=_fixture_assessment(foundation_ids=('selected_premise',))), control_plan=selection_plan("consultation.authoring.content"))
             recovered = await self.runtime.lead_turn(self.session_id, conversation,
                 'Fresh proposal from the same whole report.' + '\n' + _ADOPTION_DIRECTION,premise_selection=renewed)
             self.assertIs(recovered.kind, LeadOutcomeKind.PROPOSAL, recovered)
@@ -5767,7 +5896,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             self.assertNotEqual(capture.authoring_task_id, previous_capture.authoring_task_id)
             self.assertEqual(recovered.proposal.basis.shared_premises[0].selected_premise, capture.selected_text)
             self.assertEqual(self.history(conversation)[:len(recovery_prefix)], recovery_prefix)
-            self.assertEqual(len(_submitted_calls(self.history(conversation)[len(recovery_prefix):])), 1)
+            self.assertEqual(len(_submitted_calls(self.history(conversation)[len(recovery_prefix):])), 2)
             conflict = premise.PremiseConflict(capture.slot_id, capture.capture_digest, "The owner cannot draft this selected whole premise consistently.")
             self.backend.enqueue_for(PLOT_ARCHITECT, lambda call, provider: wire_answer({"assessment": "conflict", "message": conflict.reason, "premise_conflicts": premise.premise_value_to_dict((conflict,))}, wire_contract_id(call.payload)))
             self.backend.enqueue_for(CHARACTER_CUSTODIAN, lambda call, provider: wire_answer({"assessment": "drafted", "message": capture.selected_text, "premise_conflicts": []}, wire_contract_id(call.payload)))
@@ -5781,7 +5910,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             self.assertIsNone(held.turn.story_commit_request)
 
     async def test_pre_submission_correction_failure_closes_first_rejected_call(self) -> None:
-        backend = _LeadBackend(persist_context_threads=True)
+        backend = _LeadBackend(persist_context_threads=True, test_case=self)
         runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
         conversation_id = self.conversation("Pre-submission correction failure")
         rejected_body = "PRE_SUBMISSION_REJECTED_BODY"
@@ -5790,8 +5919,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             return json.dumps({'action': {'kind': 'answer', 'result': [{'message': rejected_body}],
                 'used_handles': []}}, separators=(',', ':'))
 
-        backend.enqueue(malformed)
-        backend.enqueue(RuntimeError("corrective call failed before submission"))
+        backend.enqueue(malformed, control_plan=selection_plan("answer.workflow"))
+        backend.enqueue(RuntimeError("corrective call failed before submission"), control_plan=())
         result = await runtime.lead_turn(self.session_id, conversation_id, 'Close the rejected result without replay.')
 
         history = self.history(conversation_id)
@@ -5802,29 +5931,29 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertIsNone(result.state)
         self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
-        self.assertEqual(len(backend.calls), 2)
+        self.assertEqual(len(backend.calls), 3)
         self.assertEqual(len(backend.providers), 2)
-        self.assertEqual(tuple(event.ordinal for event in prepared), (1, 2))
-        self.assertEqual(tuple(event.ordinal for event in submitted), (1,))
-        self.assertEqual(prepared[0].call_id, submitted[0].call_id)
-        self.assertNotEqual(prepared[1].call_id, submitted[0].call_id)
+        self.assertEqual(tuple(event.ordinal for event in prepared), (1, 2, 3))
+        self.assertEqual(tuple(event.ordinal for event in submitted), (1, 2))
+        self.assertEqual(prepared[1].call_id, submitted[1].call_id)
+        self.assertNotEqual(prepared[2].call_id, submitted[1].call_id)
         self.assertEqual(len(failures), 1)
         self.assertIs(failures[0].code, CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,)
-        self.assertEqual(failures[0].invocation_id, submitted[0].invocation_id)
-        self.assertEqual(failures[0].call_id, submitted[0].call_id)
-        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 1,)
-        self.assertEqual(tuple((finalizer.calls for finalizer in backend.finalizers)), ([(
+        self.assertEqual(failures[0].invocation_id, submitted[1].invocation_id)
+        self.assertEqual(failures[0].call_id, submitted[1].call_id)
+        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 2,)
+        self.assertEqual(tuple((finalizer.calls for finalizer in backend.finalizers)), ([('accepted', None)], [(
             'rejected', ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)],))
         self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
         self.assertNotIn(rejected_body, repr(history))
 
-        backend.enqueue(_visible_outcome("answer", "Fresh turn accepted."))
+        backend.enqueue(_visible_outcome("answer", "Fresh turn accepted."), control_plan=selection_plan("answer.workflow"))
         fresh_result = await runtime.lead_turn(self.session_id, conversation_id, "Proceed with one fresh turn.",)
         fresh_history = self.history(conversation_id)
         self.assertIs(fresh_result.kind, LeadOutcomeKind.ANSWER)
         self.assertEqual(fresh_result.message, "Fresh turn accepted.")
-        self.assertEqual(len(backend.calls), 3)
-        self.assertIsNone(backend.calls[-1].expected_thread_id)
+        self.assertEqual(len(backend.calls), 5)
+        self.assertIsNone(backend.calls[-2].expected_thread_id)
         self.assertEqual(backend.finalizers[-1].calls, [("accepted", None)])
         self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
         self.assertEqual(tuple((event.payload.content for event in fresh_history if type(
@@ -5834,7 +5963,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertNotIn(rejected_body, json.dumps(dict(backend.calls[-1].payload), ensure_ascii=False),)
 
     async def test_second_returned_rejection_closes_against_last_call(self) -> None:
-        backend = _LeadBackend(persist_context_threads=True)
+        backend = _LeadBackend(persist_context_threads=True, test_case=self)
         runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
         conversation_id = self.conversation("Second rejection closes")
 
@@ -5845,8 +5974,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
             return respond
 
-        backend.enqueue(malformed("FIRST_REJECTED_BODY"))
-        backend.enqueue(malformed("SECOND_REJECTED_BODY"))
+        backend.enqueue(malformed("FIRST_REJECTED_BODY"), control_plan=selection_plan("answer.workflow"))
+        backend.enqueue(malformed("SECOND_REJECTED_BODY"), control_plan=())
         result = await runtime.lead_turn(self.session_id, conversation_id, 'One message with two rejected results.')
 
         history = self.history(conversation_id)
@@ -5854,15 +5983,15 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         failures = _event_payloads(history, CollaborationLeadOutcomeFailurePayload)
         self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
-        self.assertEqual(len(backend.calls), 2)
+        self.assertEqual(len(backend.calls), 3)
         self.assertEqual(len(backend.providers), 2)
-        self.assertEqual(tuple(event.ordinal for event in submitted), (1, 2))
+        self.assertEqual(tuple(event.ordinal for event in submitted), (1, 2, 3))
         self.assertEqual(len({event.invocation_id for event in submitted}), 1)
         self.assertEqual(len(failures), 1)
         self.assertIs(failures[0].code, CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,)
         self.assertEqual(failures[0].invocation_id, submitted[-1].invocation_id)
         self.assertEqual(failures[0].call_id, submitted[-1].call_id)
-        self.assertEqual(tuple((finalizer.calls for finalizer in backend.finalizers)), ([(
+        self.assertEqual(tuple((finalizer.calls for finalizer in backend.finalizers)), ([('accepted', None)], [(
             'rejected', ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)], [('rejected',
             ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)]))
         self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1", "thread-lead-2"],)
@@ -5878,11 +6007,11 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 return _bound_rejection_envelope(call, value)
             return respond
 
-        self.backend.enqueue(invalid([secrets[0]]))
-        self.backend.enqueue(invalid({"unknown": secrets[1]}))
+        self.backend.enqueue(invalid([secrets[0]]), control_plan=selection_plan("answer.workflow"))
+        self.backend.enqueue(invalid({"unknown": secrets[1]}), control_plan=())
         result = await self._lead_turn(conversation_id, 'A rejected response grants no action.')
         self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
-        self.assertEqual(len(self.backend.calls), 2)
+        self.assertEqual(len(self.backend.calls), 3)
         self.assertGreaterEqual(len(result.validation_details), 2)
         self.assertTrue(result.validation_details[0].startswith("Original response"))
         self.assertTrue(result.validation_details[-1].startswith("Repair response"))
@@ -5892,18 +6021,18 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         reopened = compose_filesystem_conversation_storage(self.control_workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
         projected = project_collaboration_history(history)
-        self.assertEqual(projected.physical_calls_spent, 2)
+        self.assertEqual(projected.physical_calls_spent, 3)
         prepared = tuple(event.payload for event in history if type(event.payload) is CollaborationProviderCallPayload
                          and event.payload.state is CollaborationProviderCallState.PREPARED)
         submitted = _submitted_calls(history)
-        self.assertEqual(len(prepared), 2)
-        self.assertEqual(len(submitted), 2)
+        self.assertEqual(len(prepared), 3)
+        self.assertEqual(len(submitted), 3)
         self.assertTrue(all(not payload.validation_details for payload in prepared))
         for before, after in zip(prepared, submitted, strict=True):
             self.assertEqual(before, replace(after, state=CollaborationProviderCallState.PREPARED,
                 validation_details=()))
-        self.assertTrue(submitted[0].validation_details[0].startswith("Original response"))
-        self.assertTrue(submitted[1].validation_details[0].startswith("Repair response"))
+        self.assertTrue(submitted[1].validation_details[0].startswith("Original response"))
+        self.assertTrue(submitted[2].validation_details[0].startswith("Repair response"))
         self.assertEqual(tuple((chunk for payload in submitted for chunk in payload.validation_details)),
             result.validation_details)
         messages = tuple(event.payload.content for event in history
@@ -5986,24 +6115,24 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             'Accepted after search.'), False), ('invalid_object_then_rejected', invalid_object,invalid_object, True))
         for label, original, repair, rejected_repair in cases:
             with self.subTest(label=label):
-                backend = _LeadBackend()
+                backend = _LeadBackend(test_case=self)
                 runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
                 conversation_id = self.conversation(label)
-                backend.enqueue(_search_history, original)
-                backend.enqueue(repair)
+                backend.enqueue(_search_history, original, control_plan=selection_plan("answer.workflow", before_script_response=1))
+                backend.enqueue(repair, control_plan=())
                 result = await runtime.lead_turn(self.session_id, conversation_id, 'Search before a rejected answer.')
                 reopened = compose_filesystem_conversation_storage(self.control_workspace).event_store
                 history = reopened.read(self.session_id, conversation_id)
                 project_collaboration_history(history)
                 submitted = _submitted_calls(history)
-                self.assertEqual(len(backend.calls), 3)
-                self.assertEqual(len(submitted), 3)
+                self.assertEqual(len(backend.calls), 4)
+                self.assertEqual(len(submitted), 4)
                 self.assertEqual(submitted[0].validation_details, ())
-                self.assertTrue(submitted[1].validation_details[0].startswith("Original response"))
+                self.assertTrue(submitted[2].validation_details[0].startswith("Original response"))
                 if rejected_repair:
-                    self.assertTrue(submitted[2].validation_details[0].startswith("Repair response"))
+                    self.assertTrue(submitted[3].validation_details[0].startswith("Repair response"))
                 else:
-                    self.assertEqual(submitted[2].validation_details, ())
+                    self.assertEqual(submitted[3].validation_details, ())
                     self.assertEqual(result.message, "Accepted after search.")
                 expected = tuple(chunk for payload in submitted for chunk in payload.validation_details)
                 self.assertEqual(result.validation_details, expected)
@@ -6024,15 +6153,15 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             value['response_text'] = 'PRIVATE_PROPOSAL_TEXT'
             return json.dumps(response, separators=(',', ':'))
 
-        self.backend.enqueue(invalid_proposal)
-        self.backend.enqueue(invalid_proposal)
+        self.backend.enqueue(invalid_proposal, control_plan=selection_plan("consultation.authoring.review"))
+        self.backend.enqueue(invalid_proposal, control_plan=())
         result = await self.runtime.lead_turn(self.session_id, conversation_id, "Propose specialist work.",)
         self.assertTrue(result.validation_details)
         self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
         history = self.history(conversation_id)
         self.assertFalse(any(type(event.payload) is CollaborationProposal for event in history))
         self.assertNotIn("PRIVATE_PROPOSAL_TEXT", repr(result.validation_details))
-        self.assertEqual(len(self.backend.calls), 2)
+        self.assertEqual(len(self.backend.calls), 3)
 
     async def test_untrusted_answer_diagnostic_cannot_publish_private_text(self) -> None:
         private = "PRIVATE_CALLBACK_SECRET_한🙂"
@@ -6042,7 +6171,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                                        ("callback", ValueError(), (private,))):
             conversation_id = self.conversation(f"Diagnostic {label} privacy")
             response = _visible_outcome("answer", "Schema-valid workflow response.")
-            self.backend.enqueue(response, response)
+            self.backend.enqueue(response, control_plan=selection_plan("answer.workflow"))
+            self.backend.enqueue(response, control_plan=())
             with (mock.patch.object(StoryRuntime, "_decode_lead_outcome", side_effect=error) as decoder,
                   mock.patch.object(StoryRuntime, "_lead_outcome_validation_details",
                                     return_value=findings) as diagnostic):
@@ -6067,8 +6197,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             details['task_scope']['paths'] = [7] * 1500
             return json.dumps(value, separators=(",", ":"))
 
-        self.backend.enqueue(many_independent_issues)
-        self.backend.enqueue(_visible_outcome("answer", "Accepted after repair."))
+        self.backend.enqueue(many_independent_issues, control_plan=selection_plan("answer.workflow"))
+        self.backend.enqueue(_visible_outcome("answer", "Accepted after repair."), control_plan=())
         result = await self.runtime.lead_turn(
             self.session_id, conversation_id, "Explain the workflow.",)
         self.assertEqual(result.message, "Accepted after repair.")
@@ -6078,9 +6208,9 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         reopened = compose_filesystem_conversation_storage(self.control_workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
         submitted = _submitted_calls(history)
-        self.assertEqual(len(submitted), 2)
-        self.assertEqual(submitted[0].validation_details, result.validation_details)
-        self.assertEqual(submitted[1].validation_details, ())
+        self.assertEqual(len(submitted), 3)
+        self.assertEqual(submitted[1].validation_details, result.validation_details)
+        self.assertEqual(submitted[2].validation_details, ())
         self.assertIn('$.agent_action.task_result.response_details.task_scope.paths[1499]',
                       "\n".join(result.validation_details))
 
@@ -6095,12 +6225,12 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             details['task_scope']['paths'] = [7] * 12000
             return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
-        self.backend.enqueue(huge_invalid_array)
-        self.backend.enqueue(_visible_outcome("answer", "Accepted after repair."))
+        self.backend.enqueue(huge_invalid_array, control_plan=selection_plan("answer.workflow"))
+        self.backend.enqueue(_visible_outcome("answer", "Accepted after repair."), control_plan=())
         result = await self.runtime.lead_turn(
             self.session_id, conversation_id, "Explain the workflow.",)
         self.assertEqual(result.message, "Accepted after repair.")
-        self.assertEqual(len(self.backend.calls), 2)
+        self.assertEqual(len(self.backend.calls), 3)
         details = result.validation_details
         report = "\n".join(details)
         self.assertTrue(details)
@@ -6133,10 +6263,10 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         reopened = compose_filesystem_conversation_storage(self.control_workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
         submitted = _submitted_calls(history)
-        self.assertEqual(len(submitted), 2)
-        self.assertTrue(submitted[0].validation_details == details,
+        self.assertEqual(len(submitted), 3)
+        self.assertTrue(submitted[1].validation_details == details,
                         "durable provider report differs from returned report")
-        self.assertEqual(submitted[1].validation_details, ())
+        self.assertEqual(submitted[2].validation_details, ())
         notices = tuple((event.payload for event in history if type(
             event.payload) is CollaborationMessagePayload and event.payload.validation_details))
         self.assertEqual(len(notices), len(details))
@@ -6151,14 +6281,14 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertNotIn(secret, repr(tuple(item.response.validation_details for item in result.public_responses)))
 
     async def test_minimal_reference_answer_needs_no_provider_correction(self) -> None:
-        backend = _LeadBackend(persist_context_threads=True)
+        backend = _LeadBackend(persist_context_threads=True, test_case=self)
         runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
         conversation_id = self.conversation("Referenced correction")
 
         def incomplete(call: ContextProviderCallRequest, _provider: object) -> str:
             return _visible_outcome('answer', 'Incomplete referenced result.')(call, _provider)
 
-        backend.enqueue(incomplete)
+        backend.enqueue(incomplete, control_plan=selection_plan("answer.workflow"))
         result = await runtime.lead_turn(self.session_id, conversation_id,
             'Review ${core_documents/global_outline.md} before answering.')
 
@@ -6166,15 +6296,21 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         submitted = _submitted_calls(history)
         self.assertEqual(result.message, "Incomplete referenced result.")
         self.assertEqual(len(backend.providers), 1)
-        self.assertEqual(len(backend.calls), 1)
+        self.assertEqual(len(backend.calls), 2)
         self.assertEqual(len(backend.reference_contexts), 1)
-        self.assertEqual(tuple(event.ordinal for event in submitted), (1,))
+        self.assertEqual(tuple(event.ordinal for event in submitted), (1, 2))
         self.assertEqual(len({event.invocation_id for event in submitted}), 1)
         self.assertEqual(len(backend.reference_calls), 1)
         self.assertEqual(backend.finalizers[0].calls, [("accepted", None)])
+        self.assertEqual(backend.finalizers[1].calls, [("accepted", None)])
         self.assertFalse(any(type(event.payload) is CollaborationLeadOutcomeFailurePayload for event in history))
 
     async def test_response_correction_requires_capacity(self) -> None:
+        from contextlib import nullcontext
+        from story_writing_agents.lead_schema_groups import LeadGroupPhase
+        original_factory = orchestrator_module._lead_call_contract_factory
+        def single_phase_finalizer_factory(*args, **kwargs):
+            return original_factory(*args, **{**kwargs, "schema_group_protocol": False})
         def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
             return json.dumps({'action': {'kind': 'answer', 'result': [], 'used_handles': []}}, separators=(',', ':'))
 
@@ -6182,19 +6318,27 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             ('action_exhausted', _search_history, ContextProviderTerminalCode.ACTION_EXHAUSTED))
         for label, response, expected_code in cases:
             with self.subTest(label=label):
-                backend = _LeadBackend()
+                backend = _LeadBackend(test_case=self)
                 runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
                 conversation_id = self.conversation(label)
                 if label == "action_exhausted": backend.enqueue(malformed)
-                backend.enqueue(response)
-                with _object_positional_patch(
-                    orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT",2 if label == "action_exhausted" else 1):
+                backend.enqueue(response, **({} if label == "action_exhausted" else {
+                    "control_plan": selection_plan("answer.workflow")}))
+                # 현재 남아 있는 single-phase physical-finalizer 경계 한 row만 검증한다.
+                boundary = (mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=single_phase_finalizer_factory)
+                    if label == "action_exhausted" else nullcontext())
+                with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 2), boundary:
                     result = await runtime.lead_turn(self.session_id, conversation_id,
                         'Do not exceed the remaining capacity.')
                 self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN,)
-                self.assertEqual(len(backend.calls), 2 if label == "action_exhausted" else 1)
+                self.assertEqual(len(backend.calls), 2)
                 self.assertEqual(len(backend.providers), 2 if label == "action_exhausted" else 1)
+                self.assertIs(orchestrator_module._lead_call_contract_factory, original_factory)
+                self.assertEqual(tuple(call.contract.schema_group_phase for call in backend.calls),
+                    (None, None) if label == "action_exhausted" else (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
                 finalized = [[("rejected", expected_code)]]
+                if label != "action_exhausted":
+                    finalized.insert(0, [("accepted", None)])
                 if label == "action_exhausted":
                     finalized.insert(0, [("rejected", ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)])
                 self.assertEqual([item.calls for item in backend.finalizers], finalized)
@@ -6212,11 +6356,12 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             return indexed_response({"action_type": "submit_result", "task_result": [private]},
                 outer_schema_id=outer, inner_schema_id=inner, contract=_call.contract)
 
-        self.backend.enqueue(malformed)
-        with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 1):
+        self.backend.enqueue(malformed, control_plan=selection_plan("answer.workflow"))
+        with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 2), \
+                mock.patch.object(orchestrator_module, "_CONTEXT_INVOCATION_CALL_LIMIT", 2):
             result = await self._lead_turn(conversation_id, 'Reject an invalid result without another provider call.')
         self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
-        self.assertEqual(len(self.backend.calls), 1)
+        self.assertEqual(len(self.backend.calls), 2)
         self.assertEqual(len(self.backend.providers), 1)
         self.assertEqual(len(result.validation_details), 1)
         self.assertTrue(result.validation_details[0].startswith("Original response"))
@@ -6225,10 +6370,10 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
         reopened = compose_filesystem_conversation_storage(self.control_workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
-        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 1)
+        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 2)
         submitted = _submitted_calls(history)
-        self.assertEqual(len(submitted), 1)
-        self.assertEqual(submitted[0].validation_details, result.validation_details)
+        self.assertEqual(len(submitted), 2)
+        self.assertEqual(submitted[1].validation_details, result.validation_details)
         messages = tuple(event.payload.content for event in history
                          if type(event.payload) is CollaborationMessagePayload)
         self.assertTrue(any("Original response" in message for message in messages))
@@ -6270,7 +6415,10 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             start = len(self.backend.calls)
             failures.clear()
             invoked_limits.clear()
-            self.backend.enqueue(*responses)
+            if label == "generate":
+                self.backend.enqueue(responses[1], control_plan=selection_plan("answer.workflow"))
+            else:
+                self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, responses[0]),))
             if label == "select-frozen-context":
                 self.backend.enqueue()
             with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory), \
@@ -6309,8 +6457,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
         await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
-        restart_backend = _LeadBackend()
-        restart_backend.enqueue(_visible_outcome("answer"))
+        restart_backend = _LeadBackend(test_case=self)
+        restart_backend.enqueue(_visible_outcome("answer"), control_plan=selection_plan("answer.workflow"))
         restarted = StoryRuntime(self.control_workspace, restart_backend)  # type: ignore[arg-type]
 
         result = await restarted.lead_turn(self.session_id, conversation_id,
@@ -6318,27 +6466,27 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         self.assertIsNone(result.state)
-        self.assertEqual(len(restart_backend.calls), 1)
+        self.assertEqual(len(restart_backend.calls), 2)
 
     async def test_unstarted_prepared_and_submitted_requests_never_replay(self) -> None:
         for stage in ("unstarted", "prepared"):
             with self.subTest(stage=stage):
                 conversation = self.conversation(stage)
-                backend = _LeadBackend(bind_failure=RuntimeError("bind failed") if stage == "unstarted" else None)
+                backend = _LeadBackend(bind_failure=RuntimeError("bind failed") if stage == "unstarted" else None, test_case=self)
                 runtime = StoryRuntime(self.control_workspace, backend)
                 if stage == "unstarted":
                     with self.assertRaisesRegex(RuntimeError, "bind failed"):
                         await runtime.lead_turn(self.session_id, conversation, "Retain the original request.")
                 else:
-                    backend.enqueue(BackendProtocolError("failed before submission"))
+                    backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, BackendProtocolError("failed before submission")),))
                     result = await runtime.lead_turn(self.session_id, conversation, "Retain the original request.")
                     self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
                     self.assertEqual(json.loads(result.message), {
                     "code": "provider_failed", "language": None, "task_revisions": [],"state": "rejected", "paths": []})
 
                     # Non-protocol unexpected errors must NOT leak raw exception text into result.message
-                    unredacted_backend = _LeadBackend()
-                    unredacted_backend.enqueue(RuntimeError("/sensitive/file/path.db"))
+                    unredacted_backend = _LeadBackend(test_case=self)
+                    unredacted_backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, RuntimeError("/sensitive/file/path.db")),))
                     unredacted_runtime = StoryRuntime(self.control_workspace, unredacted_backend)
                     unredacted_conv = self.conversation("unredacted_check")
                     unredacted_result = await unredacted_runtime.lead_turn(self.session_id, unredacted_conv, "Request with unredacted failure.")
@@ -6351,12 +6499,12 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 self.assertIs(closure[0].code, CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED
                               if stage == "unstarted" else CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED)
                 self.assertEqual(project_collaboration_history(prefix).physical_calls_spent, 0)
-                restarted_backend = _LeadBackend()
-                restarted_backend.enqueue(_visible_outcome("answer"))
+                restarted_backend = _LeadBackend(test_case=self)
+                restarted_backend.enqueue(_visible_outcome("answer"), control_plan=selection_plan("answer.workflow"))
                 restarted = StoryRuntime(self.control_workspace, restarted_backend)
                 result = await restarted.lead_turn(self.session_id, conversation, "Explicit new request.")
                 self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
-                self.assertEqual(len(restarted_backend.calls), 1)
+                self.assertEqual(len(restarted_backend.calls), 2)
                 self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
 
         def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
@@ -6370,12 +6518,15 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         for corrective in (False, True):
             for label, failure_factory in cases:
                 with self.subTest(corrective=corrective, failure=label):
-                    backend = _LeadBackend(persist_context_threads=True)
+                    backend = _LeadBackend(persist_context_threads=True, test_case=self)
                     runtime = StoryRuntime(self.control_workspace, backend)
                     conversation = self.conversation(f"{corrective}-{label}")
                     original = f"Retain original {corrective}-{label} request."
-                    if corrective: backend.enqueue(malformed)
-                    backend.enqueue(failure_factory())
+                    if corrective:
+                        backend.enqueue(malformed, control_plan=selection_plan("answer.workflow"))
+                        backend.enqueue(failure_factory(), control_plan=())
+                    else:
+                        backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, failure_factory()),))
                     if label == "cancelled":
                         with self.assertRaises(asyncio.CancelledError):
                             await runtime.lead_turn(self.session_id, conversation, original)
@@ -6387,7 +6538,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     submitted = list(_submitted_calls(prefix))
                     closure = [event.payload for event in prefix
                                if type(event.payload) is CollaborationLeadOutcomeFailurePayload]
-                    self.assertEqual(len(backend.calls), 2 if corrective else 1)
+                    self.assertEqual(len(backend.calls), 3 if corrective else 1)
                     self.assertEqual(len(submitted), len(backend.calls))
                     self.assertEqual(len(closure), 1)
                     self.assertEqual(closure[0].call_id, submitted[-1].call_id)
@@ -6396,15 +6547,16 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                         "timed_out": CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT,
                     }.get(label, CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED))
                     if corrective:
-                        self.assertEqual(backend.finalizers[0].calls, [
+                        self.assertEqual(backend.finalizers[0].calls, [("accepted", None)])
+                        self.assertEqual(backend.finalizers[1].calls, [
                             ("rejected", ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)])
                         self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
-                    restarted_backend = _LeadBackend()
-                    restarted_backend.enqueue(_visible_outcome("answer"))
+                    restarted_backend = _LeadBackend(test_case=self)
+                    restarted_backend.enqueue(_visible_outcome("answer"), control_plan=selection_plan("answer.workflow"))
                     restarted = StoryRuntime(self.control_workspace, restarted_backend)
                     result = await restarted.lead_turn(self.session_id, conversation, "Explicit retry after failure.")
                     self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
-                    self.assertEqual(len(restarted_backend.calls), 1)
+                    self.assertEqual(len(restarted_backend.calls), 2)
                     self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
                     self.assertEqual(sum(type(event.payload) is CollaborationMessagePayload
                                          and event.payload.content == original for event in self.history(conversation)), 1)
@@ -6492,7 +6644,9 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             purpose='Check the story evidence before recommending a change.',
             activity='draft' if infeasible else 'review', authoring_assessment=assessment, paths=(
             'manuscript/part-01/opening.md',) if infeasible else (),
-                                                                         author_review_basis=True))
+                                                                         author_review_basis=True), control_plan=selection_plan(
+                "consultation.authoring.content" if infeasible else "consultation.authoring.review",
+                before_script_response=1))
         proposed = await self.runtime.lead_turn( self.session_id,
             conversation_id, (
                 ("Draft from this story. " if infeasible else "Review complete supplied candidate: ")
@@ -6507,10 +6661,10 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             self.assertIsNone(proposed.artifact_proposal)
             self.assertIsNone(proposed.artifact_application_request)
             self.assertIsNone(proposed.story_commit_request)
-            self.assertEqual([actor for actor, _ in self.backend.call_records[previous_calls:]], [LEAD_ORCHESTRATOR] * 2)
+            self.assertEqual([actor for actor, _ in self.backend.call_records[previous_calls:]], [LEAD_ORCHESTRATOR] * 3)
             history = self.history(conversation_id)
-            self.assertEqual(len(_submitted_calls(history)), 2)
-            self.assertEqual(project_collaboration_history(history).physical_calls_spent, 2)
+            self.assertEqual(len(_submitted_calls(history)), 3)
+            self.assertEqual(project_collaboration_history(history).physical_calls_spent, 3)
             self.assertFalse(any(type(event.payload) is CollaborationAssignmentDispatchPayload for event in history))
             self.assertIn("required preparation and complete specialist review", proposed.message)
             return conversation_id, proposed
@@ -6520,7 +6674,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             self.backend.enqueue_for(agent, _search_history, _specialist_outcome("insufficient_evidence"),)
 
         def synthesis(call, _provider):
-            material = _workflow_material(call.payload)
+            material = _workflow_material(_provider.callback_payload(call))
             input_ids = [item['input_id'] for item in material['inputs']]
             reply_event_ids = [item['reply_event_id'] for item in material['replies']]
             value = {'message': message, 'next_intent': { 'purpose': 'Review every unresolved input again.',
@@ -6579,8 +6733,8 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
                 decision_result = await self._decide(
                     proposed, CollaborationConfirmationDecision.CONFIRM)
         history = self.history(conversation_id)
-        self.assertEqual(len(_submitted_calls(history)), 9)
-        self.assertEqual(len(self.backend.calls) - previous_calls, 9,)
+        self.assertEqual(len(_submitted_calls(history)), 10)
+        self.assertEqual(len(self.backend.calls) - previous_calls, 10,)
         self.assertEqual(len(self.backend.reference_calls) - previous_references, 5)
         syntheses = [event for event in history if type(event.payload) is CollaborationLeadSynthesisPayload]
         results = [event for event in history if type(event.payload) is CollaborationExecutionResult]
@@ -6608,7 +6762,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
         self.assertIn(synthesis.payload.message, turn.message)
         self.assertIn("exceeds its remaining call budget", turn.message)
         self.assertEqual(len([e for e in history if type(e.payload) is CollaborationProposal]), 1)
-        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 9)
+        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 10)
         self.assertEqual(history[-2].payload.content, turn.message)
         self.assertIs(project_collaboration_history(history).current_state, CollaborationStepState.COMPLETED)
         before = tuple(self.backend.calls)
@@ -6623,7 +6777,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             pause_before_finalization=True)
         projection = project_collaboration_history(known)
         self.assertIs(projection.current_state, CollaborationStepState.RUNNING)
-        backend = _LeadBackend()
+        backend = _LeadBackend(test_case=self)
         restarted = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
         restored = await restarted.lead_turn(self.session_id, conversation, "Recover completed work.")
         self.assertIs(restored.state, CollaborationStepState.COMPLETED)
@@ -6635,10 +6789,10 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
         self.assertEqual(repeated, restored)
         self.assertEqual(self.history(conversation), complete)
         self.assertEqual(backend.calls, [])
-        backend.enqueue(_visible_outcome("answer", "A new independent answer."))
+        backend.enqueue(_visible_outcome("answer", "A new independent answer."), control_plan=selection_plan("answer.workflow"))
         fresh = await restarted.lead_turn(self.session_id, conversation, "Answer a fresh question.")
         self.assertIs(fresh.kind, LeadOutcomeKind.ANSWER)
-        self.assertEqual(len(backend.calls), 1)
+        self.assertEqual(len(backend.calls), 2)
         self.assertEqual(self.history(conversation)[:len(complete)], complete)
 
     async def test_budget_notice_preserves_maximum_utf8_synthesis(self):
@@ -6692,7 +6846,7 @@ class LeadReferenceFailurePrecedenceTests(LeadOrchestrationTestCase):
     """Exercise retry precedence through real reference and Lead owner records."""
 
     def reference_case(self, subject):
-        backend = _LeadBackend(persist_context_threads=True)
+        backend = _LeadBackend(persist_context_threads=True, test_case=self)
         runtime = StoryRuntime(self.control_workspace, backend)
         conversation_id = self.conversation(subject)
         return runtime, backend, conversation_id
@@ -6711,7 +6865,7 @@ class LeadReferenceFailurePrecedenceTests(LeadOrchestrationTestCase):
         for failure in errors:
             with self.subTest(failure=type(failure).__name__, code=getattr(failure, "code", None)):
                 runtime, backend, conversation_id = self.reference_case("Primary reference failure")
-                backend.enqueue(_SubmittedFailure(failure))
+                backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, _SubmittedFailure(failure)),))
                 expected = (ReferenceOperationFailure if isinstance(failure, ReferenceAuthorizationError)
                             else type(failure))
                 with self.assertRaises(expected) as raised:
@@ -6726,7 +6880,8 @@ class LeadReferenceFailurePrecedenceTests(LeadOrchestrationTestCase):
 
     async def test_reference_failure_with_unwritable_history_stays_recovery_required(self):
         runtime, backend, conversation_id = self.reference_case("Unwritable reference closure")
-        backend.enqueue(_SubmittedFailure(BackendProtocolError("Synthetic native failure")))
+        backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT,
+            _SubmittedFailure(BackendProtocolError("Synthetic native failure"))),))
         store_type = type(runtime.conversation_storage_services.event_store)
         append = store_type.append_batch
 

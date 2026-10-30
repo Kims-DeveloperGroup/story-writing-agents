@@ -279,7 +279,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         turn = await self.reviewed_create("Restart authority")
         before = self.artifact_snapshot()
         git_before = self.git_snapshot()
-        restarted = StoryRuntime(self.control_workspace, _LeadBackend())  # type: ignore[arg-type]
+        restarted = StoryRuntime(self.control_workspace, _LeadBackend(test_case=self))  # type: ignore[arg-type]
         result = await restarted.decide_artifact_application(
             _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
         )
@@ -415,7 +415,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertFalse(
             any(type(event.payload) is StoryCommitRequestPayload for event in prepared_events)
         )
-        restarted_backend = _LeadBackend()
+        restarted_backend = _LeadBackend(test_case=self)
         restarted = StoryRuntime(self.control_workspace, restarted_backend)  # type: ignore[arg-type]
         redisclosed = await restarted.lead_turn(
             self.session_id, turn.conversation_id, "Commit it now.",

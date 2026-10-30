@@ -1,6 +1,7 @@
 """Exact session memory, recovery, and publication safety using synthetic providers."""
 
 from __future__ import annotations
+from tests.provider_wire_fixture import selection_plan
 import hashlib
 from story_writing_agents.conversations import encode_collaboration_event
 from tests.test_collaboration_events import editorial, editorial_request
@@ -19,7 +20,7 @@ from story_writing_agents import ReplyTraceOrigin, StoryRuntime
 from story_writing_agents.agent_context.continuation import ContextContinuationTransaction
 from story_writing_agents.agent_context.ledger import ContextLedgerKey, ContextLedgerRecordState
 from story_writing_agents.agent_context.manifest import ContextContinuationIdentity, ContextScope, ContextSubjectKind
-from story_writing_agents.agent_context.service import ContextContinuationRejection
+from story_writing_agents.agent_context.service import AgentContextService, ContextContinuationRejection
 from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.conversations import (
@@ -73,13 +74,29 @@ def _fields(delivery):
 class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
     def setUp(self):
         super().setUp()
-        self.backend = lead._LeadBackend(persist_context_threads=True)
+        self.backend = lead._LeadBackend(persist_context_threads=True, test_case=self)
         self.runtime = StoryRuntime(self.workspace, self.backend)
 
     async def say(self, conversation, text, answer="Synthetic visible reply.", *, runtime=None, backend=None):
         backend = backend or self.backend
-        backend.enqueue(lead._visible_outcome("answer", answer))
-        return await (runtime or self.runtime).lead_turn(self.session_id, conversation, text)
+        call_start = len(backend.calls)
+        backend.enqueue(lead._visible_outcome("answer", answer), control_plan=selection_plan('answer.workflow'))
+        histories = []
+        invoke = AgentContextService.invoke
+        async def observe_history(service, request, provider, **keywords):
+            histories.append(keywords.get("session_history"))
+            return await invoke(service, request, provider, **keywords)
+        with mock.patch.object(AgentContextService, "invoke", new=observe_history):
+            result = await (runtime or self.runtime).lead_turn(self.session_id, conversation, text)
+        self.assertEqual(tuple(call.contract.schema_group_phase.value for call in backend.calls[call_start:]), ("select", "generate"))
+        first = backend.calls[call_start]
+        self.assertEqual(first.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"], "bootstrap")
+        self.assertEqual(first.payload["session_history"]["context_delivery_mode"], "bootstrap")
+        self.assertIs(type(histories[0]), SessionHistorySnapshot)
+        current = backend.callback_payload(first)
+        self.assertEqual(current["session_history"]["conversations"], histories[0].delivery()["conversations"])
+        self.assertEqual(current["task_input"]["user_request_text"], text)
+        return result
 
     def snapshot(self):
         storage = self.runtime.conversation_storage_services
@@ -120,23 +137,22 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             await self.say(second, text, f"Follow-up answer {index}.")
         calls = [call for agent, call in self.backend.call_records if agent == LEAD_ORCHESTRATOR]
         self.assertEqual({call.expected_thread_id for call in calls[1:]}, {"thread-lead-1"})
-        delivered = [text for call in calls for text in _fields(call.payload["session_history"])]
-        self.assertNotIn(plan, delivered)
+        delivered = [_fields(self.backend.callback_payload(call)["session_history"]) for call in calls]
+        self.assertEqual(tuple(delivered[index].count(plan) for index in (3, 5, 7)), (2, 2, 2))
         for text in followups:
             self.assertEqual(sum(type(event.payload) is CollaborationMessagePayload and event.payload.content == text for event in self.history(second)), 1)
-            self.assertIn(text, [call.payload["task_input"]["user_request_text"] for call in calls
-                                 if "user_request_text" in call.payload["task_input"]])
+            self.assertIn(text, [self.backend.callback_payload(call)["task_input"]["user_request_text"] for call in calls
+                                 if "user_request_text" in self.backend.callback_payload(call)["task_input"]])
         self.assertEqual(calls[-1].scope.subject_id, second)
-        for call in calls[2:]:
-            self.assertNotIn(call.payload["task_input"]["user_request_text"], _fields(call.payload["session_history"]))
-        self.assertLessEqual(_property_count(calls[-1].payload["session_history"]),
-                             _property_count(calls[-2].payload["session_history"]))
+        for index, call in enumerate(calls[3:]):
+            self.assertEqual(self.backend.callback_payload(call)["task_input"]["user_request_text"], followups[index // 2])
+        self.assertEqual(tuple(_fields(self.backend.callback_payload(calls[-2])["session_history"]).count(text) for text in followups[:-1]), (1, 1))
         self.assertTrue(all("timestamp" not in record and "batch_digest" not in record
                             and "sequence" not in record
-                            for call in calls for record in _records(call.payload["session_history"])))
+                            for call in calls for record in _records(self.backend.callback_payload(call)["session_history"])))
         judgment = next(event for event in self.history(second)
                         if type(event.payload) is CollaborationLeadJudgmentPayload)
-        host_fact = next(record for record in _records(calls[3].payload["session_history"])
+        host_fact = next(record for record in _records(self.backend.callback_payload(calls[5])["session_history"])
                          if record["event_id"] == judgment.event_id)
         self.assertEqual(host_fact["details"]["authoring_scope"]["task_id"],
                          judgment.payload.authoring_scope.task_id)
@@ -210,7 +226,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.backend.context_threads.clear()
         restarted = StoryRuntime(self.workspace, self.backend)
         await self.say(second, "Recall all retained planning.", runtime=restarted)
-        fresh = self.backend.calls[-1]
+        fresh = self.backend.calls[-2]
         self.assertIsNone(fresh.expected_thread_id)
         self.assertEqual(fresh.payload["session_history"]["context_delivery_mode"], "bootstrap")
         replay = _fields(fresh.payload["session_history"])
@@ -234,7 +250,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertIs(failed.record.state, ContextLedgerRecordState.TAINTED)
         self.assertNotEqual(failed.checkpoint_view.session_history_coverage, known_coverage)
         await self.say(second, "Retry after publication verification failure.", runtime=restarted)
-        retry = self.backend.calls[-1]
+        retry = self.backend.calls[-2]
         self.assertIsNone(retry.expected_thread_id)
         self.assertIn("Synthetic publication verification failure.", _fields(retry.payload["session_history"]))
         self.assertEqual(calls[0].continuation_identity, calls[-1].continuation_identity)
@@ -245,7 +261,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         restarted = StoryRuntime(self.workspace, self.backend)
         reports = tuple(event.payload.report for event in self.runtime.conversation_storage_services.event_store.read(self.session_id, provisional) if event.kind is CollaborationEventKind.LEAD_EXPLORATION_RESULT)
         self.assertEqual(reports, (explored.exploration,))
-        self.backend.enqueue(_visible_outcome("answer", "Ordinary workflow remains active."))
+        self.backend.enqueue(_visible_outcome("answer", "Ordinary workflow remains active."), control_plan=selection_plan('answer.workflow'))
         normal = await restarted.lead_turn(self.session_id, provisional, "Explain the ordinary workflow.")
         self.assertIs(normal.interaction_mode, exploration.LeadInteractionMode.ORCHESTRATION)
         self.assertIsNone(normal.exploration)
@@ -253,7 +269,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         state = restarted.inspect_editorial_state(self.session_id)
         self.assertEqual({r.ref for r in state.selected_records}, {r.record_ref for r in retained})
         self.assertTrue(all(r.draft.alternatives[0].disposition is editorial.EditorialApprovalState.REJECTED for r in state.current_records))
-        views = [call.payload["session_history"]["editorial_state"] for call in self.backend.calls if "session_history" in call.payload]
+        views = [self.backend.callback_payload(call)["session_history"]["editorial_state"] for call in self.backend.calls if "session_history" in call.payload]
         self.assertTrue(all({r["record_id"] for r in v["selected_refs"]} == {r.record_ref.record_id for r in retained} for v in views))
         self.assertTrue(all(len(json.dumps(call.payload["session_history"], ensure_ascii=False, separators=(",", ":"), default=dict).encode()) <= MAX_SESSION_CONTEXT_UTF8_BYTES for call in self.backend.calls if "session_history" in call.payload))
 

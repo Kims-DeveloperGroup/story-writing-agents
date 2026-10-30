@@ -2729,6 +2729,302 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(details, ["Structured response\n$: malformed JSON"])
 
+    async def _assert_grouped_reader_transport(self, backend, session_id) -> None:
+        from story_writing_agents.agent_context.service import (AgentContextService, ContextInvocationKind,
+            ContextInvocationRequest, ContextExecutionError, context_provider_failure_facts)
+        from story_writing_agents.agent_context.ledger import ContextLedger, ContextLedgerKey
+        from story_writing_agents.agent_context.sources import (ActiveDebateSourceAdapter,
+            FocusedConversationSourceAdapter, OwnAgentStateSourceAdapter, WritingArtifactSourceAdapter)
+        from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
+        from story_writing_agents.lead_schema_groups import LeadGroupPhase
+        from tests.test_agent_context_execution import (_LEAD_CALL_FACTORY, _PRIVATE_INPUT, _materials,
+            _group_request, _group_control, _group_answer, _search)
+        from tests.provider_wire_fixture import CallbackContextViews, FixturePhasePlanError, OwnedNativeHistory, assert_phase_guide
+        service = AgentContextService(self.workspace)
+        storage = compose_filesystem_conversation_storage(self.workspace)
+        repository = WritingArtifactRepository(self.workspace.root)
+        provider = (await backend.bind(self.definition(LEAD_ORCHESTRATOR))).context_provider()
+        self.assertEqual(provider.provider_id, "codex")
+        requests, invocations, raw_responses = [], [], []
+        reader_faults_checked = False
+        callback_views = CallbackContextViews()
+        self.addCleanup(callback_views.require_fixture_valid)
+        history = OwnedNativeHistory(self)
+        responses = [_group_control("answer.workflow"), _group_answer]
+        phases = (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE)
+
+        class ObservedProvider:
+            def __getattr__(self, name):
+                return getattr(provider, name)
+
+            async def invoke_context(self, request):
+                requests.append(request)
+                callback_views.observe(request)
+                return await provider.invoke_context(request)
+
+        async def invoke(_binding, invocation):
+            nonlocal reader_faults_checked
+            self.assertLess(len(invocations), len(phases))
+            assert_phase_guide(self, requests[-1], phases[len(invocations)])
+            invocations.append(invocation)
+            if not reader_faults_checked:
+                self._assert_owned_native_context_witness(invocation)
+                reader_faults_checked = True
+            witness = history.complete(invocation)
+            raw = responses.pop(0)(requests[-1], None)
+            raw_responses.append(raw)
+            return ProviderResult(history.thread_id, raw,
+                actual_transport_utf8_bytes=len(invocation.payload_json), context_witness=witness)
+
+        request = _group_request(ContextInvocationRequest(session_id=session_id,
+            subject_kind=ContextSubjectKind.CONVERSATION, subject_id="grouped-reader",
+            agent_id=LEAD_ORCHESTRATOR, operation_id="grouped-reader-operation",
+            result_correlation_id="grouped-reader-result", materials=_materials(),
+            result_contract=_LEAD_CALL_FACTORY, invocation_kind=ContextInvocationKind.LEAD, physical_call_limit=2))
+        scope = service.scope(session_id, ContextSubjectKind.CONVERSATION, "grouped-reader", LEAD_ORCHESTRATOR)
+        with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
+            result = await service.invoke(request, ObservedProvider(),
+                writing_artifacts=WritingArtifactSourceAdapter(repository, scope),
+                focused_conversation=FocusedConversationSourceAdapter(storage.catalog, storage.event_store, scope, None),
+                active_debate=ActiveDebateSourceAdapter(self.workspace, scope, None),
+                own_agent_state=OwnAgentStateSourceAdapter(self.workspace, scope))
+        self.assertEqual((len(invocations), len(result.provider_calls)), (2, 2))
+        first, second = [call.payload["response_contract"]["schema_selection"] for call in requests]
+        self.assertEqual(first["context_delivery"]["mode"], "bootstrap")
+        self.assertEqual(second["context_delivery"], {"mode": "delta",
+            "context_ref": second["context_delivery"]["context_ref"], "base_context_ref": first["context_delivery"]["context_ref"]})
+        self.assertIn(_PRIVATE_INPUT.encode(), invocations[0].payload_json)
+        self.assertNotIn(_PRIVATE_INPUT.encode(), invocations[1].payload_json)
+        self.assertNotIn("task_input", requests[1].payload)
+        self.assertEqual(set(requests[1].payload["context_changes"]), {"add", "replace", "remove"})
+        self.assertIs(invocations[1].context_witness, history.witnesses[0])
+        self.assertIs(invocations[1].context_anchor, history.witnesses[0])
+        self.assertEqual(result.group_state.transport_delivery.witness, history.witnesses[1])
+        self.assertEqual(result.group_state.accepted_delivery.witness, history.witnesses[1])
+
+        # 실제 native 전송은 완료됐지만 업무 응답은 거절된 별도 front이다.
+        requests, invocations, raw_responses = [], [], []
+        history = OwnedNativeHistory(self, thread_id="66666666-6666-4666-8666-666666666666")
+        def no_hit_search(call, provider):
+            packet = json.loads(_search(call, provider))
+            packet["agent_action"]["queries"][0]["search_text"] = "ZERO_HIT_GROUP_WITNESS_4d468"
+            return json.dumps(packet)
+        def rejected_generate(call, provider):
+            packet = json.loads(_group_answer(call, provider))
+            packet["agent_action"]["task_result"]["response_text"] = 7
+            return json.dumps(packet)
+        responses = [_group_control("answer.workflow"), no_hit_search, rejected_generate, _group_answer]
+        phases = (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE)
+        rejected_request = _group_request(replace(request, group_state=None, fresh=True,
+            operation_id="grouped-reader-reject", result_correlation_id="grouped-reader-reject-result", physical_call_limit=3))
+        authorities = dict(writing_artifacts=WritingArtifactSourceAdapter(repository, scope),
+            focused_conversation=FocusedConversationSourceAdapter(storage.catalog, storage.event_store, scope, None),
+            active_debate=ActiveDebateSourceAdapter(self.workspace, scope, None),
+            own_agent_state=OwnAgentStateSourceAdapter(self.workspace, scope))
+        with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
+            with self.assertRaises(ContextExecutionError) as held:
+                await service.invoke(rejected_request, ObservedProvider(), **authorities)
+            facts = context_provider_failure_facts(held.exception)
+            retained = facts.group_state
+            transport, accepted = retained.transport_delivery, retained.accepted_delivery
+            self.assertIsNotNone(facts.response_rejection_code)
+            self.assertEqual((len(invocations), len(facts.submitted_accountings)), (3, 3))
+            self.assertEqual((transport.call_id, accepted.call_id),
+                (invocations[2].context_call_id, invocations[1].context_call_id))
+            self.assertIs(transport.witness, history.witnesses[2])
+            self.assertIs(accepted.witness, history.witnesses[1])
+            self.assertEqual(transport.payload_json, invocations[2].payload_json)
+            self.assertEqual(transport.payload_sha256, hashlib.sha256(invocations[2].payload_json).hexdigest())
+            self.assertTrue(transport.source_valid())
+            record = ContextLedger(self.workspace).inspect(ContextLedgerKey(scope, provider.provider_id)).record
+            self.assertTrue(transport.matches_ledger(record, latest=True))
+            self.assertTrue(accepted.matches_ledger(record))
+            self.assertFalse(accepted.matches_ledger(record, latest=True))
+            absent = ContextLedger(self.workspace).inspect(ContextLedgerKey(replace(scope, subject_id="unrelated"), provider.provider_id)).record
+            self.assertFalse(transport.matches_ledger(absent, latest=True))
+            observation = requests[2].payload["context_changes"]["add"]["context_observations"]
+            self.assertEqual(observation[0]["observation"]["search_results"], [])
+            actual_wire = canonical_provider_json(requests[2].payload)
+            callback_view = callback_views.for_request(requests[2])
+            self.assertEqual(callback_view["context_observation"], observation[-1]["observation"])
+            self.assertEqual(callback_view["task_input"], _PRIVATE_INPUT)
+            self.assertEqual(callback_views.for_request(requests[2]), callback_view)
+            self.assertEqual(canonical_provider_json(requests[2].payload), actual_wire)
+            self.assertNotIn("read", requests[2].contract.offers.allowed_actions)
+            self.assertEqual(requests[2].contract.offers.issued_handle_aliases, ())
+            repair = replace(rejected_request, fresh=False, physical_call_limit=1, group_state=retained)
+            corrected = await service.invoke(repair, ObservedProvider(),
+                contract_lineage=rejected_request.result_contract.repair_lineage(held.exception), **authorities)
+        self.assertEqual((len(invocations), len(corrected.provider_calls)), (4, 1))
+        self.assertEqual(invocations[2].schema, invocations[3].schema)
+        self.assertIs(invocations[3].context_witness, history.witnesses[2])
+        self.assertIs(invocations[3].context_anchor, history.witnesses[1])
+        self.assertEqual(requests[3].payload["response_contract"]["schema_selection"]["context_delivery"]["mode"], "delta")
+        repair_delivery = requests[3].payload["response_contract"]["schema_selection"]["context_delivery"]
+        self.assertEqual(repair_delivery["base_context_ref"], accepted.context_ref)
+        self.assertNotEqual(repair_delivery["base_context_ref"], transport.context_ref)
+        self.assertEqual(requests[3].payload["context_changes"]["add"]["context_observations"], observation)
+        self.assertEqual(json.loads(raw_responses[2])["agent_action"]["task_result"]["response_text"], 7)
+        self.assertTrue(any(record["content"] == raw_responses[2] for record in _agent_exchange_records(self.workspace)))
+        self.assertEqual(corrected.group_state.accepted_delivery.witness, history.witnesses[3])
+        unknown = CallbackContextViews()
+        self.assertRaises(FixturePhasePlanError, unknown.for_request, requests[0])
+        self.assertRaises(FixturePhasePlanError, unknown.require_fixture_valid)
+
+    def _assert_owned_native_context_witness(self, invocation) -> None:
+        import sqlite3
+        from story_writing_agents import codex_adapter
+        from story_writing_agents.provider_wire import SchemaSelectionInput
+
+        thread = "11111111-1111-4111-8111-111111111111"
+        rollout = "22222222-2222-4222-8222-222222222222"
+        selection = SchemaSelectionInput.from_value(invocation.payload["response_contract"]["schema_selection"])
+        payload = dict(invocation.payload)
+        first = invocation
+        self.assertIsNotNone(first.payload_json)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            root.chmod(0o700)
+            path = root / "sessions" / "2026" / "10" / "30" / f"rollout-2026-10-30T00-00-00-{thread}_{rollout}.jsonl"
+            path.parent.mkdir(parents=True, mode=0o700)
+            for parent in (root / "sessions", path.parent.parent, path.parent):
+                parent.chmod(0o700)
+            database = root / "state_5.sqlite"
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE threads(id TEXT PRIMARY KEY, rollout_path TEXT, archived INTEGER)")
+                connection.execute("INSERT INTO threads VALUES (?, ?, 0)", (thread, str(path)))
+            database.chmod(0o600)
+            metadata = {"type": "session_meta", "payload": {"id": thread, "session_id": "separate-session-id",
+                "cli_version": "0.164.0", "originator": "codex_exec", "source": "exec", "history_mode": "paginated",
+                "cwd": str(invocation.execution_workspace.worktree_root)}}
+            settings = {"type": "turn_context", "payload": {"model": "fixture-model", "comp_hash": "configuration-hash", "multi_agent_version": "fixture"}}
+
+            def turn(request, identity):
+                return [{"type": "event_msg", "payload": {"type": "task_started", "turn_id": identity}}, settings,
+                    {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+                        {"type": "input_text", "text": request.payload_json.decode("utf-8")}]}},
+                    {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": identity}}]
+
+            def write(records):
+                path.write_bytes(b"".join(json.dumps(r, ensure_ascii=False, separators=(",", ":")).encode() + b"\n" for r in records))
+                path.chmod(0o600)
+
+            records = [metadata, *turn(first, "turn-1")]
+            write(records)
+            witness = codex_adapter.inspect_codex_context_witness(root, first, thread)
+            self.assertIsNotNone(witness)
+            self.assertEqual((witness.thread_id, witness.rollout_id), (thread, rollout))
+            self.assertEqual(witness.call_id, selection.call_id)
+            self.assertEqual(witness.payload_sha256, hashlib.sha256(first.payload_json).hexdigest())
+            self.assertEqual(witness.turn_id, "turn-1")
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread, previous=witness, before=True))
+            self.assertIs(codex_adapter.inspect_codex_context_witness(root, first, thread, previous=witness, anchor=witness, before=True), witness)
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, rollout))
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, replace(first, session_id="wrong-scope"), thread, previous=witness, anchor=witness))
+            second_payload = dict(payload)
+            second_payload["response_contract"] = {**payload["response_contract"], "schema_selection": replace(selection, call_id=selection.call_id + "-next").as_object()}
+            second = replace(first, payload=second_payload, context_call_id=selection.call_id + "-next", thread_id=thread)
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            extended = [*records, *turn(second, "turn-2")]
+            write(extended)
+            continued = codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness)
+            self.assertIsNotNone(continued)
+            self.assertEqual(continued.turn_id, "turn-2")
+            self.assertEqual(continued.file_identity, witness.file_identity)
+            self.assertGreater(continued.prefix_utf8_bytes, witness.prefix_utf8_bytes)
+            self.assertEqual(hashlib.sha256(path.read_bytes()[:witness.prefix_utf8_bytes]).hexdigest(), witness.prefix_sha256)
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness, before=True))
+            invalid = [
+                [*records, *turn(second, "turn-2")[:-1]],
+                [*records, {"type": "compacted", "payload": {}}, *turn(second, "turn-2")],
+                [*records, {"type": "event_msg", "payload": {"type": "thread_rolled_back", "turn_id": "turn-2"}}, *turn(second, "turn-2")],
+                [*records, {"type": "unknown_record", "payload": {}}, *turn(second, "turn-2")],
+                [*records, *turn(second, "turn-2"), *turn(second, "turn-3")],
+                [*records, {"type": "turn_context", "payload": {**settings["payload"], "comp_hash": "different-configuration"}}, *turn(second, "turn-2")],
+            ]
+            for bad_records in invalid:
+                write(bad_records)
+                self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            for key in ("history_base", "forked_from_id", "parent_thread_id", "forked_from_ordinal_exclusive"):
+                write([{**metadata, "payload": {**metadata["payload"], key: "unproven-branch"}}, settings, *turn(first, "turn-1")])
+                self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
+            write([{**metadata, "payload": {**metadata["payload"], "id": rollout}}, settings, *turn(first, "turn-1")])
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
+            write(extended)
+            with mock.patch.object(codex_adapter, "_CONTEXT_WITNESS_BYTES", path.stat().st_size - 1):
+                self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            with mock.patch.object(codex_adapter, "_CONTEXT_WITNESS_LINES", len(extended) - 1):
+                self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            wrong_prefix = path.read_bytes().replace(b"configuration-hash", b"configuration-edit", 1)
+            path.write_bytes(wrong_prefix)
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            write(extended)
+            replacement = path.with_suffix(".replacement")
+            replacement.write_bytes(path.read_bytes())
+            replacement.chmod(0o600)
+            replacement.replace(path)
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE threads SET archived=1")
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE threads SET archived=0, rollout_path=?", (str(root / "outside.jsonl"),))
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
+            target = path.with_suffix(".owned")
+            path.replace(target)
+            path.symlink_to(target)
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE threads SET rollout_path=?", (str(path),))
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
+            path.unlink()
+            target.replace(path)
+            current = codex_adapter.inspect_codex_context_witness(root, second, thread)
+            self.assertIsNotNone(current)
+            alternate = path.with_name(path.name.replace(rollout, "55555555-5555-4555-8555-555555555555"))
+            alternate.write_bytes(path.read_bytes())
+            alternate.chmod(0o600)
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE threads SET rollout_path=?", (str(alternate),))
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=current, anchor=current, before=True))
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=current, anchor=current))
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE threads SET rollout_path=?", (str(path),))
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread,
+                previous=current, anchor=replace(current, prefix_sha256="0" * 64), before=True))
+            with mock.patch.object(codex_adapter.os, "geteuid", return_value=path.stat().st_uid + 1):
+                self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread))
+            real_facts = codex_adapter._native_file_facts
+            observed = 0
+
+            def concurrent_change(candidate, **kwargs):
+                nonlocal observed
+                facts = real_facts(candidate, **kwargs)
+                if candidate == path:
+                    observed += 1
+                    if observed == 2:
+                        with path.open("ab") as stream:
+                            stream.write(b'{"type":"world_state","payload":{}}\n')
+                        return real_facts(candidate, **kwargs)
+                return facts
+
+            with mock.patch.object(codex_adapter, "_native_file_facts", side_effect=concurrent_change):
+                self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=current, anchor=current))
+            write(extended)
+            with sqlite3.connect(database) as connection:
+                self.assertEqual(connection.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
+                connection.execute("UPDATE threads SET archived=0")
+                connection.commit()
+                self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread))
+                shared = database.with_name(database.name + "-shm")
+                saved = shared.with_suffix(".saved")
+                self.assertTrue(shared.exists())
+                shared.replace(saved)
+                try:
+                    self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread))
+                    self.assertFalse(shared.exists())
+                finally:
+                    saved.replace(shared)
+
     async def test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread(self) -> None:
         session_id = "contextual_physical"
         backend = self._backend_with_fake_codex()
@@ -2787,6 +3083,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manifest["provider_threads"], {})
         async with provider.invocation(replace(scope, subject_id="other-conversation"), policy):
             self.assertIsNone(provider.inspect_context_thread(replace(scope, subject_id="other-conversation"), policy))
+        await self._assert_grouped_reader_transport(backend, session_id)
         backend.close()
         restarted = self._backend_with_fake_codex()
         self.addCleanup(restarted.close)

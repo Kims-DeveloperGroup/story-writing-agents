@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 from .provider_wire import common_contract_guide
+from .provider_adapter import ProviderContextWitness, ProviderContinuationRejection
 
 import asyncio
+import hashlib
+import sqlite3
+import sys
+import uuid
+from urllib.parse import quote
 import json
 import math
 import os
@@ -216,6 +222,212 @@ def _resolve_aliased_field(
     if not s2:
         return None, True
     return (s2.lower() if normalize_case else s2), False
+
+
+_CONTEXT_WITNESS_BYTES = 8 * 1024 * 1024
+_CONTEXT_WITNESS_LINES = 20000
+
+
+def _native_file_facts(path: Path, *, directory: bool = False):
+    value = path.lstat()
+    if (not (stat.S_ISDIR if directory else stat.S_ISREG)(value.st_mode)
+            or value.st_uid != os.geteuid() or stat.S_IMODE(value.st_mode) & 0o022):
+        raise ValueError("native context source is unavailable")
+    return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns
+
+
+def _codex_rollout_candidate(root: Path, thread_id: str) -> Path | None:
+    """실효 sqlite_home 추정 없이 한 ID의 후보만 읽는다."""
+    database = root / "state_5.sqlite"
+    observed = _native_file_facts(database)
+    if observed[2] > 256 * 1024 * 1024:
+        return None
+    sidecars = [database.with_name(database.name + suffix) for suffix in ("-wal", "-shm")]
+    before = tuple(_native_file_facts(p) if p.exists() else None for p in sidecars)
+    with database.open("rb") as stream:
+        header = stream.read(100)
+    if len(header) != 100 or header[:16] != b"SQLite format 3\x00":
+        return None
+    if header[18:20] == b"\x02\x02":
+        if any(v is None for v in before):
+            return None  # WAL을 무시하거나 부수 파일을 새로 만들지 않는다.
+        # 이미 초기화된 index만 빌려 자동 복구를 요구하는 상태를 피한다.
+        with sidecars[1].open("rb") as stream:
+            index_header = stream.read(136)
+        if (len(index_header) != 136 or index_header[:48] != index_header[48:96]
+                or index_header[12] != 1
+                or int.from_bytes(index_header[:4], sys.byteorder) != 3007000):
+            return None
+        words = [int.from_bytes(index_header[i:i + 4], sys.byteorder) for i in range(0, 40, 4)]
+        first = second = 0
+        for i in range(0, len(words), 2):
+            first = (first + words[i] + second) & 0xffffffff
+            second = (second + words[i + 1] + first) & 0xffffffff
+        if (first != int.from_bytes(index_header[40:44], sys.byteorder)
+                or second != int.from_bytes(index_header[44:48], sys.byteorder)):
+            return None
+    connection = sqlite3.connect("file:" + quote(str(database), safe="/") + "?mode=ro", uri=True, timeout=0.05)
+    try:
+        connection.execute("PRAGMA query_only=ON")
+        connection.set_progress_handler(lambda: 1, 10000)
+        connection.execute("BEGIN")
+        columns = {r[1]: r for r in connection.execute("PRAGMA table_info(threads)")}
+        if (not {"id", "rollout_path", "archived"} <= columns.keys() or columns["id"][5] != 1
+                or sum(bool(column[5]) for column in columns.values()) != 1
+                or any(columns[k][2].upper() != kind for k, kind in (("id", "TEXT"), ("rollout_path", "TEXT"), ("archived", "INTEGER")))):
+            return None
+        rows = connection.execute(
+            "SELECT rollout_path FROM threads WHERE id = ? AND archived = 0 LIMIT 2", (thread_id,)
+        ).fetchall()
+    finally:
+        connection.close()
+    after = tuple(_native_file_facts(p) if p.exists() else None for p in sidecars)
+    # SHM read-mark 갱신은 정상 read transaction이다. inode/소유/크기와 DB/WAL 변경을 분리한다.
+    shm_changed = ((before[1] is None) != (after[1] is None)
+                   or before[1] is not None and before[1][:3] != after[1][:3])
+    if (observed != _native_file_facts(database) or before[0] != after[0] or shm_changed
+            or len(rows) != 1 or type(rows[0][0]) is not str):
+        return None
+    return Path(rows[0][0])
+
+
+def inspect_codex_context_witness(
+    native_state: Path, invocation: ProviderInvocation, thread_id: str,
+    *, previous: ProviderContextWitness | None = None, anchor: ProviderContextWitness | None = None, before: bool = False,
+) -> ProviderContextWitness | None:
+    """소유한 0.164.0 이력만 읽고 미확인을 보존 증거로 승격하지 않는다."""
+    try:
+        if (type(thread_id) is not str or str(uuid.UUID(thread_id)) != thread_id
+                or previous is not None and type(previous) is not ProviderContextWitness
+                or anchor is not None and type(anchor) is not ProviderContextWitness):
+            return None
+        if previous is not None and anchor is None:
+            return None
+        workspace = invocation.execution_workspace
+        if workspace is None or invocation.context_call_id is None or invocation.payload_json is None:
+            return None
+        workspace.require_current()
+        root = Path(os.path.realpath(native_state))
+        if root != native_state or not root.is_absolute():
+            return None
+        _native_file_facts(root, directory=True)
+        scope = hashlib.sha256(canonical_provider_json({"session_id": invocation.session_id,
+            "cwd": str(workspace.worktree_root), "generation": workspace.generation_provenance})).hexdigest()
+        if previous is not None and (previous.thread_id != thread_id or previous.scope_digest != scope):
+            return None
+        path = _codex_rollout_candidate(root, thread_id)
+        if previous is not None and path != previous.rollout_path:
+            return None
+        if path is None or not path.is_absolute() or path != Path(os.path.realpath(path)):
+            return None
+        relative = path.relative_to(root / "sessions")
+        if len(relative.parts) != 4:
+            return None
+        parent = root / "sessions"
+        _native_file_facts(parent, directory=True)
+        for component in relative.parts[:-1]:
+            parent /= component
+            _native_file_facts(parent, directory=True)
+        name = re.fullmatch(r"rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9a-f-]{36})(?:_([0-9a-f-]{36}))?\.jsonl", path.name)
+        if name is None or name[1] != thread_id:
+            return None
+        rollout_id = name[2] or name[1]
+        if str(uuid.UUID(thread_id)) != thread_id or str(uuid.UUID(rollout_id)) != rollout_id:
+            return None
+        observed = _native_file_facts(path)
+        if observed[2] > _CONTEXT_WITNESS_BYTES:
+            return None
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            opened = os.fstat(descriptor)
+            if (opened.st_dev, opened.st_ino) != observed[:2]:
+                return None
+            with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                raw = stream.read(_CONTEXT_WITNESS_BYTES + 1)
+        finally:
+            os.close(descriptor)
+        if observed != _native_file_facts(path) or not raw.endswith(b"\n") or len(raw) > _CONTEXT_WITNESS_BYTES:
+            return None
+        if previous is not None:
+            if (previous.rollout_id != rollout_id or previous.file_identity != observed[:2]
+                    or len(raw) < previous.prefix_utf8_bytes
+                    or hashlib.sha256(raw[:previous.prefix_utf8_bytes]).hexdigest() != previous.prefix_sha256):
+                return None
+            if anchor is not None and (anchor.thread_id != thread_id or anchor.rollout_path != path
+                    or anchor.rollout_id != rollout_id or anchor.scope_digest != scope
+                    or anchor.settings_digest != previous.settings_digest
+                    or anchor.file_identity != observed[:2] or anchor.prefix_utf8_bytes > previous.prefix_utf8_bytes
+                    or hashlib.sha256(raw[:anchor.prefix_utf8_bytes]).hexdigest() != anchor.prefix_sha256):
+                return None
+            if before:
+                return previous if len(raw) == previous.prefix_utf8_bytes else None
+        elif before:
+            return None
+        lines = raw.splitlines(keepends=True)
+        if len(lines) > _CONTEXT_WITNESS_LINES:
+            return None
+        expected = hashlib.sha256(invocation.payload_json).hexdigest()
+        selection = invocation.payload.get("response_contract", {}).get("schema_selection", {})
+        if selection.get("issued_contract", {}).get("call_id") != invocation.context_call_id:
+            return None
+        allowed_top = {"session_meta", "response_item", "event_msg", "turn_context", "token_usage_record", "world_state"}
+        allowed_events = {"task_started", "task_complete", "item_completed", "thread_settings_applied", "token_count"}
+        metadata = active_turn = settings = None
+        matched, completed, position = [], set(), 0
+        for line in lines:
+            record = json.loads(line)
+            if type(record) is not dict:
+                return None
+            kind, value = record.get("type"), record.get("payload")
+            if kind not in allowed_top or type(value) is not dict:
+                return None
+            if kind == "session_meta":
+                if (metadata is not None or value.get("id") != thread_id or value.get("cli_version") != "0.164.0"
+                        or value.get("originator") != "codex_exec" or value.get("source") != "exec"
+                        or value.get("history_mode") != "paginated"
+                        or any(value.get(k) is not None for k in ("history_base", "forked_from_id", "parent_thread_id", "forked_from_ordinal_exclusive"))
+                        or not Path(value.get("cwd", "")).is_absolute() or Path(os.path.realpath(value["cwd"])) != Path(os.path.realpath(workspace.worktree_root))):
+                    return None
+                metadata = value
+            elif kind == "event_msg":
+                if value.get("type") not in allowed_events:
+                    return None
+                if value["type"] == "item_completed":
+                    item = value.get("item")
+                    if (type(item) is not dict or type(item.get("type")) is not str
+                            or item["type"].replace("_", "").lower() not in {"usermessage", "agentmessage", "message", "reasoning"}):
+                        return None
+                if value["type"] == "task_started":
+                    if active_turn is not None and active_turn not in completed:
+                        return None
+                    active_turn = value.get("turn_id")
+                elif value["type"] == "task_complete":
+                    completed.add(value.get("turn_id"))
+            elif kind == "turn_context":
+                settings = hashlib.sha256(canonical_provider_json({k: value.get(k)
+                    for k in ("model", "comp_hash", "multi_agent_version")})).hexdigest()
+                if (previous is not None and position >= previous.prefix_utf8_bytes
+                        and settings != previous.settings_digest):
+                    return None
+            elif kind == "response_item":
+                if value.get("type") not in {"message", "additional_tools", "reasoning", "agent_message"}:
+                    return None
+                if value.get("type") == "message" and value.get("role") == "user":
+                    for part in value.get("content", []):
+                        text = part.get("text") if type(part) is dict else None
+                        if type(text) is str and hashlib.sha256(text.encode()).hexdigest() == expected:
+                            if previous is None or position >= previous.prefix_utf8_bytes:
+                                matched.append(active_turn)
+            position += len(line)
+        if (metadata is None or settings is None or len(matched) != 1
+                or type(matched[0]) is not str or matched[0] not in completed or matched[0] != active_turn
+                or previous is not None and previous.settings_digest != settings):
+            return None
+        workspace.require_current()
+        return ProviderContextWitness(thread_id, rollout_id, path, scope, observed[:2], len(raw),
+            hashlib.sha256(raw).hexdigest(), expected, invocation.context_call_id, matched[0], settings)
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, sqlite3.Error):
+        return None
 
 
 class CodexAdapter:
@@ -516,6 +728,17 @@ class CodexAdapter:
                 execution_workspace,
             )
             stdin = invocation.payload_json
+            native_state = self._native_state_directory(
+                session_root=execution_workspace.worktree_root,
+                session_container=self._control_root.with_name(self._control_root.name + GIT_SESSION_WORKTREE_SIBLING_SUFFIX),
+                staging=binding.staging_directory, output=output_path)
+            if invocation.context_witness is not None and (
+                    invocation.thread_id is None or inspect_codex_context_witness(
+                        native_state, invocation, invocation.thread_id,
+                        previous=invocation.context_witness, anchor=invocation.context_anchor, before=True) is None):
+                raise ProviderInvocationError("native context continuity is unavailable",
+                    taint_existing_thread=True,
+                    continuation_rejection=ProviderContinuationRejection.UNAVAILABLE)
             create_process = self._create_process()
             agent_id = binding.definition.agent_id
             stream_sink = invocation.stream_sink
@@ -910,7 +1133,7 @@ class CodexAdapter:
                     response_text=response_text,
                     usage=self.provider_usage(events),
                     actual_transport_utf8_bytes=len(stdin),
-                )
+                context_witness=(inspect_codex_context_witness(native_state, invocation, thread_id, previous=invocation.context_witness, anchor=invocation.context_anchor) if invocation.context_call_id is not None else None))
                 execution_workspace.require_current()
                 return provider_result
             except BaseException as exc:

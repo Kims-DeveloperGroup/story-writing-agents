@@ -291,6 +291,108 @@ handoff에서 제거되는 기존 사례를 유지한다. 이 보완은 READ나 
 안내와 native 기록의 호출 전후 증명, 기존 예산 안의 활성화는 이 자식에서 구현·검증한다.
 현재 이 항목은 시작 경계의 기록이며 구현·실제 Provider 성공을 주장하지 않는다.
 
+### #896의 요청 예시와 검증 경계
+
+아래 JSON은 전달 방식을 설명하는 발췌다. 실제 호출에서는 Host가 현재
+`BoundCallContract`에서 생성한 ID·카탈로그·전체 출력 스키마를 사용한다.
+예시의 문자열 ID나 빈 카탈로그로 실제 요청을 대신하지 않는다.
+
+첫 SELECT는 원래 요청과 관련 사실, 현재 허용 그룹의 전체 카드를 보낸다.
+`issued_contract`는 이번 호출에서 허용한 outer/inner 계약을 가리키며,
+`remaining_provider_calls`는 현재 공유 예산의 파생값이다.
+
+```json
+{
+  "response_contract": {
+    "schema_selection": {
+      "phase": "select",
+      "issued_contract": {
+        "call_id": "현재 호출 ID",
+        "contracts": [
+          {"outer_schema_id": "현재 outer ID", "result_schema_id": "현재 선택 계약 ID"}
+        ]
+      },
+      "remaining_provider_calls": 3,
+      "context_delivery": {"mode": "bootstrap", "context_ref": "현재 맥락 ID"},
+      "catalog": {
+        "catalog_id": "현재 카탈로그 ID",
+        "catalog_version": "현재 카탈로그 버전",
+        "groups": [
+          {
+            "group_id": "consultation.review_only",
+            "definition": "원문에 대한 평가와 개선 의견",
+            "selection_criteria": "사용자가 원문 검토를 요청하고 개정 작업은 요청하지 않은 경우",
+            "result_effect": "검토 의견을 답변하며 문서 변경 권한을 부여하지 않음"
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+위 카드는 형태를 보여 주는 한 항목이다. 실제 `groups`에는 현재 허용한 카드를
+모두 넣는다. 선택 응답은 내부 제어다. 유효한 선택만으로 사용자 요청을 완료 처리하지 않는다.
+이어지는 GENERATE에서 문맥 보존을 확인하면 `context_delivery.mode`는 `delta`가
+되고, `base_context_ref`와 현재 제어를 보낸다. 변경 없는 요청·사실·전체 카드를
+새 stdin에 반복하지 않으며 `catalog_id`와 `active_selection`으로 현재 결합을
+명시한다. 추가·교체·제거는 `context_changes`에 전달하고 생략은 보존으로 해석한다.
+
+매 요청에는 현재 계약에서 결정한 다음 안내 중 하나를 정확히 제공한다.
+
+- SELECT: “현재 단계는 Phase 1(그룹 선택)입니다. Phase 2에서는 선택한 그룹의 상세 계약에 따라 실제 답변을 작성합니다.”
+- GENERATE: “현재 단계는 Phase 2(답변 생성)입니다. 선택한 그룹의 상세 계약에 따라 실제 답변을 작성하세요.”
+
+단순히 thread ID가 같다는 이유로 delta를 허용하지 않는다. 현재 실행 workspace와
+정확한 native 이력 파일, 호출별 stdin, 완료된 turn, 이전 파일 prefix와 설정의
+연속성을 연결한다. `state_5.sqlite`는 소유한 후보에서 정확한 thread ID의 경로를
+찾는 데만 쓰며 실효 `sqlite_home`이라고 추정하지 않는다. 다른 thread 탐색이나
+DB 복구·마이그레이션·checkpoint 쓰기는 하지 않는다. read-only WAL 트랜잭션의
+일반적인 읽기 lock과 SHM read-mark 조정은 SQLite의 정상 읽기 절차다. 이를
+애플리케이션 데이터 변경과 구별하며, sidecar를 새로 만들거나 SHM의 mtime만으로
+이력 교체를 판정하지 않는다. 이 구분은 [SQLite WAL 형식](https://www.sqlite.org/walformat.html)의
+1.3·2.3.1절과 [읽기 트랜잭션 설명](https://www.sqlite.org/wal.html#concurrency)에 따른다.
+
+증거가 없거나 파일 교체·압축·rollback·fork 등으로 연속성을 확인할 수 없으면
+원래 요청·필요 사실·현재 전체 카드를 실제로 재전달하는 bootstrap 또는 기존 STOP을
+적용한다. 이때 출력 계약은 현재 Phase의 계약을 유지한다. 이미 전송한 호출과
+거절된 원문 응답은 실제 사용량·실패 기록으로 남긴다.
+
+전송이 끝난 맥락과 업무 검증까지 수락된 맥락은 각각 보존한다. READ로 막 얻은
+사실은 다음 실제 입력에 포함되기 전까지 “이미 전달됨”으로 표시하지 않는다.
+진행 중 교정의 논리 기준점은 수락된 SELECT·SEARCH·READ 입력에서 전진한다.
+완료 GENERATE의 실제 전송 스냅샷은 별도로 남기고, 최종 업무 수락은 DONE과
+기존 COMMITTED 원장으로 확인한다. publish 뒤 기준점을 다시 검증·대입하여
+이미 완료된 업무에 새 실패를 만들지 않는다.
+native 증거만으로 delta를 허용하지도 않는다. 기존 호출 원장의 scope·attempt·세대와
+실제 제출한 call/accounting, 현재 checkpoint의 일치를 확인한다. 교정 과정에서
+수락 맥락이 과거 호출이고 전송 맥락이 최신 호출일 수 있으므로 유효한 원장 prefix를
+구분한다. SELECT를 READY로 승격하거나 별도 원장·예산 계수를 만들지는 않는다.
+이 절은 구현 검토용 설명이며, #896의 영향 테스트·전체 CI와 실제 현재 Provider의
+연속 호출 검증이 끝나기 전에는 완료 증거로 사용하지 않는다.
+
+### 추가 선택 비용과 기존 task 예산
+
+선택과 재선택도 실제 task 호출에 포함한다. 현재 12회 한도에서 3명 전문가의
+초안을 만드는 기본 경로는 front 두 호출·전문가 세 호출·synthesis 한 호출로
+6회를 쓴다. 이후 같은 task의 문서 준비 추천을 요청하면, 미래 검토4회와 준비1회를
+보호한 front 여유는 1회다. SELECT 완료 최소량2보다 작으므로 추가 Provider 제출
+없이 STOP한다. 교정용 예약을 새 SELECT 시작에 쓰거나 완료로 기록하지 않는다.
+
+해당 회귀는 기본 경로의 예산 거절을 명시적으로 검사한다. 기존 matching Apply의
+task/revision·source·후보·3명 검토·파일·memory·objective 검증은 source 생성만
+명시적인 trusted 단일 국면 fixture로 분리해 유지한다. 여기서는 실제 기록한
+source5회와 후속 기본 두 국면2회·준비1회·검토3회·synthesis1회가 합계12회다.
+초기 source fixture 밖에서는 기본 두 국면이 켜졌는지도 검사한다. 이 조건을
+현재 기본 경로의 전체 성공으로 계산하지 않으며, 예산 환불·재설정이나 가짜
+history로 여유를 만들지 않는다. 최종 실행 통과는 별도로 확인해야 한다.
+
+교정 용량 회귀의 `action_exhausted` 한 row도 단일 국면의 물리 finalizer 거절을
+검사하는 조건으로 남긴다. 기본 grouped 경로는 frozen SEARCH의 미래 비용이
+부족하면 제출 전에 STOP하므로, 그 경로는 별도 기존 T5 oracle로 확인한다.
+이 row의 단일 국면 설정을 다른 ordinary 입력으로 넓히거나 기본 활성화의
+통과 증거로 계산하지 않는다. 순수 스키마 export 검증은 물리 호출이 아니다.
+
 ## 남은 작업
 
 현재 59개 완료 조건은 모두 최종 검증 전이다. 수용한 구조 경계를 따라 런타임과 증분 전달·Lead 인지 연결을 완성하고 회귀 테스트, 정확한 새 소스의 영향·전체 CI, 실제 Provider의 두 원래 입력 복구, 크기와 종단 품질 비교, 전항목 감사 및 리뷰·통합·종료를 진행해야 한다. 실제 Provider/사용자 편집 품질의 사후평가 작업은 별도 Backlog이며 이 구현을 중단시키는 조건으로 추가하지 않는다.

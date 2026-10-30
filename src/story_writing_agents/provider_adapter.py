@@ -32,6 +32,41 @@ DEFAULT_PROVIDER_TIMEOUT_SECONDS = 900.0
 PROVIDER_TIMEOUT_GRACE_SECONDS = 30.0
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderContextWitness:
+    """실제 전송과 한 native 이력의 연속성을 연결하는 불변 관측값이다."""
+
+    thread_id: str
+    rollout_id: str
+    rollout_path: Path = field(repr=False)
+    scope_digest: str
+    file_identity: tuple[int, int]
+    prefix_utf8_bytes: int
+    prefix_sha256: str
+    payload_sha256: str
+    call_id: str
+    turn_id: str
+    settings_digest: str
+    cli_version: str = "0.164.0"
+
+    def __post_init__(self) -> None:
+        if (self.cli_version != "0.164.0" or type(self.rollout_path) is not Path
+                and not isinstance(self.rollout_path, Path)):
+            raise ValueError("native context witness has an invalid source")
+        if not self.rollout_path.is_absolute():
+            raise ValueError("native context witness needs an absolute owned path")
+        for value in (self.thread_id, self.rollout_id, self.call_id, self.turn_id):
+            if type(value) is not str or not value or len(value) > 256:
+                raise ValueError("native context witness has an invalid identity")
+        for value in (self.scope_digest, self.prefix_sha256, self.payload_sha256, self.settings_digest):
+            if type(value) is not str or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+                raise ValueError("native context witness has an invalid digest")
+        if (type(self.file_identity) is not tuple or len(self.file_identity) != 2
+                or any(type(v) is not int or v < 0 for v in self.file_identity)
+                or type(self.prefix_utf8_bytes) is not int or self.prefix_utf8_bytes < 1):
+            raise ValueError("native context witness has invalid file facts")
+
+
 class ExecutionValueSource(StrEnum):
     """Authoritative origin of one effective provider execution value."""
 
@@ -122,11 +157,31 @@ class ProviderInvocation:
         repr=False,
         compare=False,
     )
+    context_witness: ProviderContextWitness | None = field(default=None, kw_only=True, repr=False)
+    context_anchor: ProviderContextWitness | None = field(default=None, kw_only=True, repr=False)
+    context_call_id: str | None = field(default=None, kw_only=True)
     payload_json: bytes | None = field(init=False, repr=False)
     payload_accounting: ProviderPayloadAccounting | None = field(init=False)
     call_accounting: ProviderCallAccounting | None = field(init=False)
 
     def __post_init__(self) -> None:
+        if self.context_witness is not None and type(self.context_witness) is not ProviderContextWitness:
+            raise TypeError("provider context witness has an invalid type")
+        if self.context_anchor is not None and type(self.context_anchor) is not ProviderContextWitness:
+            raise TypeError("provider context anchor has an invalid type")
+        if (self.context_witness is None) != (self.context_anchor is None):
+            raise ValueError("delta needs both accepted and transport native witnesses")
+        if self.context_witness is not None and (self.thread_id != self.context_witness.thread_id
+                or self.context_anchor.thread_id != self.context_witness.thread_id
+                or self.context_anchor.rollout_path != self.context_witness.rollout_path
+                or self.context_anchor.rollout_id != self.context_witness.rollout_id
+                or self.context_anchor.file_identity != self.context_witness.file_identity
+                or self.context_anchor.scope_digest != self.context_witness.scope_digest
+                or self.context_anchor.settings_digest != self.context_witness.settings_digest
+                or self.context_anchor.prefix_utf8_bytes > self.context_witness.prefix_utf8_bytes):
+            raise ValueError("delta witness lineage is inconsistent")
+        if self.context_call_id is not None and (type(self.context_call_id) is not str or not self.context_call_id):
+            raise ValueError("provider context call identity is invalid")
         if self.stream_sink is None:
             active_sink = active_provider_stream_sink()
             if active_sink is not None:
@@ -213,6 +268,7 @@ class ProviderResult:
     response_text: str
     usage: ProviderUsage | None = field(default=None, compare=False)
     actual_transport_utf8_bytes: int | None = field(default=None, compare=False)
+    context_witness: ProviderContextWitness | None = field(default=None, kw_only=True, repr=False)
     response_diagnostic: ProviderResponseDiagnostic | None = field(
         default=None,
         compare=False,
@@ -220,6 +276,8 @@ class ProviderResult:
     )
 
     def __post_init__(self) -> None:
+        if self.context_witness is not None and type(self.context_witness) is not ProviderContextWitness:
+            raise TypeError("provider context witness has an invalid type")
         if (
             self.response_diagnostic is not None
             and type(self.response_diagnostic) is not ProviderResponseDiagnostic

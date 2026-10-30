@@ -12,6 +12,8 @@ from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
     preparation, recommendation, rewrite_history,
     task_assessment, )
+from story_writing_agents.lead_schema_groups import LeadGroupPhase
+from tests.provider_wire_fixture import selection_plan
 from tests import test_lead_orchestration as lead
 
 
@@ -115,7 +117,7 @@ class RecommendationActionContractTests(RecommendationCase):
                           request.source_proposal_digest, request.source_execution_attempt_id), (None,) * 4)
         # Ordered offered sources remain whole-message snapshots, including the new reply.
         self.backend.enqueue(recommendation(message="Second whole reply", recommended_action=action( source_ids=(source.event_id, "current_response")), authoring_scope=c.authoring_scope_to_dict(request.authoring_scope),
-            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation'))))
+            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation'))), control_plan=selection_plan("prepare.artifact"))
         second = await self.runtime.lead_turn(self.session_id, conversation_id, ("Finished candidate:\n" + message + "\nYou may make bounded review judgments and prepare a separate proposal; preserve supplied facts.\n" + "Offer another plan."))
         self.assertEqual(second.recommendation_request.authoring_scope, request.authoring_scope)
         self.assertEqual(tuple(s.content_digest for s in second.recommendation_request.draft_sources),
@@ -152,7 +154,7 @@ class RecommendationActionContractTests(RecommendationCase):
                     selection['left']['plot_architect'] = False
                     selection['right']['left']['character_custodian'] = True
                     return json.dumps(native)
-            self.backend.enqueue(bad)
+            self.backend.enqueue(bad, control_plan=selection_plan("prepare.artifact"))
             self.backend.enqueue(bad)
             result = await self.runtime.lead_turn(self.session_id, cid, ("Finished candidate:\n" + message + "\nYou may make bounded review judgments and prepare a separate proposal; preserve supplied facts.\n" + "Reject undisclosed aliases."))
             self.assertIsNone(result.recommendation_request)
@@ -339,7 +341,8 @@ class RecommendationActionContractTests(RecommendationCase):
                 self.assertFalse(hasattr(event.payload, "recommended_action"))
         self.assertIsNone(c.project_collaboration_history(executed).current_recommendation_request)
         conversation_id = self.conversation("Runtime recovery recommendation")
-        self.backend.enqueue(lead._SubmittedFailure(lead.BackendProtocolError("synthetic provider failure")))
+        self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT,
+            lead._SubmittedFailure(lead.BackendProtocolError("synthetic provider failure"))),))
         result = await self.runtime.lead_turn(self.session_id, conversation_id, "A normal read-only question.")
         self.assertIsNone(result.recommendation_request)
         self.assertFalse(self.payload_events(conversation_id, c.LeadRecommendationRequestPayload))

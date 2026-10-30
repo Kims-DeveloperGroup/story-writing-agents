@@ -6146,6 +6146,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         from tests.test_lead_orchestration import (
             _task_fixture, _current_exploration_outcome, _submitted_calls)
         from tests.test_specialist_routing_runtime import scoped_proposal
+        from tests.provider_wire_fixture import selection_plan
         case = _task_fixture(self)
         source, owner = case.conversation("Installed source A"), case.conversation("Installed owner B")
         source_text = "Prefix. 한글\r\nSelected.  Suffix."
@@ -6176,7 +6177,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             self.assertFalse(call.contract.structural_findings(frame))
             self.assertTrue(call.contract.decode_response(frame).belongs_to(call.contract))
             return frame
-        case.backend.enqueue(adopted_plot_proposal)
+        case.backend.enqueue(adopted_plot_proposal, control_plan=selection_plan("consultation.authoring.content"))
         controller, _, callbacks = self.make_controller(case.control_workspace,
                         conversation_storage_services=case.runtime.conversation_storage_services, terminal_width=200)
         controller._runtime, controller._runner = case.runtime, runner
@@ -6204,7 +6205,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 failure.add_note(_current_policy_failure_note(
                     case.backend, projection=projected))
             raise
-        self.assertEqual(len(_submitted_calls(case.history(source))) + len(_submitted_calls(case.history(owner))), 2)
+        self.assertEqual(len(_submitted_calls(case.history(source))) + len(_submitted_calls(case.history(owner))), 3)
 
 
 

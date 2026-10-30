@@ -2546,13 +2546,13 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
 
 def _lead_call_contract_factory(*, constraints: LeadProviderConstraints, contract: LeadResultRuleSeed,
                                 stage: str, language: str, authorized_validator: Callable[[str, object], object],
-                                reviewer_for_locator: Callable[[str], str]) -> OrchestrationLeadCallFactory:
+                                reviewer_for_locator: Callable[[str], str],
+                                schema_group_protocol: bool = False) -> OrchestrationLeadCallFactory:
     if type(contract) is not LeadResultRuleSeed:
         raise TypeError("Lead planning requires the exact pure source-owned rule seed")
     return OrchestrationLeadCallFactory(constraints, contract,
-                                       stage, language, authorized_validator, reviewer_for_locator)
-
-
+                                       stage, language, authorized_validator, reviewer_for_locator,
+                                       schema_group_protocol=schema_group_protocol)
 
 
 class StoryRuntime:
@@ -12010,6 +12010,9 @@ class StoryRuntime:
                         constraints=constraints,
                         fresh_revision_only=successor_only or (task_receipt is not None and task_receipt.target_task_id is not None),
                     )
+                group_protocol = (preparation is None and not discussion_only
+                    and interaction_mode is LeadInteractionMode.ORCHESTRATION
+                    and lead_rule_seed.contract_id in {"lead-response-v6", "lead-response-v7", "lead-response-v8"})
                 provider._public_response_contract_id = (
                     lead_rule_seed.contract_id
                     if lead_rule_seed.contract_id in {
@@ -12552,7 +12555,13 @@ class StoryRuntime:
                                                          source_ids=tuple(item.input_id for item in inputs))),
                     contract=lead_rule_seed, stage="lead.front",
                     language=definition.language, authorized_validator=validate,
-                    reviewer_for_locator=self._core_reviewer)
+                    reviewer_for_locator=self._core_reviewer, schema_group_protocol=group_protocol)
+                if lead_factory.schema_group_protocol and ordinary_front_cap is not None and not successor_only:
+                    # 현재 front 완료 비용만 두 국면으로 계산하고 미래 준비·검토 보호량은 유지한다.
+                    ordinary_front_cap = self._ordinary_front_call_cap(
+                        session_id, conversation_id, minimum_completion_calls=2)
+                    if ordinary_front_cap is not None:
+                        physical_call_limit = min(_CONTEXT_INVOCATION_CALL_LIMIT, remaining, ordinary_front_cap)
                 contextual_request = ContextInvocationRequest(
                     session_id=session_id,
                     subject_kind=ContextSubjectKind.CONVERSATION,
@@ -15777,9 +15786,12 @@ class StoryRuntime:
         previous = request.group_state
         return ContextGroupInvocationState(
             basis, None if previous is None else previous.workflow,
-            None if previous is None else previous.prepared_compilation)
+            None if previous is None else previous.prepared_compilation,
+            transport_delivery=None if previous is None else previous.transport_delivery,
+            accepted_delivery=None if previous is None else previous.accepted_delivery,
+        )
 
-    def _ordinary_front_call_cap(self, session_id: str, conversation_id: str) -> int | None:
+    def _ordinary_front_call_cap(self, session_id: str, conversation_id: str, *, minimum_completion_calls: int = 1) -> int | None:
         """Keep every offered completed v3 task's preparation/review floor intact."""
         events = self.conversation_storage_services.event_store.read(session_id, conversation_id)
         tasks = self._authoring_tasks(self._session_authoring_events(session_id))
@@ -15814,7 +15826,7 @@ class StoryRuntime:
             available = COLLABORATION_PHYSICAL_CALL_LIMIT - spent - (
                 self._final_review_floor(scope, source.basis.inputs, preparation=False) + 1 + read
             )
-            caps.append(min(1 + read, available))
+            caps.append(min(minimum_completion_calls + read, available))
         return min(caps) if caps else None
 
     @staticmethod

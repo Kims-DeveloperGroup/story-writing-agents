@@ -1,6 +1,7 @@
 """Exhaustive acceptance coverage for runtime-grounded lead judgments."""
 
 from __future__ import annotations
+from tests.provider_wire_fixture import selection_plan
 from story_writing_agents import authoring_admission as admission
 from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
 
@@ -361,7 +362,7 @@ def _search(query: str, kinds: list[str]):
 
 def _missing_outcome(*, proposal: bool = False, authoring_assessment=None):
     def respond(call, _provider):
-        observation = call.payload["context_observation"]
+        observation = _provider.callback_payload(call)["context_observation"]
         assert observation["observation_type"] == "context_search_results" and observation["zero_hit_receipt"] is not None
         value = {
                 **({"authoring_assessment": admission.assessment_to_dict(authoring_assessment)}
@@ -454,7 +455,7 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None):
 def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
                         authoring_assessment=None, native_proposal=False):
     def respond(call, _provider):
-        aliases = call.payload["task_input"]["available_input_sources"]
+        aliases = _provider.callback_payload(call)["task_input"]["available_input_sources"]
         target_paths = tuple(
             item["source_locator"].removeprefix("${").removesuffix("}").split("}#", 1)[0]
             for item in aliases
@@ -535,7 +536,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             with self.subTest(kinds=kinds):
                 conversation_id = self.conversation(f"Zero hit {index}")
                 self.backend.enqueue(_search("phrase absent from every source", kinds),
-                    _missing_outcome(authoring_assessment=_fixture_assessment()),)
+                    _missing_outcome(authoring_assessment=_fixture_assessment()), control_plan=selection_plan('prepare.consultation.authoring', before_script_response=1))
                 result = await self.runtime.lead_turn(
                     self.session_id,
                     conversation_id,
@@ -582,7 +583,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
     ) -> None:
         conversation_id = self.conversation("Content-free zero hit")
         self.backend.enqueue(_search("private internal search phrase", ["w"]),
-            _missing_outcome(authoring_assessment=_fixture_assessment()),)
+            _missing_outcome(authoring_assessment=_fixture_assessment()), control_plan=selection_plan('prepare.consultation.authoring', before_script_response=1))
         result = await self.runtime.lead_turn(self.session_id, conversation_id,
             _ADMISSION_BRIEF + "\n" + "Check canonical artifacts.",)
         self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
@@ -619,7 +620,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self.backend.enqueue(
             _search("phrase absent from every source", ["w", "c"]),
             _missing_outcome(proposal=True, authoring_assessment=task_assessment(foundation_ids=('user_input',), actions=('bounded missing-evidence review judgments',))),
-        )
+         control_plan=selection_plan('consultation.authoring.review', before_script_response=1))
         proposed = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
@@ -653,7 +654,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
     ) -> None:
         conversation_id = self.conversation("Zero hit drift")
         self.backend.enqueue(_search("phrase absent from every source", ["w"]), _missing_outcome(proposal=True,
-            authoring_assessment=_fixture_assessment()),)
+            authoring_assessment=_fixture_assessment()), control_plan=selection_plan('consultation.authoring.review', before_script_response=1))
         proposed = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
@@ -676,7 +677,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 evidence_ids=["reference_1", "reference_2"],
                 authoring_assessment=_fixture_assessment(foundation_ids=("reference_1", "reference_2")),
             native_proposal=True)
-        )
+        , control_plan=selection_plan('consultation.authoring.review'))
         result = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
@@ -717,7 +718,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         path.write_text("current-exploration-evidence\nSecond line.\n", encoding="utf-8")
         observed = []
         def grounded(call, _provider):
-            observed.append(call.payload["context_observation"]["read_results"][0])
+            observed.append(_provider.callback_payload(call)["context_observation"]["read_results"][0])
             from story_writing_agents.agent_context.manifest import ContextSourceKind
             from tests.provider_wire_fixture import finite_fixture_selection
             facts = call.contract.eligibility_offers
@@ -750,7 +751,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         empty = self.workspace.path("manuscript/part-01/empty.md")
         empty.write_bytes(b"")
         conversation_id = self.conversation("Empty whole")
-        self.backend.enqueue(_referenced_outcome(status="empty", evidence_ids=["reference_1"], factual=True))
+        self.backend.enqueue(_referenced_outcome(status="empty", evidence_ids=["reference_1"], factual=True), control_plan=selection_plan('question.authoring'))
         result = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
@@ -766,7 +767,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self.backend.enqueue(_referenced_outcome(
             status="empty", evidence_ids=["reference_1"],
             authoring_assessment=_fixture_assessment(foundation_ids=("reference_1",)),
-            native_proposal=True))
+            native_proposal=True), control_plan=selection_plan('consultation.authoring.review'))
         unqualified = await self.runtime.lead_turn(
             self.session_id, self.conversation("Empty READ foundation"),
             "Use ${manuscript/part-01/empty.md} as the sole foundation.\n" + _ADMISSION_BRIEF,
@@ -796,10 +797,10 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                              expect_unoffered: bool = False):
             def respond(call, _provider):
                 self.assertEqual(
-                    [item["evidence_id"] for item in call.payload["core_document_statuses"]],
+                    [item["evidence_id"] for item in _provider.callback_payload(call)["core_document_statuses"]],
                     ["status_1", "status_2", "status_3", "status_4"],
                 )
-                offered = {item["input_source_id"] for item in call.payload["task_input"][
+                offered = {item["input_source_id"] for item in _provider.callback_payload(call)["task_input"][
                     "available_input_sources"]}
                 self.assertIn("user_input", offered)
                 if references:
@@ -895,7 +896,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             with self.subTest(ids=ids):
                 conversation_id = self.conversation(f"Current source selection {index}")
                 self.backend.enqueue(selected_sources(ids, references=True,
-                    expect_unoffered=index == 0))
+                    expect_unoffered=index == 0), control_plan=selection_plan('prepare.consultation.authoring'))
                 if index != 2:
                     self.backend.enqueue(selected_sources(ids, references=True,
                     expect_unoffered=index == 0))
@@ -907,7 +908,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 failure_payloads = tuple(event.payload for event in self.history(conversation_id)
                                          if type(event.payload) is CollaborationLeadOutcomeFailurePayload)
                 self.assertEqual(len(failure_payloads), 0 if index == 2 else 1)
-                self.assertEqual(len(_submitted_calls(self.history(conversation_id))), 1 if index == 2 else 2)
+                self.assertEqual(len(_submitted_calls(self.history(conversation_id))), 2 if index == 2 else 3)
                 if index == 2:
                     self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
                     self.assertIsNotNone(result.recommendation_request, result)
@@ -947,7 +948,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             return _read_history_hit(call, provider)
 
         def answer_prior_turn(call, provider: _LeadContextProvider):
-            observation = call.payload["context_observation"]
+            observation = provider.callback_payload(call)["context_observation"]
             evidence_id = observation["read_results"][0]["evidence_id"]
             prior_evidence_ids.append(evidence_id)
             from story_writing_agents.agent_context.manifest import ContextSourceKind
@@ -979,14 +980,14 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
 
         conversation_id = self.conversation("Stale prior-turn evidence")
         self.backend.enqueue(_search("Outline", ["w"]), read_prior_turn,
-                             answer_prior_turn)
+                             answer_prior_turn, control_plan=selection_plan('answer.observed_facts', before_script_response=2))
         first = await self.runtime.lead_turn(self.session_id, conversation_id, "Read current evidence.")
         self.assertIs(first.kind, LeadOutcomeKind.ANSWER)
         self.assertEqual(first.message, "The current READ supports this answer.")
         self.assertEqual(len(prior_evidence_ids), 1)
 
         self.backend.enqueue(selected_sources(prior_evidence_ids,
-                    expect_unoffered=True))
+                    expect_unoffered=True), control_plan=selection_plan('prepare.consultation.authoring'))
         self.backend.enqueue(selected_sources(prior_evidence_ids,
                     expect_unoffered=True))
         stale = await self.runtime.lead_turn(
@@ -1033,16 +1034,16 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         def check_native_delivery(conversation_id, call_start, finalizer_start,
                                   expected_returns, expected_states):
             calls = self.backend.calls[call_start:]
-            self.assertEqual(len(calls), 3)
+            self.assertEqual(len(calls), 4)
             self.assertTrue(all(
                 call.scope.session_id == self.session_id
                 and call.scope.subject_kind is ContextSubjectKind.CONVERSATION
                 and call.scope.subject_id == conversation_id
                 and call.scope.agent_id == LEAD_ORCHESTRATOR for call in calls))
             self.assertEqual(answer_returns, expected_returns)
-            self.assertEqual(len(_submitted_calls(self.history(conversation_id))), 3)
+            self.assertEqual(len(_submitted_calls(self.history(conversation_id))), 4)
             finalizers = self.backend.finalizers[finalizer_start:]
-            self.assertEqual(len(finalizers), 3)
+            self.assertEqual(len(finalizers), 4)
             states = []
             for finalizer in finalizers:
                 self.assertTrue(type(finalizer) is _Finalizer)
@@ -1055,7 +1056,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     self.assertTrue(
                         code is ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)
                 states.append(state)
-            self.assertCountEqual(states, expected_states)
+            self.assertCountEqual(states, ("accepted", *expected_states))
 
         def require_terminal_fallback(result, conversation_id, call_start, original_message):
             self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
@@ -1166,13 +1167,13 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             return respond
 
         def answer_with_unread_id(call, _provider):
-            observation = call.payload['context_observation']
+            observation = _provider.callback_payload(call)['context_observation']
             self.assertEqual(observation['observation_type'], 'context_search_results')
             return unread_answer(call, 'A SEARCH hit is not READ evidence.',
                                  ArtifactReviewDomain.PLOT_STRUCTURE)
 
         def read_first(call, provider: _LeadContextProvider):
-            observation = call.payload['context_observation']
+            observation = provider.callback_payload(call)['context_observation']
             handle = observation['search_results'][0]['read_handle']
             provider.used_handles = (handle,)
             outer, inner = offered_fixture_bindings(
@@ -1188,7 +1189,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
 
         def answer_without_using_read(call, _provider):
             nonlocal answer_returns
-            observation = call.payload['context_observation']
+            observation = _provider.callback_payload(call)['context_observation']
             self.assertEqual(observation['observation_type'], 'context_read_results')
             evidence_id = observation['read_results'][0]['evidence_id']
             read_evidence.append(evidence_id)
@@ -1228,7 +1229,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             answer_returns = 0
             call_start = len(self.backend.calls)
             finalizer_start = len(self.backend.finalizers)
-            self.backend.enqueue(*scripts)
+            self.backend.enqueue(*scripts, control_plan=selection_plan('answer.observed_facts', before_script_response=index + 1))
             if index == 0:
                 self.backend.enqueue(invalid_correction(ArtifactReviewDomain.PLOT_STRUCTURE))
             result = await self.runtime.lead_turn(
@@ -1274,8 +1275,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 'Shared grounding phrase.\n', encoding='utf-8')
 
         def truncated_answer(call, _provider):
-            self.assertTrue(call.payload['context_observation']['truncated'])
-            self.assertEqual(call.payload['context_observation']['observation_type'],
+            self.assertTrue(_provider.callback_payload(call)['context_observation']['truncated'])
+            self.assertEqual(_provider.callback_payload(call)['context_observation']['observation_type'],
                              'context_search_results')
             return unread_answer(call, 'A SEARCH hit is not READ evidence.',
                                  ArtifactReviewDomain.TONE_EXECUTION)
@@ -1285,7 +1286,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         answer_returns = 0
         call_start = len(self.backend.calls)
         finalizer_start = len(self.backend.finalizers)
-        self.backend.enqueue(_search('Shared grounding phrase', ['w']), truncated_answer)
+        self.backend.enqueue(_search('Shared grounding phrase', ['w']), truncated_answer, control_plan=selection_plan('answer.observed_facts', before_script_response=1))
         self.backend.enqueue(invalid_correction(ArtifactReviewDomain.TONE_EXECUTION))
         result = await self.runtime.lead_turn(
             self.session_id, conversation_id, 'Reject truncated search evidence.')
@@ -1314,7 +1315,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             del call, _provider
             return json.dumps({"action": {"kind": "answer", "result": {}}}, separators=(",", ":"),)
 
-        self.backend.enqueue(incomplete)
+        self.backend.enqueue(incomplete, control_plan=selection_plan('answer.workflow'))
         self.backend.enqueue(_visible_outcome("answer", "Corrected complete direct answer."))
         corrected = await self.runtime.lead_turn(
             self.session_id,
@@ -1323,10 +1324,10 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         )
         self.assertIs(corrected.kind, LeadOutcomeKind.ANSWER)
         self.assertEqual(corrected.message, "Corrected complete direct answer.")
-        self.assertEqual(len(self.backend.calls), 2)
+        self.assertEqual(len(self.backend.calls), 3)
         self.assertEqual(
             tuple(finalizer.calls for finalizer in self.backend.finalizers),
-            (
+            ([("accepted", None)],
                 [
                     (
                         "rejected",
@@ -1357,24 +1358,24 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 separators=(",", ":"),
             )
 
-        self.backend.enqueue(invented)
+        self.backend.enqueue(invented, control_plan=selection_plan('answer.workflow'))
         self.backend.enqueue(invented)
         calls_before = len(self.backend.calls)
         failed = await self.runtime.lead_turn(self.session_id, conversation_id, "Reject invented evidence.",)
         self.assertIs(failed.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD,)
-        self.assertEqual(len(self.backend.calls) - calls_before, 2)
+        self.assertEqual(len(self.backend.calls) - calls_before, 3)
         first_history = self.history(conversation_id)
         self.assertEqual(
             sum(event.kind is CollaborationEventKind.LEAD_OUTCOME_FAILURE for event in first_history),
             1,
         )
 
-        restart_backend = _LeadBackend()
-        restart_backend.enqueue(_visible_outcome("answer", "Fresh retry answer."))
+        restart_backend = _LeadBackend(test_case=self)
+        restart_backend.enqueue(_visible_outcome("answer", "Fresh retry answer."), control_plan=selection_plan('answer.workflow'))
         restarted = StoryRuntime(self.control_workspace, restart_backend)  # type: ignore[arg-type]
         fresh = await restarted.lead_turn(self.session_id, conversation_id, "Retry in a fresh turn.",)
         self.assertIs(fresh.kind, LeadOutcomeKind.ANSWER)
-        self.assertEqual(len(restart_backend.calls), 1)
+        self.assertEqual(len(restart_backend.calls), 2)
         final_history = restarted.conversation_storage_services.event_store.read(self.session_id, conversation_id,)
         self.assertEqual(
             sum(event.kind is CollaborationEventKind.LEAD_OUTCOME_FAILURE for event in final_history),

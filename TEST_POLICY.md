@@ -69,6 +69,20 @@ raw142881이다. 기존 #881 helper4행과 이번 정책 helper2행도 청구하
 
 ## Verification rule
 
+### #896의 검증 후보 소스 배정
+
+사용자의 필요시 소스 예산 확대 허용을 #896의 현재 검증 후보에 한정하여
+정확한 **143443→145030**, 부모 누적 **142604→145030** 전환에 적용한다.
+기준 raw143435에 기존 ID의 wire·native·Phase 회귀712행과 정책 회귀13행을
+더한 raw144160, 기존 helper8행·새 fixture helper252행·비공개 실제 검증 도구
+helper608행·정책 helper2행을 모두 청구한 helper870행의 합계145030이다.
+비공개 검증 도구도 비용에서 제외하지 않는다. 이 수치는 현재 검증 후보의 배정이며
+CI나 최종 검토에서 추가 변경이 생기면 비용을 다시 정확히 실측한다.
+
+18000/3600초·전체 ID·subTest mapping과 완료된 #881/#894/#895 전환은 유지한다.
+인접한 임의 수치나 시간·ID 변경은 기존 gate와 추가 정책 회귀로 거절한다.
+이 배정은 실제 Provider 실행이나 큐 예외의 허가가 아니다.
+
 ### Provider schema changes
 
 Changes to schema producers, native projection, or pattern syntax must check the final

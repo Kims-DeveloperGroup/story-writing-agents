@@ -1,7 +1,7 @@
 """Synthetic recommendation producers and real-runtime setup; no automatic wire repair."""
 
 from __future__ import annotations
-from tests.provider_wire_fixture import lead_fixture_bound_scope
+from tests.provider_wire_fixture import lead_fixture_bound_scope, selection_plan
 
 from dataclasses import asdict, replace
 import copy
@@ -486,11 +486,11 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
                 contributions=[{'domain': domain, 'role': 'constraint_assessor'}
                 for domain in owner_domains], task_index=0 if selected['objective_id'] is not None else -1)
             scope["interpretation"] = "Prepare separate review of the finished user-supplied synthetic candidate."
-        status = next(item for item in call.payload["core_document_statuses"] if item["artifact_path"] == OUTLINE)
+        status = next(item for item in _provider.callback_payload(call)["core_document_statuses"] if item["artifact_path"] == OUTLINE)
         value = {
             "kind": "recommendation", "message": message,
             "scope": "story_specific", "evidence_status": status["document_status"] if status["document_status"] in {"empty", "missing"} else "incomplete",
-            "evidence_ids": [artifact._status_id(call, OUTLINE)], "proposal": None, "artifact_intent": None,
+            "evidence_ids": [artifact._status_id(_provider.callback_payload(call), OUTLINE)], "proposal": None, "artifact_intent": None,
             "objective_intent": None, "recommended_action": selected,
             "authoring_scope": scope,}
         if authoring_assessment is not None:
@@ -556,9 +556,9 @@ def decision(turn, kind=c.CollaborationConfirmationDecision.CONFIRM, **changes):
 def _unbound_preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
     request = turn.recommendation_request
     selected = [item.event_id for item in request.draft_sources]
-    def selected_evidence(call, path):
-        return (call.payload["context_observation"]["read_results"][0]["evidence_id"]
-                if read_evidence else artifact._status_id(call, path))
+    def selected_evidence(call, path, *, input_payload):
+        return (input_payload["context_observation"]["read_results"][0]["evidence_id"]
+                if read_evidence else artifact._status_id(input_payload, path))
     intent = ({"action": "start", "request": request.instruction,
                "target_paths": list(request.target_paths), "next_step": "prepare",
                "draft_source_event_ids": selected}
@@ -566,17 +566,17 @@ def _unbound_preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
               {"action": "continue", "objective_id": request.objective_id,
                "next_step": "prepare", "draft_source_event_ids": selected})
     producer = artifact._artifact_outcome(
-        operations=lambda call, material: [
+        operations=lambda call, material, *, input_payload: [
             ({
-                "kind": "patch", "evidence_id": selected_evidence(call, path),
+                "kind": "patch", "evidence_id": selected_evidence(call, path, input_payload=input_payload),
                 "replacement_text": text,
             } if read_evidence else
-            {"kind": "replace", "evidence_id": selected_evidence(call, path), "new_text": text})
+            {"kind": "replace", "evidence_id": selected_evidence(call, path, input_payload=input_payload), "new_text": text})
             if path.startswith("core_documents/") else
             {"kind": "create", "suggested_path": path, "new_text": text}
             for path in request.target_paths],
         evidence_status="verified" if read_evidence else "empty",
-        evidence_ids=lambda call, material: [selected_evidence(call, OUTLINE)],
+        evidence_ids=lambda call, material, *, input_payload: [selected_evidence(call, OUTLINE, input_payload=input_payload)],
         objective_intent=intent,)
     if request.kind is c.LeadRecommendationActionKind.PREPARE_CONSULTATION:
         intent = (None if request.objective_id is None else {
@@ -664,7 +664,7 @@ def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
         from tests.provider_wire_fixture import (
             result, lead_fixture_scope, lead_fixture_result, lead_fixture_response, lead_fixture_assessment)
         operations = []
-        reads = call.payload.get('context_observation', {}).get('read_results', [])
+        reads = provider.callback_payload(call).get('context_observation', {}).get('read_results', [])
         for path in request.target_paths:
             if path.startswith('core_documents/'):
                 receipt = next(row for row in reads if row['provenance']['source_locator'] == path)
@@ -697,10 +697,12 @@ class RecommendationCase(ObjectiveCase):
     """Disposable Git-backed workspace, public event store and controlled providers."""
 
     async def recommend(self, conversation_id=None, *, recommended_action=None,
-                        message=DRAFT, text="Recommend preparing this finished user-supplied outline for separate review."):
+                        message=DRAFT, text="Recommend preparing this finished user-supplied outline for separate review.",
+                        selection_group="prepare.artifact"):
         conversation_id = conversation_id or self.conversation("Synthetic recommendation")
         self.backend.enqueue(recommendation(message=message, recommended_action=recommended_action,
-            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded review judgments", "separate proposal preparation"))))
+            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded review judgments", "separate proposal preparation"))),
+                             control_plan=selection_plan(selection_group))
         turn = await self.runtime.lead_turn(self.session_id, conversation_id, text + "\nYou may make bounded review judgments and prepare a separate proposal; preserve supplied facts." + "\nFinished candidate:\n" + message)
         self.assertIs(turn.kind, c.LeadOutcomeKind.RECOMMENDATION, turn)
         self.assertIsNotNone(turn.recommendation_request, turn)
@@ -777,7 +779,7 @@ class RecommendationCase(ObjectiveCase):
             return encoded
         def read(call, provider):
             retain_binding(call)
-            hits = call.payload['context_observation']['search_results']
+            hits = provider.callback_payload(call)['context_observation']['search_results']
             try:
                 selected = tuple(next(row['read_handle'] for row in hits
                     if row['provenance']['source_locator'] == path) for path in request.target_paths

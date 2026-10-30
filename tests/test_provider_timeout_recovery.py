@@ -1,6 +1,8 @@
 """Read-only Lead failures preserve history and admit explicit same-chat retry."""
 
 from __future__ import annotations
+from tests.provider_wire_fixture import selection_plan
+from story_writing_agents.lead_schema_groups import LeadGroupPhase
 
 import asyncio
 import json
@@ -36,7 +38,7 @@ from tests.collaboration_contract_fixture import LEAD, USER, make_draft, provide
 class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
     def setUp(self):
         super().setUp()
-        self.backend = lead._LeadBackend(persist_context_threads=True)
+        self.backend = lead._LeadBackend(persist_context_threads=True, test_case=self)
         self.runtime = StoryRuntime(self.workspace, self.backend)
 
     def failures(self, conversation):
@@ -51,9 +53,11 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
 
     async def answer(self, conversation, text, *, runtime=None, backend=None):
         backend = backend or self.backend
-        backend.enqueue(lead._visible_outcome("answer", "Synthetic retry succeeded."))
+        call_start = len(backend.calls)
+        backend.enqueue(lead._visible_outcome("answer", "Synthetic retry succeeded."), control_plan=selection_plan('answer.workflow'))
         result = await (runtime or self.runtime).lead_turn(self.session_id, conversation, text)
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
+        self.assertEqual(tuple(call.contract.schema_group_phase.value for call in backend.calls[call_start:]), ("select", "generate"))
         return result
 
     def append_legacy(self, conversation, state):
@@ -91,9 +95,9 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
                                                        mandatory_reference_paths=call.mandatory_reference_paths)
                         record_context_provider_failure(failure, ContextProviderFailureFacts(
                             accounting, timed_out=True, taint_existing_thread=True))
-                        raise
+                        return failure
 
-                self.backend.enqueue(force_timeout)
+                self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, force_timeout),))
                 original = "Original request that exceeds the timer."
                 failed = await self.runtime.lead_turn(self.session_id, conversation, original)
                 self.assertTrue(cancelled.is_set())
@@ -106,7 +110,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
                 prefix = self.history(conversation)
                 self.assertIs(self.checkpoint()[1].record.state, ContextLedgerRecordState.TAINTED)
 
-                backend = lead._LeadBackend(persist_context_threads=True)
+                backend = lead._LeadBackend(persist_context_threads=True, test_case=self)
                 backend.context_threads.update(self.backend.context_threads)
                 restarted = StoryRuntime(self.workspace, backend)
                 self.assertEqual(backend.calls, [])
@@ -115,7 +119,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
                 result = await self.answer(conversation, "Explicit retry after restart.",
                                            runtime=restarted, backend=backend)
                 self.assertNotEqual(result.turn_id, failed.turn_id)
-                self.assertEqual(len(backend.calls), 1)
+                self.assertEqual(len(backend.calls), 2)
                 self.assertIsNone(backend.calls[0].expected_thread_id)
                 self.assertEqual(backend.calls[0].payload["session_history"]["context_delivery_mode"], "bootstrap")
                 history = self.history(conversation)
@@ -140,7 +144,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
                 restarted = StoryRuntime(self.workspace, self.backend)
                 before = len(self.backend.calls)
                 await self.answer(conversation, "New explicit input.", runtime=restarted)
-                self.assertEqual(len(self.backend.calls) - before, 1)
+                self.assertEqual(len(self.backend.calls) - before, 2)
                 self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
                 closure = self.failures(conversation)
                 self.assertEqual(len(closure), 1)
@@ -163,12 +167,12 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         restarted = StoryRuntime(self.workspace, self.backend)
         await self.answer(conversation, "Retry after interrupted native work.", runtime=restarted)
         self.assertIn(retained_thread, self.backend.tainted_thread_ids)
-        self.assertIsNone(self.backend.calls[-1].expected_thread_id)
-        self.assertEqual(self.backend.calls[-1].payload["session_history"]["context_delivery_mode"], "bootstrap")
+        self.assertIsNone(self.backend.calls[-2].expected_thread_id)
+        self.assertEqual(self.backend.calls[-2].payload["session_history"]["context_delivery_mode"], "bootstrap")
 
     async def test_abandoned_turn_preserves_other_conversation_successful_checkpoint(self):
         failed_conversation, successful_conversation = self.conversation(), self.conversation()
-        self.backend.enqueue(lead._SubmittedFailure(TimeoutError(), timed_out=True))
+        self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, lead._SubmittedFailure(TimeoutError(), timed_out=True)),))
         await self.runtime.lead_turn(self.session_id, failed_conversation, "Failed conversation input.")
         await self.answer(successful_conversation, "Successful other conversation input.")
         _, checkpoint = self.checkpoint()
@@ -177,8 +181,8 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         before_taints = list(self.backend.tainted_thread_ids)
         restarted = StoryRuntime(self.workspace, self.backend)
         await self.answer(failed_conversation, "Explicit retry in failed conversation.", runtime=restarted)
-        self.assertEqual(self.backend.calls[-1].expected_thread_id, retained_thread)
-        self.assertEqual(self.backend.calls[-1].payload["session_history"]["context_delivery_mode"], "delta")
+        self.assertEqual(self.backend.calls[-2].expected_thread_id, retained_thread)
+        self.assertEqual(self.backend.calls[-2].payload["session_history"]["context_delivery_mode"], 'bootstrap')
         self.assertEqual(self.backend.tainted_thread_ids, before_taints)
 
     async def test_revision_timeout_keeps_superseded_confirmation_non_authorizing(self):
@@ -201,7 +205,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
             await restarted.decide_lead_step(lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(len(self.backend.calls), before)
         await self.answer(conversation, "New request after failed revision.", runtime=restarted)
-        self.assertEqual(len(self.backend.calls), before + 1)
+        self.assertEqual(len(self.backend.calls), before + 2)
         self.assertEqual({agent for agent, _ in self.backend.call_records}, {LEAD_ORCHESTRATOR})
 
     async def test_attached_reference_cancellation_closes_and_releases_for_explicit_retry(self):
@@ -212,7 +216,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
             entered.set()
             await asyncio.Future()
 
-        self.backend.enqueue(blocked)
+        self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, blocked),))
         original = "Inspect ${core_documents/global_outline.md} before answering."
         task = asyncio.create_task(self.runtime.lead_turn(self.session_id, conversation, original))
         try:
@@ -234,15 +238,15 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         async with asyncio.timeout(120):
             await self.answer(
                 conversation, "A new request after cancellation.", runtime=restarted)
-        self.assertEqual(len(self.backend.calls), 2)
+        self.assertEqual(len(self.backend.calls), 3)
         self.assertEqual(len(self.backend.reference_calls), 1)
-        self.assertIsNone(self.backend.calls[-1].expected_thread_id)
+        self.assertIsNone(self.backend.calls[-2].expected_thread_id)
         self.assertEqual(sum(type(event.payload) is CollaborationMessagePayload
                              and event.payload.content == original for event in self.history(conversation)), 1)
 
     async def test_failure_closure_write_error_keeps_history_gated(self):
         conversation = self.conversation()
-        self.backend.enqueue(lead._SubmittedFailure(TimeoutError(), timed_out=True))
+        self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, lead._SubmittedFailure(TimeoutError(), timed_out=True)),))
         store_type = type(self.runtime.conversation_storage_services.event_store)
         append = store_type.append_batch
 
@@ -261,11 +265,11 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(len(self.backend.calls), 1)
         self.assertEqual(self.failures(conversation), [])
         await self.answer(conversation, "Retry once authoritative history is writable.")
-        self.assertEqual(len(self.backend.calls), 2)
+        self.assertEqual(len(self.backend.calls), 3)
 
     async def test_corrupt_failed_history_cannot_admit_provider_work(self):
         conversation = self.conversation()
-        self.backend.enqueue(lead._SubmittedFailure(TimeoutError(), timed_out=True))
+        self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, lead._SubmittedFailure(TimeoutError(), timed_out=True)),))
         await self.runtime.lead_turn(self.session_id, conversation, "Original failed input.")
         events = self.history(conversation)
         store_type = type(self.runtime.conversation_storage_services.event_store)

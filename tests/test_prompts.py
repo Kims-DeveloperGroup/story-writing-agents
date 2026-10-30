@@ -137,6 +137,12 @@ class PromptAssemblerTests(unittest.TestCase):
         self.assertEqual(lead.behavior_policy_components[-1].sha256, hashlib.sha256(original + retained).hexdigest())
         self.assertIn(retained.strip(), lead.system_prompt_file.content)
         authority = lead.runtime_behavior_policy
+        common = ("Host의 현재 계약과 허용 액션을 따르세요. 선택·재선택은 내부 제어이며 업무 완료가 아닙니다. "
+                  "delta에서 생략된 맥락은 유지하고 명시된 변경만 반영하세요.").encode("utf-8")
+        self.assertEqual(authority.count(common), 1)
+        self.assertEqual(lead.system_prompt_file.content.count(common), 1)
+        self.assertNotIn("현재 단계는 Phase 1".encode(), authority)
+        self.assertNotIn("현재 단계는 Phase 2".encode(), authority)
         for phrase in (b"takes precedence", b"current invocation schema owns available stage outcomes", b"exact offered task/revision, source, evidence, and candidate identities", b"Status is not a READ receipt", b"separate authority", b"exact successful Apply"):
             self.assertIn(phrase, authority)
         self.assertNotIn(b"objective_intent", authority)
@@ -146,6 +152,7 @@ class PromptAssemblerTests(unittest.TestCase):
         self.assertEqual(self.workspace.path(policy).read_bytes(), original + retained)
         for agent in ROSTER[1:]:
             self.assertEqual(changed[agent], baseline[agent])
+            self.assertNotIn(common, changed[agent].runtime_behavior_policy)
 
 
     def test_explicit_configuration_snapshot_is_fixed_and_overrides_stay_live(

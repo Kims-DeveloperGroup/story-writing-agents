@@ -138,7 +138,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
     ) -> None:
         conversation_id = self.conversation("Three-way parallel consultation")
         proposed = await _three_way_proposal_fixture(self, conversation_id)
-        self.assertEqual(tuple((item.max_physical_calls for item in proposed.proposal.assignments)), (4, 3, 3))
+        self.assertEqual(tuple((item.max_physical_calls for item in proposed.proposal.assignments)), (3, 3, 3))
         self.assertEqual(proposed.proposal.budget.synthesis_max_physical_calls, 1)
         self.assertEqual(
             sum(item.max_physical_calls for item in proposed.proposal.assignments)
@@ -342,7 +342,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(tuple((item.outcome for item in result.assignment_outcomes)), (
             CollaborationAssignmentOutcomeKind.CANCELLED,CollaborationAssignmentOutcomeKind.CANCELLED))
         self.assertEqual(len(_payloads(history, CollaborationTerminalOutcomePayload)), 2)
-        restarted_backend = _LeadBackend()
+        restarted_backend = _LeadBackend(test_case=self)
         restarted = StoryRuntime(self.control_workspace, restarted_backend)  # type: ignore[arg-type]
         finalized = await restarted.lead_turn(self.session_id, conversation_id,
             'Finalize only the already durable result.')
@@ -408,7 +408,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(execution.synthesis_submitted_physical_calls, 1)
         self.assertIs(execution.assignment_outcomes[0].outcome, CollaborationAssignmentOutcomeKind.SUCCEEDED)
         self.assertEqual(len(_payloads(history, CollaborationSpecialistReplyPayload)), 1)
-        backend = _LeadBackend()
+        backend = _LeadBackend(test_case=self)
         restarted = StoryRuntime(self.control_workspace, backend)
         result = await restarted.lead_turn(self.session_id, conversation, "Inspect the cancelled result.")
         self.assertIs(result.state, CollaborationStepState.INTERRUPTED)
@@ -539,7 +539,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(len(_payloads(known, CollaborationExecutionResult)), 1)
         expected = tuple((chunk for payload in _submitted_calls( known) for chunk in payload.validation_details))
         self.assertTrue(expected)
-        restarted_backend = _LeadBackend()
+        restarted_backend = _LeadBackend(test_case=self)
         restarted = StoryRuntime(self.control_workspace, restarted_backend)  # type: ignore[arg-type]
         restored = await restarted.lead_turn(self.session_id, conversation_id, 'Finalize the known result.')
         self.assertIs(restored.state, CollaborationStepState.COMPLETED)
@@ -597,7 +597,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 self.assertEqual(expected[0],
                     "Original response\n$.agent_action.task_result.response_text: " + requirement)
 
-                restarted_backend = _LeadBackend()
+                restarted_backend = _LeadBackend(test_case=self)
                 restarted = StoryRuntime(
                 self.control_workspace, restarted_backend,  # type: ignore[arg-type]
                 )
@@ -648,7 +648,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(len(empty_message_details), 2)
         self.assertEqual(empty_message_details[0], empty_message_details[1])
         self.assertEqual(sum(('expected string, got integer' in detail for detail in expected)), 1)
-        restarted_backend = _LeadBackend()
+        restarted_backend = _LeadBackend(test_case=self)
         restarted = StoryRuntime(
             self.control_workspace, restarted_backend,  # type: ignore[arg-type]
         )
@@ -705,7 +705,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                          'expected pattern "[\\\\s\\\\S]"')
         self.assertNotIn(private, repr(known))
 
-        restarted_backend = _LeadBackend()
+        restarted_backend = _LeadBackend(test_case=self)
         restarted = StoryRuntime(
             self.control_workspace, restarted_backend,  # type: ignore[arg-type]
         )
@@ -789,7 +789,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(len(submitted), 2)
         self.assertEqual(self.runtime._live_execution_markers, set())
 
-        restarted_backend = _LeadBackend()
+        restarted_backend = _LeadBackend(test_case=self)
         restarted = StoryRuntime(
             self.control_workspace, restarted_backend,  # type: ignore[arg-type]
         )
@@ -874,7 +874,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         calls = len(self.backend.calls)
 
         self.assertIs(decision.turn.state, CollaborationStepState.OUTCOME_UNKNOWN)
-        restarted_backend = _LeadBackend()
+        restarted_backend = _LeadBackend(test_case=self)
         restarted = StoryRuntime(self.control_workspace, restarted_backend)  # type: ignore[arg-type]
         recovery = await restarted.lead_turn(self.session_id, conversation_id, 'Do not replay the uncertain attempt.')
         self.assertIs(recovery.state, CollaborationStepState.OUTCOME_UNKNOWN)
@@ -937,7 +937,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             from tests.provider_wire_fixture import (
                 indexed_response, lead_fixture_assignments, lead_fixture_result,
                 offered_fixture_bindings, result as wire_result)
-            material = _workflow_material(call.payload)
+            material = _workflow_material(_provider.callback_payload(call))
             reply_ids = [item["reply_event_id"] for item in material["replies"]]
             known_ids = [item["input_id"] for item in material["inputs"]]
             self.assertIn("reference_1", known_ids)
@@ -1002,7 +1002,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(second.proposal.step_id, first.step_id)
         self.assertEqual(second.proposal.proposal_revision, first.proposal.proposal_revision + 1)
         self.assertEqual((second.proposal.budget.rounds_spent, second.proposal.budget.rounds_added,
-                          second.proposal.budget.physical_calls_spent), (1, 1, 4))
+                          second.proposal.budget.physical_calls_spent), (1, 1, 5))
         first_history = self.history(conversation_id)
         expected_details = tuple(chunk for payload in _submitted_calls(first_history)
             for chunk in payload.validation_details)
@@ -1058,7 +1058,7 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
             ]}}, separators=(',', ':'))
 
         def read_current_proposal(call, provider):
-            observation = call.payload["context_observation"]
+            observation = provider.callback_payload(call)["context_observation"]
             assert (isinstance(observation, dict) and
                     observation["observation_type"] == "context_search_results")
             handle = observation["search_results"][0]["read_handle"]
@@ -1091,7 +1091,7 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(result.assignment_outcomes[0].submitted_physical_calls, 3)
         self.assertEqual(result.synthesis_submitted_physical_calls, 1)
         projection = project_collaboration_history(history)
-        self.assertEqual(projection.physical_calls_spent, 5)
+        self.assertEqual(projection.physical_calls_spent, 6)
         self.assertLessEqual(projection.physical_calls_spent, 12)
 
     async def test_result_persistence_failure_cleans_marker_after_provider_completion(self) -> None:

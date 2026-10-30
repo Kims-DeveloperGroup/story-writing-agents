@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from tests.test_provider_schema_spec import check_schema
+from tests.provider_wire_fixture import ExplicitPhaseScript, assert_phase_guide, selection_plan, FixturePhasePlanError, CallbackContextViews
 
 import asyncio
 import hashlib
@@ -152,7 +153,7 @@ def _search(call: ContextProviderCallRequest, _provider: '_ScriptedProvider') ->
 
 
 def _read_search_hit(call: ContextProviderCallRequest, provider: '_ScriptedProvider') -> str:
-    framed = call.payload['context_observation']
+    framed = provider.callback_payload(call)['context_observation']
     assert isinstance(framed, Mapping) and framed['observation_type'] == 'context_search_results'
     handle = framed['search_results'][0]['read_handle']
     provider.used_handles = (handle,)
@@ -166,7 +167,7 @@ def _read_search_hit(call: ContextProviderCallRequest, provider: '_ScriptedProvi
 
 
 def _answer_with_read(call: ContextProviderCallRequest, provider: '_ScriptedProvider') -> str:
-    framed = call.payload["context_observation"]
+    framed = provider.callback_payload(call)["context_observation"]
     assert isinstance(framed, dict) and framed["observation_type"] == "context_read_results"
     assert framed["read_results"][0]["read_handle"] == provider.used_handles[0]
     return _answer(call, provider, used_handles=provider.used_handles)
@@ -179,7 +180,7 @@ def _lead_answer(call: ContextProviderCallRequest, _provider: '_ScriptedProvider
 
 
 def _lead_answer_with_read(call: ContextProviderCallRequest, provider: '_ScriptedProvider') -> str:
-    framed = call.payload['context_observation']
+    framed = provider.callback_payload(call)['context_observation']
     assert isinstance(framed, Mapping) and framed['observation_type'] == 'context_read_results'
     if isinstance(call, BoundContextProviderCallRequest):
         return _lead_answer_frame(call, 'Visible grounded lead answer.')
@@ -257,7 +258,7 @@ class _RecordingFinalizer:
 class _ScriptedProvider:
     """Deterministic provider seam retaining scoped native continuations."""
 
-    def __init__(self, responses: tuple[_Response, ...], *, provider_id: str='codex',
+    def __init__(self, responses: tuple[_Response, ...], *, control_plan=None, provider_id: str='codex',
         definition_fingerprint: str=_DEFINITION_DIGEST, usage: ProviderUsage | None=None,
         reference_operation_id: str | None=None) -> None:
         self.provider_id = provider_id
@@ -266,7 +267,9 @@ class _ScriptedProvider:
         self.reference_read = None
         self.reference_authorization = None
         self.reference_repository = None
-        self.responses = list(responses)
+        self.script = ExplicitPhaseScript(responses, control_plan)
+        self.callback_views = CallbackContextViews()
+        self.responses = self.script.responses
         self.usage = usage
         self.calls: list[ContextProviderCallRequest] = []
         self.application_bytes: list[bytes] = []
@@ -294,7 +297,9 @@ class _ScriptedProvider:
         self.invocation_entries += 1
         self.invocation_depth += 1
         if self.invocation_entries >= 2: self.second_invocation_entered.set()
-        try: yield
+        try:
+            yield
+            self.script.require_controls_consumed()
         finally:
             self.invocation_depth -= 1
             self.invocation_exits += 1
@@ -320,16 +325,29 @@ class _ScriptedProvider:
         return ProviderCallAccounting(payload, state=ProviderCallState.SUBMITTED,
             actual_transport_utf8_bytes=len(payload_json), usage=self.usage)
 
+    def callback_payload(self, request):
+        return self.callback_views.for_request(request)
+
     async def invoke_context(self, request: ContextProviderCallRequest) -> ContextProviderCallResult:
         if self.before_call is not None:
-            observed = self.before_call(request)
-            if inspect.isawaitable(observed): await observed
+            try:
+                observed = self.before_call(request)
+                if inspect.isawaitable(observed):
+                    observed = await observed
+            except Exception as failure:
+                self.script.callback_failed(failure)
+            if isinstance(observed, BaseException):
+                raise observed
         self.calls.append(request)
-        if not self.responses: raise AssertionError("unexpected provider call")
-        response = self.responses.pop(0)
-        if callable(response):
-            response = response(request, self)
-            if inspect.isawaitable(response): response = await response
+        self.callback_views.observe(request)
+        response = self.script.next_response(request)
+        try:
+            if callable(response):
+                response = response(request, self)
+                if inspect.isawaitable(response):
+                    response = await response
+        except Exception as failure:
+            self.script.callback_failed(failure)
         if isinstance(response, BaseException): raise response
         accounting = self._accounting(request)
         key = self._key(request.scope, request.policy_fingerprint)
@@ -423,6 +441,9 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
         Callable[[str], object] | None=None, event_sink: ContextExecutionEventSink | None=None,
         progress_sink: Callable[[ContextActionProgressEvent], None] | None=None, phase: str | None=
         None, round_number: int | None=None) -> ContextInvocationResult:
+        if isinstance(provider, _ScriptedProvider):
+            self.addCleanup(provider.script.require_fixture_valid)
+            self.addCleanup(provider.callback_views.require_fixture_valid)
         actual_request = request or self.request()
         actual_service = service or self.service
         collaborators = authorities or self.authorities(actual_request, service=actual_service)
@@ -646,10 +667,15 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
                 operation_id="group-" + label, result_correlation_id="group-result-" + label,
                 invocation_kind=ContextInvocationKind.LEAD, result_contract=_LEAD_CALL_FACTORY,
                 agent_id=LEAD_ORCHESTRATOR, physical_call_limit=len(responses)))
-            grouped_provider = _ScriptedProvider(responses)
+            grouped_provider = _ScriptedProvider(responses[-1:], control_plan=tuple(
+                (0, phase, response) for phase, response in zip(phases[:-1], responses[:-1], strict=True)))
             events = []
             grouped = await self.invoke(grouped_provider, grouped_request, event_sink=events.append)
             self.assertEqual(tuple(call.contract.schema_group_phase for call in grouped_provider.calls), phases)
+            for call, phase in zip(grouped_provider.calls, phases, strict=True):
+                assert_phase_guide(self, call, phase)
+                self.assertEqual(call.schema, call.contract.schema_value())
+                self.assertEqual(check_schema(call.schema), ())
             self.assertEqual(len(grouped.provider_calls), len(responses))
             self.assertEqual(tuple(item.group_id for item in grouped.group_state.workflow.history), chosen)
             self.assertIs(grouped.group_state.workflow.phase, LeadGroupPhase.DONE)
@@ -658,6 +684,22 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             self.assertEqual([finalizer.calls for finalizer in grouped_provider.finalizers],
                              [[("accepted", None)]] * len(responses))
             self.assertEqual(json.loads(grouped.answer)["message"], "Visible grouped lead answer.")
+            from tests.test_agent_context_accounting import _expanded_context_payload
+            for call in grouped_provider.calls:
+                self.assertEqual(call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"], "bootstrap")
+                logical = _expanded_context_payload(call.payload)
+                self.assertEqual(logical["task_input"], _PRIVATE_INPUT)
+                self.assertIn(_PRIVATE_DEFINITION, canonical_provider_json(logical).decode())
+            self.assertEqual(grouped_provider.script.script_responses_consumed, 1)
+        from tests.provider_wire_fixture import ExplicitPhaseScript
+        for controls in (None, (), ((1, LeadGroupPhase.SELECT, _group_control("answer.workflow")),),
+                ((0, LeadGroupPhase.GENERATE, _group_control("answer.workflow")),)):
+            missing = ExplicitPhaseScript((_group_answer,), controls)
+            self.assertRaises(AssertionError, missing.next_response, grouped_provider.calls[0])
+            self.assertEqual(missing.script_responses_consumed, 0)
+            self.assertRaises(FixturePhasePlanError, missing.require_fixture_valid)
+        extra = ExplicitPhaseScript((), ((0, LeadGroupPhase.SELECT, _group_control("answer.workflow")),))
+        self.assertRaises(AssertionError, extra.require_controls_consumed)
         read_request = _group_request(self.request(
             operation_id="group-read", result_correlation_id="group-read-result",
             invocation_kind=ContextInvocationKind.LEAD, result_contract=_LEAD_CALL_FACTORY,
@@ -667,7 +709,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             selection = call.contract.group_workflow.active_selection
             retained.append((selection, selection.as_object(), call.contract.prepared_compilation))
             return _search(call, provider)
-        read_provider = _ScriptedProvider((_group_control("answer.workflow"), search_after_selection, _read_search_hit, _group_answer))
+        read_provider = _ScriptedProvider((search_after_selection, _read_search_hit, _group_answer),
+            control_plan=((0, LeadGroupPhase.SELECT, _group_control("answer.workflow")),))
         read_result = await self.invoke(read_provider, read_request)
         selected, original_selection, original_plan = retained[0]
         fresh = read_provider.calls[-1].contract
@@ -681,6 +724,9 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual(len(fresh.offers.delivery_read_facts), 1)
         self.assertEqual(fresh.prepared_compilation.read_facts, fresh.offers.delivery_read_facts)
         self.assertEqual(len(read_result.provider_calls), 4)
+        for call, phase in zip(read_provider.calls, (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE,
+                                                    LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE), strict=True):
+            assert_phase_guide(self, call, phase)
 
         revised_scope = replace(_LEAD_SCOPE, task_revision=2)
         revised_constraints = replace(_LEAD_CONSTRAINTS, scope=revised_scope, task_revisions=(("context-task", 2),))
@@ -702,7 +748,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         revised_request = replace(revised_request, group_state=carried)
         def revised_answer(call, _provider):
             return _lead_answer_frame(call, "Current revision answer.", grouped=True, revision=2)
-        revised_provider = _ScriptedProvider((_group_control("answer.workflow"), revised_answer))
+        revised_provider = _ScriptedProvider((revised_answer,),
+            control_plan=((0, LeadGroupPhase.SELECT, _group_control("answer.workflow")),))
         revised_result = await self.invoke(revised_provider, revised_request)
         first_current = revised_provider.calls[0].contract
         self.assertIs(first_current.schema_group_phase, LeadGroupPhase.SELECT)
@@ -712,6 +759,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual(selected.as_object(), original_selection)
         self.assertEqual(len(revised_result.group_state.workflow.history), 2)
         self.assertEqual(json.loads(revised_result.answer)["authoring_scope"]["task"], "context-task@2")
+        for call, phase in zip(revised_provider.calls, (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE), strict=True):
+            assert_phase_guide(self, call, phase)
 
         from story_writing_agents.specialist_routing import (
             ArtifactReviewDomain, AuthoringContribution, AuthoringContributionRole, AuthoringIntent)
@@ -745,8 +794,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         def hold_review(_call, _provider):
             record_context_provider_failure(hold, ContextProviderFailureFacts(taint_existing_thread=True))
             return hold
-        qualified_provider = _ScriptedProvider((plot_search, _read_search_hit,
-            _group_control("answer.observed_facts"), hold_review))
+        qualified_provider = _ScriptedProvider((plot_search, _read_search_hit, hold_review),
+            control_plan=selection_plan("answer.observed_facts", before_script_response=2))
         with self.assertRaises(RuntimeError) as held:
             await self.invoke(qualified_provider, review_request)
         self.assertIs(held.exception, hold)
@@ -766,7 +815,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
                              qualified_selection.catalog.request_basis_ref)
             self.assertIsNot(call.contract.prepared_compilation, qualified_state.prepared_compilation)
             return halt
-        current_provider = _ScriptedProvider((current_selection,))
+        current_provider = _ScriptedProvider((), control_plan=((0, LeadGroupPhase.SELECT, current_selection),))
         current_request = replace(review_request, fresh=True, physical_call_limit=2, group_state=qualified_state)
         with self.assertRaises(RuntimeError) as reset:
             await self.invoke(current_provider, current_request)
@@ -927,7 +976,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         def lose_history(_call, _provider):
             record_context_provider_failure(lost, ContextProviderFailureFacts(taint_existing_thread=True))
             return lost
-        grouped_provider = _ScriptedProvider((_group_control("answer.workflow"), lose_history))
+        grouped_provider = _ScriptedProvider((lose_history,), control_plan=selection_plan("answer.workflow"))
         with self.assertRaises(RuntimeError) as rejected:
             await self.invoke(grouped_provider, grouped_request)
         self.assertIs(rejected.exception, lost)
@@ -1098,16 +1147,16 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         self.assertIs(before_state.workflow.phase, LeadGroupPhase.STOP)
         self.assertEqual(before_state.workflow.history, ())
         self.assertEqual(before_provider.calls, [])
-        for label, limit, responses, observed_index, search_allowed in (
-                ("select-context", 3, (_search, _group_control("answer.workflow"), _group_answer), 0, True),
-                ("select-no-context", 2, (_group_control("answer.workflow"), _group_answer), 0, False),
-                ("generate-context", 3, (_group_control("answer.workflow"), _search, _group_answer), 1, True),
-                ("generate-no-context", 2, (_group_control("answer.workflow"), _group_answer), 1, False)):
+        for label, limit, responses, plan, physical_calls, observed_index, search_allowed in (
+                ("select-context", 3, (_search, _group_answer), selection_plan("answer.workflow", before_script_response=1), 3, 0, True),
+                ("select-no-context", 2, (_group_answer,), selection_plan("answer.workflow"), 2, 0, False),
+                ("generate-context", 3, (_search, _group_answer), selection_plan("answer.workflow"), 3, 1, True),
+                ("generate-no-context", 2, (_group_answer,), selection_plan("answer.workflow"), 2, 1, False)):
             bounded_request = _group_request(self.request(
                 operation_id=label, result_correlation_id=label + "-result",
                 invocation_kind=ContextInvocationKind.LEAD, result_contract=_LEAD_CALL_FACTORY,
                 agent_id=LEAD_ORCHESTRATOR, physical_call_limit=limit))
-            bounded_provider = _ScriptedProvider(responses)
+            bounded_provider = _ScriptedProvider(responses, control_plan=plan)
             bounded = await self.invoke(bounded_provider, bounded_request)
             offered = {member.rule_graph.literal_at(("action_type",))
                        for member in bounded_provider.calls[observed_index].contract.action_index.contracts}
@@ -1121,7 +1170,9 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
             session_id="group-stop", operation_id="group-stop", result_correlation_id="group-stop-result",
             invocation_kind=ContextInvocationKind.LEAD, result_contract=_LEAD_CALL_FACTORY,
             agent_id=LEAD_ORCHESTRATOR, physical_call_limit=2))
-        final_provider = _ScriptedProvider((_group_control("question.workflow"), _group_control("answer.workflow"), _group_answer))
+        final_provider = _ScriptedProvider((_group_answer,), control_plan=(
+            (0, LeadGroupPhase.SELECT, _group_control("question.workflow")),
+            (0, LeadGroupPhase.GENERATE, _group_control("answer.workflow"))))
         final_events = []
         with self.assertRaises(ContextExecutionError) as final_error:
             await self.invoke(final_provider, final_request, event_sink=final_events.append)
@@ -1189,7 +1240,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
                     accounting, timed_out=not uncertain, taint_existing_thread=True,
                     submission_uncertain=uncertain))
                 return failure
-            grouped_provider = _ScriptedProvider((_group_control("answer.workflow"), fail_group_generation, _group_answer))
+            grouped_provider = _ScriptedProvider((fail_group_generation, _group_answer), control_plan=selection_plan("answer.workflow"))
             grouped_events = []
             with self.assertRaises(RuntimeError) as caught:
                 await self.invoke(grouped_provider, grouped_request, event_sink=grouped_events.append)

@@ -67,6 +67,16 @@ class SuiteBudgetTests(unittest.TestCase):
                 self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
                     dict(execution_source, max_test_source_lines=limit),
                     dict(origin, max_test_source_lines=old))
+        wire_source = dict(execution_source, max_test_source_lines=145030)
+        for origin in (source, execution_source):
+            self.assertIsNone(suite_budget.check_monotonic(wire_source, origin))
+            for old, limit in ((origin["max_test_source_lines"] - 1, 145030),
+                               (origin["max_test_source_lines"] + 1, 145030),
+                               (origin["max_test_source_lines"], 145029),
+                               (origin["max_test_source_lines"], 145031)):
+                self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                    dict(wire_source, max_test_source_lines=limit),
+                    dict(origin, max_test_source_lines=old))
         for old, limit in ((142603, 142887), (142605, 142887), (142604, 142886),
                            (142604, 142888), (142887, 142888)):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
@@ -89,6 +99,9 @@ class SuiteBudgetTests(unittest.TestCase):
             for origin in (source, group_source):
                 self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
                     {**execution_source, key: value}, {**origin, key: value} if key != "subtest_caps" else origin)
+            for origin in (source, execution_source):
+                self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                    {**wire_source, key: value}, {**origin, key: value} if key != "subtest_caps" else origin)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
                           source, dict(self.budget, max_test_source_lines=142474))
         for change in [lambda value: value["subtest_caps"].update({"c.test": 0}),

@@ -793,3 +793,286 @@ def fixture_property_policies(packet, schema):
             for index, child in enumerate(value): visit(rule['items'], child, path + (index,))
     visit(schema, packet, ())
     return policies, required
+
+
+class FixturePhasePlanError(AssertionError):
+    """runtime 업무 거절과 구분하며 cleanup에서도 보존할 fixture 실패다."""
+
+
+_ORIGINAL_SCRIPT_RESPONSE = object()
+
+
+class CallbackContextViews:
+    """실제로 받은 입력만 합성하며 현재 계약이나 native 보존 증거를 만들지 않는다."""
+
+    _fresh = {"protocol_version", "request_correlation_token", "response_contract", "contract_guidance"}
+
+    def __init__(self):
+        self.scopes = {}
+        self.requests = {}
+        self.fixture_error_code = None
+
+    def fail_fixture(self, code):
+        if self.fixture_error_code is None:
+            self.fixture_error_code = code
+        raise FixturePhasePlanError("fixture-callback-context:" + self.fixture_error_code)
+
+    @staticmethod
+    def key(request):
+        basis = getattr(getattr(request, "contract", None), "request_basis", None)
+        correlation = None if basis is None else (basis.operation_id, basis.result_correlation_id, basis.scope_ref)
+        return request.scope, request.policy_fingerprint, correlation
+
+    def observe(self, request):
+        try:
+            self._observe(request)
+        except FixturePhasePlanError:
+            raise
+        except (KeyError, TypeError, ValueError, IndexError):
+            self.fail_fixture("invalid_input_view")
+
+    def _observe(self, request):
+        from tests.test_agent_context_accounting import _expanded_context_payload
+        raw = copy.deepcopy(dict(request.payload))
+        key = self.key(request)
+        state = self.scopes.setdefault(key, {"views": {}, "latest": {}})
+
+        def expand(piece):
+            current = copy.deepcopy(piece)
+            if "shared_context_objects" in raw:
+                current.update({name: copy.deepcopy(raw[name]) for name in ("shared_context_objects", "context_reuse")})
+            return _expanded_context_payload(current)
+
+        selection = raw.get("response_contract", {}).get("schema_selection")
+        if selection is not None:
+            delivery = selection["context_delivery"]
+            if delivery["mode"] == "delta":
+                base = state["views"].get(delivery["base_context_ref"])
+                if base is None:
+                    self.fail_fixture("unknown_base")
+                components = json.loads(base)
+                changes = raw.get("context_changes")
+                if type(changes) is not dict or set(changes) != {"add", "replace", "remove"}:
+                    self.fail_fixture("invalid_changes")
+                added, changed, removed = changes["add"], changes["replace"], changes["remove"]
+                if type(added) is not dict or type(changed) is not dict or type(removed) is not list:
+                    self.fail_fixture("invalid_change_types")
+                keys = [*added, *changed, *removed]
+                if any(type(name) is not str or name in self._fresh for name in keys) or len(set(keys)) != len(keys):
+                    self.fail_fixture("overlapping_changes")
+                latest = state["latest"]
+                for name in set(components) | set(latest):
+                    if (name in components) != (name in latest) or components.get(name) != latest.get(name):
+                        if name not in keys:
+                            self.fail_fixture("unrestored_transport_component")
+                if any(name in components for name in added):
+                    self.fail_fixture("add_existing_component")
+                if any(name not in components and name not in latest for name in (*changed, *removed)):
+                    self.fail_fixture("change_unknown_component")
+                components.update(expand(added))
+                components.update(expand(changed))
+                for name in removed:
+                    components.pop(name, None)
+                view = {**components, **{name: raw[name] for name in self._fresh if name in raw}}
+            elif delivery["mode"] == "bootstrap" and "context_changes" not in raw:
+                view = expand(raw)
+                components = {name: value for name, value in view.items() if name not in self._fresh}
+            else:
+                self.fail_fixture("invalid_delivery")
+            encoded = json.dumps(components, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            state["views"][delivery["context_ref"]] = encoded
+            state["latest"] = json.loads(encoded)
+        else:
+            view = expand(raw)
+        self.requests[id(request)] = (request, key, json.dumps(view, ensure_ascii=False))
+
+    def for_request(self, request):
+        recorded = self.requests.get(id(request))
+        if recorded is None or recorded[0] is not request or recorded[1] != self.key(request):
+            self.fail_fixture("unobserved_request")
+        view = json.loads(recorded[2])
+        observations = view.get("context_observations")
+        if observations:
+            if type(observations) is not list or type(observations[-1]) is not dict or "observation" not in observations[-1]:
+                self.fail_fixture("invalid_observation")
+            # 단수는 최신 실제 전송 observation의 callback 전용 alias다.
+            view["context_observation"] = copy.deepcopy(observations[-1]["observation"])
+        return view
+
+    def require_fixture_valid(self):
+        if self.fixture_error_code is not None:
+            self.fail_fixture(self.fixture_error_code)
+
+
+def selection_plan(group_id, *, before_script_response=0):
+    """사례가 선언한 원래 script 위치와 유효한 SELECT 국면만 연결한다."""
+    from story_writing_agents.lead_schema_groups import LeadGroupPhase, SchemaGroupControlOwner
+    from tests.test_agent_context_execution import _group_control
+    if type(before_script_response) is not int or before_script_response < 0:
+        raise FixturePhasePlanError("fixture-phase-plan:invalid_cursor")
+    def select(call, provider):
+        owners = tuple(member.owner for member in call.contract.semantic_index.contracts
+                       if type(member.owner) is SchemaGroupControlOwner)
+        assert len(owners) == 1
+        assert group_id in owners[0].catalog.group_ids
+        return _group_control(group_id)(call, provider)
+    context = tuple((index, LeadGroupPhase.SELECT, _ORIGINAL_SCRIPT_RESPONSE)
+                    for index in range(before_script_response))
+    return (*context, (before_script_response, LeadGroupPhase.SELECT, select))
+
+
+class ExplicitPhaseScript:
+    """원래 script 응답 소비 위치와 별도 제어 계획을 보존한다."""
+
+    def __init__(self, responses, controls=None):
+        self.responses = list(responses)
+        self.controls = list(controls or ())
+        self.planned = controls is not None
+        self.script_responses_consumed = 0
+        self.fixture_error_code = None
+        self.callback_exception_site = None
+        for entry in self.controls:
+            if type(entry) is not tuple or len(entry) != 3 or type(entry[0]) is not int or entry[0] < 0:
+                self.fail_fixture("invalid_entry")
+
+    def fail_fixture(self, code):
+        if self.fixture_error_code is None:
+            self.fixture_error_code = code
+        detail = "" if self.callback_exception_site is None else " " + ":".join(map(str, self.callback_exception_site))
+        raise FixturePhasePlanError("fixture-phase-plan:" + self.fixture_error_code + detail) from None
+
+    def callback_failed(self, error):
+        trace = error.__traceback__
+        while trace is not None and trace.tb_next is not None:
+            trace = trace.tb_next
+        self.callback_exception_site = (type(error).__module__, type(error).__qualname__,
+            "" if trace is None else trace.tb_frame.f_globals.get("__name__", ""), 0 if trace is None else trace.tb_lineno)
+        self.fail_fixture("callback_exception")
+
+    def next_response(self, request, *, missing_message="unexpected provider call"):
+        from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
+        from story_writing_agents.lead_schema_groups import LeadGroupPhase, SchemaGroupControlOwner
+        grouped = isinstance(request, BoundContextProviderCallRequest) and request.contract.schema_group_phase is not None
+        if grouped and request.contract.schema_group_phase is LeadGroupPhase.SELECT:
+            if not self.planned:
+                self.fail_fixture("missing_explicit_plan")
+            if not self.controls or self.controls[0][0] != self.script_responses_consumed:
+                self.fail_fixture("wrong_select_cursor")
+        if self.controls:
+            if not grouped:
+                self.fail_fixture("plan_on_single_phase")
+            after_script_responses, phase, response = self.controls[0]
+            if after_script_responses < self.script_responses_consumed:
+                self.fail_fixture("missed_cursor")
+            if after_script_responses == self.script_responses_consumed:
+                if type(phase) is not LeadGroupPhase or request.contract.schema_group_phase is not phase:
+                    self.fail_fixture("wrong_phase")
+                owners = tuple(member.owner for member in request.contract.semantic_index.contracts
+                               if type(member.owner) is SchemaGroupControlOwner)
+                if len(owners) != 1:
+                    self.fail_fixture("missing_control_owner")
+                self.controls.pop(0)
+                if response is not _ORIGINAL_SCRIPT_RESPONSE:
+                    return response
+        if not self.responses:
+            self.fail_fixture("script_exhausted")
+        self.script_responses_consumed += 1
+        return self.responses.pop(0)
+
+    def require_fixture_valid(self):
+        if self.fixture_error_code is not None:
+            self.fail_fixture(self.fixture_error_code)
+        if self.controls:
+            self.fail_fixture("extra_plan")
+
+    def require_controls_consumed(self):
+        self.require_fixture_valid()
+
+
+class OwnedNativeHistory:
+    """공개 reader가 검증하는 소유 fixture이며 native 실행 성공 증거가 아니다."""
+
+    def __init__(self, case, *, thread_id="33333333-3333-4333-8333-333333333333"):
+        import tempfile
+        from pathlib import Path
+        import sqlite3
+        self.case = case
+        temporary = tempfile.TemporaryDirectory()
+        case.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.root.chmod(0o700)
+        self.thread_id = thread_id
+        self.rollout_id = "44444444-4444-4444-8444-444444444444"
+        self.path = self.root / "sessions" / "2026" / "10" / "30" / f"rollout-2026-10-30T00-00-00-{self.thread_id}_{self.rollout_id}.jsonl"
+        self.path.parent.mkdir(parents=True, mode=0o700)
+        database = self.root / "state_5.sqlite"
+        with sqlite3.connect(database) as connection:
+            connection.execute("CREATE TABLE threads(id TEXT PRIMARY KEY, rollout_path TEXT, archived INTEGER)")
+            connection.execute("INSERT INTO threads VALUES (?, ?, 0)", (self.thread_id, str(self.path)))
+        database.chmod(0o600)
+        self.records = []
+        self.witnesses = []
+
+    def complete(self, invocation):
+        from story_writing_agents.codex_adapter import inspect_codex_context_witness
+        if self.records:
+            self.case.assertEqual(invocation.thread_id, self.thread_id)
+            previous = inspect_codex_context_witness(self.root, invocation, self.thread_id,
+                previous=invocation.context_witness, anchor=invocation.context_anchor, before=True)
+            self.case.assertIs(previous, invocation.context_witness)
+        else:
+            self.case.assertIsNone(invocation.thread_id)
+            self.records.append({"type": "session_meta", "payload": {
+                "id": self.thread_id, "session_id": "different-session-id", "cli_version": "0.164.0",
+                "originator": "codex_exec", "source": "exec", "history_mode": "paginated",
+                "cwd": str(invocation.execution_workspace.worktree_root)}})
+        turn = "turn_" + str(len(self.witnesses) + 1)
+        self.records.extend([
+            {"type": "event_msg", "payload": {"type": "task_started", "turn_id": turn}},
+            {"type": "turn_context", "payload": {"model": "fixture-model", "comp_hash": "fixture-config", "multi_agent_version": None}},
+            {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": invocation.payload_json.decode("utf-8")}]}},
+            {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": turn}}])
+        self.path.write_bytes(b"".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode() + b"\n" for row in self.records))
+        self.path.chmod(0o600)
+        witness = inspect_codex_context_witness(self.root, invocation, self.thread_id,
+            previous=invocation.context_witness, anchor=invocation.context_anchor)
+        self.case.assertIsNotNone(witness)
+        self.witnesses.append(witness)
+        return witness
+
+
+def assert_phase_guide(case, request, expected_phase):
+    """원하는 typed 국면을 먼저 고정하고 신뢰된 안내 슬롯만 대조한다."""
+    from story_writing_agents.lead_schema_groups import LeadGroupPhase
+    guides = {
+        LeadGroupPhase.SELECT: "현재 단계는 Phase 1(그룹 선택)입니다. Phase 2에서는 선택한 그룹의 상세 계약에 따라 실제 답변을 작성합니다.",
+        LeadGroupPhase.GENERATE: "현재 단계는 Phase 2(답변 생성)입니다. 선택한 그룹의 상세 계약에 따라 실제 답변을 작성하세요.",
+    }
+    case.assertIs(request.contract.schema_group_phase, expected_phase)
+    rules = request.payload["contract_guidance"]["response_rules"]
+    case.assertEqual(rules.count(guides[expected_phase]), 1)
+    case.assertEqual(sum(rule.startswith("현재 단계는 Phase ") for rule in rules), 1)
+    case.assertNotIn(guides[next(phase for phase in guides if phase is not expected_phase)], rules)
+    from story_writing_agents.provider_wire import SchemaSelectionInput
+    wire = request.payload["response_contract"]["schema_selection"]
+    selection = SchemaSelectionInput.from_value(wire)
+    case.assertEqual(selection.phase, expected_phase.value)
+    case.assertEqual(selection.call_id, request.call_id)
+    case.assertEqual(selection.contracts, request.contract.outer_inner_schema_ids)
+    case.assertEqual(selection.remaining_provider_calls, request.contract.offers.remaining_provider_calls)
+    case.assertEqual(set(wire["issued_contract"]), {"call_id", "contracts"})
+    case.assertEqual(wire["issued_contract"]["contracts"], [
+        {"outer_schema_id": outer, "result_schema_id": inner}
+        for outer, inner in request.contract.outer_inner_schema_ids])
+    catalog = request.contract.group_stage.catalog
+    if "catalog" in wire:
+        case.assertEqual(wire["catalog"], catalog.as_object())
+    else:
+        case.assertEqual(wire["catalog_id"], catalog.catalog_id)
+    if expected_phase is LeadGroupPhase.GENERATE:
+        active = request.contract.group_workflow.active_selection
+        case.assertEqual(wire["active_selection"], {
+            "origin_catalog_id": active.catalog.catalog_id, "group_id": active.group_id})
+    else:
+        case.assertNotIn("active_selection", wire)
