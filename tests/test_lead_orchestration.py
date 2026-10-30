@@ -1403,9 +1403,8 @@ def _discussion_reply(text, kind="answer"):
 
 def _task_fixture(test):
     case = LeadOrchestrationTestCase()
+    case.addCleanup = test.addCleanup
     case.setUp()
-    test.addCleanup(case.doCleanups)
-    test.addCleanup(case.backend.require_fixture_valid)
     return case
 
 class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
@@ -4551,8 +4550,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         from tests.test_artifact_objectives import ObjectiveCase, OUTLINE
         from story_writing_agents import conversations as collaboration
         case = ObjectiveCase()
+        case.addCleanup = self.addCleanup
         case.setUp()
-        self.addCleanup(case.doCleanups)
         initial_question_text = "Which ending should the outline use?"
         original_enqueue = case.backend.enqueue
         def enqueue_initial_question(*responses):
@@ -4694,7 +4693,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             'dependency slot IDs must be unique within one authoring scope' in item for item in original.validation_details))
 
         from dataclasses import replace
-        from unittest import mock
         from story_writing_agents.agent_context.service import AgentContextService
         from tests.test_agent_context_execution import _group_control
         original_factory = orchestrator_module._lead_call_contract_factory
@@ -4817,8 +4815,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     family=family_number)
                 member = next(item for item in call.contract.semantic_index.contracts if item.schema_id == inner)
                 self.assertEqual(member.owner.variant.branch_key.partition(":partition:")[0], {
-                        "answer": "lead-response-v8:family:0", "clarification_question": "lead-response-v8:family:1",
-                        "critique": "lead-response-v8:family:2"}[response_type])
+                        "answer": "lead-response-v8:family:0:group:answer.workflow", "clarification_question": "lead-response-v8:family:1:group:question.workflow",
+                        "critique": "lead-response-v8:family:2:group:critique.workflow"}[response_type])
                 self.assertIn((outer, inner), call.contract.outer_inner_schema_ids)
                 native = {'response_type': response_type, 'response_text': value['message']}
                 scope = _compact_scope(_live_scope(call, activity='workflow', domains=(), paths=()))
@@ -5768,7 +5766,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             task_result = complete['agent_action']['task_result']
             member = next(item for item in call.contract.semantic_index.contracts
                           if item.schema_id == task_result['schema_id'])
-            self.assertEqual(member.owner.variant.branch_key.partition(":partition:")[0], "lead-response-v8:family:0")
+            self.assertEqual(member.owner.variant.branch_key.partition(":partition:")[0], "lead-response-v8:family:0:group:answer.workflow")
             self.assertEqual(member.rule_graph.findings(task_result), ())
             call.contract.decode_response(response)
             task_result['response_details']['task_scope'] = lead_fixture_bound_scope(

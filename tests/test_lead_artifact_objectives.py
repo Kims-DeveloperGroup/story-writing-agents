@@ -56,7 +56,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
     async def _assert_default_budget_refusal(self, path, text, brief, native_inputs):
         """Same three-role source under DEFAULT grouping has six calls and cannot buy the next two."""
         case = RecommendationCase()
-        self.addCleanup(lambda: self.assertTrue(case.doCleanups()))
+        case.addCleanup = self.addCleanup
         case.setUp()
         await case.record_book_readiness(seed_before_capture=True)
         conversation_id = case.conversation("Default grouped budget boundary")

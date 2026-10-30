@@ -689,7 +689,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
                 self.assertEqual(call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"], "bootstrap")
                 logical = _expanded_context_payload(call.payload)
                 self.assertEqual(logical["task_input"], _PRIVATE_INPUT)
-                self.assertIn(_PRIVATE_DEFINITION, canonical_provider_json(logical).decode())
+                self.assertNotIn(_PRIVATE_DEFINITION, canonical_provider_json(logical).decode())
             self.assertEqual(grouped_provider.script.script_responses_consumed, 1)
         from tests.provider_wire_fixture import ExplicitPhaseScript
         for controls in (None, (), ((1, LeadGroupPhase.SELECT, _group_control("answer.workflow")),),

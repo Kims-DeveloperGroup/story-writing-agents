@@ -2732,20 +2732,29 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     async def _assert_grouped_reader_transport(self, backend, session_id) -> None:
         from story_writing_agents.agent_context.service import (AgentContextService, ContextInvocationKind,
             ContextInvocationRequest, ContextExecutionError, context_provider_failure_facts)
-        from story_writing_agents.agent_context.ledger import ContextLedger, ContextLedgerKey
+        from story_writing_agents.agent_context.ledger import (ContextLedger, ContextLedgerKey,
+            ContextLedgerRecordState, ContextLedgerAttemptOutcome)
         from story_writing_agents.agent_context.sources import (ActiveDebateSourceAdapter,
             FocusedConversationSourceAdapter, OwnAgentStateSourceAdapter, WritingArtifactSourceAdapter)
         from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
-        from tests.test_agent_context_execution import (_LEAD_CALL_FACTORY, _PRIVATE_INPUT, _materials,
-            _group_request, _group_control, _group_answer, _search)
+        from tests.test_agent_context_execution import (_LEAD_CALL_FACTORY, _PRIVATE_INPUT, _PRIVATE_DEFINITION,
+            _materials, _group_request, _group_control, _group_answer, _search)
+        from story_writing_agents.provider_process import ProcessResult
         from tests.provider_wire_fixture import CallbackContextViews, FixturePhasePlanError, OwnedNativeHistory, assert_phase_guide
         service = AgentContextService(self.workspace)
         storage = compose_filesystem_conversation_storage(self.workspace)
         repository = WritingArtifactRepository(self.workspace.root)
-        provider = (await backend.bind(self.definition(LEAD_ORCHESTRATOR))).context_provider()
+        role_path = self.definition(LEAD_ORCHESTRATOR).behavior_policy_components[-1].path
+        self.assertTrue(role_path.resolve().is_relative_to(self.workspace.root.resolve()))
+        original_role = role_path.read_bytes()
+        self.addCleanup(role_path.write_bytes, original_role)
+        role_path.write_bytes(original_role + b"\n" + _PRIVATE_DEFINITION.encode("utf-8") + b"\n")
+        definition = self.definition(LEAD_ORCHESTRATOR)
+        provider = (await backend.bind(definition)).context_provider()
         self.assertEqual(provider.provider_id, "codex")
-        requests, invocations, raw_responses = [], [], []
+        native_invoke = backend._codex_adapter.invoke
+        requests, invocations, raw_responses, native_witnesses, native_commands = [], [], [], [], []
         reader_faults_checked = False
         callback_views = CallbackContextViews()
         self.addCleanup(callback_views.require_fixture_valid)
@@ -2762,7 +2771,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 callback_views.observe(request)
                 return await provider.invoke_context(request)
 
-        async def invoke(_binding, invocation):
+        async def invoke(binding, invocation):
             nonlocal reader_faults_checked
             self.assertLess(len(invocations), len(phases))
             assert_phase_guide(self, requests[-1], phases[len(invocations)])
@@ -2770,11 +2779,32 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             if not reader_faults_checked:
                 self._assert_owned_native_context_witness(invocation)
                 reader_faults_checked = True
-            witness = history.complete(invocation)
-            raw = responses.pop(0)(requests[-1], None)
-            raw_responses.append(raw)
-            return ProviderResult(history.thread_id, raw,
-                actual_transport_utf8_bytes=len(invocation.payload_json), context_witness=witness)
+            staged = (binding.staging_directory / "AGENTS.md").read_bytes()
+            role = binding.definition.system_prompt_file.content
+            self.assertIn(_PRIVATE_DEFINITION.encode("utf-8"), role)
+            self.assertIn(role, staged)
+            self.assertEqual(invocation.binding_components, binding.binding_components)
+            async def native_process(request, **_options):
+                native_commands.append(tuple(request.command))
+                configs = [request.command[index + 1] for index, value in enumerate(request.command[:-1])
+                           if value == "--config" and request.command[index + 1].startswith("developer_instructions=")]
+                self.assertEqual(len(configs), 1)
+                instructions = json.loads(configs[0].split("=", 1)[1])
+                self.assertEqual(instructions.encode("utf-8"), staged)
+                self.assertEqual(request.stdin, invocation.payload_json)
+                history.complete(invocation)
+                raw = responses.pop(0)(requests[-1], None)
+                raw_responses.append(raw)
+                output = Path(request.command[request.command.index("--output-last-message") + 1])
+                output.write_text(raw, encoding="utf-8")
+                event = {"type": "thread.started", "thread_id": history.thread_id}
+                return ProcessResult(stdout=canonical_provider_json(event) + b"\n", stderr=b"", returncode=0)
+            with (mock.patch.dict(os.environ, {"CODEX_HOME": str(history.root)}),
+                  mock.patch("story_writing_agents.codex_adapter.run_process", new=native_process)):
+                result = await native_invoke(binding, invocation)
+            self.assertEqual(result.context_witness, history.witnesses[-1])
+            native_witnesses.append(result.context_witness)
+            return result
 
         request = _group_request(ContextInvocationRequest(session_id=session_id,
             subject_kind=ContextSubjectKind.CONVERSATION, subject_id="grouped-reader",
@@ -2782,6 +2812,16 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             result_correlation_id="grouped-reader-result", materials=_materials(),
             result_contract=_LEAD_CALL_FACTORY, invocation_kind=ContextInvocationKind.LEAD, physical_call_limit=2))
         scope = service.scope(session_id, ContextSubjectKind.CONVERSATION, "grouped-reader", LEAD_ORCHESTRATOR)
+        def assert_done_ledger(completed):
+            state = completed.group_state
+            record = ContextLedger(self.workspace).inspect(ContextLedgerKey(scope, provider.provider_id)).record
+            self.assertIs(state.workflow.phase, LeadGroupPhase.DONE)
+            self.assertIs(record.state, ContextLedgerRecordState.READY)
+            self.assertIs(record.attempt.outcome, ContextLedgerAttemptOutcome.COMMITTED)
+            self.assertEqual(record.generation, completed.ledger_generation)
+            self.assertEqual(record.attempt.provider_calls, completed.provider_calls)
+            self.assertFalse(state.transport_delivery.matches_ledger(record, latest=True))
+            self.assertFalse(state.accepted_delivery.matches_ledger(record))
         with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
             result = await service.invoke(request, ObservedProvider(),
                 writing_artifacts=WritingArtifactSourceAdapter(repository, scope),
@@ -2789,6 +2829,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 active_debate=ActiveDebateSourceAdapter(self.workspace, scope, None),
                 own_agent_state=OwnAgentStateSourceAdapter(self.workspace, scope))
         self.assertEqual((len(invocations), len(result.provider_calls)), (2, 2))
+        self.assertEqual(len(native_commands), len(invocations))
         first, second = [call.payload["response_contract"]["schema_selection"] for call in requests]
         self.assertEqual(first["context_delivery"]["mode"], "bootstrap")
         self.assertEqual(second["context_delivery"], {"mode": "delta",
@@ -2797,13 +2838,14 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(_PRIVATE_INPUT.encode(), invocations[1].payload_json)
         self.assertNotIn("task_input", requests[1].payload)
         self.assertEqual(set(requests[1].payload["context_changes"]), {"add", "replace", "remove"})
-        self.assertIs(invocations[1].context_witness, history.witnesses[0])
-        self.assertIs(invocations[1].context_anchor, history.witnesses[0])
-        self.assertEqual(result.group_state.transport_delivery.witness, history.witnesses[1])
-        self.assertEqual(result.group_state.accepted_delivery.witness, history.witnesses[1])
+        self.assertIs(invocations[1].context_witness, native_witnesses[0])
+        self.assertIs(invocations[1].context_anchor, native_witnesses[0])
+        self.assertEqual(result.group_state.transport_delivery.witness, native_witnesses[1])
+        self.assertEqual(result.group_state.accepted_delivery.witness, native_witnesses[0])
+        assert_done_ledger(result)
 
         # 실제 native 전송은 완료됐지만 업무 응답은 거절된 별도 front이다.
-        requests, invocations, raw_responses = [], [], []
+        requests, invocations, raw_responses, native_witnesses, native_commands = [], [], [], [], []
         history = OwnedNativeHistory(self, thread_id="66666666-6666-4666-8666-666666666666")
         def no_hit_search(call, provider):
             packet = json.loads(_search(call, provider))
@@ -2831,8 +2873,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((len(invocations), len(facts.submitted_accountings)), (3, 3))
             self.assertEqual((transport.call_id, accepted.call_id),
                 (invocations[2].context_call_id, invocations[1].context_call_id))
-            self.assertIs(transport.witness, history.witnesses[2])
-            self.assertIs(accepted.witness, history.witnesses[1])
+            self.assertIs(transport.witness, native_witnesses[2])
+            self.assertIs(accepted.witness, native_witnesses[1])
             self.assertEqual(transport.payload_json, invocations[2].payload_json)
             self.assertEqual(transport.payload_sha256, hashlib.sha256(invocations[2].payload_json).hexdigest())
             self.assertTrue(transport.source_valid())
@@ -2856,9 +2898,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             corrected = await service.invoke(repair, ObservedProvider(),
                 contract_lineage=rejected_request.result_contract.repair_lineage(held.exception), **authorities)
         self.assertEqual((len(invocations), len(corrected.provider_calls)), (4, 1))
+        self.assertEqual(len(native_commands), len(invocations))
         self.assertEqual(invocations[2].schema, invocations[3].schema)
-        self.assertIs(invocations[3].context_witness, history.witnesses[2])
-        self.assertIs(invocations[3].context_anchor, history.witnesses[1])
+        self.assertIs(invocations[3].context_witness, native_witnesses[2])
+        self.assertIs(invocations[3].context_anchor, native_witnesses[1])
         self.assertEqual(requests[3].payload["response_contract"]["schema_selection"]["context_delivery"]["mode"], "delta")
         repair_delivery = requests[3].payload["response_contract"]["schema_selection"]["context_delivery"]
         self.assertEqual(repair_delivery["base_context_ref"], accepted.context_ref)
@@ -2866,7 +2909,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(requests[3].payload["context_changes"]["add"]["context_observations"], observation)
         self.assertEqual(json.loads(raw_responses[2])["agent_action"]["task_result"]["response_text"], 7)
         self.assertTrue(any(record["content"] == raw_responses[2] for record in _agent_exchange_records(self.workspace)))
-        self.assertEqual(corrected.group_state.accepted_delivery.witness, history.witnesses[3])
+        self.assertEqual(corrected.group_state.accepted_delivery.witness, native_witnesses[1])
+        self.assertEqual(corrected.group_state.transport_delivery.witness, native_witnesses[3])
+        assert_done_ledger(corrected)
         unknown = CallbackContextViews()
         self.assertRaises(FixturePhasePlanError, unknown.for_request, requests[0])
         self.assertRaises(FixturePhasePlanError, unknown.require_fixture_valid)

@@ -1496,7 +1496,7 @@ class CompactWireDecoderTests(unittest.TestCase):
                 "현재 단계는 Phase 1(그룹 선택)입니다. Phase 2에서는 선택한 그룹의 상세 계약에 따라 실제 답변을 작성합니다."), 1)
             current.require_projection(current.schema_value())
             if current is pure_missing:
-                with self.assertRaisesRegex(ValueError, "schema_selection does not match exact current bound call"):
+                with self.assertRaisesRegex(ValueError, "schema_selection does not match the exact current bound call"):
                     current.require_submission(complete, current.schema_value())
             else:
                 self.assertIsNone(current.require_submission(complete, current.schema_value()))
