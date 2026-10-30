@@ -2730,7 +2730,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(details, ["Structured response\n$: malformed JSON"])
 
-    async def _assert_grouped_reader_transport(self, backend, session_id) -> None:
+    async def _assert_grouped_reader_transport(self, backend, session_id, execution_workspace) -> None:
         from story_writing_agents.agent_context.service import (AgentContextService, ContextInvocationKind,
             ContextInvocationRequest, ContextExecutionError, context_provider_failure_facts)
         from story_writing_agents.agent_context.ledger import (ContextLedger, ContextLedgerKey,
@@ -2841,7 +2841,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             agent_id=LEAD_ORCHESTRATOR, operation_id="grouped-reader-operation",
             result_correlation_id="grouped-reader-result", materials=_materials(),
             result_contract=_LEAD_CALL_FACTORY, invocation_kind=ContextInvocationKind.LEAD, physical_call_limit=2,
-            reference_operation_id="grouped-reader-reference", mandatory_references=(reference,)))
+            reference_operation_id="grouped-reader-reference", mandatory_references=(reference,),
+            execution_workspace=execution_workspace))
         scope = service.scope(session_id, ContextSubjectKind.CONVERSATION, "grouped-reader", LEAD_ORCHESTRATOR)
         def assert_done_ledger(completed):
             state = completed.group_state
@@ -3222,7 +3223,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manifest["provider_threads"], {})
         async with provider.invocation(replace(scope, subject_id="other-conversation"), policy):
             self.assertIsNone(provider.inspect_context_thread(replace(scope, subject_id="other-conversation"), policy))
-        await self._assert_grouped_reader_transport(backend, session_id)
+        async with bound._direct_codex_execution_workspace(session_id, None) as execution_workspace:
+            await self._assert_grouped_reader_transport(backend, session_id, execution_workspace)
         backend.close()
         restarted = self._backend_with_fake_codex()
         self.addCleanup(restarted.close)
