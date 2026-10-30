@@ -1405,6 +1405,7 @@ def _task_fixture(test):
     case = LeadOrchestrationTestCase()
     case.setUp()
     test.addCleanup(case.doCleanups)
+    test.addCleanup(case.backend.require_fixture_valid)
     return case
 
 class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
