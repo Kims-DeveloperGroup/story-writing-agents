@@ -2913,7 +2913,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(repair_delivery["base_context_ref"], transport.context_ref)
         self.assertEqual(requests[3].payload["context_changes"]["add"]["context_observations"], observation)
         self.assertEqual(json.loads(raw_responses[2])["agent_action"]["task_result"]["response_text"], 7)
-        self.assertTrue(any(record["content"] == raw_responses[2] for record in _agent_exchange_records(self.workspace)))
+        self.assertTrue(any(record["request_type"] == "response"
+            and json.loads(record["content"])["response_text"].encode("utf-8") == raw_responses[2].encode("utf-8")
+            for record in _agent_exchange_records(self.workspace)))
         self.assertEqual(corrected.group_state.accepted_delivery.witness, native_witnesses[1])
         self.assertEqual(corrected.group_state.transport_delivery.witness, native_witnesses[3])
         assert_done_ledger(corrected)
@@ -2956,7 +2958,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(host_facts.group_state.accepted_delivery.matches_ledger(host_record))
         async with provider.invocation(scope, requests[-1].policy_fingerprint):
             self.assertIsNone(provider.inspect_context_thread(scope, requests[-1].policy_fingerprint))
-        self.assertTrue(any(record["content"] == raw_responses[1] for record in _agent_exchange_records(self.workspace)))
+        self.assertTrue(any(record["request_type"] == "response"
+            and json.loads(record["content"])["response_text"].encode("utf-8") == raw_responses[1].encode("utf-8")
+            for record in _agent_exchange_records(self.workspace)))
 
     def _assert_owned_native_context_witness(self, invocation) -> None:
         import sqlite3
