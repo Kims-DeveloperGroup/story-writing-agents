@@ -276,9 +276,12 @@ class AuthContextProvider(context._ScriptedProvider):
 
 
 class ContextRecoveryTests(context.ContextExecutionTestCase):
-    async def _bound_replay(self, responses, *, seed, before_script_response):
+    async def _bound_replay(self, responses, *, seed, before_script_response, action_policy=None):
         from story_writing_agents.agent_context.service import AgentContextService
         case = lead._task_fixture(self)
+        if action_policy is not None:
+            case.runtime._agent_context_service = AgentContextService(
+                case.workspace, action_policy=action_policy)
         conversation_id = lead.LeadOrchestrationTestCase.conversation(case, "Bound authority replay")
         if seed is not None:
             case.backend.enqueue(lead._visible_outcome("answer", seed),
@@ -498,9 +501,17 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertEqual(provider.calls[2].expected_thread_id, provider.calls[3].expected_thread_id)
         search = lambda call, provider: lead._search_history(call, provider, "Bound history evidence")
         calls, bound_result, failed = await self._bound_replay(
-            (search, lead._read_history_hit, auth_failure(), lead._answer_from_history), seed="Bound history evidence", before_script_response=2)
+            (search, lead._read_history_hit, auth_failure(), lead._answer_from_history),
+            seed="Bound history evidence", before_script_response=2,
+            action_policy=replace(context.CONTEXT_ACTION_POLICY,
+                                  max_search_actions=1, max_read_actions=1))
         self._require_bound_replay(calls, bound_result, failed, count=5, failure_index=3)
         self.assertEqual([call.contract.offers.action_index for call in calls], [1, 2, 3, 4, 4])
+        limits = dict(calls[2].contract.offers.action_limits)
+        self.assertEqual((limits["search_actions"], limits["read_actions"]), (0, 0))
+        self.assertEqual(calls[3].contract.eligibility_offers.allowed_actions, ("answer",))
+        self.assertEqual(tuple(call.contract.offers.remaining_provider_calls for call in calls),
+                         (5, 4, 3, 2, 1))
         self.assertEqual(calls[3].contract.eligibility_offers.completed_read_facts,
                          calls[4].contract.eligibility_offers.completed_read_facts)
         self.assertEqual(calls[3].contract.eligibility_offers.delivery_read_facts,

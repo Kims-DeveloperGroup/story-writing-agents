@@ -412,3 +412,14 @@ factory를 복원한 뒤 취소 자체는 SELECT→GENERATE 2회로 검사한다
 
 실제 SEARCH schema가 포함된 교환 JSONL은 LF 경계로 읽는다. 유효한 JSON 문자열의
 Unicode U+2029를 줄 경계로 해석하지 않으며, 잘못된 물리 JSON 행은 계속 거절한다.
+
+첨부 참조의 승인된 prelude는 grouped 논리 호출 전체에서 유지한다. SELECT 이후에도
+GENERATE·SEARCH·재선택·교정의 전체 논리 맥락에 같은 원문이 남아야 한다. 검증된
+native delta에서는 변경 없는 참조 bytes를 다시 보내지 않으며, 원장을 확인하지
+못하는 bootstrap에는 원문을 실제로 포함한다. 단일 국면의 consume-once 전달과
+별도 invoke의 기존 참조 준비·source/workspace 재검증은 유지한다.
+
+이번 witness 계약 소비로 검사 대상 AST 그래프에는 service→provider_adapter edge만
+추가됐다(노드164 유지, edge738→739). provider-neutral 하향 계약 의존성이며 cycle과
+RAG 직접 importer는 변하지 않는다. 경계 회귀는 이 정확한 edge와 기존 엄격한
+의존성·export·파일 접근 검증을 함께 고정한다.

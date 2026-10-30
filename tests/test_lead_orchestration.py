@@ -506,12 +506,22 @@ def _live_material(call):
     except LookupError: return _LIVE_CONTEXT[call.payload["request_correlation_token"]]
 
 
+def _live_task(call, task_index=-1):
+    if isinstance(call, BoundContextProviderCallRequest):
+        task_id, task_revision = call.contract.semantic_index.policy.task_revisions[task_index]
+        return {"task_id": task_id, "task_revision": task_revision}
+    return _live_material(call)["authoring_tasks"][task_index]
+
+
 def _live_scope(call, *, activity='workflow', domains=(), paths=(), task_index=-1, contributions=None):
     """Declare synthetic test semantics using one exact runtime-offered task pair."""
-    material = _live_material(call)
-    if "authoring_tasks" not in material:
-        return dict(material["answer_contract"]["authoring_scope"])
-    task = material["authoring_tasks"][task_index]
+    if isinstance(call, BoundContextProviderCallRequest):
+        task = _live_task(call, task_index)
+    else:
+        material = _live_material(call)
+        if "authoring_tasks" not in material:
+            return dict(material["answer_contract"]["authoring_scope"])
+        task = material["authoring_tasks"][task_index]
     affected = set(domains) | {domain.value for path in paths if (domain := artifact_domain(path)) is not None}
     return {"activity": activity, "intent": "authoring", "target_paths": list(paths), "domains": list(domains), "task_id": task["task_id"], "task_revision": task["task_revision"],
         "contributions": (copy.deepcopy(contributions) if contributions is not None else [
@@ -713,7 +723,7 @@ def _visible_outcome(kind: str, message: str = "Visible lead response.", *, reco
     ) -> str:
         if (getattr(call, 'contract', None) is not None
                 and kind in ('answer', 'question', 'critique') and recommended_action is None):
-            task = _live_material(call)['authoring_tasks'][-1]
+            task = _live_task(call)
             native = {'response_type': {'answer': 'answer', 'question': 'clarification_question',
                                       'critique': 'critique'}[kind], 'response_text': message,
                       'task_scope': lead_fixture_scope({
@@ -770,7 +780,7 @@ def _current_proposal_outcome(assignments, *, domains, relation='new_step',
         from tests.provider_wire_fixture import (
             lead_fixture_assignments, lead_fixture_response, lead_fixture_assessment,
             author_positive_fixture_review_bases)
-        task = _live_material(call)['authoring_tasks'][-1]
+        task = _live_task(call)
         native_scope = lead_fixture_bound_scope(call, {'writing_intent': 'authoring',
             'activity_type': {'review': 'review_writing', 'draft': 'draft_writing'}[activity],
             'target_artifact_paths': list(paths), 'specialist_domains': list(domains),
@@ -1440,8 +1450,14 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         calls = self.backend.calls[first_call_count:]
         self.assertEqual(self.backend.definitions[-1], session_definition)
         self.assertNotIn(b"CONTROL_ROOT_INJECTION", self.backend.definitions[-1].system_prompt_file.content)
-        self.assertIsNotNone(calls[0].expected_thread_id)
-        self.assertEqual({call.expected_thread_id for call in calls}, {calls[0].expected_thread_id})
+        self.assertIsNone(calls[0].expected_thread_id)
+        self.assertIsNotNone(calls[1].expected_thread_id)
+        self.assertNotEqual(calls[1].expected_thread_id,
+                            self.backend.calls[first_call_count - 1].expected_thread_id)
+        self.assertEqual({call.expected_thread_id for call in calls[1:]}, {calls[1].expected_thread_id})
+        self.assertEqual(tuple(call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"]
+                               for call in calls), ("bootstrap",) * 4)
+        self.assertTrue(all(call.context_witness is None and call.context_anchor is None for call in calls))
         self.assertEqual(len(calls), 4)
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
         self.assertEqual(tuple(item.contract.schema_group_phase for item in calls),
@@ -5285,10 +5301,10 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         case.backend.enqueue(lambda call, _provider: lead_fixture_response(call, {
             'response_type': 'clarification_question',
             'response_text': "Which direction should the resumed task pursue?",
-            'response_details': {'used_evidence_ids': {}}}, family=0), control_plan=selection_plan("question.authoring"))
+            'response_details': {'used_evidence_ids': {}}}, family=0))
         case.backend.enqueue(native_scoped(PLOT_ARCHITECT, paths=(OUTLINE,), domains=(
             'plot_structure',), activity='draft', mutate=lambda value, _: value.update(
-            message=original.goal), authoring_assessment=_fixture_assessment()), control_plan=selection_plan("consultation.authoring.content"))
+            message=original.goal), authoring_assessment=_fixture_assessment()))
         resumed = await case.runtime.decide_lead_task(resume)
         self.assertIsNone(resumed.turn.proposal)
         receipt = case.runtime.inspect_lead_collaboration(case.session_id, conversation).discussion_context
@@ -5298,13 +5314,13 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         repeated = await case.runtime.decide_lead_task(resume)
         self.assertEqual(repeated.transition_event_id, resumed.transition_event_id)
         self.assertEqual(case.history(conversation), question_prefix)
-        self.assertEqual(len(case.backend.calls), spent + 2)
+        self.assertEqual(len(case.backend.calls), spent + 1)
         resumed = replace(resumed, turn=await case.runtime.lead_turn(
             case.session_id, conversation,
             _ADMISSION_BRIEF + "\n" + ("The selected direction stays on this same fresh revision. "
             "Draft the three outline scenes at core_documents/global_outline.md; execution needs separate confirmation."),
         ))
-        self.assertEqual(len(_submitted_calls(case.history(conversation)[len(unchanged):])), 4)
+        self.assertEqual(len(_submitted_calls(case.history(conversation)[len(unchanged):])), 2)
         self.assertEqual({event.step_id for event in case.history(conversation)[len(unchanged):]
             if type(event.payload) is CollaborationProviderCallPayload
             and event.payload.state is CollaborationProviderCallState.SUBMITTED}, {receipt.planning_step_id})
@@ -5317,12 +5333,12 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         self.assertEqual(next(item.status for item in view.available_tasks
                               if item.ref.task_id == current.ref.task_id), "active")
         self.assertIsNone(case.runtime.inspect_lead_collaboration( case.session_id, conversation).discussion_context)
-        self.assertEqual(len(case.backend.calls), spent + 4)
+        self.assertEqual(len(case.backend.calls), spent + 2)
         current_prefix = case.history(conversation)
         with self.assertRaises(ValueError):
             await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(original.ref, task.LeadTaskAction.HOLD))
         self.assertEqual(case.history(conversation), current_prefix)
-        self.assertEqual(len(case.backend.calls), spent + 4)
+        self.assertEqual(len(case.backend.calls), spent + 2)
         await case._decide(resumed.turn, CollaborationConfirmationDecision.REJECT)
         current = next(item for item in case.runtime.inspect_lead_collaboration(case.session_id, conversation).available_tasks
                        if item.ref.task_id == original.ref.task_id)
@@ -5336,7 +5352,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                                                                              text="Cannot revive discarded authority."))
         case.backend.enqueue(native_scoped(
             EXECUTION_SPECIALIST, paths=("manuscript/part-01/opening.md",), domains=("tone_execution",), activity="draft",
-            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded prose drafting",)),), control_plan=selection_plan("consultation.authoring.content"))
+            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded prose drafting",)),))
         created = await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(
             retired.ref, task.LeadTaskAction.NEW_TASK,
             text=_ADMISSION_BRIEF + "\n" + ("Start separate prose work. Draft the opening prose at "
@@ -5346,8 +5362,15 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         self.assertEqual(created.turn.proposal.authoring_scope.domains, (ArtifactReviewDomain.TONE_EXECUTION,))
         self.assertEqual(next(item for item in case.runtime.inspect_lead_collaboration(case.session_id, conversation).available_tasks
                               if item.ref.task_id == retired.ref.task_id).status, "discarded")
-        self.assertEqual(len(_submitted_calls(case.history(conversation))), len(_submitted_calls(prefix)) + 6)
-        self.assertEqual(len(case.backend.calls), spent + 6)
+        self.assertEqual(len(_submitted_calls(case.history(conversation))), len(_submitted_calls(prefix)) + 3)
+        self.assertEqual(len(case.backend.calls), spent + 3)
+        revision_calls = case.backend.calls[spent:]
+        self.assertEqual(tuple(call.contract.factory.rule_seed.contract_id for call in revision_calls),
+                         ("lead-response-v9",) * 3)
+        self.assertEqual(tuple(call.contract.factory.schema_group_protocol for call in revision_calls),
+                         (False,) * 3)
+        self.assertEqual(tuple(call.contract.schema_group_phase for call in revision_calls),
+                         (None,) * 3)
         self.assertEqual(StoryRuntime(case.control_workspace, case.backend).inspect_lead_collaboration(
             case.session_id, conversation), case.runtime.inspect_lead_collaboration(case.session_id, conversation))
 
@@ -6011,7 +6034,11 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(tuple((finalizer.calls for finalizer in backend.finalizers)), ([('accepted', None)], [(
             'rejected', ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)], [('rejected',
             ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)]))
-        self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1", "thread-lead-2"],)
+        self.assertEqual(tuple(call.contract.schema_group_phase for call in backend.calls),
+                         (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE))
+        self.assertEqual(tuple(call.expected_thread_id for call in backend.calls),
+                         (None, "thread-lead-1", None))
+        self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1", "thread-lead-3"])
         self.assertNotIn("FIRST_REJECTED_BODY", repr(history))
         self.assertNotIn("SECOND_REJECTED_BODY", repr(history))
 

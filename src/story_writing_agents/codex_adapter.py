@@ -6,7 +6,6 @@ from .provider_adapter import ProviderContextWitness, ProviderContinuationReject
 
 import asyncio
 import hashlib
-import sqlite3
 import sys
 import uuid
 from urllib.parse import quote
@@ -266,21 +265,28 @@ def _codex_rollout_candidate(root: Path, thread_id: str) -> Path | None:
         if (first != int.from_bytes(index_header[40:44], sys.byteorder)
                 or second != int.from_bytes(index_header[44:48], sys.byteorder)):
             return None
-    connection = sqlite3.connect("file:" + quote(str(database), safe="/") + "?mode=ro", uri=True, timeout=0.05)
     try:
-        connection.execute("PRAGMA query_only=ON")
-        connection.set_progress_handler(lambda: 1, 10000)
-        connection.execute("BEGIN")
-        columns = {r[1]: r for r in connection.execute("PRAGMA table_info(threads)")}
-        if (not {"id", "rollout_path", "archived"} <= columns.keys() or columns["id"][5] != 1
-                or sum(bool(column[5]) for column in columns.values()) != 1
-                or any(columns[k][2].upper() != kind for k, kind in (("id", "TEXT"), ("rollout_path", "TEXT"), ("archived", "INTEGER")))):
-            return None
-        rows = connection.execute(
-            "SELECT rollout_path FROM threads WHERE id = ? AND archived = 0 LIMIT 2", (thread_id,)
-        ).fetchall()
-    finally:
-        connection.close()
+        import sqlite3
+    except ImportError:
+        return None
+    try:
+        connection = sqlite3.connect("file:" + quote(str(database), safe="/") + "?mode=ro", uri=True, timeout=0.05)
+        try:
+            connection.execute("PRAGMA query_only=ON")
+            connection.set_progress_handler(lambda: 1, 10000)
+            connection.execute("BEGIN")
+            columns = {r[1]: r for r in connection.execute("PRAGMA table_info(threads)")}
+            if (not {"id", "rollout_path", "archived"} <= columns.keys() or columns["id"][5] != 1
+                    or sum(bool(column[5]) for column in columns.values()) != 1
+                    or any(columns[k][2].upper() != kind for k, kind in (("id", "TEXT"), ("rollout_path", "TEXT"), ("archived", "INTEGER")))):
+                return None
+            rows = connection.execute(
+                "SELECT rollout_path FROM threads WHERE id = ? AND archived = 0 LIMIT 2", (thread_id,)
+            ).fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return None
     after = tuple(_native_file_facts(p) if p.exists() else None for p in sidecars)
     # SHM read-mark 갱신은 정상 read transaction이다. inode/소유/크기와 DB/WAL 변경을 분리한다.
     shm_changed = ((before[1] is None) != (after[1] is None)
@@ -426,7 +432,7 @@ def inspect_codex_context_witness(
         workspace.require_current()
         return ProviderContextWitness(thread_id, rollout_id, path, scope, observed[:2], len(raw),
             hashlib.sha256(raw).hexdigest(), expected, invocation.context_call_id, matched[0], settings)
-    except (OSError, ValueError, TypeError, KeyError, RecursionError, sqlite3.Error):
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
         return None
 
 

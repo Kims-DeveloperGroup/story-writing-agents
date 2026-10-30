@@ -2740,6 +2740,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
         from story_writing_agents.lead_provider_contracts import LeadContractRejection
+        from story_writing_agents.agent_context.manifest import ContextAuthorityKind, ContextProvenance
+        from story_writing_agents.agent_context.planning import MandatoryReferenceReservation
+        from story_writing_agents.agent_context.sources import writing_artifact_source_id
         from tests.test_agent_context_execution import (_LEAD_CALL_FACTORY, _PRIVATE_INPUT, _materials,
             _group_request, _group_control, _group_answer, _search)
         from story_writing_agents.provider_process import ProcessResult
@@ -2753,7 +2756,27 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         domain_policy = role_source.path.read_bytes()
         self.assertEqual(domain_policy, role_source.content)
         self.assertIn(b"# Lead Orchestrator Policy", domain_policy)
-        provider = (await backend.bind(definition)).context_provider()
+        reference_path = "core_documents/global_outline.md"
+        reference_text = "GROUPED_ATTACHED_REFERENCE_한🙂\n"
+        self.workspace.root.joinpath(reference_path).write_bytes(reference_text.encode("utf-8"))
+        repository, reference_authorization, reference_read = self.reference_invocation(
+            operation_id="grouped-reader-reference", invocation_id="grouped-reader-reference-1",
+            agent_id=LEAD_ORCHESTRATOR, phase="lead", round_number=None,
+            references=(ArtifactReference(reference_path),))
+        proof = reference_authorization.authorized_references[0]
+        reference = MandatoryReferenceReservation(proof.ordinal, f"reference_{proof.ordinal}",
+            writing_artifact_source_id(proof.reference.path), f"sha256:{proof.source.source_sha256}",
+            ContextProvenance(ContextAuthorityKind.REFERENCE_AUTHORIZATION, proof.reference.token),
+            f"sha256:{proof.selected_sha256}", proof.selected_utf8_bytes)
+        expected_references = [{"artifact_reference": {"artifact_path": reference_path, "line_range": None},
+                                "content_text": reference_text}]
+        bound = await backend.bind(definition)
+        provider = bound.context_provider(reference_read=reference_read)
+        def next_reference_provider(ordinal):
+            reader = repository.begin_reference_invocation(reference_authorization,
+                replace(reference_read.request.correlation, invocation_id=f"grouped-reader-reference-{ordinal}",
+                        invocation_ordinal=ordinal, attempt=ordinal))
+            return bound.context_provider(reference_read=reader)
         self.assertEqual(provider.provider_id, "codex")
         native_invoke = backend._codex_adapter.invoke
         requests, invocations, raw_responses, native_witnesses, native_commands = [], [], [], [], []
@@ -2816,7 +2839,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             subject_kind=ContextSubjectKind.CONVERSATION, subject_id="grouped-reader",
             agent_id=LEAD_ORCHESTRATOR, operation_id="grouped-reader-operation",
             result_correlation_id="grouped-reader-result", materials=_materials(),
-            result_contract=_LEAD_CALL_FACTORY, invocation_kind=ContextInvocationKind.LEAD, physical_call_limit=2))
+            result_contract=_LEAD_CALL_FACTORY, invocation_kind=ContextInvocationKind.LEAD, physical_call_limit=2,
+            reference_operation_id="grouped-reader-reference", mandatory_references=(reference,)))
         scope = service.scope(session_id, ContextSubjectKind.CONVERSATION, "grouped-reader", LEAD_ORCHESTRATOR)
         def assert_done_ledger(completed):
             state = completed.group_state
@@ -2848,6 +2872,13 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIs(invocations[1].context_anchor, native_witnesses[0])
         self.assertEqual(result.group_state.transport_delivery.witness, native_witnesses[1])
         self.assertEqual(result.group_state.accepted_delivery.witness, native_witnesses[0])
+        self.assertIn(reference_text.encode("utf-8"), invocations[0].payload_json)
+        self.assertNotIn(reference_text.encode("utf-8"), invocations[1].payload_json)
+        self.assertNotIn("untrusted_attached_references", requests[1].payload["context_changes"]["remove"])
+        self.assertEqual([callback_views.for_request(call)["untrusted_attached_references"] for call in requests],
+                         [expected_references] * 2)
+        self.assertEqual(json.loads(result.group_state.accepted_delivery.logical_context)["input"]["untrusted_attached_references"], expected_references)
+        self.assertEqual(json.loads(result.group_state.transport_delivery.logical_context)["input"]["untrusted_attached_references"], expected_references)
         assert_done_ledger(result)
 
         # 실제 native 전송은 완료됐지만 업무 응답은 거절된 별도 front이다.
@@ -2865,6 +2896,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         phases = (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE)
         rejected_request = _group_request(replace(request, group_state=None,
             operation_id="grouped-reader-reject", result_correlation_id="grouped-reader-reject-result", physical_call_limit=3))
+        provider = next_reference_provider(2)
         authorities = dict(writing_artifacts=WritingArtifactSourceAdapter(repository, scope),
             focused_conversation=FocusedConversationSourceAdapter(storage.catalog, storage.event_store, scope, None),
             active_debate=ActiveDebateSourceAdapter(self.workspace, scope, None),
@@ -2901,6 +2933,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("read", requests[2].contract.offers.allowed_actions)
             self.assertEqual(requests[2].contract.offers.issued_handle_aliases, ())
             repair = replace(rejected_request, fresh=False, physical_call_limit=1, group_state=retained)
+            provider = next_reference_provider(3)
             corrected = await service.invoke(repair, ObservedProvider(),
                 contract_lineage=rejected_request.result_contract.repair_lineage(held.exception), **authorities)
         self.assertEqual((len(invocations), len(corrected.provider_calls)), (4, 1))
@@ -2919,6 +2952,14 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             for record in _agent_exchange_records(self.workspace)))
         self.assertEqual(corrected.group_state.accepted_delivery.witness, native_witnesses[1])
         self.assertEqual(corrected.group_state.transport_delivery.witness, native_witnesses[3])
+        self.assertIn(reference_text.encode("utf-8"), invocations[0].payload_json)
+        self.assertEqual(["untrusted_attached_references" in call.payload.get("context_changes", {}).get("remove", [])
+                          for call in requests], [False] * 4)
+        self.assertEqual([callback_views.for_request(call)["untrusted_attached_references"] for call in requests],
+                         [expected_references] * 4)
+        self.assertEqual(json.loads(corrected.group_state.accepted_delivery.logical_context)["input"]["untrusted_attached_references"], expected_references)
+        self.assertEqual(json.loads(corrected.group_state.transport_delivery.logical_context)["input"]["untrusted_attached_references"], expected_references)
+        repository.finish_reference_operation(reference_authorization, outcome=None)
         assert_done_ledger(corrected)
         unknown = CallbackContextViews()
         self.assertRaises(FixturePhasePlanError, unknown.for_request, requests[0])
@@ -2937,8 +2978,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             host_callback_reached.append(True)
             raise host_rejection
         host_factory = replace(_LEAD_CALL_FACTORY, authorized_validator=reject_business)
+        provider = bound.context_provider()
         host_request = _group_request(replace(request, group_state=None, result_contract=host_factory,
-            operation_id="grouped-reader-host", result_correlation_id="grouped-reader-host-result", physical_call_limit=2))
+            operation_id="grouped-reader-host", result_correlation_id="grouped-reader-host-result", physical_call_limit=2,
+            mandatory_references=(), reference_operation_id=None))
         with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
             with self.assertRaises(LeadContractRejection) as denied:
                 await service.invoke(host_request, ObservedProvider(), **authorities)

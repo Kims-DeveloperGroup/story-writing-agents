@@ -11,6 +11,7 @@ from unittest import mock
 
 from story_writing_agents import StoryRuntime
 from story_writing_agents.agent_context.ledger import ContextLedgerKey, ContextLedgerRecordState
+from story_writing_agents.agent_context.planning import ContextCheckpointState
 from story_writing_agents.agent_context.service import (
     ContextProviderFailureFacts,
     record_context_provider_failure,
@@ -178,12 +179,17 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         _, checkpoint = self.checkpoint()
         retained_thread = checkpoint.checkpoint_view.provider_thread_id
         self.assertIsNotNone(retained_thread)
+        self.assertIs(checkpoint.checkpoint_view.state, ContextCheckpointState.READY)
+        successful_history = self.history(successful_conversation)
         before_taints = list(self.backend.tainted_thread_ids)
         restarted = StoryRuntime(self.workspace, self.backend)
+        self.assertEqual(self.checkpoint()[1], checkpoint)
+        self.assertEqual(self.history(successful_conversation), successful_history)
         await self.answer(failed_conversation, "Explicit retry in failed conversation.", runtime=restarted)
-        self.assertEqual(self.backend.calls[-2].expected_thread_id, retained_thread)
+        self.assertIsNone(self.backend.calls[-2].expected_thread_id)
         self.assertEqual(self.backend.calls[-2].payload["session_history"]["context_delivery_mode"], 'bootstrap')
-        self.assertEqual(self.backend.tainted_thread_ids, before_taints)
+        self.assertEqual(self.backend.tainted_thread_ids, before_taints + [retained_thread])
+        self.assertEqual(self.history(successful_conversation), successful_history)
 
     async def test_revision_timeout_keeps_superseded_confirmation_non_authorizing(self):
         from tests.recommendation_fixture import task_assessment
@@ -204,8 +210,14 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         with self.assertRaisesRegex(ValueError, "no authoritative pending request"):
             await restarted.decide_lead_step(lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(len(self.backend.calls), before)
-        await self.answer(conversation, "New request after failed revision.", runtime=restarted)
-        self.assertEqual(len(self.backend.calls), before + 2)
+        self.backend.enqueue(lead._visible_outcome("answer", "Synthetic retry succeeded."))
+        retried = await restarted.lead_turn(
+            self.session_id, conversation, "New request after failed revision.")
+        self.assertIs(retried.kind, LeadOutcomeKind.ANSWER)
+        self.assertEqual(len(self.backend.calls), before + 1)
+        self.assertIsNone(self.backend.calls[-1].contract.schema_group_phase)
+        self.assertEqual(self.backend.calls[-1].contract.factory.rule_seed.contract_id,
+                         "lead-response-v9")
         self.assertEqual({agent for agent, _ in self.backend.call_records}, {LEAD_ORCHESTRATOR})
 
     async def test_attached_reference_cancellation_closes_and_releases_for_explicit_retry(self):

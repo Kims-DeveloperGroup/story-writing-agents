@@ -154,7 +154,8 @@ class RecommendationActionContractTests(RecommendationCase):
                     selection['left']['plot_architect'] = False
                     selection['right']['left']['character_custodian'] = True
                     return json.dumps(native)
-            self.backend.enqueue(bad, control_plan=selection_plan("prepare.artifact"))
+            self.backend.enqueue(bad, control_plan=selection_plan(
+                "prepare.consultation.authoring" if bad_route else "prepare.artifact"))
             self.backend.enqueue(bad)
             result = await self.runtime.lead_turn(self.session_id, cid, ("Finished candidate:\n" + message + "\nYou may make bounded review judgments and prepare a separate proposal; preserve supplied facts.\n" + "Reject undisclosed aliases."))
             self.assertIsNone(result.recommendation_request)

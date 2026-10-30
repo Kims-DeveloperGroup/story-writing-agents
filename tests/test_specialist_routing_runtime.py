@@ -1,5 +1,5 @@
 """Runtime routing accepts typed task facts and keeps draft/review authority separate."""
-from tests.test_lead_orchestration import _live_material
+from tests.test_lead_orchestration import _live_material, _live_task
 from tests.provider_wire_fixture import selection_plan
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
 from tests.provider_wire_fixture import ( result as wire_result, lead_fixture_bound_scope, lead_fixture_assignments,
@@ -68,7 +68,7 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
         intent=None, mutate=None, native_inputs=None):
     def respond(call, provider):
         material = _workflow_material(provider.callback_payload(call))
-        tasks = material["authoring_tasks"]
+        tasks = [_live_task(call, i) for i, _ in enumerate(call.contract.semantic_index.policy.task_revisions)]
         index = next((i for i, t in enumerate(tasks) if t["task_id"] == selected and (revision is None or t["task_revision"] == revision)), len(tasks)-1)
         assert revision is None or (tasks[index]["task_id"], tasks[index]["task_revision"]) == (selected, revision)
         scope = _live_scope(call, activity=activity, paths=paths, domains=domains, task_index=index)
@@ -700,8 +700,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         task_id = pending.proposal.authoring_scope.task_id
         self.workspace.path(OUTLINE).unlink()
         def selected_review_scope(call):
-            material = _live_material(call)
-            index = next(i for i,t in enumerate(material["authoring_tasks"])
+            tasks = [_live_task(call, i) for i, _ in enumerate(call.contract.semantic_index.policy.task_revisions)]
+            index = next(i for i,t in enumerate(tasks)
                 if t["task_id"] == task_id)
             return _live_scope(call, activity="review", domains=("plot_structure",),
                 paths=(OUTLINE,), task_index=index)

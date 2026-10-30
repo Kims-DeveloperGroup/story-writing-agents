@@ -153,7 +153,11 @@ def _artifact_outcome(
                 outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         material = _workflow_material(input_payload)
         if read_queries:
-            reads = _provider.callback_payload(call)['context_observation']['read_results']
+            reads = ([row for entry in input_payload['context_observations']
+                      if entry['observation']['observation_type'] == 'context_read_results'
+                      for row in entry['observation']['read_results']]
+                     if call.contract.schema_group_phase is not None else
+                     input_payload['context_observation']['read_results'])
             paths = tuple(path for path, _query in read_queries)
             locators = tuple(path.removeprefix('manuscript/') for path in paths)
             if (len(set(paths)) != len(paths) or len(set(locators)) != len(paths)
@@ -650,6 +654,8 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         before_revision_calls = len(self.backend.call_records)
 
         def fresh_recommendation(call, _provider):
+            self.assertFalse(call.contract.factory.schema_group_protocol)
+            self.assertIsNone(call.contract.schema_group_phase)
             def encode_current(call, value):
                 from tests.provider_wire_fixture import (
                     result as native_result, lead_fixture_result, lead_fixture_scope_record,
@@ -732,7 +738,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 agent_id
                 for agent_id, _call in self.backend.call_records[before_revision_calls:]
             ),
-            (LEAD_ORCHESTRATOR, LEAD_ORCHESTRATOR,), )
+            (LEAD_ORCHESTRATOR,), )
 
         self.backend.enqueue(
             _artifact_outcome(
@@ -1168,9 +1174,13 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             call_kinds,
             (
                 ProviderCallKind.COLLABORATION_INITIAL,
-                ProviderCallKind.COLLABORATION_CONTINUATION,
-                ProviderCallKind.COLLABORATION_CONTINUATION,
-            ProviderCallKind.COLLABORATION_CONTINUATION, ), )
+                ProviderCallKind.COLLABORATION_INITIAL,
+                ProviderCallKind.COLLABORATION_INITIAL,
+            ProviderCallKind.COLLABORATION_INITIAL, ), )
+        self.assertEqual([call.payload['response_contract']['schema_selection']['context_delivery']['mode']
+                          for call in self.backend.calls[-4:]], ['bootstrap'] * 4)
+        self.assertEqual([(call.context_witness, call.context_anchor) for call in self.backend.calls[-4:]],
+                         [(None, None)] * 4)
         self.assertNotIn("context_observation", self.backend.calls[-4].payload)
         self.assertNotIn("context_observations", self.backend.calls[-4].payload)
         self.assertEqual(self.backend.callback_payload(self.backend.calls[-3])["context_observation"]["observation_type"], "context_search_results")

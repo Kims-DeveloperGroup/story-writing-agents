@@ -3,6 +3,7 @@
 from __future__ import annotations
 import story_writing_agents.lead_task_transitions as task
 from story_writing_agents import conversations as collaboration
+from story_writing_agents.lead_schema_groups import LeadGroupPhase
 from story_writing_agents import lead_exploration as exploration
 import hashlib
 
@@ -1768,7 +1769,7 @@ class ControllerContractTests(ControllerTestCase):
         for module_name in graph:
             visit(module_name)
         self.assertEqual(len(modules), 164)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 738)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 739)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6557,7 +6558,8 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             self.addCleanup(fixture.doCleanups)
             conversation = fixture.conversation()
             _, first_report = runner.run(_confirmed_premise(fixture, conversation))
-            fixture.backend.enqueue(_SubmittedFailure(RuntimeError("known selected front failure")))
+            fixture.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT,
+                _SubmittedFailure(RuntimeError("known selected front failure"))),))
             runner.run(fixture.runtime.lead_turn(fixture.session_id, conversation, "Keep this whole choice.", premise_selection=_premise_choice(first_report, ("core_documents/global_outline.md",))))
             _, latest = runner.run(_confirmed_premise(fixture, conversation))
             history = fixture.history(conversation)

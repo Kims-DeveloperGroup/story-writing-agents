@@ -1092,6 +1092,35 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual(result.authorization.mandatory_references, (reference,))
         self.assertEqual(provider.completed_references, 1)
         self.assertEqual(provider.aborted_references, [])
+        from story_writing_agents.lead_schema_groups import LeadGroupPhase
+        expected = [{"artifact_reference": {"artifact_path": "core_documents/global_outline.md",
+                    "line_range": None}, "content_text": "PRIVATE_REFERENCE_BODY"}]
+        self.assertEqual(_expanded_context_payload(provider.calls[0].payload)["untrusted_attached_references"], expected)
+        grouped_reference = self.reference("grouped-reference-operation")
+        grouped_request = _group_request(self.request(operation_id="grouped-reference-invoke",
+            result_correlation_id="grouped-reference-result", reference_operation_id="grouped-reference-operation",
+            mandatory_references=(grouped_reference,), invocation_kind=ContextInvocationKind.LEAD,
+            result_contract=_LEAD_CALL_FACTORY, agent_id=LEAD_ORCHESTRATOR, physical_call_limit=4))
+        grouped_provider = _ScriptedProvider((_search, _group_answer), reference_operation_id="grouped-reference-operation",
+            control_plan=((0, LeadGroupPhase.SELECT, _group_control("question.workflow")),
+                          (1, LeadGroupPhase.GENERATE, _group_control("answer.workflow"))))
+        grouped = await self.invoke(grouped_provider, grouped_request)
+        self.assertEqual((len(grouped_provider.calls), len(grouped.provider_calls),
+                          grouped_provider.script.script_responses_consumed), (4, 4, 2))
+        self.assertEqual([call.contract.schema_group_phase for call in grouped_provider.calls],
+            [LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE])
+        self.assertEqual([call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"]
+                          for call in grouped_provider.calls], ["bootstrap"] * 4)
+        self.assertEqual([_expanded_context_payload(call.payload)["untrusted_attached_references"]
+                          for call in grouped_provider.calls], [expected] * 4)
+        self.assertEqual([grouped_provider.callback_payload(call)["untrusted_attached_references"]
+                          for call in grouped_provider.calls], [expected] * 4)
+        self.assertEqual([b"PRIVATE_REFERENCE_BODY" in raw for raw in grouped_provider.application_bytes], [True] * 4)
+        self.assertEqual(json.loads(grouped.group_state.accepted_delivery.logical_context)["input"]["untrusted_attached_references"], expected)
+        self.assertEqual(json.loads(grouped.group_state.transport_delivery.logical_context)["input"]["untrusted_attached_references"], expected)
+        self.assertEqual(tuple(item.group_id for item in grouped.group_state.workflow.history),
+                         ("question.workflow", "answer.workflow"))
+        self.assertEqual((grouped_provider.completed_references, grouped_provider.aborted_references), (1, []))
 
 
 class ContextExecutionFailureTests(ContextExecutionTestCase):

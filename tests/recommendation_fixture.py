@@ -512,9 +512,8 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
                              'recommended_action', 'authoring_scope', 'authoring_assessment'}
             compact.update((key, item) for key, item in value.items() if key not in baseline_keys)
             native = result(compact, 'lead-response-v9')
-            from tests.provider_wire_fixture import lead_fixture_scope_record
             native.pop('writing_task_scope')
-            native['task_scope'] = lead_fixture_scope_record(value['authoring_scope'])
+            native['task_scope'] = lead_fixture_bound_scope(call, value['authoring_scope'], record=True)
             choices = dict(call.contract.semantic_index.policy.choices)
             sources = (choices['input_ids'] if choices['source_binding'] == ('unbound',)
                        else choices['source_ids'])

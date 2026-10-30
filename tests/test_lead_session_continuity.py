@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from tests.provider_wire_fixture import selection_plan
+from story_writing_agents.provider_wire import project_context_payload
 import hashlib
 from story_writing_agents.conversations import encode_collaboration_event
 from tests.test_collaboration_events import editorial, editorial_request
@@ -94,7 +95,13 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(first.payload["session_history"]["context_delivery_mode"], "bootstrap")
         self.assertIs(type(histories[0]), SessionHistorySnapshot)
         current = backend.callback_payload(first)
-        self.assertEqual(current["session_history"]["conversations"], histories[0].delivery()["conversations"])
+        raw_history = histories[0].delivery()
+        expected_history = project_context_payload({"h": raw_history}, {})[0]["session_history"]
+        self.assertEqual(current["session_history"]["conversations"], expected_history["conversations"])
+        self.assertEqual([(record["event_id"], tuple(field["field_text"].encode("utf-8")
+            for field in record.get("readable_fields", []))) for record in _records(current["session_history"])],
+            [(record["event_id"], tuple(field["text"].encode("utf-8")
+            for field in record.get("fields", []))) for record in _records(raw_history)])
         self.assertEqual(current["task_input"]["user_request_text"], text)
         return result
 

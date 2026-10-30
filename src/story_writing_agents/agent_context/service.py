@@ -6680,7 +6680,8 @@ class AgentContextService:
                         )
                     return call_request
                 call_request = build_call_request(call_id, current_lineage)
-                reference_context = set()
+                if group_state is None:
+                    reference_context = set()
                 schema, call_kind = call_request.schema, call_request.call_kind
                 call_decoded = None
                 stage = "provider"
