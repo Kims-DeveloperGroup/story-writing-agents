@@ -224,12 +224,12 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertEqual(offer.recommendation_request.authoring_scope, completed.authoring_scope)
         self.enqueue_preparation(offer, answer=checked(offer))
         continued = await self.runtime.decide_lead_recommendation(decision(offer))
-        self.assertIsNotNone(continued.confirmation_request_id, continued)
-        self.assertIsNotNone(continued.turn.artifact_proposal, continued)
         self.assertEqual(self.objective(other).facts, before)
         self.assertIs(type(self.objective(other).facts), c.ArtifactObjectiveFacts)
         self.assertEqual(c.encode_collaboration_event(self.history(other)[old_event.sequence - 1]), old_wire)
         self.assertFalse(self.payload_events(other, c.ArtifactObjectivePayloadV2))
+        self.assertIsNotNone(continued.confirmation_request_id, continued)
+        self.assertIsNotNone(continued.turn.artifact_proposal, continued)
 
     async def test_history_rejects_foreign_origin_tail_and_nonatomic_action_batches(self):
         self.workspace.path(OUTLINE).write_text("Outline first line.\nOutline second line.\n", encoding="utf-8")
