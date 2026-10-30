@@ -125,7 +125,7 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
                    if premise_signature(member.rule_graph.schema_value(), member.rule_graph.schema_value())
                    and member.rule_graph.literal_at(("response_type",)) == "specialist_consultation_proposal"}
         return lead_fixture_response(call, lead_fixture_result(native), family=0, branch_key=branch)
-    case.backend.enqueue(front)
+    case.backend.enqueue(front, control_plan=selection_plan("premise.analysis"))
     request = "Compare knowledge alternatives without drafting."
     if reference: request += " ${core_documents/global_outline.md}#L1-L2"
     proposed = await case.runtime.lead_turn(case.session_id, conversation, request)
@@ -4554,8 +4554,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         case.setUp()
         initial_question_text = "Which ending should the outline use?"
         original_enqueue = case.backend.enqueue
-        def enqueue_initial_question(*responses):
-            return original_enqueue(*responses, control_plan=select("question.authoring"))
+        def enqueue_initial_question(*responses, control_plan):
+            return original_enqueue(*responses, control_plan=control_plan)
         with mock.patch.object(case.backend, "enqueue", side_effect=enqueue_initial_question):
             pending_conversation, _ = await case.clarify(message=initial_question_text)
         pending = case.objective(pending_conversation)
@@ -5795,6 +5795,14 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 def corrected(call: ContextProviderCallRequest, _provider: object) -> str:
                     material = _workflow_material(_provider.callback_payload(call))
                     correction = material["response_correction"]
+                    failed = backend.calls[-2]
+                    self.assertEqual((call.contract.phase, call.contract.logical_origin_call_id), ("repair", failed.call_id))
+                    self.assertIs(call.contract.eligibility_offers, failed.contract.eligibility_offers)
+                    self.assertEqual((correction["bound_contract"]["current_physical_call_id"],
+                                      correction["bound_contract"]["current_offer_digest"]),
+                                     (failed.call_id, failed.contract.offers.offer_digest))
+                    call.contract.require_submission(call.payload, call.schema)
+                    assert_phase_guide(self, call, LeadGroupPhase.GENERATE)
                     correction_records.append( (
                             correction["rejection_code"],  # type: ignore[index]
                             correction["instruction"],  # type: ignore[index]
@@ -5808,15 +5816,25 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 history = self.history(conversation_id)
                 call_events = _event_payloads(history, CollaborationProviderCallPayload)
                 submitted = _submitted_calls(history)
-                self.assertEqual(correction_records, [(rejection_code.value, mock.ANY, [
-                    'submit_result'])], (result, tuple((item.calls for item in backend.finalizers)),
+                failed = backend.calls[-2]
+                expected_actions = list(dict.fromkeys(member.rule_graph.literal_at(("action_type",))
+                    for member in failed.contract.action_index.contracts))
+                self.assertEqual(correction_records, [(rejection_code.value, mock.ANY, expected_actions)],
+                    (result, tuple((item.calls for item in backend.finalizers)),
                     tuple((call.payload['response_contract'] for call in backend.calls))))
                 self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
                 self.assertEqual(result.message, f"Corrected {label} answer.")
                 self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD,)
                 self.assertEqual(len(backend.calls), len(initial_script) + 2)
                 self.assertEqual(len(backend.providers), 2)
-                self.assertIn("Return submit_result now", correction_records[0][1])
+                instruction = correction_records[0][1]
+                self.assertIn("current native output schema", instruction)
+                self.assertIn("exact frozen guidance in response_correction.bound_contract", instruction)
+                self.assertIn("only the actions currently offered for this call", instruction)
+                self.assertIn("actual task constraints", instruction)
+                self.assertIn("do not invent completion or authority", instruction)
+                self.assertNotIn("without search_context or read_context", instruction)
+                self.assertNotIn("Preserve the selected draft_document_change_proposal step", instruction)
                 self.assertIsNone(backend.calls[-1].expected_thread_id)
                 self.assertEqual(backend.finalizers[0].calls, [("accepted", None)])
                 self.assertEqual(backend.finalizers[-2].calls, [("rejected", rejection_code)],)

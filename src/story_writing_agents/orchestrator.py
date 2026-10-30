@@ -517,13 +517,10 @@ _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES = frozenset(
     }
 )
 _LEAD_RESPONSE_CORRECTION_INSTRUCTION = (
-    "Return submit_result now without search_context or read_context. "
-    "Follow the current native output schema and the exact frozen "
-    "rule-derived guidance in response_correction.bound_contract "
-    "for the complete selected response. Preserve the selected "
-    "draft_document_change_proposal step as its exact artifact proposal; "
-    "do not downgrade it to advice or claim that the document change "
-    "request is completed."
+    "Correct the rejected response using the current native output schema and "
+    "the exact frozen guidance in response_correction.bound_contract. "
+    "Use only the actions currently offered for this call, preserve its actual "
+    "task constraints, and do not invent completion or authority."
 )
 _SAFE_STRUCTURED_FALLBACK_MESSAGE = "LEAD_CONTRACT_REJECTED"
 _LEAD_PROPOSAL_USER_IMPACT = (

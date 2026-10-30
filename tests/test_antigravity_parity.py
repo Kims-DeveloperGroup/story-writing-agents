@@ -1193,7 +1193,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     else:
                         await lead._confirmed_premise(case, case.conversation("native-premise"))
                 setup_calls.append(len(case.backend.calls))
-        self.assertEqual(([index for index, _ in invocations], setup_calls), ([0, 0, 1, 2, 3], [3, 4]))
+        self.assertEqual(([index for index, _ in invocations], setup_calls), ([0, 0, 1, 2, 3], [3, 5]))
         self.assertEqual(front_call_kinds, [ProviderCallKind.COLLABORATION_INITIAL,
                                            ProviderCallKind.COLLABORATION_CONTINUATION])
         self.assertEqual([json.loads(invocation.payload_json)["response_contract"]["schema_selection"]["phase"]

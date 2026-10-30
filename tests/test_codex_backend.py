@@ -2738,19 +2738,19 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             FocusedConversationSourceAdapter, OwnAgentStateSourceAdapter, WritingArtifactSourceAdapter)
         from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
-        from tests.test_agent_context_execution import (_LEAD_CALL_FACTORY, _PRIVATE_INPUT, _PRIVATE_DEFINITION,
-            _materials, _group_request, _group_control, _group_answer, _search)
+        from tests.test_agent_context_execution import (_LEAD_CALL_FACTORY, _PRIVATE_INPUT, _materials,
+            _group_request, _group_control, _group_answer, _search)
         from story_writing_agents.provider_process import ProcessResult
         from tests.provider_wire_fixture import CallbackContextViews, FixturePhasePlanError, OwnedNativeHistory, assert_phase_guide
         service = AgentContextService(self.workspace)
         storage = compose_filesystem_conversation_storage(self.workspace)
         repository = WritingArtifactRepository(self.workspace.root)
-        role_path = self.definition(LEAD_ORCHESTRATOR).behavior_policy_components[-1].path
-        self.assertTrue(role_path.resolve().is_relative_to(self.workspace.root.resolve()))
-        original_role = role_path.read_bytes()
-        self.addCleanup(role_path.write_bytes, original_role)
-        role_path.write_bytes(original_role + b"\n" + _PRIVATE_DEFINITION.encode("utf-8") + b"\n")
         definition = self.definition(LEAD_ORCHESTRATOR)
+        role_source = definition.behavior_policy_components[-1]
+        self.assertTrue(role_source.path.resolve().is_relative_to(self.workspace.root.resolve()))
+        domain_policy = role_source.path.read_bytes()
+        self.assertEqual(domain_policy, role_source.content)
+        self.assertIn(b"# Lead Orchestrator Policy", domain_policy)
         provider = (await backend.bind(definition)).context_provider()
         self.assertEqual(provider.provider_id, "codex")
         native_invoke = backend._codex_adapter.invoke
@@ -2781,7 +2781,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 reader_faults_checked = True
             staged = (binding.staging_directory / "AGENTS.md").read_bytes()
             role = binding.definition.system_prompt_file.content
-            self.assertIn(_PRIVATE_DEFINITION.encode("utf-8"), role)
+            self.assertIn(domain_policy, role)
+            self.assertEqual(role, definition.system_prompt_file.content)
             self.assertIn(role, staged)
             self.assertEqual(invocation.binding_components, binding.binding_components)
             async def native_process(request, **_options):

@@ -1535,7 +1535,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         generation_offers = replace(offers, call_id="group-generation", action_index=offers.action_index + 1)
         generated = grouped_factory.for_offer(generation_offers, request_basis=basis, group_workflow=workflow,
                                              prepared_compilation=selector.prepared_compilation)
-        self.assertEqual(check_schema(generated.schema_value()), [])
+        self.assertEqual(check_schema(generated.schema_value()), ())
         self.assertEqual(set(generated.schema_value()['properties']), {'agent_action'})
         self.assertIs(generated.prepared_compilation, selector.prepared_compilation)
         reselect = control_frame(generated, "question.workflow")
