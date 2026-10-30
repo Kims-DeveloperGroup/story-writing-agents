@@ -357,6 +357,99 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertEqual(calls[0].contract.eligibility_offers.completed_read_facts, ())
         self.assertEqual(calls[0].contract.eligibility_offers.delivery_read_facts, ())
 
+        from story_writing_agents.lead_schema_groups import LeadGroupPhase
+        from story_writing_agents.agent_context.service import context_provider_failure_facts
+        for cap, succeeds in ((4, True), (3, False)):
+            label = f"group-auth-select-{cap}"
+            plain_request = self.request(
+                operation_id=label, result_correlation_id=label + "-result",
+                invocation_kind=context.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
+                agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=cap)
+            grouped_request = context._group_request(plain_request)
+            grouped_provider = AuthContextProvider((auth_failure(), context._group_control("answer.workflow"), context._group_answer))
+            if succeeds:
+                grouped, keys = await drive_recovery(self.invoke(grouped_provider, grouped_request))
+                self.assertEqual(len(keys), 1)
+                self.assertIs(grouped.group_state.workflow.phase, LeadGroupPhase.DONE)
+                self.assertEqual(len(grouped.group_state.workflow.history), 1)
+                self.assertEqual(len(grouped.provider_calls), 3)
+                first, replay, _answer_call = grouped_provider.calls
+                self.assertEqual(replay.contract.phase, "replay")
+                self.assertEqual(replay.contract.logical_origin_call_id, first.call_id)
+                self.assertEqual(replay.contract.eligibility_offers, first.contract.eligibility_offers)
+                self.assertNotEqual(replay.contract.offers.offer_digest, first.contract.offers.offer_digest)
+                self.assertEqual(tuple(member.owner.declare_rules().canonical_bytes for member in replay.contract.semantic_index.contracts),
+                                 tuple(member.owner.declare_rules().canonical_bytes for member in first.contract.semantic_index.contracts))
+                self.assertEqual(tuple(dict(call.contract.offers.action_limits)["nonterminal_actions"]
+                                       for call in grouped_provider.calls), (2, 1, 1))
+                self.assertEqual(dict(replay.contract.eligibility_offers.action_limits)["nonterminal_actions"], 2)
+                self.assertEqual(len({call.call_id for call in grouped.provider_calls}), 3)
+            else:
+                with self.assertRaises(ProviderAuthenticationRequiredError) as caught:
+                    await drive_recovery(self.invoke(grouped_provider, grouped_request))
+                facts = context_provider_failure_facts(caught.exception)
+                self.assertIs(facts.group_state.workflow.phase, LeadGroupPhase.STOP)
+                self.assertEqual(facts.group_state.workflow.stop_reason, "authentication_replay_budget_exhausted")
+                self.assertEqual(facts.group_state.workflow.history, ())
+                self.assertEqual(len(grouped_provider.calls), 1)
+                self.assertEqual(len(grouped_provider.responses), 2)
+            offered = {member.rule_graph.literal_at(("action_type",))
+                       for member in grouped_provider.calls[0].contract.action_index.contracts}
+            self.assertIn("search_context", offered)
+        no_context_service = context.AgentContextService(
+            self.workspace, action_policy=replace(context.CONTEXT_ACTION_POLICY, max_search_actions=1))
+        def zero_hit_search(call, provider):
+            packet = json.loads(context._search(call, provider))
+            packet["agent_action"]["queries"][0]["search_text"] = "GROUP_AUTH_ZERO_HIT_895"
+            return json.dumps(packet)
+        def select_after_empty_search(call, provider):
+            self.assertEqual(call.payload["context_observation"]["search_results"], [])
+            self.assertEqual(call.contract.offers.issued_handle_aliases, ())
+            return context._group_control("answer.workflow")(call, provider)
+        for cap, succeeds, expected_limits in ((4, True, (2, 1, 1, 0)), (3, False, (1, 0, 0))):
+            label = f"group-auth-generate-{cap}"
+            grouped_request = context._group_request(self.request(
+                operation_id=label, result_correlation_id=label + "-result",
+                invocation_kind=context.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
+                agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=cap))
+            grouped_provider = AuthContextProvider((zero_hit_search, select_after_empty_search,
+                                                   auth_failure(), context._group_answer))
+            if succeeds:
+                grouped, keys = await drive_recovery(self.invoke(
+                    grouped_provider, grouped_request, service=no_context_service))
+                self.assertEqual(len(keys), 1)
+                self.assertIs(grouped.group_state.workflow.phase, LeadGroupPhase.DONE)
+                self.assertEqual(len(grouped.group_state.workflow.history), 1)
+                self.assertEqual(len(grouped.provider_calls), 4)
+                self.assertEqual(len({call.call_id for call in grouped.provider_calls}), 4)
+                first, replay = grouped_provider.calls[2:]
+                self.assertEqual(replay.contract.phase, "replay")
+                self.assertEqual(replay.contract.logical_origin_call_id, first.call_id)
+                self.assertEqual(replay.contract.eligibility_offers, first.contract.eligibility_offers)
+                self.assertNotEqual(replay.contract.offers.offer_digest, first.contract.offers.offer_digest)
+                self.assertEqual(tuple(member.owner.declare_rules().canonical_bytes for member in replay.contract.semantic_index.contracts),
+                                 tuple(member.owner.declare_rules().canonical_bytes for member in first.contract.semantic_index.contracts))
+                self.assertEqual(dict(replay.contract.eligibility_offers.action_limits)["nonterminal_actions"], 1)
+                self.assertEqual(dict(replay.contract.offers.action_limits)["nonterminal_actions"], 0)
+                self.assertEqual(tuple(call.contract.schema_group_phase for call in grouped_provider.calls),
+                                 (LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE))
+            else:
+                with self.assertRaises(ProviderAuthenticationRequiredError) as caught:
+                    await drive_recovery(self.invoke(grouped_provider, grouped_request, service=no_context_service))
+                facts = context_provider_failure_facts(caught.exception)
+                self.assertIs(facts.group_state.workflow.phase, LeadGroupPhase.STOP)
+                self.assertEqual(facts.group_state.workflow.stop_reason, "authentication_replay_budget_exhausted")
+                self.assertEqual(len(facts.group_state.workflow.history), 1)
+                self.assertEqual(len(facts.submitted_accountings), 3)
+                self.assertEqual(len(grouped_provider.calls), 3)
+                self.assertEqual(len(grouped_provider.responses), 1)
+            original_generate = grouped_provider.calls[2].contract
+            self.assertEqual(original_generate.eligibility_offers.issued_handle_aliases, ())
+            self.assertEqual({member.rule_graph.literal_at(("action_type",))
+                              for member in original_generate.action_index.contracts}, {"submit_result"})
+            self.assertEqual(tuple(dict(call.contract.offers.action_limits)["nonterminal_actions"]
+                                   for call in grouped_provider.calls), expected_limits)
+
     def reference_request(self, limit=5):
         reference_operation_id = f"reference-operation-{limit}"
         proof = self.reference(operation_id=reference_operation_id)
@@ -423,6 +516,19 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         with self.assertRaises(ProviderAuthenticationRequiredError):
             await drive_recovery(self.invoke(provider), drift)
         self.assertEqual(len(provider.calls), 1)
+
+        grouped_request = context._group_request(self.request(
+            operation_id="group-auth-source", result_correlation_id="group-auth-source-result",
+            invocation_kind=context.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
+            agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=4))
+        grouped_provider = AuthContextProvider((auth_failure(), context._group_control("answer.workflow"), context._group_answer))
+        def change_group_source(_key):
+            self.workspace.path("core_documents/global_outline.md").write_text("Changed typed group source.")
+            return True
+        with self.assertRaises(ProviderAuthenticationRequiredError):
+            await drive_recovery(self.invoke(grouped_provider, grouped_request), change_group_source)
+        self.assertEqual(len(grouped_provider.calls), 1)
+        self.assertEqual(len(grouped_provider.responses), 2)
 
     async def backend_fixture(self):
         workspace = pristine_initialized_workspace(self)

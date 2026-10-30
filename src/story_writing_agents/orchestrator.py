@@ -58,6 +58,8 @@ from .conversations.events import (
     CollaborationPremiseFreshWorkAdmissionPayload, encode_collaboration_event,
 )
 from .lead_provider_contracts import PremiseDecisionConstraints
+from .lead_provider_contracts import LeadGroupCompilation, LeadGroupedStage
+from .lead_schema_groups import LeadGroupPhase, LeadGroupRequestBasis, SchemaGroupControlOwner
 
 from .editorial_scope import (
     EditorialScope, EditorialScopeKind, editorial_scope_contains, intersect_editorial_scopes,
@@ -143,6 +145,7 @@ from .structured_output_validation import (
 from .conversations.session_context import SessionContextCapacityError, SessionHistorySnapshot
 from .agent_context.service import (
     AgentContextService,
+    ContextGroupInvocationState,
     ContextAnswerAuthorization,
     ContextEvidenceReceipt,
     ContextExecutionEvent,
@@ -2375,6 +2378,9 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
     language: str
     authorized_validator: Callable[[str, object], object] = field(repr=False, compare=False)
     reviewer_for_locator: Callable[[str], str] = field(repr=False, compare=False)
+    schema_group_protocol: bool = field(default=False, kw_only=True)
+    _factory_profile: tuple = field(init=False, repr=False, compare=False)
+    _factory_sources: tuple = field(init=False, repr=False, compare=False)
     _declared_authorization_check: Callable[[LeadDecodedResult, HostCheckContext], None] = field(init=False, repr=False, compare=False)
     _authorization_declaration: NamedHostCheck[LeadDecodedResult] = field(init=False, repr=False, compare=False)
     _status_rule: tuple[object, object] = field(
@@ -2396,6 +2402,20 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
                 or not callable(self.authorized_validator) or inspect.iscoroutinefunction(self.authorized_validator)
                 or not callable(self.reviewer_for_locator) or inspect.iscoroutinefunction(self.reviewer_for_locator)):
             raise TypeError("Lead factory requires its exact current owner declaration")
+        if (type(self.schema_group_protocol) is not bool
+                or self.schema_group_protocol and (
+                    self.stage != "lead.front" or self.constraints.preparation_kind is not None
+                    or self.constraints.continuation
+                    or self.rule_seed.contract_id not in {
+                        "lead-response-v6", "lead-response-v7", "lead-response-v8"})):
+            raise ValueError("두 국면 선택은 ordinary Lead front에만 적용합니다")
+        object.__setattr__(self, "_factory_profile", (
+            self.constraints, self.rule_seed, self.stage, self.language,
+            self.schema_group_protocol, self.reviewer_for_locator))
+        object.__setattr__(self, "_factory_sources", tuple(
+            (method, method.__code__) for method in (
+                type(self)._current_owner_declaration, type(self).declare_result_owners,
+                type(self).declare_schema_groups)))
         TypedDecoder.require_hook_shape(self.authorized_validator, 2)
         TypedDecoder.require_hook_shape(self.reviewer_for_locator, 1)
         validator = self.authorized_validator
@@ -2418,10 +2438,17 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
         ))
 
     def require_declaration(self) -> None:
+        profile = self._factory_profile
+        if (self.constraints is not profile[0] or self.rule_seed is not profile[1]
+                or (self.stage, self.language, self.schema_group_protocol) != profile[2:5]
+                or self.reviewer_for_locator is not profile[5]
+                or self._factory_sources != tuple((method, method.__code__) for method in (
+                    type(self)._current_owner_declaration, type(self).declare_result_owners,
+                    type(self).declare_schema_groups))):
+            raise ValueError("동결된 Lead 호출 프로필이 변경됐습니다")
         declaration = self._authorization_declaration
         declaration.require_provenance()
         if (self._declared_authorization_check is not declaration.check
-                or self.authorized_validator is not declaration.dependencies[0]
                 or type(self).require_declaration is not declaration.dependencies[1]):
             raise ValueError("frozen Lead authorization declaration changed")
         self._require_status_rule()
@@ -2430,14 +2457,14 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
     def contract_id(self) -> str:
         return self.rule_seed.contract_id
 
-    def declare_result_owners(self, offers: ContextCallOffers) -> LeadStagePolicy:
+    def _current_owner_declaration(self, offers: ContextCallOffers):
         self._authorization_declaration.require_provenance()
         self._authorization_declaration.dependencies[1](self)
         if type(offers) is not ContextCallOffers:
             raise TypeError("Lead declaration requires actual service-owned physical offers")
         if self.constraints.continuation and self.constraints.review_candidate_ids is None:
             raise ValueError("physical continuation requires frozen review candidates")
-        facts = offers.completed_read_facts + offers.delivery_read_facts
+        facts = tuple(dict.fromkeys(offers.completed_read_facts + offers.delivery_read_facts))
         read_ids = tuple(dict.fromkeys(item.evidence_id for item in facts))
         writing_ids = tuple(dict.fromkeys(item.evidence_id for item in facts
                                         if item.source_kind is ContextSourceKind.WRITING_ARTIFACT))
@@ -2452,11 +2479,6 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
             (item.evidence_id, item.artifact_locator, item.whole_source)
             for item in facts if item.source_kind is ContextSourceKind.WRITING_ARTIFACT
         )
-        variants = current.current_wire_variants(
-            self.rule_seed, read_ids=read_ids, writing_read_ids=writing_ids,
-            writing_read_facts=writing_reads, core_status_facts=offers.core_status_facts,
-        )
-        tasks = current.task_revisions or (() if current.scope is None else ((current.scope.task_id, current.scope.task_revision),))
         facts_bytes = json.dumps({"requirements": [{"path": "$", "rule": "ACTUAL_CURRENT_OWNER_AUTHORIZATION",
             "expected": {"physical_call_id": offers.call_id, "input_ids": current.input_ids,
                 "review_candidate_ids": current.review_candidate_ids,
@@ -2466,10 +2488,49 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
                 "admission": "EXISTING_OWNER_STATE_AND_FINAL_ADMISSION"}}]},
             sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
         check = replace(self._authorization_declaration, corrective_facts=facts_bytes)
+        return current, read_ids, writing_ids, writing_reads, check
+
+    def declare_result_owners(self, offers: ContextCallOffers) -> LeadStagePolicy:
+        current, read_ids, writing_ids, writing_reads, check = self._current_owner_declaration(offers)
+        variants = current.current_wire_variants(
+            self.rule_seed, read_ids=read_ids, writing_read_ids=writing_ids,
+            writing_read_facts=writing_reads, core_status_facts=offers.core_status_facts,
+        )
+        tasks = current.task_revisions or (() if current.scope is None else ((current.scope.task_id, current.scope.task_revision),))
         owners = tuple(LeadResultContractOwner(variant, tasks, (check,)) for variant in variants)
         return LeadStagePolicy(self.stage, offers.call_id, tasks, self.language, offers.offer_digest,
                                current.choice_snapshot(), offers.offer_digest, offers.call_id,
                                owner_declarations=owners)
+
+    def declare_schema_groups(self, offers: ContextCallOffers,
+                              request_basis: LeadGroupRequestBasis, *,
+                              prepared_compilation: LeadGroupCompilation | None = None) -> LeadGroupedStage | None:
+        self.require_declaration()
+        if not self.schema_group_protocol:
+            return None
+        if type(request_basis) is not LeadGroupRequestBasis:
+            raise TypeError("그룹 선택에는 서비스의 정확한 논리 요청 참조가 필요합니다")
+        current, read_ids, writing_ids, writing_reads, check = self._current_owner_declaration(offers)
+        read_facts = tuple(dict.fromkeys(offers.completed_read_facts + offers.delivery_read_facts))
+        if prepared_compilation is not None and type(prepared_compilation) is not LeadGroupCompilation:
+            raise TypeError("재사용할 의미 계획은 정확한 현재 compiler여야 합니다")
+        compilation = prepared_compilation
+        if compilation is None or not compilation.matches_current(
+                current, self.rule_seed, read_facts=read_facts,
+                core_status_facts=offers.core_status_facts):
+            compilation = LeadGroupCompilation(
+                current, self.rule_seed, read_ids, writing_ids, writing_reads, offers.core_status_facts,
+                read_facts=read_facts)
+        catalog = LeadGroupedStage.catalog_for(
+            compilation, request_basis, stage=self.stage, language=self.language,
+            authorization_check=check)
+        tasks = current.task_revisions or (() if current.scope is None else (
+            (current.scope.task_id, current.scope.task_revision),))
+        policy = LeadStagePolicy(
+            self.stage, offers.call_id, tasks, self.language, offers.offer_digest,
+            current.choice_snapshot(), offers.offer_digest, offers.call_id,
+            owner_declarations=(SchemaGroupControlOwner(catalog),))
+        return LeadGroupedStage(compilation, request_basis, policy, check)
 
     def _require_status_rule(self) -> None:
         function, code = self._status_rule
@@ -12515,11 +12576,19 @@ class StoryRuntime:
                     ),
                     execution_workspace=execution_workspace,
                 )
+                contextual_request = replace(contextual_request, group_state=self._lead_group_invocation_state(
+                    contextual_request, original_text=text, constraints=lead_factory.constraints))
                 result = None
                 correction_call_limit = 1
                 corrective_rejection_code: ContextProviderTerminalCode | None = None
                 if admission is not None:
                     remaining = min(remaining, admission.front_physical_call_limit)
+                group_front_envelope = None
+                if contextual_request.group_state is not None:
+                    # 기존 normal + 교정 한 번의 범위만 공유하고 최초 호출 한도는 늘리지 않는다.
+                    group_front_envelope = min(contextual_request.physical_call_limit + 1, remaining)
+                    contextual_request = replace(contextual_request, physical_call_limit=min(
+                        contextual_request.physical_call_limit, remaining))
                 correction_failure_code: CollaborationLeadOutcomeFailureCode | None = None
                 rejected_call_id: str | None = None
                 try:
@@ -12547,7 +12616,15 @@ class StoryRuntime:
                 except BaseException as captured_failure:
                     first_failure = captured_failure
                     facts = context_provider_failure_facts(first_failure)
+                    if facts.group_state is not None:
+                        contextual_request = replace(contextual_request, group_state=facts.group_state)
+                        if (facts.group_state.workflow is not None
+                                and facts.group_state.workflow.phase in {LeadGroupPhase.STOP, LeadGroupPhase.DONE}):
+                            raise
                     rejection_code = facts.response_rejection_code
+                    if group_front_envelope is not None:
+                        correction_call_limit = min(_CONTEXT_INVOCATION_CALL_LIMIT, max(
+                            0, group_front_envelope - provider.submitted_physical_calls))
                     correction_available = (
                         rejection_code in _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES
                         and not facts.submission_uncertain
@@ -12555,6 +12632,13 @@ class StoryRuntime:
                         and provider.submitted_physical_calls + correction_call_limit
                         <= remaining
                     )
+                    if (correction_available and facts.group_state is not None
+                            and facts.group_state.workflow is not None
+                            and correction_call_limit < facts.group_state.workflow.minimum_remaining_calls):
+                        facts = replace(facts, group_state=replace(facts.group_state,
+                            workflow=facts.group_state.workflow.stop("provider_call_budget_exhausted")))
+                        record_context_provider_failure(first_failure, facts)
+                        raise
                     if not correction_available:
                         raise
                     if _lead_is_source_owner_rejection(first_failure):
@@ -12709,6 +12793,12 @@ class StoryRuntime:
                             > submitted_before_correction
                         ):
                             raise
+                        if correction_facts.group_state is not None:
+                            record_context_provider_failure(first_failure, replace(
+                                context_provider_failure_facts(first_failure), group_state=correction_facts.group_state))
+                            if (correction_facts.group_state.workflow is not None
+                                    and correction_facts.group_state.workflow.phase is LeadGroupPhase.STOP):
+                                raise first_failure
                         self._fail_reference_operation(
                             reference_operation,
                             correction_failure,
@@ -15648,6 +15738,46 @@ class StoryRuntime:
             payload=CollaborationPremiseFreshWorkAdmissionPayload(admission))
         self._append_drafts(projection.last_sequence, (draft,))
         return admission
+
+    @staticmethod
+    def _lead_group_invocation_state(
+        request: ContextInvocationRequest, *, original_text: str,
+        constraints: LeadProviderConstraints,
+    ) -> ContextGroupInvocationState | None:
+        """현재 요청·작업·범위에서 선택 근거를 발급하며 READ와 호출 예산은 제외한다."""
+        factory = request.result_contract
+        if type(factory) is not OrchestrationLeadCallFactory:
+            return None
+        if not factory.schema_group_protocol:
+            if request.group_state is not None:
+                raise BackendProtocolError("비활성 그룹 프로필에 선택 상태를 전달할 수 없습니다")
+            return None
+        if factory.constraints is not constraints or type(original_text) is not str:
+            raise BackendProtocolError("현재 Lead 소유자가 발급한 요청·범위가 필요합니다")
+        basis_value = {
+            "request_sha256": hashlib.sha256(original_text.encode("utf-8")).hexdigest(),
+            "task_revisions": constraints.task_revisions,
+            "scope": None if constraints.scope is None else authoring_scope_to_dict(constraints.scope),
+            "objective_ids": constraints.objective_ids,
+            "review_candidate_ids": constraints.review_candidate_ids,
+            "preparation_kind": constraints.preparation_kind,
+            "preparation_objective_id": constraints.preparation_objective_id,
+            "preparation_targets": constraints.preparation_targets,
+            "preparation_specialists": constraints.preparation_specialists,
+            "premise_question_id": constraints.premise_question_id,
+            "adoption_intent": None if constraints.adoption_intent is None else constraints.adoption_intent.value,
+            "adoption_targets": constraints.adoption_targets,
+            "readiness_source_basis_ref": constraints.readiness_source_basis_ref,
+        }
+        scope_ref = "lead-group-request-" + hashlib.sha256(json.dumps(
+            basis_value, sort_keys=True, ensure_ascii=False, allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        basis = LeadGroupRequestBasis(request.operation_id, request.result_correlation_id, scope_ref)
+        previous = request.group_state
+        return ContextGroupInvocationState(
+            basis, None if previous is None else previous.workflow,
+            None if previous is None else previous.prepared_compilation)
 
     def _ordinary_front_call_cap(self, session_id: str, conversation_id: str) -> int | None:
         """Keep every offered completed v3 task's preparation/review floor intact."""
@@ -18606,6 +18736,11 @@ class StoryRuntime:
             return await self._agent_context_service.invoke(request, provider, **arguments)
         except BaseException as failure:
             facts = context_provider_failure_facts(failure)
+            if facts.group_state is not None:
+                if (facts.group_state.workflow is not None
+                        and facts.group_state.workflow.phase in {LeadGroupPhase.STOP, LeadGroupPhase.DONE}):
+                    raise
+                request = replace(request, group_state=facts.group_state)
             spent = provider.submitted_physical_calls - submitted_before
             limit = request.physical_call_limit
             if (

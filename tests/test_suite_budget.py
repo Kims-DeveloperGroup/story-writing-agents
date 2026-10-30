@@ -55,6 +55,22 @@ class SuiteBudgetTests(unittest.TestCase):
         source_base = dict(hourly, max_test_source_lines=142474)
         source = dict(source_base, max_test_source_lines=142604)
         self.assertIsNone(suite_budget.check_monotonic(source, source_base))
+        group_source = dict(source, max_test_source_lines=142887)
+        self.assertIsNone(suite_budget.check_monotonic(group_source, source))
+        execution_source = dict(group_source, max_test_source_lines=143443)
+        for origin in (source, group_source):
+            self.assertIsNone(suite_budget.check_monotonic(execution_source, origin))
+            for old, limit in ((origin["max_test_source_lines"] - 1, 143443),
+                               (origin["max_test_source_lines"] + 1, 143443),
+                               (origin["max_test_source_lines"], 143442),
+                               (origin["max_test_source_lines"], 143444)):
+                self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                    dict(execution_source, max_test_source_lines=limit),
+                    dict(origin, max_test_source_lines=old))
+        for old, limit in ((142603, 142887), (142605, 142887), (142604, 142886),
+                           (142604, 142888), (142887, 142888)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                dict(group_source, max_test_source_lines=limit), dict(source, max_test_source_lines=old))
         for old, limit in ((142474, 142603), (142474, 142605),
                            (142473, 142604), (142475, 142604), (142604, 142605)):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
@@ -68,6 +84,11 @@ class SuiteBudgetTests(unittest.TestCase):
         ):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
                               {**source, key: value}, source_base)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                {**group_source, key: value}, {**source, key: value} if key != "subtest_caps" else source)
+            for origin in (source, group_source):
+                self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                    {**execution_source, key: value}, {**origin, key: value} if key != "subtest_caps" else origin)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
                           source, dict(self.budget, max_test_source_lines=142474))
         for change in [lambda value: value["subtest_caps"].update({"c.test": 0}),

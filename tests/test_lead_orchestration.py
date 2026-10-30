@@ -670,7 +670,7 @@ def _bound_rejection_envelope(call, value):
     return indexed_response({'action_type': 'submit_result', 'task_result': value},
                             outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
 
-def _visible_outcome(kind: str, message: str = "Visible lead response.", *, recommended_action=None):
+def _visible_outcome(kind: str, message: str = "Visible lead response.", *, recommended_action=None, grouped=False):
     def respond(
         call: ContextProviderCallRequest,
         _provider: _LeadContextProvider,
@@ -685,6 +685,9 @@ def _visible_outcome(kind: str, message: str = "Visible lead response.", *, reco
                           'target_artifact_paths': [], 'specialist_domains': [],
                           'contributions': [], 'dependency_slots': [], 'task_reference': {
                               'task_id': task['task_id'], 'task_revision': task['task_revision']}})}
+            if grouped:
+                from tests.test_agent_context_execution import _group_result
+                return _group_result(call, lead_fixture_result(native))
             response_type = {'answer': 'answer', 'question': 'clarification_question', 'critique': 'critique'}[kind]
             outer, inner = offered_fixture_bindings(
                 call, action_type='submit_result', response_type=response_type, family=0)
@@ -3154,8 +3157,93 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             replace(factory, constraints=replace(ordered_facts, continuation=True,
                 reviewer_inputs=((PLOT_ARCHITECT, 'outline'),))).for_offer(call.contract.offers)
 
+
+        from collections import Counter
+        from story_writing_agents.lead_schema_groups import (
+            LEAD_SCHEMA_GROUPS, LeadGroupRequestBasis, SchemaGroupControlOwner, LeadGroupPhase)
+        from tests.test_provider_schema_spec import check_schema
+        group_contexts, typed_groups = {}, set()
+        expected_groups = {"answer.workflow", "answer.observed_facts", "question.workflow", "question.authoring",
+            "question.review_only", "critique.workflow", "prepare.artifact", "prepare.consultation.authoring",
+            "prepare.consultation.review_only", "consultation.authoring.content", "consultation.authoring.review",
+            "consultation.review_only", "artifact.changes", "premise.analysis", "readiness.core_documents"}
+        self.assertEqual({group.group_id for group in LEAD_SCHEMA_GROUPS}, expected_groups)
+        for group in LEAD_SCHEMA_GROUPS:
+            self.assertEqual(set(group.card()), {"group_id", "definition", "selection_criteria", "result_effect"})
+            self.assertTrue(all(group.card().values()))
+        def group_control_packet(binding, group):
+            control, = (member for member in binding.semantic_index.contracts
+                        if type(member.owner) is SchemaGroupControlOwner)
+            choices = [name for name in binding.group_stage.catalog.group_ids if binding.schema_group_phase
+                       is LeadGroupPhase.SELECT or name != binding.group_workflow.active_selection.group_id]
+            self.assertEqual(control.owner.declare_rules().schema_value()["properties"]["group_id"]["enum"], choices)
+            outer, = (outer for outer, inner in binding.outer_inner_schema_ids if inner == control.schema_id)
+            return {"agent_action": {"schema_id": outer, "action_type": "submit_result", "task_result": {
+                "schema_id": control.schema_id, "response_type": control.rule_graph.literal_at(("response_type",)),
+                "catalog_id": binding.group_stage.catalog.catalog_id, "group_id": group,
+                "selection_reason": "Use the explicitly authored fixture's result meaning."}}}
+        def detail_nodes(schema, node):
+            node = fixture_schema_node(schema, node)
+            yield node
+            for child in (*node.get("properties", {}).values(), *node.get("anyOf", ())):
+                yield from detail_nodes(schema, child)
+        def require_group_case(owner, offers, supplied, expected, group, *, typed=True):
+            key = (owner.rule_seed.domain_rules, repr(owner.constraints), offers.offer_digest)
+            if key not in group_contexts:
+                grouped_owner = replace(owner, schema_group_protocol=True)
+                basis = LeadGroupRequestBasis("group-fixture", "group-result", "group-scope")
+                selector = grouped_owner.for_offer(offers, request_basis=basis)
+                self.assertEqual(tuple(type(member.owner) for member in selector.semantic_index.contracts),
+                                 (SchemaGroupControlOwner,))
+                plan = selector.prepared_compilation
+                members = {name: tuple(item.branch_key for item in plan.semantic_variants if item.group_id == name)
+                           for name in expected_groups}
+                self.assertEqual(Counter(branch for values in members.values() for branch in values),
+                                 Counter(item.branch_key for item in plan.semantic_variants))
+                self.assertEqual({name for name, values in members.items() if values},
+                                 set(selector.group_stage.catalog.group_ids))
+                group_contexts[key] = (selector, members, {})
+            selector, members, generations = group_contexts[key]
+            if group not in generations:
+                record = selector.record_group_control(selector.decode_value(group_control_packet(selector, group)))
+                state = selector.group_workflow.accept(record, remaining_calls=1)
+                current = selector.factory.for_offer(replace(offers, call_id="group-" + str(len(group_contexts)) + "-" + group,
+                    action_index=offers.action_index + 1), request_basis=selector.request_basis, group_workflow=state,
+                    prepared_compilation=selector.prepared_compilation)
+                self.assertIs(current.prepared_compilation, selector.prepared_compilation)
+                binding = current.generation_binding()
+                self.assertEqual(len(binding.member_bindings), len(current.semantic_index.contracts)
+                                 - int(len(current.group_stage.catalog.groups) > 1))
+                represented = []
+                for outer, inner in binding.member_bindings:
+                    self.assertEqual(inner.owner.variant.group_id, group)
+                    self.assertEqual(dict(current.outer_inner_schema_ids)[outer.schema_id], inner.schema_id)
+                    self.assertNotIn(inner.schema_id, call.contract.semantic_index.expected_schema_ids)
+                    graph = inner.rule_graph.schema_value()
+                    identities = {literal for node in detail_nodes(graph, graph)
+                        if "variant_id" in node.get("properties", {})
+                        for literal in fixture_schema_node(graph, node["properties"]["variant_id"])["enum"]}
+                    if not identities:
+                        self.assertEqual(len(members[group]), 1)
+                        identities = set(members[group])
+                    represented.extend(identities)
+                self.assertEqual(Counter(represented), Counter(members[group]))
+                generations[group] = current
+            current = generations[group]
+            frame = lead_fixture_response(SimpleNamespace(contract=current), supplied, family=0)
+            self.assertFalse(current.rule_graph.findings(json.loads(frame)), (group, expected))
+            if typed and group not in typed_groups:
+                self.assertEqual(check_schema(current.schema_value()), ())
+                self._require_fixture_projections(current)
+                decoded_group = current.decode_response(frame)
+                self.assertIsNone(decoded_group.group_control)
+                self.assertEqual(json.loads(decoded_group.answer_json), expected)
+                self.assertIs(current.group_workflow.complete(
+                    current.generation_binding(), decoded_group.selected_result).phase, LeadGroupPhase.DONE)
+                typed_groups.add(group)
+            return current
         def require_final_case(seed, supplied, expected, *, branch, constraints=declared,
-                               offers=call.contract.offers):
+                               offers=call.contract.offers, group=None):
             owner = replace(factory, rule_seed=seed, constraints=constraints)
             selected = owner.for_offer(offers)
             family_counts = {'lead-discussion-response-v1': 1, 'lead-exploration-response-v1': 3, 'lead-response-v8': 1,
@@ -3202,6 +3290,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 selected.decode_response(json.dumps(bad))
             require_current_correction(selected, rejected.exception,
                 native['agent_action']['schema_id'], native['agent_action']['task_result']['schema_id'])
+            if group is not None:
+                require_group_case(owner, offers, supplied, expected, group)
             return selected, native
         # Handwritten semantic expectations; schemas only supply current issued identities.
         profile_record = { 'schema_version': 3, 'activity': 'review', 'intent': 'authoring', 'target_paths': [],
@@ -3239,7 +3329,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                  'recommended_action': {'kind': kind, 'instruction': 'Use supplied concern.',
                                         'source_ids': ['user_input'],
                                         'target_paths' if choices is None else selector: selected}},
-                branch='lead-response-v7:family:0', constraints=recommendation_facts)
+                branch='lead-response-v7:family:0', constraints=recommendation_facts,
+                group={'prepare_artifact': 'prepare.artifact',
+                       'prepare_consultation': 'prepare.consultation.authoring'}[kind])
             self.assertEqual({item.owner.variant.branch_key
                               for item in selected_bound.semantic_index.contracts}, {'lead-response-v7:family:0'})
             for field, wrong in (('task_instructions', ''), ('task_instructions', ' '),
@@ -3336,7 +3428,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     'intent': 'authoring', 'activity': 'workflow', 'target_paths': [],
                     'domains': [], 'task': task['task_id'] + '@1', 'contributions': [], 'dependency_slots': []},
                  'objective_intent': {'action': 'cancel', 'objective_id': 'fixture-objective'}},
-                branch='lead-response-v7:family:' + ('0' if kind == 'answer' else '2'), constraints=workflow_facts)
+                branch='lead-response-v7:family:' + ('0' if kind == 'answer' else '2'), constraints=workflow_facts,
+                group={'answer': 'answer.workflow', 'critique': 'critique.workflow'}[kind])
         workflow_expected = { 'intent': 'authoring', 'activity': 'workflow', 'target_paths': [],
             'domains': [], 'task': task['task_id'] + '@1', 'contributions': [], 'dependency_slots': []}
         objective_updates = (({'update_type': 'start_request', 'target_artifact_paths': [future_path],
@@ -3351,7 +3444,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 fixed_targets=True, fixed_dependencies=True), 'document_change_request_update': native_update}},
                 {'kind': 'question', 'message': 'Clarify the pending target.',
                 'authoring_scope': workflow_expected, 'objective_intent': expected_update},
-                branch='lead-response-v7:family:1', constraints=workflow_facts)
+                branch='lead-response-v7:family:1', constraints=workflow_facts, group='question.workflow')
             wrong_step = copy.deepcopy(clarify_packet)
             wrong_step['agent_action']['task_result']['response_details'][ 'document_change_request_update'][
                 'requested_workflow_step'] = 'draft_document_change_proposal'
@@ -3647,6 +3740,19 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                             self.assertEqual(json.loads(decoded_profile.answer_json),
                                 {'kind': semantic_kind, 'message': base['response_text'],
                                  'authoring_scope': expected_scope, **semantic_extra})
+                            profile_group = ({'answer': 'answer.workflow', 'critique': 'critique.workflow',
+                                'question': 'question.workflow'}[semantic_kind] if activity == 'workflow'
+                                and semantic_kind in ('answer', 'critique', 'question') else
+                                'question.' + intent if semantic_kind == 'question' else
+                                'prepare.consultation.' + intent if semantic_kind == 'recommendation' else
+                                'artifact.changes' if family == 7 else 'consultation.review_only'
+                                if intent == 'review_only' else 'consultation.authoring.'
+                                + ('review' if activity == 'review' else 'content'))
+                            require_group_case(profile_binding.factory, profile_binding.offers,
+                                {**base, 'response_type': response_kind,
+                                 'response_details': {'task_scope': native_scope, **extra}},
+                                {'kind': semantic_kind, 'message': base['response_text'],
+                                 'authoring_scope': expected_scope, **semantic_extra}, profile_group, typed=family != 7)
                             if family in (5, 6):
                                 profile_assignments = packet["agent_action"]["task_result"][
                                     "response_details"]["specialist_consultation_proposal"][ "assignments"]
@@ -3783,6 +3889,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     'intent': 'authoring', 'activity': 'review', 'target_paths': [],
                     'domains': ['plot_structure'], 'task': task['task_id'] + '@1',
                     'contributions': [{'domain': 'plot_structure', 'role': 'draft_owner'}], 'dependency_slots': []}})
+            observed_generation = require_group_case(unit_bound.factory, unit_offers,
+                {'response_type': 'answer', 'response_text': 'The canonical READ supports inspection.',
+                 'response_details': {'task_scope': unit_native_scope}}, json.loads(unit_decoded.answer_json),
+                'answer.observed_facts')
             for schema in unit_native_schemas:
                 self.assertFalse(diagnose_json_text(json.dumps(unit_answer), schema))
             for authority in ('proposal_drafting_request', 'assignments',
@@ -3799,6 +3909,93 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     authority_decoded = unit_bound.decode_response(json.dumps(authority_frame))
                     self.assertTrue(authority_decoded.belongs_to(unit_bound))
                     self.assertEqual(authority_decoded.domain_value(), unit_decoded.domain_value())
+
+        original_selection = observed_generation.group_workflow.active_selection
+        original_record = original_selection.as_object()
+        original_catalog = observed_generation.group_stage.catalog
+        exported_catalog = original_catalog.as_object()
+        exported_catalog["groups"][0]["definition"] = "Changed detached export."
+        self.assertNotEqual(exported_catalog, original_catalog.as_object())
+        read_plan = observed_generation.prepared_compilation
+        self.assertRaises(ValueError, replace, read_plan, read_facts=())
+        self.assertRaises(ValueError, replace, read_plan, read_facts=(replace(unit_writing, evidence_id="foreign"),))
+        for field, value in (("revision", "unit-v2"), ("source_digest", "c" * 64), ("boundary_digest", "d" * 64)):
+            changed_fact = replace(unit_writing, **{field: value})
+            changed_offers = replace(observed_generation.offers, call_id="read-update-" + field,
+                                    completed_read_facts=(changed_fact,), delivery_read_facts=())
+            refreshed = observed_generation.factory.for_offer(changed_offers,
+                request_basis=observed_generation.request_basis, group_workflow=observed_generation.group_workflow,
+                prepared_compilation=read_plan)
+            self.assertIsNot(refreshed.prepared_compilation, read_plan)
+            self.assertNotEqual(refreshed.group_stage.catalog.catalog_id, original_catalog.catalog_id)
+            self.assertEqual(refreshed.group_stage.catalog.request_basis_ref, original_catalog.request_basis_ref)
+            self.assertIs(refreshed.group_workflow.active_selection, original_selection)
+            self.assertEqual(original_selection.as_object(), original_record)
+            other = next(name for name in refreshed.group_stage.catalog.group_ids if name != original_selection.group_id)
+            stale = group_control_packet(refreshed, other)
+            stale["agent_action"]["task_result"]["catalog_id"] = original_catalog.catalog_id
+            self.assertRaises(ValueError, refreshed.decode_value, stale)
+        for owner, basis in ((observed_generation.factory, replace(observed_generation.request_basis,
+                scope_ref="new-owner-scope-revision")), (replace(observed_generation.factory,
+                authorized_validator=replaced_authorization), observed_generation.request_basis)):
+            refreshed = owner.for_offer(replace(observed_generation.offers, call_id="authority-update"),
+                request_basis=basis, group_workflow=observed_generation.group_workflow, prepared_compilation=read_plan)
+            self.assertIs(refreshed.prepared_compilation, read_plan)
+            self.assertIs(refreshed.group_workflow.phase, LeadGroupPhase.SELECT)
+            self.assertNotEqual(refreshed.group_stage.catalog.request_basis_ref, original_catalog.request_basis_ref)
+            self.assertEqual(original_selection.as_object(), original_record)
+        from story_writing_agents import lead_provider_contracts as group_contracts
+        with mock.patch.object(group_contracts, "_compile_lead_families", lambda *_args, **_kwargs: ()):
+            self.assertRaises(ValueError, read_plan.require_provenance)
+        semantic_decoder = read_plan.semantic_variants[0].decode
+        defaults = semantic_decoder.__kwdefaults__
+        try:
+            semantic_decoder.__kwdefaults__ = {**(defaults or {}), "foreign_fixture_default": True}
+            self.assertRaises(ValueError, read_plan.require_provenance)
+        finally: semantic_decoder.__kwdefaults__ = defaults
+        read_plan.require_provenance()
+        review_record = {**unit_record, "intent": "review_only", "target_paths": []}
+        review_facts = replace(unit_constraints, scope=authoring_scope_from_dict(review_record))
+        review_seed = orchestrator_module._lead_front_result_contract(
+            orchestrator_module.LeadProposalRelation.NEW_STEP, review_facts.input_ids, constraints=review_facts)
+        require_group_case(replace(factory, constraints=review_facts, rule_seed=review_seed), unit_offers,
+            {"response_type": "answer", "response_text": "Report this supplied fact only.", "response_details": {
+                "task_scope": lead_fixture_scope_record(review_record, fixed_targets=True, fixed_dependencies=True)}},
+            {"message": "Report this supplied fact only.", "authoring_scope": {"intent": "review_only",
+                "activity": "review", "target_paths": [], "domains": ["plot_structure"],
+                "task": task["task_id"] + "@1", "contributions": [{"domain": "plot_structure",
+                    "role": "draft_owner"}], "dependency_slots": []}}, "answer.observed_facts")
+
+        operation_record = copy.deepcopy(profile_record)
+        operation_facts = replace(declared, scope=authoring_scope_from_dict(operation_record))
+        operation_seed = orchestrator_module._lead_front_result_contract(
+            orchestrator_module.LeadProposalRelation.NEW_STEP, operation_facts.input_ids, constraints=operation_facts)
+        operation_reads = tuple(replace(unit_writing, evidence_id="operation-" + kind, source_id="source-" + kind,
+            artifact_locator="manuscript/part-01/" + kind + ".md") for _, kind, *_ in receipt_operations)
+        operation_offers = replace(call.contract.offers, call_id="mixed-operations",
+                                  completed_read_facts=operation_reads, delivery_read_facts=())
+        native_changes = [copy.deepcopy(literal_operations[0])]
+        domain_changes = [{"kind": "create", "suggested_path": future_path, "new_text": literal_text}]
+        for fact, (native_kind, kind, native_field, field, _whole) in zip(operation_reads, receipt_operations):
+            native_change, domain_change = {"change_type": native_kind, "evidence_id": fact.evidence_id}, {
+                "kind": kind, "evidence_id": fact.evidence_id}
+            if field is not None:
+                value = "manuscript/part-01/renamed.md" if kind == "rename" else "Literal replacement.\n"
+                native_change[native_field] = value; domain_change[field] = value
+            native_changes.append(native_change); domain_changes.append(domain_change)
+        mixed_supplied = {"response_type": "artifact_change_proposal", "response_text": "Review five distinct changes.",
+            "response_details": {"task_scope": lead_fixture_scope_record(
+                operation_record, fixed_targets=True, fixed_dependencies=True),
+                "artifact_change_proposal": {"artifact_changes": native_changes}, "authoring_assessment": None}}
+        mixed_domain = {"kind": "proposal", "message": "Review five distinct changes.", "authoring_scope": {
+            **expected_profile_scope, "domains": ["tone_execution"]},
+            "artifact_intent": {"operations": domain_changes}, "authoring_assessment": None}
+        operation_owner = replace(factory, constraints=operation_facts, rule_seed=operation_seed)
+        legacy_operations = operation_owner.for_offer(operation_offers)
+        self.assertFalse(legacy_operations.rule_graph.findings(json.loads(lead_fixture_response(
+            SimpleNamespace(contract=legacy_operations), mixed_supplied, family=0))))
+        mixed_group = require_group_case(operation_owner, operation_offers, mixed_supplied, mixed_domain, "artifact.changes")
+        self.assertEqual(mixed_group.prepared_compilation.constraints.diagnose(json.dumps(mixed_domain)), ())
         preparation_record = {**profile_record, 'activity': 'draft', 'target_paths': [future_path], 'contributions': [
                                   {'domain': 'tone_execution', 'role': 'draft_owner'}]}
         preparation_scope = authoring_scope_from_dict(preparation_record)
@@ -3975,7 +4172,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 'writing_task_scope': None, 'core_document_assessment': native_readiness}}, {
             'kind': 'answer', 'message': 'Report current missing readiness facts.',
             'authoring_scope': None, 'core_document_assessment': expected_readiness},
-            branch='lead-response-v7:family:9', constraints=readiness_facts)
+            branch='lead-response-v7:family:9', constraints=readiness_facts, group='readiness.core_documents')
         readiness_details = readiness_packet['agent_action']['task_result']['response_details']
         assessment_path = ('agent_action', 'task_result', 'response_details', 'core_document_assessment')
         readiness_invalid = ((('source_basis_ref',), 'a-different-source-basis'),
@@ -4086,7 +4283,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     'input_ids': ['user_input']}], 'premise_decision': {
                     'question_id': 'fixture-question', 'slot_id': 'choice',
                         'question': 'Which route?',
-                    'dependent_domains': ['plot_structure']}}}, branch='lead-response-v8:family:0')
+                    'dependent_domains': ['plot_structure']}}}, branch='lead-response-v8:family:0', group='premise.analysis')
         premise_summary = PremiseDecisionConstraints(question_id='fixture-question',
             reply_alternatives=(('reply-A', ('first', 'second')), ('reply-B', ()),
                                 ('reply-C', ('support',))), unavailable_reply_ids=('reply-B',))
@@ -4199,6 +4396,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 'response_details': {'review_outcome': native_decision}},
                 {'decision': expected_decision, 'message': 'Separate Apply and Commit authority.'},
                 branch='artifact-review-summary-v4:family:0', constraints=synthesis_constraints)
+
+        self.assertEqual(typed_groups, expected_groups)
 
     async def test_front_schema_rejection_is_repaired_once(self) -> None:
         conversation_id = self.conversation("Repair schema")
@@ -4381,6 +4580,90 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                          (slot_calls[0][0].call_id, case.backend.calls[-1].call_id, slot_calls[0][0].call_id))
         self.assertTrue(any('$.agent_action.task_result.response_details.task_scope.slots[1].id' in item and
             'dependency slot IDs must be unique within one authoring scope' in item for item in original.validation_details))
+
+        from dataclasses import replace
+        from unittest import mock
+        from story_writing_agents.agent_context.service import AgentContextService
+        from tests.test_agent_context_execution import _group_control
+        original_factory = orchestrator_module._lead_call_contract_factory
+        def grouped_factory(*args, **kwargs):
+            return replace(original_factory(*args, **kwargs), schema_group_protocol=True)
+        def invalid_selection(call, provider):
+            packet = json.loads(_group_control("answer.workflow")(call, provider))
+            packet["agent_action"]["task_result"]["group_id"] = "not-in-current-catalog"
+            return json.dumps(packet)
+        def invalid_generation(call, provider):
+            packet = json.loads(_visible_outcome("answer", grouped=True)(call, provider))
+            del packet["agent_action"]["task_result"]["response_text"]
+            return json.dumps(packet)
+        original_invoke = AgentContextService.invoke
+        invocations, context_results = [], []
+        async def capture_grouped(service, request, provider, **kwargs):
+            invocations.append(request)
+            result = await original_invoke(service, request, provider, **kwargs)
+            context_results.append(result)
+            return result
+        for label, responses, failed_index in (
+                ("select", (invalid_selection, _group_control("answer.workflow"), _visible_outcome("answer", grouped=True)), 0),
+                ("generate", (_group_control("answer.workflow"), invalid_generation, _visible_outcome("answer", grouped=True)), 1)):
+            conversation = self.conversation("Grouped repair " + label)
+            start = len(self.backend.calls)
+            self.backend.enqueue(*responses[:failed_index + 1])
+            self.backend.enqueue(*responses[failed_index + 1:])
+            with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory), \
+                    mock.patch.object(AgentContextService, "invoke", capture_grouped):
+                repaired_group = await self.runtime.lead_turn(self.session_id, conversation, "Explain group workflow.")
+            calls = self.backend.calls[start:]
+            self.assertIs(repaired_group.kind, LeadOutcomeKind.ANSWER)
+            self.assertEqual(len(calls), 3)
+            failed, correction = calls[failed_index].contract, calls[failed_index + 1].contract
+            self.assertEqual(correction.phase, "repair")
+            self.assertEqual(correction.logical_origin_call_id, failed.offers.call_id)
+            self.assertEqual(correction.eligibility_offers, failed.eligibility_offers)
+            self.assertEqual(tuple(member.owner.declare_rules().canonical_bytes for member in correction.semantic_index.contracts),
+                             tuple(member.owner.declare_rules().canonical_bytes for member in failed.semantic_index.contracts))
+            self.assertEqual(len(context_results[-1].group_state.workflow.history), 1)
+        real_request = invocations[-1]
+        constraints = real_request.result_contract.constraints
+        self.assertTrue(constraints.task_revisions)
+        revised_scope = None if constraints.scope is None else replace(
+            constraints.scope, task_revision=constraints.scope.task_revision + 1)
+        revised = replace(constraints, scope=revised_scope,
+                          task_revisions=tuple((task, revision + 1) for task, revision in constraints.task_revisions))
+        revised_factory = replace(real_request.result_contract, constraints=revised)
+        revised_request = replace(real_request, result_contract=revised_factory)
+        minted = self.runtime._lead_group_invocation_state(
+            revised_request, original_text="Explain group workflow.", constraints=revised)
+        self.assertNotEqual(minted.request_basis.scope_ref, real_request.group_state.request_basis.scope_ref)
+        self.assertIs(minted.workflow, real_request.group_state.workflow)
+        self.assertIs(minted.prepared_compilation, real_request.group_state.prepared_compilation)
+        with self.assertRaises(ValueError):
+            failed.factory.for_offer(failed.offers, failed.repair_lineage(), request_basis=minted.request_basis)
+        reading = self.conversation("Context during grouped repair")
+        self.backend.enqueue(_visible_outcome("answer", "A prior lead response for grouped repair."))
+        await self.runtime.lead_turn(self.session_id, reading, "Seed group repair context.")
+        retained = []
+        def reject_with_snapshot(call, provider):
+            selected = call.contract.group_workflow.active_selection
+            retained.append((call.contract, selected, selected.as_object(), call.contract.prepared_compilation))
+            return invalid_generation(call, provider)
+        start = len(self.backend.calls)
+        self.backend.enqueue(_group_control("answer.workflow"), reject_with_snapshot)
+        self.backend.enqueue(_search_history, _read_history_hit, _visible_outcome("answer", grouped=True))
+        with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory):
+            refreshed = await self.runtime.lead_turn(self.session_id, reading, "Explain group repair context.")
+        calls = self.backend.calls[start:]
+        failed, selection, snapshot, old_plan = retained[0]
+        self.assertIs(refreshed.kind, LeadOutcomeKind.ANSWER)
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(calls[2].contract.phase, "repair")
+        self.assertEqual(calls[2].contract.eligibility_offers, failed.eligibility_offers)
+        self.assertIs(calls[-1].contract.group_workflow.active_selection, selection)
+        self.assertEqual(selection.as_object(), snapshot)
+        self.assertIsNot(calls[-1].contract.prepared_compilation, old_plan)
+        self.assertEqual(calls[-1].contract.offers.completed_read_facts, ())
+        self.assertEqual(len(calls[-1].contract.offers.delivery_read_facts), 1)
+        self.assertEqual(calls[-1].contract.prepared_compilation.read_facts, calls[-1].contract.offers.delivery_read_facts)
 
     async def test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing(
         self,
@@ -5951,6 +6234,68 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertTrue(any("Original response" in message for message in messages))
         self.assertFalse(any(type(event.payload) is CollaborationProposal for event in history))
         self.assertNotIn(private, repr(history))
+
+        from dataclasses import replace
+        from story_writing_agents.agent_context.service import AgentContextService, context_provider_failure_facts
+        from story_writing_agents.lead_schema_groups import LeadGroupPhase
+        from tests.test_agent_context_execution import _group_control
+        original_factory = orchestrator_module._lead_call_contract_factory
+        def grouped_factory(*args, **kwargs):
+            return replace(original_factory(*args, **kwargs), schema_group_protocol=True)
+        private_group = "PRIVATE_GROUP_REJECTION_한🙂"
+        def rejected_select(call, provider):
+            packet = json.loads(_group_control("answer.workflow")(call, provider))
+            packet["agent_action"]["task_result"]["group_id"] = private_group
+            return json.dumps(packet)
+        def rejected_generate(call, provider):
+            packet = json.loads(_visible_outcome("answer", grouped=True)(call, provider))
+            packet["agent_action"]["task_result"]["response_text"] = {"private": private_group}
+            return json.dumps(packet)
+        original_invoke = AgentContextService.invoke
+        failures, invoked_limits = [], []
+        async def retain_failure(service, request, provider, **kwargs):
+            invoked_limits.append(request.physical_call_limit)
+            try:
+                return await original_invoke(service, request, provider, **kwargs)
+            except BaseException as failure:
+                facts = context_provider_failure_facts(failure)
+                if facts is not None and facts.group_state is not None:
+                    failures.append(failure)
+                raise
+        for label, responses, expected_calls, history_count, limit in (
+                ("select", (rejected_select,), 1, 0, 2),
+                ("select-frozen-context", (rejected_select,), 1, 0, 3),
+                ("generate", (_group_control("answer.workflow"), rejected_generate), 2, 1, 2)):
+            conversation = self.conversation("Grouped exhausted correction " + label)
+            start = len(self.backend.calls)
+            failures.clear()
+            invoked_limits.clear()
+            self.backend.enqueue(*responses)
+            if label == "select-frozen-context":
+                self.backend.enqueue()
+            with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory), \
+                    mock.patch.object(AgentContextService, "invoke", retain_failure), \
+                    mock.patch.object(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", limit):
+                exhausted = await self.runtime.lead_turn(self.session_id, conversation, "Explain bounded group workflow.")
+            self.assertTrue(invoked_limits, label)
+            self.assertEqual(invoked_limits[0], limit, label)
+            self.assertIs(exhausted.next_action, CollaborationNextAction.RETRY_LEAD_TURN, (label, tuple(invoked_limits)))
+            self.assertEqual(len(self.backend.calls) - start, expected_calls)
+            self.assertTrue(exhausted.validation_details)
+            self.assertTrue(exhausted.validation_details[0].startswith("Original"))
+            self.assertNotIn(private_group, repr(exhausted.validation_details))
+            stopped_states = tuple(context_provider_failure_facts(failure).group_state
+                                   for failure in failures)
+            self.assertTrue(any(state.workflow.phase is LeadGroupPhase.STOP and
+                                len(state.workflow.history) == history_count for state in stopped_states))
+            if label == "select-frozen-context":
+                self.assertTrue(any(state.workflow.stop_reason == "frozen_contract_budget_exhausted"
+                                    for state in stopped_states))
+            history = self.history(conversation)
+            self.assertEqual(project_collaboration_history(history).physical_calls_spent, expected_calls)
+            self.assertFalse(any(type(event.payload) is CollaborationProposal for event in history))
+            self.assertTrue(all(value is None for value in (exhausted.proposal, exhausted.recommendation_request,
+                exhausted.artifact_application_request, exhausted.story_commit_request)))
 
     async def test_restart_after_completed_execution_accepts_a_new_lead_turn(self) -> None:
         from tests.recommendation_fixture import task_assessment
