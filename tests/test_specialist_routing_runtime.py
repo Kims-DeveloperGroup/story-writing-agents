@@ -1479,22 +1479,29 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.assertEqual((current["task_id"], current["task_revision"]), (task_id, 2))
             current = dict(current, task_revision=3)
             self.assertEqual((current["task_id"], current["task_revision"]), (task_id, 3))
+            source_choices = dict(call.contract.semantic_index.policy.choices)
+            self.assertEqual(source_choices["source_binding"], ("bound",))
+            self.assertIn(old_source, source_choices["source_ids"])
             raw = recommendation(message="Exclude the earlier revision draft.",
-                recommended_action=action(source_ids=("user_input",), target_paths=(OUTLINE,),
+                recommended_action=action(source_ids=(old_source,), target_paths=(OUTLINE,),
                 specialist_ids=(PLOT_ARCHITECT,)), authoring_scope=current,
                 mutate=lambda value: value.update(authoring_assessment=assessment),
             )(call, provider)
             frame = json.loads(raw)
-            frame["agent_action"]["task_result"]["response_details"]["proposal_drafting_request"]["source_ids"] = {old_source: True}
-            raw = json.dumps(frame, ensure_ascii=False)
+            self.assertEqual(frame["agent_action"]["task_result"]["response_details"]["proposal_drafting_request"]["source_ids"],
+                finite_fixture_selection(source_choices["source_ids"], (old_source,)))
             self.assertTrue(call.contract.structural_findings(raw), raw)
             return raw
         self.backend.enqueue(stale)
         self.backend.enqueue(stale)
         before_stale = len(self.backend.calls)
-        stale_result = await self.runtime.decide_lead_task(stale_resume)
+        import traceback
+        with mock.patch.object(self.runtime, "_fail_reference_operation", wraps=self.runtime._fail_reference_operation) as failed_references:
+            stale_result = await self.runtime.decide_lead_task(stale_resume)
         rejected = stale_result.turn
-        self.assertEqual(len(self.backend.calls) - before_stale, 2, rejected)
+        failures = tuple((type(entry.args[1]).__name__, getattr(entry.args[1], "code", None),
+            "".join(traceback.format_exception(entry.args[1]))[-2400:]) for entry in failed_references.call_args_list)
+        self.assertEqual(len(self.backend.calls) - before_stale, 2, (rejected, failures))
         self.assertIs(rejected.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
         self.assertEqual(stale_result.transition_event_id, transition_receipt(stale_resume).event_id)
         self.assertIsNone(rejected.recommendation_request, rejected)
