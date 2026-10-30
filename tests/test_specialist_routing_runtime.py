@@ -263,6 +263,16 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
 
         prefix = self.history(conversation)
         late_call_start = len(self.backend.calls)
+        self.assertEqual(tuple(call.contract.schema_group_phase for call in self.backend.calls[:2]),
+                         (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
+        self.assertEqual(tuple(call.contract.factory.schema_group_protocol for call in self.backend.calls[:2]),
+                         (True, True))
+        import story_writing_agents.orchestrator as orchestrator_module
+        original_factory = orchestrator_module._lead_call_contract_factory
+        def bounded_history_factory(*args, **kwargs):
+            self.assertEqual(kwargs["stage"], "lead.front")
+            self.assertIs(kwargs["schema_group_protocol"], True)
+            return original_factory(*args, **{**kwargs, "schema_group_protocol": False})
         def request_inspection_source(call, _provider):
             offers = call.contract.offers
             self.assertEqual(offers.allowed_actions, ("answer",))
@@ -280,16 +290,25 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 "response_details": {"task_scope": lead_fixture_bound_scope(call, _live_scope(
                     call, activity="draft", domains=("plot_structure",), paths=(OUTLINE,)),
                     record=True)},
-            }, family=0, branch_key=call.contract.factory.rule_seed.contract_id + ":family:1:group:question.authoring")
+            }, family=0, branch_key=call.contract.factory.rule_seed.contract_id + ":family:1")
 
         self.backend.enqueue(
             partial(_search_history, text="Nora must recover her brother's letter"),
             request_inspection_source,
-            _visible_outcome("answer", "A third submission is not invoked."), control_plan=selection_plan('question.authoring', before_script_response=1))
-        bounded = await self.runtime.lead_turn(self.session_id, conversation, "Inspect context before offering fresh work.")
+            _visible_outcome("answer", "A third submission is not invoked."))
+        # This late SEARCH/QUESTION row retains its explicit single-phase domain boundary.
+        with mock.patch.object(orchestrator_module, "_lead_call_contract_factory",
+                               side_effect=bounded_history_factory) as boundary_factory:
+            bounded = await self.runtime.lead_turn(self.session_id, conversation, "Inspect context before offering fresh work.")
+        self.assertEqual(boundary_factory.call_count, 1)
+        self.assertIs(orchestrator_module._lead_call_contract_factory, original_factory)
+        self.assertEqual(tuple(call.contract.factory.schema_group_protocol for call in self.backend.calls[late_call_start:]),
+                         (False, False))
+        self.assertEqual(tuple(call.contract.schema_group_phase for call in self.backend.calls[late_call_start:]),
+                         (None, None))
         calls = _submitted_calls(self.history(conversation)[len(prefix):])
-        self.assertEqual(len(calls), 3)
-        self.assertEqual(len(self.backend.calls) - late_call_start, 3)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(self.backend.calls) - late_call_start, 2)
         self.assertIs(bounded.kind, c.LeadOutcomeKind.QUESTION)
         self.assertIsNone(bounded.proposal)
         self.assertFalse(any(event.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for event in self.history(conversation)[len(prefix):]))

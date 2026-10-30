@@ -409,9 +409,10 @@ def _agent_exchange_records(workspace: Any) -> list[dict[str, object]]:
     directory = workspace.path("debug_logs/agent_exchanges")
     if not directory.exists():
         return []
-    records = [json.loads(line)
-        for path in directory.rglob("*.jsonl")
-        for line in path.read_text(encoding="utf-8").splitlines()]
+    records = []
+    for path in directory.rglob("*.jsonl"):
+        with path.open(encoding="utf-8", newline="\n") as stream:
+            records.extend(json.loads(line) for line in stream)
     return sorted(records, key=lambda record: record["workspace_sequence"])
 
 

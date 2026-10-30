@@ -1,7 +1,7 @@
 {
   "max_sequential_wall_seconds": 18000,
   "max_shard_wall_seconds": 3600,
-  "max_test_source_lines": 145200,
+  "max_test_source_lines": 145219,
   "schema_version": 1,
   "subtest_caps": {
     "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_extracts_status_and_error_from_legacy_terminal_shape": 0,

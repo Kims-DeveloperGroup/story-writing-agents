@@ -1156,7 +1156,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             negative = json.loads(lead_fixture_response(call, {
                 'response_type': 'answer', 'response_text': message,
                 'response_details': {'task_scope': scope}}, family=0,
-                branch_key=stem + ':family:0:group:answer.observed_facts'))
+                branch_key=stem + ':family:0:group:answer.workflow'))
             self.assertTrue(call.contract.rule_graph.findings(negative))
             frame = json.dumps(negative, ensure_ascii=False, separators=(',', ':'))
             with self.assertRaises(LeadContractRejection) as rejected:
@@ -1234,7 +1234,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             answer_returns = 0
             call_start = len(self.backend.calls)
             finalizer_start = len(self.backend.finalizers)
-            self.backend.enqueue(*scripts, control_plan=selection_plan('answer.observed_facts', before_script_response=index + 1))
+            self.backend.enqueue(*scripts, control_plan=selection_plan('answer.workflow' if index == 0 else 'answer.observed_facts', before_script_response=index + 1))
             if index == 0:
                 self.backend.enqueue(invalid_correction(ArtifactReviewDomain.PLOT_STRUCTURE))
             result = await self.runtime.lead_turn(
@@ -1291,7 +1291,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         answer_returns = 0
         call_start = len(self.backend.calls)
         finalizer_start = len(self.backend.finalizers)
-        self.backend.enqueue(_search('Shared grounding phrase', ['w']), truncated_answer, control_plan=selection_plan('answer.observed_facts', before_script_response=1))
+        self.backend.enqueue(_search('Shared grounding phrase', ['w']), truncated_answer, control_plan=selection_plan('answer.workflow', before_script_response=1))
         self.backend.enqueue(invalid_correction(ArtifactReviewDomain.TONE_EXECUTION))
         result = await self.runtime.lead_turn(
             self.session_id, conversation_id, 'Reject truncated search evidence.')
