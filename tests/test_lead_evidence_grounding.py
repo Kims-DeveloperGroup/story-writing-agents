@@ -742,7 +742,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 "text": "An input alias is not artifact evidence.",
                 "evidence_input_ids": {"user_input": True}}]
             return json.dumps(packet, ensure_ascii=False)
-        self.backend.enqueue(unsupported, unsupported)
+        self.backend.enqueue(unsupported)
+        self.backend.enqueue(unsupported)
         refused = await self.runtime.lead_turn(self.session_id, self.conversation("False evidence claim"), "Explore alternatives.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         self.assertIsNone(refused.exploration)
 

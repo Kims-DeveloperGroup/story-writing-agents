@@ -200,11 +200,27 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
                 'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '
                 'requires separate exact confirmation.'
             ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
-        self.backend.enqueue(lead._SubmittedFailure(TimeoutError(), timed_out=True))
+        revision_failure = lead._SubmittedFailure(TimeoutError(), timed_out=True)
+        grouped_revision = proposed.proposal.authoring_scope is None
+        if grouped_revision:
+            self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, revision_failure),))
+        else:
+            self.backend.enqueue(revision_failure)
+        revision_start = len(self.backend.calls)
         result = await self.runtime.decide_lead_step(
             lead._decision(proposed, CollaborationConfirmationDecision.REVISE))
         self.assertIs(result.turn.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assertEqual(len(self.backend.calls), revision_start + 1)
+        revision_call = self.backend.calls[revision_start]
+        self.assertIs(revision_call.contract.schema_group_phase,
+                      LeadGroupPhase.SELECT if grouped_revision else None)
+        self.assertIn(revision_call.contract.factory.rule_seed.contract_id,
+                      ("lead-response-v6", "lead-response-v7", "lead-response-v8")
+                      if grouped_revision else ("lead-response-v9",))
         self.assertEqual(len(self.failures(conversation)), 1)
+        self.assertIs(self.failures(conversation)[0].payload.code,
+                      CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT)
+        self.assertIs(self.checkpoint()[1].record.state, ContextLedgerRecordState.TAINTED)
         before = len(self.backend.calls)
         restarted = StoryRuntime(self.workspace, self.backend)
         with self.assertRaisesRegex(ValueError, "no authoritative pending request"):

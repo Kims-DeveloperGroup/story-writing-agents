@@ -89,10 +89,16 @@ _REVIEW_USER_INPUT = "Review complete supplied candidate: " + _STORY_USER_INPUT
 
 
 async def _confirmed_premise(case, conversation, *, reference=False, recommendation="knows"):
+    call_start = len(case.backend.calls)
     literal = "Éither the narrator knows.\r\nThe reader learns later.  "
     agents = (PLOT_ARCHITECT, CHARACTER_CUSTODIAN)
     def front(call, provider):
-        facts = _workflow_material(provider.callback_payload(call))["provider_constraints"]
+        initial = case.backend.calls[call_start]
+        case.assertIs(initial.contract.factory, call.contract.factory)
+        case.assertEqual(initial.scope, call.scope)
+        case.assertIs(initial.call_kind, ProviderCallKind.COLLABORATION_INITIAL)
+        case.assertIs(initial.contract.schema_group_phase, LeadGroupPhase.SELECT)
+        facts = _workflow_material(provider.callback_payload(initial))["provider_constraints"]
         spec = {"question_id": facts["offered_premise_question_id"], "slot_id": "knowledge",
                 "question": "Who knows the concealed motive?", "dependent_domains": ["plot_structure", "character_world"]}
         assignments = [{"agent_id": agent, "instruction": "Compare alternatives and their residual costs.",

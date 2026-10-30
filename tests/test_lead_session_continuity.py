@@ -96,7 +96,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertIs(type(histories[0]), SessionHistorySnapshot)
         current = backend.callback_payload(first)
         raw_history = histories[0].delivery()
-        expected_history = project_context_payload({"h": raw_history}, {})[0]["session_history"]
+        expected_history = json.loads(_json(project_context_payload({"h": raw_history}, {})[0]))["session_history"]
         self.assertEqual(current["session_history"]["conversations"], expected_history["conversations"])
         self.assertEqual([(record["event_id"], tuple(field["field_text"].encode("utf-8")
             for field in record.get("readable_fields", []))) for record in _records(current["session_history"])],

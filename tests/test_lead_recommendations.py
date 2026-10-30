@@ -65,7 +65,7 @@ class LeadRecommendationTests(RecommendationCase):
             self.assertIs(initial.contract.factory, call.contract.factory)
             self.assertEqual(initial.scope, call.scope)
             self.assertIs(initial.call_kind, lead.ProviderCallKind.COLLABORATION_INITIAL)
-            material = lead._live_material(call)["structured_recommendation_execution"]
+            material = lead._workflow_material(provider.callback_payload(initial))["structured_recommendation_execution"]
             self.assertEqual(initial.payload["context_reuse"]["format"], "shared-objects-v1")
             self.assertLess(len(json.dumps(dict(initial.payload), ensure_ascii=False)),
                             len(json.dumps(lead._expanded_context_payload(initial.payload),
@@ -115,7 +115,7 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertEqual(self.snapshots(), before)
 
         for call in self.backend.calls:
-            self.assertNotIn("response_correction", lead._live_material(call))
+            self.assertNotIn('"response_correction":', json.dumps(self.backend.callback_payload(call)))
             self.assertNotIn("structured_response_repair", call.payload)
         from tests.provider_wire_fixture import finite_fixture_selection
         for aliases, omit_source in (((), False), (("recommendation_request",), False),

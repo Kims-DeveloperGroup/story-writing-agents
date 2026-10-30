@@ -11,6 +11,7 @@ from unittest import mock
 
 from story_writing_agents import ReplyTraceOrigin, StoryRuntime
 from story_writing_agents.agent_context.accounting import ProviderCallKind
+from story_writing_agents.lead_provider_contracts import LeadResultContractOwner
 from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
 from story_writing_agents.conversations import session_context as session_context_module
 from story_writing_agents.agents import (
@@ -521,7 +522,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         by_path = {row['provenance']['source_locator']: row['evidence_id'] for row in reads}
         self.assertEqual(tuple(identity for _path, _kind, identity
                                in self.backend.artifact_read_links),
-                         tuple(by_path[path.removeprefix('manuscript/')]
+                         tuple(by_path[path]
                                for path, _kind in expected_links))
         hits = self.backend.callback_payload(physical[1])['context_observation']['search_results']
         self.assertEqual(tuple(row['read_handle'] for row in reads),
@@ -914,18 +915,23 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             proposed.kind, proposed.next_action, proposed.state, proposed.validation_details,
             proposed.artifact_proposal is not None,
         ))
+        bad_calls = []
+        def malformed_reviewer(call, _provider):
+            from story_writing_agents.structured_output_validation import diagnose_json_text
+            from tests.provider_wire_fixture import contract_id, response
+            self.assertEqual(contract_id(call.payload), "specialist-assignment-response-v3")
+            self.assertFalse(hasattr(call, "contract"))
+            value = { "assessment": "supports", "assignment_id": "wrong_assignment", "input_ids": [], "message": "Malformed reviewer identity.", }
+            encoded = response(json.dumps({"action": {"kind": "answer", "result": value, "used_handles": []}}), contract_id(call.payload))
+            self.assertTrue(diagnose_json_text(encoded, call.schema))
+            bad_calls.append(call)
+            return encoded
         for assignment in proposed.proposal.assignments:
-            response = (
-                (
-                    lambda call, _provider: _provider_envelope(
-                        call,
-                        { "assessment": "supports", "assignment_id": "wrong_assignment", "input_ids": [], "message": "Malformed reviewer identity.", },
-                    )
-                )
-                if assignment.specialist_id == PLOT_ARCHITECT
-                else _specialist_outcome("supports")
-            )
+            response = (malformed_reviewer if assignment.specialist_id == PLOT_ARCHITECT
+                else _specialist_outcome("supports"))
             self.backend.enqueue_for(assignment.specialist_id, response)
+            if assignment.specialist_id == PLOT_ARCHITECT:
+                self.backend.enqueue_for(assignment.specialist_id, response)
         review_call_start = len(self.backend.call_records)
         failed = await self.runtime.decide_lead_step(
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
@@ -941,17 +947,23 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 proposed.artifact_proposal.candidate.candidate
             ) )
         specialist_calls = self.backend.call_records[review_call_start:]
+        self.assertEqual(len(bad_calls), 2)
         self.assertCountEqual(
             tuple(agent_id for agent_id, _call in specialist_calls),
-            tuple(item.specialist_id for item in proposed.proposal.assignments), )
+            tuple(item.specialist_id for item in proposed.proposal.assignments) + (PLOT_ARCHITECT,), )
         from tests.provider_wire_fixture import artifact_candidate as wire_candidate
         from tests.test_agent_context_accounting import _expanded_context_payload
-        for agent_id, call in specialist_calls:
-            with self.subTest(specialist=agent_id):
-                material = (_expanded_context_payload(call.payload) if "shared_context_objects" in call.payload else call.payload)["task_input"]
-                disclosed = next(item["artifact_candidate"] for item in material["inputs"]
-                                 if item["input_source_type"] == "artifact_candidate")
-                self.assertEqual(disclosed, wire_candidate(candidate_value))
+        for assignment in proposed.proposal.assignments:
+            with self.subTest(specialist=assignment.specialist_id):
+                for call in (call for agent_id, call in specialist_calls
+                             if agent_id == assignment.specialist_id):
+                    material = (_expanded_context_payload(call.payload) if "shared_context_objects" in call.payload else call.payload)["task_input"]
+                    if call is bad_calls[1]:
+                        self.assertEqual(set(material), {"original_task_input", "response_correction"})
+                        material = material["original_task_input"]
+                    disclosed = next(item["artifact_candidate"] for item in material["inputs"]
+                                     if item["input_source_type"] == "artifact_candidate")
+                    self.assertEqual(disclosed, wire_candidate(candidate_value))
 
     async def test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority(
         self,
@@ -987,8 +999,8 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             malformed_response = _artifact_synthesis_outcome( "propose", malformed=malformed )
             self.backend.enqueue_for(
                 LEAD_ORCHESTRATOR,
-                malformed_response,
                 malformed_response, )
+            self.backend.enqueue_for(LEAD_ORCHESTRATOR, malformed_response)
             mismatch = await self.runtime.decide_lead_step(
                 _decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
             self.assertIs(
@@ -1189,10 +1201,14 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         bound_call = self.backend.calls[-1]
         native_schema = bound_call.schema
         inner_by_outer = dict(bound_call.contract.outer_inner_schema_ids)
+        domain_result_ids = {member.schema_id
+            for member in bound_call.contract.semantic_index.contracts
+            if type(member.owner) is LeadResultContractOwner}
         issued_answers = {
             member.schema_id: inner_by_outer[member.schema_id]
             for member in bound_call.contract.action_index.contracts
             if member.rule_graph.literal_at(("action_type",)) == "submit_result"
+            and inner_by_outer[member.schema_id] in domain_result_ids
         }
         actions = fixture_schema_node(
             native_schema, native_schema["properties"]["agent_action"])["anyOf"]

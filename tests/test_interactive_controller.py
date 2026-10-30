@@ -6593,6 +6593,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             self.assertEqual(forwarded[-1]["premise_selection"].report_event_id, unranked.premise_report_ref.report_event_id)
 
         from tests.test_lead_orchestration import _task_fixture, _discussion_reply
+        from tests.provider_wire_fixture import offered_fixture_bindings, indexed_response
         case = _task_fixture(self)
         task_conversation = case.conversation("Shell task choices")
         runner.run(case.proposal(task_conversation, text=(
@@ -6601,10 +6602,21 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '
                 'requires separate exact confirmation.'
             ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',)))))
-        case.backend.enqueue(_discussion_reply("Whole shell material e\u0301\r\n"))
-        runner.run(case.runtime.decide_lead_task(task.LeadTaskDecision.for_conversation(
+        discussion_text = "Whole shell material e\u0301\r\n"
+        def shell_discussion_reply(call, _provider):
+            self.assertIsNone(call.contract.schema_group_phase)
+            self.assertEqual(call.contract.factory.rule_seed.contract_id,
+                             "lead-discussion-response-v1")
+            outer, inner = offered_fixture_bindings(
+                call, action_type="submit_result", response_type="answer", family=0)
+            action = json.loads(_discussion_reply(discussion_text))["agent_action"]
+            return indexed_response(action, outer_schema_id=outer,
+                                    inner_schema_id=inner, contract=call.contract)
+        case.backend.enqueue(shell_discussion_reply)
+        discussed = runner.run(case.runtime.decide_lead_task(task.LeadTaskDecision.for_conversation(
             case.session_id, task_conversation, task.LeadTaskAction.DISCUSS, text="Discuss role responsibilities.",
         )))
+        self.assertEqual(discussed.turn.discussion.response_text, discussion_text)
         projection = case.runtime.inspect_lead_collaboration(case.session_id, task_conversation)
         selected_task, material = projection.available_tasks[0], projection.selectable_materials[-1]
         decisions = []

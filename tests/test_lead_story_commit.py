@@ -49,7 +49,7 @@ from story_writing_agents.workspace.initialization import provision_session_reso
 from tests import test_lead_artifact_application as lead_artifact_application_tests
 from tests.collaboration_contract_fixture import seed_reviewed_artifact
 from tests.helpers import pristine_initialized_workspace
-from tests.provider_wire_fixture import selection_plan
+from tests.provider_wire_fixture import selection_plan, lead_fixture_result, lead_fixture_response
 from tests.test_artifact_proposal_orchestration import (
     _RULES,
     _artifact_outcome,
@@ -339,7 +339,11 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         self.assertEqual(self.session_git_snapshot(), before_git)
 
         conversation = applied.request.reviewed_proposal.conversation_id
-        self.backend.enqueue(_discussion_reply("Discussion preserves this exact Commit request."))
+        def pending_discussion(call, _provider):
+            self.assertIsNone(call.contract.schema_group_phase)
+            return lead_fixture_response(call, lead_fixture_result({"response_type": "answer",
+                "response_text": "Discussion preserves this exact Commit request.", "used_evidence_ids": {}}), family=0)
+        self.backend.enqueue(pending_discussion)
         discussion = await self.runtime.decide_lead_task(task.LeadTaskDecision.for_conversation(
             self.session_id, conversation, task.LeadTaskAction.DISCUSS, text="Explain the pending Commit.",
         ))
