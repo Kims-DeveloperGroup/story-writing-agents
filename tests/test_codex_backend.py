@@ -2758,6 +2758,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"# Lead Orchestrator Policy", domain_policy)
         reference_path = "manuscript/part-01/grouped-reference.md"
         reference_text = "GROUPED_ATTACHED_REFERENCE_한🙂\n"
+        reference_wire = json.dumps(reference_text, ensure_ascii=False).encode("utf-8")
         self.workspace.root.joinpath(reference_path).parent.mkdir(parents=True, exist_ok=True)
         self.workspace.root.joinpath(reference_path).write_bytes(reference_text.encode("utf-8"))
         repository, reference_authorization, reference_read = self.reference_invocation(
@@ -2874,8 +2875,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIs(invocations[1].context_anchor, native_witnesses[0])
         self.assertEqual(result.group_state.transport_delivery.witness, native_witnesses[1])
         self.assertEqual(result.group_state.accepted_delivery.witness, native_witnesses[0])
-        self.assertIn(reference_text.encode("utf-8"), invocations[0].payload_json)
-        self.assertNotIn(reference_text.encode("utf-8"), invocations[1].payload_json)
+        self.assertIn(reference_wire, invocations[0].payload_json)
+        self.assertNotIn(reference_wire, invocations[1].payload_json)
         self.assertNotIn("untrusted_attached_references", requests[1].payload["context_changes"]["remove"])
         self.assertEqual([callback_views.for_request(call)["untrusted_attached_references"] for call in requests],
                          [expected_references] * 2)
@@ -2954,7 +2955,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             for record in _agent_exchange_records(self.workspace)))
         self.assertEqual(corrected.group_state.accepted_delivery.witness, native_witnesses[1])
         self.assertEqual(corrected.group_state.transport_delivery.witness, native_witnesses[3])
-        self.assertIn(reference_text.encode("utf-8"), invocations[0].payload_json)
+        self.assertIn(reference_wire, invocations[0].payload_json)
         self.assertEqual(["untrusted_attached_references" in call.payload.get("context_changes", {}).get("remove", [])
                           for call in requests], [False] * 4)
         self.assertEqual([callback_views.for_request(call)["untrusted_attached_references"] for call in requests],
