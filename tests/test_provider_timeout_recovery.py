@@ -226,10 +226,18 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         with self.assertRaisesRegex(ValueError, "no authoritative pending request"):
             await restarted.decide_lead_step(lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(len(self.backend.calls), before)
-        self.backend.enqueue(lead._visible_outcome("answer", "Synthetic retry succeeded."))
+        retry_response = lead._visible_outcome("answer", "Synthetic retry succeeded.")
+        retry_findings = []
+        def retry_answer(call, provider):
+            raw = retry_response(call, provider)
+            retry_findings.append(call.contract.structural_findings(raw))
+            return raw
+        self.backend.enqueue(retry_answer)
         retried = await restarted.lead_turn(
             self.session_id, conversation, "New request after failed revision.")
+        self.assertEqual(retry_findings, [()])
         self.assertIs(retried.kind, LeadOutcomeKind.ANSWER)
+        self.assertEqual(retried.message, "Synthetic retry succeeded.")
         self.assertEqual(len(self.backend.calls), before + 1)
         self.assertIsNone(self.backend.calls[-1].contract.schema_group_phase)
         self.assertEqual(self.backend.calls[-1].contract.factory.rule_seed.contract_id,

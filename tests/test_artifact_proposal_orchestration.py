@@ -515,14 +515,19 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         )
         physical = self.backend.calls[physical_before:]
         self.assertEqual(len(physical), 4)
-        reads = self.backend.callback_payload(physical[-1])['context_observation']['read_results']
+        reads = [row for entry in self.backend.callback_payload(physical[-1])['context_observations']
+                 if entry['observation']['observation_type'] == 'context_read_results'
+                 for row in entry['observation']['read_results']]
         expected_links = ((_INDEX, 'replace'), (_SECOND, 'rename'))
+        self.assertEqual(len(reads), 2)
+        self.assertEqual(len({row['evidence_id'] for row in reads}), 2)
+        self.assertEqual(len({row['read_handle'] for row in reads}), 2)
         self.assertEqual(tuple((path, kind) for path, kind, _identity
                                in self.backend.artifact_read_links), expected_links)
         by_path = {row['provenance']['source_locator']: row['evidence_id'] for row in reads}
         self.assertEqual(tuple(identity for _path, _kind, identity
                                in self.backend.artifact_read_links),
-                         tuple(by_path[path]
+                         tuple(by_path[path.removeprefix('manuscript/')]
                                for path, _kind in expected_links))
         hits = self.backend.callback_payload(physical[1])['context_observation']['search_results']
         self.assertEqual(tuple(row['read_handle'] for row in reads),

@@ -140,10 +140,33 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             "Proceed in the order you recommended.",
             "Recall your last recommendation.",
             "Summarize our current discussion.", )
+        expected_scope = self.runtime._agent_context_service.scope(
+            self.session_id, ContextSubjectKind.CONVERSATION, second, LEAD_ORCHESTRATOR)
         for index, text in enumerate(followups):
+            prior_thread = self.checkpoint().checkpoint_view.provider_thread_id
+            self.assertIs(type(prior_thread), str)
+            self.assertTrue(prior_thread)
+            call_start = len(self.backend.calls)
+            threads_before = dict(self.backend.context_threads)
+            taints_before = tuple(self.backend.tainted_thread_ids)
             await self.say(second, text, f"Follow-up answer {index}.")
+            current = self.backend.calls[call_start:]
+            self.assertEqual(len(current), 2)
+            self.assertEqual(tuple(call.scope for call in current), (expected_scope,) * 2)
+            self.assertEqual(tuple(call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"] for call in current), ("bootstrap",) * 2)
+            self.assertTrue(all(call.context_witness is None and call.context_anchor is None for call in current))
+            self.assertIsNone(current[0].expected_thread_id)
+            fresh_thread = self.checkpoint().checkpoint_view.provider_thread_id
+            self.assertIs(type(fresh_thread), str)
+            self.assertTrue(fresh_thread)
+            self.assertEqual(current[1].expected_thread_id, fresh_thread)
+            self.assertNotEqual(fresh_thread, prior_thread)
+            owned_key = (current[0].continuation_identity, current[0].policy_fingerprint)
+            self.assertEqual(threads_before[owned_key], prior_thread)
+            self.assertEqual(self.backend.context_threads, {**threads_before, owned_key: fresh_thread})
+            self.assertEqual(tuple(self.backend.tainted_thread_ids), (*taints_before, prior_thread))
         calls = [call for agent, call in self.backend.call_records if agent == LEAD_ORCHESTRATOR]
-        self.assertEqual({call.expected_thread_id for call in calls[1:]}, {"thread-lead-1"})
+        self.assertEqual({call.expected_thread_id for call in calls[1:3]}, {"thread-lead-1"})
         delivered = [_fields(self.backend.callback_payload(call)["session_history"]) for call in calls]
         self.assertEqual(tuple(delivered[index].count(plan) for index in (3, 5, 7)), (2, 2, 2))
         for text in followups:

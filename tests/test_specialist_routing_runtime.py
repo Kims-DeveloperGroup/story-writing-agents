@@ -6,6 +6,7 @@ from tests.provider_wire_fixture import ( result as wire_result, lead_fixture_bo
     finite_fixture_selection, lead_fixture_result, lead_fixture_response,)
 from tests.provider_wire_fixture import author_positive_fixture_review_bases
 from story_writing_agents.agent_context.accounting import ProviderCallKind
+from story_writing_agents.lead_provider_contracts import LeadResultContractOwner
 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id
 
 from functools import partial
@@ -131,12 +132,17 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
                 review_choices=choices['review_candidate_ids'], anchors=native_inputs['anchors'],
                 recipients=proposal.get('required_input_recipients'))
             proposal['assignments'] = allocation['assignments']
-        branch_key = (call.contract.factory.rule_seed.contract_id + f":family:{native_inputs['family']}:group:"
-            + call.contract.group_workflow.active_selection.group_id
-            if call.contract.schema_group_phase is not None else None)
+        response_type = native_inputs.get('lookup_response_type', native_types.get(kind, kind))
+        branch_key = None
+        if call.contract.schema_group_phase is not None:
+            group_id = call.contract.group_workflow.active_selection.group_id
+            branch_key, = {member.owner.variant.branch_key.partition(':partition:')[0]
+                for member in call.contract.semantic_index.contracts
+                if type(member.owner) is LeadResultContractOwner and member.owner.variant.group_id == group_id
+                and member.rule_graph.literal_at(('response_type',)) == response_type}
         return lead_fixture_response(call, lead_fixture_result(body),
             family=0 if branch_key is not None else native_inputs['family'], branch_key=branch_key,
-            response_type=native_inputs.get('lookup_response_type', native_types.get(kind, kind)))
+            response_type=response_type)
     return respond
 
 
@@ -351,7 +357,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             proposal["premise_decision"]["dependent_domains"] = dict.fromkeys(spec["dependent_domains"], True)
             branch, = {member.owner.variant.branch_key.partition(":partition:")[0]
                 for member in call.contract.semantic_index.contracts
-                if member.owner.variant.group_id == "premise.analysis"
+                if type(member.owner) is LeadResultContractOwner and member.owner.variant.group_id == "premise.analysis"
                 and member.rule_graph.literal_at(("response_type",)) == "specialist_consultation_proposal"}
             return lead_fixture_response(call, lead_fixture_result(native), family=0, branch_key=branch)
         refused = await self._rejected_pair(self.conversation(), "Explore who knows the motive.",

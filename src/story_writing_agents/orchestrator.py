@@ -8772,6 +8772,22 @@ class StoryRuntime:
                 return _CollaborationInvocationResult(
                     value,
                     provider.submitted_physical_calls,
+                    failure=(
+                        reference_failure
+                        if origin is ReplyTraceOrigin.RUNTIME_FALLBACK
+                        and (
+                            type(value) is _ArtifactSynthesisResult
+                            or (
+                                type(value) is CollaborationSpecialistReplyPayload
+                                and context_invocation_kind is ContextInvocationKind.SPECIALIST_ASSIGNMENT
+                                and any(
+                                    item.kind is CollaborationInputKind.ARTIFACT_CANDIDATE
+                                    for item in inputs
+                                )
+                            )
+                        )
+                        else None
+                    ),
                     artifact_binding=artifact_binding,
                     generation_pin=transferred_pin,
                     trace=self._collaboration_reply_trace(
