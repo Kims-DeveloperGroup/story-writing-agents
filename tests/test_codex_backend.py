@@ -2756,8 +2756,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         domain_policy = role_source.path.read_bytes()
         self.assertEqual(domain_policy, role_source.content)
         self.assertIn(b"# Lead Orchestrator Policy", domain_policy)
-        reference_path = "core_documents/global_outline.md"
+        reference_path = "manuscript/part-01/grouped-reference.md"
         reference_text = "GROUPED_ATTACHED_REFERENCE_한🙂\n"
+        self.workspace.root.joinpath(reference_path).parent.mkdir(parents=True, exist_ok=True)
         self.workspace.root.joinpath(reference_path).write_bytes(reference_text.encode("utf-8"))
         repository, reference_authorization, reference_read = self.reference_invocation(
             operation_id="grouped-reader-reference", invocation_id="grouped-reader-reference-1",

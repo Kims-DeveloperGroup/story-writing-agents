@@ -549,7 +549,6 @@ def _live_result(call, value):
     import copy
     if type(value) is not dict: return value
     value = copy.deepcopy(value)
-    material = _live_material(call)
     if "assignment_id" in value:
         return {"assessment": value["assessment"], "message": value["message"]}
     if "reply_event_ids" in value:
@@ -562,6 +561,7 @@ def _live_result(call, value):
             compact["recommended_action"] = _compact_recommended(value["recommended_action"])
         return compact
     if "kind" not in value: return value
+    material = _live_material(call)
     proposal = value.get("proposal")
     artifact = value.get("artifact_intent")
     objective = value.get("objective_intent")
@@ -1519,7 +1519,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertIsNone(result.confirmation_request_id)
         self.assertEqual(
             tuple(call.payload["response_contract"]["allowed_action_types"] for call in calls),
-            (["search_context", "submit_result"], ["search_context", "read_context", "submit_result"], ["search_context", "read_context", "submit_result"]),
+            (["search_context", "submit_result"], ["search_context", "read_context", "submit_result"], ["search_context", "read_context", "submit_result"], ["search_context", "read_context", "submit_result"]),
         )
         self.assertIn("A prior lead response",
                       json.dumps(dict(calls[0].payload), ensure_ascii=False),)
@@ -6214,14 +6214,23 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         for label, error, findings in (("metadata", failure, (Rule.LEAD_OUTCOME_REJECTED,)),
                                        ("callback", ValueError(), (private,))):
             conversation_id = self.conversation(f"Diagnostic {label} privacy")
+            call_start = len(self.backend.calls)
             response = _visible_outcome("answer", "Schema-valid workflow response.")
             self.backend.enqueue(response, control_plan=selection_plan("answer.workflow"))
             self.backend.enqueue(response, control_plan=())
-            with (mock.patch.object(StoryRuntime, "_decode_lead_outcome", side_effect=error) as decoder,
+            def reject_decode(*_args, **_kwargs):
+                fresh = type(error)(*error.args)
+                if label == "metadata":
+                    fresh.provider_validation_findings = error.provider_validation_findings
+                raise fresh
+            with (mock.patch.object(StoryRuntime, "_decode_lead_outcome", side_effect=reject_decode) as decoder,
                   mock.patch.object(StoryRuntime, "_lead_outcome_validation_details",
                                     return_value=findings) as diagnostic):
                 result = await self.runtime.lead_turn(self.session_id, conversation_id, "Propose review.")
             self.assertGreaterEqual(decoder.call_count, 1)
+            self.assertEqual(decoder.call_count, 2)
+            self.assertEqual(tuple(call.contract.schema_group_phase for call in self.backend.calls[call_start:]),
+                             (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE))
             diagnostic.assert_not_called()
             self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
             self.assertTrue(result.validation_details)
