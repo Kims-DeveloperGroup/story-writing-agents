@@ -67,13 +67,13 @@ class SuiteBudgetTests(unittest.TestCase):
                 self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
                     dict(execution_source, max_test_source_lines=limit),
                     dict(origin, max_test_source_lines=old))
-        wire_source = dict(execution_source, max_test_source_lines=145528)
+        wire_source = dict(execution_source, max_test_source_lines=145533)
         for origin in (source, execution_source):
             self.assertIsNone(suite_budget.check_monotonic(wire_source, origin))
-            for old, limit in ((origin["max_test_source_lines"] - 1, 145528),
-                               (origin["max_test_source_lines"] + 1, 145528),
-                               (origin["max_test_source_lines"], 145527),
-                               (origin["max_test_source_lines"], 145529)):
+            for old, limit in ((origin["max_test_source_lines"] - 1, 145533),
+                               (origin["max_test_source_lines"] + 1, 145533),
+                               (origin["max_test_source_lines"], 145532),
+                               (origin["max_test_source_lines"], 145534)):
                 self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
                     dict(wire_source, max_test_source_lines=limit),
                     dict(origin, max_test_source_lines=old))

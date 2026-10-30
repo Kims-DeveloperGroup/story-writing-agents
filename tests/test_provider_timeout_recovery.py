@@ -1,7 +1,8 @@
 """Read-only Lead failures preserve history and admit explicit same-chat retry."""
 
 from __future__ import annotations
-from tests.provider_wire_fixture import selection_plan
+from tests.provider_wire_fixture import (
+    selection_plan, offered_fixture_bindings, indexed_response, lead_fixture_result)
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
 
 import asyncio
@@ -226,10 +227,14 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         with self.assertRaisesRegex(ValueError, "no authoritative pending request"):
             await restarted.decide_lead_step(lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(len(self.backend.calls), before)
-        retry_response = lead._visible_outcome("answer", "Synthetic retry succeeded.")
         retry_findings = []
         def retry_answer(call, provider):
-            raw = retry_response(call, provider)
+            action = json.loads(lead._discussion_reply("Synthetic retry succeeded."))["agent_action"]
+            action["task_result"] = lead_fixture_result(action["task_result"])
+            outer, inner = offered_fixture_bindings(
+                call, action_type="submit_result", response_type="answer", family=0)
+            raw = indexed_response(action, outer_schema_id=outer,
+                                   inner_schema_id=inner, contract=call.contract)
             retry_findings.append(call.contract.structural_findings(raw))
             return raw
         self.backend.enqueue(retry_answer)
