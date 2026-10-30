@@ -333,8 +333,17 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
             update={'update_type': 'cancel_request', 'document_change_request_id': objective_id},
             branch='lead-response-v8:family:0', selection_group='answer.workflow'),
                              control_plan=selection_plan("answer.workflow"))
+        cancel_call_start = len(self.backend.calls)
         cancelled = await self.runtime.lead_turn(self.session_id, conversation_id, "Cancel this writing objective.")
-        self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.CANCELLED, cancelled)
+        selects = [call for call in self.backend.calls[cancel_call_start:]
+                   if call.contract.group_workflow is not None and call.contract.group_workflow.phase.value == "select"]
+        current = selects[-1] if selects else None
+        diagnostic = None if current is None else {
+            "catalog_group_ids": current.contract.group_workflow.catalog.group_ids,
+            "result_contract_id": current.payload["response_contract"]["result_contract_id"],
+            "remaining_provider_calls": current.contract.offers.remaining_provider_calls,
+        }
+        self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.CANCELLED, diagnostic)
         before = self.objective(conversation_id)
         bad = self.question(intent={"action": "continue", "objective_id": objective_id, "next_step": "clarify", "draft_source_event_ids": []})
         self.backend.enqueue(bad, control_plan=selection_plan("question.authoring"))
