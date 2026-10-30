@@ -720,7 +720,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             schema_version=3, intent=AuthoringIntent.REVIEW_ONLY,
             contributions=(AuthoringContribution(ArtifactReviewDomain.PLOT_STRUCTURE,
                            AuthoringContributionRole.CONSTRAINT_ASSESSOR),))
-        review_facts = replace(_LEAD_CONSTRAINTS, scope=review_scope)
+        review_facts = replace(_LEAD_CONSTRAINTS, scope=review_scope,
+                               input_ids=("current-input",))
         def no_review_business(_answer, _authorization):
             raise AssertionError("This fixture permits only context/control before handoff")
         review_factory = replace(_LEAD_CALL_FACTORY, constraints=review_facts,
@@ -733,6 +734,9 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             operation_id="group-ineligible", result_correlation_id="group-ineligible-result",
             invocation_kind=ContextInvocationKind.LEAD, result_contract=review_factory,
             agent_id=LEAD_ORCHESTRATOR, physical_call_limit=5, fresh=True))
+        self.assertEqual(review_facts.input_ids, tuple(
+            material.entry.source_id for material in review_request.materials
+            if material.entry.semantic_channel is ContextSemanticChannel.CURRENT_INPUT))
         def plot_search(call, provider):
             packet = json.loads(_search(call, provider))
             packet["agent_action"]["queries"][0]["search_text"] = "PRIVATE_PLOT_GROUP_SOURCE"
