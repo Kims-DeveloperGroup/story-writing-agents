@@ -261,7 +261,18 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         reports_before_restart = self.runtime.lead_group_reports(self.session_id, second)
         self.backend.context_threads.clear()
         restarted = StoryRuntime(self.workspace, self.backend)
-        await self.say(second, "Recall all retained planning.", runtime=restarted)
+        from story_writing_agents.conversations import CollaborationAppendStatus
+        terminal_store = restarted.conversation_storage_services.event_store
+        append_batch = type(terminal_store).append_batch
+        terminal_batches = []
+        def observe_terminal_batch(actual_store, batch):
+            receipt = append_batch(actual_store, batch)
+            if actual_store is terminal_store and any(
+                    event.kind is CollaborationEventKind.LEAD_GROUP_TRACE for event in batch.events):
+                terminal_batches.append((batch, receipt))
+            return receipt
+        with mock.patch.object(type(terminal_store), "append_batch", new=observe_terminal_batch):
+            await self.say(second, "Recall all retained planning.", runtime=restarted)
 
         reports_after_restart = restarted.lead_group_reports(self.session_id, second)
         self.assertTrue(reports_before_restart)
@@ -269,6 +280,14 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(len(reports_after_restart), len(reports_before_restart) + 1)
         self.assertEqual(restarted.lead_group_reports(self.session_id, empty), ())
         report_history = self.history(second)
+        self.assertEqual(len(terminal_batches), 1)
+        original_batch, initial_receipt = terminal_batches[0]
+        self.assertIs(initial_receipt.status, CollaborationAppendStatus.APPENDED)
+        self.assertEqual(terminal_store.read(self.session_id, second), report_history)
+        retried_receipt = terminal_store.append_batch(original_batch)
+        self.assertIs(retried_receipt.status, CollaborationAppendStatus.ALREADY_COMMITTED)
+        self.assertEqual(replace(retried_receipt, status=CollaborationAppendStatus.APPENDED), initial_receipt)
+        self.assertEqual(terminal_store.read(self.session_id, second), report_history)
         physical_count = len(self.backend.calls)
         latest = reports_after_restart[-1]
         self.assertTrue(latest["result_accepted"])
@@ -299,7 +318,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(len(self.backend.calls), physical_count)
         fresh = self.backend.calls[-2]
         for call in self.backend.calls[-2:]:
-            private_wire = _json(call.payload)
+            private_wire = canonical_provider_json(call.payload).decode("utf-8")
             self.assertNotIn('"lead_group_trace"', private_wire)
             self.assertNotIn('"catalog_at_selection"', private_wire)
         self.assertIsNone(fresh.expected_thread_id)

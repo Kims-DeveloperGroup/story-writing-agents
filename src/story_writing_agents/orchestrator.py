@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 
-from .agent_context.accounting import canonical_provider_json
 from .agent_context.group_observation import LeadGroupObservation, LeadGroupObservationKind, LeadGroupTrace
 from .agent_context.group_reporting import group_trace_report
 from .conversations.events import CollaborationLeadGroupTracePayload
@@ -1892,17 +1891,21 @@ class _AccountingContextProvider:
             return ()
         terminal = next((item for item in terminal_drafts
             if type(item.payload) in {CollaborationLeadJudgmentPayload, CollaborationLeadOutcomeFailurePayload}), None)
+        if (terminal is not None and type(terminal.payload) is CollaborationLeadOutcomeFailurePayload
+                and terminal.payload.code is CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED
+                and all(item.kind is LeadGroupObservationKind.TERMINAL for item in self._group_observations)):
+            return ()
         terminal_snapshot = None
         if terminal is not None:
             payload = terminal.payload
             scope = getattr(payload, "authoring_scope", None)
-            terminal_snapshot = canonical_provider_json({
+            terminal_snapshot = json.dumps({
                 "source_event_id": terminal.event_id, "source_kind": terminal.kind.value,
                 "outcome_kind": payload.kind.value if type(payload) is CollaborationLeadJudgmentPayload else None,
                 "failure_code": payload.code.value if type(payload) is CollaborationLeadOutcomeFailurePayload else None,
                 "task_ref": None if scope is None else {"task_id": scope.task_id, "revision": scope.task_revision},
                 "task_completion": None, "objective_completion": None,
-            })
+            }, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
         return (self._runtime._draft(
             session_id=self._session_id, conversation_id=self._conversation_id,
             turn_id=self._turn_id, step_id=self._step_id,
@@ -14541,7 +14544,7 @@ class StoryRuntime:
             call_id=calls[-1].call_id if calls else None,
             failure_code=code,
             failure=failure,
-            accounting_provider=accounting_provider,
+            trace_provider=accounting_provider,
         )
 
     def _lead_outcome_failure_result(
@@ -14556,6 +14559,7 @@ class StoryRuntime:
         failure_code: CollaborationLeadOutcomeFailureCode,
         failure: BaseException | None = None,
         accounting_provider: _AccountingContextProvider | None = None,
+        trace_provider: _AccountingContextProvider | None = None,
     ) -> LeadTurnResult:
         """Durably close a failed read-only Lead attempt without replaying it."""
 
@@ -14568,8 +14572,9 @@ class StoryRuntime:
             accounting_provider.task_revisions if accounting_provider is not None else (),
             "rejected", accounting_provider.validation_details if accounting_provider is not None else (),
             failure_code.value)
-        if accounting_provider is not None:
-            accounting_provider.publish_public_responses()
+        collector = trace_provider if trace_provider is not None else accounting_provider
+        if collector is not None:
+            collector.publish_public_responses()
         try:
             projection = self.conversation_storage_services.event_store.read_context(
                 session_id,
@@ -14610,7 +14615,7 @@ class StoryRuntime:
                 )
             self._append_drafts(
                 projection.last_sequence,
-                _with_group_trace(accounting_provider, failure_drafts, failure_code.value),
+                _with_group_trace(collector, failure_drafts, failure_code.value),
             )
         except Exception:
             return self._blocking_lead_result(

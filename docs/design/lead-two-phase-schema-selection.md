@@ -446,6 +446,15 @@ history로 여유를 만들지 않는다. 최종 실행 통과는 별도로 확�
 
 ## 관측과 비교의 판정 기준
 
+`outer_contract_linkage_utf8_bytes`는 최종 요청의 `schema_selection`에서 실제 존재하는
+`issued_contract`·`active_selection`·`catalog_id` 부분 객체를 런타임 JSON으로 직렬화한
+UTF-8 크기다. 발행 계약의 중첩 위치를 유지하며, 전체 native 입력·schema 바이트와 구분한다.
+
+Provider admission 전에 최소 호출 예산이 부족하면 기존 `REQUEST_NOT_SUBMITTED` 결과가
+남는다. Phase binding·준비·제출이 없는 이 경우에는 provider-group trace를 생성하지 않는다.
+실제 PREPARED/SUBMITTED 경로는 기존 회계와 관측에 따른 상태를 보고한다. 실패 메시지의
+언어와 작업 리비전 참조는 원래 발행 규칙을 따르며 관측 collector가 바꾸지 않는다.
+
 관측은 실행을 설명하는 자료다. 선택 이유의 문장 품질이나 관측 보고서가 그룹,
 업무 권한, 교정 여부 또는 호출 예산을 바꾸지 않는다. 이 절은 #897 구현과 검증에
 적용할 판정 기준이며, 아래의 예시 수치가 성능 목표나 Provider 설정은 아니다.

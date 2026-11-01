@@ -76,7 +76,7 @@ def group_request_size_report(
         response_contract = payload.get("response_contract", {})
         selection = response_contract.get("schema_selection", {}) if type(response_contract) is dict else {}
         catalog = selection.get("catalog") if type(selection) is dict else None
-        links = {name: selection[name] for name in ("call_id", "contracts", "active_selection", "catalog_id")
+        links = {name: selection[name] for name in ("issued_contract", "active_selection", "catalog_id")
                  if type(selection) is dict and name in selection}
         rows.append({
             "variant": sample.variant, "group_id": sample.group_id,

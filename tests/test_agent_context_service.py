@@ -1659,7 +1659,7 @@ class CompactWireDecoderTests(unittest.TestCase):
             prepared.append(LeadGroupRequestMeasurement(variant, comparison_basis, invocation, group_id))
             exported.append((variant, group_id, invocation))
         comparison = group_request_size_report(tuple(prepared), group_ids=catalogue.group_ids)
-        self.assertEqual(comparison["conditions"], json.loads(comparison_basis))
+        self.assertEqual(comparison["comparison_basis_sha256"], hashlib.sha256(comparison_basis).hexdigest())
         self.assertEqual(len(comparison["measurements"]), len(catalogue.group_ids) + 2)
         self.assertEqual({row["group_id"] for row in comparison["measurements"] if row["variant"] == "generate"},
                          set(catalogue.group_ids))
@@ -1669,6 +1669,17 @@ class CompactWireDecoderTests(unittest.TestCase):
             self.assertEqual((row["variant"], row["group_id"]), (variant, group_id))
             self.assertEqual(row["schema_utf8_bytes"], len(native_schema))
             self.assertEqual(row["payload_utf8_bytes"], len(native_payload))
+            if variant == "full":
+                self.assertIsNone(row["outer_contract_linkage_utf8_bytes"])
+            else:
+                wire_selection = json.loads(native_payload)["response_contract"]["schema_selection"]
+                linkage = {"issued_contract": wire_selection["issued_contract"]}
+                if variant == "generate":
+                    linkage["active_selection"] = wire_selection["active_selection"]
+                if "catalog_id" in wire_selection:
+                    linkage["catalog_id"] = wire_selection["catalog_id"]
+                self.assertEqual(row["outer_contract_linkage_utf8_bytes"],
+                                 len(canonical_provider_json(linkage)))
             self.assertEqual(row["binding_utf8_bytes"], 17)
             self.assertEqual(row["prepared_model_input_utf8_bytes"],
                              len(native_schema) + len(native_payload) + 17)

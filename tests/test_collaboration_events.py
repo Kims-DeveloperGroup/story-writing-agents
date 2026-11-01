@@ -258,6 +258,8 @@ def _group_trace_fixture():
         "response_type": "schema_group_selection", "call_id": "group-call-1",
         "outer_schema_id": "historical-outer", "inner_schema_id": "historical-inner",
     }
+    catalog = json.loads(json.dumps(catalog, sort_keys=True))
+    selection = json.loads(json.dumps(selection, sort_keys=True))
     observations = (
         LeadGroupObservation(LeadGroupObservationKind.BOUND, basis, LeadGroupPhase.SELECT,
                              "group-call-1", catalog_snapshot=canonical_provider_json(catalog)),
@@ -1239,7 +1241,7 @@ class CollaborationWireContractTests(unittest.TestCase):
             invocation_id=trace.invocation_id, call_id="group-call-1", role=LEAD_ORCHESTRATOR,
             recipient=LEAD, invocation_kind=CollaborationInvocationKind.LEAD))
         terminal = make_draft("group_trace_failure", CollaborationEventKind.LEAD_OUTCOME_FAILURE,
-            RUNTIME, LEAD, CollaborationLeadOutcomeFailurePayload(
+            RUNTIME, USER, CollaborationLeadOutcomeFailurePayload(
                 CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED,
                 trace.invocation_id, "group-call-1"), turn_id=turn_id)
         terminal_history = store_batch(history, make_batch(
