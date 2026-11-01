@@ -273,6 +273,8 @@ live composition, reference activation, collaboration presentation, and the term
 - `interactive_terminal._reference_activation`, `interactive_terminal._viewer_model`
 - `interactive_terminal._viewer_controls`, `interactive_terminal._viewer_render`
 
+`interactive_terminal._core`는 공개 `conversations.CollaborationEventKind`로 비공개 Lead 그룹 trace를 건너뛰며 검증한 이력 cursor를 전진시킨다. 일반 상세 이력은 공개 이벤트 panel을 표시하고, 명시적 전체 감사 projection은 모든 typed 이벤트를 보존한다.
+
 Presentation consumes domain contracts without owning runtime state. Private `_box.Box` shares Unicode cell geometry.
 `_markdown` owns sanitized prose; `_response_usage` joins exact scoped call identities. The facade's pure `project_conversation_messages` selects and deduplicates restored/transcript messages; detailed history retains event panels. Live/history/transcript share frames.
 The main-input facade owns queued semantic alerts until the next read. `_output_history` owns semantic message/JSON order, group identity and navigation.

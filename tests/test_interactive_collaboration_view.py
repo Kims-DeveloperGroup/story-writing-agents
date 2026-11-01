@@ -138,11 +138,13 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(event.payload.message, tuple(message.content for _, message in prose))
 
             records: list[str] = []
+            expected_visible_events = tuple(event for event in events
+                                            if event.kind is not CollaborationEventKind.LEAD_GROUP_TRACE)
             cursor = InteractiveTerminal(input, records.append).write_collaboration_events(events)
             rendered = "".join(records)
 
             self.assertEqual(cursor, events[-1].sequence)
-            self.assertEqual(len(records), len(events))
+            self.assertEqual(len(records), len(expected_visible_events))
             for text in ("Changes awaiting application", "applies artifacts only", "Artifact state: proposed",
                 "Artifact state: reviewed", "Artifact state: applied", "Artifact state: committed",
                 "Git index: not staged", "Local commit", "local commit only", "paired remote push"):
