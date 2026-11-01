@@ -276,6 +276,12 @@ class LeadGroupCatalog:
     def group_ids(self) -> tuple[str, ...]:
         return tuple(group.group_id for group in self.groups)
 
+    def historical_snapshot(self) -> bytes:
+        """Freeze private historical definitions without expanding provider input."""
+        self.require_snapshot()
+        return _canonical({**self.as_object(), "request_basis_ref": self.request_basis_ref,
+                           "selection_basis_ref": self.selection_basis_ref})
+
     def as_object(self) -> dict[str, object]:
         self.require_snapshot()
         return {"catalog_id": self.catalog_id, "catalog_version": self.catalog_version,

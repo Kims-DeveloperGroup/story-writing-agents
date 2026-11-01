@@ -283,6 +283,49 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             view = _collaboration_view.project_lead_turn_result(unlinked, public_response_events=final_history)
             self.assertIn("Input tokens: unavailable | Output tokens: unavailable", render_component(view, _capability(CapabilityProfile.LINE, width=120)).text)
 
+        from story_writing_agents.agent_context.accounting import (
+            ProviderCallAccounting, ProviderCallState, ProviderUsageObservation, ProviderUsageScope,
+            account_provider_payload,
+        )
+        _, metrics_payload = account_provider_payload({"type": "object"}, {})
+        first_usage = ProviderUsage(25043, 149, 0)
+        second_usage = ProviderUsage(53410, 298, 0)
+        first_observation = ProviderUsageObservation(
+            first_usage, ProviderUsageScope.SESSION_CUMULATIVE, "native-token-count",
+            session_ref="footer-session", prefix_ref="footer-prefix-1", session_start=True)
+        second_observation = ProviderUsageObservation(
+            second_usage, ProviderUsageScope.SESSION_CUMULATIVE, "native-token-count",
+            session_ref="footer-session", prefix_ref="footer-prefix-2",
+            previous_prefix_ref="footer-prefix-1")
+        first_accounting = ProviderCallAccounting(
+            metrics_payload, state=ProviderCallState.SUBMITTED,
+            actual_transport_utf8_bytes=metrics_payload.payload_utf8_bytes,
+            usage=first_usage, usage_observation=first_observation)
+        second_accounting = replace(first_accounting, usage=second_usage,
+                                    usage_observation=second_observation)
+        cumulative_lead = replace(lead, payload=replace(
+            lead.payload, usage=first_usage, accounting=first_accounting))
+        cumulative_repair = replace(repair, payload=replace(
+            repair.payload, usage=second_usage, accounting=second_accounting))
+        self.assertEqual(response_usage((cumulative_lead, cumulative_repair), **scope),
+                         ResponseUsage(53410, 298))
+        self.assertEqual(response_usage((cumulative_lead, cumulative_repair, cumulative_lead), **scope),
+                         ResponseUsage(53410, 298))
+        self.assertEqual(response_usage((cumulative_lead, cumulative_repair), **scope,
+                                        call_id="repair_lead"), ResponseUsage(28367, 149))
+        self.assertEqual(response_usage((cumulative_repair,), **scope, call_id="repair_lead"),
+                         ResponseUsage())
+        unclassified = replace(second_accounting, usage_observation=replace(
+            second_observation, scope=ProviderUsageScope.UNKNOWN))
+        unknown_repair = replace(cumulative_repair, payload=replace(
+            cumulative_repair.payload, accounting=unclassified))
+        self.assertEqual(response_usage((cumulative_lead, unknown_repair), **scope), ResponseUsage())
+        wrong_prefix = replace(second_accounting, usage_observation=replace(
+            second_observation, previous_prefix_ref="not-the-native-prefix"))
+        stale_repair = replace(cumulative_repair, payload=replace(
+            cumulative_repair.payload, accounting=wrong_prefix))
+        self.assertEqual(response_usage((cumulative_lead, stale_repair), **scope), ResponseUsage())
+
 
 
 

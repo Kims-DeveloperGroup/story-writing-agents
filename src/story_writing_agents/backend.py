@@ -217,6 +217,27 @@ _SAFE_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
 _SAFE_CONTEXT_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
 
+async def _timed_provider_invoke(
+    adapter: ProviderAdapter, binding: ProviderBinding, invocation: ProviderInvocation,
+) -> ProviderResult:
+    """Observe actual adapter latency without changing its result or failure."""
+
+    started = time.monotonic_ns()
+    try:
+        result = await adapter.invoke(binding, invocation)
+    except BaseException as failure:
+        facts = provider_failure_accounting(failure)
+        if facts.state is ProviderCallState.SUBMITTED:
+            record_provider_failure_accounting(
+                failure, state=facts.state,
+                actual_transport_utf8_bytes=facts.actual_transport_utf8_bytes,
+                usage=facts.usage, usage_observation=facts.usage_observation,
+                elapsed_ns=time.monotonic_ns() - started,
+            )
+        raise
+    return replace(result, elapsed_ns=time.monotonic_ns() - started) if type(result) is ProviderResult else result
+
+
 @dataclass(frozen=True, slots=True)
 class _DeferredDirectCodexAcceptance:
     """Delay one successful direct-call terminal until workspace exit is safe."""
@@ -4356,6 +4377,8 @@ class AgentBackend:
                     failure_accounting.actual_transport_utf8_bytes
                 ),
                 usage=failure_accounting.usage,
+                usage_observation=failure_accounting.usage_observation,
+                elapsed_ns=failure_accounting.elapsed_ns,
             )
         )
 
@@ -4927,7 +4950,7 @@ class AgentBackend:
         )
         try:
             async with provider_activity(bound_agent.vendor) as auth_generation:
-                result = await adapter.invoke(
+                result = await _timed_provider_invoke(adapter,
                     bound_agent._provider_binding,
                     invocation,
                 )
@@ -4996,6 +5019,8 @@ class AgentBackend:
                             result.actual_transport_utf8_bytes
                         ),
                         usage=result.usage,
+                        usage_observation=result.usage_observation,
+                        elapsed_ns=result.elapsed_ns,
                     )
                 )
             )
@@ -5177,6 +5202,8 @@ class AgentBackend:
                 failure_accounting.actual_transport_utf8_bytes
             ),
             usage=failure_accounting.usage,
+            usage_observation=failure_accounting.usage_observation,
+            elapsed_ns=failure_accounting.elapsed_ns,
         )
 
     @staticmethod
@@ -5417,7 +5444,7 @@ class AgentBackend:
                             else "identity"
                         ),
                     )
-                result = await adapter.invoke(bound_agent._provider_binding, invocation)
+                result = await _timed_provider_invoke(adapter, bound_agent._provider_binding, invocation)
                 self._require_postsubmission_workspace(invocation)
             self._capture_provider_return_without_replacing(exchange, result)
         except ProviderInvocationError as failure:
@@ -5549,6 +5576,8 @@ class AgentBackend:
                 else None
             ),
             usage=result.usage if type(result) is ProviderResult else None,
+            usage_observation=result.usage_observation if type(result) is ProviderResult else None,
+            elapsed_ns=result.elapsed_ns if type(result) is ProviderResult else None,
         )
         self._observe_context_accounting(accounting)
         if type(result) is not ProviderResult or type(result.response_text) is not str:

@@ -380,7 +380,25 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
                 controls += ((0, LeadGroupPhase.SELECT, context._group_control("answer.workflow")),)
             grouped_provider = AuthContextProvider((*pending, context._group_answer), control_plan=controls)
             if succeeds:
-                grouped, keys = await drive_recovery(self.invoke(grouped_provider, grouped_request))
+                auth_observations = []
+                grouped, keys = await drive_recovery(self.invoke(grouped_provider, grouped_request, group_observation_sink=auth_observations.append))
+
+                from story_writing_agents.agent_context.group_observation import LeadGroupTrace
+                from story_writing_agents.agent_context.group_reporting import group_trace_report
+                auth_trace = LeadGroupTrace("auth-replay-observation", tuple(auth_observations), "accepted")
+                auth_report = group_trace_report(auth_trace,
+                    tuple((item.call_id, item.accounting) for item in grouped.provider_calls))
+                self.assertEqual(auth_report["submitted_calls"], len(grouped_provider.calls))
+                self.assertEqual({item["call_id"] for item in auth_report["physical_calls"]},
+                                 {item.call_id for item in grouped_provider.calls})
+                self.assertEqual(auth_report["observed_replay_calls"], 1)
+                self.assertEqual(auth_report["prepared_only_replays"], 0)
+                self.assertEqual(auth_report["rates"]["replay_calls_per_submitted_call"],
+                                 {"numerator": 1, "denominator": len(grouped_provider.calls),
+                                  "fraction": 1 / len(grouped_provider.calls)})
+                self.assertTrue(auth_report["result_accepted"])
+                self.assertIsNone(auth_report["task_completion"])
+                self.assertIsNone(auth_report["objective_completion"])
                 self.assertEqual(len(keys), 1)
                 self.assertIs(grouped.group_state.workflow.phase, LeadGroupPhase.DONE)
                 self.assertEqual(len(grouped.group_state.workflow.history), 1)
@@ -398,7 +416,12 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
                 self.assertEqual(len({call.call_id for call in grouped.provider_calls}), 3)
             else:
                 with self.assertRaises(ProviderAuthenticationRequiredError) as caught:
-                    await drive_recovery(self.invoke(grouped_provider, grouped_request))
+                    stopped_observations = []
+                    await drive_recovery(self.invoke(grouped_provider, grouped_request, group_observation_sink=stopped_observations.append))
+
+                self.assertTrue(stopped_observations)
+                self.assertEqual(stopped_observations[-1].kind.value, "terminal")
+                self.assertNotEqual(stopped_observations[-1].terminal_code, "accepted")
                 facts = context_provider_failure_facts(caught.exception)
                 self.assertIs(facts.group_state.workflow.phase, LeadGroupPhase.STOP)
                 self.assertEqual(facts.group_state.workflow.stop_reason, "authentication_replay_budget_exhausted")
@@ -431,8 +454,26 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
                 control_plan=(*selection_plan("answer.workflow", before_script_response=1)[:-1],
                     (1, LeadGroupPhase.SELECT, select_after_empty_search)))
             if succeeds:
+                auth_observations = []
                 grouped, keys = await drive_recovery(self.invoke(
-                    grouped_provider, grouped_request, service=no_context_service))
+                    grouped_provider, grouped_request, service=no_context_service, group_observation_sink=auth_observations.append))
+
+                from story_writing_agents.agent_context.group_observation import LeadGroupTrace
+                from story_writing_agents.agent_context.group_reporting import group_trace_report
+                auth_trace = LeadGroupTrace("auth-replay-observation", tuple(auth_observations), "accepted")
+                auth_report = group_trace_report(auth_trace,
+                    tuple((item.call_id, item.accounting) for item in grouped.provider_calls))
+                self.assertEqual(auth_report["submitted_calls"], len(grouped_provider.calls))
+                self.assertEqual({item["call_id"] for item in auth_report["physical_calls"]},
+                                 {item.call_id for item in grouped_provider.calls})
+                self.assertEqual(auth_report["observed_replay_calls"], 1)
+                self.assertEqual(auth_report["prepared_only_replays"], 0)
+                self.assertEqual(auth_report["rates"]["replay_calls_per_submitted_call"],
+                                 {"numerator": 1, "denominator": len(grouped_provider.calls),
+                                  "fraction": 1 / len(grouped_provider.calls)})
+                self.assertTrue(auth_report["result_accepted"])
+                self.assertIsNone(auth_report["task_completion"])
+                self.assertIsNone(auth_report["objective_completion"])
                 self.assertEqual(len(keys), 1)
                 self.assertIs(grouped.group_state.workflow.phase, LeadGroupPhase.DONE)
                 self.assertEqual(len(grouped.group_state.workflow.history), 1)
@@ -451,7 +492,12 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
                                  (LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE))
             else:
                 with self.assertRaises(ProviderAuthenticationRequiredError) as caught:
-                    await drive_recovery(self.invoke(grouped_provider, grouped_request, service=no_context_service))
+                    stopped_observations = []
+                    await drive_recovery(self.invoke(grouped_provider, grouped_request, service=no_context_service, group_observation_sink=stopped_observations.append))
+
+                self.assertTrue(stopped_observations)
+                self.assertEqual(stopped_observations[-1].kind.value, "terminal")
+                self.assertNotEqual(stopped_observations[-1].terminal_code, "accepted")
                 facts = context_provider_failure_facts(caught.exception)
                 self.assertIs(facts.group_state.workflow.phase, LeadGroupPhase.STOP)
                 self.assertEqual(facts.group_state.workflow.stop_reason, "authentication_replay_budget_exhausted")
@@ -556,7 +602,12 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
             self.workspace.path("core_documents/global_outline.md").write_text("Changed typed group source.")
             return True
         with self.assertRaises(ProviderAuthenticationRequiredError):
-            await drive_recovery(self.invoke(grouped_provider, grouped_request), change_group_source)
+            drift_observations = []
+            await drive_recovery(self.invoke(grouped_provider, grouped_request, group_observation_sink=drift_observations.append), change_group_source)
+
+        self.assertTrue(drift_observations)
+        self.assertNotEqual(drift_observations[-1].terminal_code, "accepted")
+        self.assertFalse(any(item.kind.value == "control_accepted" for item in drift_observations))
         self.assertEqual(len(grouped_provider.calls), 1)
         self.assertEqual(len(grouped_provider.responses), 2)
 

@@ -1013,7 +1013,7 @@ class OwnedNativeHistory:
         self.records = []
         self.witnesses = []
 
-    def complete(self, invocation):
+    def complete(self, invocation, *, token_usage=None):
         from story_writing_agents.codex_adapter import inspect_codex_context_witness
         if self.records:
             self.case.assertEqual(invocation.thread_id, self.thread_id)
@@ -1033,6 +1033,9 @@ class OwnedNativeHistory:
             {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [
                 {"type": "input_text", "text": invocation.payload_json.decode("utf-8")}]}},
             {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": turn}}])
+        if token_usage is not None:
+            self.records.insert(len(self.records) - 1, {
+                "type": "event_msg", "payload": {"type": "token_count", "info": token_usage}})
         self.path.write_bytes(b"".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode() + b"\n" for row in self.records))
         self.path.chmod(0o600)
         witness = inspect_codex_context_witness(self.root, invocation, self.thread_id,

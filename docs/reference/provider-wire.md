@@ -801,6 +801,19 @@ Accounting includes the final bound guide, per-call guidance, annotated schema,
 payload, and native rendering. Larger descriptive fields do not raise runtime
 resource limits.
 
+### 두 국면의 Host 회계와 사용량 범위
+
+교환 capture와 내부 회계는 원시 usage, `usage_observation`의 범위·출처·단위·검증된
+세션/prefix 참조, 실제 adapter 호출의 `elapsed_ns`를 보존한다. `call`,
+`session_cumulative`, `unknown`을 구분하며, 같은 native 이력의 전임 prefix와
+단조 증가가 확인될 때만 누적값의 차이를 호출별 토큰으로 사용한다. 미관측 값은
+`None`이다. 모델 이름이나 CLI 버전 이름만으로 누적 범위를 정하지 않는다.
+
+보고서는 PREPARED와 SUBMITTED, 실제 full/delta 전달과 준비 계획, 원시 usage와
+검증된 호출별 값, 결과 수용과 작업 완료를 구분한다. 최종 native schema의 바이트·
+대안·anyOf 위치·정의 수는 기술 지표이며 Provider 수용이나 비용 개선을 뜻하지 않는다.
+자세한 예시는 [관측과 비교의 판정 기준](../design/lead-two-phase-schema-selection.md#관측과-비교의-판정-기준)에 있다.
+
 ### Codex schema regex compatibility
 
 Built-in field patterns use equivalent Codex-compatible declarations while

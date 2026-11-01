@@ -1616,6 +1616,85 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assertIsNone(ordinary.schema_group_phase)
         self.assertRaises(ValueError, replace, grouped_factory, rule_seed=revision_seed)
 
+        from story_writing_agents.agent_context.accounting import (
+            ContextComponentBytes, ContextComponentKind, canonical_provider_json, provider_schema_statistics,
+        )
+        from story_writing_agents.agent_context.group_reporting import (
+            LeadGroupRequestMeasurement, group_request_size_report,
+        )
+        from story_writing_agents.provider_adapter import ProviderInvocation
+        comparison_basis = canonical_provider_json({
+            "operation_id": basis.operation_id, "scope_ref": basis.scope_ref,
+            "catalog_id": selector.group_stage.catalog.catalog_id,
+            "profile": "same-explicit-workflow-fixture",
+        })
+        catalogue = selector.group_stage.catalog
+        full = replace(grouped_factory, schema_group_protocol=False).for_offer(offers)
+        prepared = []
+        exported = []
+        variants = [("full", full, None), ("select", selector, None)]
+        for group_id in catalogue.group_ids:
+            selected_control = selector.decode_value(control_frame(selector, group_id))
+            selected_record = selector.record_group_control(selected_control)
+            selected_workflow = selector.group_workflow.accept(selected_record, remaining_calls=1)
+            member = grouped_factory.for_offer(
+                generation_offers, request_basis=basis, group_workflow=selected_workflow,
+                prepared_compilation=selector.prepared_compilation)
+            variants.append(("generate", member, group_id))
+        for variant, current_bound, group_id in variants:
+            schema = current_bound.schema_value()
+            self.assertEqual(check_schema(schema), ())
+            if variant == "full":
+                payload = {}
+            else:
+                current_selection = SchemaSelectionInput(
+                    variant, current_bound.offers.call_id, current_bound.outer_inner_schema_ids,
+                    2, "comparison-context", catalog=canonical_provider_json(catalogue.as_object()),
+                    active_selection=None if group_id is None else (catalogue.catalog_id, group_id))
+                payload = {"response_contract": {"schema_selection": current_selection.as_object()}}
+                payload = add_contract_guidance(payload, schema)
+            invocation = ProviderInvocation(
+                "comparison-session", schema, payload,
+                thread_id=None, binding_components=(ContextComponentBytes(ContextComponentKind.ROLE_SYSTEM_PROMPT, 17),))
+            prepared.append(LeadGroupRequestMeasurement(variant, comparison_basis, invocation, group_id))
+            exported.append((variant, group_id, invocation))
+        comparison = group_request_size_report(tuple(prepared), group_ids=catalogue.group_ids)
+        self.assertEqual(comparison["conditions"], json.loads(comparison_basis))
+        self.assertEqual(len(comparison["measurements"]), len(catalogue.group_ids) + 2)
+        self.assertEqual({row["group_id"] for row in comparison["measurements"] if row["variant"] == "generate"},
+                         set(catalogue.group_ids))
+        for row, (variant, group_id, invocation) in zip(comparison["measurements"], exported, strict=True):
+            native_schema = canonical_provider_json(invocation.schema)
+            native_payload = invocation.payload_json
+            self.assertEqual((row["variant"], row["group_id"]), (variant, group_id))
+            self.assertEqual(row["schema_utf8_bytes"], len(native_schema))
+            self.assertEqual(row["payload_utf8_bytes"], len(native_payload))
+            self.assertEqual(row["binding_utf8_bytes"], 17)
+            self.assertEqual(row["prepared_model_input_utf8_bytes"],
+                             len(native_schema) + len(native_payload) + 17)
+            self.assertFalse(row["submitted"])
+            self.assertIn("prepared", row["measurement_stage"])
+        generated_sizes = [row for row in comparison["measurements"] if row["variant"] == "generate"]
+        self.assertEqual(comparison["largest_generate_schema"]["schema_utf8_bytes"],
+                         max(row["schema_utf8_bytes"] for row in generated_sizes))
+        self.assertEqual(comparison["largest_generate_request"]["prepared_model_input_utf8_bytes"],
+                         max(row["prepared_model_input_utf8_bytes"] for row in generated_sizes))
+        with self.assertRaises(ValueError):
+            group_request_size_report(tuple(prepared[:-1]), group_ids=catalogue.group_ids)
+        with self.assertRaises(ValueError):
+            group_request_size_report(tuple(prepared) + (prepared[-1],), group_ids=catalogue.group_ids)
+        foreign = replace(prepared[0], comparison_basis=canonical_provider_json({"profile": "different"}))
+        with self.assertRaises(ValueError):
+            group_request_size_report((foreign,) + tuple(prepared[1:]), group_ids=catalogue.group_ids)
+        census = provider_schema_statistics({
+            "type": "object", "properties": {"agent_action": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+            "$defs": {"One": {"type": "string", "enum": ["한", "🙂"]}},
+        })
+        self.assertEqual(census.outer_alternatives, 2)
+        self.assertEqual(census.any_of_paths, ("$/properties/agent_action/anyOf",))
+        self.assertEqual((census.definition_count, census.enum_value_count), (1, 2))
+        self.assertEqual(denied, [answer.answer_json])
+
     def test_valid_search_read_and_natural_result_shapes_decode_exactly(self) -> None:
         search = self.decode(_search_wire( self.token, [ ("Needle", ["writing_artifact", "conversation",
             "active_debate", "own_agent_state", ], ) ], ), allowed=("search", "answer"), )

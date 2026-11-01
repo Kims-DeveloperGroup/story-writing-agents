@@ -1021,6 +1021,22 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     execution_workspace=execution):
                     for physical_request in case.backend.calls:
                         response = await provider.invoke_context(physical_request)
+
+                        from story_writing_agents.agent_context.accounting import (
+                            provider_schema_statistics, provider_call_accounting_to_object, provider_call_accounting_from_object,
+                        )
+                        actual_statistics = provider_schema_statistics(json.loads(frames[-1]))
+                        self.assertEqual(response.accounting.schema_statistics, actual_statistics)
+                        self.assertEqual(response.accounting.payload.schema_utf8_bytes, len(frames[-1]))
+                        self.assertEqual(response.accounting.payload.payload_utf8_bytes,
+                                         len(canonical_provider_json(physical_request.payload)))
+                        self.assertIs(type(response.accounting.elapsed_ns), int)
+                        self.assertGreaterEqual(response.accounting.elapsed_ns, 0)
+                        self.assertIsNone(response.accounting.usage_observation)
+                        retained_accounting = provider_call_accounting_from_object(
+                            provider_call_accounting_to_object(response.accounting))
+                        self.assertEqual(retained_accounting.schema_statistics, actual_statistics)
+                        self.assertEqual(retained_accounting.elapsed_ns, response.accounting.elapsed_ns)
         self.assertEqual(frames, [canonical_provider_json(
             AntigravityAdapter.native_output_schema(call.schema) if vendor == 'antigravity' else call.schema)
             for call in case.backend.calls])

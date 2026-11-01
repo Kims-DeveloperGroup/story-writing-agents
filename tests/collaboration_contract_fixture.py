@@ -144,6 +144,7 @@ COLLABORATION_EVENT_EXPORTS = (
     'CollaborationInvocationKind',
     'CollaborationLeadSynthesisPayload',
     'CollaborationLeadEvidence',
+    'CollaborationLeadGroupTracePayload',
     'CollaborationLeadJudgmentPayload',
     'CollaborationLeadOutcomeFailureCode',
     'CollaborationLeadOutcomeFailurePayload',

@@ -4750,6 +4750,23 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     mock.patch.object(AgentContextService, "invoke", capture_grouped):
                 repaired_group = await self.runtime.lead_turn(self.session_id, conversation, "Explain group workflow.")
             calls = self.backend.calls[start:]
+
+            reports = self.runtime.lead_group_reports(self.session_id, conversation)
+            self.assertEqual(len(reports), 1)
+            report = reports[0]
+            self.assertEqual(report["submitted_calls"], 3)
+            self.assertEqual(report["observed_repair_calls"], 1)
+            self.assertEqual(report["prepared_only_repairs"], 0)
+            self.assertEqual(report["rejected_responses"], 1)
+            self.assertTrue(report["result_accepted"])
+            self.assertEqual(report["terminal_result"]["outcome_kind"], "answer")
+            self.assertEqual(report["rates"]["repair_calls_per_submitted_call"],
+                             {"numerator": 1, "denominator": 3, "fraction": 1 / 3})
+            self.assertEqual(report["rates"]["invocations_with_submitted_repair"],
+                             {"numerator": 1, "denominator": 1, "fraction": 1.0})
+            self.assertIsNone(report["task_completion"])
+            self.assertIsNone(report["objective_completion"])
+            self.assertIsNone(report["rates"]["max_output_tokens_failures"])
             self.assertIs(repaired_group.kind, LeadOutcomeKind.ANSWER)
             self.assertEqual(len(calls), 3)
             phases = (LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE) if label == "select" else (
@@ -4793,6 +4810,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory):
             refreshed = await self.runtime.lead_turn(self.session_id, reading, "Explain group repair context.")
         calls = self.backend.calls[start:]
+
+        read_reports = self.runtime.lead_group_reports(self.session_id, reading)
+        self.assertEqual(len(read_reports), 1)
+        self.assertEqual(read_reports[0]["submitted_calls"], 5)
+        self.assertEqual(read_reports[0]["rejected_responses"], 1)
+        self.assertTrue(read_reports[0]["result_accepted"])
+        self.assertEqual((read_reports[0]["full_deliveries"], read_reports[0]["delta_deliveries"]), (5, 0))
+        self.assertEqual(read_reports[0]["rates"]["full_redeliveries_per_followup_submitted_call"],
+                         {"numerator": 4, "denominator": 4, "fraction": 1.0})
         failed, selection, snapshot, old_plan = retained[0]
         self.assertIs(refreshed.kind, LeadOutcomeKind.ANSWER)
         self.assertEqual(len(calls), 5)
@@ -6484,6 +6510,21 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     mock.patch.object(AgentContextService, "invoke", retain_failure), \
                     mock.patch.object(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", limit):
                 exhausted = await self.runtime.lead_turn(self.session_id, conversation, "Explain bounded group workflow.")
+
+            reports = self.runtime.lead_group_reports(self.session_id, conversation)
+            self.assertEqual(len(reports), 1)
+            report = reports[0]
+            self.assertEqual(report["submitted_calls"], expected_calls, label)
+            self.assertEqual(report["observed_repair_calls"], 0, label)
+            self.assertFalse(report["result_accepted"], label)
+            self.assertNotEqual(report["terminal_code"], "accepted", label)
+            self.assertIsNone(report["task_completion"])
+            self.assertIsNone(report["objective_completion"])
+            terminal_event = next(event for event in self.history(conversation)
+                                  if event.event_id == report["terminal_result"]["source_event_id"])
+            self.assertEqual(report["terminal_result"]["failure_code"], terminal_event.payload.code.value)
+            self.assertEqual(report["rates"]["accepted_results_per_logical_invocation"],
+                             {"numerator": 0, "denominator": 1, "fraction": 0.0})
             self.assertTrue(invoked_limits, label)
             self.assertEqual(invoked_limits[0], limit, label)
             self.assertIs(exhausted.next_action, CollaborationNextAction.RETRY_LEAD_TURN, (label, tuple(invoked_limits)))
