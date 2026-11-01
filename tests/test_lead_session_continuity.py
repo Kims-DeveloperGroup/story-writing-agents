@@ -258,10 +258,69 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(missing[0]["records"], [])
 
         self.runtime.conversation_storage_services.catalog.archive(self.session_id, first)
+        reports_before_restart = self.runtime.lead_group_reports(self.session_id, second)
         self.backend.context_threads.clear()
         restarted = StoryRuntime(self.workspace, self.backend)
-        await self.say(second, "Recall all retained planning.", runtime=restarted)
+        from story_writing_agents.conversations import CollaborationAppendStatus
+        terminal_store = restarted.conversation_storage_services.event_store
+        append_batch = type(terminal_store).append_batch
+        terminal_batches = []
+        def observe_terminal_batch(actual_store, batch):
+            receipt = append_batch(actual_store, batch)
+            if actual_store is terminal_store and any(
+                    event.kind is CollaborationEventKind.LEAD_GROUP_TRACE for event in batch.events):
+                terminal_batches.append((batch, receipt))
+            return receipt
+        with mock.patch.object(type(terminal_store), "append_batch", new=observe_terminal_batch):
+            await self.say(second, "Recall all retained planning.", runtime=restarted)
+
+        reports_after_restart = restarted.lead_group_reports(self.session_id, second)
+        self.assertTrue(reports_before_restart)
+        self.assertEqual(reports_after_restart[:-1], reports_before_restart)
+        self.assertEqual(len(reports_after_restart), len(reports_before_restart) + 1)
+        self.assertEqual(restarted.lead_group_reports(self.session_id, empty), ())
+        report_history = self.history(second)
+        self.assertEqual(len(terminal_batches), 1)
+        original_batch, initial_receipt = terminal_batches[0]
+        self.assertIs(initial_receipt.status, CollaborationAppendStatus.APPENDED)
+        self.assertEqual(terminal_store.read(self.session_id, second), report_history)
+        retried_receipt = terminal_store.append_batch(original_batch)
+        self.assertIs(retried_receipt.status, CollaborationAppendStatus.ALREADY_COMMITTED)
+        self.assertEqual(replace(retried_receipt, status=CollaborationAppendStatus.APPENDED), initial_receipt)
+        self.assertEqual(terminal_store.read(self.session_id, second), report_history)
+        physical_count = len(self.backend.calls)
+        latest = reports_after_restart[-1]
+        self.assertTrue(latest["result_accepted"])
+        self.assertEqual(latest["submitted_calls"], 2)
+        self.assertEqual(latest["terminal_result"]["outcome_kind"], "answer")
+        self.assertEqual(latest["terminal_result"]["source_kind"], "message")
+        terminal_event = next(event for event in report_history
+                              if event.event_id == latest["terminal_result"]["source_event_id"])
+        self.assertIs(terminal_event.kind, CollaborationEventKind.MESSAGE)
+        self.assertIs(type(terminal_event.payload), CollaborationLeadJudgmentPayload)
+        self.assertIs(terminal_event.payload.kind, LeadOutcomeKind.ANSWER)
+        self.assertEqual(terminal_event.payload.provider_invocation_id, latest["invocation_id"])
+        self.assertIn(latest["terminal_result"]["source_event_id"],
+                      {event.event_id for event in report_history})
+        self.assertIsNone(latest["task_completion"])
+        self.assertIsNone(latest["objective_completion"])
+        self.assertIsNone(latest["end_to_end_elapsed_ns"])
+        self.assertIsNone(latest["cost"])
+        self.assertIs(type(latest["logical_elapsed_ns"]), int)
+        self.assertGreaterEqual(latest["logical_elapsed_ns"], 0)
+        self.assertEqual(latest["logical_latency_stage"], "first_bound_to_terminal_prepublication")
+        original_definition = latest["trace"]["observations"][0]["catalog"]["groups"][0]["definition"]
+        latest["trace"]["observations"][0]["catalog"]["groups"][0]["definition"] = "MUTATED_REPORT_CARD"
+        untouched = restarted.lead_group_reports(self.session_id, second)[-1]
+        self.assertEqual(untouched["trace"]["observations"][0]["catalog"]["groups"][0]["definition"],
+                         original_definition)
+        self.assertEqual(self.history(second), report_history)
+        self.assertEqual(len(self.backend.calls), physical_count)
         fresh = self.backend.calls[-2]
+        for call in self.backend.calls[-2:]:
+            private_wire = canonical_provider_json(call.payload).decode("utf-8")
+            self.assertNotIn('"lead_group_trace"', private_wire)
+            self.assertNotIn('"catalog_at_selection"', private_wire)
         self.assertIsNone(fresh.expected_thread_id)
         self.assertEqual(fresh.payload["session_history"]["context_delivery_mode"], "bootstrap")
         replay = _fields(fresh.payload["session_history"])

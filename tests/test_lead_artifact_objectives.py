@@ -80,12 +80,15 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(source.content_digest, objectives.digest(text))
         self.assertEqual(case.projection(conversation_id).physical_calls_spent, 6)
         before_calls, before_files = len(case.backend.calls), case.snapshots()
+        reports_before_refusal = case.runtime.lead_group_reports(case.session_id, conversation_id)
         case.backend.enqueue(control_plan=())
         refused = await case.runtime.lead_turn(case.session_id, conversation_id,
             "Approve the previous draft and prepare it as a new document." + f" Target: {path}. {brief}"
             + "\nSupplied selected draft:\n" + text
             + "\nYou may give bounded artifact review judgments and prepare a separate exact proposal; preserve supplied facts. Execution requires separate confirmation.")
         self.assertEqual(len(case.backend.calls), before_calls)
+        self.assertEqual(case.runtime.lead_group_reports(case.session_id, conversation_id),
+                         reports_before_refusal)
         self.assertEqual((refused.kind, refused.next_action),
                          (c.LeadOutcomeKind.RECOMMENDATION, c.CollaborationNextAction.RETRY_LEAD_TURN))
         self.assertIsNone(refused.recommendation_request)

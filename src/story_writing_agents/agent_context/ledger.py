@@ -37,6 +37,8 @@ from .accounting import (
     ProviderCallState,
     ProviderPayloadAccounting,
     ProviderUsage,
+    provider_call_accounting_from_object,
+    provider_call_accounting_to_object,
 )
 from .manifest import (
     ContextAuthorityKind,
@@ -1100,43 +1102,11 @@ def _decode_usage(value: object) -> ProviderUsage:
 
 
 def _call_accounting_value(value: ProviderCallAccounting) -> dict[str, object]:
-    return {
-        "actual_transport_utf8_bytes": value.actual_transport_utf8_bytes,
-        "binding_components": [
-            _component_value(component) for component in value.binding_components
-        ],
-        "payload": _payload_accounting_value(value.payload),
-        "state": value.state.value,
-        "usage": None if value.usage is None else _usage_value(value.usage),
-    }
+    return provider_call_accounting_to_object(value)
 
 
 def _decode_call_accounting(value: object) -> ProviderCallAccounting:
-    item = _decoded_dict(
-        value,
-        frozenset(
-            {
-                "payload",
-                "binding_components",
-                "state",
-                "actual_transport_utf8_bytes",
-                "usage",
-            }
-        ),
-    )
-    usage = None if item["usage"] is None else _decode_usage(item["usage"])
-    return ProviderCallAccounting(
-        payload=_decode_payload_accounting(item["payload"]),
-        binding_components=tuple(
-            _decode_component(component)
-            for component in _decoded_list(item["binding_components"])
-        ),
-        state=_decoded_enum(ProviderCallState, item["state"]),
-        actual_transport_utf8_bytes=_decoded_optional_integer(
-            item["actual_transport_utf8_bytes"]
-        ),
-        usage=usage,
-    )
+    return provider_call_accounting_from_object(value)
 
 
 def _decision_accounting_value(

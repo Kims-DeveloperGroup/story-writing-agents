@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import time
+
+from .agent_context.group_observation import LeadGroupObservation, LeadGroupObservationKind, LeadGroupTrace
+from .agent_context.group_reporting import group_trace_report
+from .conversations.events import CollaborationLeadGroupTracePayload
+from .conversations.context import project_lead_group_traces
+
 from .core_document_readiness import (
     AuthoringTarget, CoreDocumentAssessment, CoreDocumentReadinessBasis, CoreDocumentReadinessNeeded,
     ReadinessSource, assessment_schema as core_assessment_schema,
@@ -1673,6 +1680,10 @@ class _ArtifactApplicationCapability:
             self._secret[index] = 0
 
 
+def _with_group_trace(provider, drafts, terminal_code):
+    return tuple(drafts) if provider is None else provider.with_group_trace(drafts, terminal_code)
+
+
 class _AccountingContextProvider:
     """Persist content-free call lifecycle facts around one backend context seam."""
 
@@ -1723,6 +1734,8 @@ class _AccountingContextProvider:
         self._public_observations: dict[str, tuple[str, int, CollaborationProviderCallKind]] = {}
         self._public_accepted_call_id: str | None = None
         self._public_responses_published = False
+        self._group_observations: list[LeadGroupObservation] = []
+        self._group_started_ns: int | None = None
         self._task_front_budget: int | None = None
 
 
@@ -1860,6 +1873,63 @@ class _AccountingContextProvider:
         if call_id in self._submitted_call_ids and details:
             labelled = self._label_validation_details(call_id, details)
             self._validation_details[call_id] = labelled
+
+    def record_group_observation(self, observation: LeadGroupObservation) -> None:
+        """Keep observations invocation-local until existing terminal publication."""
+        if type(observation) is not LeadGroupObservation:
+            raise TypeError("group observer requires a typed observation")
+        if self._group_started_ns is None and observation.kind is LeadGroupObservationKind.BOUND:
+            self._group_started_ns = time.monotonic_ns()
+        self._group_observations.append(observation)
+
+    def group_trace_drafts(self, terminal_code: str, terminal_drafts=()) -> tuple[CollaborationEventDraft, ...]:
+        if not self._group_observations:
+            return ()
+        events = self._runtime.conversation_storage_services.event_store.read(self._session_id, self._conversation_id)
+        if any(type(event.payload) is CollaborationLeadGroupTracePayload
+               and event.payload.trace.invocation_id == self._invocation_id for event in events):
+            return ()
+        terminal = next((item for item in terminal_drafts
+            if type(item.payload) in {CollaborationLeadJudgmentPayload, CollaborationLeadOutcomeFailurePayload}), None)
+        if (terminal is not None and type(terminal.payload) is CollaborationLeadOutcomeFailurePayload
+                and terminal.payload.code is CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED
+                and all(item.kind is LeadGroupObservationKind.TERMINAL for item in self._group_observations)):
+            return ()
+        terminal_snapshot = None
+        if terminal is not None:
+            payload = terminal.payload
+            scope = getattr(payload, "authoring_scope", None)
+            terminal_snapshot = json.dumps({
+                "source_event_id": terminal.event_id, "source_kind": terminal.kind.value,
+                "outcome_kind": payload.kind.value if type(payload) is CollaborationLeadJudgmentPayload else None,
+                "failure_code": payload.code.value if type(payload) is CollaborationLeadOutcomeFailurePayload else None,
+                "task_ref": None if scope is None else {"task_id": scope.task_id, "revision": scope.task_revision},
+                "task_completion": None, "objective_completion": None,
+            }, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        return (self._runtime._draft(
+            session_id=self._session_id, conversation_id=self._conversation_id,
+            turn_id=self._turn_id, step_id=self._step_id,
+            kind=CollaborationEventKind.LEAD_GROUP_TRACE,
+            sender=_RUNTIME_ACTOR, recipient=_LEAD_ACTOR,
+            payload=CollaborationLeadGroupTracePayload(LeadGroupTrace(
+                self._invocation_id, tuple(self._group_observations), terminal_code,
+                elapsed_ns=None if self._group_started_ns is None else time.monotonic_ns() - self._group_started_ns,
+                terminal_snapshot=terminal_snapshot)),
+        ),)
+
+    def with_group_trace(self, drafts, terminal_code: str):
+        traces = self.group_trace_drafts(terminal_code, terminal_drafts=drafts)
+        if not traces:
+            return tuple(drafts)
+        source_ids = {draft.payload.source_recommendation_event_id for draft in drafts
+                      if type(draft.payload) is LeadRecommendationRequestPayload}
+        tail_index = next((index for index, draft in enumerate(drafts)
+            if type(draft.payload) in {CollaborationStepStatePayload, LeadRecommendationRequestPayload}
+            or (type(draft.payload) is CollaborationLeadJudgmentPayload and draft.event_id in source_ids)), len(drafts))
+        drafts = tuple(replace(draft, payload=replace(
+            draft.payload, tail_sequence=draft.payload.tail_sequence + len(traces),
+        )) if type(draft.payload) is LeadRecommendationRequestPayload else draft for draft in drafts)
+        return (*drafts[:tail_index], *traces, *drafts[tail_index:])
 
     def publish_public_responses(self) -> None:
         if self._public_responses_published or self._public_response_contract_id is None:
@@ -2139,6 +2209,7 @@ class _AccountingContextProvider:
             invocation_kind=self._invocation_kind,
             validation_details=details,
             usage=accounting.usage,
+            accounting=accounting,
         )
 
     @property
@@ -5775,6 +5846,23 @@ class StoryRuntime:
         return await self._decide_lead_task_impl(
             decision, action_progress_sink=action_progress_sink,
         )
+
+    def lead_group_reports(self, session_id: str, conversation_id: str) -> tuple[dict[str, object], ...]:
+        """Explicit read-only private group trace and physical-cost inspection."""
+        self.workspace.validate_identifier(session_id)
+        self.workspace.validate_identifier(conversation_id)
+        events = self.conversation_storage_services.event_store.read(session_id, conversation_id)
+        traces = project_lead_group_traces(events)
+        return tuple(group_trace_report(trace, tuple(
+            (event.payload.call_id, event.payload.accounting) for event in events
+            if type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.invocation_id == trace.invocation_id
+            and event.payload.accounting is not None
+        ), unmeasured_prepared_call_ids=tuple(event.payload.call_id for event in events
+            if type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.invocation_id == trace.invocation_id
+            and event.payload.state is CollaborationProviderCallState.PREPARED
+            and event.payload.accounting is None)) for trace in traces)
 
     async def lead_turn(
         self,
@@ -12628,6 +12716,7 @@ class StoryRuntime:
 
 
                         validation_sink=provider.record_validation_details,
+                            group_observation_sink=provider.record_group_observation,
                         event_sink=context_event_sink,
                         progress_sink=action_progress_sink,
                         **self._lead_continuation_arguments(
@@ -12765,6 +12854,7 @@ class StoryRuntime:
                             active_debate=authorities[2],
                             own_agent_state=authorities[3],
                             validation_sink=provider.record_validation_details,
+                            group_observation_sink=provider.record_group_observation,
                             event_sink=context_event_sink,
                             progress_sink=action_progress_sink,
                             **self._lead_continuation_arguments(session_id, conversation_id, turn_id, step_id, session_history=session_history),
@@ -13000,6 +13090,7 @@ class StoryRuntime:
                 recovered = self._close_failed_lead_attempt(
                     session_id, conversation_id, failure=failure,
                     turn_id=turn_id, step_id=step_id,
+                    accounting_provider=provider,
                 )
                 if not isinstance(failure, Exception):
                     raise
@@ -13062,12 +13153,12 @@ class StoryRuntime:
                 provider._public_accepted_call_id = provider.last_submitted_call_id
                 provider.publish_public_responses()
                 projection = services.event_store.read_context(session_id, conversation_id)
-                self._append_drafts(projection.last_sequence, (self._draft(
+                self._append_drafts(projection.last_sequence, provider.with_group_trace((self._draft(
                     session_id=session_id, conversation_id=conversation_id,
                     turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.LEAD_DISCUSSION,
                     sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
                     payload=CollaborationLeadDiscussionPayload(decoded_discussion, provider_invocation_id=provider.invocation_id),
-                ),))
+                ),), "accepted"))
                 projection = self.conversation_storage_services.event_store.read_context(session_id, conversation_id)
                 provider._public_accepted_call_id = provider.last_submitted_call_id
                 return self._discussion_turn(
@@ -13083,12 +13174,12 @@ class StoryRuntime:
                 provider._public_accepted_call_id = provider.last_submitted_call_id
                 provider.publish_public_responses()
                 projection = services.event_store.read_context(session_id, conversation_id)
-                self._append_drafts(projection.last_sequence, (self._draft(
+                self._append_drafts(projection.last_sequence, provider.with_group_trace((self._draft(
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
                     kind=CollaborationEventKind.LEAD_EXPLORATION_RESULT,
                     sender=_LEAD_ACTOR, recipient=_USER_ACTOR,
                     payload=CollaborationLeadExplorationResultPayload(decoded_exploration),
-                ),))
+                ),), "accepted"))
                 return LeadTurnResult(
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
                     kind=LeadOutcomeKind.EXPLORATION, message=decoded_exploration.message,
@@ -13244,7 +13335,7 @@ class StoryRuntime:
                 refreshed = services.event_store.read_context(session_id, conversation_id)
                 self._append_drafts(
                     refreshed.last_sequence,
-                    (
+                    provider.with_group_trace((
                         message_event, proposal_event,
                         *self._objective_drafts(
                             outcome, objective_projection, objective_events, message_event,
@@ -13254,7 +13345,7 @@ class StoryRuntime:
                            decision_event=preparation.decision_event, start_event=preparation.start_event),)
                           if preparation is not None else ()),
                         state_event,
-                    ),
+                    ), "accepted"),
                 )
                 return LeadTurnResult(
                     session_id,
@@ -13320,7 +13411,9 @@ class StoryRuntime:
                 request_draft = replace(request_draft, payload=replace(
                     request_draft.payload, tail_sequence=refreshed.last_sequence + len(final_drafts) + 1,
                 ))
-                self._append_drafts(refreshed.last_sequence, (*final_drafts, request_draft))
+                publication_drafts = provider.with_group_trace((*final_drafts, request_draft), "accepted")
+                request_draft = publication_drafts[-1]
+                self._append_drafts(refreshed.last_sequence, publication_drafts)
                 return replace(
                     self._recommendation_turn_result(request_draft),
                     validation_details=provider.validation_details,
@@ -13328,7 +13421,7 @@ class StoryRuntime:
             provider._public_accepted_call_id = provider.last_submitted_call_id
             provider.publish_public_responses()
             refreshed = services.event_store.read_context(session_id, conversation_id)
-            self._append_drafts(refreshed.last_sequence, final_drafts)
+            self._append_drafts(refreshed.last_sequence, provider.with_group_trace(final_drafts, "accepted"))
             return LeadTurnResult(
                 session_id,
                 conversation_id,
@@ -13539,7 +13632,7 @@ class StoryRuntime:
             projection = self.conversation_storage_services.event_store.read_context(session_id, conversation_id)
         self._append_drafts(
             projection.last_sequence,
-            (
+            (_with_group_trace(public_response_provider, (
                 judgment,
                 candidate_event,
                 *self._objective_drafts(
@@ -13590,7 +13683,7 @@ class StoryRuntime:
                         confirmation_request_id=request_id,
                     ),
                 ),
-            ),
+            ), "accepted")),
         )
         return LeadTurnResult(
             session_id,
@@ -14389,6 +14482,7 @@ class StoryRuntime:
         self, session_id: str, conversation_id: str, *,
         failure: BaseException | None = None,
         turn_id: str | None = None, step_id: str | None = None,
+        accounting_provider: _AccountingContextProvider | None = None,
     ) -> LeadTurnResult | None:
         """Close only the projection-authorized read-only attempt under its lease."""
 
@@ -14450,6 +14544,7 @@ class StoryRuntime:
             call_id=calls[-1].call_id if calls else None,
             failure_code=code,
             failure=failure,
+            trace_provider=accounting_provider,
         )
 
     def _lead_outcome_failure_result(
@@ -14464,6 +14559,7 @@ class StoryRuntime:
         failure_code: CollaborationLeadOutcomeFailureCode,
         failure: BaseException | None = None,
         accounting_provider: _AccountingContextProvider | None = None,
+        trace_provider: _AccountingContextProvider | None = None,
     ) -> LeadTurnResult:
         """Durably close a failed read-only Lead attempt without replaying it."""
 
@@ -14476,8 +14572,9 @@ class StoryRuntime:
             accounting_provider.task_revisions if accounting_provider is not None else (),
             "rejected", accounting_provider.validation_details if accounting_provider is not None else (),
             failure_code.value)
-        if accounting_provider is not None:
-            accounting_provider.publish_public_responses()
+        collector = trace_provider if trace_provider is not None else accounting_provider
+        if collector is not None:
+            collector.publish_public_responses()
         try:
             projection = self.conversation_storage_services.event_store.read_context(
                 session_id,
@@ -14518,7 +14615,7 @@ class StoryRuntime:
                 )
             self._append_drafts(
                 projection.last_sequence,
-                failure_drafts,
+                _with_group_trace(collector, failure_drafts, failure_code.value),
             )
         except Exception:
             return self._blocking_lead_result(
@@ -18316,6 +18413,7 @@ class StoryRuntime:
         invocation_kind: CollaborationInvocationKind,
         validation_details: tuple[str, ...] = (),
         usage: ProviderUsage | None = None,
+        accounting: ProviderCallAccounting | None = None,
     ) -> None:
         projection = self.conversation_storage_services.event_store.read_context(
             session_id,
@@ -18342,6 +18440,7 @@ class StoryRuntime:
                         state=state,
                         validation_details=validation_details,
                         usage=usage,
+                        accounting=accounting,
                     ),
                 ),
             ),

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import unicodedata
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import TypeAlias
 
@@ -217,6 +217,152 @@ class ProviderUsage:
             raise ValueError("provider usage must contain at least one exact counter")
 
 
+class ProviderUsageScope(StrEnum):
+    """The observed counter scope, independent of model or call-kind guesses."""
+
+    CALL = "call"
+    SESSION_CUMULATIVE = "session_cumulative"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderUsageObservation:
+    """Raw counters and content-free provenance; unknown never means zero."""
+
+    raw: ProviderUsage
+    scope: ProviderUsageScope
+    source: str
+    unit: str = "tokens"
+    session_ref: str | None = None
+    prefix_ref: str | None = None
+    previous_prefix_ref: str | None = None
+    session_start: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.raw) is not ProviderUsage or type(self.scope) is not ProviderUsageScope:
+            raise TypeError("usage observation requires typed counters and scope")
+        if type(self.session_start) is not bool or (self.session_start and self.previous_prefix_ref is not None):
+            raise ValueError("usage session start conflicts with a predecessor")
+        for value in (self.source, self.unit):
+            if type(value) is not str or not value or len(value) > 256:
+                raise ValueError("usage observation provenance is invalid")
+        for value in (self.session_ref, self.prefix_ref, self.previous_prefix_ref):
+            if value is not None and (type(value) is not str or not value or len(value) > 256):
+                raise ValueError("usage observation reference is invalid")
+        if self.scope is ProviderUsageScope.SESSION_CUMULATIVE and (
+            self.session_ref is None or self.prefix_ref is None
+        ):
+            raise ValueError("cumulative usage requires an observed session and prefix")
+
+
+def normalized_provider_usage(
+    observation: ProviderUsageObservation,
+    previous: ProviderUsageObservation | None = None,
+) -> ProviderUsage | None:
+    """Attribute only explicit call counters or a proven cumulative prefix delta.
+
+    A new, observed cumulative session has no predecessor. A resume without its
+    exact predecessor remains unavailable, including resets and source changes.
+    """
+
+    if type(observation) is not ProviderUsageObservation:
+        raise TypeError("usage normalization requires an observation")
+    if observation.unit != "tokens":
+        return None
+    if observation.scope is ProviderUsageScope.CALL:
+        return observation.raw
+    if observation.scope is not ProviderUsageScope.SESSION_CUMULATIVE:
+        return None
+    if observation.previous_prefix_ref is None:
+        return observation.raw if observation.session_start else None
+    if previous is None or (
+        previous.scope is not ProviderUsageScope.SESSION_CUMULATIVE
+        or previous.session_ref != observation.session_ref
+        or previous.prefix_ref != observation.previous_prefix_ref
+        or previous.source != observation.source
+        or previous.unit != observation.unit
+    ):
+        return None
+    values: dict[str, int | None] = {}
+    for name in ("input_tokens", "output_tokens", "cached_input_tokens"):
+        current, prior = getattr(observation.raw, name), getattr(previous.raw, name)
+        if current is not None and prior is not None and current < prior:
+            return None
+        values[name] = None if current is None or prior is None else current - prior
+    return None if all(value is None for value in values.values()) else ProviderUsage(**values)
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderSchemaStatistics:
+    """Descriptive native-schema shape, never a schema validation gate."""
+
+    outer_alternatives: int
+    any_of_paths: tuple[str, ...]
+    definition_count: int
+    enum_value_count: int
+
+    def __post_init__(self) -> None:
+        for name in ("outer_alternatives", "definition_count", "enum_value_count"):
+            _nonnegative_integer(name, getattr(self, name))
+        if type(self.any_of_paths) is not tuple or any(type(path) is not str for path in self.any_of_paths):
+            raise TypeError("schema locations must be an immutable tuple")
+
+
+def provider_schema_statistics(schema: Mapping[str, object]) -> ProviderSchemaStatistics:
+    """Count final schema-node locations, without a validation or syntax gate."""
+
+    def pointer(path, key):
+        return path + "/" + str(key).replace("~", "~0").replace("/", "~1")
+
+    paths: list[str] = []
+    definitions = enums = 0
+    pending: list[tuple[object, str]] = [(schema, "$")]
+    while pending:
+        node, path = pending.pop()
+        if not isinstance(node, Mapping):
+            continue
+        enum = node.get("enum")
+        if type(enum) in {list, tuple}:
+            enums += len(enum)
+        for key in ("$defs", "definitions", "properties", "patternProperties"):
+            children = node.get(key)
+            if isinstance(children, Mapping):
+                if key in {"$defs", "definitions"}:
+                    definitions += len(children)
+                pending.extend((value, pointer(pointer(path, key), name))
+                               for name, value in children.items())
+        for key in ("anyOf", "oneOf", "allOf", "prefixItems"):
+            children = node.get(key)
+            if type(children) in {list, tuple}:
+                if key == "anyOf":
+                    paths.append(pointer(path, key))
+                pending.extend((value, pointer(pointer(path, key), index))
+                               for index, value in enumerate(children))
+        for key in ("items", "additionalProperties", "unevaluatedProperties", "contains", "not", "if", "then", "else", "propertyNames"):
+            child = node.get(key)
+            if isinstance(child, Mapping):
+                pending.append((child, pointer(path, key)))
+    def resolved(node):
+        seen = set()
+        while isinstance(node, Mapping) and "$ref" in node:
+            reference = node["$ref"]
+            if type(reference) is not str or not reference.startswith("#/") or reference in seen:
+                return {}
+            seen.add(reference)
+            node = schema
+            for part in reference[2:].split("/"):
+                node = node.get(part.replace("~1", "/").replace("~0", "~"), {}) if isinstance(node, Mapping) else {}
+        return node
+    root = resolved(schema)
+    properties = root.get("properties", {}) if isinstance(root, Mapping) else {}
+    action = resolved(properties.get("agent_action", {})) if isinstance(properties, Mapping) else {}
+    alternatives = action.get("anyOf") if isinstance(action, Mapping) else None
+    return ProviderSchemaStatistics(
+        len(alternatives) if type(alternatives) in {list, tuple} else 1,
+        tuple(sorted(paths)), definitions, enums,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderCallAccounting:
     """One content-free physical model-input measurement."""
@@ -226,6 +372,9 @@ class ProviderCallAccounting:
     state: ProviderCallState = ProviderCallState.PREPARED
     actual_transport_utf8_bytes: int | None = None
     usage: ProviderUsage | None = None
+    usage_observation: ProviderUsageObservation | None = field(default=None, kw_only=True, compare=False)
+    elapsed_ns: int | None = field(default=None, kw_only=True, compare=False)
+    schema_statistics: ProviderSchemaStatistics | None = field(default=None, kw_only=True, compare=False)
 
     def __post_init__(self) -> None:
         if type(self.payload) is not ProviderPayloadAccounting:
@@ -272,6 +421,17 @@ class ProviderCallAccounting:
             raise TypeError("provider call usage must be ProviderUsage or None")
         if self.usage is not None and self.state is not ProviderCallState.SUBMITTED:
             raise ValueError("provider usage requires a submitted call")
+        if self.usage_observation is not None:
+            if type(self.usage_observation) is not ProviderUsageObservation:
+                raise TypeError("provider usage observation has an invalid type")
+            if self.state is not ProviderCallState.SUBMITTED or self.usage_observation.raw != self.usage:
+                raise ValueError("usage observation must describe the submitted raw counters")
+        if self.elapsed_ns is not None:
+            _nonnegative_integer("provider elapsed nanoseconds", self.elapsed_ns)
+            if self.state is not ProviderCallState.SUBMITTED:
+                raise ValueError("provider elapsed time requires submitted call")
+        if self.schema_statistics is not None and type(self.schema_statistics) is not ProviderSchemaStatistics:
+            raise TypeError("provider schema statistics have an invalid type")
 
     @property
     def binding_instruction_utf8_bytes(self) -> int:
@@ -312,6 +472,60 @@ class ProviderCallAccounting:
         if self.state is ProviderCallState.PREPARED:
             return None
         return self.gross_model_input_utf8_bytes
+
+
+def provider_call_accounting_to_object(value: ProviderCallAccounting) -> dict[str, object]:
+    """Encode exact typed accounting at ledger and conversation boundaries."""
+
+    if type(value) is not ProviderCallAccounting:
+        raise TypeError("accounting codec requires ProviderCallAccounting")
+    result = asdict(value)
+    for name in ("usage_observation", "elapsed_ns", "schema_statistics"):
+        if result[name] is None:
+            del result[name]
+    return result
+
+
+def provider_call_accounting_from_object(value: object) -> ProviderCallAccounting:
+    """Decode the closed content-free accounting record without runtime authority."""
+
+    def record(raw: object, required: set[str], optional: set[str] = frozenset()) -> dict:
+        if type(raw) is not dict or not required <= set(raw) or set(raw) - required - optional:
+            raise ValueError("invalid provider accounting fields")
+        return raw
+
+    def component(raw: object) -> ContextComponentBytes:
+        item = record(raw, {"identity", "kind", "serialized_utf8_bytes", "raw_mandatory_reference_utf8_bytes"})
+        return ContextComponentBytes(**{**item, "kind": ContextComponentKind(item["kind"])})
+
+    def usage(raw: object) -> ProviderUsage | None:
+        if raw is None:
+            return None
+        item = record(raw, {"input_tokens", "output_tokens", "cached_input_tokens"})
+        return ProviderUsage(**item)
+
+    item = record(value, {"payload", "binding_components", "state", "actual_transport_utf8_bytes", "usage"},
+                  {"usage_observation", "elapsed_ns", "schema_statistics"})
+    payload = record(item["payload"], {"call_kind", "schema_utf8_bytes", "payload_utf8_bytes", "components"})
+    if type(payload["components"]) not in {list, tuple} or type(item["binding_components"]) not in {list, tuple}:
+        raise ValueError("invalid provider accounting components")
+    observation = None
+    if "usage_observation" in item:
+        raw = record(item["usage_observation"], {"raw", "scope", "source", "unit", "session_ref", "prefix_ref", "previous_prefix_ref", "session_start"})
+        observation = ProviderUsageObservation(**{**raw, "raw": usage(raw["raw"]), "scope": ProviderUsageScope(raw["scope"])})
+    shape = None
+    if "schema_statistics" in item:
+        raw = record(item["schema_statistics"], {"outer_alternatives", "any_of_paths", "definition_count", "enum_value_count"})
+        if type(raw["any_of_paths"]) not in {list, tuple}:
+            raise ValueError("invalid schema statistics paths")
+        shape = ProviderSchemaStatistics(**{**raw, "any_of_paths": tuple(raw["any_of_paths"])})
+    return ProviderCallAccounting(
+        ProviderPayloadAccounting(ProviderCallKind(payload["call_kind"]), payload["schema_utf8_bytes"],
+                                  payload["payload_utf8_bytes"], tuple(component(raw) for raw in payload["components"])),
+        tuple(component(raw) for raw in item["binding_components"]), ProviderCallState(item["state"]),
+        item["actual_transport_utf8_bytes"], usage(item["usage"]),
+        usage_observation=observation, elapsed_ns=item.get("elapsed_ns"), schema_statistics=shape,
+    )
 
 
 @dataclass(slots=True)

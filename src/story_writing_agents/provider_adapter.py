@@ -26,6 +26,7 @@ from .agent_context import (
 from .errors import ProviderAuthenticationRequiredError
 from .models import AgentDefinition
 from .provider_execution_workspace import ProviderExecutionWorkspace
+from .agent_context.accounting import ProviderUsageObservation, ProviderUsageScope, provider_schema_statistics
 
 
 DEFAULT_PROVIDER_TIMEOUT_SECONDS = 900.0
@@ -240,6 +241,7 @@ class ProviderInvocation:
                 else ProviderCallAccounting(
                     payload=accounting,
                     binding_components=self.binding_components,
+                schema_statistics=(provider_schema_statistics(schema) if self.context_call_id is not None else None),
                 )
             ),
         )
@@ -267,6 +269,8 @@ class ProviderResult:
     thread_id: str
     response_text: str
     usage: ProviderUsage | None = field(default=None, compare=False)
+    usage_observation: ProviderUsageObservation | None = field(default=None, kw_only=True, compare=False)
+    elapsed_ns: int | None = field(default=None, kw_only=True, compare=False)
     actual_transport_utf8_bytes: int | None = field(default=None, compare=False)
     context_witness: ProviderContextWitness | None = field(default=None, kw_only=True, repr=False)
     response_diagnostic: ProviderResponseDiagnostic | None = field(
@@ -276,6 +280,13 @@ class ProviderResult:
     )
 
     def __post_init__(self) -> None:
+        if self.usage_observation is not None and (
+            type(self.usage_observation) is not ProviderUsageObservation
+            or self.usage_observation.raw != self.usage
+        ):
+            raise ValueError("provider observation must retain the exact raw counters")
+        if self.elapsed_ns is not None and (type(self.elapsed_ns) is not int or self.elapsed_ns < 0):
+            raise ValueError("provider elapsed nanoseconds must be nonnegative")
         if self.context_witness is not None and type(self.context_witness) is not ProviderContextWitness:
             raise TypeError("provider context witness has an invalid type")
         if (
@@ -301,8 +312,19 @@ class ProviderFailureAccounting:
     state: ProviderCallState = ProviderCallState.PREPARED
     actual_transport_utf8_bytes: int | None = None
     usage: ProviderUsage | None = None
+    usage_observation: ProviderUsageObservation | None = field(default=None, kw_only=True, compare=False)
+    elapsed_ns: int | None = field(default=None, kw_only=True, compare=False)
 
     def __post_init__(self) -> None:
+        if self.usage_observation is not None and (
+            type(self.usage_observation) is not ProviderUsageObservation
+            or self.usage_observation.raw != self.usage
+        ):
+            raise ValueError("provider observation must retain the exact raw counters")
+        if self.elapsed_ns is not None and (type(self.elapsed_ns) is not int or self.elapsed_ns < 0):
+            raise ValueError("provider elapsed nanoseconds must be nonnegative")
+        if (self.usage_observation is not None or self.elapsed_ns is not None) and self.state is not ProviderCallState.SUBMITTED:
+            raise ValueError("provider observations require a submitted call")
         if type(self.state) is not ProviderCallState:
             raise TypeError("provider failure state must be a ProviderCallState")
         if self.actual_transport_utf8_bytes is not None:
@@ -392,13 +414,19 @@ def record_provider_failure_accounting(
     state: ProviderCallState,
     actual_transport_utf8_bytes: int | None = None,
     usage: ProviderUsage | None = None,
+    usage_observation: ProviderUsageObservation | None = None,
+    elapsed_ns: int | None = None,
 ) -> None:
     """Attach validated, content-free call facts without replacing a failure."""
 
+    if usage is not None and usage_observation is None:
+        usage_observation = ProviderUsageObservation(usage, ProviderUsageScope.UNKNOWN, "provider.failure.reported_usage")
     accounting = ProviderFailureAccounting(
         state=state,
         actual_transport_utf8_bytes=actual_transport_utf8_bytes,
         usage=usage,
+        usage_observation=usage_observation,
+        elapsed_ns=elapsed_ns,
     )
     if isinstance(failure, ProviderInvocationError):
         failure._call_accounting = accounting

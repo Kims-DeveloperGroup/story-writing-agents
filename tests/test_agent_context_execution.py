@@ -1,6 +1,7 @@
 """Workspace-scoped provider contextual execution verification."""
 
 from __future__ import annotations
+from story_writing_agents.agent_context.group_observation import LeadGroupObservationKind
 from tests.test_provider_schema_spec import check_schema
 from tests.provider_wire_fixture import ExplicitPhaseScript, assert_phase_guide, selection_plan, FixturePhasePlanError, CallbackContextViews
 
@@ -440,7 +441,8 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
         None, answer_validator: Callable[[str, object], object] | None=None, answer_diagnostic:
         Callable[[str], object] | None=None, event_sink: ContextExecutionEventSink | None=None,
         progress_sink: Callable[[ContextActionProgressEvent], None] | None=None, phase: str | None=
-        None, round_number: int | None=None) -> ContextInvocationResult:
+        None, round_number: int | None=None,
+        group_observation_sink=None) -> ContextInvocationResult:
         if isinstance(provider, _ScriptedProvider):
             self.addCleanup(provider.script.require_fixture_valid)
             self.addCleanup(provider.callback_views.require_fixture_valid)
@@ -459,6 +461,7 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
             answer_validator=answer_validator,  # type: ignore[arg-type]
             answer_diagnostic=answer_diagnostic,  # type: ignore[arg-type]
             event_sink=event_sink, progress_sink=progress_sink, phase=phase, round_number=round_number,
+            group_observation_sink=group_observation_sink,
             **collaborators,  # type: ignore[arg-type]
         )
 
@@ -594,6 +597,22 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             self.assertNotIn(forbidden, rendered)
 
     async def test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit(self) -> None:
+        def assert_frozen_binding(observations, actual_provider):
+            by_call = {call.call_id: call.contract for call in actual_provider.calls}
+            for item in observations:
+                if item.call_id is None or item.binding_snapshot is None:
+                    continue
+                self.assertIn(item.call_id, by_call)
+                expected = by_call[item.call_id]
+                binding = json.loads(item.binding_snapshot)
+                active = expected.group_workflow.active_selection
+                self.assertEqual(binding["group_id"], None if active is None else active.group_id)
+                self.assertEqual(binding["catalog_id"], expected.group_workflow.catalog.catalog_id)
+                self.assertEqual(binding["outer_inner_schema_ids"],
+                                 [list(pair) for pair in expected.outer_inner_schema_ids])
+                self.assertEqual(binding["offer_digest"], expected.offers.offer_digest)
+                self.assertIs(item.phase, expected.schema_group_phase)
+
         self.publish()
         request = self.request(invocation_kind=ContextInvocationKind.LEAD, result_contract=
             _LEAD_CALL_FACTORY, physical_call_limit=3, agent_id=LEAD_ORCHESTRATOR)
@@ -670,7 +689,27 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             grouped_provider = _ScriptedProvider(responses[-1:], control_plan=tuple(
                 (0, phase, response) for phase, response in zip(phases[:-1], responses[:-1], strict=True)))
             events = []
-            grouped = await self.invoke(grouped_provider, grouped_request, event_sink=events.append)
+            group_observations = []
+            grouped = await self.invoke(grouped_provider, grouped_request, event_sink=events.append, group_observation_sink=group_observations.append)
+
+            assert_frozen_binding(group_observations, grouped_provider)
+            bound_observations = {item.call_id: item for item in group_observations
+                                  if item.kind is LeadGroupObservationKind.BOUND}
+            self.assertEqual(set(bound_observations), {call.call_id for call in grouped_provider.calls})
+            self.assertEqual(tuple(bound_observations[call.call_id].phase
+                                   for call in grouped_provider.calls), phases)
+            self.assertEqual(sum(item.kind is LeadGroupObservationKind.CONTROL_ACCEPTED
+                                 for item in group_observations), len(chosen))
+            self.assertIs(group_observations[-1].kind, LeadGroupObservationKind.TERMINAL)
+            self.assertEqual(group_observations[-1].terminal_code, "accepted")
+            self.assertEqual(tuple(json.loads(value)["group_id"]
+                                   for value in group_observations[-1].selection_snapshots), chosen)
+            self.assertEqual(json.loads(group_observations[0].catalog_snapshot)["catalog_id"],
+                             grouped_provider.calls[0].contract.group_stage.catalog.catalog_id)
+            private_trace = json.dumps([item.as_object() for item in group_observations], ensure_ascii=False)
+            for private in (_PRIVATE_INPUT, _PRIVATE_DEFINITION, _PRIVATE_ARTIFACT, _PRIVATE_ANSWER):
+                self.assertNotIn(private, private_trace)
+                self.assertNotIn(private, repr(group_observations))
             self.assertEqual(tuple(call.contract.schema_group_phase for call in grouped_provider.calls), phases)
             for call, phase in zip(grouped_provider.calls, phases, strict=True):
                 assert_phase_guide(self, call, phase)
@@ -711,7 +750,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             return _search(call, provider)
         read_provider = _ScriptedProvider((search_after_selection, _read_search_hit, _group_answer),
             control_plan=((0, LeadGroupPhase.SELECT, _group_control("answer.workflow")),))
-        read_result = await self.invoke(read_provider, read_request)
+        read_observations = []
+        read_result = await self.invoke(read_provider, read_request, group_observation_sink=read_observations.append)
         selected, original_selection, original_plan = retained[0]
         fresh = read_provider.calls[-1].contract
         self.assertIs(fresh.group_workflow.active_selection, selected)
@@ -750,7 +790,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             return _lead_answer_frame(call, "Current revision answer.", grouped=True, revision=2)
         revised_provider = _ScriptedProvider((revised_answer,),
             control_plan=((0, LeadGroupPhase.SELECT, _group_control("answer.workflow")),))
-        revised_result = await self.invoke(revised_provider, revised_request)
+        revision_observations = []
+        revised_result = await self.invoke(revised_provider, revised_request, group_observation_sink=revision_observations.append)
         first_current = revised_provider.calls[0].contract
         self.assertIs(first_current.schema_group_phase, LeadGroupPhase.SELECT)
         self.assertIsNone(first_current.group_workflow.active_selection)
@@ -797,7 +838,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         qualified_provider = _ScriptedProvider((plot_search, _read_search_hit, hold_review),
             control_plan=selection_plan("answer.observed_facts", before_script_response=2))
         with self.assertRaises(RuntimeError) as held:
-            await self.invoke(qualified_provider, review_request)
+            review_observations = []
+            await self.invoke(qualified_provider, review_request, group_observation_sink=review_observations.append)
         self.assertIs(held.exception, hold)
         qualified_state = service_module.context_provider_failure_facts(hold).group_state
         qualified_selection = qualified_state.workflow.active_selection
@@ -818,10 +860,32 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         current_provider = _ScriptedProvider((), control_plan=((0, LeadGroupPhase.SELECT, current_selection),))
         current_request = replace(review_request, fresh=True, physical_call_limit=2, group_state=qualified_state)
         with self.assertRaises(RuntimeError) as reset:
-            await self.invoke(current_provider, current_request)
+            handoff_observations = []
+            await self.invoke(current_provider, current_request, group_observation_sink=handoff_observations.append)
         self.assertIs(reset.exception, halt)
         self.assertEqual(len(current_provider.calls), 1)
         self.assertEqual(qualified_selection.as_object(), qualified_snapshot)
+
+        for observations, actual_provider, expected_phases in (
+            (read_observations, read_provider, (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE,
+                                               LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE)),
+            (revision_observations, revised_provider, (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE)),
+            (review_observations, qualified_provider, (LeadGroupPhase.SELECT, LeadGroupPhase.SELECT,
+                                                       LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE)),
+            (handoff_observations, current_provider, (LeadGroupPhase.SELECT,)),
+        ):
+            assert_frozen_binding(observations, actual_provider)
+            bound = {item.call_id: item for item in observations
+                     if item.kind is LeadGroupObservationKind.BOUND}
+            self.assertEqual(set(bound), {call.call_id for call in actual_provider.calls})
+            self.assertEqual(tuple(bound[call.call_id].phase for call in actual_provider.calls),
+                             expected_phases)
+        self.assertEqual(json.loads(read_observations[-1].selection_snapshots[0]), original_selection)
+        self.assertNotEqual(json.loads(read_observations[-1].catalog_snapshot)["catalog_id"],
+                            original_selection["catalog_at_selection"]["catalog_id"])
+        self.assertEqual(json.loads(revision_observations[-1].selection_snapshots[0]), original_selection)
+        self.assertEqual(json.loads(handoff_observations[-1].selection_snapshots[0]), qualified_snapshot)
+        self.assertIsNone(handoff_observations[-1].as_object()["binding"]["group_id"])
 
     async def test_local_reference_load_does_not_consume_lead_physical_limit(self) -> None:
         reference = self.reference('reference-operation')
@@ -1271,8 +1335,9 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
                 return failure
             grouped_provider = _ScriptedProvider((fail_group_generation, _group_answer), control_plan=selection_plan("answer.workflow"))
             grouped_events = []
+            failure_observations = []
             with self.assertRaises(RuntimeError) as caught:
-                await self.invoke(grouped_provider, grouped_request, event_sink=grouped_events.append)
+                await self.invoke(grouped_provider, grouped_request, event_sink=grouped_events.append, group_observation_sink=failure_observations.append)
             self.assertIs(caught.exception, failure)
             facts = service_module.context_provider_failure_facts(caught.exception)
             self.assertIs(facts.submission_uncertain, uncertain)
@@ -1285,6 +1350,37 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
             inspection = self.inspect(grouped_provider, grouped_request)
             self.assertIs(inspection.record.state, ContextLedgerRecordState.TAINTED)
             self.assertIsNone(inspection.record.ready_checkpoint)
+
+            observed_bounds = {item.call_id: item for item in failure_observations
+                               if item.kind is LeadGroupObservationKind.BOUND}
+            self.assertEqual(set(observed_bounds), {call.call_id for call in grouped_provider.calls})
+            self.assertEqual(tuple(observed_bounds[call.call_id].phase for call in grouped_provider.calls),
+                             (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
+            self.assertIs(failure_observations[-1].kind, LeadGroupObservationKind.TERMINAL)
+            self.assertNotEqual(failure_observations[-1].terminal_code, "accepted")
+            self.assertEqual(tuple(json.loads(value) for value in failure_observations[-1].selection_snapshots),
+                             tuple(item.as_object() for item in facts.group_state.workflow.history))
+            from story_writing_agents.agent_context.group_observation import LeadGroupTrace
+            from story_writing_agents.agent_context.group_reporting import group_trace_report
+            report = group_trace_report(LeadGroupTrace(label, tuple(failure_observations),
+                failure_observations[-1].terminal_code),
+                tuple((item.call_id, item.accounting)
+                      for item in inspection.record.attempt.provider_calls),
+                unmeasured_prepared_call_ids=(grouped_provider.calls[-1].call_id,) if uncertain else ())
+            self.assertEqual(report["known_submitted_calls"], 1 if uncertain else 2)
+            self.assertEqual(report["prepared_only_calls"], 0)
+            self.assertEqual(report["unresolved_calls"], int(uncertain))
+            self.assertIs(report["submission_coverage"]["complete"], not uncertain)
+            self.assertEqual(report["submission_coverage"]["unresolved_call_ids"],
+                [grouped_provider.calls[-1].call_id] if uncertain else [])
+            self.assertEqual(report["known_submitted_subtotals"]["calls"], 1 if uncertain else 2)
+            if uncertain:
+                self.assertIsNone(report["submitted_calls"])
+                self.assertIsNone(report["transport_utf8_bytes"])
+                self.assertIsNone(report["rates"]["repair_calls_per_submitted_call"]["denominator"])
+            else:
+                self.assertEqual(report["submitted_calls"], 2)
+            self.assertFalse(report["result_accepted"])
 
     async def test_invalid_read_response_rejects_taints_and_never_advances(self) -> None:
         private_values = ("conflict", "PRIVATE/critique text")

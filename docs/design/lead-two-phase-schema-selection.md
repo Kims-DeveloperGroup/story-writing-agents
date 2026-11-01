@@ -86,67 +86,118 @@ SELECT·GENERATE·컨텍스트·교정·인증 replay·반복 재선택은 기�
 
 원래 조건은 [#890의 구현 완료 조건](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/890#구현-완료-조건)이다. 아래는 같은 59개 조건의 증거 위치와 검증 계획이며 조건을 축소하지 않는다. 각 행은 실제 최종 소스·결과·보고서 링크가 확보된 뒤에만 충족으로 바꾼다.
 
-| 조건 | 구현 또는 검증 경계 | 필요한 증거 | 판정 |
-|---|---|---|---|
-| AC-01 | 그룹 레지스트리·의미 분류·업무 계약 | 현재 허용 정규 결과 합집합, 15개 그룹, 혼합 역할·작업 및 intent 경계의 결정적 대조 | 미검증 |
-| AC-02 | 그룹 레지스트리·의미 분류·업무 계약 | 현재 허용 정규 결과 합집합, 15개 그룹, 혼합 역할·작업 및 intent 경계의 결정적 대조 | 미검증 |
-| AC-03 | 그룹 레지스트리·의미 분류·업무 계약 | 현재 허용 정규 결과 합집합, 15개 그룹, 혼합 역할·작업 및 intent 경계의 결정적 대조 | 미검증 |
-| AC-04 | 그룹 레지스트리·의미 분류·업무 계약 | 현재 허용 정규 결과 합집합, 15개 그룹, 혼합 역할·작업 및 intent 경계의 결정적 대조 | 미검증 |
-| AC-05 | 그룹 레지스트리·의미 분류·업무 계약 | 현재 허용 정규 결과 합집합, 15개 그룹, 혼합 역할·작업 및 intent 경계의 결정적 대조 | 미검증 |
-| AC-06 | 그룹 레지스트리·의미 분류·업무 계약 | 현재 허용 정규 결과 합집합, 15개 그룹, 혼합 역할·작업 및 intent 경계의 결정적 대조 | 미검증 |
-| AC-07 | 그룹 레지스트리·의미 분류·업무 계약 | 현재 허용 정규 결과 합집합, 15개 그룹, 혼합 역할·작업 및 intent 경계의 결정적 대조 | 미검증 |
-| AC-08 | 선택 제어 계약·Lead 지시문 | 실제 SELECT 입력·닫힌 다섯 필드 계약과 누락/추가/타입/ID/enum 음성 대조 | 미검증 |
-| AC-09 | 선택 제어 계약·Lead 지시문 | 실제 SELECT 입력·닫힌 다섯 필드 계약과 누락/추가/타입/ID/enum 음성 대조 | 미검증 |
-| AC-10 | 선택 제어 계약·Lead 지시문 | 실제 SELECT 입력·닫힌 다섯 필드 계약과 누락/추가/타입/ID/enum 음성 대조 | 미검증 |
-| AC-11 | 선택 제어 계약·Lead 지시문 | 실제 SELECT 입력·닫힌 다섯 필드 계약과 누락/추가/타입/ID/enum 음성 대조 | 미검증 |
-| AC-12 | GENERATE 입력 구성 | 원래 요청·intent/scope·현재 전체 카탈로그의 실제 전달 및 독립 요청 대조 | 미검증 |
-| AC-13 | 결과 compiler·bound call 합성 | 의미 분류 전후 비교, 모든 member/partition, 참조 폐쇄 및 SEARCH/READ 공유 정의 대조 | 미검증 |
-| AC-14 | 결과 compiler·bound call 합성 | 의미 분류 전후 비교, 모든 member/partition, 참조 폐쇄 및 SEARCH/READ 공유 정의 대조 | 미검증 |
-| AC-15 | 결과 compiler·bound call 합성 | 의미 분류 전후 비교, 모든 member/partition, 참조 폐쇄 및 SEARCH/READ 공유 정의 대조 | 미검증 |
-| AC-16 | 선택·재선택 타입·제어 실행 | 정확한 외부/내부 binding과 직접 재선택 경로, 업무 완료·권한 이벤트가 없는 제어 호출 대조 | 미검증 |
-| AC-17 | 선택·재선택 타입·제어 실행 | 정확한 외부/내부 binding과 직접 재선택 경로, 업무 완료·권한 이벤트가 없는 제어 호출 대조 | 미검증 |
-| AC-18 | 선택·재선택 타입·제어 실행 | 정확한 외부/내부 binding과 직접 재선택 경로, 업무 완료·권한 이벤트가 없는 제어 호출 대조 | 미검증 |
-| AC-19 | 선택·재선택 타입·제어 실행 | 정확한 외부/내부 binding과 직접 재선택 경로, 업무 완료·권한 이벤트가 없는 제어 호출 대조 | 미검증 |
-| AC-20 | Lead 업무 owner·wire decoder | 현재 owner/codec/checks 및 scope·source·authority·variant identity 회귀 | 미검증 |
-| AC-21 | Lead 업무 owner·wire decoder | 현재 owner/codec/checks 및 scope·source·authority·variant identity 회귀 | 미검증 |
-| AC-22 | 카탈로그 스냅샷·선택 이력 | 카탈로그 정의·ID·작업 근거 불변성, 원래 선택과 현재 binding의 분리 대조 | 미검증 |
-| AC-23 | 카탈로그 스냅샷·선택 이력 | 카탈로그 정의·ID·작업 근거 불변성, 원래 선택과 현재 binding의 분리 대조 | 미검증 |
-| AC-24 | 카탈로그 스냅샷·선택 이력 | 카탈로그 정의·ID·작업 근거 불변성, 원래 선택과 현재 binding의 분리 대조 | 미검증 |
-| AC-25 | 카탈로그 스냅샷·선택 이력 | 카탈로그 정의·ID·작업 근거 불변성, 원래 선택과 현재 binding의 분리 대조 | 미검증 |
-| AC-26 | 국면 실행·교정·replay·fresh rebind | READ/목표/revision/권한 갱신과 오래된 ID, 동결 교정 및 새 정보 재결합 전이 대조 | 미검증 |
-| AC-27 | 국면 실행·교정·replay·fresh rebind | READ/목표/revision/권한 갱신과 오래된 ID, 동결 교정 및 새 정보 재결합 전이 대조 | 미검증 |
-| AC-28 | 국면 실행·교정·replay·fresh rebind | READ/목표/revision/권한 갱신과 오래된 ID, 동결 교정 및 새 정보 재결합 전이 대조 | 미검증 |
-| AC-29 | 국면 실행·교정·replay·fresh rebind | READ/목표/revision/권한 갱신과 오래된 ID, 동결 교정 및 새 정보 재결합 전이 대조 | 미검증 |
-| AC-30 | 국면 실행·교정·replay·fresh rebind | READ/목표/revision/권한 갱신과 오래된 ID, 동결 교정 및 새 정보 재결합 전이 대조 | 미검증 |
-| AC-31 | 공유 예산·명시적 중단 | 경로별 최소 잔여 호출 표, 정상 2회/직접 재선택 3회, 컨텍스트/교정 및 마지막 재선택 소진 대조 | 미검증 |
-| AC-32 | 공유 예산·명시적 중단 | 경로별 최소 잔여 호출 표, 정상 2회/직접 재선택 3회, 컨텍스트/교정 및 마지막 재선택 소진 대조 | 미검증 |
-| AC-33 | 공유 예산·명시적 중단 | 경로별 최소 잔여 호출 표, 정상 2회/직접 재선택 3회, 컨텍스트/교정 및 마지막 재선택 소진 대조 | 미검증 |
-| AC-34 | 공유 예산·명시적 중단 | 경로별 최소 잔여 호출 표, 정상 2회/직접 재선택 3회, 컨텍스트/교정 및 마지막 재선택 소진 대조 | 미검증 |
-| AC-35 | 공유 예산·명시적 중단 | 경로별 최소 잔여 호출 표, 정상 2회/직접 재선택 3회, 컨텍스트/교정 및 마지막 재선택 소진 대조 | 미검증 |
-| AC-36 | 지시문·예시·기존 wire 사례 | JSON 16개 의미, 전체 응답 스키마와 stdin 분리, schema_selection wire 등록·입력 검사·guidance, 독립 GENERATE의 전체 맥락 및 경계 사례 대조 | 미검증 |
-| AC-37 | 지시문·예시·기존 wire 사례 | 설계 JSON 16개 구문/의미, workflow/variant/원문 평가/개정/준비/직접 제안/위임/사실·준비도 사례 대조 | 미검증 |
-| AC-38 | 지시문·예시·기존 wire 사례 | 설계 JSON 16개 구문/의미, workflow/variant/원문 평가/개정/준비/직접 제안/위임/사실·준비도 사례 대조 | 미검증 |
-| AC-39 | 지시문·예시·기존 wire 사례 | 설계 JSON 16개 구문/의미, workflow/variant/원문 평가/개정/준비/직접 제안/위임/사실·준비도 사례 대조 | 미검증 |
-| AC-40 | 지시문·예시·기존 wire 사례 | 설계 JSON 16개 구문/의미, workflow/variant/원문 평가/개정/준비/직접 제안/위임/사실·준비도 사례 대조 | 미검증 |
-| AC-41 | 지시문·예시·기존 wire 사례 | 설계 JSON 16개 구문/의미, workflow/variant/원문 평가/개정/준비/직접 제안/위임/사실·준비도 사례 대조 | 미검증 |
-| AC-42 | 지시문·예시·기존 wire 사례 | 설계 JSON 16개 구문/의미, workflow/variant/원문 평가/개정/준비/직접 제안/위임/사실·준비도 사례 대조 | 미검증 |
-| AC-43 | 이유 설명·중앙 제어 규칙 | 이유 문자열과 ID 검증의 분리, 이유로 권한·필수 재시도를 만들지 않는 대조 | 미검증 |
-| AC-44 | 선택 평가 기록 | 타당성·근거성·구분·후속 일관성·회복 성격의 다섯 축과 복수 유효 선택 대조 | 미검증 |
-| AC-45 | 호출 관측·선택 이력 | 요청/근거/정의/선택/호출/현재 binding/교정/재선택/결과·중단 연결 대조 | 미검증 |
-| AC-46 | 이유 설명·중앙 제어 규칙 | 이유 문자열과 ID 검증의 분리, 이유로 권한·필수 재시도를 만들지 않는 대조 | 미검증 |
-| AC-47 | 크기·종단 실행 비교 | 동일 입력·컨텍스트·profile의 전체/SELECT/모든 GENERATE 크기·분기·최댓값, 실제 호출·사용량·지연·결과 비교 | 미검증 |
-| AC-48 | 크기·종단 실행 비교 | 동일 입력·컨텍스트·profile의 전체/SELECT/모든 GENERATE 크기·분기·최댓값, 실제 호출·사용량·지연·결과 비교 | 미검증 |
-| AC-49 | 크기·종단 실행 비교 | 동일 입력·컨텍스트·profile의 전체/SELECT/모든 GENERATE 크기·분기·최댓값, 실제 호출·사용량·지연·결과 비교 | 미검증 |
-| AC-50 | 이 문서·현재 구현 diff | 기준 05980c8와 수용된 main 및 최종 코드·테스트·증거의 59개 조건 대응 감사 | 미검증 |
-| AC-51 | 기존 정규 회귀 사례 | 선택/재선택/ID/READ/무효화/교정/replay/예산/표현력의 전체 결정적 전이 검증 | 미검증 |
-| AC-52 | 영향 테스트·전체 CI·개발 guardrail | 기존 ID/Whole Front 사례 보존, 정확한 최종 소스의 영향 및 전체 5개 shard·예산·정리 확인 | 미검증 |
-| AC-53 | 실제 Codex 런타임 | 현재 Provider/model과 전체 생성 스키마로 원래 인사·에세이 입력의 유효한 타입 결과 확인 | 미검증 |
-| AC-54 | 실제 호출별 관측 기록 | 소스·CLI·모델·추론 강도·입력·schema hash·native/typed 결과와 실효 한도·사용량 또는 관측 불가 확인 | 미검증 |
-| AC-55 | 인식 가능한 출력 한도 설정 | 요청한 설정과 실제 인식·적용 증거 분리; 무시된 키·파서 수용만으로 효과를 주장하지 않음 | 미검증 |
-| AC-56 | 새 유한 호출 캠페인 원장 | 기존 40/40 보존, 별도 사전 허용·모든 실패/사용량 불확실성·소스 불변·소유 프로세스 정리 확인 | 미검증 |
-| AC-57 | context 서비스·renderer·adapter | 적격 continuation의 정상 GENERATE·재선택 증분에서 변경 없는 요청·근거·카탈로그 생략, 독립/복구 전체 재전달 및 명시적 추가·교체·제거·교정 대조 | 미검증 |
-| AC-58 | 전달 스냅샷·비용 관측 | 전체/증분·복구 사유와 계약·결과 연결, 최대/종단 전송량·입력 토큰·캐시·비용·지연·전체 재전달 빈도/비용 구분 및 중단·불확실성·예산 회귀 | 미검증 |
-| AC-59 | Lead bound 지시·호출별 guidance·현재 계약 | 공통 지시와 현재 국면/허용 액션/스키마 일치, 잘못된 국면·본문/허위 완료·delta 생략/삭제·교정/재선택/복구 및 전문가·단일 국면 보존 대조 | 미검증 |
+이 표는 조건별 구현 소유와 검증 대상을 연결한다. 현재 소스의 통과 여부는
+[#897 검증 기록](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/897#issuecomment-6556708277)과
+[#898 최종 감사](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/898)에서 확인한다.
+역사적 PASS와 새 구현의 PASS를 합치지 않는다. H894/H895/H896은 통합된 자식의 역사적 증거,
+P897은 이번 관측·보고와 회귀의 검증 범위, N898은 두 원래 입력·실제 복구의 최종 검증 범위다.
+D806은 사후평가 Backlog의 선택 packet/UI·실제 인간 평가이며 현재 구현을 차단하지 않는다.
+
+| 조건 | 구현 소유 | 기존 ID | 검증 단계와 범위 |
+| --- | --- | --- | --- |
+| AC-01 | G/K/S | W,WF | H894: full과 모든 group/member/partition의 결과 합집합 |
+| AC-02 | G/K | W,WF | H894: 15그룹·family·혼합 구성원 |
+| AC-03 | G/K | W,WF | H894; 과거 정의 trace는 P897 |
+| AC-04 | G/WIRE | W,WF | H894: 카드 네 필드·기존 효과·비권한성 |
+| AC-05 | G/K/S/O | W,E1,WF | H894: 전체 eligibility·Host 임의 선택 금지 |
+| AC-06 | G/K | W,WF | H894: 역할·문서·operation 합법 조합 |
+| AC-07 | G/K/O | W,WF,E1 | H894: 준비/직접 제안·authoring/review_only |
+| AC-08 | G/S/WIRE/P | W,E1,WF,P | H896: SELECT 제어·컨텍스트·현재 Phase 안내 |
+| AC-09 | G/S/WIRE | W,WF | H894: 닫힌 다섯 필드·현재 ID·음성 대조 |
+| AC-10 | G/S/K | W,WF | H894: Host ID와 모델 group/reason 분리 |
+| AC-11 | WIRE/P/S | P,PO,WF | H896: 사실 기반 짧은 안내·이유 형식 과잉 강제 금지 |
+| AC-12 | S/WIRE/N/V | B1,E1,ED,WF | H896: 전체 원본과 검증된 이력 재사용 구분 |
+| AC-13 | G/K/S | W,WF | H894: 전체 member와 모든 partition |
+| AC-14 | K/S/N/WIRE | W,WF,B1 | H894: 완성된 native schema·참조 폐쇄·strict guard |
+| AC-15 | S/K/G | W,E1,EF,WF | H895: phase별 action 합성·잔여 비용 |
+| AC-16 | G/S | W,E1,WF | H894: 재선택의 다른 모든 그룹·stale 거절 |
+| AC-17 | G/S/O | E1,L2 | H895: 재선택 기록 후 GEN 직행·이력 보존 |
+| AC-18 | G/S | W,E1 | H894: typed control·정확한 binding |
+| AC-19 | S/O/L | E1,L1,L2 | H895: physical 제어 완료와 업무 완료 분리 |
+| AC-20 | S/K/O | W,WF,Q,V9 | H894: owner·권한·admission·지원 profile |
+| AC-21 | K/S | W,WF | H894: 원래 business 객체·variant·codec |
+| AC-22 | G/S | W,E1,C1 | H894; trace의 ID 의미 분리는 P897 |
+| AC-23 | G/K/S | W,E1,C1,H1 | H894; 과거 카드의 durable 복원은 P897 |
+| AC-24 | G/S/K | W,E1,A2 | H894: catalog가 exact 계약 검증을 대체하지 않음 |
+| AC-25 | G/S/C/H | W,E1,C1,B1,H1 | H894; 역사 snapshot/current binding/wire 격리는 P897 |
+| AC-26 | G/S/O | E1,E2,L1,L2 | H895; 실제 phase/delivery 관측은 P897 |
+| AC-27 | G/S/K | E1,L1 | H895: READ fresh rebind·그룹 무효화 |
+| AC-28 | G/S/O | E1,A2 | H895: revision/권한 변경·stale 거절 |
+| AC-29 | S/O/G | L1,A1,A2,B1 | H895: 동결 repair/replay와 fresh 분리 |
+| AC-30 | S/O | E1,L1,A2 | H895: 교정 중 새 정보·원래 실패 lineage |
+| AC-31 | S/O/L | E1,L1,L2,A1,E2 | H895: 모든 physical 시도를 같은 예산에 포함 |
+| AC-32 | S/O | E1,L2 | H895: 정상2·직접 재선택3·SELECT 최소2 |
+| AC-33 | S/O | E1,L2,A1 | H895: 경로별 최소2·3·1·2·2와 동결 컨텍스트 비용 |
+| AC-34 | G/S/O | L2 | H895: 마지막 유효 재선택 보존 후 STOP |
+| AC-35 | S/O | L2,E2,A1 | H895: 임의 그룹·전체 계약 fallback·강제 완료 금지 |
+| AC-36 | G/K/WIRE/S | WF,W | H896: 16예시·15그룹·운영 동적 ID |
+| AC-37 | S/K/WIRE | WF,E1 | H896: workflow/task revision·catalog·계약 pair |
+| AC-38 | G/K/O | WF,E1 | H896: 원문 평가와 작업 내 검토 의미 분리 |
+| AC-39 | G/K/O | WF | H896: 준비 추천과 실제 변경 제안 |
+| AC-40 | G/K/P | WF | H896: 위임 선택 보존·불필요한 질문 금지 |
+| AC-41 | G/K/S | WF,E1 | H896: READ 사실과 전체 readiness/unknown |
+| AC-42 | G/K/S | WF,E1 | H896: 복수 타당한 선택·직접 재선택 |
+| AC-43 | G/S/OBS/REP | W,E1,L1,L2 | P897: 이유 변경이 권한·재시도·예산을 바꾸지 않음 |
+| AC-44 | OBS/REP·평가 protocol | W,C1 | P897: 증거/미평가 구분; 실제 packet/UI·인간 평가는 D806 |
+| AC-45 | G/OBS/REP/S/O/C/H | E1,L1,L2,A1,A2,C1,H1 | P897: 전체 lineage·당시 정의·terminal·비공개 저장 |
+| AC-46 | G/K/S | W,WF | H894: 공통 reason 문자열·새 필수 근거 필드 금지 |
+| AC-47 | K/S/V/A/REP | W,WF,B1,P1,M1 | P897: 같은 comparison basis의 native 크기·분기·최댓값 |
+| AC-48 | A/OBS/REP/S/O /CAP/U/BACK/TA| E2,L1,L2,A1,A2,B1,P1,M1,F | P897 집계; 실제 두 입력 종단 관측은 N898 |
+| AC-49 | K/G/S/REP | W,WF,M1 | P897: 전체 inventory·최대 크기/복잡도·고정 성능 목표 금지 |
+| AC-50 | G/K/S/O/OBS/REP/C/H | GB,GF,GP,GI,RB | P897 연결표·graph/facade; GP는 기존 SKIP; 최종 감사 N898 |
+| AC-51 | G/K/S/O/L/OBS/REP | W,WF,E1,E2,EF,L1,L2,A1,A2,B1,H1 | P897: 원래 표·동적 음성·회복·예산 사례 보존 |
+| AC-52 | K/S/N | WF,GB,GF,GP,GI,RB | P897: 최종 같은 source의 guardrail/영향/full5·정리 |
+| AC-53 | S/O/N/V | B1,WF | N898: 두 원래 입력·실제 복구; H896 실제 인사는 부분 증거 |
+| AC-54 | S/N/V/A/OBS/REP | B1,P1,M1 | N898: 최종 source/CLI/model/hash/typed; H896는 역사 증거 |
+| AC-55 | N/V/A | B1,M1 | N898 조건부: 출력 cap 사용 시 실제 인식·적용 증명, 미관측은 unknown |
+| AC-56 | N/V/L | B1,E2 | N898: 새 유한 admission; 기존40·격리4·닫힌896 예외 보존 |
+| AC-57 | G/S/WIRE/N/OBS/REP/C/H | B1,E1,ED,H1 | H896 + P897 역사 확장 회귀 + N898 실제 두 입력/복구 |
+| AC-58 | S/L/A/OBS/REP/O/C/H /CAP/U/BACK/TA| E1,E2,L1,L2,A1,A2,B1,P1,M1,H1,F | P897 전달/집계·불확실성; 실제 종단 관측 N898 |
+| AC-59 | P/WIRE/S/G | P,PO,WF,E1,B1,V9 | H896; trace 비간섭 P897·최종 실제 복구 N898 |
+
+### 소스와 정규 테스트의 연결
+
+소스 별칭은 `src/story_writing_agents/` 기준이다.
+
+`G` lead_schema_groups, `K` lead_provider_contracts, `S` agent_context/service,
+`O` orchestrator, `WIRE` provider_wire, `A` agent_context/accounting,
+`L` agent_context/ledger, `N` codex_adapter, `V` provider_adapter,
+`C` conversations/events, `H` conversations/context, `P` prompts,
+`OBS` agent_context/group_observation, `REP` agent_context/group_reporting,
+`CAP` agent_exchanges/capture, `U` interactive_terminal/_response_usage,
+`BACK` backend, `TA` antigravity_adapter를 뜻한다.
+
+테스트 별칭은 아래 정확한 canonical ID를 가리킨다. 26개 모두 기존 2,527 ID에 있다.
+[역사적 CI 41138175373](https://github.com/Kims-DeveloperGroup/story-writing-agents/actions/runs/41138175373)에서
+**GP는 기존 declared SKIP**, 나머지 25개는 PASS였다. GP를 실행 PASS로 적지 않는다.
+이 이력은 현재 #897 변경의 검증을 대신하지 않는다.
+
+- `W`: `tests.test_agent_context_service.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact`
+- `WF`: `tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict`
+- `E1`: `tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit`
+- `E2`: `tests.test_agent_context_execution.ContextExecutionFailureTests.test_prepared_submitted_timeout_cancel_and_malformed_outcomes_are_exact`
+- `EF`: `tests.test_agent_context_execution.ContextExecutionFailureTests.test_final_provider_call_is_answer_only_and_rejects_nonterminal`
+- `ED`: `tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps`
+- `L1`: `tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_rejection_is_repaired_once`
+- `L2`: `tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_no_repair_capacity_preserves_validation_notice_without_authority`
+- `LR`: `tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_original_and_repair_validation_details_persist_across_restart`
+- `A1`: `tests.test_provider_auth_recovery.ContextRecoveryTests.test_safe_replay_preserves_wire_and_counts_distinct_physical_calls`
+- `A2`: `tests.test_provider_auth_recovery.ContextRecoveryTests.test_source_drift_vetoes_replay_before_submission`
+- `C1`: `tests.test_collaboration_events.CollaborationWireContractTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip`
+- `H1`: `tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch`
+- `B1`: `tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread`
+- `P1`: `tests.test_antigravity_parity.AntigravityParityTests.test_contextual_invocation_captures_and_accounts_rendered_schema_only_for_antigravity`
+- `M1`: `tests.test_agent_context_accounting.ProviderPayloadAccountingTests.test_call_totals_keep_reference_envelopes_and_escaping_counted`
+- `P`: `tests.test_prompts.PromptAssemblerTests.test_lead_prompt_is_front_channel_router_watcher_critic_and_non_authority`
+- `PO`: `tests.test_prompts.PromptAssemblerTests.test_lead_overlay_supersedes_retained_policy_and_preserves_specialist_bytes`
+- `Q`: `tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_strict_provider_outcomes_reject_unknown_private_mixed_and_duplicate`
+- `V9`: `tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_revision_timeout_keeps_superseded_confirmation_non_authorizing`
+- `GB`: `tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief`
+- `GF`: `tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_supported_module_surfaces_do_not_expand_the_root_facade`
+- `GP`: `tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_temporary_base_and_optional_artifacts_exclude_vendored_source`
+- `GI`: `tests.test_agent_context_accounting.AgentContextBoundaryTests.test_exact_internal_facade_and_public_facades_are_unchanged`
+- `RB`: `tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected`
+- `F`: `tests.test_interactive_collaboration_view.ArtifactAndGitCollaborationViewTests.test_runtime_artifact_and_local_commit_events_are_complete_and_safe`
 
 ## 전송과 Lead 인지의 구현 기준
 
@@ -392,6 +443,77 @@ history로 여유를 만들지 않는다. 최종 실행 통과는 별도로 확�
 부족하면 제출 전에 STOP하므로, 그 경로는 별도 기존 T5 oracle로 확인한다.
 이 row의 단일 국면 설정을 다른 ordinary 입력으로 넓히거나 기본 활성화의
 통과 증거로 계산하지 않는다. 순수 스키마 export 검증은 물리 호출이 아니다.
+
+## 관측과 비교의 판정 기준
+
+`outer_contract_linkage_utf8_bytes`는 최종 요청의 `schema_selection`에서 실제 존재하는
+`issued_contract`·`active_selection`·`catalog_id` 부분 객체를 런타임 JSON으로 직렬화한
+UTF-8 크기다. 발행 계약의 중첩 위치를 유지하며, 전체 native 입력·schema 바이트와 구분한다.
+
+Provider admission 전에 최소 호출 예산이 부족하면 기존 `REQUEST_NOT_SUBMITTED` 결과가
+남는다. Phase binding·준비·제출이 없는 이 경우에는 provider-group trace를 생성하지 않는다.
+실제 PREPARED/SUBMITTED 경로는 기존 회계와 관측에 따른 상태를 보고한다. 실패 메시지의
+언어와 작업 리비전 참조는 원래 발행 규칙을 따르며 관측 collector가 바꾸지 않는다.
+
+관측은 실행을 설명하는 자료다. 선택 이유의 문장 품질이나 관측 보고서가 그룹,
+업무 권한, 교정 여부 또는 호출 예산을 바꾸지 않는다. 이 절은 #897 구현과 검증에
+적용할 판정 기준이며, 아래의 예시 수치가 성능 목표나 Provider 설정은 아니다.
+
+당시 카탈로그는 ID와 함께 카드 목록·정의·선택 기준을 보존한다. 원래 요청과
+컨텍스트의 참조, 선택·재선택 이유와 호출, 현재 계약 연결, 실제 전달 방식,
+교정·재실행, 마지막 결과 또는 중단이 하나의 이력으로 이어져야 한다. 내부 이력을
+공개 진행 표시나 다음 Lead 요청의 근거로 자동 복사하지 않는다.
+
+예를 들어 SELECT를 준비했지만 전송 전에 중단됐다면 물리 호출 수는 늘지 않는다.
+전송 후 구조 검증에서 거절됐다면 호출 수와 관측된 비용은 남는다. `DELTA` 계획이
+있어도 최종 전송이 bootstrap이었다면 실제 전달은 bootstrap으로 보고한다.
+실제 native 입력·전체 schema 바이트와 논리 컨텍스트 크기는 서로 다른 항목이다.
+
+#896의 실제 Codex 캡처에서는 재개 요청의 CLI usage가 누적값이었다.
+
+| 관측 | 입력 토큰 | 출력 토큰 | 의미 |
+| --- | ---: | ---: | --- |
+| 첫 CLI 완료 | 25,043 | 149 | 첫 turn까지의 누적 |
+| 재개 CLI 완료 | 53,410 | 298 | 같은 세션의 두 turn 누적 |
+| native 마지막 turn | 28,367 | 149 | 두 번째 turn만의 사용량 |
+
+이 경우 raw 완료 두 값을 더하면 중복 계산이다. 누적과 호출별 관측을 출처·범위와
+함께 구분하고, 같은 세션의 검증된 누적 prefix에서 단위와 단조 증가가 확인될 때만
+차이를 계산한다. 세션 변경, 카운터 재설정, 누락 또는 서로 다른 출처의 관측은
+독립 처리하거나 unavailable로 둔다. 관측되지 않은 금액·지연도 0으로 채우지 않는다.
+
+크기 비교는 같은 요청·컨텍스트·계약 profile에서 기존 전체 계약, SELECT, 모든
+GENERATE의 최종 직렬화를 사용한다. 카탈로그·선택기·상세 schema·전체 요청의
+UTF-8 바이트, 외부 대안·anyOf·정의 수와 가장 큰 그룹을 구분한다. 정상 추가 호출과
+실패·교정·인증 replay·예외적 전체 재전달까지 포함한 종단 비용을 함께 보고한다.
+결정적 렌더 결과와 실제 Provider 관측은 구분하며, 일부 schema 축소만으로 토큰·
+금액·품질 향상을 주장하지 않는다. 실제 인간 품질 비교는 사후평가 #806에서 한다.
+
+### 사람이 확인할 선택 평가
+
+선택의 구조적 유효성과 설명의 설득력은 각각 기록한다. 하나의 요청에 여러 그룹이
+타당할 수 있으며, 설명이 덜 설득력 있다는 이유로 런타임 호출을 추가하지 않는다.
+평가자는 실제 제공된 입력·당시 카드·선택 이유·후속 결과를 함께 보고 다음 축을
+독립적으로 판단한다. 미제공 자료나 모델 내부의 선택 원인은 추정하지 않는다.
+
+| 축 | 사람이 확인할 질문 |
+| --- | --- |
+| 선택 타당성 | 이 요청과 당시 허용 결과에서 선택한 그룹이 가능한가? 다른 타당한 선택도 허용했는가? |
+| 근거성 | 이유에 언급한 사실이 실제 입력에 있는가? 읽지 않은 자료나 없는 승인을 만들지 않았는가? |
+| 그룹 구분 | 인접 그룹의 중요한 차이를 현재 요청에 맞게 이해했는가? 모든 후보의 비교 설명은 요구하지 않는다. |
+| 후속 결과 일관성 | 선택한 그룹의 상세 결과가 요청과 현재 근거에 부합하는가? 구조 통과와 업무 완료를 구분했는가? |
+| 회복의 성격 | 재선택이 초기 오선택, 새 정보, 요청 변경 중 무엇과 관련되는가? 판단할 자료가 없으면 판정불가로 남겼는가? |
+
+예를 들어 이미 READ한 개요에 `결말: 미정`이 있고 사용자가 결말의 현재 상태를
+묻는다면 그 사실에 한정한 답을 평가한다. 다른 핵심 문서를 읽지 않았다는 이유만으로
+전체 준비도 평가를 강제하지 않는다. 평가 기록에는 제공 자료의 참조, 각 축의 판단과
+짧은 근거, 실제 평가자와 평가 시점, 재선택 전후의 입력 변화를 남긴다.
+
+기존 `tools/evaluate_lead_editorial.py`의 `prepare/grade/compare`는 작품 품질용
+별도 rubric과 shell 참여 절차를 갖는다. 이 도구의 기존 다섯 축으로 위 선택 다섯
+축을 평가했다고 표시하지 않는다. 실제 선택 품질 평가와 사용자 참여는 사후평가
+#806에 인계하며, 실행 전에 별도의 rubric과 shell 입력·결과 연결을 준비한다.
+현재 자동 회귀나 합성 기록은 인간 판단 또는 품질 개선의 증거가 아니다.
 
 ## 남은 작업
 

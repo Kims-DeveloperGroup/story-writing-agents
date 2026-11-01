@@ -3,6 +3,7 @@
 from __future__ import annotations
 from .provider_wire import common_contract_guide
 from .provider_adapter import ProviderContextWitness, ProviderContinuationRejection
+from .agent_context.accounting import ProviderUsageObservation, ProviderUsageScope
 
 import asyncio
 import hashlib
@@ -297,10 +298,10 @@ def _codex_rollout_candidate(root: Path, thread_id: str) -> Path | None:
     return Path(rows[0][0])
 
 
-def inspect_codex_context_witness(
+def _inspect_codex_native_observation(
     native_state: Path, invocation: ProviderInvocation, thread_id: str,
     *, previous: ProviderContextWitness | None = None, anchor: ProviderContextWitness | None = None, before: bool = False,
-) -> ProviderContextWitness | None:
+) -> tuple[ProviderContextWitness, tuple[ProviderUsage, ProviderUsage] | None, ProviderUsage | None, bool] | None:
     """소유한 0.164.0 이력만 읽고 미확인을 보존 증거로 승격하지 않는다."""
     try:
         if (type(thread_id) is not str or str(uuid.UUID(thread_id)) != thread_id
@@ -366,7 +367,7 @@ def inspect_codex_context_witness(
                     or hashlib.sha256(raw[:anchor.prefix_utf8_bytes]).hexdigest() != anchor.prefix_sha256):
                 return None
             if before:
-                return previous if len(raw) == previous.prefix_utf8_bytes else None
+                return (previous, None, None, False) if len(raw) == previous.prefix_utf8_bytes else None
         elif before:
             return None
         lines = raw.splitlines(keepends=True)
@@ -380,6 +381,7 @@ def inspect_codex_context_witness(
         allowed_events = {"task_started", "task_complete", "item_completed", "thread_settings_applied", "token_count"}
         metadata = active_turn = settings = None
         matched, completed, position = [], set(), 0
+        usage_records = []
         for line in lines:
             record = json.loads(line)
             if type(record) is not dict:
@@ -387,6 +389,12 @@ def inspect_codex_context_witness(
             kind, value = record.get("type"), record.get("payload")
             if kind not in allowed_top or type(value) is not dict:
                 return None
+            if kind == "event_msg" and value.get("type") == "token_count":
+                info = value.get("info")
+                total = _native_usage(info.get("total_token_usage")) if type(info) is dict else None
+                last = _native_usage(info.get("last_token_usage")) if type(info) is dict else None
+                if total is not None and last is not None:
+                    usage_records.append((position, active_turn, total, last))
             if kind == "session_meta":
                 if (metadata is not None or value.get("id") != thread_id or value.get("cli_version") != "0.164.0"
                         or value.get("originator") != "codex_exec" or value.get("source") != "exec"
@@ -430,10 +438,68 @@ def inspect_codex_context_witness(
                 or previous is not None and previous.settings_digest != settings):
             return None
         workspace.require_current()
-        return ProviderContextWitness(thread_id, rollout_id, path, scope, observed[:2], len(raw),
+        witness = ProviderContextWitness(thread_id, rollout_id, path, scope, observed[:2], len(raw),
             hashlib.sha256(raw).hexdigest(), expected, invocation.context_call_id, matched[0], settings)
+        current = [row for row in usage_records if row[1] == matched[0]]
+        prior = [row for row in usage_records if previous is not None and row[0] < previous.prefix_utf8_bytes]
+        return witness, (current[-1][2:] if current else None), (prior[-1][2] if prior else None), len(completed) == 1
+
     except (OSError, ValueError, TypeError, KeyError, RecursionError):
         return None
+
+
+def _native_usage(value: object) -> ProviderUsage | None:
+    if type(value) is not dict:
+        return None
+    names = ("input_tokens", "output_tokens", "cached_input_tokens")
+    if any(type(value.get(name)) is not int or value[name] < 0 for name in names):
+        return None
+    return ProviderUsage(**{name: value[name] for name in names})
+
+
+def inspect_codex_context_witness(
+    native_state: Path, invocation: ProviderInvocation, thread_id: str, *,
+    previous: ProviderContextWitness | None = None,
+    anchor: ProviderContextWitness | None = None, before: bool = False,
+) -> ProviderContextWitness | None:
+    """Preserve the existing native continuity contract and read guards."""
+    observed = _inspect_codex_native_observation(native_state, invocation, thread_id,
+        previous=previous, anchor=anchor, before=before)
+    return None if observed is None else observed[0]
+
+
+def _codex_usage_observation(raw, observed, invocation):
+    if raw is None:
+        return None
+    unknown = ProviderUsageObservation(raw, ProviderUsageScope.UNKNOWN, "codex.turn.completed.usage")
+    if observed is None or observed[1] is None:
+        return unknown
+    witness, (total, last), previous_total, first_native_turn = observed
+    previous = invocation.context_witness
+    if raw != total:
+        return unknown
+    names = ("input_tokens", "output_tokens", "cached_input_tokens")
+    if previous is None:
+        if invocation.thread_id is not None or not first_native_turn or total != last:
+            return unknown
+    elif previous_total is None or any(
+        getattr(total, name) < getattr(previous_total, name)
+        or getattr(total, name) - getattr(previous_total, name) != getattr(last, name)
+        for name in names
+    ):
+        return unknown
+    def prefix(value):
+        return hashlib.sha256(canonical_provider_json({"scope": value.scope_digest,
+            "rollout": value.rollout_id, "file": value.file_identity,
+            "bytes": value.prefix_utf8_bytes, "sha256": value.prefix_sha256,
+            "settings": value.settings_digest})).hexdigest()
+    session = hashlib.sha256(canonical_provider_json({"scope": witness.scope_digest,
+        "rollout": witness.rollout_id, "file": witness.file_identity,
+        "settings": witness.settings_digest})).hexdigest()
+    return ProviderUsageObservation(raw, ProviderUsageScope.SESSION_CUMULATIVE,
+        "codex.turn.completed+native.token_count.total_and_last", session_ref=session,
+        prefix_ref=prefix(witness), previous_prefix_ref=None if previous is None else prefix(previous),
+        session_start=previous is None and first_native_turn)
 
 
 class CodexAdapter:
@@ -1134,12 +1200,17 @@ class CodexAdapter:
                         "Codex CLI returned malformed structured output",
                         taint_existing_thread=True,
                     ) from exc
+                native_observation = (_inspect_codex_native_observation(native_state, invocation, thread_id,
+                    previous=invocation.context_witness, anchor=invocation.context_anchor)
+                    if invocation.context_call_id is not None else None)
+                raw_usage = self.provider_usage(events)
                 provider_result = ProviderResult(
                     thread_id=thread_id,
                     response_text=response_text,
-                    usage=self.provider_usage(events),
+                    usage=raw_usage,
+                    usage_observation=_codex_usage_observation(raw_usage, native_observation, invocation),
                     actual_transport_utf8_bytes=len(stdin),
-                context_witness=(inspect_codex_context_witness(native_state, invocation, thread_id, previous=invocation.context_witness, anchor=invocation.context_anchor) if invocation.context_call_id is not None else None))
+                    context_witness=None if native_observation is None else native_observation[0])
                 execution_workspace.require_current()
                 return provider_result
             except BaseException as exc:

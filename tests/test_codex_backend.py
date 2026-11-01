@@ -2599,8 +2599,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     "response_text",
                     "thread_id",
                     "usage",
+                    "elapsed_ns",
                 },
             )
+            self.assertIs(type(response["elapsed_ns"]), int)
+            self.assertGreaterEqual(response["elapsed_ns"], 0)
             self.assertEqual(outcome, {"code": "accepted", "outcome": "accepted"})
             self.assertNotIn("stderr", response)
             self.assertNotIn("environment", response)
@@ -2789,6 +2792,20 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         responses = [_group_control("answer.workflow"), _group_answer]
         phases = (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE)
 
+        from story_writing_agents.agent_context.accounting import (
+            ProviderUsage, ProviderUsageScope, normalized_provider_usage,
+        )
+        from story_writing_agents.agent_context.group_observation import LeadGroupTrace
+        from story_writing_agents.agent_context.group_reporting import group_trace_report
+        first_usage = {"input_tokens": 25043, "output_tokens": 149, "cached_input_tokens": 0}
+        second_usage = {"input_tokens": 53410, "output_tokens": 298, "cached_input_tokens": 0}
+        native_usage_cases = (
+            {"total_token_usage": first_usage, "last_token_usage": first_usage},
+            {"total_token_usage": second_usage, "last_token_usage": {
+                "input_tokens": 28367, "output_tokens": 149, "cached_input_tokens": 0}},
+        )
+        group_observations, native_schema_bytes = [], []
+
         class ObservedProvider:
             def __getattr__(self, name):
                 return getattr(provider, name)
@@ -2823,13 +2840,20 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 instructions = json.loads(configs[0].split("=", 1)[1])
                 self.assertEqual(instructions.encode("utf-8"), staged)
                 self.assertEqual(request.stdin, invocation.payload_json)
-                history.complete(invocation)
+                native_info = None if native_usage_cases is None else native_usage_cases[len(native_commands) - 1]
+                if native_info is not None:
+                    native_schema_bytes.append(Path(request.command[request.command.index("--output-schema") + 1]).read_bytes())
+                history.complete(invocation, token_usage=native_info)
                 raw = responses.pop(0)(requests[-1], None)
                 raw_responses.append(raw)
                 output = Path(request.command[request.command.index("--output-last-message") + 1])
                 output.write_text(raw, encoding="utf-8")
                 event = {"type": "thread.started", "thread_id": history.thread_id}
-                return ProcessResult(stdout=canonical_provider_json(event) + b"\n", stderr=b"", returncode=0)
+                stdout = canonical_provider_json(event) + b"\n"
+                if native_info is not None:
+                    stdout += canonical_provider_json({"type": "turn.completed",
+                        "usage": native_info["total_token_usage"]}) + b"\n"
+                return ProcessResult(stdout=stdout, stderr=b"", returncode=0)
             with (mock.patch.dict(os.environ, {"CODEX_HOME": str(history.root)}),
                   mock.patch("story_writing_agents.codex_adapter.run_process", new=native_process)):
                 result = await native_invoke(binding, invocation)
@@ -2860,7 +2884,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 writing_artifacts=WritingArtifactSourceAdapter(repository, scope),
                 focused_conversation=FocusedConversationSourceAdapter(storage.catalog, storage.event_store, scope, None),
                 active_debate=ActiveDebateSourceAdapter(self.workspace, scope, None),
-                own_agent_state=OwnAgentStateSourceAdapter(self.workspace, scope))
+                own_agent_state=OwnAgentStateSourceAdapter(self.workspace, scope), group_observation_sink=group_observations.append)
         self.assertEqual((len(invocations), len(result.provider_calls)), (2, 2))
         self.assertEqual(len(native_commands), len(invocations))
         first, second = [call.payload["response_contract"]["schema_selection"] for call in requests]
@@ -2883,6 +2907,42 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(result.group_state.accepted_delivery.logical_context)["input"]["untrusted_attached_references"], expected_references)
         self.assertEqual(json.loads(result.group_state.transport_delivery.logical_context)["input"]["untrusted_attached_references"], expected_references)
         assert_done_ledger(result)
+
+        self.assertEqual(tuple(call.accounting.usage for call in result.provider_calls),
+                         (ProviderUsage(25043, 149, 0), ProviderUsage(53410, 298, 0)))
+        usage_observations = tuple(call.accounting.usage_observation for call in result.provider_calls)
+        self.assertTrue(all(item.scope is ProviderUsageScope.SESSION_CUMULATIVE for item in usage_observations))
+        self.assertTrue(usage_observations[0].session_start)
+        self.assertEqual(usage_observations[1].previous_prefix_ref, usage_observations[0].prefix_ref)
+        self.assertEqual(usage_observations[1].session_ref, usage_observations[0].session_ref)
+        self.assertEqual(normalized_provider_usage(usage_observations[1], usage_observations[0]),
+                         ProviderUsage(28367, 149, 0))
+        observed_trace = LeadGroupTrace("native-reader-observation", tuple(group_observations), "accepted")
+        native_report = group_trace_report(observed_trace,
+            tuple((item.call_id, item.accounting) for item in result.provider_calls))
+        self.assertEqual((native_report["submitted_calls"], native_report["input_tokens"],
+                          native_report["output_tokens"], native_report["cached_input_tokens"]),
+                         (2, 53410, 298, 0))
+        self.assertEqual((native_report["full_deliveries"], native_report["delta_deliveries"]), (1, 1))
+        self.assertEqual(native_report["phase_submitted_calls"]["select"], 1)
+        self.assertEqual(native_report["phase_submitted_calls"]["generate"], 1)
+        self.assertEqual(result.group_state.transport_delivery.ledger_record.attempt.plan.delivery_mode.value,
+                         "bootstrap")
+        self.assertEqual(set(second["active_selection"]), {"origin_catalog_id", "group_id"})
+        self.assertNotIn("catalog", second)
+        self.assertNotIn(b'"catalog_at_selection"', invocations[1].payload_json)
+        self.assertIn("selection_criteria", json.dumps(observed_trace.as_object()))
+        for row, invocation, native_schema in zip(native_report["physical_calls"], invocations,
+                                                   native_schema_bytes, strict=True):
+            self.assertEqual(row["payload_utf8_bytes"], len(invocation.payload_json))
+            self.assertEqual(row["schema_utf8_bytes"], len(native_schema))
+            self.assertEqual(row["transport_utf8_bytes"], len(invocation.payload_json))
+        self.assertTrue(native_report["result_accepted"])
+        self.assertIsNone(native_report["task_completion"])
+        self.assertIsNone(native_report["objective_completion"])
+        self.assertIsNone(native_report["end_to_end_elapsed_ns"])
+        self.assertIsNone(native_report["cost"])
+        native_usage_cases = None
 
         # 실제 native 전송은 완료됐지만 업무 응답은 거절된 별도 front이다.
         requests, invocations, raw_responses, native_witnesses, native_commands = [], [], [], [], []

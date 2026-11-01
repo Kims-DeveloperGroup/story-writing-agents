@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from ..agent_context.group_observation import LeadGroupTrace
+from ..agent_context.accounting import (ProviderCallAccounting, provider_call_accounting_from_object, provider_call_accounting_to_object)
+
 from ..core_document_readiness import (
     CoreDocumentAssessment, CoreDocumentReadinessBasis, targets_for_paths, validate_authoring_target_basis, assessment_from_dict as core_assessment_from_dict,
     assessment_to_dict as core_assessment_to_dict, basis_from_dict as readiness_basis_from_dict,
@@ -149,6 +152,7 @@ class CollaborationEventKind(StrEnum):
     INTERRUPTION = "interruption"
     TERMINAL_OUTCOME = "terminal_outcome"
     PROVIDER_CALL_ACCOUNTING = "provider_call_accounting"
+    LEAD_GROUP_TRACE = "lead_group_trace"
     LEAD_OUTCOME_FAILURE = "lead_outcome_failure"
     ARTIFACT_REVIEW_CANDIDATE = "artifact_review_candidate"
     ARTIFACT_REVIEW_SYNTHESIS = "artifact_review_synthesis"
@@ -3912,6 +3916,17 @@ class CollaborationTerminalOutcomePayload:
 
 
 @dataclass(frozen=True, slots=True)
+class CollaborationLeadGroupTracePayload:
+    """Private non-authorizing trace, absent from ordinary readable content."""
+
+    trace: LeadGroupTrace
+
+    def __post_init__(self) -> None:
+        if type(self.trace) is not LeadGroupTrace:
+            raise TypeError("group trace payload requires a typed private trace")
+
+
+@dataclass(frozen=True, slots=True)
 class CollaborationProviderCallPayload:
     """Content-free durable lifecycle fact for one physical provider call."""
 
@@ -3925,6 +3940,7 @@ class CollaborationProviderCallPayload:
     validation_details: tuple[str, ...] = ()
 
     usage: ProviderUsage | None = field(default=None, kw_only=True)
+    accounting: ProviderCallAccounting | None = field(default=None, kw_only=True, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if type(self.invocation_id) is not str or type(self.call_id) is not str:
@@ -3950,6 +3966,11 @@ class CollaborationProviderCallPayload:
             "provider call state",
         )
         validate_details(self.validation_details)
+        if self.accounting is not None:
+            if type(self.accounting) is not ProviderCallAccounting:
+                raise TypeError("provider call accounting has an invalid type")
+            if self.accounting.state.value != self.state.value or self.accounting.usage != self.usage:
+                raise ValueError("provider call accounting differs from the actual lifecycle fact")
         if self.usage is not None:
             if type(self.usage) is not ProviderUsage:
                 raise TypeError("provider call usage must be ProviderUsage or None")
@@ -4117,6 +4138,7 @@ CollaborationPayload = (
     | CollaborationInterruptionPayload
     | CollaborationTerminalOutcomePayload
     | CollaborationProviderCallPayload
+    | CollaborationLeadGroupTracePayload
     | CollaborationLeadOutcomeFailurePayload
     | ArtifactReviewCandidatePayload
     | ArtifactReviewSynthesisPayload
@@ -5300,6 +5322,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
     if type(payload) is CollaborationProviderCallPayload:
         value = {
             **({"usage": asdict(payload.usage)} if payload.usage is not None else {}),
+            **({"accounting": provider_call_accounting_to_object(payload.accounting)} if payload.accounting is not None else {}),
             "call_id": payload.call_id,
             "call_kind": payload.call_kind.value,
             "invocation_id": payload.invocation_id,
@@ -5312,6 +5335,8 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         if payload.validation_details:
             value["validation_details"] = list(payload.validation_details)
         return value
+    if type(payload) is CollaborationLeadGroupTracePayload:
+        return {"payload_type": "lead_group_trace", "trace": payload.trace.as_object()}
     if type(payload) is CollaborationLeadOutcomeFailurePayload:
         return {
             "call_id": payload.call_id,
@@ -6479,6 +6504,9 @@ def _decode_payload(value: object) -> CollaborationPayload:
             authoring_scope=_decode_optional_authoring_scope(item),
             trace=_decode_optional_reply_trace(item),
         )
+    if payload_type == "lead_group_trace":
+        item = _object(value, {"payload_type", "trace"}, label="private group trace payload")
+        return CollaborationLeadGroupTracePayload(LeadGroupTrace.from_object(item["trace"]))
     if payload_type == "lead_outcome_failure":
         item = _object(
             value,
@@ -6650,11 +6678,13 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 "role",
                 "state",
             } | ({"validation_details"} if "validation_details" in value else set())
-            | ({"usage"} if "usage" in value else set()),
+            | ({"usage"} if "usage" in value else set())
+            | ({"accounting"} if "accounting" in value else set()),
             label="provider-call payload",
         )
         return CollaborationProviderCallPayload(
             usage=_decode_provider_usage(item["usage"]) if "usage" in item else None,
+            accounting=provider_call_accounting_from_object(item["accounting"]) if "accounting" in item else None,
             invocation_id=_string(
                 item["invocation_id"],
                 label="provider invocation ID",
@@ -7148,6 +7178,7 @@ def _validate_collaboration_payload(
         CollaborationEventKind.PROVIDER_CALL_ACCOUNTING: (
             CollaborationProviderCallPayload,
         ),
+        CollaborationEventKind.LEAD_GROUP_TRACE: (CollaborationLeadGroupTracePayload,),
         CollaborationEventKind.LEAD_OUTCOME_FAILURE: (
             CollaborationLeadOutcomeFailurePayload,
         ),
@@ -7330,6 +7361,7 @@ def _validate_collaboration_direction(
             (CollaborationActorKind.RUNTIME, CollaborationActorKind.LEAD),
             (CollaborationActorKind.RUNTIME, CollaborationActorKind.SPECIALIST),
         },
+        CollaborationEventKind.LEAD_GROUP_TRACE: {(CollaborationActorKind.RUNTIME, CollaborationActorKind.LEAD)},
         CollaborationEventKind.LEAD_OUTCOME_FAILURE: {
             (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
         },
@@ -7896,6 +7928,7 @@ __all__ = [
     "CollaborationLeadEvidence",
     "CollaborationLeadJudgmentPayload",
     "CollaborationLeadOutcomeFailureCode",
+    "CollaborationLeadGroupTracePayload",
     "CollaborationLeadOutcomeFailurePayload",
     "CollaborationLeadExplorationRequestPayload",
     "CollaborationLeadExplorationResultPayload",

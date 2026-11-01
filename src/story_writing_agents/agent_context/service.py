@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from .accounting import normalized_provider_usage
+from .group_observation import LeadGroupObservation, LeadGroupObservationKind, LeadGroupObservationSink
+
 from ..provider_adapter import ProviderContextWitness
 from ..provider_wire import SchemaSelectionInput, LEAD_GROUP_PHASE_GUIDES
 from .accounting import canonical_provider_json
@@ -1988,8 +1991,15 @@ def _provider_input_token_total(
     if not accountings:
         return None
     total = 0
+    previous = {}
     for accounting in accountings:
         usage = accounting.usage
+        observation = accounting.usage_observation
+        if observation is not None:
+            key = observation.session_ref, observation.previous_prefix_ref
+            usage = normalized_provider_usage(observation, previous.get(key))
+            if observation.session_ref is not None and observation.prefix_ref is not None:
+                previous[(observation.session_ref, observation.prefix_ref)] = observation
         if usage is None or usage.input_tokens is None:
             return None
         total += usage.input_tokens
@@ -5850,6 +5860,7 @@ class AgentContextService:
         contract_lineage: BoundCallLineage | None = None,
         validation_sink: Callable[[str, tuple[str, ...]], object] | None = None,
         event_sink: ContextExecutionEventSink | None = None,
+        group_observation_sink: LeadGroupObservationSink | None = None,
         progress_sink: ContextActionProgressSink | None = None,
         phase: str | None = None,
         round_number: int | None = None,
@@ -6018,6 +6029,7 @@ class AgentContextService:
                         contract_lineage=contract_lineage,
                         validation_sink=validation_sink,
                         event_sink=event_sink,
+                            group_observation_sink=group_observation_sink,
                         progress_sink=progress_sink,
                         phase=phase,
                         round_number=round_number,
@@ -6079,6 +6091,7 @@ class AgentContextService:
         contract_lineage: BoundCallLineage | None,
         validation_sink: Callable[[str, tuple[str, ...]], object] | None,
         event_sink: ContextExecutionEventSink | None,
+        group_observation_sink: LeadGroupObservationSink | None,
         progress_sink: ContextActionProgressSink | None,
         phase: str | None,
         round_number: int | None,
@@ -6095,6 +6108,55 @@ class AgentContextService:
         current_lineage = contract_lineage
         policy_fingerprint = self._execution_policy_fingerprint
         operation_id = request.operation_id
+
+        def observe_group(kind, *, delivery=None, action_type=None, terminal_code=None):
+            if group_observation_sink is None or group_state is None or group_state.workflow is None:
+                return
+            try:
+                workflow = group_state.workflow
+                binding = None
+                if call_contract is not None:
+                    bound_workflow = call_contract.group_workflow
+                    binding = {
+                        "call_id": call_contract.offers.call_id,
+                        "logical_origin_call_id": call_contract.logical_origin_call_id,
+                        "offer_digest": call_contract.offers.offer_digest,
+                        "eligibility_offer_digest": call_contract.eligibility_offers.offer_digest,
+                        "outer_inner_schema_ids": call_contract.outer_inner_schema_ids,
+                        "binding_phase": call_contract.phase,
+                        "catalog_id": None if bound_workflow is None else bound_workflow.catalog.catalog_id,
+                        "group_id": None if bound_workflow is None or bound_workflow.active_selection is None else bound_workflow.active_selection.group_id,
+                        "completed_read_facts": [
+                            {"evidence_id": item.evidence_id, "source_id": item.source_id,
+                             "revision": item.revision, "source_digest": item.source_digest,
+                             "boundary_digest": item.boundary_digest}
+                            for item in call_contract.offers.completed_read_facts
+                        ],
+                    }
+                if delivery is not None:
+                    delivery = dict(delivery)
+                    delivery["observation_stage"] = "bound_payload_before_native_submission"
+                    delivery["decision_reason"] = (
+                        "verified_native_delta" if delivery.get("mode") == "delta" else
+                        "explicit_fresh" if request.fresh else
+                        "no_prior_delivery" if group_state.transport_delivery is None else
+                        "no_live_thread" if current_thread_id is None else
+                        "no_accepted_delivery" if group_state.accepted_delivery is None else
+                        "preservation_unproven"
+                    )
+                _require_sync_none(group_observation_sink(LeadGroupObservation(
+                    kind, group_state.request_basis,
+                    workflow.phase if call_contract is None else call_contract.schema_group_phase,
+                    None if call_contract is None else call_contract.offers.call_id,
+                    workflow.catalog.historical_snapshot(),
+                    tuple(_canonical_bytes(item.as_object()) for item in workflow.history),
+                    None if binding is None else _canonical_bytes(binding),
+                    None if delivery is None else _canonical_bytes(delivery), action_type,
+                    None if call_contract is None or call_contract.lineage is None else call_contract.lineage.kind, terminal_code,
+                )))
+            except BaseException:
+                # Observation cannot change execution, authority, or the primary failure.
+                pass
 
         def inspect_provider_thread() -> str | None:
             if request.execution_workspace is None:
@@ -6195,12 +6257,14 @@ class AgentContextService:
                 pass
             _reject_provider_call_without_replacing(finalizer, code)
             response_rejection_code = code
+            observe_group(LeadGroupObservationKind.REJECTED, terminal_code=code.value)
 
         def completed_group_state() -> ContextGroupInvocationState | None:
             if group_state is None:
                 return None
             if call_contract is None or call_decoded is None or group_state.workflow is None:
                 raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+            observe_group(LeadGroupObservationKind.TERMINAL, terminal_code="accepted")
             return replace(group_state, workflow=group_state.workflow.complete(call_contract.generation_binding(), call_decoded.selected_result))
 
         try:
@@ -6681,6 +6745,7 @@ class AgentContextService:
                             payload=call_request.payload,
                             stage="provider_payload",
                         )
+                    observe_group(LeadGroupObservationKind.BOUND, delivery=(call_request.payload.get("response_contract", {}).get("schema_selection", {}).get("context_delivery")))
                     return call_request
                 call_request = build_call_request(call_id, current_lineage)
                 if group_state is None:
@@ -6980,6 +7045,7 @@ class AgentContextService:
                     record = call_contract.record_group_control(call_decoded)
                     group_state = replace(group_state, workflow=group_state.workflow.accept(
                         record, remaining_calls=physical_call_limit - len(calls)))
+                    observe_group(LeadGroupObservationKind.CONTROL_ACCEPTED)
                     action_session.advance_group_control(correlation)
                     history_advanced = True
                     require_execution_workspace_current()
@@ -6995,6 +7061,7 @@ class AgentContextService:
                         raise _execution_error(ContextExecutionErrorCode.ACTION_EXHAUSTED)
                     continue
                 if type(action) is ContextSearchAction:
+                    observe_group(LeadGroupObservationKind.CONTEXT_ACTION, action_type="search_context")
                     history_advanced = True
                     stage = "action_observer"
                     _emit_context_event(
@@ -7065,6 +7132,7 @@ class AgentContextService:
                             group_state = replace(group_state, accepted_delivery=group_state.transport_delivery)
                     continue
                 if type(action) is ContextReadAction:
+                    observe_group(LeadGroupObservationKind.CONTEXT_ACTION, action_type="read_context")
                     history_advanced = True
                     stage = "action_observer"
                     read_progress_sources = action_session.progress_sources(
@@ -7365,6 +7433,7 @@ class AgentContextService:
             stage = "exhausted"
             raise _execution_error(ContextExecutionErrorCode.ACTION_EXHAUSTED)
         except BaseException as failure:
+            observe_group(LeadGroupObservationKind.TERMINAL, terminal_code=(response_rejection_code.value if response_rejection_code is not None else type(failure).__name__))
             if group_state is not None:
                 if (stage == "exhausted" and group_state.workflow is not None
                         and group_state.workflow.phase in {LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE}):

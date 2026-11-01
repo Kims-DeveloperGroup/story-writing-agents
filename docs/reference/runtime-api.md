@@ -587,6 +587,36 @@ from story_writing_agents.conversations import (
 
 They are deliberately not package-root exports.
 
+### 두 국면의 읽기 전용 관측 보고
+
+현재 workspace에 저장된 세션과 대화의 식별자를 사용한다.
+
+```python
+reports = runtime.lead_group_reports(
+    session_id="session-1",
+    conversation_id="conversation-1",
+)
+```
+
+`StoryRuntime.lead_group_reports()`는 저장된 논리 호출별 관측과 물리 호출 회계를
+읽어 보고서 tuple을 반환한다. Provider를 호출하거나 현재 작업·권한을 변경하지 않는다.
+당시 카드 정의·선택 기준과 이유, 현재 binding, 실제 전달·교정·재선택·결과의 연결은
+이 명시적 조회에서 확인한다. 내부 trace는 일반 답변·검색 가능한 대화 메모리·진행
+표시에 자동으로 섞이지 않으며, 과거 전체 카드를 정상 GENERATE delta에 재주입하지 않는다.
+
+`project_collaboration_readable_history()`는 전체 저장 이력을 감사하는 별도 API다. trace도 typed record로 남지만 읽을 수 있는 fields와 바이트는 비어 있다. 일반 대화·검색·Lead 메모리에는 trace 내용을 노출하지 않는다. 원본 payload 열람은 이 전체 감사 API를 명시적으로 호출한 경우에만 해당한다.
+
+PREPARED와 실제 SUBMITTED를 구분한다. 최종 회계 없이 남은 PREPARED 기록은
+제출되지 않았다는 증거가 아니므로, 미확인 제출과 확인된 부분합·총량 미관측을 구분한다. 런타임이 직렬화한 native 입력/schema의
+바이트, 모델이 보고한 토큰·캐시, 금액과 지연은 서로 다른 항목이다. 누적 토큰의
+호출별 차이는 같은 native 이력·출처·단위와 단조 증가를 확인할 때만 계산한다.
+미관측 값은 `None`이며, 유효 결과의 수용을 사용자 작업의 완료로 바꾸어 표시하지 않는다.
+
+Provider 호출 지연의 합과 첫 BOUND부터 terminal 게시 직전까지의 관측 시간은
+범위를 구분한다. 후자는 게시 I/O나 그 이전 준비 시간을 포함한 전체 턴 지연이 아니다.
+관측되지 않은 전체 턴 지연은 unavailable로 남긴다. 결과 게시가 없거나 trace가
+불완전하면 남아 있는 회계 사실과 관측의 한계를 함께 보며 성공을 재구성하지 않는다.
+
 ### Explicit task choices and retained messages
 
 `StoryRuntime.decide_lead_task(decision, *, action_progress_sink=None)` and the session facade return `LeadTaskDecisionResult`. Call synchronous `runtime.inspect_lead_collaboration(session_id, conversation_id)` first and choose a returned task or material reference from `available_tasks` or `selectable_materials`. The session facade takes only `conversation_id`. The decision factories generate a request ID; reuse the same decision for a retry.
