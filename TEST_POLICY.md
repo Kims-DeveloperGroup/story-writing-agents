@@ -47,7 +47,78 @@ and an identical complete subtest-cap mapping. It preserves the separate #872 ti
 transition. Other source-ceiling increases remain rejected; test IDs, subtest caps,
 runtime behavior, and workflow limits are unchanged.
 
+### Issue #894의 소스 배정
+
+사용자의 필요시 테스트 예산 초과 허용을 이번의 정확한 **142604→142887** 전환에
+적용한다. 기준 raw142556에 그룹·계약 및 graph 기대 검증317행과 정책 회귀8행을 더하면
+raw142881이다. 기존 #881 helper4행과 이번 정책 helper2행도 청구하여 최종 비용은
+142887이다. 기존 effective 여유44행을 사용한 뒤 ceiling 순증은283행이다.
+
+새 전환은 기존 18000/3600초와 전체 subTest mapping이 동일할 때만 허용한다.
+기존 #881 소스·#872 시간 전환을 보존하고 다른 증가는 계속 거절한다. 기존
+2527개 ID와 Whole Front의 모든 기존 assert를 유지한다. 소스 비용은 정적으로
+실측했으며 실행 시간·통과 여부는 정확한 소스의 영향 테스트와 전체 CI로 검증한다.
+
+#895의 실행 엔진 회귀에는 기존 사용자의 필요시 예산 확대 허용을 정확한
+**142887→143443** 전환에 적용한다. 부모 PR의 누적 비교 **142604→143443**도
+명시적으로 허용하며, 다른 소스 증가는 계속 거절한다. 기존 raw142881에 실행·교정·
+인증 회귀541행과 정책 회귀13행을 더해 raw143435가 된다. 기존 helper6행과 이번
+정책 helper2행까지 청구한 최종 비용은143443이며 추가 여유는 없다. 기존 사례를
+삭제·압축하지 않고 qualified READ 무효화와 실제 리비전 갱신도 검증한다. 두 전환은
+전체 test ID·subTest mapping과 18000/3600초가 동일할 때만 인정한다.
+
+### #897의 관측·사용량 회귀 소스 배정
+
+사용자의 필요시 테스트 예산 초과 허용을 **145817→146667**과 부모 PR의
+main 기준 **142604→146667**에 정확히 적용한다. 당시 정의와 실제 binding,
+제출 불확실성, 누적 usage·footer·codec·전체 그룹 비교를 기존 사례에서 검증하기 위한
+배정이다. 기존 raw144946에 최초 후보715행·정책 회귀11행, 리뷰 회귀와 fixture
+보완79행·owner-only 경계2행·저장·계측 및 호출 전 거절 회귀35행·비공개 표시 검증2행을 더하면 raw145790이다. 기존 청구 helper871행에
+native-history/export fixture4행과 정책 helper2행을 더한877행까지 청구하여
+최종 비용은 **146667**, 추가 여유는 없다. 정식 런타임 AST 그래프는 `TYPE_CHECKING`을 제외한166모듈/756간선이며,
+추가된 UI→공개 domain facade 의존성을 포함한다. 그래프 수치 기대의 교체는 소스 순증0이다.
+
+Root가 원본/후보 SHA, Python3.11 정적컴파일, 기존 동기·비동기 ID와
+subTest 호출 AST, 원래 Front 원문 보존을 확인한다. 기존 추천 결과·요청의 인접성과
+실패 trace 게시, 전체 감사·공개 projection의 구분은 기존 ID의 assertion으로 검증한다.
+정적 증거와 실패한 최초 CI는 새 소스의 실행 통과나 시간을 대신하지 않는다.
+기존2527 ID·전체 subTest mapping·18000/3600초와 원래 Front 사례를 유지한다.
+기존 #881/#894/#895/#896 소스와 #872 시간 전환은 보존하고 다른 증가는 거절한다.
+이 배정은 신규 native 호출예산이나 quarantine 상태를 바꾸지 않는다.
+
+### #898의 최종 실제 검증 소스 배정
+
+사용자의 필요시 테스트 소스 예산 확대 허용을 정확한 **146667→146829**와
+부모 PR의 main 기준 **142604→146829**에 적용한다. 두 원래 입력을 별도 대화에서
+검증하는 단일 활성 도구 757행이 기존 608행을 대체하므로 helper 순증은149행이다.
+기존 도구·닫힌 실행 허가·실제 증거는 보존하며 새 실행 도구로 재사용하지 않는다.
+raw145790에 기존 ID의 좁은 전환/인접값 거절 검증11행을 더한 raw145801,
+기존 비도구 helper269행·활성 도구757행·이번 정책 helper2행을 합쳐
+정확히146829행을 청구한다. 별도 동시 유지 도구라면 source 전체를 추가 청구한다.
+
+기존2527개 ID·전체 subTest mapping·18000/3600초·제품의 task당12회 한도는
+유지한다. 기존 승인 전환과 #872 시간 전환을 보존하고 다른 소스 증가는 거절한다.
+이 배정은 실제 Provider 호출 승인이나 큐 예외가 아니다. 기존40/40·격리4건과
+종료된 #894/#896 실행 허가는 보존하고, #898의 검토된 소스/도구/설정에 묶인 새
+유한 캠페인 승인 전에는 호출하지 않는다. 호출/시간/프로세스 경계만 강제할 때는
+토큰·금액·미사용 출력 인자의 실효 상한을 관측됐다고 보고하지 않는다.
+
 ## Verification rule
+
+### #896의 검증 후보 소스 배정
+
+사용자의 필요시 소스 예산 확대 허용을 #896의 현재 검증 후보에 한정하여
+정확한 **143443→145817**, 부모 누적 **142604→145817** 전환에 적용한다.
+기준 raw143435에 기존 ID의 wire·native·Phase 회귀1498행과 정책 회귀13행을
+더한 raw144946, 기존 helper8행·새 fixture helper253행·비공개 실제 검증 도구
+helper608행·정책 helper2행을 모두 청구한 helper871행의 합계145817이다.
+중첩 fixture의 cleanup은 실제 실행 중인 바깥 테스트에 등록하여 감사·자원 정리를 보존한다.
+비공개 검증 도구도 비용에서 제외하지 않는다. 이 수치는 현재 검증 후보의 배정이며
+CI나 최종 검토에서 추가 변경이 생기면 비용을 다시 정확히 실측한다.
+
+18000/3600초·전체 ID·subTest mapping과 완료된 #881/#894/#895 전환은 유지한다.
+인접한 임의 수치나 시간·ID 변경은 기존 gate와 추가 정책 회귀로 거절한다.
+이 배정은 실제 Provider 실행이나 큐 예외의 허가가 아니다.
 
 ### Provider schema changes
 
@@ -82,6 +153,14 @@ The timing-weight manifest balances shards; it is not evidence of actual run
 time. The budget gate uses the wall time in the current Python 3.11 runner
 reports. Report the observed full and shard times and any platform limitation
 when recalibrating weights.
+
+### Actions의 지정 영향 검증
+
+`pr-validation` 수동 실행의 `validation_scope: affected`와 줄바꿈으로 구분한
+`test_ids`로 정확한 정규 ID를 선택한다. 잠긴 Python3.11·ARM64 4CPU 환경에서
+기존 runner의 반복 `--id` 인자로 실행하며 선택 인자·JSON 결과·로그·하드웨어를
+`runtime-affected` artifact에 보관한다. 입력을 shell 코드로 평가하지 않는다.
+이 부분 검증은 전체5개 shard의 완주·결과 조정·예산·정리 증거를 대신하지 않는다.
 
 ## Dedicated whole-front shard
 

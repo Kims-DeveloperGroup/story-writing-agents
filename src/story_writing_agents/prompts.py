@@ -1,7 +1,7 @@
 """Deterministic prompt assembly with least-context hydration."""
 
 from __future__ import annotations
-from .provider_wire import WIRE_VERSION, common_contract_guide
+from .provider_wire import WIRE_VERSION, common_contract_guide, LEAD_GROUP_COMMON_POLICY
 
 import hashlib
 import json
@@ -268,6 +268,8 @@ class PromptAssembler:
                 "behavior policy component must be nonempty and NUL-free"
             )
         runtime_behavior_policy = _RUNTIME_BEHAVIOR_POLICY
+        if agent_id == "lead_orchestrator":
+            runtime_behavior_policy += b"\n" + LEAD_GROUP_COMMON_POLICY.encode("utf-8")
         if agent_id == LEAD_ORCHESTRATOR:
             runtime_behavior_policy += b"\n\n" + _LEAD_RUNTIME_BEHAVIOR_POLICY
         system_prompt_file = PromptFileReference.from_bytes(

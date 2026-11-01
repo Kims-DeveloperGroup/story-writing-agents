@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..agent_context.accounting import normalized_provider_usage
+
 from dataclasses import dataclass
 
 from ..conversations import (
@@ -57,8 +59,32 @@ def response_usage(
             return ResponseUsage()
         calls = {call_id: calls[call_id]}
 
+    predecessors = {}
+    ambiguous = set()
+    for event in events:
+        payload = event.payload
+        if type(payload) is not CollaborationProviderCallPayload or payload.accounting is None:
+            continue
+        observation = payload.accounting.usage_observation
+        if observation is None or observation.session_ref is None or observation.prefix_ref is None:
+            continue
+        key = observation.session_ref, observation.prefix_ref
+        old = predecessors.get(key)
+        if old is not None and old != observation:
+            ambiguous.add(key)
+        predecessors[key] = observation
+    attributed = {}
+    for identity, call in calls.items():
+        observation = None if call.accounting is None else call.accounting.usage_observation
+        if observation is None:
+            attributed[identity] = call.usage
+        else:
+            key = observation.session_ref, observation.previous_prefix_ref
+            attributed[identity] = (None if key in ambiguous else
+                normalized_provider_usage(observation, predecessors.get(key)))
+
     def counter(name: str) -> int | None:
-        values: list[int | None] = [getattr(call.usage, name, None) for call in calls.values()]
+        values: list[int | None] = [getattr(usage, name, None) for usage in attributed.values()]
         if any(value is None for value in values):
             return None
         return sum(value for value in values if value is not None)

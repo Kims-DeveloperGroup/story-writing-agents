@@ -239,6 +239,39 @@ def _reviewed_artifact_proposal() -> ArtifactReviewedProposal:
     )
 
 
+
+def _group_trace_fixture():
+    from story_writing_agents.agent_context.accounting import canonical_provider_json
+    from story_writing_agents.agent_context.group_observation import (
+        LeadGroupObservation, LeadGroupObservationKind, LeadGroupTrace,
+    )
+    from story_writing_agents.lead_schema_groups import LeadGroupPhase, LeadGroupRequestBasis
+    basis = LeadGroupRequestBasis("group-operation", "group-result", "group-scope")
+    catalog = {
+        "catalog_id": "historical-catalog", "catalog_version": "lead-groups-v1",
+        "groups": [{"group_id": "answer.workflow", "definition": "Historical definition 한🙂",
+                    "selection_criteria": "Historical criterion", "result_effect": "Existing answer only"}],
+    }
+    selection = {
+        "catalog_at_selection": catalog, "selection_basis_ref": "historical-basis",
+        "group_id": "answer.workflow", "selection_reason": "PRIVATE_SELECTION_REASON",
+        "response_type": "schema_group_selection", "call_id": "group-call-1",
+        "outer_schema_id": "historical-outer", "inner_schema_id": "historical-inner",
+    }
+    catalog = json.loads(json.dumps(catalog, sort_keys=True))
+    selection = json.loads(json.dumps(selection, sort_keys=True))
+    observations = (
+        LeadGroupObservation(LeadGroupObservationKind.BOUND, basis, LeadGroupPhase.SELECT,
+                             "group-call-1", catalog_snapshot=canonical_provider_json(catalog)),
+        LeadGroupObservation(LeadGroupObservationKind.CONTROL_ACCEPTED, basis, LeadGroupPhase.SELECT,
+                             "group-call-1", catalog_snapshot=canonical_provider_json(catalog),
+                             selection_snapshots=(canonical_provider_json(selection),)),
+        LeadGroupObservation(LeadGroupObservationKind.TERMINAL, basis, LeadGroupPhase.STOP,
+                             selection_snapshots=(canonical_provider_json(selection),),
+                             terminal_code="evidence_validation_rejected"),
+    )
+    return LeadGroupTrace("group-invocation", observations, "evidence_validation_rejected", elapsed_ns=37)
+
 class CollaborationValueContractTests(unittest.TestCase):
     def test_constants_and_closed_enums_are_exact(self) -> None:
         self.assertEqual(COLLABORATION_EVENT_SCHEMA_VERSION, 2)
@@ -269,6 +302,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "interruption",
                 "terminal_outcome",
                 "provider_call_accounting",
+                "lead_group_trace",
                 "lead_outcome_failure",
                 "artifact_review_candidate",
                 "artifact_review_synthesis",
@@ -670,7 +704,8 @@ class CollaborationValueContractTests(unittest.TestCase):
             ),
             (
                 provider_call,
-                ('invocation_id', 'call_id', 'ordinal', 'role', 'invocation_kind', 'call_kind', 'state', 'validation_details', 'usage'),
+                ('invocation_id', 'call_id', 'ordinal', 'role', 'invocation_kind', 'call_kind', 'state',
+                 'validation_details', 'usage', 'accounting'),
             ),
         )
         for value, expected_fields in values_and_fields:
@@ -718,6 +753,13 @@ class CollaborationValueContractTests(unittest.TestCase):
         self.assertEqual(tuple(core_readiness.CriterionFinding.__dataclass_fields__),
                          ("criterion_id", "criterion_judgment", "source_ids",
                           "depends_on_author_decision_ids", "explanation"))
+
+        from story_writing_agents.conversations.events import CollaborationLeadGroupTracePayload
+        trace_payload = CollaborationLeadGroupTracePayload(_group_trace_fixture())
+        self.assertEqual(tuple(field.name for field in dataclasses.fields(trace_payload)), ("trace",))
+        self.assertFalse(hasattr(trace_payload, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            setattr(trace_payload, "trace", None)
 
     def test_actor_direction_matrix_is_closed_and_exact(self) -> None:
         advisory = make_proposal(step_kind=CollaborationStepKind.SPECIALIST_ADVISORY)
@@ -865,6 +907,23 @@ class CollaborationValueContractTests(unittest.TestCase):
         for sender, recipient in ((LEAD, USER), (RUNTIME, USER), (PLOT, LEAD)):
             with self.assertRaises(ValueError):
                 make_draft("provider_memory", CollaborationEventKind.EDITORIAL_RECORD, sender, recipient, payload)
+
+        from story_writing_agents.conversations.events import CollaborationLeadGroupTracePayload
+        trace_payload = CollaborationLeadGroupTracePayload(_group_trace_fixture())
+        for sender in actors.values():
+            for recipient in actors.values():
+                if sender.kind is CollaborationActorKind.RUNTIME and recipient.kind is CollaborationActorKind.LEAD:
+                    actual = make_draft("trace_direction", CollaborationEventKind.LEAD_GROUP_TRACE,
+                                        sender, recipient, trace_payload)
+                    self.assertEqual(actual.direction.value, "runtime_to_lead")
+                else:
+                    with self.assertRaises(ValueError):
+                        make_draft("trace_direction", CollaborationEventKind.LEAD_GROUP_TRACE,
+                                   sender, recipient, trace_payload)
+        with self.assertRaises(TypeError):
+            CollaborationLeadGroupTracePayload(object())
+        with self.assertRaises(TypeError):
+            make_draft("trace_type", CollaborationEventKind.LEAD_GROUP_TRACE, RUNTIME, LEAD, payload)
 
     def test_proposal_closure_budget_and_advisory_invariants_fail_closed(self) -> None:
         proposal = make_proposal()
@@ -1146,6 +1205,72 @@ class CollaborationWireContractTests(unittest.TestCase):
                 self.assertEqual(_canonical_json(json.loads(wire)), wire)
         self.assertEqual(collaboration_proposal_digest(proposal), proposal.proposal_digest)
         self.assertEqual(collaboration_batch_digest(batch), batch.batch_digest)
+
+        from story_writing_agents.agent_context.group_observation import LeadGroupTrace
+        from story_writing_agents.conversations.events import CollaborationLeadGroupTracePayload
+        from story_writing_agents.conversations.context import (
+            project_collaboration_history, project_collaboration_readable_history, project_lead_group_traces,
+        )
+        trace = _group_trace_fixture()
+        detached = trace.as_object()
+        self.assertEqual(detached["observations"][1]["selections"][0]["catalog_at_selection"]["groups"], [{
+            "group_id": "answer.workflow", "definition": "Historical definition 한🙂",
+            "selection_criteria": "Historical criterion", "result_effect": "Existing answer only",
+        }])
+        self.assertIsNone(detached["terminal"])
+        restored = LeadGroupTrace.from_object(copy.deepcopy(detached))
+        self.assertEqual(restored, trace)
+        detached["observations"][1]["selections"][0]["catalog_at_selection"]["groups"][0]["definition"] = "mutated"
+        self.assertEqual(restored.as_object()["observations"][1]["selections"][0]
+                         ["catalog_at_selection"]["groups"][0]["definition"], "Historical definition 한🙂")
+        self.assertNotIn("PRIVATE_SELECTION_REASON", repr(trace))
+        with self.assertRaises(ValueError):
+            LeadGroupTrace.from_object({**trace.as_object(), "unexpected": True})
+        with self.assertRaises(ValueError):
+            replace(trace, elapsed_ns=True)
+        from story_writing_agents.agents import LEAD_ORCHESTRATOR
+        from tests.collaboration_contract_fixture import provider_call_drafts
+        turn_id = "group_trace_turn"
+        draft = make_draft("group_trace", CollaborationEventKind.LEAD_GROUP_TRACE, RUNTIME, LEAD,
+                           CollaborationLeadGroupTracePayload(trace), turn_id=turn_id)
+        with self.assertRaises(CollaborationAppendError):
+            store_batch(history, make_batch(history, "batch_orphan_trace", draft))
+        user = make_draft("group_trace_user", CollaborationEventKind.MESSAGE, USER, LEAD,
+                          CollaborationMessagePayload("Visible group request."), turn_id=turn_id)
+        calls = tuple(replace(item, turn_id=turn_id) for item in provider_call_drafts(
+            invocation_id=trace.invocation_id, call_id="group-call-1", role=LEAD_ORCHESTRATOR,
+            recipient=LEAD, invocation_kind=CollaborationInvocationKind.LEAD))
+        terminal = make_draft("group_trace_failure", CollaborationEventKind.LEAD_OUTCOME_FAILURE,
+            RUNTIME, USER, CollaborationLeadOutcomeFailurePayload(
+                CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED,
+                trace.invocation_id, "group-call-1"), turn_id=turn_id)
+        terminal_history = store_batch(history, make_batch(
+            history, "batch_group_trace", user, *calls, terminal))
+        trace_batch = make_batch(history, "batch_group_trace", user, *calls, terminal, draft)
+        with_trace = store_batch(history, trace_batch)
+        event = with_trace[-1]
+        raw = encode_collaboration_event(event)
+        self.assertEqual(decode_collaboration_event(raw), event)
+        self.assertEqual(encode_collaboration_event(decode_collaboration_event(raw)), raw)
+        self.assertEqual(json.loads(raw)["payload"], {"payload_type": "lead_group_trace", "trace": trace.as_object()})
+        self.assertEqual(project_lead_group_traces(with_trace), (trace,))
+        before = project_collaboration_history(terminal_history)
+        after = project_collaboration_history(with_trace)
+        self.assertEqual(before.current_proposal, proposal)
+        self.assertEqual(after.current_proposal, proposal)
+        for name in ("current_state", "next_safe_action", "available_tasks", "selectable_materials",
+                     "public_responses", "physical_calls_spent", "artifact_objectives"):
+            self.assertEqual(getattr(after, name), getattr(before, name), name)
+        readable = project_collaboration_readable_history(with_trace)
+        expected_records = tuple(replace(record, batch_size=len(trace_batch.events),
+            batch_digest=collaboration_batch_digest(trace_batch))
+            if record.batch_id == trace_batch.batch_id else record
+            for record in project_collaboration_readable_history(terminal_history))
+        self.assertEqual(readable[:-1], expected_records)
+        self.assertEqual(readable[-1].fields, ())
+        self.assertEqual(readable[-1].readable_utf8_bytes, 0)
+        self.assertEqual(readable[-1].payload.trace, trace)
+        self.assertNotIn("PRIVATE_SELECTION_REASON", repr(readable))
 
     def test_artifact_public_decoders_clear_content_from_exception_graphs(
         self,
@@ -1512,7 +1637,8 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         }
         self.assertEqual(len(collaboration_names), 75)
         for owner in (events_owner, context_owner):
-            for name in (n for n in owner.__all__ if n not in exploration_names):
+            for name in (n for n in owner.__all__ if n not in exploration_names
+                         and n != "CollaborationLeadGroupTracePayload"):
                 if name.startswith("Collaboration") or name.startswith("COLLABORATION_"):
                     with self.subTest(owner=owner.__name__, name=name):
                         self.assertIs(getattr(owner, name), getattr(conversations, name))
@@ -1560,6 +1686,18 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         for name in ("project_editorial_state", "editorial_provenance_available"):
             self.assertIs(getattr(context_owner, name), getattr(conversations, name))
             self.assertNotIn(name, story_writing_agents.__all__)
+
+        from story_writing_agents.conversations.events import CollaborationLeadGroupTracePayload
+        name = "CollaborationLeadGroupTracePayload"
+        self.assertIs(getattr(events_owner, name), CollaborationLeadGroupTracePayload)
+        self.assertEqual(CollaborationLeadGroupTracePayload.__module__,
+                         "story_writing_agents.conversations.events")
+        self.assertNotIn(name, conversations.__all__)
+        self.assertFalse(hasattr(conversations, name))
+        self.assertNotIn(name, story_writing_agents.__all__)
+        self.assertFalse(hasattr(story_writing_agents, name))
+        self.assertIs(pickle.loads(pickle.dumps(CollaborationLeadGroupTracePayload)),
+                      CollaborationLeadGroupTracePayload)
 
     def test_append_receipt_error_and_public_signatures_are_exact(self) -> None:
         receipt = CollaborationAppendReceipt(
@@ -1620,7 +1758,10 @@ import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
 assert len(facade.__all__) == 188
-assert len(events.__all__) == 133
+assert len(events.__all__) == 134
+assert "CollaborationLeadGroupTracePayload" in events.__all__
+assert "CollaborationLeadGroupTracePayload" not in facade.__all__
+assert not hasattr(facade, "CollaborationLeadGroupTracePayload")
 assert len(context.__all__) == 37
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore

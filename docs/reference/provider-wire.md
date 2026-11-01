@@ -386,18 +386,15 @@ values, bounds, and branch order. Current bound contract IDs use `lead_v11_` and
 include `swa-annotation-rules-v2` provenance. Copy only the IDs offered by the
 current call.
 
-Budget declarations are frozen call policy. For bound Lead calls, each semantic
-member stays within 65,536 UTF-8 bytes and each inner action contract stays within
-262,144 bytes. The intermediate semantic aggregate and final contextual/provider
-schema share the existing 524,288-byte provider-schema limit. The semantic
-aggregate previously had a separate 262,144-byte ceiling; aligning it with the
-final schema allowance supports the offered variant declarations without changing
-the physical provider limit. Final assembly still enforces that limit.
-The service retains its 262,144-byte serialized request/context-frame limit, while
-transport counts rendered schema plus payload against the 786,432-byte
-invocation-input limit. Aggregate allowances do not widen member, action,
-history, or generic-contract limits. Action templates compose the frozen semantic
-rules; generic result contracts keep their existing defaults.
+예산 선언은 호출 시점에 동결된다. bound Lead 호출의 각 의미 계약은
+65,536 UTF-8 bytes, 내부 action 계약은 262,144 bytes 이하여야 한다. 중간 의미
+계약의 합성과 최종 contextual/provider schema는 기존 524,288-byte schema 한도를
+공유한다. 중간 합성에 별도로 적용하던 262,144-byte 한도를 최종 schema와 맞췄으며,
+최종 조립에서도 같은 provider-schema 한도를 검사한다.
+서비스의 직렬화된 요청/context frame 한도는 524,288 bytes다. 전송에서는 렌더링된
+schema와 payload의 합을 1,048,576 bytes로 제한한다. 이 합산 한도로 개별 의미 계약,
+action, 이력 또는 일반 계약의 한도가 늘어나지는 않는다. Action template은 동결된
+의미 규칙을 조합하며 일반 결과 계약은 기존 기본값을 유지한다.
 
 Every built-in semantic result includes `response_type`. Objects and their nested
 variants are closed: return every required field and no extra properties.
@@ -803,6 +800,19 @@ captured effective response language; it does not substitute English prose.
 Accounting includes the final bound guide, per-call guidance, annotated schema,
 payload, and native rendering. Larger descriptive fields do not raise runtime
 resource limits.
+
+### 두 국면의 Host 회계와 사용량 범위
+
+교환 capture와 내부 회계는 원시 usage, `usage_observation`의 범위·출처·단위·검증된
+세션/prefix 참조, 실제 adapter 호출의 `elapsed_ns`를 보존한다. `call`,
+`session_cumulative`, `unknown`을 구분하며, 같은 native 이력의 전임 prefix와
+단조 증가가 확인될 때만 누적값의 차이를 호출별 토큰으로 사용한다. 미관측 값은
+`None`이다. 모델 이름이나 CLI 버전 이름만으로 누적 범위를 정하지 않는다.
+
+보고서는 PREPARED와 SUBMITTED, 실제 full/delta 전달과 준비 계획, 원시 usage와
+검증된 호출별 값, 결과 수용과 작업 완료를 구분한다. 최종 native schema의 바이트·
+대안·anyOf 위치·정의 수는 기술 지표이며 Provider 수용이나 비용 개선을 뜻하지 않는다.
+자세한 예시는 [관측과 비교의 판정 기준](../design/lead-two-phase-schema-selection.md#관측과-비교의-판정-기준)에 있다.
 
 ### Codex schema regex compatibility
 

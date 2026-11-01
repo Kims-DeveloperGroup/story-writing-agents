@@ -8,6 +8,7 @@ import copy
 import json
 import math
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import story_writing_agents
@@ -22,6 +23,10 @@ from story_writing_agents.provider_adapter import (
     ProviderBinding, ProviderFailureAccounting, ProviderInvocation, ProviderInvocationError,
     ProviderResult, provider_failure_accounting, record_provider_failure_accounting, )
 from story_writing_agents.agent_context.request_compaction import compact_context_payload
+from story_writing_agents.agent_context.accounting import (
+    ProviderUsageObservation, ProviderUsageScope, normalized_provider_usage,
+    provider_call_accounting_from_object, provider_call_accounting_to_object,
+)
 
 
 def _property_count(value):
@@ -290,6 +295,164 @@ class ProviderPayloadAccountingTests(unittest.TestCase):
         self.assertIsNone(
             ProviderCallAccounting(payload_accounting).submitted_model_input_utf8_bytes )
 
+        raw_first = ProviderUsage(25043, 149, 0)
+        raw_second = ProviderUsage(53410, 298, 0)
+        first = ProviderUsageObservation(
+            raw_first, ProviderUsageScope.SESSION_CUMULATIVE, "native-token-count",
+            session_ref="fixture-session", prefix_ref="prefix-1", session_start=True,
+        )
+        second = ProviderUsageObservation(
+            raw_second, ProviderUsageScope.SESSION_CUMULATIVE, "native-token-count",
+            session_ref="fixture-session", prefix_ref="prefix-2",
+            previous_prefix_ref="prefix-1",
+        )
+        self.assertEqual(normalized_provider_usage(first), raw_first)
+        self.assertEqual(normalized_provider_usage(second, first), ProviderUsage(28367, 149, 0))
+        self.assertEqual(second.raw, ProviderUsage(53410, 298, 0))
+        normalized = (normalized_provider_usage(first), normalized_provider_usage(second, first))
+        self.assertEqual(tuple(sum(getattr(value, name) for value in normalized)
+                               for name in ("input_tokens", "output_tokens")), (53410, 298))
+        call_usage = ProviderUsageObservation(raw_second, ProviderUsageScope.CALL, "physical-call")
+        self.assertEqual(normalized_provider_usage(call_usage), raw_second)
+        zero = ProviderUsageObservation(ProviderUsage(0, 0, 0), ProviderUsageScope.CALL, "physical-call")
+        self.assertEqual(normalized_provider_usage(zero), ProviderUsage(0, 0, 0))
+        self.assertIsNone(normalized_provider_usage(replace(call_usage, scope=ProviderUsageScope.UNKNOWN)))
+        self.assertIsNone(normalized_provider_usage(second))
+        for unproven in (
+            replace(first, session_start=False),
+            replace(second, unit="bytes"),
+            replace(second, source="another-source"),
+            replace(second, session_ref="another-session"),
+            replace(second, previous_prefix_ref="unrelated-prefix"),
+            replace(second, raw=ProviderUsage(25042, 298, 0)),
+            replace(second, raw=ProviderUsage(53410, 148, 0)),
+        ):
+            self.assertIsNone(normalized_provider_usage(unproven, first), unproven)
+        self.assertIsNone(normalized_provider_usage(second, replace(first, unit="bytes")))
+        self.assertIsNone(normalized_provider_usage(second, replace(first, scope=ProviderUsageScope.CALL)))
+        partial = replace(second, raw=ProviderUsage(output_tokens=298))
+        self.assertEqual(normalized_provider_usage(partial, first), ProviderUsage(output_tokens=149))
+        with self.assertRaises(ValueError):
+            replace(second, session_start=True)
+        with self.assertRaises(ValueError):
+            replace(second, prefix_ref=None)
+        measured = replace(call, usage=raw_second, usage_observation=second, elapsed_ns=11)
+        serialized = provider_call_accounting_to_object(measured)
+        self.assertEqual(serialized["usage_observation"], {
+            "raw": {"input_tokens": 53410, "output_tokens": 298, "cached_input_tokens": 0},
+            "scope": "session_cumulative", "source": "native-token-count", "unit": "tokens",
+            "session_ref": "fixture-session", "prefix_ref": "prefix-2",
+            "previous_prefix_ref": "prefix-1", "session_start": False,
+        })
+        restored = provider_call_accounting_from_object(copy.deepcopy(serialized))
+        self.assertEqual(restored.usage, raw_second)
+        self.assertEqual(restored.usage_observation, second)
+        self.assertEqual(restored.elapsed_ns, 11)
+        serialized["usage_observation"]["raw"]["input_tokens"] = 0
+        self.assertEqual(restored.usage_observation.raw.input_tokens, 53410)
+        self.assertEqual(provider_call_accounting_from_object(
+            provider_call_accounting_to_object(call)), call)
+
+        from story_writing_agents.agent_context.group_observation import (
+            LeadGroupObservation, LeadGroupObservationKind, LeadGroupTrace,
+        )
+        from story_writing_agents.agent_context.group_reporting import group_trace_report
+        from story_writing_agents.lead_schema_groups import LeadGroupPhase, LeadGroupRequestBasis
+        basis = LeadGroupRequestBasis("metrics-operation", "metrics-result", "metrics-scope")
+        observed = (
+            LeadGroupObservation(LeadGroupObservationKind.BOUND, basis, LeadGroupPhase.SELECT, "prepared",
+                                 delivery_snapshot=canonical_provider_json({"mode": "bootstrap"})),
+            LeadGroupObservation(LeadGroupObservationKind.BOUND, basis, LeadGroupPhase.SELECT, "first",
+                                 delivery_snapshot=canonical_provider_json({"mode": "bootstrap"})),
+            LeadGroupObservation(LeadGroupObservationKind.BOUND, basis, LeadGroupPhase.GENERATE, "second",
+                                 delivery_snapshot=canonical_provider_json({"mode": "delta"})),
+            LeadGroupObservation(LeadGroupObservationKind.TERMINAL, basis, LeadGroupPhase.DONE,
+                                 terminal_code="accepted"),
+        )
+        trace = LeadGroupTrace("metrics-invocation", observed, "accepted", elapsed_ns=37)
+        submitted_first = replace(call, usage=raw_first, usage_observation=first, elapsed_ns=7)
+        submitted_second = replace(call, usage=raw_second, usage_observation=second, elapsed_ns=11)
+        facts = (("prepared", ProviderCallAccounting(payload_accounting)),
+                 ("first", submitted_first), ("second", submitted_second))
+        report = group_trace_report(trace, facts,
+                                    unmeasured_prepared_call_ids=("prepared",))
+        self.assertEqual(report["submitted_calls"], 2)
+        self.assertEqual(report["prepared_only_calls"], 1)
+        self.assertEqual((report["input_tokens"], report["output_tokens"], report["cached_input_tokens"]),
+                         (53410, 298, 0))
+        self.assertEqual(report["physical_calls"][1]["raw_usage"],
+                         {"input_tokens": 53410, "output_tokens": 298, "cached_input_tokens": 0})
+        self.assertEqual(report["physical_calls"][1]["attributable_usage"],
+                         {"input_tokens": 28367, "output_tokens": 149, "cached_input_tokens": 0})
+        self.assertEqual((report["full_deliveries"], report["delta_deliveries"]), (1, 1))
+        self.assertEqual((report["planned_full_deliveries"], report["planned_delta_deliveries"]), (2, 1))
+        self.assertEqual(report["phase_submitted_calls"]["select"], 1)
+        self.assertEqual(report["phase_submitted_calls"]["generate"], 1)
+        self.assertEqual(report["full_delivery_payload_utf8_bytes"], payload_accounting.payload_utf8_bytes)
+        self.assertEqual(report["delta_delivery_transport_utf8_bytes"], payload_accounting.payload_utf8_bytes)
+        self.assertEqual(report["transport_utf8_bytes"], 2 * payload_accounting.payload_utf8_bytes)
+        self.assertEqual(report["submitted_model_input_utf8_bytes"], 2 * call.gross_model_input_utf8_bytes)
+        self.assertEqual(report["elapsed_ns"], 18)
+        self.assertEqual(report["logical_elapsed_ns"], 37)
+        self.assertEqual(report["logical_latency_stage"], "first_bound_to_terminal_prepublication")
+        self.assertIsNone(report["end_to_end_elapsed_ns"])
+        self.assertTrue(report["result_accepted"])
+        self.assertEqual(report["logical_terminal_state"], "done")
+        self.assertIsNone(report["terminal_result"])
+        self.assertIsNone(report["task_completion"])
+        self.assertIsNone(report["objective_completion"])
+        self.assertNotIn("business_result_succeeded", report)
+        self.assertIsNone(report["cost"])
+        self.assertIsNone(report["output_token_cap"])
+
+        self.assertEqual(report["submission_coverage"], {
+            "scope": "known_submitted_accounting_records", "complete": True,
+            "known_submitted_call_ids": ["first", "second"],
+            "proven_prepared_only_call_ids": ["prepared"], "unresolved_call_ids": [],
+        })
+        incomplete = group_trace_report(trace, facts,
+            unmeasured_prepared_call_ids=("prepared", "missing", "missing"))
+        self.assertEqual(incomplete["known_submitted_calls"], 2)
+        self.assertEqual(incomplete["prepared_only_calls"], 1)
+        self.assertEqual(incomplete["unresolved_calls"], 1)
+        self.assertFalse(incomplete["submission_coverage"]["complete"])
+        self.assertEqual(incomplete["submission_coverage"]["unresolved_call_ids"], ["missing"])
+        self.assertEqual(incomplete["known_submitted_subtotals"]["input_tokens"], 53410)
+        for field in ("submitted_calls", "submitted_model_input_utf8_bytes",
+                      "max_call_model_input_utf8_bytes", "transport_utf8_bytes",
+                      "elapsed_ns", "input_tokens", "output_tokens", "cached_input_tokens"):
+            self.assertIsNone(incomplete[field], field)
+        self.assertIsNone(incomplete["rates"]["repair_calls_per_submitted_call"]["denominator"])
+        self.assertIsNone(incomplete["rates"]["repair_calls_per_submitted_call"]["fraction"])
+        unknown_submission = group_trace_report(trace, (),
+            unmeasured_prepared_call_ids=("missing",))
+        self.assertEqual(unknown_submission["known_submitted_calls"], 0)
+        self.assertEqual(unknown_submission["prepared_only_calls"], 0)
+        self.assertEqual(unknown_submission["known_submitted_subtotals"]["calls"], 0)
+        self.assertIsNone(unknown_submission["submitted_calls"])
+        no_submission = group_trace_report(trace,
+            (("prepared", ProviderCallAccounting(payload_accounting)),))
+        self.assertEqual(no_submission["submitted_calls"], 0)
+        self.assertIsNone(no_submission["rates"]["repair_calls_per_submitted_call"]["fraction"])
+
+        unknown_report = group_trace_report(trace, (
+            ("first", submitted_first),
+            ("second", replace(submitted_second, usage_observation=replace(second, scope=ProviderUsageScope.UNKNOWN),
+                               elapsed_ns=None)),
+        ))
+        self.assertEqual(unknown_report["submitted_calls"], 2)
+        self.assertIsNone(unknown_report["input_tokens"])
+        self.assertIsNone(unknown_report["output_tokens"])
+        self.assertIsNone(unknown_report["elapsed_ns"])
+        zero_report = group_trace_report(trace, (
+            ("first", replace(submitted_first, usage=zero.raw, usage_observation=zero, elapsed_ns=0)),
+            ("second", replace(submitted_second, usage=zero.raw, usage_observation=zero, elapsed_ns=0)),
+        ))
+        self.assertEqual((zero_report["input_tokens"], zero_report["output_tokens"],
+                          zero_report["cached_input_tokens"], zero_report["elapsed_ns"]), (0, 0, 0, 0))
+        with self.assertRaises(ValueError):
+            group_trace_report(trace, (("first", submitted_first), ("first", submitted_first)))
+
     def test_invalid_paths_partitions_and_components_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "identify payload values"):
             account_provider_payload(
@@ -439,6 +602,12 @@ class AgentContextBoundaryTests(unittest.TestCase):
         self.assertTrue(
             set(agent_context.__all__).isdisjoint(story_writing_agents.__all__) )
         self.assertFalse(hasattr(story_writing_agents, "ProviderCallAccounting"))
+
+        for name in ("ProviderUsageObservation", "ProviderUsageScope", "normalized_provider_usage",
+                     "LeadGroupObservation", "LeadGroupTrace", "LeadGroupRequestMeasurement",
+                     "group_trace_report", "group_request_size_report"):
+            self.assertNotIn(name, agent_context.__all__)
+            self.assertNotIn(name, story_writing_agents.__all__)
 
     def test_accounting_is_a_standard_library_leaf_and_facade_imports_only_it(
         self,

@@ -60,6 +60,7 @@ from ._collaboration_view import (
     project_collaboration_event,
     validate_collaboration_event_order,
 )
+from ..conversations import CollaborationEventKind
 from ._advisory_progress import (
     AdvisoryProgressRequest,
     AdvisoryProgressState,
@@ -1212,6 +1213,9 @@ class InteractiveTerminal:
         cursor = after_sequence
         for event in events:
             if event.sequence <= after_sequence:
+                continue
+            if event.kind is CollaborationEventKind.LEAD_GROUP_TRACE:
+                cursor = event.sequence
                 continue
             self._write_component(
                 project_collaboration_event(

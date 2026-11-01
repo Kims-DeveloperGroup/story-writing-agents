@@ -73,8 +73,9 @@ from ..writing_artifacts.change_sets import (
 MAX_SESSION_CONTEXT_UTF8_BYTES = 262_144
 # Physical schemas and logical payloads have separate UTF-8 limits.
 MAX_PROVIDER_SCHEMA_UTF8_BYTES = 524_288
+MAX_PROVIDER_PAYLOAD_UTF8_BYTES = 524_288
 MAX_PROVIDER_INPUT_UTF8_BYTES = (
-    MAX_PROVIDER_SCHEMA_UTF8_BYTES + MAX_SESSION_CONTEXT_UTF8_BYTES
+    MAX_PROVIDER_SCHEMA_UTF8_BYTES + MAX_PROVIDER_PAYLOAD_UTF8_BYTES
 )
 
 
@@ -98,7 +99,11 @@ class SessionContextCapacityError(ValueError):
             raise ValueError("context byte count must be a nonnegative integer")
         self.stage = stage
         self.actual_utf8_bytes = actual_utf8_bytes
-        self.maximum_utf8_bytes = MAX_SESSION_CONTEXT_UTF8_BYTES
+        self.maximum_utf8_bytes = (
+            MAX_PROVIDER_PAYLOAD_UTF8_BYTES
+            if stage in {"known_envelope", "provider_payload"}
+            else MAX_SESSION_CONTEXT_UTF8_BYTES
+        )
         self.excess_utf8_bytes = (
             None if actual_utf8_bytes is None
             else max(0, actual_utf8_bytes - self.maximum_utf8_bytes)

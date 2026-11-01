@@ -1,6 +1,8 @@
 """Antigravity-specific binding, command, and structured-JSON adapter."""
 
 from __future__ import annotations
+
+from .agent_context.accounting import ProviderUsageObservation, ProviderUsageScope
 from .structured_output_validation import strict_json_member_text
 
 from .provider_wire import common_contract_guide
@@ -1553,6 +1555,7 @@ class AntigravityAdapter:
                 thread_id=provider_result.thread_id,
                 response_text=provider_result.response_text,
                 usage=provider_result.usage,
+                usage_observation=provider_result.usage_observation,
                 actual_transport_utf8_bytes=transport_utf8_bytes,
                 response_diagnostic=provider_result.response_diagnostic,
             )
@@ -1964,10 +1967,13 @@ class AntigravityAdapter:
                 "Antigravity CLI did not complete successfully",
                 taint_existing_thread=True,
             )
+        raw_usage = cls.provider_usage(terminal.get("usage"))
         return ProviderResult(
             thread_id=thread_id,
             response_text=response_text,
-            usage=cls.provider_usage(terminal.get("usage")),
+            usage=raw_usage,
+            usage_observation=(None if raw_usage is None else ProviderUsageObservation(
+                raw_usage, ProviderUsageScope.UNKNOWN, "antigravity.completed.usage")),
             response_diagnostic=(
                 response_diagnostic if recoverable_error or completion_required else None
             ),

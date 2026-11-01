@@ -12,6 +12,8 @@ from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
     preparation, recommendation, rewrite_history,
     task_assessment, )
+from story_writing_agents.lead_schema_groups import LeadGroupPhase
+from tests.provider_wire_fixture import selection_plan
 from tests import test_lead_orchestration as lead
 
 
@@ -109,13 +111,23 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertEqual(request.draft_sources, (c.ArtifactDraftSource(conversation_id, source.event_id, digest(message)),))
         self.assertEqual((source.batch_id, source.sequence + 1), (events[-1].batch_id, request.tail_sequence))
         self.assertEqual(request.request_event_id, events[-1].event_id)
+        traces = tuple(event for event in events
+                       if event.kind is c.CollaborationEventKind.LEAD_GROUP_TRACE)
+        self.assertEqual(len(traces), 1)
+        self.assertEqual((traces[0].batch_id, traces[0].turn_id, traces[0].step_id),
+                         (source.batch_id, source.turn_id, source.step_id))
+        self.assertLess(traces[0].sequence, source.sequence)
+        self.assertEqual((events[-1].kind, events[-1].sequence),
+                         (c.CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST, request.tail_sequence))
+        self.assertEqual(traces[0].payload.trace.invocation_id, source.payload.provider_invocation_id)
+        self.assertEqual(traces[0].payload.trace.terminal_code, "accepted")
         self.assertEqual(request.basis.inputs[0].input_id, source.event_id)
         self.assertNotIn(b"current_response", c.encode_collaboration_event(events[-1]))
         self.assertEqual((request.source_proposal_id, request.source_proposal_revision,
                           request.source_proposal_digest, request.source_execution_attempt_id), (None,) * 4)
         # Ordered offered sources remain whole-message snapshots, including the new reply.
         self.backend.enqueue(recommendation(message="Second whole reply", recommended_action=action( source_ids=(source.event_id, "current_response")), authoring_scope=c.authoring_scope_to_dict(request.authoring_scope),
-            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation'))))
+            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation'))), control_plan=selection_plan("prepare.artifact"))
         second = await self.runtime.lead_turn(self.session_id, conversation_id, ("Finished candidate:\n" + message + "\nYou may make bounded review judgments and prepare a separate proposal; preserve supplied facts.\n" + "Offer another plan."))
         self.assertEqual(second.recommendation_request.authoring_scope, request.authoring_scope)
         self.assertEqual(tuple(s.content_digest for s in second.recommendation_request.draft_sources),
@@ -152,7 +164,8 @@ class RecommendationActionContractTests(RecommendationCase):
                     selection['left']['plot_architect'] = False
                     selection['right']['left']['character_custodian'] = True
                     return json.dumps(native)
-            self.backend.enqueue(bad)
+            self.backend.enqueue(bad, control_plan=selection_plan(
+                "prepare.consultation.authoring" if bad_route else "prepare.artifact"))
             self.backend.enqueue(bad)
             result = await self.runtime.lead_turn(self.session_id, cid, ("Finished candidate:\n" + message + "\nYou may make bounded review judgments and prepare a separate proposal; preserve supplied facts.\n" + "Reject undisclosed aliases."))
             self.assertIsNone(result.recommendation_request)
@@ -208,11 +221,17 @@ class RecommendationActionContractTests(RecommendationCase):
         wire = c.encode_collaboration_event(objective_event)
         self.assertIn(b'"payload_type":"artifact_objective_v2"', wire)
         self.assertEqual(c.decode_collaboration_event(wire), objective_event)
-        other, _ = await self.start()
+        other, completed_turn = await self.start()
+        completed = self.projection(other).current_proposal
+        self.assertIsNotNone(completed)
+        self.assertEqual(completed.step_id, completed_turn.step_id)
         before = self.objective(other).facts
         old_event = self.payload_events(other, c.ArtifactObjectivePayload)[0]
         old_wire = c.encode_collaboration_event(old_event)
-        _, offer = await self.recommend(other, recommended_action=action(objective_id=before.objective_id))
+        _, offer = await self.recommend(other,
+            recommended_action=action(objective_id=before.objective_id),
+            authoring_scope=dataclasses.asdict(completed.authoring_scope))
+        self.assertEqual(offer.recommendation_request.authoring_scope, completed.authoring_scope)
         self.enqueue_preparation(offer, answer=checked(offer))
         await self.runtime.decide_lead_recommendation(decision(offer))
         self.assertEqual(self.objective(other).facts, before)
@@ -339,7 +358,8 @@ class RecommendationActionContractTests(RecommendationCase):
                 self.assertFalse(hasattr(event.payload, "recommended_action"))
         self.assertIsNone(c.project_collaboration_history(executed).current_recommendation_request)
         conversation_id = self.conversation("Runtime recovery recommendation")
-        self.backend.enqueue(lead._SubmittedFailure(lead.BackendProtocolError("synthetic provider failure")))
+        self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT,
+            lead._SubmittedFailure(lead.BackendProtocolError("synthetic provider failure"))),))
         result = await self.runtime.lead_turn(self.session_id, conversation_id, "A normal read-only question.")
         self.assertIsNone(result.recommendation_request)
         self.assertFalse(self.payload_events(conversation_id, c.LeadRecommendationRequestPayload))

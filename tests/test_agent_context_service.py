@@ -1189,7 +1189,9 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             self.assertFalse(hasattr(facade, "ContextInvocationKind"))
             self.assertFalse(hasattr(facade, "ContextJsonObjectResultContract"))
         self.assertEqual( tuple(field.name for field in fields(service_module.ContextProviderCallResult) ),
-            ("response_text", "thread_id", "accounting", "finalizer"), )
+            ("response_text", "thread_id", "accounting", "finalizer", "context_witness"), )
+        witness_field = next(field for field in fields(service_module.ContextProviderCallResult) if field.name == "context_witness")
+        self.assertEqual((witness_field.default, witness_field.kw_only, witness_field.repr), (None, True, False))
         self.assertEqual(tuple(field.name for field in fields(ContextInvocationBinding)), ("scope",
                 "operation_id", "result_correlation_id", "manifest", "reference_operation_id",
                 "mandatory_references", ), )
@@ -1235,7 +1237,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             service_module.ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED, )
         self.assertEqual( tuple(field.name for field in fields(service_module.ContextProviderFailureFacts) ),
             ( "accounting", "timed_out", "taint_existing_thread", "submitted_accountings",
-            "submission_uncertain", "response_rejection_code", "continuation_rejection", ), )
+            "submission_uncertain", "response_rejection_code", "continuation_rejection", "group_state", ), )
         for code in rejection_codes:
             with self.subTest(code=code):
                 facts = service_module.ContextProviderFailureFacts(
@@ -1426,6 +1428,283 @@ class CompactWireDecoderTests(unittest.TestCase):
         invalid["$defs"]["unvisited_invalid"] = {"type": "string", "enum": []}
         with self.assertRaises(ValueError):
             SchemaRules.declare(invalid)
+
+
+        from types import SimpleNamespace
+        from story_writing_agents.conversations import LeadProposalRelation
+        from story_writing_agents.lead_schema_groups import (
+            LeadGroupRequestBasis, LeadGroupPhase, SchemaGroupControlOwner, SchemaGroupSelection,
+            SchemaGroupReselection)
+        from story_writing_agents.orchestrator import _lead_front_result_contract, _lead_revision_result_contract
+        from story_writing_agents.lead_provider_contracts import LeadDiscussionConstraints
+        from story_writing_agents.specialist_routing import AuthoringScope, AuthoringActivity
+        from story_writing_agents.structured_output_validation import BoundContract
+        from tests.provider_wire_fixture import lead_fixture_response, lead_fixture_scope_record
+        scope = AuthoringScope(AuthoringActivity.WORKFLOW, (), (), "Explain workflow.", "group-task", 1, schema_version=3)
+        facts = LeadProviderConstraints(scope=scope, task_revisions=(("group-task", 1),), input_ids=("user_input",))
+        seed = _lead_front_result_contract(LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=facts)
+        denied = []
+        def deny_business(raw, authorization):
+            denied.append(raw)
+            raise ValueError("business authority denied")
+        grouped_factory = OrchestrationLeadCallFactory(facts, seed, "lead.front", "EN", deny_business,
+            lambda _locator: "plot_architect", schema_group_protocol=True)
+        basis = LeadGroupRequestBasis("group-operation", "group-result", "group-scope")
+        selector = grouped_factory.for_offer(offers, request_basis=basis)
+        from story_writing_agents.provider_wire import SchemaSelectionInput, add_contract_guidance
+        wire = SchemaSelectionInput("select", offers.call_id, selector.outer_inner_schema_ids,
+            2, "current-context", catalog=json.dumps(selector.group_stage.catalog.as_object()).encode()).as_object()
+        self.assertEqual(SchemaSelectionInput.from_value(wire).as_object(), wire)
+        self.assertEqual(wire["issued_contract"]["contracts"], [
+            {"outer_schema_id": outer, "result_schema_id": inner}
+            for outer, inner in selector.outer_inner_schema_ids])
+        self.assertEqual(wire["context_delivery"], {"mode": "bootstrap", "context_ref": "current-context"})
+        invalid_wire = []
+        for path, value in ((('extra',), True), (('remaining_provider_calls',), True),
+                (('phase',), 'generate'), (('catalog_id',), 'duplicate-catalog'),
+                (('issued_contract', 'contracts'), []), (('issued_contract', 'extra'), None),
+                (('context_delivery', 'mode'), 'unknown'), (('context_delivery', 'base_context_ref'), 'undeclared-base'),
+                (('active_selection',), {'origin_catalog_id': 'foreign', 'group_id': 'answer.workflow'})):
+            changed = json.loads(json.dumps(wire))
+            target = changed
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            invalid_wire.append(changed)
+        missing_catalog = json.loads(json.dumps(wire))
+        del missing_catalog['catalog']
+        invalid_wire.append(missing_catalog)
+        for changed in invalid_wire:
+            self.assertRaises((TypeError, ValueError), SchemaSelectionInput.from_value, changed)
+            self.assertRaises((TypeError, ValueError), add_contract_guidance,
+                {'response_contract': {'schema_selection': changed}}, selector.schema_value())
+        pure_missing = grouped_factory.for_offer(replace(offers, call_id="pure-missing-R"), request_basis=basis)
+        self.assertIsNone(pure_missing.offers.remaining_provider_calls)
+        self.assertEqual(check_schema(pure_missing.schema_value()), ())
+        for current in (pure_missing, grouped_factory.for_offer(
+                replace(offers, call_id="physical-current-R", remaining_provider_calls=2), request_basis=basis)):
+            declaration = SchemaSelectionInput("select", current.offers.call_id, current.outer_inner_schema_ids,
+                2, "complete-context", catalog=json.dumps(current.group_stage.catalog.as_object()).encode()).as_object()
+            complete = add_contract_guidance({"request_correlation_token": self.token,
+                "task_input": {"workflow_type": "lead_front_channel", "user_request_text": "Explain workflow."},
+                "response_contract": {"schema_selection": declaration}}, current.schema_value())
+            parsed = SchemaSelectionInput.from_value(complete["response_contract"]["schema_selection"])
+            self.assertEqual((parsed.phase, parsed.call_id, parsed.contracts),
+                ("select", current.offers.call_id, current.outer_inner_schema_ids))
+            self.assertEqual(json.loads(parsed.catalog), current.group_stage.catalog.as_object())
+            self.assertEqual(complete["contract_guidance"]["response_rules"].count(
+                "현재 단계는 Phase 1(그룹 선택)입니다. Phase 2에서는 선택한 그룹의 상세 계약에 따라 실제 답변을 작성합니다."), 1)
+            current.require_projection(current.schema_value())
+            if current is pure_missing:
+                with self.assertRaisesRegex(ValueError, "schema_selection does not match the exact current bound call"):
+                    current.require_submission(complete, current.schema_value())
+            else:
+                self.assertIsNone(current.require_submission(complete, current.schema_value()))
+        def control_frame(binding, group):
+            member, = (item for item in binding.semantic_index.contracts
+                       if type(item.owner) is SchemaGroupControlOwner)
+            outer, = (outer for outer, inner in binding.outer_inner_schema_ids if inner == member.schema_id)
+            return {"agent_action": {"schema_id": outer, "action_type": "submit_result", "task_result": {
+                "schema_id": member.schema_id, "response_type": member.rule_graph.literal_at(("response_type",)),
+                "catalog_id": binding.group_stage.catalog.catalog_id, "group_id": group, "selection_reason": ""}}}
+        packet = control_frame(selector, "answer.workflow")
+        self.assertEqual(check_schema(selector.schema_value()), ())
+        decoded = selector.decode_value(packet)
+        self.assertIs(type(decoded.group_control), SchemaGroupSelection)
+        self.assertRaises(TypeError, lambda: decoded.answer_json)
+        self.assertRaises(TypeError, selector.require_authorized_answer, decoded, None)
+        for field in packet["agent_action"]["task_result"]:
+            missing = json.loads(json.dumps(packet)); del missing["agent_action"]["task_result"][field]
+            self.assertRaises(ValueError, selector.decode_value, missing)
+        for field, wrong in (("schema_id", "old-inner"), ("response_type", "schema_group_reselection"),
+                ("catalog_id", "old-catalog"), ("group_id", "f0"), ("selection_reason", None),
+                ("selection_reason", 1), ("selection_reason", {}), ("foreign", "extra")):
+            invalid = json.loads(json.dumps(packet)); invalid["agent_action"]["task_result"][field] = wrong
+            self.assertRaises(ValueError, selector.decode_value, invalid)
+        for path in ((), ("agent_action",)):
+            invalid = json.loads(json.dumps(packet)); node = invalid
+            for name in path: node = node[name]
+            node["foreign"] = True
+            self.assertRaises(ValueError, selector.decode_value, invalid)
+        duplicate = json.dumps(packet).replace('"selection_reason": ""', '"selection_reason": "", "selection_reason": ""')
+        self.assertRaises(ValueError, selector.decode_response, duplicate)
+        old_outer = json.loads(json.dumps(packet)); old_outer["agent_action"]["schema_id"] = "old-outer"
+        self.assertRaises(ValueError, selector.decode_value, old_outer)
+        record = selector.record_group_control(decoded)
+        workflow = selector.group_workflow.accept(record, remaining_calls=1)
+        generation_offers = replace(offers, call_id="group-generation", action_index=offers.action_index + 1)
+        generated = grouped_factory.for_offer(generation_offers, request_basis=basis, group_workflow=workflow,
+                                             prepared_compilation=selector.prepared_compilation)
+        self.assertEqual(check_schema(generated.schema_value()), ())
+        self.assertEqual(set(generated.schema_value()['properties']), {'agent_action'})
+        self.assertIs(generated.prepared_compilation, selector.prepared_compilation)
+        reselect = control_frame(generated, "question.workflow")
+        self.assertIs(type(generated.decode_value(reselect).group_control), SchemaGroupReselection)
+        initial_repeat = control_frame(generated, "question.workflow")
+        initial_repeat["agent_action"]["task_result"]["response_type"] = "schema_group_selection"
+        self.assertRaises(ValueError, generated.decode_value, initial_repeat)
+        reselect["agent_action"]["task_result"]["group_id"] = "answer.workflow"
+        self.assertRaises(ValueError, generated.decode_value, reselect)
+        self.assertRaises(TypeError, generated.record_group_control, decoded)
+        self.assertEqual(denied, [])
+        body = {"response_type": "answer", "response_text": "Workflow only.", "response_details": {
+            "task_scope": lead_fixture_scope_record({"activity": "workflow", "intent": "authoring", "domains": [],
+                "target_paths": [], "contributions": [], "dependency_slots": [], "task_id": "group-task",
+                "task_revision": 1}, fixed_targets=True, fixed_dependencies=True)}}
+        answer_text = lead_fixture_response(SimpleNamespace(contract=generated), body, family=0)
+        answer = generated.decode_response(answer_text)
+        false_completion = json.loads(answer_text)
+        false_completion["agent_action"]["schema_id"] = packet["agent_action"]["schema_id"]
+        false_completion["agent_action"]["task_result"]["schema_id"] = packet["agent_action"]["task_result"]["schema_id"]
+        false_completion["agent_action"]["task_result"]["response_text"] = "업무를 완료했습니다."
+        self.assertRaises(ValueError, selector.decode_value, false_completion)
+        self.assertEqual(denied, [])
+        binding = generated.generation_binding()
+        self.assertEqual(binding.schema_id_pairs, tuple((outer, inner) for outer, inner in
+            generated.outer_inner_schema_ids if inner == answer.selected_result.schema_id))
+        self.assertIs(workflow.complete(binding, answer.selected_result).phase, LeadGroupPhase.DONE)
+        self.assertRaises(ValueError, workflow.complete, binding, decoded.selected_result)
+        outer, inner = binding.member_bindings[0]
+        shadow = BoundContract.bind(inner.owner, inner.identity)
+        shadow_result = shadow.decode_selected(json.loads(lead_fixture_response(
+            SimpleNamespace(contract=generated), body, family=0))["agent_action"]["task_result"])
+        self.assertRaises(ValueError, binding.require_result, shadow_result)
+        for changes in ({"member_bindings": ()}, {"member_bindings": binding.member_bindings * 2},
+                {"member_bindings": ((selector.action_index.contracts[0], inner),)},
+                {"provided_contracts": (inner,)}, {"provided_call_id": "foreign-call"},
+                {"provided_offer_digest": "0" * 64}, {"logical_origin_call_id": "foreign-origin"},
+                {"current_offer": b"{}"}, {"eligibility_offer": b"{}"}):
+            self.assertRaises((TypeError, ValueError), replace, binding, **changes)
+        for retained, kind in ((selector, "select"), (generated, "generate")):
+            repaired_offers = replace(retained.offers, call_id="group-repair-" + kind,
+                                      action_index=retained.offers.action_index + 1)
+            repaired = grouped_factory.for_offer(repaired_offers, retained.repair_lineage())
+            self.assertIs(repaired.semantic_index, retained.semantic_index)
+            self.assertIs(repaired.group_workflow, retained.group_workflow)
+            self.assertEqual(repaired.outer_inner_schema_ids, retained.outer_inner_schema_ids)
+            replayed = grouped_factory.for_offer(replace(repaired_offers, call_id="group-replay-" + kind,
+                action_index=repaired_offers.action_index + 1), repaired.replay_lineage())
+            self.assertIs(replayed.group_stage.catalog, retained.group_stage.catalog)
+            self.assertNotEqual(replayed.outer_inner_schema_ids, retained.outer_inner_schema_ids)
+            if kind == "generate":
+                repair_binding = repaired.generation_binding()
+                self.assertEqual(repair_binding.provided_call_id, generated.offers.call_id)
+                repair_binding.require_result(answer.selected_result)
+                self.assertRaises(ValueError, replayed.generation_binding().require_result, answer.selected_result)
+                replayed_result = replayed.decode_response(lead_fixture_response(SimpleNamespace(contract=replayed), body, family=0))
+                replayed.generation_binding().require_result(replayed_result.selected_result)
+            self.assertRaises(ValueError, replayed.decode_value, control_frame(retained, "question.workflow"))
+            self.assertRaises(ValueError, grouped_factory.for_offer, repaired_offers, retained.repair_lineage(),
+                              request_basis=replace(basis, scope_ref="changed-authority"))
+        control_owner = selector.semantic_index.contracts[0].owner
+        for field, changed in (("owner_revision", "foreign"), ("_rules", replace(control_owner.declare_rules())),
+                               ("_decoder", object())):
+            original = getattr(control_owner, field)
+            try:
+                object.__setattr__(control_owner, field, changed)
+                self.assertRaises(ValueError, selector.require_current_offer, offers)
+            finally: object.__setattr__(control_owner, field, original)
+        with mock.patch.object(type(grouped_factory), "declare_schema_groups", lambda *_args, **_kwargs: None):
+            self.assertRaises(ValueError, selector.require_current_offer, offers)
+        authority = session.authorize_answer(ContextAnswerAction(
+            _correlation(session.binding, session.next_action_index), answer.answer_json, ()))
+        self.assertRaises(ValueError, generated.require_authorized_answer, answer, authority)
+        self.assertEqual(denied, [answer.answer_json])
+        revision_seed = _lead_revision_result_contract(LeadProposalRelation.NEW_STEP, facts.input_ids,
+            facts.task_revisions, facts, LeadDiscussionConstraints("group-discussion", 1))
+        ordinary = replace(grouped_factory, schema_group_protocol=False, rule_seed=revision_seed).for_offer(offers)
+        self.assertIsNone(ordinary.schema_group_phase)
+        self.assertRaises(ValueError, replace, grouped_factory, rule_seed=revision_seed)
+
+        from story_writing_agents.agent_context.accounting import (
+            ContextComponentBytes, ContextComponentKind,  provider_schema_statistics,
+        )
+        from story_writing_agents.agent_context.group_reporting import (
+            LeadGroupRequestMeasurement, group_request_size_report,
+        )
+        from story_writing_agents.provider_adapter import ProviderInvocation
+        comparison_basis = canonical_provider_json({
+            "operation_id": basis.operation_id, "scope_ref": basis.scope_ref,
+            "catalog_id": selector.group_stage.catalog.catalog_id,
+            "profile": "same-explicit-workflow-fixture",
+        })
+        catalogue = selector.group_stage.catalog
+        full = replace(grouped_factory, schema_group_protocol=False).for_offer(offers)
+        prepared = []
+        exported = []
+        variants = [("full", full, None), ("select", selector, None)]
+        for group_id in catalogue.group_ids:
+            selected_control = selector.decode_value(control_frame(selector, group_id))
+            selected_record = selector.record_group_control(selected_control)
+            selected_workflow = selector.group_workflow.accept(selected_record, remaining_calls=1)
+            member = grouped_factory.for_offer(
+                generation_offers, request_basis=basis, group_workflow=selected_workflow,
+                prepared_compilation=selector.prepared_compilation)
+            variants.append(("generate", member, group_id))
+        for variant, current_bound, group_id in variants:
+            schema = current_bound.schema_value()
+            self.assertEqual(check_schema(schema), ())
+            if variant == "full":
+                payload = {}
+            else:
+                current_selection = SchemaSelectionInput(
+                    variant, current_bound.offers.call_id, current_bound.outer_inner_schema_ids,
+                    2, "comparison-context", catalog=canonical_provider_json(catalogue.as_object()),
+                    active_selection=None if group_id is None else (catalogue.catalog_id, group_id))
+                payload = {"response_contract": {"schema_selection": current_selection.as_object()}}
+                payload = add_contract_guidance(payload, schema)
+            invocation = ProviderInvocation(
+                "comparison-session", schema, payload,
+                thread_id=None, binding_components=(ContextComponentBytes(ContextComponentKind.ROLE_SYSTEM_PROMPT, 17),))
+            prepared.append(LeadGroupRequestMeasurement(variant, comparison_basis, invocation, group_id))
+            exported.append((variant, group_id, invocation))
+        comparison = group_request_size_report(tuple(prepared), group_ids=catalogue.group_ids)
+        self.assertEqual(comparison["comparison_basis_sha256"], hashlib.sha256(comparison_basis).hexdigest())
+        self.assertEqual(len(comparison["measurements"]), len(catalogue.group_ids) + 2)
+        self.assertEqual({row["group_id"] for row in comparison["measurements"] if row["variant"] == "generate"},
+                         set(catalogue.group_ids))
+        for row, (variant, group_id, invocation) in zip(comparison["measurements"], exported, strict=True):
+            native_schema = canonical_provider_json(invocation.schema)
+            native_payload = invocation.payload_json
+            self.assertEqual((row["variant"], row["group_id"]), (variant, group_id))
+            self.assertEqual(row["schema_utf8_bytes"], len(native_schema))
+            self.assertEqual(row["payload_utf8_bytes"], len(native_payload))
+            if variant == "full":
+                self.assertIsNone(row["outer_contract_linkage_utf8_bytes"])
+            else:
+                wire_selection = json.loads(native_payload)["response_contract"]["schema_selection"]
+                linkage = {"issued_contract": wire_selection["issued_contract"]}
+                if variant == "generate":
+                    linkage["active_selection"] = wire_selection["active_selection"]
+                if "catalog_id" in wire_selection:
+                    linkage["catalog_id"] = wire_selection["catalog_id"]
+                self.assertEqual(row["outer_contract_linkage_utf8_bytes"],
+                                 len(canonical_provider_json(linkage)))
+            self.assertEqual(row["binding_utf8_bytes"], 17)
+            self.assertEqual(row["prepared_model_input_utf8_bytes"],
+                             len(native_schema) + len(native_payload) + 17)
+            self.assertFalse(row["submitted"])
+            self.assertIn("prepared", row["measurement_stage"])
+        generated_sizes = [row for row in comparison["measurements"] if row["variant"] == "generate"]
+        self.assertEqual(comparison["largest_generate_schema"]["schema_utf8_bytes"],
+                         max(row["schema_utf8_bytes"] for row in generated_sizes))
+        self.assertEqual(comparison["largest_generate_request"]["prepared_model_input_utf8_bytes"],
+                         max(row["prepared_model_input_utf8_bytes"] for row in generated_sizes))
+        with self.assertRaises(ValueError):
+            group_request_size_report(tuple(prepared[:-1]), group_ids=catalogue.group_ids)
+        with self.assertRaises(ValueError):
+            group_request_size_report(tuple(prepared) + (prepared[-1],), group_ids=catalogue.group_ids)
+        foreign = replace(prepared[0], comparison_basis=canonical_provider_json({"profile": "different"}))
+        with self.assertRaises(ValueError):
+            group_request_size_report((foreign,) + tuple(prepared[1:]), group_ids=catalogue.group_ids)
+        census = provider_schema_statistics({
+            "type": "object", "properties": {"agent_action": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+            "$defs": {"One": {"type": "string", "enum": ["한", "🙂"]}},
+        })
+        self.assertEqual(census.outer_alternatives, 2)
+        self.assertEqual(census.any_of_paths, ("$/properties/agent_action/anyOf",))
+        self.assertEqual((census.definition_count, census.enum_value_count), (1, 2))
+        self.assertEqual(denied, [answer.answer_json])
 
     def test_valid_search_read_and_natural_result_shapes_decode_exactly(self) -> None:
         search = self.decode(_search_wire( self.token, [ ("Needle", ["writing_artifact", "conversation",
