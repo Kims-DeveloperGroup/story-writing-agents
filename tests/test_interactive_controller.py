@@ -3,6 +3,8 @@
 from __future__ import annotations
 import story_writing_agents.lead_task_transitions as task
 from story_writing_agents import conversations as collaboration
+from story_writing_agents.lead_schema_groups import LeadGroupPhase
+from story_writing_agents.agent_context.manifest import ContextSourceKind
 from story_writing_agents import lead_exploration as exploration
 import hashlib
 
@@ -1768,7 +1770,7 @@ class ControllerContractTests(ControllerTestCase):
         for module_name in graph:
             visit(module_name)
         self.assertEqual(len(modules), 164)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 738)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 739)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6146,6 +6148,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         from tests.test_lead_orchestration import (
             _task_fixture, _current_exploration_outcome, _submitted_calls)
         from tests.test_specialist_routing_runtime import scoped_proposal
+        from tests.provider_wire_fixture import selection_plan
         case = _task_fixture(self)
         source, owner = case.conversation("Installed source A"), case.conversation("Installed owner B")
         source_text = "Prefix. 한글\r\nSelected.  Suffix."
@@ -6176,7 +6179,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             self.assertFalse(call.contract.structural_findings(frame))
             self.assertTrue(call.contract.decode_response(frame).belongs_to(call.contract))
             return frame
-        case.backend.enqueue(adopted_plot_proposal)
+        case.backend.enqueue(adopted_plot_proposal, control_plan=selection_plan("consultation.authoring.content"))
         controller, _, callbacks = self.make_controller(case.control_workspace,
                         conversation_storage_services=case.runtime.conversation_storage_services, terminal_width=200)
         controller._runtime, controller._runner = case.runtime, runner
@@ -6204,7 +6207,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 failure.add_note(_current_policy_failure_note(
                     case.backend, projection=projected))
             raise
-        self.assertEqual(len(_submitted_calls(case.history(source))) + len(_submitted_calls(case.history(owner))), 2)
+        self.assertEqual(len(_submitted_calls(case.history(source))) + len(_submitted_calls(case.history(owner))), 3)
 
 
 
@@ -6556,7 +6559,8 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             self.addCleanup(fixture.doCleanups)
             conversation = fixture.conversation()
             _, first_report = runner.run(_confirmed_premise(fixture, conversation))
-            fixture.backend.enqueue(_SubmittedFailure(RuntimeError("known selected front failure")))
+            fixture.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT,
+                _SubmittedFailure(RuntimeError("known selected front failure"))),))
             runner.run(fixture.runtime.lead_turn(fixture.session_id, conversation, "Keep this whole choice.", premise_selection=_premise_choice(first_report, ("core_documents/global_outline.md",))))
             _, latest = runner.run(_confirmed_premise(fixture, conversation))
             history = fixture.history(conversation)
@@ -6590,6 +6594,8 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             self.assertEqual(forwarded[-1]["premise_selection"].report_event_id, unranked.premise_report_ref.report_event_id)
 
         from tests.test_lead_orchestration import _task_fixture, _discussion_reply
+        from tests.provider_wire_fixture import (
+            offered_fixture_bindings, indexed_response, lead_fixture_result, finite_fixture_selection)
         case = _task_fixture(self)
         task_conversation = case.conversation("Shell task choices")
         runner.run(case.proposal(task_conversation, text=(
@@ -6598,10 +6604,29 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '
                 'requires separate exact confirmation.'
             ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',)))))
-        case.backend.enqueue(_discussion_reply("Whole shell material e\u0301\r\n"))
-        runner.run(case.runtime.decide_lead_task(task.LeadTaskDecision.for_conversation(
+        discussion_text = "Whole shell material e\u0301\r\n"
+        def shell_discussion_reply(call, _provider):
+            self.assertIsNone(call.contract.schema_group_phase)
+            self.assertEqual(call.contract.factory.rule_seed.contract_id,
+                             "lead-discussion-response-v1")
+            outer, inner = offered_fixture_bindings(
+                call, action_type="submit_result", response_type="answer", family=0)
+            action = json.loads(_discussion_reply(discussion_text))["agent_action"]
+            evidence_offers = call.contract.eligibility_offers
+            writing_ids = tuple(dict.fromkeys(
+                fact.evidence_id
+                for fact in evidence_offers.completed_read_facts + evidence_offers.delivery_read_facts
+                if fact.source_kind is ContextSourceKind.WRITING_ARTIFACT))
+            action["task_result"]["used_evidence_ids"] = finite_fixture_selection(
+                writing_ids, action["task_result"]["used_evidence_ids"])
+            action["task_result"] = lead_fixture_result(action["task_result"])
+            return indexed_response(action, outer_schema_id=outer,
+                                    inner_schema_id=inner, contract=call.contract)
+        case.backend.enqueue(shell_discussion_reply)
+        discussed = runner.run(case.runtime.decide_lead_task(task.LeadTaskDecision.for_conversation(
             case.session_id, task_conversation, task.LeadTaskAction.DISCUSS, text="Discuss role responsibilities.",
         )))
+        self.assertEqual(discussed.turn.discussion.response_text, discussion_text)
         projection = case.runtime.inspect_lead_collaboration(case.session_id, task_conversation)
         selected_task, material = projection.available_tasks[0], projection.selectable_materials[-1]
         decisions = []
@@ -6713,8 +6738,10 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                         self.assertLess(rendered.index("User"), rendered.index("working")); self.assertEqual(driver._progress_rows, 0)
             self.assertEqual(stream.getvalue().count("User"), 3); self.assertIn("503 Overloaded", rendered); self.assertIn("provider failure", rendered); self.assertIn("Elapsed: 00:00:00", rendered)
 
-        from story_writing_agents.conversations.session_context import SessionContextCapacityError
-        capacity = SessionContextCapacityError(stage="provider_payload", actual_utf8_bytes=262_145)
+        from story_writing_agents.conversations.session_context import (
+            MAX_PROVIDER_PAYLOAD_UTF8_BYTES, SessionContextCapacityError,
+        )
+        capacity = SessionContextCapacityError(stage="provider_payload", actual_utf8_bytes=MAX_PROVIDER_PAYLOAD_UTF8_BYTES + 1)
         capacity_call = mock.AsyncMock(side_effect=capacity)
         self.enterContext(_object_new_patch(RuntimeSession, "lead_turn", capacity_call))
         output, progress, picker = self._Output(), self._Progress(), self._Picker()

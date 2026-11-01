@@ -1,6 +1,8 @@
 """Exact session memory, recovery, and publication safety using synthetic providers."""
 
 from __future__ import annotations
+from tests.provider_wire_fixture import selection_plan
+from story_writing_agents.provider_wire import project_context_payload
 import hashlib
 from story_writing_agents.conversations import encode_collaboration_event
 from tests.test_collaboration_events import editorial, editorial_request
@@ -16,10 +18,14 @@ from dataclasses import asdict, replace
 from unittest import mock
 
 from story_writing_agents import ReplyTraceOrigin, StoryRuntime
+from story_writing_agents.agent_context import canonical_provider_json, service as service_module
 from story_writing_agents.agent_context.continuation import ContextContinuationTransaction
+from story_writing_agents.agent_context.planning import (
+    MAX_MANDATORY_REFERENCE_RESERVATION_UTF8_BYTES,
+)
 from story_writing_agents.agent_context.ledger import ContextLedgerKey, ContextLedgerRecordState
 from story_writing_agents.agent_context.manifest import ContextContinuationIdentity, ContextScope, ContextSubjectKind
-from story_writing_agents.agent_context.service import ContextContinuationRejection
+from story_writing_agents.agent_context.service import AgentContextService, ContextContinuationRejection
 from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.conversations import (
@@ -41,6 +47,7 @@ from story_writing_agents.conversations import (
 )
 from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
 from story_writing_agents.conversations.session_context import (
+    MAX_PROVIDER_PAYLOAD_UTF8_BYTES,
     MAX_SESSION_CONTEXT_UTF8_BYTES,
     SessionContextCapacityError,
     SessionContextHistoryChangedError,
@@ -73,13 +80,35 @@ def _fields(delivery):
 class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
     def setUp(self):
         super().setUp()
-        self.backend = lead._LeadBackend(persist_context_threads=True)
+        self.backend = lead._LeadBackend(persist_context_threads=True, test_case=self)
         self.runtime = StoryRuntime(self.workspace, self.backend)
 
     async def say(self, conversation, text, answer="Synthetic visible reply.", *, runtime=None, backend=None):
         backend = backend or self.backend
-        backend.enqueue(lead._visible_outcome("answer", answer))
-        return await (runtime or self.runtime).lead_turn(self.session_id, conversation, text)
+        call_start = len(backend.calls)
+        backend.enqueue(lead._visible_outcome("answer", answer), control_plan=selection_plan('answer.workflow'))
+        histories = []
+        invoke = AgentContextService.invoke
+        async def observe_history(service, request, provider, **keywords):
+            histories.append(keywords.get("session_history"))
+            return await invoke(service, request, provider, **keywords)
+        with mock.patch.object(AgentContextService, "invoke", new=observe_history):
+            result = await (runtime or self.runtime).lead_turn(self.session_id, conversation, text)
+        self.assertEqual(tuple(call.contract.schema_group_phase.value for call in backend.calls[call_start:]), ("select", "generate"))
+        first = backend.calls[call_start]
+        self.assertEqual(first.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"], "bootstrap")
+        self.assertEqual(first.payload["session_history"]["context_delivery_mode"], "bootstrap")
+        self.assertIs(type(histories[0]), SessionHistorySnapshot)
+        current = backend.callback_payload(first)
+        raw_history = histories[0].delivery()
+        expected_history = json.loads(_json(project_context_payload({"h": raw_history}, {})[0]))["session_history"]
+        self.assertEqual(current["session_history"]["conversations"], expected_history["conversations"])
+        self.assertEqual([(record["event_id"], tuple(field["field_text"].encode("utf-8")
+            for field in record.get("readable_fields", []))) for record in _records(current["session_history"])],
+            [(record["event_id"], tuple(field["text"].encode("utf-8")
+            for field in record.get("fields", []))) for record in _records(raw_history)])
+        self.assertEqual(current["task_input"]["user_request_text"], text)
+        return result
 
     def snapshot(self):
         storage = self.runtime.conversation_storage_services
@@ -116,27 +145,49 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             "Proceed in the order you recommended.",
             "Recall your last recommendation.",
             "Summarize our current discussion.", )
+        expected_scope = self.runtime._agent_context_service.scope(
+            self.session_id, ContextSubjectKind.CONVERSATION, second, LEAD_ORCHESTRATOR)
         for index, text in enumerate(followups):
+            prior_thread = self.checkpoint().checkpoint_view.provider_thread_id
+            self.assertIs(type(prior_thread), str)
+            self.assertTrue(prior_thread)
+            call_start = len(self.backend.calls)
+            threads_before = dict(self.backend.context_threads)
+            taints_before = tuple(self.backend.tainted_thread_ids)
             await self.say(second, text, f"Follow-up answer {index}.")
+            current = self.backend.calls[call_start:]
+            self.assertEqual(len(current), 2)
+            self.assertEqual(tuple(call.scope for call in current), (expected_scope,) * 2)
+            self.assertEqual(tuple(call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"] for call in current), ("bootstrap",) * 2)
+            self.assertTrue(all(call.context_witness is None and call.context_anchor is None for call in current))
+            self.assertIsNone(current[0].expected_thread_id)
+            fresh_thread = self.checkpoint().checkpoint_view.provider_thread_id
+            self.assertIs(type(fresh_thread), str)
+            self.assertTrue(fresh_thread)
+            self.assertEqual(current[1].expected_thread_id, fresh_thread)
+            self.assertNotEqual(fresh_thread, prior_thread)
+            owned_key = (current[0].continuation_identity, current[0].policy_fingerprint)
+            self.assertEqual(threads_before[owned_key], prior_thread)
+            self.assertEqual(self.backend.context_threads, {**threads_before, owned_key: fresh_thread})
+            self.assertEqual(tuple(self.backend.tainted_thread_ids), (*taints_before, prior_thread))
         calls = [call for agent, call in self.backend.call_records if agent == LEAD_ORCHESTRATOR]
-        self.assertEqual({call.expected_thread_id for call in calls[1:]}, {"thread-lead-1"})
-        delivered = [text for call in calls for text in _fields(call.payload["session_history"])]
-        self.assertNotIn(plan, delivered)
+        self.assertEqual({call.expected_thread_id for call in calls[1:3]}, {"thread-lead-1"})
+        delivered = [_fields(self.backend.callback_payload(call)["session_history"]) for call in calls]
+        self.assertEqual(tuple(delivered[index].count(plan) for index in (3, 5, 7)), (2, 2, 2))
         for text in followups:
             self.assertEqual(sum(type(event.payload) is CollaborationMessagePayload and event.payload.content == text for event in self.history(second)), 1)
-            self.assertIn(text, [call.payload["task_input"]["user_request_text"] for call in calls
-                                 if "user_request_text" in call.payload["task_input"]])
+            self.assertIn(text, [self.backend.callback_payload(call)["task_input"]["user_request_text"] for call in calls
+                                 if "user_request_text" in self.backend.callback_payload(call)["task_input"]])
         self.assertEqual(calls[-1].scope.subject_id, second)
-        for call in calls[2:]:
-            self.assertNotIn(call.payload["task_input"]["user_request_text"], _fields(call.payload["session_history"]))
-        self.assertLessEqual(_property_count(calls[-1].payload["session_history"]),
-                             _property_count(calls[-2].payload["session_history"]))
+        for index, call in enumerate(calls[3:]):
+            self.assertEqual(self.backend.callback_payload(call)["task_input"]["user_request_text"], followups[index // 2])
+        self.assertEqual(tuple(_fields(self.backend.callback_payload(calls[-2])["session_history"]).count(text) for text in followups[:-1]), (1, 1))
         self.assertTrue(all("timestamp" not in record and "batch_digest" not in record
                             and "sequence" not in record
-                            for call in calls for record in _records(call.payload["session_history"])))
+                            for call in calls for record in _records(self.backend.callback_payload(call)["session_history"])))
         judgment = next(event for event in self.history(second)
                         if type(event.payload) is CollaborationLeadJudgmentPayload)
-        host_fact = next(record for record in _records(calls[3].payload["session_history"])
+        host_fact = next(record for record in _records(self.backend.callback_payload(calls[5])["session_history"])
                          if record["event_id"] == judgment.event_id)
         self.assertEqual(host_fact["details"]["authoring_scope"]["task_id"],
                          judgment.payload.authoring_scope.task_id)
@@ -210,7 +261,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.backend.context_threads.clear()
         restarted = StoryRuntime(self.workspace, self.backend)
         await self.say(second, "Recall all retained planning.", runtime=restarted)
-        fresh = self.backend.calls[-1]
+        fresh = self.backend.calls[-2]
         self.assertIsNone(fresh.expected_thread_id)
         self.assertEqual(fresh.payload["session_history"]["context_delivery_mode"], "bootstrap")
         replay = _fields(fresh.payload["session_history"])
@@ -234,7 +285,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertIs(failed.record.state, ContextLedgerRecordState.TAINTED)
         self.assertNotEqual(failed.checkpoint_view.session_history_coverage, known_coverage)
         await self.say(second, "Retry after publication verification failure.", runtime=restarted)
-        retry = self.backend.calls[-1]
+        retry = self.backend.calls[-2]
         self.assertIsNone(retry.expected_thread_id)
         self.assertIn("Synthetic publication verification failure.", _fields(retry.payload["session_history"]))
         self.assertEqual(calls[0].continuation_identity, calls[-1].continuation_identity)
@@ -245,15 +296,16 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         restarted = StoryRuntime(self.workspace, self.backend)
         reports = tuple(event.payload.report for event in self.runtime.conversation_storage_services.event_store.read(self.session_id, provisional) if event.kind is CollaborationEventKind.LEAD_EXPLORATION_RESULT)
         self.assertEqual(reports, (explored.exploration,))
-        self.backend.enqueue(_visible_outcome("answer", "Ordinary workflow remains active."))
+        self.backend.enqueue(_visible_outcome("answer", "Ordinary workflow remains active."), control_plan=selection_plan('answer.workflow'))
         normal = await restarted.lead_turn(self.session_id, provisional, "Explain the ordinary workflow.")
+        self.assertEqual(normal.message, "Ordinary workflow remains active.", normal)
         self.assertIs(normal.interaction_mode, exploration.LeadInteractionMode.ORCHESTRATION)
         self.assertIsNone(normal.exploration)
 
         state = restarted.inspect_editorial_state(self.session_id)
         self.assertEqual({r.ref for r in state.selected_records}, {r.record_ref for r in retained})
         self.assertTrue(all(r.draft.alternatives[0].disposition is editorial.EditorialApprovalState.REJECTED for r in state.current_records))
-        views = [call.payload["session_history"]["editorial_state"] for call in self.backend.calls if "session_history" in call.payload]
+        views = [self.backend.callback_payload(call)["session_history"]["editorial_state"] for call in self.backend.calls if "session_history" in call.payload]
         self.assertTrue(all({r["record_id"] for r in v["selected_refs"]} == {r.record_ref.record_id for r in retained} for v in views))
         self.assertTrue(all(len(json.dumps(call.payload["session_history"], ensure_ascii=False, separators=(",", ":"), default=dict).encode()) <= MAX_SESSION_CONTEXT_UTF8_BYTES for call in self.backend.calls if "session_history" in call.payload))
 
@@ -273,26 +325,53 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
 
         capacity_conversation = self.conversation("Complete payload overflow")
         source_path = self.workspace.path("core_documents/global_outline.md")
+        second_source_path = self.workspace.path("core_documents/character_sheets.md")
         marker = "PRIVATE_CAPACITY_SOURCE\n"
         source_text = marker + '\\"' * ((131_072 - len(marker.encode("utf-8"))) // 2)
+        second_marker = marker.replace("SOURCE", "SECOND")
+        second_source_text = source_text.replace(marker, second_marker, 1)
+        self.assertEqual(len(second_marker.encode("utf-8")), len(marker.encode("utf-8")))
         source_path.write_text(source_text, encoding="utf-8")
+        second_source_path.write_text(second_source_text, encoding="utf-8")
         self.assertLessEqual(len(source_text.encode("utf-8")), 131_072)
+        self.assertLessEqual(len(second_source_text.encode("utf-8")), 131_072)
+        self.assertLessEqual(
+            len(source_text.encode("utf-8")) + len(second_source_text.encode("utf-8")),
+            MAX_MANDATORY_REFERENCE_RESERVATION_UTF8_BYTES)
+        capacity_observations = []
+        capacity_check = service_module._require_context_capacity
+        def observe_capacity(schema, payload, *, stage):
+            capacity_observations.append((stage, canonical_provider_json(payload)))
+            return capacity_check(schema, payload, stage=stage)
         preserved_history = (self.history(first), self.history(second))
         preserved_approval = self.runtime.inspect_editorial_state(self.session_id)
         submitted_before = tuple(self.backend.call_records)
-        with self.assertRaises(SessionContextCapacityError) as initial_capacity:
-            await self.say(capacity_conversation, "Review ${core_documents/global_outline.md} before answering.")
+        self.backend.enqueue(control_plan=())
+        with mock.patch.object(service_module, "_require_context_capacity", new=observe_capacity):
+            with self.assertRaises(SessionContextCapacityError) as initial_capacity:
+                await self.runtime.lead_turn(self.session_id, capacity_conversation,
+                    "Review ${core_documents/global_outline.md} and ${core_documents/character_sheets.md} before answering.")
+        self.assertEqual(tuple(stage for stage, _ in capacity_observations),
+                         ("known_envelope", "provider_payload"))
+        self.assertEqual(initial_capacity.exception.actual_utf8_bytes, len(capacity_observations[-1][1]))
+        for full_text in (source_text, second_source_text):
+            encoded_text = json.dumps(full_text, ensure_ascii=False).encode("utf-8")
+            self.assertNotIn(encoded_text, capacity_observations[0][1])
+            self.assertIn(encoded_text, capacity_observations[-1][1])
         self.assertEqual(initial_capacity.exception.stage, "provider_payload")
-        self.assertGreater(initial_capacity.exception.actual_utf8_bytes, MAX_SESSION_CONTEXT_UTF8_BYTES)
-        self.assertEqual(initial_capacity.exception.maximum_utf8_bytes, MAX_SESSION_CONTEXT_UTF8_BYTES)
+        self.assertGreater(initial_capacity.exception.actual_utf8_bytes, MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
+        self.assertEqual(initial_capacity.exception.maximum_utf8_bytes, MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
         self.assertEqual(initial_capacity.exception.excess_utf8_bytes,
-            initial_capacity.exception.actual_utf8_bytes - MAX_SESSION_CONTEXT_UTF8_BYTES)
+            initial_capacity.exception.actual_utf8_bytes - MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
         self.assertNotIn(marker.strip(), str(initial_capacity.exception))
         self.assertNotIn(marker.strip(), repr(initial_capacity.exception))
+        self.assertNotIn(second_marker.strip(), str(initial_capacity.exception))
+        self.assertNotIn(second_marker.strip(), repr(initial_capacity.exception))
         self.assertEqual(tuple(self.backend.call_records), submitted_before)
         self.assertEqual((self.history(first), self.history(second)), preserved_history)
         self.assertEqual(self.runtime.inspect_editorial_state(self.session_id), preserved_approval)
         self.assertNotIn(marker.strip(), repr(self.history(capacity_conversation)))
+        self.assertNotIn(second_marker.strip(), repr(self.history(capacity_conversation)))
         failed_capacity = self.checkpoint()
         self.assertIsNone(failed_capacity.record.ready_checkpoint)
         self.assertEqual(failed_capacity.record.attempt.provider_calls, ())
@@ -308,12 +387,24 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             if row.metadata.conversation_id == capacity_conversation)
         self.assertEqual(archived_row.metadata.status.value, "archived")
         self.assertEqual(restart_storage.event_store.read(self.session_id, capacity_conversation), capacity_history)
-        with self.assertRaises(SessionContextCapacityError) as restarted_capacity:
-            await self.say(restart_conversation, "Review ${core_documents/global_outline.md} before answering.",
-                runtime=capacity_restart)
+        self.backend.enqueue(control_plan=())
+        capacity_observations.clear()
+        with mock.patch.object(service_module, "_require_context_capacity", new=observe_capacity):
+            with self.assertRaises(SessionContextCapacityError) as restarted_capacity:
+                await capacity_restart.lead_turn(self.session_id, restart_conversation,
+                    "Review ${core_documents/global_outline.md} and ${core_documents/character_sheets.md} before answering.")
+        self.assertEqual(tuple(stage for stage, _ in capacity_observations),
+                         ("known_envelope", "provider_payload"))
+        self.assertEqual(restarted_capacity.exception.actual_utf8_bytes, len(capacity_observations[-1][1]))
+        for full_text in (source_text, second_source_text):
+            encoded_text = json.dumps(full_text, ensure_ascii=False).encode("utf-8")
+            self.assertNotIn(encoded_text, capacity_observations[0][1])
+            self.assertIn(encoded_text, capacity_observations[-1][1])
         self.assertEqual(restarted_capacity.exception.stage, "provider_payload")
-        self.assertGreater(restarted_capacity.exception.actual_utf8_bytes, MAX_SESSION_CONTEXT_UTF8_BYTES)
+        self.assertGreater(restarted_capacity.exception.actual_utf8_bytes, MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
         self.assertNotIn(marker.strip(), str(restarted_capacity.exception))
+        self.assertNotIn(second_marker.strip(), str(restarted_capacity.exception))
         self.assertEqual(tuple(self.backend.call_records), submitted_before)
         self.assertEqual(capacity_restart.inspect_editorial_state(self.session_id), preserved_approval)
         self.assertEqual(source_path.read_text(encoding="utf-8"), source_text)
+        self.assertEqual(second_source_path.read_text(encoding="utf-8"), second_source_text)

@@ -1189,7 +1189,9 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             self.assertFalse(hasattr(facade, "ContextInvocationKind"))
             self.assertFalse(hasattr(facade, "ContextJsonObjectResultContract"))
         self.assertEqual( tuple(field.name for field in fields(service_module.ContextProviderCallResult) ),
-            ("response_text", "thread_id", "accounting", "finalizer"), )
+            ("response_text", "thread_id", "accounting", "finalizer", "context_witness"), )
+        witness_field = next(field for field in fields(service_module.ContextProviderCallResult) if field.name == "context_witness")
+        self.assertEqual((witness_field.default, witness_field.kw_only, witness_field.repr), (None, True, False))
         self.assertEqual(tuple(field.name for field in fields(ContextInvocationBinding)), ("scope",
                 "operation_id", "result_correlation_id", "manifest", "reference_operation_id",
                 "mandatory_references", ), )
@@ -1449,6 +1451,55 @@ class CompactWireDecoderTests(unittest.TestCase):
             lambda _locator: "plot_architect", schema_group_protocol=True)
         basis = LeadGroupRequestBasis("group-operation", "group-result", "group-scope")
         selector = grouped_factory.for_offer(offers, request_basis=basis)
+        from story_writing_agents.provider_wire import SchemaSelectionInput, add_contract_guidance
+        wire = SchemaSelectionInput("select", offers.call_id, selector.outer_inner_schema_ids,
+            2, "current-context", catalog=json.dumps(selector.group_stage.catalog.as_object()).encode()).as_object()
+        self.assertEqual(SchemaSelectionInput.from_value(wire).as_object(), wire)
+        self.assertEqual(wire["issued_contract"]["contracts"], [
+            {"outer_schema_id": outer, "result_schema_id": inner}
+            for outer, inner in selector.outer_inner_schema_ids])
+        self.assertEqual(wire["context_delivery"], {"mode": "bootstrap", "context_ref": "current-context"})
+        invalid_wire = []
+        for path, value in ((('extra',), True), (('remaining_provider_calls',), True),
+                (('phase',), 'generate'), (('catalog_id',), 'duplicate-catalog'),
+                (('issued_contract', 'contracts'), []), (('issued_contract', 'extra'), None),
+                (('context_delivery', 'mode'), 'unknown'), (('context_delivery', 'base_context_ref'), 'undeclared-base'),
+                (('active_selection',), {'origin_catalog_id': 'foreign', 'group_id': 'answer.workflow'})):
+            changed = json.loads(json.dumps(wire))
+            target = changed
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            invalid_wire.append(changed)
+        missing_catalog = json.loads(json.dumps(wire))
+        del missing_catalog['catalog']
+        invalid_wire.append(missing_catalog)
+        for changed in invalid_wire:
+            self.assertRaises((TypeError, ValueError), SchemaSelectionInput.from_value, changed)
+            self.assertRaises((TypeError, ValueError), add_contract_guidance,
+                {'response_contract': {'schema_selection': changed}}, selector.schema_value())
+        pure_missing = grouped_factory.for_offer(replace(offers, call_id="pure-missing-R"), request_basis=basis)
+        self.assertIsNone(pure_missing.offers.remaining_provider_calls)
+        self.assertEqual(check_schema(pure_missing.schema_value()), ())
+        for current in (pure_missing, grouped_factory.for_offer(
+                replace(offers, call_id="physical-current-R", remaining_provider_calls=2), request_basis=basis)):
+            declaration = SchemaSelectionInput("select", current.offers.call_id, current.outer_inner_schema_ids,
+                2, "complete-context", catalog=json.dumps(current.group_stage.catalog.as_object()).encode()).as_object()
+            complete = add_contract_guidance({"request_correlation_token": self.token,
+                "task_input": {"workflow_type": "lead_front_channel", "user_request_text": "Explain workflow."},
+                "response_contract": {"schema_selection": declaration}}, current.schema_value())
+            parsed = SchemaSelectionInput.from_value(complete["response_contract"]["schema_selection"])
+            self.assertEqual((parsed.phase, parsed.call_id, parsed.contracts),
+                ("select", current.offers.call_id, current.outer_inner_schema_ids))
+            self.assertEqual(json.loads(parsed.catalog), current.group_stage.catalog.as_object())
+            self.assertEqual(complete["contract_guidance"]["response_rules"].count(
+                "현재 단계는 Phase 1(그룹 선택)입니다. Phase 2에서는 선택한 그룹의 상세 계약에 따라 실제 답변을 작성합니다."), 1)
+            current.require_projection(current.schema_value())
+            if current is pure_missing:
+                with self.assertRaisesRegex(ValueError, "schema_selection does not match the exact current bound call"):
+                    current.require_submission(complete, current.schema_value())
+            else:
+                self.assertIsNone(current.require_submission(complete, current.schema_value()))
         def control_frame(binding, group):
             member, = (item for item in binding.semantic_index.contracts
                        if type(item.owner) is SchemaGroupControlOwner)
@@ -1484,9 +1535,14 @@ class CompactWireDecoderTests(unittest.TestCase):
         generation_offers = replace(offers, call_id="group-generation", action_index=offers.action_index + 1)
         generated = grouped_factory.for_offer(generation_offers, request_basis=basis, group_workflow=workflow,
                                              prepared_compilation=selector.prepared_compilation)
+        self.assertEqual(check_schema(generated.schema_value()), ())
+        self.assertEqual(set(generated.schema_value()['properties']), {'agent_action'})
         self.assertIs(generated.prepared_compilation, selector.prepared_compilation)
         reselect = control_frame(generated, "question.workflow")
         self.assertIs(type(generated.decode_value(reselect).group_control), SchemaGroupReselection)
+        initial_repeat = control_frame(generated, "question.workflow")
+        initial_repeat["agent_action"]["task_result"]["response_type"] = "schema_group_selection"
+        self.assertRaises(ValueError, generated.decode_value, initial_repeat)
         reselect["agent_action"]["task_result"]["group_id"] = "answer.workflow"
         self.assertRaises(ValueError, generated.decode_value, reselect)
         self.assertRaises(TypeError, generated.record_group_control, decoded)
@@ -1495,7 +1551,14 @@ class CompactWireDecoderTests(unittest.TestCase):
             "task_scope": lead_fixture_scope_record({"activity": "workflow", "intent": "authoring", "domains": [],
                 "target_paths": [], "contributions": [], "dependency_slots": [], "task_id": "group-task",
                 "task_revision": 1}, fixed_targets=True, fixed_dependencies=True)}}
-        answer = generated.decode_response(lead_fixture_response(SimpleNamespace(contract=generated), body, family=0))
+        answer_text = lead_fixture_response(SimpleNamespace(contract=generated), body, family=0)
+        answer = generated.decode_response(answer_text)
+        false_completion = json.loads(answer_text)
+        false_completion["agent_action"]["schema_id"] = packet["agent_action"]["schema_id"]
+        false_completion["agent_action"]["task_result"]["schema_id"] = packet["agent_action"]["task_result"]["schema_id"]
+        false_completion["agent_action"]["task_result"]["response_text"] = "업무를 완료했습니다."
+        self.assertRaises(ValueError, selector.decode_value, false_completion)
+        self.assertEqual(denied, [])
         binding = generated.generation_binding()
         self.assertEqual(binding.schema_id_pairs, tuple((outer, inner) for outer, inner in
             generated.outer_inner_schema_ids if inner == answer.selected_result.schema_id))
