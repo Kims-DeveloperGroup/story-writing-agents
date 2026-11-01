@@ -1876,7 +1876,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             'executable', 'model', 'timeout_seconds', 'backend_overrides', 'antigravity_executable',
             'antigravity_model', 'antigravity_effort'))
         self.assertEqual(tuple(inspect.signature(ProviderResult).parameters), ('thread_id',
-            'response_text', 'usage', 'actual_transport_utf8_bytes', 'response_diagnostic', 'context_witness'))
+            'response_text', 'usage', 'actual_transport_utf8_bytes', 'response_diagnostic', 'usage_observation', 'elapsed_ns', 'context_witness'))
         owner = WorkspaceProviderErrorArtifacts(self.workspace)
         self.assertFalse(owner.directory.exists())
         backend = self.backend()

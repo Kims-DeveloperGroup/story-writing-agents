@@ -87,6 +87,7 @@ _CATALOG_EXPORTS = {
     "normalize_conversation_subject",
 }
 _EVENT_EXPORTS = set(COLLABORATION_EVENT_EXPORTS)
+_OWNER_ONLY_EVENT_EXPORTS = {"CollaborationLeadGroupTracePayload"}
 _CONTEXT_EXPORTS = set(COLLABORATION_CONTEXT_EXPORTS)
 _ROOT_CONVERSATION_EXPORTS = set(_V1_CONVERSATION_FACADE_EXPORTS).difference(
     {
@@ -826,11 +827,12 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
             (conversation_events_module, _EVENT_EXPORTS),
             (conversation_context_module, _CONTEXT_EXPORTS),
         )
+        self.assertTrue(_OWNER_ONLY_EVENT_EXPORTS.isdisjoint(vars(conversations_module)))
         for owner, expected in owner_exports:
             with self.subTest(owner=owner.__name__):
                 self.assertEqual(set(owner.__all__), expected)
                 self.assertEqual(len(owner.__all__), len(expected))
-                for name in expected:
+                for name in expected.difference(_OWNER_ONLY_EVENT_EXPORTS):
                     self.assertIs(
                         getattr(owner, name),
                         getattr(conversations_module, name),
@@ -890,7 +892,7 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
             "events.py": _EVENT_EXPORTS,
             "context.py": _CONTEXT_EXPORTS,
         }
-        public_names = set(_CONVERSATION_FACADE_EXPORTS)
+        public_names = set(_CONVERSATION_FACADE_EXPORTS) | _OWNER_ONLY_EVENT_EXPORTS
 
         for filename, expected in expected_by_file.items():
             tree = ast.parse(

@@ -111,6 +111,16 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertEqual(request.draft_sources, (c.ArtifactDraftSource(conversation_id, source.event_id, digest(message)),))
         self.assertEqual((source.batch_id, source.sequence + 1), (events[-1].batch_id, request.tail_sequence))
         self.assertEqual(request.request_event_id, events[-1].event_id)
+        traces = tuple(event for event in events
+                       if event.kind is c.CollaborationEventKind.LEAD_GROUP_TRACE)
+        self.assertEqual(len(traces), 1)
+        self.assertEqual((traces[0].batch_id, traces[0].turn_id, traces[0].step_id),
+                         (source.batch_id, source.turn_id, source.step_id))
+        self.assertLess(traces[0].sequence, source.sequence)
+        self.assertEqual((events[-1].kind, events[-1].sequence),
+                         (c.CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST, request.tail_sequence))
+        self.assertEqual(traces[0].payload.trace.invocation_id, source.payload.provider_invocation_id)
+        self.assertEqual(traces[0].payload.trace.terminal_code, "accepted")
         self.assertEqual(request.basis.inputs[0].input_id, source.event_id)
         self.assertNotIn(b"current_response", c.encode_collaboration_event(events[-1]))
         self.assertEqual((request.source_proposal_id, request.source_proposal_revision,

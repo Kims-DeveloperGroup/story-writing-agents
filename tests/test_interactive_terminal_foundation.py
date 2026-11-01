@@ -3399,7 +3399,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             '_core.py': {'..agent_context.progress', '..agents', '..conversations', '..errors', '..interactive_commands', '._advisory_progress', '._collaboration_view', '._controls', '._driver', '._external_view', '._live_composer', '._model', '._reference_activation', '._render', '._transcript_view', '._viewer_controls', '._viewer_model', '._viewer_render'},
             '_box.py': {'._model'},
             '_markdown.py': {'._model'},
-            '_response_usage.py': {'..conversations'},
+            '_response_usage.py': {'..agent_context.accounting', '..conversations'},
         }
         self.assertEqual(
             {path.name for path in terminal_root.glob("*.py")},

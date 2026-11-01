@@ -1714,13 +1714,18 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.assertIsNone(result.state)
                 self.assertIs(result.next_action, next_action)
                 history = self.history(conversation_id)
+                expected_tail = (
+                    (CollaborationEventKind.LEAD_GROUP_TRACE, CollaborationEventKind.MESSAGE,
+                     CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST)
+                    if kind == 'recommendation'
+                    else (CollaborationEventKind.MESSAGE, CollaborationEventKind.LEAD_GROUP_TRACE)
+                )
                 self.assertEqual(tuple((event.kind for event in history)), (
-                    CollaborationEventKind.MESSAGE, CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
-                    CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
-                    CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
-                    CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
-                    CollaborationEventKind.LEAD_PUBLIC_RESPONSE, CollaborationEventKind.MESSAGE) + (
-                    (CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST,) if kind == 'recommendation' else ()))
+                    CollaborationEventKind.MESSAGE,
+                    CollaborationEventKind.PROVIDER_CALL_ACCOUNTING, CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+                    CollaborationEventKind.PROVIDER_CALL_ACCOUNTING, CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+                    CollaborationEventKind.LEAD_PUBLIC_RESPONSE,
+                ) + expected_tail)
                 self.assertEqual(project_collaboration_history(history).physical_calls_spent, 2,)
 
         proposal_id = self.conversation("Proposal")
@@ -4804,6 +4809,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             selected = call.contract.group_workflow.active_selection
             retained.append((call.contract, selected, selected.as_object(), call.contract.prepared_compilation))
             return invalid_generation(call, provider)
+        read_reports_before = self.runtime.lead_group_reports(self.session_id, reading)
         start = len(self.backend.calls)
         self.backend.enqueue(reject_with_snapshot, control_plan=select("answer.workflow"))
         self.backend.enqueue(_search_history, _read_history_hit, _visible_outcome("answer", grouped=True))
@@ -4812,12 +4818,16 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         calls = self.backend.calls[start:]
 
         read_reports = self.runtime.lead_group_reports(self.session_id, reading)
-        self.assertEqual(len(read_reports), 1)
-        self.assertEqual(read_reports[0]["submitted_calls"], 5)
-        self.assertEqual(read_reports[0]["rejected_responses"], 1)
-        self.assertTrue(read_reports[0]["result_accepted"])
-        self.assertEqual((read_reports[0]["full_deliveries"], read_reports[0]["delta_deliveries"]), (5, 0))
-        self.assertEqual(read_reports[0]["rates"]["full_redeliveries_per_followup_submitted_call"],
+        self.assertEqual(read_reports[:-1], read_reports_before)
+        self.assertEqual(len(read_reports), len(read_reports_before) + 1)
+        read_report = read_reports[-1]
+        self.assertEqual(tuple(row["call_id"] for row in read_report["physical_calls"]),
+                         tuple(call.call_id for call in calls))
+        self.assertEqual(read_report["submitted_calls"], 5)
+        self.assertEqual(read_report["rejected_responses"], 1)
+        self.assertTrue(read_report["result_accepted"])
+        self.assertEqual((read_report["full_deliveries"], read_report["delta_deliveries"]), (5, 0))
+        self.assertEqual(read_report["rates"]["full_redeliveries_per_followup_submitted_call"],
                          {"numerator": 4, "denominator": 4, "fraction": 1.0})
         failed, selection, snapshot, old_plan = retained[0]
         self.assertIs(refreshed.kind, LeadOutcomeKind.ANSWER)
@@ -6105,8 +6115,10 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(len(submitted), 3)
         self.assertTrue(all(not payload.validation_details for payload in prepared))
         for before, after in zip(prepared, submitted, strict=True):
+            self.assertIsNone(before.accounting)
+            self.assertIs(after.accounting.state, ProviderCallState.SUBMITTED)
             self.assertEqual(before, replace(after, state=CollaborationProviderCallState.PREPARED,
-                validation_details=()))
+                validation_details=(), accounting=None))
         self.assertTrue(submitted[1].validation_details[0].startswith("Original response"))
         self.assertTrue(submitted[2].validation_details[0].startswith("Repair response"))
         self.assertEqual(tuple((chunk for payload in submitted for chunk in payload.validation_details)),
@@ -6643,6 +6655,21 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     self.assertEqual(len(closure), 1)
                     self.assertEqual(closure[0].call_id, submitted[-1].call_id)
                     self.assertEqual(closure[0].invocation_id, submitted[-1].invocation_id)
+                    traces = tuple(event for event in prefix
+                                   if event.kind is CollaborationEventKind.LEAD_GROUP_TRACE)
+                    terminal_event = next(event for event in prefix
+                        if type(event.payload) is CollaborationLeadOutcomeFailurePayload)
+                    self.assertEqual(len(traces), 1)
+                    self.assertEqual((traces[0].batch_id, traces[0].turn_id, traces[0].step_id),
+                                     (terminal_event.batch_id, terminal_event.turn_id, terminal_event.step_id))
+                    reports = runtime.lead_group_reports(self.session_id, conversation)
+                    self.assertEqual(len(reports), 1)
+                    self.assertEqual(reports[0]["invocation_id"], closure[0].invocation_id)
+                    self.assertEqual(reports[0]["trace"], traces[0].payload.trace.as_object())
+                    self.assertFalse(reports[0]["result_accepted"])
+                    self.assertEqual(reports[0]["submitted_calls"], len(submitted))
+                    self.assertEqual(reports[0]["submission_coverage"]["known_submitted_call_ids"],
+                                     [item.call_id for item in submitted])
                     self.assertIs(closure[0].code, { "cancelled": CollaborationLeadOutcomeFailureCode.CANCELLED,
                         "timed_out": CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT,
                     }.get(label, CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED))

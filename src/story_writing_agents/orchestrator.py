@@ -1916,9 +1916,17 @@ class _AccountingContextProvider:
 
     def with_group_trace(self, drafts, terminal_code: str):
         traces = self.group_trace_drafts(terminal_code, terminal_drafts=drafts)
-        if drafts and type(drafts[-1].payload) is CollaborationStepStatePayload:
-            return (*drafts[:-1], *traces, drafts[-1])
-        return (*drafts, *traces)
+        if not traces:
+            return tuple(drafts)
+        source_ids = {draft.payload.source_recommendation_event_id for draft in drafts
+                      if type(draft.payload) is LeadRecommendationRequestPayload}
+        tail_index = next((index for index, draft in enumerate(drafts)
+            if type(draft.payload) in {CollaborationStepStatePayload, LeadRecommendationRequestPayload}
+            or (type(draft.payload) is CollaborationLeadJudgmentPayload and draft.event_id in source_ids)), len(drafts))
+        drafts = tuple(replace(draft, payload=replace(
+            draft.payload, tail_sequence=draft.payload.tail_sequence + len(traces),
+        )) if type(draft.payload) is LeadRecommendationRequestPayload else draft for draft in drafts)
+        return (*drafts[:tail_index], *traces, *drafts[tail_index:])
 
     def publish_public_responses(self) -> None:
         if self._public_responses_published or self._public_response_contract_id is None:
@@ -13079,6 +13087,7 @@ class StoryRuntime:
                 recovered = self._close_failed_lead_attempt(
                     session_id, conversation_id, failure=failure,
                     turn_id=turn_id, step_id=step_id,
+                    accounting_provider=provider,
                 )
                 if not isinstance(failure, Exception):
                     raise
@@ -13399,7 +13408,9 @@ class StoryRuntime:
                 request_draft = replace(request_draft, payload=replace(
                     request_draft.payload, tail_sequence=refreshed.last_sequence + len(final_drafts) + 1,
                 ))
-                self._append_drafts(refreshed.last_sequence, provider.with_group_trace((*final_drafts, request_draft), "accepted"))
+                publication_drafts = provider.with_group_trace((*final_drafts, request_draft), "accepted")
+                request_draft = publication_drafts[-1]
+                self._append_drafts(refreshed.last_sequence, publication_drafts)
                 return replace(
                     self._recommendation_turn_result(request_draft),
                     validation_details=provider.validation_details,
@@ -14468,6 +14479,7 @@ class StoryRuntime:
         self, session_id: str, conversation_id: str, *,
         failure: BaseException | None = None,
         turn_id: str | None = None, step_id: str | None = None,
+        accounting_provider: _AccountingContextProvider | None = None,
     ) -> LeadTurnResult | None:
         """Close only the projection-authorized read-only attempt under its lease."""
 
@@ -14529,6 +14541,7 @@ class StoryRuntime:
             call_id=calls[-1].call_id if calls else None,
             failure_code=code,
             failure=failure,
+            accounting_provider=accounting_provider,
         )
 
     def _lead_outcome_failure_result(

@@ -72,7 +72,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
                 and event.payload.state is CollaborationProviderCallState.SUBMITTED
                 and event.payload.invocation_id == artifact.payload.provider_invocation_id]
             self.assertTrue(calls)
-            measured = tuple(replace(event, payload=replace(event.payload, usage=ProviderUsage(0, 2, 7)))
+            measured = tuple(replace(event, payload=replace(event.payload, usage=ProviderUsage(0, 2, 7), accounting=None))
                 if event in calls else event for event in events)
             view = _collaboration_view.project_collaboration_event(artifact, history_events=measured)
             rendered_artifact = render_component(view, _capability(CapabilityProfile.LINE, width=120)).text
@@ -233,13 +233,13 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
         calls = [event for event in history if type(event.payload) is CollaborationProviderCallPayload
             and event.payload.state is CollaborationProviderCallState.SUBMITTED]
         original = calls[0]
-        lead = replace(original, payload=replace(original.payload, usage=ProviderUsage(0, 2, 7)))
+        lead = replace(original, payload=replace(original.payload, usage=ProviderUsage(0, 2, 7), accounting=None))
         repair = replace(lead, payload=replace(lead.payload, call_id="repair_lead", ordinal=2,
-            call_kind=CollaborationProviderCallKind.CONTINUATION, usage=ProviderUsage(3, 4, 5)))
+            call_kind=CollaborationProviderCallKind.CONTINUATION, usage=ProviderUsage(3, 4, 5), accounting=None))
         scope = dict(session_id=lead.session_id, conversation_id=lead.conversation_id,
             turn_id=lead.turn_id, step_id=lead.step_id, invocation_id=lead.payload.invocation_id,
             role=lead.payload.role, invocation_kinds=frozenset({lead.payload.invocation_kind}))
-        specialist = replace(calls[1], payload=replace(calls[1].payload, usage=ProviderUsage(900, 800)))
+        specialist = replace(calls[1], payload=replace(calls[1].payload, usage=ProviderUsage(900, 800), accounting=None))
         self.assertEqual(response_usage((lead,), **scope), ResponseUsage(0, 2))
         self.assertEqual(response_usage((lead, repair, lead, specialist), **scope), ResponseUsage(3, 6))
         self.assertEqual(response_usage((lead, repair), **scope, call_id="repair_lead"), ResponseUsage(3, 4))
@@ -248,15 +248,15 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
         specialist_scope = dict(scope, invocation_id=specialist.payload.invocation_id,
             role=specialist.payload.role, invocation_kinds=frozenset({specialist.payload.invocation_kind}))
         self.assertEqual(response_usage((lead, repair, specialist), **specialist_scope), ResponseUsage(900, 800))
-        partial = replace(repair, payload=replace(repair.payload, usage=ProviderUsage(input_tokens=3)))
+        partial = replace(repair, payload=replace(repair.payload, usage=ProviderUsage(input_tokens=3), accounting=None))
         self.assertEqual(response_usage((lead, partial), **scope), ResponseUsage(3, None))
-        output_only = replace(lead, payload=replace(lead.payload, usage=ProviderUsage(output_tokens=0)))
+        output_only = replace(lead, payload=replace(lead.payload, usage=ProviderUsage(output_tokens=0), accounting=None))
         self.assertEqual(response_usage((output_only,), **scope), ResponseUsage(None, 0))
         self.assertEqual(response_usage((original, repair), **scope), ResponseUsage())
         self.assertEqual(response_usage((lead,), **dict(scope, invocation_id=None)), ResponseUsage())
         self.assertEqual(response_usage((lead,), **scope, call_id="missing"), ResponseUsage())
         for ambiguous in (replace(lead, conversation_id="different_conversation"),
-            replace(lead, payload=replace(lead.payload, usage=ProviderUsage(1, 2))),
+            replace(lead, payload=replace(lead.payload, usage=ProviderUsage(1, 2), accounting=None)),
             replace(repair, payload=replace(repair.payload, ordinal=1)),
             replace(repair, payload=replace(repair.payload, ordinal=3)),
             replace(lead, recipient=specialist.recipient, payload=replace(specialist.payload, invocation_id=lead.payload.invocation_id)),

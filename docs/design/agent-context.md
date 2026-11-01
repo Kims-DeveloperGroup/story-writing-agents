@@ -462,6 +462,8 @@ private trace는 당시 전체 카드 정의·기준과 선택 기록을 보존�
 Provider를 실행·저장하지 않는다. 크기 비교도 같은 원래 요청·컨텍스트·profile로
 준비한 실제 native full/SELECT/모든 GENERATE를 입력받으며 준비를 제출로 간주하지 않는다.
 
+명시적 전체 감사 API인 `project_collaboration_readable_history()`는 모든 저장 이벤트의 typed record를 보존한다. trace record의 읽을 수 있는 필드와 바이트는 비어 있으며, 일반 Lead 메모리·검색·공개 응답에는 trace 내용이 전달되지 않는다. 비공개 원본 payload가 필요한 호출자만 이 전체 감사 API나 `lead_group_reports()`를 명시적으로 조회한다.
+
 원시 usage와 관측 범위·출처를 보존하고 검증된 호출별 값만 footer/report에서 합산한다.
 세션·prefix·출처·단위가 맞지 않거나 reset/누락이면 차이를 추정하지 않는다. 첫 BOUND부터
 terminal 게시 직전까지의 관측 시간과 Provider 호출 지연 합, 전체 턴 지연은 구분한다.

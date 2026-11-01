@@ -274,7 +274,13 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertTrue(latest["result_accepted"])
         self.assertEqual(latest["submitted_calls"], 2)
         self.assertEqual(latest["terminal_result"]["outcome_kind"], "answer")
-        self.assertEqual(latest["terminal_result"]["source_kind"], "lead_judgment")
+        self.assertEqual(latest["terminal_result"]["source_kind"], "message")
+        terminal_event = next(event for event in report_history
+                              if event.event_id == latest["terminal_result"]["source_event_id"])
+        self.assertIs(terminal_event.kind, CollaborationEventKind.MESSAGE)
+        self.assertIs(type(terminal_event.payload), CollaborationLeadJudgmentPayload)
+        self.assertIs(terminal_event.payload.kind, LeadOutcomeKind.ANSWER)
+        self.assertEqual(terminal_event.payload.provider_invocation_id, latest["invocation_id"])
         self.assertIn(latest["terminal_result"]["source_event_id"],
                       {event.event_id for event in report_history})
         self.assertIsNone(latest["task_completion"])

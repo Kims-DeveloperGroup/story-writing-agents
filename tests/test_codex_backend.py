@@ -2599,8 +2599,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     "response_text",
                     "thread_id",
                     "usage",
+                    "elapsed_ns",
                 },
             )
+            self.assertIs(type(response["elapsed_ns"]), int)
+            self.assertGreaterEqual(response["elapsed_ns"], 0)
             self.assertEqual(outcome, {"code": "accepted", "outcome": "accepted"})
             self.assertNotIn("stderr", response)
             self.assertNotIn("environment", response)

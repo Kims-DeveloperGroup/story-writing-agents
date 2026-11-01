@@ -604,6 +604,8 @@ reports = runtime.lead_group_reports(
 이 명시적 조회에서 확인한다. 내부 trace는 일반 답변·검색 가능한 대화 메모리·진행
 표시에 자동으로 섞이지 않으며, 과거 전체 카드를 정상 GENERATE delta에 재주입하지 않는다.
 
+`project_collaboration_readable_history()`는 전체 저장 이력을 감사하는 별도 API다. trace도 typed record로 남지만 읽을 수 있는 fields와 바이트는 비어 있다. 일반 대화·검색·Lead 메모리에는 trace 내용을 노출하지 않는다. 원본 payload 열람은 이 전체 감사 API를 명시적으로 호출한 경우에만 해당한다.
+
 PREPARED와 실제 SUBMITTED를 구분한다. 최종 회계 없이 남은 PREPARED 기록은
 제출되지 않았다는 증거가 아니므로, 미확인 제출과 확인된 부분합·총량 미관측을 구분한다. 런타임이 직렬화한 native 입력/schema의
 바이트, 모델이 보고한 토큰·캐시, 금액과 지연은 서로 다른 항목이다. 누적 토큰의

@@ -261,14 +261,14 @@ def _group_trace_fixture():
     observations = (
         LeadGroupObservation(LeadGroupObservationKind.BOUND, basis, LeadGroupPhase.SELECT,
                              "group-call-1", catalog_snapshot=canonical_provider_json(catalog)),
-        LeadGroupObservation(LeadGroupObservationKind.CONTROL_ACCEPTED, basis, LeadGroupPhase.GENERATE,
+        LeadGroupObservation(LeadGroupObservationKind.CONTROL_ACCEPTED, basis, LeadGroupPhase.SELECT,
                              "group-call-1", catalog_snapshot=canonical_provider_json(catalog),
                              selection_snapshots=(canonical_provider_json(selection),)),
         LeadGroupObservation(LeadGroupObservationKind.TERMINAL, basis, LeadGroupPhase.STOP,
                              selection_snapshots=(canonical_provider_json(selection),),
-                             terminal_code="provider_call_budget_exhausted"),
+                             terminal_code="evidence_validation_rejected"),
     )
-    return LeadGroupTrace("group-invocation", observations, "provider_call_budget_exhausted", elapsed_ns=37)
+    return LeadGroupTrace("group-invocation", observations, "evidence_validation_rejected", elapsed_ns=37)
 
 class CollaborationValueContractTests(unittest.TestCase):
     def test_constants_and_closed_enums_are_exact(self) -> None:
@@ -702,7 +702,8 @@ class CollaborationValueContractTests(unittest.TestCase):
             ),
             (
                 provider_call,
-                ('invocation_id', 'call_id', 'ordinal', 'role', 'invocation_kind', 'call_kind', 'state', 'validation_details', 'usage'),
+                ('invocation_id', 'call_id', 'ordinal', 'role', 'invocation_kind', 'call_kind', 'state',
+                 'validation_details', 'usage', 'accounting'),
             ),
         )
         for value, expected_fields in values_and_fields:
@@ -750,6 +751,13 @@ class CollaborationValueContractTests(unittest.TestCase):
         self.assertEqual(tuple(core_readiness.CriterionFinding.__dataclass_fields__),
                          ("criterion_id", "criterion_judgment", "source_ids",
                           "depends_on_author_decision_ids", "explanation"))
+
+        from story_writing_agents.conversations.events import CollaborationLeadGroupTracePayload
+        trace_payload = CollaborationLeadGroupTracePayload(_group_trace_fixture())
+        self.assertEqual(tuple(field.name for field in dataclasses.fields(trace_payload)), ("trace",))
+        self.assertFalse(hasattr(trace_payload, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            setattr(trace_payload, "trace", None)
 
     def test_actor_direction_matrix_is_closed_and_exact(self) -> None:
         advisory = make_proposal(step_kind=CollaborationStepKind.SPECIALIST_ADVISORY)
@@ -912,7 +920,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                                    sender, recipient, trace_payload)
         with self.assertRaises(TypeError):
             CollaborationLeadGroupTracePayload(object())
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             make_draft("trace_type", CollaborationEventKind.LEAD_GROUP_TRACE, RUNTIME, LEAD, payload)
 
     def test_proposal_closure_budget_and_advisory_invariants_fail_closed(self) -> None:
@@ -1218,9 +1226,25 @@ class CollaborationWireContractTests(unittest.TestCase):
             LeadGroupTrace.from_object({**trace.as_object(), "unexpected": True})
         with self.assertRaises(ValueError):
             replace(trace, elapsed_ns=True)
-        draft = make_draft("group_trace", CollaborationEventKind.LEAD_GROUP_TRACE,
-                           RUNTIME, LEAD, CollaborationLeadGroupTracePayload(trace))
-        trace_batch = make_batch(history, "batch_group_trace", draft)
+        from story_writing_agents.agents import LEAD_ORCHESTRATOR
+        from tests.collaboration_contract_fixture import provider_call_drafts
+        turn_id = "group_trace_turn"
+        draft = make_draft("group_trace", CollaborationEventKind.LEAD_GROUP_TRACE, RUNTIME, LEAD,
+                           CollaborationLeadGroupTracePayload(trace), turn_id=turn_id)
+        with self.assertRaises(CollaborationAppendError):
+            store_batch(history, make_batch(history, "batch_orphan_trace", draft))
+        user = make_draft("group_trace_user", CollaborationEventKind.MESSAGE, USER, LEAD,
+                          CollaborationMessagePayload("Visible group request."), turn_id=turn_id)
+        calls = tuple(replace(item, turn_id=turn_id) for item in provider_call_drafts(
+            invocation_id=trace.invocation_id, call_id="group-call-1", role=LEAD_ORCHESTRATOR,
+            recipient=LEAD, invocation_kind=CollaborationInvocationKind.LEAD))
+        terminal = make_draft("group_trace_failure", CollaborationEventKind.LEAD_OUTCOME_FAILURE,
+            RUNTIME, LEAD, CollaborationLeadOutcomeFailurePayload(
+                CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED,
+                trace.invocation_id, "group-call-1"), turn_id=turn_id)
+        terminal_history = store_batch(history, make_batch(
+            history, "batch_group_trace", user, *calls, terminal))
+        trace_batch = make_batch(history, "batch_group_trace", user, *calls, terminal, draft)
         with_trace = store_batch(history, trace_batch)
         event = with_trace[-1]
         raw = encode_collaboration_event(event)
@@ -1228,7 +1252,7 @@ class CollaborationWireContractTests(unittest.TestCase):
         self.assertEqual(encode_collaboration_event(decode_collaboration_event(raw)), raw)
         self.assertEqual(json.loads(raw)["payload"], {"payload_type": "lead_group_trace", "trace": trace.as_object()})
         self.assertEqual(project_lead_group_traces(with_trace), (trace,))
-        before = project_collaboration_history(history)
+        before = project_collaboration_history(terminal_history)
         after = project_collaboration_history(with_trace)
         self.assertEqual(before.current_proposal, proposal)
         self.assertEqual(after.current_proposal, proposal)
@@ -1236,7 +1260,14 @@ class CollaborationWireContractTests(unittest.TestCase):
                      "public_responses", "physical_calls_spent", "artifact_objectives"):
             self.assertEqual(getattr(after, name), getattr(before, name), name)
         readable = project_collaboration_readable_history(with_trace)
-        self.assertEqual(readable.records, project_collaboration_readable_history(history).records)
+        expected_records = tuple(replace(record, batch_size=len(trace_batch.events),
+            batch_digest=collaboration_batch_digest(trace_batch))
+            if record.batch_id == trace_batch.batch_id else record
+            for record in project_collaboration_readable_history(terminal_history))
+        self.assertEqual(readable[:-1], expected_records)
+        self.assertEqual(readable[-1].fields, ())
+        self.assertEqual(readable[-1].readable_utf8_bytes, 0)
+        self.assertEqual(readable[-1].payload.trace, trace)
         self.assertNotIn("PRIVATE_SELECTION_REASON", repr(readable))
 
     def test_artifact_public_decoders_clear_content_from_exception_graphs(
@@ -1725,7 +1756,10 @@ import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
 assert len(facade.__all__) == 188
-assert len(events.__all__) == 133
+assert len(events.__all__) == 134
+assert "CollaborationLeadGroupTracePayload" in events.__all__
+assert "CollaborationLeadGroupTracePayload" not in facade.__all__
+assert not hasattr(facade, "CollaborationLeadGroupTracePayload")
 assert len(context.__all__) == 37
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore

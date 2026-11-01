@@ -1617,7 +1617,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assertRaises(ValueError, replace, grouped_factory, rule_seed=revision_seed)
 
         from story_writing_agents.agent_context.accounting import (
-            ContextComponentBytes, ContextComponentKind, canonical_provider_json, provider_schema_statistics,
+            ContextComponentBytes, ContextComponentKind,  provider_schema_statistics,
         )
         from story_writing_agents.agent_context.group_reporting import (
             LeadGroupRequestMeasurement, group_request_size_report,
