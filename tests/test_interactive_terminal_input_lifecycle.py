@@ -527,7 +527,6 @@ class InputLatchAndDriverTests(unittest.TestCase):
                   for width, height, retain in ((40, 250, False), (7, 250, True), (40, 1, True))]
         cases += [(prefix + f6 + click + "\x1b[D\r", "draft", 1, -7, 250, True)]
         cases += [(prefix + f6 + "\rx\r", "drafxt", 1, 40, 250, True)]
-        cutoff = len((prefix + f6 + click).encode())
         for scripted, expected, captures, width, height, retain in cases:
             scripted = scripted[:-1] + "\x1b[<x;2;3M\x1b[<0;" + "1" * 100 + ";3M\r"
             with _session_driver(*(bytes([byte]) for byte in scripted.encode())) as (driver, termios, stream, output, fallback):
@@ -536,16 +535,19 @@ class InputLatchAndDriverTests(unittest.TestCase):
                                             buffer_lines=("first", "second", "third"))
                 if retain:
                     driver._output_history.retain(MultiAgentScrollState((view,), 0))
+                if (hit := next(iter(driver._output_history.render(_live_capabilities(), max(1, min(height, 200) - 1)).hits), None)) is not None:
+                    scripted = scripted.replace(";248M", f";{hit.top + 1}M").replace(";249M", f";{hit.top + 1}M").replace(";250M", f";{hit.bottom + 1}M")
+                    stream.chunks = deque(bytes((byte,)) for byte in scripted.encode())
+                    cutoff = len((prefix + f6 + click.replace(";248M", f";{hit.top + 1}M")).encode())
                 output.fileno.return_value = 8
                 driver._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=(7 if len(stream.calls) > cutoff else 40) if width == -7 else width, lines=height))
-                with (mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True),
-                      mock.patch.object(RawTerminalDriver, "_query_cursor_row", return_value=height)):
+                with mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True):
                     self.assertEqual(driver.read_main_line("main> ", lambda _: ()), expected)
                 rendered = "".join(call.args[0] for call in output.write.call_args_list)
                 self.assertEqual(rendered.count(driver_module._MOUSE_ENABLE), captures)
                 if captures:
                     self.assertIn("Focused", rendered)
-                    if width != -7 and click in scripted:
+                    if width != -7 and prefix + f6 + "\x1b[<0;" in scripted:
                         self.assertIn("second", rendered)
                         self.assertIn("third", rendered)
                         self.assertLess(rendered.rfind(driver_module._MOUSE_DISABLE), rendered.rfind(expected))
@@ -567,7 +569,6 @@ class InputLatchAndDriverTests(unittest.TestCase):
                 return len(text)
             output.write.side_effect = write
             with (mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True),
-                  mock.patch.object(RawTerminalDriver, "_query_cursor_row", return_value=250),
                   self.assertRaisesRegex(OSError, "mouse release failed")):
                 driver.read_main_line("main> ", lambda _: ())
             self.assertEqual(output.write.call_args_list.count(mock.call(driver_module._MOUSE_DISABLE)), 2)
@@ -588,8 +589,8 @@ class InputLatchAndDriverTests(unittest.TestCase):
                 driver._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=40, lines=24))
                 observations = []
                 def write(text):
-                    if text == "\x1b[6n":
-                        reply = (interleaved if not observations else "") + "\x1b[24;1R"
+                    if "\x1b[?1049h" in text:
+                        reply = interleaved if not observations else ""
                         observations.append(reply)
                         for byte in reversed(reply.encode()):
                             stream.chunks.appendleft(bytes([byte]))
@@ -599,7 +600,7 @@ class InputLatchAndDriverTests(unittest.TestCase):
                       mock.patch.object(driver_module._select, "select", return_value=([7], [], []))):
                     self.assertEqual(driver.read_main_line("main> ", lambda _: ()), expected)
                 rendered = "".join(call.args[0] for call in output.write.call_args_list)
-                self.assertTrue(observations)
+                self.assertEqual(observations, [interleaved])
                 self.assertEqual(rendered.count(driver_module._MOUSE_ENABLE), 1)
                 self.assertEqual(driver._history_state.entries, (expected,))
                 if not interleaved:

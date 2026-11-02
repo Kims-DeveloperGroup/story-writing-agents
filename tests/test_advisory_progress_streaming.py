@@ -2854,7 +2854,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                 review = [read for read in rig.reads if read.phase == "review"]
                 exited = review[next(index for index, read in enumerate(review) if read.character == "B") + 1]
                 self.assertTrue(exited.alternate)
-                self.assertEqual(re.findall(r"USER_A|JSON_A|A_ROW_[12]", exited.text), ["USER_A", "JSON_A", "A_ROW_1" if paragraphs == 2 else "A_ROW_2"])
+                self.assertEqual(re.findall(r"USER_A|JSON_A|A_ROW_[12]", exited.text), ["USER_A", "JSON_A", *(["A_ROW_1", "A_ROW_2"] if paragraphs == 2 else ["A_ROW_2"])])
                 pointer = next(index for index, read in enumerate(review) if read.character == "M")
                 self.assertEqual(review[pointer + 1].text != review[pointer].text, paragraphs == 80)
                 self.assertFalse(rig.queried)

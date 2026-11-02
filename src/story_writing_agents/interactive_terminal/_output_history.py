@@ -229,7 +229,7 @@ class ConversationTimeline:
                 rows.extend(render_nested_scroll_view(state, capabilities).text.split("\n"))
         for frame in entry.frames:
             start = len(rows)
-            rows.extend(self._frame_rows(frame, capabilities, False, False))
+            rows.extend(self._frame_rows(frame, capabilities, False, False, focus=False))
             frames.append((frame.identity, start, len(rows)))
         cached = _EntryRows(entry, capabilities, preview_height, tuple(" " + row for row in rows), tuple(frames))
         self._row_cache[entry.identity] = cached
@@ -326,8 +326,8 @@ class ConversationTimeline:
         for frame, start, stop in rectangles:
             top, bottom = max(0, start - offset), min(len(visible), stop - offset)
             hits.append(FrameHit(frame.identity, top + 1, bottom, capabilities.width - 1))
-            if mouse_mode:
-                frame_rows = self._frame_rows(frame, frame_capabilities, True, pointer_mode)
+            if mouse_mode or (frame.identity == self.focused_id and not self.timeline_focused):
+                frame_rows = self._frame_rows(frame, frame_capabilities, mouse_mode, pointer_mode)
                 for row in range(top, bottom):
                     visible[row] = " " + frame_rows[row + offset - start]
             if frame.identity == self.focused_id and not self.timeline_focused:
@@ -348,12 +348,13 @@ class ConversationTimeline:
         visible_keys = self._row_keys[self._visible_offset:self._visible_offset + self._height]
         return any(entry_identity == identity for entry_identity, _ in visible_keys)
 
-    def _frame_rows(self, frame: OutputFrame, capabilities: TerminalCapabilities, mouse_mode: bool, pointer_mode: bool) -> list[str]:
+    def _frame_rows(self, frame: OutputFrame, capabilities: TerminalCapabilities, mouse_mode: bool,
+                    pointer_mode: bool, *, focus: bool = True) -> list[str]:
         view = frame.view
         visible_height = min(6, view.visible_height)
         buffer = view.buffer_lines or view.visible_lines
         start = min(view.start_line, max(1, view.total_lines - visible_height + 1))
-        focused = mouse_mode and frame.identity == self.focused_id and not self.timeline_focused
+        focused = focus and frame.identity == self.focused_id and not self.timeline_focused
         projected = replace(view, visible_height=visible_height, start_line=start,
                             visible_lines=tuple(buffer[start - 1:start - 1 + visible_height])
                             if view.buffer_lines else view.visible_lines[:visible_height], is_focused=focused)
