@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import io
 import re
+import threading
 import unittest
 from unittest import mock
 
@@ -19,7 +21,9 @@ from story_writing_agents.agent_context.progress import (
     ProviderStreamEventKind,
     active_provider_stream_sink,
 )
-from story_writing_agents.errors import BackendProtocolError
+from story_writing_agents.errors import BackendProtocolError, ProviderAuthenticationRequiredError
+from story_writing_agents.blocking_work import run_blocking
+from story_writing_agents.provider_auth_recovery import request_authentication
 from story_writing_agents.interactive_terminal import (
     _core,
     _driver,
@@ -41,6 +45,7 @@ from story_writing_agents.interactive_terminal._model import (
     KeyKind,
     MultiAgentScrollState,
     NestedScrollViewport,
+    RenderedFrame,
     TerminalCapabilities,
     ViewState,
     display_character_width,
@@ -450,39 +455,47 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertIsNone(active_provider_stream_sink())
 
     def test_lead_policy_operation_task_inherits_stream_sink(self) -> None:
-        """Verify InteractiveLeadAdapter._run_operation passes active stream sink to task."""
+        """Draw before setup and auth retry while preserving the task's stream sink."""
         from story_writing_agents.interactive_controller._lead_policy import InteractiveLeadAdapter
         from story_writing_agents.orchestrator import RuntimeSession
-
         runner = asyncio.Runner()
         self.addCleanup(runner.close)
-
+        events, observed_sinks = [], []
         mock_terminal = mock.create_autospec(InteractiveTerminal, instance=True)
         async def fake_advisory_progress(coro):
+            events.append("frame")
             return await coro
         mock_terminal._advisory_progress = fake_advisory_progress
         progress = InteractiveAdvisoryProgress(mock_terminal)
-
+        def recover(provider):
+            self.assertEqual(provider, "codex")
+            events.append("authentication")
+            return True
         adapter = InteractiveLeadAdapter(
-            RuntimeSession.__new__(RuntimeSession),
-            runner,
-            progress,
-            mock.MagicMock(),
-            mock.MagicMock(),
-            mock.MagicMock(),
-            recover_authentication=lambda _key: True,)
-
-        observed_sink_in_operation = None
-
+            RuntimeSession.__new__(RuntimeSession), runner, progress,
+            mock.MagicMock(), mock.MagicMock(), mock.MagicMock(), recover_authentication=recover)
         async def fake_operation() -> str:
-            nonlocal observed_sink_in_operation
-            observed_sink_in_operation = active_provider_stream_sink()
+            events.append("setup")
+            observed_sinks.append(active_provider_stream_sink())
+            self.assertTrue(await request_authentication(ProviderAuthenticationRequiredError("codex")))
+            events.append("retry")
+            observed_sinks.append(active_provider_stream_sink())
             return "ok"
-
-        result = adapter._run_operation(fake_operation())
-        self.assertEqual(result, "ok")
-        self.assertEqual(observed_sink_in_operation, progress._state.observe_stream)
+        self.assertEqual(adapter._run_operation(fake_operation()), "ok")
+        self.assertEqual(events, ["frame", "setup", "authentication", "frame", "retry"])
+        self.assertEqual(observed_sinks, [progress._state.observe_stream] * 2)
         self.assertIsNone(active_provider_stream_sink())
+        self.assertEqual(asyncio.all_tasks(runner.get_loop()), set())
+        operation = fake_operation()
+        async def failed_display(coro):
+            coro.close()
+            raise OSError("display failed before operation admission")
+        progress._run = failed_display
+        with self.assertRaises(OSError):
+            adapter._run_operation(operation)
+        self.assertEqual(inspect.getcoroutinestate(operation), inspect.CORO_CLOSED)
+        self.assertEqual(len(events), 5)
+        self.assertEqual(asyncio.all_tasks(runner.get_loop()), set())
 
     def test_observe_stream_status_capped_and_single_line(self) -> None:
         state = AdvisoryProgressState()
@@ -649,53 +662,46 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
 
     def test_capable_raw_terminal_renders_stream_preview_and_clears_cleanly(self) -> None:
         """Verify stream status/preview updates render on a raw terminal and are cleared cleanly."""
+        from story_writing_agents import StoryRuntime
         output = io.StringIO()
         real_sleep = asyncio.sleep
+        entered, release, frames, worker_threads = threading.Event(), threading.Event(), [], []
+        main_thread, draw = threading.get_ident(), RawTerminalDriver._draw_progress_frame
+        def observed_draw(driver, *args):
+            self.assertEqual(threading.get_ident(), main_thread)
+            draw(driver, *args)
+            if entered.is_set():
+                frames.append(driver._progress_frame)
+                if len(set(frames)) >= 3:
+                    release.set()
+        def blocked_history(*_args):
+            worker_threads.append(threading.get_ident())
+            self.assertEqual(active_provider_stream_sink(), progress._state.observe_stream)
+            entered.set()
+            self.assertTrue(release.wait(2), "history blocked animation")
+            raise BackendProtocolError("history inspection stopped")
 
         async def controlled_sleep(_delay: float) -> None:
             await real_sleep(0)
 
         with (
-            mock.patch.object(
-                RawTerminalDriver,
-                "capabilities",
-                autospec=True,
-                return_value=_ansi_terminal_capabilities(),
-            ),
-            mock.patch.object(
-                _driver.asyncio,
-                "sleep",
-                side_effect=controlled_sleep,
-            ),
+            mock.patch.object(RawTerminalDriver, "capabilities", autospec=True,
+                              return_value=_ansi_terminal_capabilities()),
+            mock.patch.object(_driver.asyncio, "sleep", side_effect=controlled_sleep),
+            mock.patch.object(RawTerminalDriver, "_draw_progress_frame", new=observed_draw),
         ):
-            terminal = _core.build_stream_terminal(
-                lambda _prompt: "",
-                io.StringIO(),
-                output,)
+            terminal = _core.build_stream_terminal(lambda _prompt: "", io.StringIO(), output)
             progress = InteractiveAdvisoryProgress(terminal)
-            progress.begin(
-                (AdvisoryProgressRequest("lead_orchestrator", "lead_turn_1", "Consulting specialist..."),)
-            )
+            progress.begin((AdvisoryProgressRequest(
+                "lead_orchestrator", "lead_turn_1", "Consulting specialist..."),))
 
             async def streaming_operation() -> str:
                 sink = active_provider_stream_sink()
                 self.assertIsNotNone(sink)
-                sink(
-                    ProviderStreamEvent(
-                        ProviderStreamEventKind.STATUS,
-                        "lead_orchestrator",
-                        "Synthesizing outline...",
-                        operation_id="lead_turn_1",
-                    )
-                )
-                sink(
-                    ProviderStreamEvent(
-                        ProviderStreamEventKind.TEXT_DELTA,
-                        "lead_orchestrator",
-                        "Chapter 1: The First Dawn",
-                        operation_id="lead_turn_1",
-                    )
-                )
+                sink(ProviderStreamEvent(ProviderStreamEventKind.STATUS, "lead_orchestrator",
+                    "Synthesizing outline...", operation_id="lead_turn_1"))
+                sink(ProviderStreamEvent(ProviderStreamEventKind.TEXT_DELTA, "lead_orchestrator",
+                    "Chapter 1: The First Dawn", operation_id="lead_turn_1"))
                 await real_sleep(0.05)
                 return "ok"
 
@@ -704,9 +710,22 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             result = runner.run(progress.run(streaming_operation()))
             # Final output is written after progress completes and clears
             terminal.write_agent("lead_orchestrator", "Final novel outline committed.\n")
+            rendered = output.getvalue()
+            progress.begin()
+            try:
+                with mock.patch.object(StoryRuntime, "_validate_lead_identity"), \
+                        mock.patch.object(StoryRuntime, "_read_lead_history", new=blocked_history), \
+                        self.assertRaisesRegex(BackendProtocolError, "history inspection stopped"):
+                    runner.run(progress.run(StoryRuntime.lead_turn(
+                        StoryRuntime.__new__(StoryRuntime), "session", "conversation", "status"), keep_frame=False))
+            finally:
+                release.set()
+            self.assertGreaterEqual(len(set(frames)), 3)
+            self.assertNotEqual(worker_threads, [main_thread])
+            self.assertEqual(len(worker_threads), 1)
+            self.assertEqual(asyncio.all_tasks(runner.get_loop()), set())
 
         self.assertEqual(result, "ok")
-        rendered = output.getvalue()
         # Preview and status were rendered into the terminal stream
         self.assertIn("Synthesizing outline...", rendered)
         self.assertIn("Chapter 1: The First Dawn", rendered)
@@ -887,14 +906,8 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep),
         ):
             input_stream = io.StringIO("\r")
-            driver = RawTerminalDriver(
-                lambda _prompt: "",
-                input_stream,
-                fail_output,
-                lambda s, e: (s, None),
-                lambda s, e, h: (s, None),
-                lambda h, t: h,
-            )
+            driver = RawTerminalDriver(lambda _prompt: '', input_stream, fail_output,
+            lambda s, e: (s, None), lambda s, e, h: (s, None), lambda h, t: h)
             async def failing_op() -> dict:
                 await real_sleep(0.01)
                 return {"status": "error", "next_action": "retry_lead_turn"}
@@ -2530,66 +2543,30 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertIn("Focused", rendered.text.splitlines()[-1])
         self.assertIn("F6: mouse mode", render_nested_scroll_view(MultiAgentScrollState((view,), 0), _ansi_terminal_capabilities()).text)
 
-    def test_run_advisory_progress_frame_persists_when_keep_frame_true(self) -> None:
-        capabilities = _ansi_terminal_capabilities()
-        real_sleep = asyncio.sleep
-
+    def _successful_progress_output(self, keep_frame: bool) -> str:
+        real_sleep, output = asyncio.sleep, io.StringIO()
         async def fast_sleep(_delay: float) -> None:
             await real_sleep(0)
+        async def successful_op() -> dict:
+            await real_sleep(0.01)
+            return {"status": "ok"}
+        with mock.patch.object(RawTerminalDriver, "capabilities", return_value=_ansi_terminal_capabilities()), \
+                mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep):
+            driver = RawTerminalDriver(
+                lambda _prompt: "", io.StringIO(), output,
+                lambda s, e: (s, None), lambda s, e, h: (s, None), lambda h, t: h)
+            result = asyncio.run(driver.run_advisory_progress(
+                successful_op(), lambda _f: "Running task...", keep_frame=keep_frame))
+            self.assertEqual(result, {"status": "ok"})
+        return output.getvalue()
 
-        output = io.StringIO()
-        with (
-            mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
-            mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep),
-        ):
-            driver = RawTerminalDriver(lambda _prompt: '', io.StringIO(), output,
-                     lambda s, e: (s, None), lambda s, e, h: (s, None), lambda h, t: h)
-
-            async def successful_op() -> dict:
-                await real_sleep(0.01)
-                return {"status": "ok"}
-
-            res = asyncio.run(
-                driver.run_advisory_progress(
-                    successful_op(),
-                    lambda _f: "Running task...",
-                    keep_frame=True,
-                )
-            )
-            self.assertEqual(res, {"status": "ok"})
-            val = output.getvalue()
-            # The frame text is written and ended with newline \r\n (retained), not cleared at end
-            self.assertIn("Running task...", val)
-            self.assertTrue(val.endswith("\r\n"))
+    def test_run_advisory_progress_frame_persists_when_keep_frame_true(self) -> None:
+        rendered = self._successful_progress_output(True)
+        self.assertIn("Running task...", rendered)
+        self.assertTrue(rendered.endswith("\r\n"))
 
     def test_run_advisory_progress_frame_clears_when_keep_frame_false(self) -> None:
-        capabilities = _ansi_terminal_capabilities()
-        real_sleep = asyncio.sleep
-
-        async def fast_sleep(_delay: float) -> None:
-            await real_sleep(0)
-
-        output = io.StringIO()
-        with (
-            mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
-            mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep),
-        ):
-            driver = RawTerminalDriver(lambda _prompt: '', io.StringIO(), output,
-                     lambda s, e: (s, None), lambda s, e, h: (s, None), lambda h, t: h)
-
-            async def successful_op() -> dict:
-                await real_sleep(0.01)
-                return {"status": "ok"}
-
-            res = asyncio.run(
-                driver.run_advisory_progress(
-                    successful_op(),
-                    lambda _f: "Running task...",
-                    keep_frame=False,)
-            )
-            self.assertEqual(res, {"status": "ok"})
-            val = output.getvalue()
-            self.assertTrue(val.endswith("\r\x1b[K"))
+        self.assertTrue(self._successful_progress_output(False).endswith("\r\x1b[K"))
 
     def test_terminal_progress_mode_persists_frame_when_on_and_clears_when_off(self) -> None:
         from story_writing_agents.interactive_terminal._core import build_stream_terminal
@@ -2715,14 +2692,8 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         """Verify successful operation with keep_frame=True invokes run_nested_scroll_inspector with keep_frame=True."""
         capabilities = _ansi_terminal_capabilities()
         out = io.StringIO()
-        driver = RawTerminalDriver(
-            lambda _p: "",
-            io.StringIO(),
-            out,
-            lambda s, e: (s, None),
-            lambda s, e, h: (s, None),
-            lambda h, t: h,
-        )
+        driver = RawTerminalDriver(lambda _p: '', io.StringIO(), out,
+            lambda s, e: (s, None), lambda s, e, h: (s, None), lambda h, t: h)
         view = NestedScrollViewport(
             view_id="lead:1",
             title="Lead",
@@ -3061,6 +3032,54 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                     self.assertEqual(len(inspector_called), 0)
                     self.assertTrue(mock_clear.called)
 
+        async def cancel_blocking_preparation():
+            from pathlib import Path
+            from story_writing_agents import codex_adapter
+            loop, entered, release = asyncio.get_running_loop(), asyncio.Event(), threading.Event()
+            worker_threads = []
+            def blocked(*_args, **_kwargs):
+                loop.call_soon_threadsafe(entered.set)
+                self.assertTrue(release.wait(2), "worker was not released")
+                worker_threads.append(threading.get_ident())
+                raise ValueError("worker failed after cancellation")
+            async def cancel_and_join(operation, cause):
+                entered.clear(); release.clear(); worker_threads.clear()
+                task = asyncio.create_task(operation)
+                try:
+                    await asyncio.wait_for(entered.wait(), 2)
+                    task.cancel("first cancellation")
+                    await asyncio.sleep(0)
+                    task.cancel("repeated cancellation")
+                    await asyncio.sleep(0)
+                    self.assertFalse(task.done(), "cancellation released a still-running worker")
+                    release.set()
+                    with self.assertRaises(asyncio.CancelledError) as cancelled:
+                        await task
+                    self.assertEqual(cancelled.exception.args, ("first cancellation",))
+                    self.assertIsInstance(cancelled.exception.__cause__, cause)
+                    self.assertEqual(len(worker_threads), 1)
+                    self.assertNotEqual(worker_threads[0], threading.get_ident())
+                    self.assertEqual(asyncio.all_tasks(), {asyncio.current_task()})
+                finally:
+                    release.set()
+                    await asyncio.gather(task, return_exceptions=True)
+            await cancel_and_join(run_blocking(blocked), ValueError)
+            owner = mock.Mock(worktree_root=Path("/tmp"), generation_provenance="sha256:" + "0" * 64)
+            creator = threading.get_ident()
+            def guard():
+                self.assertEqual(threading.get_ident(), creator)
+                if worker_threads:
+                    raise OSError("workspace invalidated during native inspection")
+            owner.require_current.side_effect = guard
+            invocation = mock.Mock(session_id="session", context_call_id="call", payload_json=b"{}",
+                payload={"response_contract": {"schema_selection": {"issued_contract": {"call_id": "call"}}}},
+                execution_workspace=owner)
+            with mock.patch.object(codex_adapter, "_read_codex_native_observation", new=blocked):
+                await cancel_and_join(codex_adapter._inspect_codex_native_observation_async(
+                    Path("/tmp"), invocation, "native-thread"), OSError)
+            self.assertEqual(owner.require_current.call_count, 2)
+        asyncio.run(cancel_blocking_preparation())
+
     def test_none_result_handoff_clears_frame_and_bypasses_inspector_under_keep_frame(self) -> None:
         """Verify None result (e.g. auth recovery handoff) clears frame and does not open inspector even if keep_frame=True."""
         capabilities = _ansi_terminal_capabilities()
@@ -3381,107 +3400,30 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             self.assertEqual(len(inspector_called), 0)
             mock_clear.assert_called()
 
-    def test_non_live_nested_scroll_inspector_respects_keep_frame_false(self) -> None:
-        """Verify non-live fallback inspector clears frame and does not retain when keep_frame=False."""
-        from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
-        from story_writing_agents.interactive_terminal._model import (
-            CapabilityProfile,
-            MultiAgentScrollState,
-            NestedScrollViewport,
-            RenderedFrame,
-            TerminalCapabilities,
-        )
-
-        caps = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
-        out = io.StringIO()
+    def _check_non_live_inspector_retention(self, keep_frame: bool) -> None:
+        caps, out = _ansi_terminal_capabilities(), io.StringIO()
         driver = RawTerminalDriver(
-            lambda _p: "",
-            io.StringIO(),
-            out,
-            lambda s, e: (s, None),
-            lambda s, e, h: (s, None),
-            lambda h, t: h,
-        )
+            lambda _p: "", io.StringIO(), out,
+            lambda s, e: (s, None), lambda s, e, h: (s, None), lambda h, t: h)
         view = NestedScrollViewport(
-            view_id="a:1",
-            title="Agent",
-            total_lines=5,
-            start_line=1,
-            visible_lines=("line 1",),
-            visible_height=1,
-            is_focused=True,
-        )
-        scroll_state = MultiAgentScrollState((view,), 0)
+            view_id="a:1", title="Agent", total_lines=5, start_line=1,
+            visible_lines=("line 1",), visible_height=1, is_focused=True)
         renderer = lambda _s, _c: RenderedFrame("line 1", 80, 1)
-
         with mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(caps, None)), \
-             mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as mock_clear:
+                mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as clear:
             driver.run_nested_scroll_inspector(
-                scroll_state,
-                mock.MagicMock(),
-                renderer,
-                keep_frame=False,
-            )
-            mock_clear.assert_called()
-            self.assertFalse(out.getvalue().endswith("\r\n"))
+                MultiAgentScrollState((view,), 0), mock.MagicMock(), renderer, keep_frame=keep_frame)
+            if keep_frame:
+                clear.assert_not_called()
+                self.assertEqual(driver._progress_rows, 0)
+            else:
+                clear.assert_called()
+            self.assertEqual(out.getvalue().endswith("\r\n"), keep_frame)
+
+    def test_non_live_nested_scroll_inspector_respects_keep_frame_false(self) -> None:
+        """Non-live fallback clears its frame when retention is disabled."""
+        self._check_non_live_inspector_retention(False)
 
     def test_non_live_nested_scroll_inspector_respects_keep_frame_true(self) -> None:
-        """Verify non-live fallback inspector writes newline and retains frame when keep_frame=True."""
-        from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
-        from story_writing_agents.interactive_terminal._model import (
-            CapabilityProfile,
-            MultiAgentScrollState,
-            NestedScrollViewport,
-            RenderedFrame,
-            TerminalCapabilities,
-        )
-
-        caps = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
-        out = io.StringIO()
-        driver = RawTerminalDriver(
-            lambda _p: "",
-            io.StringIO(),
-            out,
-            lambda s, e: (s, None),
-            lambda s, e, h: (s, None),
-            lambda h, t: h,
-        )
-        view = NestedScrollViewport(
-            view_id="a:1",
-            title="Agent",
-            total_lines=5,
-            start_line=1,
-            visible_lines=("line 1",),
-            visible_height=1,
-            is_focused=True,
-        )
-        scroll_state = MultiAgentScrollState((view,), 0)
-        renderer = lambda _s, _c: RenderedFrame("line 1", 80, 1)
-
-        with mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(caps, None)), \
-             mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as mock_clear:
-            driver.run_nested_scroll_inspector(
-                scroll_state,
-                mock.MagicMock(),
-                renderer,
-                keep_frame=True,
-            )
-            mock_clear.assert_not_called()
-            self.assertTrue(out.getvalue().endswith("\r\n"))
-            self.assertEqual(driver._progress_rows, 0)
+        """Non-live fallback retains its frame and releases owned row tracking."""
+        self._check_non_live_inspector_retention(True)
