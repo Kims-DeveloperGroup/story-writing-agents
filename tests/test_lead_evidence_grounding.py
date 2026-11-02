@@ -272,10 +272,13 @@ def _search(query: str, kinds: list[str]):
     return respond
 
 
-def _missing_outcome(*, proposal: bool = False, authoring_assessment=None):
+def _missing_outcome(*, proposal: bool = False, authoring_assessment=None, input_ids=None):
     def respond(call, _provider):
         observation = _provider.callback_payload(call)["context_observation"]
-        assert observation["observation_type"] == "context_search_results" and observation["zero_hit_receipt"] is not None
+        if input_ids is None:
+            assert observation["observation_type"] == "context_search_results" and observation["zero_hit_receipt"] is not None
+        else:
+            assert observation["observation_type"] == "context_read_results"
         value = {
                 **({"authoring_assessment": admission.assessment_to_dict(authoring_assessment)}
                 if authoring_assessment is not None else {}),
@@ -289,7 +292,7 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None):
             "message": "No matching canonical writing artifact was found.",
             "scope": "story_specific",
             "evidence_status": "missing",
-            "evidence_ids": [observation["zero_hit_receipt"]["evidence_id"]],
+            "evidence_ids": ([observation["zero_hit_receipt"]["evidence_id"]] if input_ids is None else [item["evidence_id"] for item in observation["read_results"]]),
             "artifact_intent": None,
             "objective_intent": None,
             "authoring_scope": _live_scope(call, activity="review", domains=("plot_structure",)),
@@ -302,7 +305,7 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None):
                         {
                             "agent_id": PLOT_ARCHITECT,
                             "instruction": "Assess the request without inventing facts.",
-                            "input_ids": ["user_input"],
+                            "input_ids": list(input_ids or ("user_input",)),
                         }
                     ],
                 }
@@ -522,7 +525,6 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
 
     async def test_mixed_zero_hit_survives_self_appended_history_without_mutation(self) -> None:
         from tests.recommendation_fixture import action, task_assessment
-        from tests.test_lead_orchestration import _current_proposal_outcome
         from tests.provider_wire_fixture import finite_fixture_selection
         from story_writing_agents.agents import SPECIALIST_IDS
         from story_writing_agents.agent_context.accounting import ProviderUsage
@@ -539,11 +541,13 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             reads, raw, specialist_reads = [], [], []
             def proposal(call, provider):
                 reads.append(provider.callback_payload(call)["context_observation"]["read_results"][0]["evidence_id"])
-                return _current_proposal_outcome([{"agent_id": PLOT_ARCHITECT,
-                    "instruction": "Review the exact assigned source without inventing absent facts.",
-                    "input_ids": ["user_input", reads[-1]], "mode": "review"}], domains=("plot_structure",),
-                    author_review_basis=True, authoring_assessment=asdict(task_assessment(foundation_ids=("user_input",),
-                    actions=("bounded missing-evidence review judgments",))))(call, provider)
+                response = _missing_outcome(proposal=True, input_ids=("user_input", reads[-1]),
+                    authoring_assessment=task_assessment(foundation_ids=("user_input",),
+                    actions=("bounded missing-evidence review judgments",)))(call, provider)
+                self.assertFalse(call.contract.rule_graph.findings(json.loads(response)), response)
+                decoded = json.loads(call.contract.decode_response(response).answer_json)
+                self.assertEqual(decoded["proposal"]["assignments"][0]["input_ids"], ["user_input", reads[-1]])
+                return response
             self.backend.enqueue(_search("phrase absent from every source", ["w", "c"]), _search(marker, ["c"]),
                 _read_history_hit, proposal, control_plan=selection_plan("consultation.authoring.review", before_script_response=3))
             proposed = await self.runtime.lead_turn(self.session_id, conversation_id,
