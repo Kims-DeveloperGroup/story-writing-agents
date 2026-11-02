@@ -2632,8 +2632,10 @@ _catalog("depends_on_author_decision_ids", "Exact declared author-decision depen
 
 _catalog("readiness_authority", "Retained whole-book judgment is input only; current host source qualification and every workflow/write decision remain separate.")
 
-_catalog("preliminary_review inspection inspected excluded findings conflicts missing_information further_review_required next_action",
+_catalog("preliminary_review inspection inspected excluded inspected_input_ids excluded_input_ids findings conflicts missing_information further_review_required next_action",
     "Bounded Lead preliminary inspection only: disclose inspected and excluded exact current targets, findings, conflicts, gaps and next work. This grants no final review or execution authority.")
+_catalog("preliminary_review_rule", "Current host guidance for useful evidence-bound Lead preliminary advice, declared coverage limitations and separate specialist/final-review authority.")
+_catalog("final_review_evidence criteria_digest user_conditions_digest reviewer_ids", "Immutable exact-candidate final-review basis: host-captured criteria, USER conditions and required reviewers. This is not current READ, Apply or Commit authority.")
 _catalog("stage_plan stage work_kind focus_domains questions question_id source_input_ids required_condition_ids agreed_direction unresolved_questions expected_result",
     "Disclose one current-task specialist stage, exact sources and all required conditions before confirmation. Semantic influence domains remain complete; focus controls only eligible this-stage participants.")
 

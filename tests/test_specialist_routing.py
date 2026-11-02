@@ -154,13 +154,14 @@ class SpecialistRoutingTests(unittest.TestCase):
             questions, ("preserve_motive", "keep_secret"), "Keep the secret unresolved.",
             ("Whether the betrayal follows from her motive",), "A bounded motivation review.")
         sources = ("outline", "characters", "scene")
+        review_scope = replace(mixed, activity=Activity.REVIEW)
         routing.validate_stage_routing(
-            mixed, ("character_custodian",), plan, source_input_ids=sources,
+            review_scope, ("character_custodian",), plan, source_input_ids=sources,
             required_condition_ids=("preserve_motive", "keep_secret"))
         self.assertEqual(required_authoring_domains(mixed), tuple(Domain))
         self.assertEqual(required_authoring_specialists(mixed),
                          ("plot_architect", "character_custodian", "execution_specialist"))
-        self.assertEqual(routing.stage_required_specialists(mixed, plan),
+        self.assertEqual(routing.stage_required_specialists(review_scope, plan),
                          ("character_custodian",))
         encoded = routing.stage_plan_to_dict(plan)
         self.assertEqual(encoded["specialist_ids"], ["character_custodian"])
@@ -180,22 +181,22 @@ class SpecialistRoutingTests(unittest.TestCase):
                         {"questions": (replace(questions[0], task_id="foreign"), questions[1])}):
             with self.assertRaises(ValueError): replace(plan, **changes)
         with self.assertRaises(ValueError):
-            routing.stage_required_specialists(replace(mixed, task_revision=2), plan)
+            routing.stage_required_specialists(replace(review_scope, task_revision=2), plan)
         with self.assertRaises(ValueError):
-            routing.stage_required_specialists(self.scope(), plan)
+            routing.stage_required_specialists(self.scope(activity=Activity.REVIEW), plan)
         with self.assertRaises(ValueError):
-            routing.validate_stage_routing(mixed, ("character_custodian",), plan,
+            routing.validate_stage_routing(review_scope, ("character_custodian",), plan,
                 source_input_ids=("outline", "characters"))
         with self.assertRaises(ValueError):
-            routing.validate_stage_routing(mixed, ("character_custodian",), plan,
+            routing.validate_stage_routing(review_scope, ("character_custodian",), plan,
                 source_input_ids=sources, required_condition_ids=("unapproved_condition",))
         roster = ("plot_architect", "character_custodian", "execution_specialist")
         final = replace(plan, stage=routing.ReviewStage.FINAL_CANDIDATE_REVIEW,
                         focus_domains=tuple(Domain), specialist_ids=roster)
-        self.assertEqual(routing.stage_required_specialists(mixed, final), roster)
+        self.assertEqual(routing.stage_required_specialists(review_scope, final), roster)
         with self.assertRaises(ValueError):
             routing.stage_required_specialists(
-                mixed, replace(final, specialist_ids=("character_custodian",)))
+                review_scope, replace(final, specialist_ids=("character_custodian",)))
         draft = replace(final, stage=routing.ReviewStage.SPECIALIST_WORK,
                         work_kind=routing.SpecialistWorkKind.DRAFT)
         self.assertEqual(routing.stage_required_specialists(mixed, draft), roster)
