@@ -1103,7 +1103,20 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     async def test_reviewed_history_transfers_with_filesystem_sqlite_parity(
         self,
     ) -> None:
-        await self.record_book_readiness()
+        from story_writing_agents.structured_output_validation import failure_findings
+        try:
+            await self.record_book_readiness()
+        except Exception as failure:
+            pending, seen, findings = [failure], set(), []
+            # The original exception plus at most eight cause/context links.
+            for _ in range(9):
+                if not pending: break
+                current = pending.pop()
+                if id(current) in seen: continue
+                seen.add(id(current))
+                findings.extend((item.path, item.requirement) for item in failure_findings(current))
+                pending.extend(link for link in (current.__context__, current.__cause__) if link is not None)
+            raise AssertionError(("book_readiness_schema_findings", tuple(findings))) from failure
         conversation_id = self.conversation("Artifact storage parity")
         _proposed, decided = await self.reviewed_create(conversation_id)
         reviewed = decided.turn.artifact_proposal.reviewed_proposal

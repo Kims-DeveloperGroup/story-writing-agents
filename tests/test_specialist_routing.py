@@ -143,21 +143,21 @@ class SpecialistRoutingTests(unittest.TestCase):
         questions = (
             routing.SpecialistWorkQuestion(
                 "motive", mixed.task_id, 1, "Why does Mara protect the letter?",
-                ("outline", "characters"), ("preserve_motive",)),
+                ("outline", "characters"), ("characters",)),
             routing.SpecialistWorkQuestion(
                 "betrayal", mixed.task_id, 1, "Does the betrayal preserve her motive?",
-                ("scene",), ("keep_secret",)),
+                ("scene",), ("scene",)),
         )
         plan = routing.SpecialistStagePlan(
             routing.ReviewStage.SPECIALIST_WORK, routing.SpecialistWorkKind.DEEP_REVIEW,
             mixed.task_id, 1, (Domain.CHARACTER_WORLD,), ("character_custodian",),
-            questions, ("preserve_motive", "keep_secret"), "Keep the secret unresolved.",
+            questions, ("characters", "scene"), "Keep the secret unresolved.",
             ("Whether the betrayal follows from her motive",), "A bounded motivation review.")
         sources = ("outline", "characters", "scene")
         review_scope = replace(mixed, activity=Activity.REVIEW)
         routing.validate_stage_routing(
             review_scope, ("character_custodian",), plan, source_input_ids=sources,
-            required_condition_ids=("preserve_motive", "keep_secret"))
+            required_condition_ids=("characters", "scene"))
         self.assertEqual(required_authoring_domains(mixed), tuple(Domain))
         self.assertEqual(required_authoring_specialists(mixed),
                          ("plot_architect", "character_custodian", "execution_specialist"))
@@ -165,7 +165,7 @@ class SpecialistRoutingTests(unittest.TestCase):
                          ("character_custodian",))
         encoded = routing.stage_plan_to_dict(plan)
         self.assertEqual(encoded["specialist_ids"], ["character_custodian"])
-        self.assertEqual(encoded["required_condition_ids"], ["preserve_motive", "keep_secret"])
+        self.assertEqual(encoded["required_condition_ids"], ["characters", "scene"])
         self.assertEqual(encoded["agreed_direction"], "Keep the secret unresolved.")
         self.assertEqual(routing.stage_plan_from_dict(encoded), plan)
         with self.assertRaises(FrozenInstanceError): plan.specialist_ids = ()
