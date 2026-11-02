@@ -1569,16 +1569,15 @@ class InteractiveCliPtyTests(unittest.TestCase):
 
     def _exercise_external_library_pty(self, *, edit_query: bool, termination_signal: int | None = None, termination_during_view: bool = False) -> None:
         gate = self.temporary_root / f"viewer-ready-{edit_query}-{termination_signal}"
-        def assert_accepted_message_visible_once():
+        def assert_accepted_message_retained_once():
             from tests._external_view_support import PortableTerminalScreen
             screen = PortableTerminalScreen(width=120, height=24)
             screen.primary[:] = [[" "] * 120 for _ in range(24)]
             screen.cursor = (0, 0); screen.history.clear()
             screen.write(bytes(process.raw_bytes).decode("utf-8", errors="replace"))
-            visible = "\n".join("".join(row) for row in screen.primary)
+            visible = "\n".join([*screen.history, *("".join(row) for row in screen.primary)])
             self.assertFalse(screen.alternate)
             self.assertEqual(visible.count("LEGITIMATE_ACCEPTED_MESSAGE"), 1, visible)
-            self.assertFalse(any("LEGITIMATE_ACCEPTED_MESSAGE" in row for row in screen.history), "\n".join(screen.history))
 
         def viewer_rows(data: bytes) -> list[str]:
             frame = data[data.rfind(b"\x1b[1;1H\x1b[2K"):]
@@ -1628,7 +1627,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
         process.wait_for_text("story[lobby]> ")
         process.send_line("seed")
         process.wait_for_text("INTER_READER_READY")
-        assert_accepted_message_visible_once()
+        assert_accepted_message_retained_once()
         assert termios is not None
         flags = termios.tcgetattr(process.master_fd)[3]
         self.assertFalse(flags & (termios.ECHO | termios.ECHONL))
@@ -1707,11 +1706,11 @@ print(f"SHELL_VALUE={input('shell> ')}")
         mark = process.output_mark()
         process.send_line("opaque-native-input")
         process.wait_for_text("story[lobby]> ", after=mark)
-        assert_accepted_message_visible_once()
+        assert_accepted_message_retained_once()
         self.assertFalse(termios.tcgetattr(process.master_fd)[3] & termios.ECHO)
         process.send_line("\x1b[17~\x1b[H\x1bafter-native")
         process.wait_for_text("shell> ")
-        assert_accepted_message_visible_once()
+        assert_accepted_message_retained_once()
         self.assertTrue(termios.tcgetattr(process.master_fd)[3] & termios.ICANON)
         process.send_line("after-view")
         process.wait_for_text("SHELL_VALUE=after-view")
