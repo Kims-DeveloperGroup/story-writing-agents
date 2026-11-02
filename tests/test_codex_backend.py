@@ -3732,15 +3732,16 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manifest["provider_threads"], {})
         async with provider.invocation(replace(scope, subject_id="other-conversation"), policy):
             self.assertIsNone(provider.inspect_context_thread(replace(scope, subject_id="other-conversation"), policy))
-        async with bound._direct_codex_execution_workspace(session_id, None) as execution_workspace:
-            await self._assert_grouped_reader_transport(backend, session_id, execution_workspace)
         backend.close()
         restarted = self._backend_with_fake_codex()
         self.addCleanup(restarted.close)
         restarted.acquire_session_access(session_id)
-        restarted_provider = (await restarted.bind(definition))._context_provider()
+        restarted_bound = await restarted.bind(definition)
+        restarted_provider = restarted_bound._context_provider()
         async with restarted_provider.invocation(scope, policy):
             self.assertEqual(restarted_provider.inspect_context_thread(scope, policy), first.thread_id)
+        async with restarted_bound._direct_codex_execution_workspace(session_id, None) as execution_workspace:
+            await self._assert_grouped_reader_transport(restarted, session_id, execution_workspace)
 
     async def test_contextual_submitted_failure_taints_only_exact_context_thread(
         self,

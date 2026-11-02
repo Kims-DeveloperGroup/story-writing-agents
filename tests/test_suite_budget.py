@@ -99,7 +99,7 @@ class SuiteBudgetTests(unittest.TestCase):
                     suite_budget.check_monotonic(
                         dict(native_source, max_test_source_lines=limit),
                         dict(origin, max_test_source_lines=old))
-        continuity_source = dict(native_source, max_test_source_lines=147337)
+        continuity_source = dict(native_source, max_test_source_lines=147338)
         self.assertIsNone(suite_budget.check_monotonic(continuity_source, native_source))
         for old, limit in ((146828, continuity_source["max_test_source_lines"]),
                            (146830, continuity_source["max_test_source_lines"]),
