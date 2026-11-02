@@ -3568,7 +3568,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(continued.file_identity, witness.file_identity)
             self.assertGreater(continued.prefix_utf8_bytes, witness.prefix_utf8_bytes)
             self.assertEqual(hashlib.sha256(path.read_bytes()[:witness.prefix_utf8_bytes]).hexdigest(), witness.prefix_sha256)
-            self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness, before=True))
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness, before=True))
             invalid = [
                 [*records, *turn(second, "turn-2")[:-1]],
                 [*records, {"type": "compacted", "payload": {}}, *turn(second, "turn-2")],
