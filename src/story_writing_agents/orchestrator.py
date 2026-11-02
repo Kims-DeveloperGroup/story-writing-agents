@@ -4369,7 +4369,9 @@ class StoryRuntime:
             )
         offered = {item.event_id: item for item in projection.offered_draft_sources}
         current = ArtifactDraftSource(source.conversation_id, source.event_id, self._recommendation_event_digest(source))
-        aliases = {item.input_id: item for item in self._materialize_lead_evidence_inputs(inputs, evidence)}
+        aliases = {item.input_id: item for item in self._materialize_lead_evidence_inputs(
+            inputs, evidence, validation_path='$.recommended_action.source_ids',
+        )}
         selected: list[CollaborationInputRevision] = []
         drafts: list[ArtifactDraftSource] = []
         for alias in action.source_ids:
@@ -8256,6 +8258,7 @@ class StoryRuntime:
             ),
             action_progress_sink=action_progress_sink,
             editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
+            evidence=proposal.basis.evidence,
         )
 
     async def _run_lead_synthesis(
@@ -8456,6 +8459,7 @@ class StoryRuntime:
             fallback_answer=json.dumps({"assessment": "insufficient_evidence",
                 "message": _SAFE_STRUCTURED_FALLBACK_MESSAGE, "alternatives": []}),
             action_progress_sink=action_progress_sink, editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
+            evidence=proposal.basis.evidence,
         )
 
     async def _run_premise_synthesis(
@@ -8711,6 +8715,7 @@ class StoryRuntime:
         constraints: LeadProviderConstraints | None = None,
         editorial_refs: tuple[EditorialRecordRef, ...] = (),
         editorial_context_digest: str | None = None,
+        evidence: CollaborationLeadEvidence | None = None,
     ) -> _CollaborationInvocationResult:
         session_history: SessionHistorySnapshot | None = None
         artifact_inputs = tuple(
@@ -8810,18 +8815,52 @@ class StoryRuntime:
                 agent_id,
             )
             services = self.conversation_storage_services
-            captured_conversation = select_bounded_collaboration_context(
-                services.event_store.read(session_id, conversation_id)
-            )
-            allowed_paths = frozenset(
-                proof.reference.path for proof in reference_operation.reference_proofs
-            )
-            authorities = (
-                create_guarded_writing_artifact_source_adapter(
-                    repository_access,
-                    scope,
-                    allowed_paths=allowed_paths,
+            captured_events = services.event_store.read(session_id, conversation_id)
+            selected_event_ids: set[str] = set()
+            writing_authority = create_guarded_writing_artifact_source_adapter(
+                repository_access,
+                scope,
+                allowed_paths=frozenset(
+                    proof.reference.path for proof in reference_operation.reference_proofs
                 ),
+            )
+            if evidence is not None:
+                self._materialize_lead_evidence_inputs(
+                    inputs, evidence, validation_path='$.inputs',
+                )
+                assigned_ids = {item.input_id for item in inputs}
+                for receipt in evidence.receipts:
+                    if (receipt.acquisition is not CollaborationEvidenceAcquisition.READ
+                            or receipt.evidence_id not in assigned_ids
+                            or receipt.source_kind is not CollaborationInputKind.CONVERSATION_EVENT):
+                        continue
+                    if receipt.locator != f"conversation/{conversation_id}":
+                        raise BackendProtocolError(
+                            "assignment READ source is outside the focused conversation"
+                        )
+                    snapshot = self._current_lead_read_snapshot(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        scope=scope,
+                        receipt=receipt,
+                        writing_adapter=writing_authority,
+                        session_sources=session_sources,
+                    )
+                    selected_event_ids.update(
+                        record.record_id for record in snapshot.records
+                        if receipt.boundary_kind == ContextSourceBoundaryKind.WHOLE.value
+                        or (record.boundary.start is not None
+                            and receipt.boundary_start is not None
+                            and receipt.boundary_end is not None
+                            and receipt.boundary_start <= record.boundary.start <= receipt.boundary_end)
+                    )
+            captured_conversation = select_bounded_collaboration_context(
+                captured_events, event_ids=tuple(sorted(selected_event_ids)),
+            )
+            if captured_conversation.truncated:
+                raise BackendProtocolError("assigned READ boundaries exceed the context record budget")
+            authorities = (
+                writing_authority,
                 FocusedConversationSourceAdapter(
                     services.catalog,
                     services.event_store,
@@ -18220,48 +18259,56 @@ class StoryRuntime:
         cls,
         inputs: tuple[CollaborationInputRevision, ...],
         evidence: CollaborationLeadEvidence,
+        *,
+        validation_path: str = '$.proposal.assignments',
     ) -> tuple[CollaborationInputRevision, ...]:
         """Materialize only cited READ content as exact proposal inputs."""
 
         materialized = list(inputs)
-        known_ids = {item.input_id for item in materialized}
+        known_inputs = {item.input_id: item for item in materialized}
         for receipt in evidence.receipts:
             if receipt.acquisition is not CollaborationEvidenceAcquisition.READ:
                 continue
-            if (
-                receipt.evidence_id in known_ids
-                or receipt.source_kind is None
-                or receipt.locator is None
-                or receipt.content_digest is None
-            ):
+            missing = tuple(field for field in ('source_kind', 'locator', 'content_digest')
+                            if getattr(receipt, field) is None)
+            if missing:
+                reason = (f"lead READ evidence {receipt.evidence_id!r} is incomplete: "
+                          + ', '.join(missing))
                 raise validation_failure(
-                    _LeadOutcomeValidationError(
-                        'lead READ evidence cannot become an exact proposal input',
-                    ),
-                    '$.proposal.assignments',
-                    'lead READ evidence cannot become an exact proposal input',
+                    _LeadOutcomeValidationError(reason), validation_path, reason,
                 )
-            materialized.append(
-                CollaborationInputRevision(
-                    input_id=receipt.evidence_id,
-                    kind=receipt.source_kind,
-                    locator=(
-                        cls._artifact_evidence_locator(receipt)
-                        if receipt.source_kind
-                        in {
-                            CollaborationInputKind.CORE_DOCUMENT,
-                            CollaborationInputKind.MANUSCRIPT,
-                            CollaborationInputKind.WRITING_ARTIFACT,
-                        }
-                        else receipt.locator
-                    ),
-                    state=CollaborationInputState.PRESENT,
-                    revision_digest=receipt.content_digest,
-                    start_line=receipt.start_line,
-                    end_line=receipt.end_line,
-                )
+            candidate = CollaborationInputRevision(
+                input_id=receipt.evidence_id,
+                kind=receipt.source_kind,
+                locator=(
+                    cls._artifact_evidence_locator(receipt)
+                    if receipt.source_kind
+                    in {
+                        CollaborationInputKind.CORE_DOCUMENT,
+                        CollaborationInputKind.MANUSCRIPT,
+                        CollaborationInputKind.WRITING_ARTIFACT,
+                    }
+                    else receipt.locator
+                ),
+                state=CollaborationInputState.PRESENT,
+                revision_digest=receipt.content_digest,
+                start_line=receipt.start_line,
+                end_line=receipt.end_line,
             )
-            known_ids.add(receipt.evidence_id)
+            existing = known_inputs.get(receipt.evidence_id)
+            if existing is not None:
+                differences = tuple(field for field in (
+                    'kind', 'locator', 'state', 'revision_digest', 'start_line', 'end_line',
+                ) if getattr(existing, field) != getattr(candidate, field))
+                if differences:
+                    reason = (f"lead READ evidence {receipt.evidence_id!r} conflicts with existing input: "
+                              + ', '.join(differences))
+                    raise validation_failure(
+                        _LeadOutcomeValidationError(reason), validation_path, reason,
+                    )
+                continue
+            materialized.append(candidate)
+            known_inputs[receipt.evidence_id] = candidate
         return tuple(materialized)
 
     @staticmethod
