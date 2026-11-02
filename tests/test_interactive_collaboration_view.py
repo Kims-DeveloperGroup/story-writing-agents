@@ -74,8 +74,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(calls)
             measured = tuple(replace(event, payload=replace(event.payload, usage=ProviderUsage(0, 2, 7), accounting=None))
                 if event in calls else event for event in events)
-            view = _collaboration_view.project_collaboration_event(artifact, history_events=measured)
-            rendered_artifact = render_component(view, _capability(CapabilityProfile.LINE, width=120)).text
+            rendered_artifact = render_component(_collaboration_view.project_collaboration_event(artifact, history_events=measured), _capability(CapabilityProfile.LINE, width=120)).text
             self.assertIn(f"Input tokens: 0 | Output tokens: {2 * len(calls)}", rendered_artifact)
             services = case.runtime.conversation_storage_services
             metadata = services.catalog.create(case.session_id, "Measured host finalization")
@@ -109,6 +108,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
                 overflow = tuple(replace(event, payload=replace(event.payload, message=long_prose, provider_invocation_id=invocation_id)) if event == origin else replace(event, payload=replace(event.payload, content=budget_notice, provider_invocation_id=invocation_id)) if event == finalization_notice else event for event in final_history)
                 retained = project_conversation_messages((next(event for event in overflow if event.event_id == finalization_notice.event_id),), history_events=overflow)
                 self.assertEqual(tuple(message.content for _, message in retained), (long_prose + "\n\n" + budget_notice,))
+                self.assertEqual(next(item.content for item in _collaboration_view.project_lead_turn_result(replace(finalized, message=long_prose)).items if type(item) is _collaboration_view.Message), long_prose)
             legacy = tuple(replace(event, payload=replace(event.payload, provider_invocation_id=None)) if type(event.payload) in {CollaborationMessagePayload, CollaborationLeadSynthesisPayload} else event for event in final_history)
             self.assertEqual(tuple(event.event_id for event, _ in project_conversation_messages(legacy)), tuple(event.event_id for event, _ in projected))
             synthesis = origin.payload

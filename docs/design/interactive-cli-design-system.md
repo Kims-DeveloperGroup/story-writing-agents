@@ -293,9 +293,11 @@ their established presentation.
 
 Chat boxes fit 40–120 available terminal cells, reserving the terminal's last
 column. Below 40 cells, messages use a compact colored speaker and body rail;
-below three cells, the rail is omitted to leave room for content. Complete messages remain in the shell-local conversation timeline on capable
-terminals, reflowing on resize alongside their originating JSON frames. Fallback
-messages remain ordinary scrollback output. See the
+below three cells, the rail is omitted to leave room for content. Complete
+messages and retained JSON snapshots remain in ordinary scrollback
+when their turn finishes. Capable terminals also retain the semantic timeline
+for temporary F6 review, reflowing it on resize while native output stays fixed.
+Fallback messages remain ordinary scrollback output. See the
 [current frame example and metadata rules](../reference/interactive-terminal.md#message-frames-markdown-and-response-metadata).
 
 ### Purpose-bound `StartupWelcome`
