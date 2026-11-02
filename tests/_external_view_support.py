@@ -240,8 +240,8 @@ def recording_driver(characters="", *, width=100, height=24, response="valid"):
     screen.primary[:] = [[" "] * width for _ in range(height)]
     screen.cursor, screen.history = (0, 0), []
     probe = SimpleNamespace(driver=driver, incoming=incoming, output=output, fallback=fallback, termios=termios,
-                            screen=screen, reads=[], attempts=0, phase="", queried=False, after_query="", query_input="", mouse=False, observe=lambda: None)
-    probe.text = lambda: "\n".join("".join(row) for row in screen.primary)
+                            screen=screen, reads=[], attempts=0, phase="", queried=False, review_input="", mouse=False, observe=lambda: None)
+    probe.text = lambda: "\n".join("".join(row) for row in screen.screen)
     original_write, original_read = output.write, RawTerminalDriver._read_character
     def reply():
         row, column = screen.cursor
@@ -256,19 +256,18 @@ def recording_driver(characters="", *, width=100, height=24, response="valid"):
             probe.queried = True
             if response in {"valid", "invalid"}:
                 incoming.characters[:0] = list(reply().encode())
-            incoming.characters.extend(probe.query_input.encode())
-            probe.query_input = ""
+        if "\x1b[?1049h" in value:
+            probe.review_history = tuple(screen.history)
+            incoming.characters.extend(probe.review_input.encode())
+            probe.review_input = ""
         return written
     def read(owner, **kwargs):
         probe.attempts += 1
         if kwargs.get("before_read") is not None:
             return original_read(owner, **kwargs)
-        if probe.queried and probe.after_query:
-            incoming.characters.extend(((reply() if response == "late" else "") + probe.after_query).encode())
-            probe.after_query = ""
         text, cursor, mouse, data = probe.text(), screen.cursor, probe.mouse, probe.observe()
         character = original_read(owner, **kwargs)
-        probe.reads.append(SimpleNamespace(phase=probe.phase, character=character, text=text, cursor=cursor, mouse=mouse, data=data))
+        probe.reads.append(SimpleNamespace(phase=probe.phase, character=character, text=text, cursor=cursor, mouse=mouse, data=data, alternate=screen.alternate))
         return character
     output.write = paint
     with (mock.patch.object(RawTerminalDriver, "_read_character", autospec=True, side_effect=read),

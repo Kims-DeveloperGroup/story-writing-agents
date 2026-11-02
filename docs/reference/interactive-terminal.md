@@ -336,11 +336,11 @@ Partial UTF-8 and buffered input survive these nonfatal polling pauses.
 
 ## Retained agent-output history
 
-Capable terminals show one interactive conversation timeline above the main
-prompt. Each user message keeps its JSON/progress frames in their original
-chronological positions, followed by the resulting replies. Sending another
-message adds another turn below it. Terminal height does not insert empty rows
-between a user message and its frames.
+Capable terminals preserve completed turns in ordinary terminal scrollback.
+Each user message keeps its JSON/progress frames in their original chronological
+positions, followed by the resulting replies. Sending another message adds
+another turn below it. Long final answers remain readable in full after the
+turn finishes; terminal height does not insert empty rows between messages.
 
 This abbreviated example illustrates the ordering, not the frame heights:
 
@@ -359,16 +359,23 @@ Main prompt > next message_
 The existing `/progress` retention rules determine which previews remain.
 Transient progress is replaced in its original slot when it becomes retained
 JSON. Confirmations and retries stay with their originating user message.
-Messages and retained previews remain available throughout the current shell,
-including across conversation and session switches. Opening an older frame does
-not reload files or call a provider. Timeline state is discarded on shell exit.
+While a turn is awaiting a decision, its disclosures remain in the active
+presentation; F6 can review their full content. Completing the turn preserves
+its messages and retained previews in native scrollback once. The archived
+JSON frames are fixed snapshots; use F6 to scroll their contents.
+
+Messages and retained previews remain available for review throughout the
+current shell, including across conversation and session switches. Opening an
+older frame does not reload files or call a provider. Review state is discarded
+on shell exit; restored messages use the same complete output presentation.
 
 The mouse wheel normally scrolls the terminal's own scrollback. Press `F6` to
-enter keyboard timeline review and focus the newest visible JSON frame. `Tab`
-switches navigation between the timeline and selected frame. Arrows, paging keys,
-Home, and End act on that target. Keyboard review remains available when the
-terminal cannot enable pointer interaction; the wheel then keeps its normal
-terminal behavior.
+open conversation review on a temporary screen and focus the newest visible
+JSON frame, or the timeline when no frame is visible. `Tab` switches navigation
+between the timeline and a visible frame. Arrows, paging keys, `Home`, and `End`
+act on that target. At a frame boundary, further vertical movement continues
+through the timeline. Keyboard review remains available when the terminal
+cannot enable pointer interaction.
 
 When pointer interaction is available, left-click a frame's header, border, or
 body to change focus. The wheel over a JSON frame scrolls its contents; the left
@@ -376,24 +383,19 @@ gutter scrolls the whole timeline. The selected-control accent, `Focused` marker
 and `>` gutter marker identify frame focus even with `NO_COLOR` or clipped
 borders. A `T` in the gutter marks whole-timeline focus.
 
-When reading an earlier turn, new output preserves the visible entry and
-position. The timeline follows new output only when already at the bottom.
-Completed frames outside the visible timeline are retained in place without
-waiting for an invisible inspector to be dismissed.
-Resizing reflows messages while keeping each JSON frame with its own user input.
+Resizing reflows review content while keeping each JSON frame with its own user
+input. Completed native output is not printed again when the terminal changes
+size. Press `Escape`, `Enter`, or `F6` to return to the unchanged draft and cursor
+or pending decision without submitting or confirming it. Printable text returns
+to input and preserves that first character. Navigation does not add command
+history entries or change conversation focus, and temporary review copies do not
+enter native scrollback.
 
-Click the composer, press `Escape`, or press Enter while navigating to return to
-the unchanged draft and cursor without submitting it. Printable text returns to
-the composer, releases mouse capture, and preserves the first character. Press
-`F6` again to leave review and release any mouse capture. Navigation
-does not add command-history entries or change conversation focus.
-
-Inline pickers and prompts keep the timeline visible, so proposal details remain
-available during confirmation. If a decision and its context cannot fit, enlarge
-the terminal or press Escape to leave without confirming. These controls remain
-transient. Native authentication and external viewers suspend timeline painting
-and release mouse capture; returning restores the timeline and draft with fresh
-terminal geometry.
+Inline pickers and prompts keep their disclosures available during confirmation.
+If a decision and its context cannot fit, enlarge the terminal or press Escape
+to leave without confirming. These controls remain transient. Native
+authentication and external viewers have exclusive terminal ownership; returning
+restores the draft with fresh terminal geometry.
 Very short, narrow, or unsupported terminals retain safe ordinary output behavior.
 Ordinary input never re-enables mouse capture merely because older frames exist.
 

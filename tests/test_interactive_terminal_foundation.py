@@ -1931,12 +1931,10 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                     managed._os_provider().environ["NO_COLOR"] = "1"
                 self.assertEqual(managed.read_main_line("main> ", lambda _: ()), "seed")
                 if reviewing:
-                    managed.write_component(_model.Message("User", "OLDER_INPUT"))
-                    managed.write_component(_model.Message("Lead", "\n".join(f"OLDER_ROW_{row}" for row in range(35))))
+                    for component in (_model.Message("User", "OLDER_INPUT"), _model.Message("Lead", "\n".join(f"OLDER_ROW_{row}" for row in range(35)))): managed.write_component(component)
                     timeline = managed._output_history
                     timeline.focus_visible(timeline.render(managed.semantic_capabilities(), 23))
-                    timeline.handle_key(KeyEvent(KeyKind.HOME))
-                    timeline.handle_key(KeyEvent(KeyKind.ENTER))
+                    for kind in (KeyKind.HOME, KeyKind.ENTER): timeline.handle_key(KeyEvent(kind))
                     managed._paint_timeline()
                 user = _model.Message("User", "USER_VISIBLE", presentation=_model.MessagePresentation.CHAT_BLOCK)
                 with managed.submission("session", "conversation", user):
@@ -1944,9 +1942,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                     preview = _model.NestedScrollViewport("review:one", "JSON review", 3, 1, ("JSON_ONE",), 1, False, buffer_lines=("JSON_ONE", "JSON_TWO", "JSON_THREE"))
                     managed._output_history.retain(_model.MultiAgentScrollState((preview,), 0))
                     managed._paint_timeline()
-                    before = tuple(map(tuple, rig.screen.primary))
                     pending = _model.InputPromptView((), Prompt("REVISION_INPUT", instruction="Explain immutable review authority. " * 180 if blocked else None))
-                    self.assertEqual(pending.context, ())
                     rig.phase, rig.observe = "prompt", lambda: managed._output_history._visible_offset
                     outcome = managed.read_prompt(pending, render_input_prompt, transition_prompt_input)
                     self.assertEqual(outcome, ControlOutcome(ControlOutcomeKind.CANCEL) if blocked else ControlOutcome(ControlOutcomeKind.COMMIT, text="revise candidate"))
@@ -1956,18 +1952,16 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                                          ["USER_VISIBLE", "TARGET_VISIBLE", "REVIEWERS_VISIBLE", "AUTHORITY_VISIBLE"])
                         self.assertTrue(all(word in read.text.lower() for word in (("resize", "esc") if blocked else ("revision_input",))))
                     decisions = [read for read in reads if read.character == "\r"]
-                    self.assertEqual(len(decisions), 1)
-                    self.assertFalse(decisions[0].mouse)
+                    self.assertEqual((len(decisions), decisions[0].mouse), (1, False))
                     if reviewing:
                         pointer = next(index for index, read in enumerate(reads) if read.character == "M")
                         self.assertLess(reads[pointer + 1].data, reads[pointer].data)
-                    self.assertFalse(any("USER_VISIBLE" in row for row in rig.screen.history))
-                    self.assertEqual(tuple(map(tuple, rig.screen.primary)), before, {"case": case, "physical_cursor": rig.screen.cursor,
-                        "timeline_cursor_row": managed._timeline_cursor_row, "timeline_origin": managed._timeline_origin,
-                        "changed_rows": [(index, "".join(old).rstrip(), "".join(new).rstrip()) for index, (old, new) in enumerate(zip(before, rig.screen.primary)) if tuple(new) != old]})
+                    self.assertEqual((rig.queried, any("USER_VISIBLE" in row for row in rig.screen.history)), (False, False))
+                    self.assertEqual((rig.screen.alternate, "REVISION_INPUT" in rig.text(), re.findall(r"USER_VISIBLE|TARGET_VISIBLE|REVIEWERS_VISIBLE|AUTHORITY_VISIBLE", rig.text())), (False, False, ["USER_VISIBLE", "TARGET_VISIBLE", "REVIEWERS_VISIBLE", "AUTHORITY_VISIBLE"]))
+                    if reviewing: self.assertEqual(re.findall(r"OLDER_ROW_\d+", "\n".join([*rig.screen.history, rig.text()])), [f"OLDER_ROW_{row}" for row in range(35)])
                     self.assertEqual(managed._output_history.frames[0].view.start_line, 2 if reviewing else 1)
-                    self.assertEqual((sum(entry.component == user for entry in managed._output_history.entries), managed._history_state, list(managed._typeahead_buffer)),
-                                     (1, MainInputHistoryState(("seed",)), []))
+                    self.assertEqual((pending.context, sum(entry.component == user for entry in managed._output_history.entries), managed._history_state, list(managed._typeahead_buffer)),
+                                     ((), 1, MainInputHistoryState(("seed",)), []))
                     self.assertEqual(any(read.mouse for read in reads), reviewing)
                     rig.fallback.assert_not_called()
                     self.assertEqual((rig.termios.events.count("activate"), rig.termios.attributes), (rig.termios.events.count("restore"), rig.termios.original))

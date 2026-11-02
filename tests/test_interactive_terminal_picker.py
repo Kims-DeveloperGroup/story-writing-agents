@@ -2570,12 +2570,10 @@ class PickerDriverTests(unittest.TestCase):
                     managed._os_provider().environ["NO_COLOR"] = "1"
                 self.assertEqual(managed.read_main_line("main> ", lambda _: ()), "seed")
                 if reviewing:
-                    managed.write_component(_model.Message("User", "OLDER_INPUT"))
-                    managed.write_component(_model.Message("Lead", "\n".join(f"OLDER_ROW_{row}" for row in range(35))))
+                    for component in (_model.Message("User", "OLDER_INPUT"), _model.Message("Lead", "\n".join(f"OLDER_ROW_{row}" for row in range(35)))): managed.write_component(component)
                     timeline = managed._output_history
                     timeline.focus_visible(timeline.render(managed.semantic_capabilities(), 23))
-                    timeline.handle_key(KeyEvent(KeyKind.HOME))
-                    timeline.handle_key(KeyEvent(KeyKind.ENTER))
+                    for kind in (KeyKind.HOME, KeyKind.ENTER): timeline.handle_key(KeyEvent(kind))
                     managed._paint_timeline()
                 user = _model.Message("User", "USER_VISIBLE", presentation=_model.MessagePresentation.INLINE if shrinking else _model.MessagePresentation.CHAT_BLOCK)
                 with managed.submission("session", "conversation", user):
@@ -2584,11 +2582,9 @@ class PickerDriverTests(unittest.TestCase):
                         view = _model.NestedScrollViewport("review:one", "JSON review", 3, 1, ("JSON_ONE",), 1, False, buffer_lines=("JSON_ONE", "JSON_TWO", "JSON_THREE"))
                         managed._output_history.retain(_model.MultiAgentScrollState((view,), 0))
                         managed._paint_timeline()
-                    before = tuple(map(tuple, rig.screen.primary))
                     choices = tuple(Choice(str(index), f"CHOICE_{index:02}") for index in range(20)) if shrinking else (Choice("confirm", "Confirm"), Choice("reject", "Reject"), Choice("revise", "Revise"))
                     pending = initialize_picker(Picker(Prompt("CONFIRM_REVIEW", instruction="Explain immutable review authority. " * 180 if blocked else None), choices,
                         presentation=InputPresentation.FORM if case == "blocked_form" else InputPresentation.STANDARD, visible_choice_limit=9 if shrinking else 7, transient_context=()))
-                    self.assertEqual(pending.picker.transient_context, ())
                     rig.phase = "picker"
                     outcome = _read_picker(managed, pending, transient=True)
                     self.assertEqual(outcome, ControlOutcome(ControlOutcomeKind.CANCEL) if blocked else ControlOutcome(ControlOutcomeKind.COMMIT, text="1" if shrinking else "reject"))
@@ -2600,19 +2596,17 @@ class PickerDriverTests(unittest.TestCase):
                         if shrinking:
                             self.assertTrue(0 < sum(choice.label in read.text for choice in choices) < 9)
                     decisions = [read for read in reads if read.character == "\r"]
-                    self.assertEqual(len(decisions), 1)
-                    self.assertFalse(decisions[0].mouse)
-                    self.assertEqual(any(read.mouse for read in reads), reviewing and cpr_available)
-                    self.assertFalse(any("USER_VISIBLE" in row for row in rig.screen.history))
-                    self.assertEqual(tuple(map(tuple, rig.screen.primary)), before, {"case": case, "physical_cursor": rig.screen.cursor,
-                        "timeline_cursor_row": managed._timeline_cursor_row, "timeline_origin": managed._timeline_origin,
-                        "changed_rows": [(index, "".join(old).rstrip(), "".join(new).rstrip()) for index, (old, new) in enumerate(zip(before, rig.screen.primary)) if tuple(new) != old]})
+                    self.assertEqual((len(decisions), decisions[0].mouse), (1, False))
+                    self.assertEqual(any(read.mouse for read in reads), reviewing)
+                    self.assertEqual((rig.queried, any("USER_VISIBLE" in row for row in rig.screen.history)), (False, False))
+                    self.assertEqual((rig.screen.alternate, "CONFIRM_REVIEW" in rig.text(), re.findall(r"USER_VISIBLE|TARGET_VISIBLE|REVIEWERS_VISIBLE|AUTHORITY_VISIBLE", rig.text())), (False, False, ["USER_VISIBLE", "TARGET_VISIBLE", "REVIEWERS_VISIBLE", "AUTHORITY_VISIBLE"]))
+                    if reviewing: self.assertEqual(re.findall(r"OLDER_ROW_\d+", "\n".join([*rig.screen.history, rig.text()])), [f"OLDER_ROW_{row}" for row in range(35)])
                     if shrinking:
                         self.assertEqual((pending.picker.visible_choice_limit, managed._output_history.frames), (9, ()))
                     else:
                         self.assertEqual(managed._output_history.frames[0].view.start_line, 2 if reviewing else 1)
-                    self.assertEqual((sum(entry.component == user for entry in managed._output_history.entries), managed._history_state, list(managed._typeahead_buffer)),
-                                     (1, MainInputHistoryState(("seed",)), []))
+                    self.assertEqual((pending.picker.transient_context, sum(entry.component == user for entry in managed._output_history.entries), managed._history_state, list(managed._typeahead_buffer)),
+                                     ((), 1, MainInputHistoryState(("seed",)), []))
                     rig.fallback.assert_not_called()
                     self.assertEqual((rig.termios.events.count("activate"), rig.termios.attributes), (rig.termios.events.count("restore"), rig.termios.original))
 

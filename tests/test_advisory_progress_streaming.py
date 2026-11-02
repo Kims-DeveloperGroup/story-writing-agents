@@ -1112,8 +1112,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
     def test_failure_snapshot_retained_across_turns_until_dismissed(self) -> None:
         state = AdvisoryProgressState()
         key = ("lead", "op1")
-        req = AdvisoryProgressRequest("lead", "op1", "Working")
-        state.begin((req,))
+        state.begin((AdvisoryProgressRequest("lead", "op1", "Working"),))
         state.agent_buffers[key] = ["Line 1", "Line 2", "Error: failed operation"]
         state.record_error("Fatal connection timeout")
 
@@ -1122,25 +1121,22 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertIsNotNone(state.failure_snapshot)
 
         # Start a new turn - regular buffers cleared, failure_snapshot retained
-        req2 = AdvisoryProgressRequest("lead", "op2", "Next turn")
-        state.begin((req2,))
+        state.begin((AdvisoryProgressRequest("lead", "op2", "Next turn"),))
         self.assertNotIn(key, state.agent_buffers)
         self.assertIsNotNone(state.failure_snapshot)
 
         # InteractiveAdvisoryProgress falls back to failure_snapshot when agent_buffers is empty
-        terminal = InteractiveTerminal(lambda p: "", lambda t: "", width=80)
-        progress = InteractiveAdvisoryProgress(terminal)
+        progress = InteractiveAdvisoryProgress(InteractiveTerminal(lambda p: "", lambda t: "", width=80))
         progress._state = state
-        scroll_state = progress.to_scroll_state()
-        self.assertEqual(len(scroll_state.views), 1)
-        self.assertIn("Line 1", scroll_state.views[0].visible_lines)
+        retained_view, = progress.to_scroll_state().views
+        self.assertIn("Line 1", retained_view.visible_lines)
 
         # Explicitly dismiss the snapshot
         progress.dismiss_failure_snapshot()
         self.assertIsNone(state.failure_snapshot)
 
         from dataclasses import replace
-        from story_writing_agents.interactive_terminal._output_history import OutputHistory
+        from story_writing_agents.interactive_terminal._output_history import ConversationTimeline, OutputHistory, render_component
         from story_writing_agents.interactive_terminal._pointer import PointerEvent
         history = OutputHistory()
         caps = _ansi_terminal_capabilities()
@@ -1171,15 +1167,12 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertEqual(history.focused_id, first.identity)
         self.assertEqual(history.frames[1].view.start_line, 4)
         self.assertEqual(history.frames[0].view.start_line, 1)
-        self.assertTrue(history.handle_key(KeyEvent(KeyKind.DOWN)))
-        self.assertEqual(history.frames[0].view.start_line, 2)
-        self.assertTrue(history.handle_key(KeyEvent(KeyKind.ENTER)))
-        self.assertIsNone(history.focused_id)
+        self.assertEqual((history.handle_key(KeyEvent(KeyKind.DOWN)), history.frames[0].view.start_line), (True, 2))
+        self.assertEqual((history.handle_key(KeyEvent(KeyKind.ENTER)), history.focused_id), (True, None))
         history.handle_pointer(PointerEvent(0, 2, first.bottom, True), layout)
         self.assertTrue(history.handle_key(KeyEvent(KeyKind.ESCAPE)))
         history.handle_pointer(PointerEvent(0, 2, first.top + 1, True), layout)
-        self.assertFalse(history.handle_key(KeyEvent(KeyKind.TEXT, text="x")))
-        self.assertIsNone(history.focused_id)
+        self.assertEqual((history.handle_key(KeyEvent(KeyKind.TEXT, text="x")), history.focused_id), (False, None))
         history.handle_pointer(PointerEvent(0, 2, first.top, True), layout)
         history.handle_pointer(PointerEvent(0, 2, len(layout.lines) + 1, True), layout)
         self.assertIsNone(history.focused_id)
@@ -1206,7 +1199,6 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertIn("\x1b[1;7;36m", history.render(caps, 1).lines[0])
         self.assertNotIn("press 't'", history.render(caps, 1).lines[0])
 
-        from story_writing_agents.interactive_terminal._output_history import ConversationTimeline
         from story_writing_agents.interactive_terminal._model import Message, MessagePresentation
         timeline = ConversationTimeline()
         user = Message("User", "REPEATED_REQUEST", presentation=MessagePresentation.CHAT_BLOCK)
@@ -1214,8 +1206,8 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         origin_a = timeline.begin_submission("session", "conversation", user)
         operation_a = timeline.begin_operation()
         timeline.update_operation(operation_a, lines=("TRANSIENT_A",))
-        first_view = replace(view, view_id="plot:one", title="JSON_A_ONE", total_lines=1, visible_lines=("A_ONE_BODY",), visible_height=1, buffer_lines=("A_ONE_BODY",))
-        second_view = replace(first_view, view_id="character:one", title="JSON_A_TWO", visible_lines=("A_TWO_BODY",), buffer_lines=("A_TWO_BODY",))
+        first_view = replace(view, view_id="plot:one", title="JSON_A_ONE", total_lines=3, visible_lines=("A_ONE_BODY",), visible_height=1, buffer_lines=("A_ONE_BODY", "A_ONE_MIDDLE", "A_ONE_END"))
+        second_view = replace(first_view, view_id="character:one", title="JSON_A_TWO", total_lines=1, visible_lines=("A_TWO_BODY",), buffer_lines=("A_TWO_BODY",))
         state_a = MultiAgentScrollState((first_view, second_view), 0)
         timeline.retain(state_a, operation_id=operation_a)
         timeline.retain(state_a, operation_id=operation_a)
@@ -1228,7 +1220,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         origin_b = timeline.begin_submission("session", "conversation", user)
         self.assertNotEqual(origin_a, origin_b)
         operation_b = timeline.begin_operation()
-        final_b = replace(first_view, title="JSON_B", visible_lines=("B_BODY",), buffer_lines=("B_BODY",))
+        final_b = replace(first_view, title="JSON_B", total_lines=1, visible_lines=("B_BODY",), buffer_lines=("B_BODY",))
         timeline.retain(MultiAgentScrollState((final_b,), 0), operation_id=operation_b)
         for discarded in ("OFF_PREVIEW", "CANCELLED_PREVIEW"):
             transient = timeline.begin_operation()
@@ -1262,10 +1254,20 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         timeline.focus_visible(current)
         self.assertTrue(timeline.handle_key(KeyEvent(KeyKind.TAB)))
         self.assertTrue(timeline.handle_key(KeyEvent(KeyKind.HOME)))
-        older = timeline.render(caps, 8)
+        older = timeline.render(caps, 6)
         self.assertIn("REPEATED_REQUEST", _without_sgr("\n".join(older.lines)))
+        timeline.handle_key(KeyEvent(KeyKind.TAB))
+        timeline.handle_key(KeyEvent(KeyKind.DOWN))
+        self.assertEqual(tuple(frame.view.start_line for frame in timeline.frames), (2, 1, 1, 1))
+        older = timeline.render(caps, 6)
+        self.assertIn("A_ONE_MIDDLE", _without_sgr("\n".join(older.lines)))
+        timeline.handle_key(KeyEvent(KeyKind.END))
+        clamped = timeline.render(caps, 6)
+        timeline.handle_key(KeyEvent(KeyKind.DOWN))
+        older = timeline.render(caps, 6)
+        self.assertNotEqual(older.lines, clamped.lines)
         timeline.append_component(Message("Lead", "NEWEST_REPLY"))
-        self.assertEqual(timeline.render(caps, 8).lines, older.lines)
+        self.assertEqual(timeline.render(caps, 6).lines, older.lines)
         self.assertTrue(timeline.handle_key(KeyEvent(KeyKind.END)))
         self.assertIn("NEWEST_REPLY", _without_sgr("\n".join(timeline.render(caps, 8).lines)))
         timeline.append_component(Message("Lead", "\n".join(f"SEMANTIC_TAIL_{row}" for row in range(30)), presentation=MessagePresentation.CHAT_BLOCK))
@@ -1291,7 +1293,9 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         origin = single.begin_submission("session", "conversation", user)
         single.retain(MultiAgentScrollState((first_view,), 0), operation_id=single.begin_operation())
         single.end_submission(origin)
-        self.assertEqual(single.render(caps, 24).lines, single.render(caps, 60).lines)
+        with mock.patch("story_writing_agents.interactive_terminal._output_history.render_component", wraps=render_component) as project:
+            self.assertEqual(single.render(caps, 24).lines, single.render(caps, 60).lines)
+            self.assertEqual(project.call_count, 1)
 
     def test_thought_delta_coalesces_consecutive_thinking_rows_and_bounds_buffer(self) -> None:
         state = AdvisoryProgressState()
@@ -2759,10 +2763,10 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             self.assertTrue(inspector_called[0]["keep_frame"])
 
     def test_nested_scroll_inspector_focus_cycling_and_frame_retention_on_success(self) -> None:
-        """Retain completed turns and review them with optional pointer geometry."""
+        """Publish completed prose once and review retained frames without losing input."""
         from dataclasses import replace
         from tests._external_view_support import recording_driver
-        from story_writing_agents.interactive_terminal._model import Message, MessagePresentation
+        from story_writing_agents.interactive_terminal._model import Message, MessagePresentation, SemanticRole
         views = tuple(NestedScrollViewport(f"a{i}:1", f"Agent {i}", 3, 1, (f"agent {i} line",), 1, i == 1) for i in (1, 2))
         with recording_driver("\t\x1b[17~\x1b[<0;5;248M\x1bxq", width=40, height=250) as rig:
             rig.screen.cursor = (249, 0)
@@ -2785,35 +2789,32 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                 older = timeline.begin_submission("session", "conversation", Message("User", "OLDER_INPUT"))
                 timeline.append_component(Message("Lead", "\n".join(f"OLDER_ROW_{row}" for row in range(40))))
                 timeline.end_submission(older)
-                caps = replace(driver.semantic_capabilities(), width=39)
-                timeline.focus_visible(timeline.render(caps, 23))
-                timeline.handle_key(KeyEvent(KeyKind.HOME))
-                timeline.handle_key(KeyEvent(KeyKind.ENTER))
-                before = timeline.render(caps, 23).lines
                 origin = timeline.begin_submission("session", "conversation", Message("User", "NEW_INPUT"))
                 driver._typeahead_buffer.extend("queued")
-                async def completed(): return view_state
                 state = MultiAgentScrollState((replace(views[0], state=view_state),), 0)
-                result = asyncio.run(driver.run_advisory_progress(completed(), lambda _: "Working...", scroll_state_provider=lambda _: state,
-                    is_failure=lambda value: value is ViewState.ERROR, nested_scroll_transition=transition_nested_scroll, nested_scroll_renderer=render_nested_scroll_view, keep_frame=True))
-                self.assertIs(result, view_state)
-                self.assertEqual(rig.attempts, 0)
-                self.assertEqual(rig.termios.events.count("restore"), 1)
-                self.assertEqual(timeline.render(caps, 23).lines, before)
+                def final_state(_):
+                    rig.incoming.characters.extend(b"\r")
+                    return state
+                async def completed(): return view_state
+                self.assertIs(asyncio.run(driver.run_advisory_progress(completed(), lambda _: "Working...", scroll_state_provider=final_state,
+                    is_failure=lambda value: value is ViewState.ERROR, nested_scroll_transition=transition_nested_scroll, nested_scroll_renderer=render_nested_scroll_view, keep_frame=True)), view_state)
+                read, = rig.reads
+                self.assertEqual(rig.attempts, 1)
+                self.assertEqual(read.character, "\r")
+                self.assertIn("NEW_INPUT", read.text)
+                self.assertIn("agent 1 line", read.text)
                 slot, = (entry for entry in timeline.entries if entry.frames)
                 self.assertEqual((slot.origin, len(slot.frames), slot.frames[0].view.state, slot.preview, slot.lines), (origin, 1, view_state, None, ()))
-                self.assertFalse(timeline.entry_visible(slot.identity))
                 self.assertEqual((driver._timeline_operation, driver._progress_active, driver._progress_rows), (None, False, 0))
                 self.assertEqual(list(driver._typeahead_buffer), list("queued"))
                 self.assertFalse(rig.mouse)
                 timeline.end_submission(origin)
                 with driver._input_latch.input_operation():
                     pass
-        expected = ["USER_A", "JSON_A", "A_ROW_1", "LEAD_A", "USER_B", "JSON_B", "B_ROW_1", "LEAD_B"]
-        tokens = lambda text: re.findall(r"USER_[AB]|JSON_[AB]|[AB]_ROW_1|LEAD_[AB]", text)
-        for height, response in ((60, "none"), (60, "valid"), (16, "none"), (16, "valid"), (16, "invalid"), (16, "late"), (16, "queued")):
-            with recording_driver(height=height, response=response) as rig, rig.driver.input_session():
+        for height, paragraphs, release in ((60, 2, "\r"), (24, 80, "\r"), (16, 80, "\x1b"), (16, 80, "\x1b[17~"), (24, 80, "")):
+            with recording_driver(height=height, response="none") as rig, rig.driver.input_session():
                 driver, timeline = rig.driver, rig.driver._output_history
+                native = lambda: "\n".join(rig.screen.history + ["".join(row) for row in rig.screen.primary])
                 def snapshot():
                     return tuple((e.identity, e.origin, e.component, tuple((f.identity, f.view.view_id, f.view.buffer_lines) for f in e.frames)) for e in timeline.entries)
                 rig.observe = snapshot
@@ -2831,41 +2832,50 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                         async def completed(): return label
                         self.assertEqual(asyncio.run(driver.run_advisory_progress(completed(), lambda _: "Working...", scroll_state_provider=final_state,
                             nested_scroll_transition=transition_nested_scroll, nested_scroll_renderer=render_nested_scroll_view, keep_frame=True)), label)
-                        driver.write_component(Message("Lead", "LEAD_" + label))
+                        body = "\n\n".join(f"LEAD_{label}_{row} **界e\u0301 complete prose**" for row in range(paragraphs))
+                        driver.write_component(Message("Lead", body, role=SemanticRole.AGENT, presentation=MessagePresentation.CHAT_BLOCK, metadata="Outcome: answer\nInput tokens: 0 | Output tokens: 2"))
+                        self.assertFalse(any("LEAD_" + label + "_" in row for row in rig.screen.history))
                     if label == "A":
                         first = snapshot()
                 saved = snapshot()
+                for label, row in ((label, row) for label in "AB" for row in range(paragraphs)):
+                    self.assertEqual(len(re.findall(rf"\bLEAD_{label}_{row}\b", native())), 1, (height, label, row))
                 self.assertEqual([entry[1] for entry in saved], [saved[0][1]] * 3 + [saved[3][1]] * 3)
                 self.assertNotEqual(saved[0][1], saved[3][1])
-                navigation = "\t\x1b[H\x1b[<65;100;1M\x1b[H\rx\r"
-                rig.phase = "review"
-                rig.query_input, rig.after_query = (navigation, "") if response == "queued" else ("", navigation)
-                rig.incoming.characters.extend(b"draft\x1b[D\x1b[D\x1b[17~")
-                self.assertEqual(driver.read_main_line("main> ", lambda _: ()), "draxft")
+                navigation = "\t\x1b[H\x1b[<65;100;1M\x1b[H\t\x1b[B" + release + "x\r"
+                rig.phase, rig.review_input = "review", navigation
+                draft = "draft" if release else "draft" + " word" * 180
+                rig.incoming.characters.extend((draft + "\x1b[D\x1b[D\x1b[17~").encode())
+                expected = draft[:-2] + "x" + draft[-2:]
+                self.assertEqual(driver.read_main_line("main> ", lambda _: ()), expected)
                 inspections = [read for read in rig.reads if read.phase.startswith("inspect_") and read.character == "\r"]
                 self.assertEqual([read.phase for read in inspections], ["inspect_A", "inspect_B"])
                 self.assertEqual(inspections[1].data[:len(first)], first)
-                for label, read in zip("AB", inspections):
-                    self.assertEqual(re.findall(f"USER_{label}|JSON_{label}|{label}_ROW_1", read.text), ["USER_" + label, "JSON_" + label, label + "_ROW_1"])
                 review = [read for read in rig.reads if read.phase == "review"]
-                enters = [read for read in review if read.character == "\r"]
-                self.assertEqual(len(enters), 2)
-                self.assertEqual(re.findall(r"USER_A|JSON_A|A_ROW_1", enters[0].text), ["USER_A", "JSON_A", "A_ROW_1"])
-                if height == 60:
-                    self.assertEqual(tokens(inspections[1].text), expected[:-1])
-                    self.assertEqual(tokens(next(read.text for read in review if read.character == "d")), expected)
-                    self.assertFalse(any("USER_A" in row for row in rig.screen.history))
+                exited = review[next(index for index, read in enumerate(review) if read.character == "B") + 1]
+                self.assertTrue(exited.alternate)
+                self.assertEqual(re.findall(r"USER_A|JSON_A|A_ROW_[12]", exited.text), ["USER_A", "JSON_A", *(["A_ROW_1", "A_ROW_2"] if paragraphs == 2 else ["A_ROW_2"])])
                 pointer = next(index for index, read in enumerate(review) if read.character == "M")
-                self.assertEqual(review[pointer + 1].text != review[pointer].text, response == "valid" and height == 16)
-                typed = next(read for read in review if read.character == "x")
-                self.assertIn("main> draft", typed.text)
-                self.assertEqual(typed.cursor[1], len("main> dra"))
-                self.assertEqual(snapshot(), saved)
-                self.assertEqual(driver._history_state.entries, ("USER_A", "USER_B", "draxft"))
-                self.assertEqual((list(driver._typeahead_buffer), rig.incoming.characters), ([], []))
+                self.assertEqual(review[pointer + 1].text != review[pointer].text, paragraphs == 80)
+                self.assertFalse(rig.queried)
                 self.assertFalse(rig.screen.alternate)
+                self.assertEqual(snapshot(), saved)
+                self.assertEqual(driver._history_state.entries, ("USER_A", "USER_B", expected))
+                self.assertEqual((list(driver._typeahead_buffer), rig.incoming.characters), ([], []))
+                self.assertEqual(tuple(rig.screen.history), rig.review_history)
+                for label in "AB":
+                    self.assertEqual(len(re.findall(rf"\bLEAD_{label}_{paragraphs - 1}\b", native())), 1)
                 rig.fallback.assert_not_called()
             self.assertEqual((rig.termios.events.count("activate"), rig.termios.attributes), (rig.termios.events.count("restore"), rig.termios.original))
+        for failure, key in ((EOFError, ""), (KeyboardInterrupt, "\x03")):
+            with recording_driver("draft\x1b[17~", response="none") as rig, rig.driver.input_session():
+                rig.driver.write_component(Message("Lead", "NATIVE_SENTINEL"))
+                rig.review_input = key
+                with self.assertRaises(failure): rig.driver.read_main_line("main> ", lambda _: ())
+                self.assertFalse(rig.screen.alternate)
+                self.assertNotIn("main> draft", rig.text())
+                self.assertEqual(("\n".join(rig.screen.history) + rig.text()).count("NATIVE_SENTINEL"), 1)
+            self.assertEqual(rig.termios.attributes, rig.termios.original)
 
     def test_provide_scroll_state_on_success_sets_idle_state_and_does_not_record_error(self) -> None:
         """Verify success response passes ViewState.IDLE and does not record result message as an error."""
