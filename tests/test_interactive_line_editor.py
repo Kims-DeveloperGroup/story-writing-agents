@@ -683,7 +683,7 @@ class LiveEditingTests(unittest.TestCase):
                     (
                         "\r",
                         "\x1b[A" * (len(lines) - 1),
-                        "\r\x1b[J",
+                        "\r" + "\x1b[2K\x1b[1B\r" * (len(lines) - 1) + "\x1b[2K" + "\x1b[A" * (len(lines) - 1) + "\r\r",
                     )
                 )
                 self.assertEqual(output.records[-1], expected)
@@ -705,7 +705,7 @@ class LiveEditingTests(unittest.TestCase):
         self.assertNotIn("\x00", rendered)
         self.assertNotIn("\u2060", rendered)
         residue = rendered
-        for fixed_control in ("\x1b[J", "\x1b[A", "\x1b[C", "\r"):
+        for fixed_control in ("\x1b[J", "\x1b[2K", "\x1b[1B", "\x1b[A", "\x1b[C", "\r"):
             residue = residue.replace(fixed_control, "")
         self.assertNotIn("\x1b", residue)
 

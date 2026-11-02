@@ -2773,7 +2773,7 @@ class CompletionDriverTests(unittest.TestCase):
             self.assertTrue(
                 frame.endswith("\x1b[A" * frame.count("\n") + "\r" + "\x1b[C" * 6)
             )
-        self.assertEqual(output.records[-1], "\r\r\x1b[J")
+        self.assertEqual(output.records[-1], "\r\r\x1b[2K\r\r")
 
     def test_completion_only_enter_does_not_append_before_interrupt(self) -> None:
         driver, _input, output, fallback, termios, _os = make_driver("/s\n\x03")
@@ -2786,7 +2786,7 @@ class CompletionDriverTests(unittest.TestCase):
         history_append.assert_not_called()
         self.assertEqual(driver._history_state, MainInputHistoryState())
         fallback.assert_not_called()
-        self.assertTrue(output.records[-1].endswith("\x1b[J\n"))
+        self.assertEqual("".join(output.records[-2:]), "\r\r\x1b[2K\r\r\n")
         self.assertEqual(
             tuple(call[1] for call in termios.set_calls),
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
@@ -2844,10 +2844,11 @@ class CompletionDriverTests(unittest.TestCase):
             driver._history_state,
             MainInputHistoryState(("/session resume beta",)),
         )
+        # Erase only the four owned palette rows, returning to their first row.
         self.assertEqual(
             events[-3:],
             [
-                ("write", "\r\r\x1b[J"),
+                ("write", "\r\r" + "\x1b[2K\x1b[1B\r" * 3 + "\x1b[2K" + "\x1b[A" * 3 + "\r\r"),
                 ("termios", FakeTermios.TCSADRAIN),
                 ("history", "/session resume beta"),
             ],
@@ -2873,7 +2874,7 @@ class CompletionDriverTests(unittest.TestCase):
         provider.assert_called_once_with("/", 1)
         fallback.assert_not_called()
         self.assertEqual(driver._history_state, MainInputHistoryState())
-        self.assertTrue(output.records[-1].endswith("\x1b[J\n"))
+        self.assertEqual("".join(output.records[-2:]), "\r\r\x1b[2K\r\r\n")
         self.assertEqual(
             tuple(call[1] for call in termios.set_calls),
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
@@ -3145,7 +3146,7 @@ class CompletionDriverTests(unittest.TestCase):
                     tuple(call[1] for call in termios.set_calls),
                     (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
                 )
-                self.assertEqual(output.records[-1], "\r\r\x1b[J\n")
+                self.assertEqual("".join(output.records[-2:]), "\r\r\x1b[2K\r\r\n")
 
     def test_line_fallback_bypasses_all_completion_and_live_collaborators(self) -> None:
         driver, input_stream, output, fallback, termios, os_module = make_driver(
