@@ -3274,7 +3274,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(record["request_type"] == "response" and
             json.loads(record["content"])["response_text"].encode("utf-8") == raw_responses[1].encode("utf-8")
             for record in _agent_exchange_records(self.workspace)))
-        with provider.invocation(scope, requests[-1].policy_fingerprint):
+        async with provider.invocation(scope, requests[-1].policy_fingerprint):
             self.assertIsNone(provider.inspect_context_thread(scope, requests[-1].policy_fingerprint))
         first_thread = history.thread_id
         history = OwnedNativeHistory(self, thread_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
