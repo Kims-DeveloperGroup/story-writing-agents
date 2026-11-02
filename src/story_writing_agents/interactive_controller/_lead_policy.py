@@ -977,8 +977,8 @@ class InteractiveLeadAdapter:
                     return self._runner.run(self._progress.run(operation))
             return self._runner.run(self._progress.run(operation))
         recovery = ProviderAuthRecovery()
-
-        bound_sink = getattr(self._progress, "bound_stream_sink", None)
+        task: asyncio.Task[object] | None = None
+        pending_resolution: tuple[tuple[str, int], bool] | None = None
 
         async def scoped_operation() -> object:
             with recovery.scope():
@@ -987,13 +987,16 @@ class InteractiveLeadAdapter:
                         return await operation
                 return await operation
 
-        if bound_sink is not None:
-            with bound_sink():
-                task = self._runner.get_loop().create_task(scoped_operation())
-        else:
-            task = self._runner.get_loop().create_task(scoped_operation())
-
         async def wait_for_operation_or_auth() -> object:
+            nonlocal task, pending_resolution
+            # The terminal starts this awaitable only after its first frame.
+            # Both initial setup and an authentication retry must wait for it.
+            if task is None:
+                task = asyncio.create_task(scoped_operation())
+            if pending_resolution is not None:
+                key, authenticated = pending_resolution
+                pending_resolution = None
+                recovery.resolve(key, authenticated)
             ready = asyncio.create_task(recovery.wait_ready())
             try:
                 await asyncio.wait((task, ready), return_when=asyncio.FIRST_COMPLETED)
@@ -1005,21 +1008,22 @@ class InteractiveLeadAdapter:
             return None
 
         async def join_operation() -> None:
-            await asyncio.gather(task, return_exceptions=True)
+            if task is not None:
+                await asyncio.gather(task, return_exceptions=True)
 
         try:
             while True:
                 outcome = self._runner.run(
                     self._progress.run(wait_for_operation_or_auth())
                 )
-                if task.done():
+                if task is not None and task.done():
                     return task.result()
                 key = recovery.next_request()
                 # Runner and progress have both returned before native TTY use.
                 authenticated = self._recover_authentication(key[0])
-                recovery.resolve(key, authenticated)
+                pending_resolution = (key, authenticated)
         finally:
-            if not task.done():
+            if task is not None and not task.done():
                 task.cancel()
             recovery.close()
             self._runner.run(join_operation())

@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import tempfile
+import threading
 import unittest
 import warnings
 import weakref
@@ -2734,15 +2735,16 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(details, ["Structured response\n$: malformed JSON"])
 
     async def _assert_grouped_reader_transport(self, backend, session_id, execution_workspace) -> None:
-        from story_writing_agents.agent_context.service import (AgentContextService, ContextInvocationKind,
-            ContextInvocationRequest, ContextExecutionError, context_provider_failure_facts)
+        from story_writing_agents.agent_context.service import (AgentContextService, BoundCallFactory,
+            ContextCallOffers, ContextInvocationKind, ContextInvocationRequest, ContextExecutionError,
+            context_provider_failure_facts)
         from story_writing_agents.agent_context.ledger import (ContextLedger, ContextLedgerKey,
             ContextLedgerRecordState, ContextLedgerAttemptOutcome)
         from story_writing_agents.agent_context.sources import (ActiveDebateSourceAdapter,
             FocusedConversationSourceAdapter, OwnAgentStateSourceAdapter, WritingArtifactSourceAdapter)
         from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
-        from story_writing_agents.lead_provider_contracts import LeadContractRejection
+        from story_writing_agents.lead_provider_contracts import LeadContractRejection, LeadGroupCompilation
         from story_writing_agents.agent_context.manifest import ContextAuthorityKind, ContextProvenance
         from story_writing_agents.agent_context.planning import MandatoryReferenceReservation
         from story_writing_agents.agent_context.sources import writing_artifact_source_id
@@ -2866,14 +2868,28 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     stdout += canonical_provider_json({"type": "turn.completed",
                         "usage": native_info["total_token_usage"]}) + b"\n"
                 return ProcessResult(stdout=stdout, stderr=b"", returncode=0)
+            creator, scan_threads, guard_threads = threading.get_ident(), set(), set()
+            facts = codex_adapter_module._native_file_facts
+            require_current = ProviderExecutionWorkspace.require_current
+            def observed_facts(*args, **kwargs):
+                scan_threads.add(threading.get_ident())
+                return facts(*args, **kwargs)
+            def observed_guard(owner):
+                guard_threads.add(threading.get_ident())
+                self.assertEqual(threading.get_ident(), creator)
+                return require_current(owner)
             try:
                 with (mock.patch.dict(os.environ, {"CODEX_HOME": str(history.root)}),
-                      mock.patch("story_writing_agents.codex_adapter.run_process", new=native_process)):
+                      mock.patch("story_writing_agents.codex_adapter.run_process", new=native_process),
+                      mock.patch.object(codex_adapter_module, "_native_file_facts", new=observed_facts),
+                      mock.patch.object(ProviderExecutionWorkspace, "require_current", new=observed_guard)):
                     result = await native_invoke(binding, invocation)
             finally:
                 cleanup = native_cleanups.get(len(native_commands))
                 if cleanup is not None:
                     cleanup()
+            self.assertEqual(guard_threads, {creator})
+            self.assertTrue(scan_threads - {creator}, "native inspection blocked the event loop")
             if history.witnesses[-1] is None and result.context_witness is not None:
                 self.assertTrue(result.native_context_check.verified)
                 post = [item for item in result.native_context_check.observations
@@ -2904,12 +2920,37 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(record.attempt.provider_calls, completed.provider_calls)
             self.assertFalse(state.transport_delivery.matches_ledger(record, latest=True))
             self.assertFalse(state.accepted_delivery.matches_ledger(record))
-        with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
+        loop, creator, release = asyncio.get_running_loop(), threading.get_ident(), threading.Event()
+        compilation_threads, custom_threads = [], []
+        compile_group = LeadGroupCompilation.__post_init__
+        def responsive_compilation(plan):
+            compilation_threads.append(threading.get_ident())
+            loop.call_soon_threadsafe(release.set)
+            self.assertTrue(release.wait(2), "schema compilation blocked the event loop")
+            return compile_group(plan)
+        class CustomFactory(BoundCallFactory):
+            contract_id = _LEAD_CALL_FACTORY.contract_id
+            def require_declaration(self):
+                custom_threads.append(threading.get_ident())
+            def declare_result_owners(self, offers):
+                custom_threads.append(threading.get_ident())
+                raise ValueError("custom declaration remains on the calling loop")
+        custom = CustomFactory()
+        offers = ContextCallOffers("progress-custom", scope, 1, ("answer",), (), (), (), (), (), ())
+        self.assertIsNone(await custom.prepare_schema_compilation(offers))
+        self.assertEqual(custom_threads, [])
+        with self.assertRaisesRegex(ValueError, "custom declaration remains on the calling loop"):
+            custom.for_offer(offers)
+        self.assertEqual(set(custom_threads), {creator})
+        with mock.patch.object(backend._codex_adapter, "invoke", new=invoke), \
+                mock.patch.object(LeadGroupCompilation, "__post_init__", new=responsive_compilation):
             result = await service.invoke(request, ObservedProvider(),
                 writing_artifacts=WritingArtifactSourceAdapter(repository, scope),
                 focused_conversation=FocusedConversationSourceAdapter(storage.catalog, storage.event_store, scope, None),
                 active_debate=ActiveDebateSourceAdapter(self.workspace, scope, None),
                 own_agent_state=OwnAgentStateSourceAdapter(self.workspace, scope), group_observation_sink=group_observations.append)
+        self.assertTrue(compilation_threads)
+        self.assertNotIn(creator, compilation_threads)
         self.assertEqual((len(invocations), len(result.provider_calls)), (2, 2))
         self.assertEqual(len(native_commands), len(invocations))
         first, second = [call.payload["response_contract"]["schema_selection"] for call in requests]
@@ -3346,20 +3387,22 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 {"total_token_usage": {"input_tokens": 3000, "output_tokens": 30, "cached_input_tokens": 0},
                  "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
             ]
-            hidden = []
+            hidden, inspect_native = [], codex_adapter_module._inspect_codex_native_observation_async
             def restore_rollout():
                 if hidden and hidden[-1][0].exists():
                     hidden[-1][0].replace(hidden[-1][1])
+            async def inspect_before_publication(*args, **kwargs):
+                observed = await inspect_native(*args, **kwargs)
+                if transient and hidden and observed.check.reason is NativeContextCheckReason.ROLLOUT_NOT_VISIBLE:
+                    restore_rollout()
+                return observed
             def hide_rollout(owned_history):
                 saved = owned_history.path.with_suffix(".pending")
                 owned_history.path.replace(saved)
                 hidden.append((saved, owned_history.path))
                 self.addCleanup(restore_rollout)
-                if transient:
-                    asyncio.get_running_loop().call_soon(restore_rollout)
             native_mutations, native_cleanups = {2: hide_rollout}, {2: restore_rollout}
-            inspection_fault = RuntimeError("PRIVATE_NATIVE_INSPECTION_DETAIL")
-            fault_active = [False]
+            inspection_fault, fault_active = RuntimeError("PRIVATE_NATIVE_INSPECTION_DETAIL"), [False]
             original_file_facts = codex_adapter_module._native_file_facts
             def file_facts(path, *args, **kwargs):
                 if fault_active[0] and Path(path) == history.path:
@@ -3386,16 +3429,15 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     self.assertIs(before_native.exception.__cause__, inspection_fault)
                     self.assertIs(before_native.exception.native_context_check.stage, NativeContextCheckStage.PRE_SUBMIT)
                     self.assertFalse(before_native.exception.native_context_check.pre_submit_verified)
-            unavailable_native_calls = {2}
-            omitted_thread_reports = set() if report_thread else {2}
+            unavailable_native_calls, omitted_thread_reports, observations = {2}, set() if report_thread else {2}, []
             provider = bound.context_provider()
             unavailable_request = _group_request(replace(request, group_state=None,
                 operation_id="native-observation-" + native_thread,
                 result_correlation_id="native-observation-result-" + native_thread,
                 physical_call_limit=3, mandatory_references=(), reference_operation_id=None))
-            observations = []
             with mock.patch.object(backend._codex_adapter, "invoke", new=invoke), \
-                    mock.patch.object(codex_adapter_module, "_native_file_facts", new=file_facts):
+                    mock.patch.object(codex_adapter_module, "_native_file_facts", new=file_facts), \
+                    mock.patch.object(codex_adapter_module, "_inspect_codex_native_observation_async", new=inspect_before_publication):
                 if report_thread:
                     observed_result = await service.invoke(unavailable_request, ObservedProvider(),
                         group_observation_sink=observations.append, **authorities)

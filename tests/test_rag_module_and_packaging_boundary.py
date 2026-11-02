@@ -338,8 +338,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 167)
-        self.assertEqual(len(edges), 765)
+        self.assertEqual(len(modules), 168)
+        self.assertEqual(len(edges), 767)
         self.assertIn(("story_writing_agents.agent_context.service", "story_writing_agents.provider_adapter"), edges)
         self.assertIn(("story_writing_agents.interactive_terminal._advisory_progress", "story_writing_agents.agent_context.service"), edges)
         self.assertIn(("story_writing_agents.interactive_terminal._core", "story_writing_agents.agent_context.service"), edges)
@@ -892,6 +892,10 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.conversations", "story_writing_agents.conversations.context",
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_terminal._collaboration_view",
             "story_writing_agents.lead_provider_contracts", "story_writing_agents.orchestrator"})
+        self.assertIn("story_writing_agents.blocking_work", modules)
+        self.assertEqual({target for source, target in edges if source == "story_writing_agents.blocking_work"}, set())
+        self.assertEqual({source for source, target in edges if target == "story_writing_agents.blocking_work"},
+                         {"story_writing_agents.codex_adapter", "story_writing_agents.orchestrator"})
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
         self.assertEqual(len(story_writing_agents.__all__), 106)

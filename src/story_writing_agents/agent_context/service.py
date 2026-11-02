@@ -561,6 +561,19 @@ class BoundCallFactory(ABC):
                               prepared_compilation: LeadGroupCompilation | None = None) -> LeadGroupedStage | None:
         return None
 
+    async def prepare_schema_compilation(
+        self, offers: ContextCallOffers, lineage: BoundCallLineage | None = None, *,
+        request_basis: LeadGroupRequestBasis | None = None,
+        group_workflow: LeadGroupWorkflow | None = None,
+        prepared_compilation: LeadGroupCompilation | None = None,
+    ) -> LeadGroupCompilation | None:
+        """Retain custom factories' declaration callbacks on the calling loop.
+
+        A concrete owner may prepare immutable compiler inputs separately;
+        ordinary binding and live host checks still run through ``for_offer``.
+        """
+        return prepared_compilation
+
     def for_offer(self, offers: ContextCallOffers, lineage: BoundCallLineage | None = None,
                   *, request_basis: LeadGroupRequestBasis | None = None,
                   group_workflow: LeadGroupWorkflow | None = None,
@@ -6678,7 +6691,7 @@ class AgentContextService:
                 call_id = f"{attempt_id}_call_{len(calls) + 1}"
                 correlation = _action_correlation(binding, action_index)
                 physical_reference_context = reference_context
-                def build_call_request(call_id: str, lineage: BoundCallLineage | None):
+                async def build_call_request(call_id: str, lineage: BoundCallLineage | None):
                     nonlocal call_contract, group_state, allowed_actions, stage, pending_group_input, pending_group_payload
                     if (group_state is not None and group_state.workflow is not None
                             and group_state.workflow.phase in {LeadGroupPhase.STOP, LeadGroupPhase.DONE}):
@@ -6702,6 +6715,9 @@ class AgentContextService:
                             "group_workflow": group_state.workflow,
                             "prepared_compilation": group_state.prepared_compilation,
                         }
+                        if group_state is not None:
+                            group_arguments["prepared_compilation"] = await request.result_contract.prepare_schema_compilation(
+                                offers, lineage, **group_arguments)
                         call_contract = request.result_contract.for_offer(offers, lineage, **group_arguments)
                         if group_state is not None:
                             group_state = ContextGroupInvocationState(
@@ -6730,10 +6746,14 @@ class AgentContextService:
                                     reference_prelude=prelude, reference_request=prelude_request)
                                 if current_offers != offers:
                                     allowed_actions = current_actions
-                                    call_contract = request.result_contract.for_offer(
+                                    prepared = await request.result_contract.prepare_schema_compilation(
                                         current_offers, request_basis=group_state.request_basis,
                                         group_workflow=group_state.workflow,
                                         prepared_compilation=group_state.prepared_compilation)
+                                    call_contract = request.result_contract.for_offer(
+                                        current_offers, request_basis=group_state.request_basis,
+                                        group_workflow=group_state.workflow,
+                                        prepared_compilation=prepared)
                                     group_state = ContextGroupInvocationState(
                                         call_contract.request_basis, call_contract.group_workflow,
                                         call_contract.prepared_compilation,
@@ -6810,7 +6830,7 @@ class AgentContextService:
                         )
                     observe_group(LeadGroupObservationKind.BOUND, delivery=(call_request.payload.get("response_contract", {}).get("schema_selection", {}).get("context_delivery")))
                     return call_request
-                call_request = build_call_request(call_id, current_lineage)
+                call_request = await build_call_request(call_id, current_lineage)
                 if group_state is None:
                     reference_context = set()
                 schema, call_kind = call_request.schema, call_request.call_kind
@@ -6884,7 +6904,7 @@ class AgentContextService:
                         if not failure.validate_replay() or not replay_sources_unchanged():
                             raise
                         auth_failure = failure
-                        call_request = build_call_request(f'{attempt_id}_call_{len(calls) + 1}',
+                        call_request = await build_call_request(f'{attempt_id}_call_{len(calls) + 1}',
                             None if call_contract is None else call_contract.replay_lineage())
                         schema, call_kind = call_request.schema, call_request.call_kind
                 terminal_provider_succeeded = True

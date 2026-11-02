@@ -51,6 +51,13 @@ card. A specialist card retains its exact request. Before an action, the card
 says `Preparing context`; once an action is known, it shows the indexed
 `SEARCH` or `READ` and whether it is running or completed.
 
+The first working frame appears before request preparation starts, including
+when a request resumes after native authentication. Bounded history and native
+context inspection run outside the display's event loop, so the bar can keep
+moving before any provider text arrives. The bar indicates activity rather
+than a percentage of completion. Cancellation waits for any started inspection
+to finish its cleanup before releasing its resources and returning to input.
+
 A SEARCH start displays its active literal query as `Searching for: "..."`
 and the exact requested resource/source-kind values (`runtime_input`,
 `agent_definition`, `writing_artifact`, `conversation`, `active_debate`, or

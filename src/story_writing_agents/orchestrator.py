@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .blocking_work import run_blocking
+
 import time
 
 from .agent_context.group_observation import LeadGroupObservation, LeadGroupObservationKind, LeadGroupTrace
@@ -76,7 +78,7 @@ from .conversations.events import (
 )
 from .lead_provider_contracts import PremiseDecisionConstraints
 from .lead_provider_contracts import LeadGroupCompilation, LeadGroupedStage
-from .lead_schema_groups import LeadGroupPhase, LeadGroupRequestBasis, SchemaGroupControlOwner
+from .lead_schema_groups import LeadGroupPhase, LeadGroupRequestBasis, LeadGroupWorkflow, SchemaGroupControlOwner
 
 from .editorial_scope import (
     EditorialScope, EditorialScopeKind, editorial_scope_contains, intersect_editorial_scopes,
@@ -2557,7 +2559,7 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
         object.__setattr__(self, "_factory_sources", tuple(
             (method, method.__code__) for method in (
                 type(self)._current_owner_declaration, type(self).declare_result_owners,
-                type(self).declare_schema_groups)))
+                type(self).declare_schema_groups, type(self).prepare_schema_compilation)))
         TypedDecoder.require_hook_shape(self.authorized_validator, 2)
         TypedDecoder.require_hook_shape(self.reviewer_for_locator, 1)
         validator = self.authorized_validator
@@ -2586,7 +2588,7 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
                 or self.reviewer_for_locator is not profile[5]
                 or self._factory_sources != tuple((method, method.__code__) for method in (
                     type(self)._current_owner_declaration, type(self).declare_result_owners,
-                    type(self).declare_schema_groups))):
+                    type(self).declare_schema_groups, type(self).prepare_schema_compilation))):
             raise ValueError("동결된 Lead 호출 프로필이 변경됐습니다")
         declaration = self._authorization_declaration
         declaration.require_provenance()
@@ -2645,6 +2647,32 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
         return LeadStagePolicy(self.stage, offers.call_id, tasks, self.language, offers.offer_digest,
                                current.choice_snapshot(), offers.offer_digest, offers.call_id,
                                owner_declarations=owners)
+
+    async def prepare_schema_compilation(
+        self, offers: ContextCallOffers, lineage: BoundCallLineage | None = None, *,
+        request_basis: LeadGroupRequestBasis | None = None,
+        group_workflow: LeadGroupWorkflow | None = None,
+        prepared_compilation: LeadGroupCompilation | None = None,
+    ) -> LeadGroupCompilation | None:
+        """Prepare pure compiler data while declaration and host callbacks stay local."""
+        self.require_declaration()
+        if lineage is not None or not self.schema_group_protocol:
+            return prepared_compilation
+        if type(request_basis) is not LeadGroupRequestBasis:
+            raise TypeError("그룹 선택에는 서비스의 정확한 논리 요청 참조가 필요합니다")
+        current, read_ids, writing_ids, writing_reads, _check = self._current_owner_declaration(offers)
+        read_facts = tuple(dict.fromkeys(offers.completed_read_facts + offers.delivery_read_facts))
+        if prepared_compilation is not None and type(prepared_compilation) is not LeadGroupCompilation:
+            raise TypeError("재사용할 의미 계획은 정확한 현재 compiler여야 합니다")
+        if prepared_compilation is None or not prepared_compilation.matches_current(
+            current, self.rule_seed, read_facts=read_facts, core_status_facts=offers.core_status_facts,
+        ):
+            prepared_compilation = await run_blocking(
+                LeadGroupCompilation, current, self.rule_seed, read_ids, writing_ids,
+                writing_reads, offers.core_status_facts, read_facts=read_facts,
+            )
+        self.require_declaration()
+        return prepared_compilation
 
     def declare_schema_groups(self, offers: ContextCallOffers,
                               request_basis: LeadGroupRequestBasis, *,
@@ -4911,12 +4939,12 @@ class StoryRuntime:
         """Consume one exact recommendation decision and bounded preparation."""
         if type(decision) is not LeadRecommendationDecision:
             raise TypeError("decision must be a LeadRecommendationDecision")
-        self._validate_lead_identity(decision.session_id, decision.conversation_id)
+        await run_blocking(self._validate_lead_identity, decision.session_id, decision.conversation_id)
         self._validate_context_event_sink(context_event_sink)
         self._validate_context_event_sink(action_progress_sink)
         session_id, conversation_id = decision.session_id, decision.conversation_id
         async with self._lead_session_lifecycle(session_id), self._conversation_lock(session_id, conversation_id):
-            events, projection, failure = self._read_lead_history(session_id, conversation_id)
+            events, projection, failure = (await run_blocking(self._read_lead_history, session_id, conversation_id))
             if failure is not None or events is None or projection is None:
                 return self._blocking_lead_result(session_id, conversation_id,
                     CollaborationStepState.RECOVERY_REQUIRED, "Recommendation history requires repair.")
@@ -5000,11 +5028,12 @@ class StoryRuntime:
                         raise ValueError(readiness.message if type(readiness) is CoreDocumentReadinessNeeded else "preparation readiness basis missing or changed")
                 try:
                     self._validate_editorial_refs(session_id, request.basis.editorial_refs, request.basis.editorial_context_digest, scope=request.authoring_scope)
-                    artifact_binding = self._session_artifact_binding(session_id)
+                    artifact_binding = (await run_blocking(self._session_artifact_binding, session_id)).transfer_to_current_thread()
                     scope = request.authoring_scope
-                    current = None if scope is None else self._authoring_tasks(
-                        self._session_authoring_events(session_id),
-                    ).get(scope.task_id)
+                    current = None if scope is None else (await run_blocking(
+                        self._authoring_tasks,
+                        await run_blocking(self._session_authoring_events, session_id),
+                    )).get(scope.task_id)
                     if (scope is None or current is None or current.task_revision != scope.task_revision
                         or not set(current.domains).issubset(scope.domains)
                         or not set(current.target_paths).issubset(scope.target_paths)):
@@ -5696,12 +5725,12 @@ class StoryRuntime:
         if type(decision) is not LeadTaskDecision:
             raise TypeError("task control requires an exact LeadTaskDecision")
         session_id, conversation_id = decision.session_id, decision.conversation_id
-        self._validate_lead_identity(session_id, conversation_id)
+        await run_blocking(self._validate_lead_identity, session_id, conversation_id)
         self._validate_context_event_sink(action_progress_sink)
         async with self._lead_session_lifecycle(session_id), self._conversation_lock(
             session_id, conversation_id,
         ):
-            events, projection, failure = self._read_lead_history(session_id, conversation_id)
+            events, projection, failure = (await run_blocking(self._read_lead_history, session_id, conversation_id))
             if failure is not None or events is None or projection is None:
                 raise BackendProtocolError("authoritative task history requires repair")
             prior_origin = next((event for event in events if event.event_id == decision.request_id), None)
@@ -5774,7 +5803,7 @@ class StoryRuntime:
                     selected_task.status in {"discarded", "completed", "protected"}
                 ):
                     raise ValueError("retired or protected work cannot resume old authority")
-            snapshot = self._editorial_snapshot(session_id)
+            snapshot = (await run_blocking(self._editorial_snapshot, session_id))
             materials = tuple(self._selected_task_material(snapshot, ref) for ref in decision.material_refs)
             turn_id = self._new_id("t")
             step_id = self._new_id("s")
@@ -5966,9 +5995,9 @@ class StoryRuntime:
             raise TypeError("premise_selection must be PremiseDecisionSelection")
         if premise_selection is not None and (interaction_mode is not LeadInteractionMode.ORCHESTRATION or adoption is not None):
             raise ValueError("premise choice is separate from exploration and idea adoption")
-        self._validate_lead_identity(session_id, conversation_id)
+        await run_blocking(self._validate_lead_identity, session_id, conversation_id)
         if interaction_mode is LeadInteractionMode.ORCHESTRATION and adoption is None and premise_selection is None:
-            _, current, current_failure = self._read_lead_history(session_id, conversation_id)
+            _, current, current_failure = (await run_blocking(self._read_lead_history, session_id, conversation_id))
             if current_failure is None and current is not None and current.discussion_context is not None and current.discussion_context.action is LeadTaskAction.DISCUSS and current.next_safe_action not in {
                 CollaborationNextAction.SUBMIT_APPLICATION_DECISION,
                 CollaborationNextAction.SUBMIT_COMMIT_DECISION,
@@ -5989,10 +6018,10 @@ class StoryRuntime:
         self._validate_context_event_sink(action_progress_sink)
         lock = self._conversation_lock(session_id, conversation_id)
         async with self._lead_session_lifecycle(session_id), lock:
-            events, projection, failure = self._read_lead_history(
+            events, projection, failure = (await run_blocking(self._read_lead_history,
                 session_id,
                 conversation_id,
-            )
+            ))
             if failure is not None:
                 return self._blocking_lead_result(
                     session_id,
@@ -6015,9 +6044,9 @@ class StoryRuntime:
                     return normalized
                 # The explicitly supplied new input is still pending admission.
                 # Re-read after durably abandoning the prior read-only request.
-                events, projection, failure = self._read_lead_history(
+                events, projection, failure = (await run_blocking(self._read_lead_history,
                     session_id, conversation_id,
-                )
+                ))
                 if failure is not None or events is None or projection is None:
                     return self._blocking_lead_result(
                         session_id, conversation_id,
@@ -6084,7 +6113,7 @@ class StoryRuntime:
             selected_text = None
             adoption_source = None
             if interaction_mode is LeadInteractionMode.EXPLORATION or adoption is not None:
-                snapshot = self._editorial_snapshot(session_id)
+                snapshot = (await run_blocking(self._editorial_snapshot, session_id))
                 self._exploration_admission_barrier(snapshot)
                 if adoption is not None:
                     adoption_source = snapshot.exploration_source(adoption)
@@ -6254,7 +6283,7 @@ class StoryRuntime:
         if authoring_scope is not None and authoring_scope.schema_version == 3:
             raise ValueError("scope3 contributions require the separately confirmed Lead workflow; advisory supports historical scope1/2")
 
-        self._validate_lead_identity(session_id, conversation_id)
+        await run_blocking(self._validate_lead_identity, session_id, conversation_id)
         if specialist_id not in SPECIALIST_IDS:
             raise ValueError("specialist advisory requires a canonical specialist ID")
         text = self._validate_visible_text(text, label="specialist advisory")
@@ -6265,10 +6294,10 @@ class StoryRuntime:
         if self.backend is None:
             raise BackendProtocolError("specialist advisory requires an AgentBackend")
         async with self._conversation_lock(session_id, conversation_id):
-            events, projection, failure = self._read_lead_history(
+            events, projection, failure = (await run_blocking(self._read_lead_history,
                 session_id,
                 conversation_id,
-            )
+            ))
             if failure is not None:
                 return self._blocking_lead_result(
                     session_id,
@@ -6288,8 +6317,8 @@ class StoryRuntime:
             turn_id = self._new_id("t")
             step_id = self._new_id("s")
             inputs = self._provider_free_lead_inputs(session_id, turn_id, text)
-            task_events = self._session_authoring_events(session_id)
-            prior_scope = self._authoring_tasks(task_events).get(authoring_scope.task_id)
+            task_events = (await run_blocking(self._session_authoring_events, session_id))
+            prior_scope = (await run_blocking(self._authoring_tasks, task_events)).get(authoring_scope.task_id)
             if prior_scope is not None:
                 if authoring_scope.task_revision != prior_scope.task_revision:
                     raise ValueError("advisory task revision is no longer current; ask the Lead to regenerate it")
@@ -6348,7 +6377,7 @@ class StoryRuntime:
                 )
             )
             assert synthesis_calls == 0
-            artifact_binding = self._session_artifact_binding(session_id)
+            artifact_binding = (await run_blocking(self._session_artifact_binding, session_id)).transfer_to_current_thread()
             definition = self._build_guarded_contextual_definition(
                 artifact_binding=artifact_binding,
                 session_id=session_id,
@@ -6492,7 +6521,7 @@ class StoryRuntime:
         if type(decision) is not LeadStepDecision:
             raise TypeError("decision must be a LeadStepDecision")
         self._validate_context_event_sink(action_progress_sink)
-        self._validate_lead_identity(decision.session_id, decision.conversation_id)
+        await run_blocking(self._validate_lead_identity, decision.session_id, decision.conversation_id)
         lock = self._conversation_lock(
             decision.session_id,
             decision.conversation_id,
@@ -6503,7 +6532,7 @@ class StoryRuntime:
                 decision.conversation_id,
             )
             if any(type(event.payload) is CollaborationExplorationAdoptionPayload for event in events):
-                self._editorial_snapshot(decision.session_id).validate_exploration_adoptions(decision.conversation_id)
+                (await run_blocking(self._editorial_snapshot, decision.session_id)).validate_exploration_adoptions(decision.conversation_id)
             projection = project_collaboration_history(events)
             if (projection.next_safe_action is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
                     and any(type(event.payload) is CollaborationProviderCallPayload
@@ -8756,7 +8785,7 @@ class StoryRuntime:
         session_id = cast(str, arguments["session_id"])
         result: _CollaborationInvocationResult | None = None
         try:
-            artifact_binding = self._session_artifact_binding(session_id)
+            artifact_binding = (await run_blocking(self._session_artifact_binding, session_id)).transfer_to_current_thread()
             result = await self._run_collaboration_invocation_guarded(
                 artifact_binding=artifact_binding,
                 **arguments,
@@ -8818,7 +8847,7 @@ class StoryRuntime:
         ] | None = None
         execution_workspace: ProviderExecutionWorkspace | None = None
         try:
-            session_history = self._editorial_snapshot(session_id) if agent_id == LEAD_ORCHESTRATOR or editorial_refs else None
+            session_history = (await run_blocking(self._editorial_snapshot, session_id)) if agent_id == LEAD_ORCHESTRATOR or editorial_refs else None
             if editorial_refs:
                 material_value = {**material_value, "editorial_state": self._editorial_pinned_view(session_history, editorial_refs, editorial_context_digest)}
             if agent_id == LEAD_ORCHESTRATOR:
@@ -11601,7 +11630,7 @@ class StoryRuntime:
 
         session_id = cast(str, arguments["session_id"])
         try:
-            artifact_binding = self._session_artifact_binding(session_id)
+            artifact_binding = (await run_blocking(self._session_artifact_binding, session_id)).transfer_to_current_thread()
             result = await self._run_lead_provider_guarded(artifact_binding=artifact_binding, **arguments)
             events = self.conversation_storage_services.event_store.read(arguments["session_id"], arguments["conversation_id"])
             projection = project_collaboration_history(events)
@@ -11767,7 +11796,7 @@ class StoryRuntime:
 
         provider: _AccountingContextProvider | None = None
         try:
-            session_history = self._editorial_snapshot(session_id)
+            session_history = (await run_blocking(self._editorial_snapshot, session_id))
             task_transition = None
             task_receipt = None
             discussion_constraints = None
@@ -11863,8 +11892,8 @@ class StoryRuntime:
                         state=CollaborationInputState.PRESENT,
 
                     ),)
-            task_events = self._session_authoring_events(session_id)
-            available_tasks = self._authoring_tasks(task_events)
+            task_events = (await run_blocking(self._session_authoring_events, session_id))
+            available_tasks = (await run_blocking(self._authoring_tasks, task_events))
             previous_scope = None if previous_proposal is None else previous_proposal.authoring_scope
             if previous_scope is not None:
                 current_scope = available_tasks.get(previous_scope.task_id)
@@ -12225,22 +12254,24 @@ class StoryRuntime:
                 physical_call_limit = min(_CONTEXT_INVOCATION_CALL_LIMIT, remaining)
                 if ordinary_front_cap is not None:
                     physical_call_limit = min(physical_call_limit, ordinary_front_cap)
-                lead_rule_seed = _lead_discussion_result_contract(discussion_constraints) if discussion_only else _lead_revision_result_contract(
-                    expected_relation,
-                    tuple((item.input_id for item in inputs)),
-                    tuple(offered_tasks),
-                    constraints,
-                    discussion_constraints,
-                    fresh_revision_only=successor_only or (task_receipt is not None and task_receipt.target_task_id is not None),
-                    source_scope=revision_source_scope,
-                    artifact_revision_only=source_artifact_revision,
-                ) if discussion_constraints is not None else _lead_result_rule_seed("lead-exploration-response-v1", constraints.schema()) if interaction_mode is LeadInteractionMode.EXPLORATION else _lead_front_result_contract(
+                def prepare_lead_rule_seed() -> LeadResultRuleSeed:
+                    return _lead_discussion_result_contract(discussion_constraints) if discussion_only else _lead_revision_result_contract(
                         expected_relation,
-                        tuple(item.input_id for item in inputs),
+                        tuple((item.input_id for item in inputs)),
                         tuple(offered_tasks),
-                        constraints=constraints,
+                        constraints,
+                        discussion_constraints,
                         fresh_revision_only=successor_only or (task_receipt is not None and task_receipt.target_task_id is not None),
-                    )
+                        source_scope=revision_source_scope,
+                        artifact_revision_only=source_artifact_revision,
+                    ) if discussion_constraints is not None else _lead_result_rule_seed("lead-exploration-response-v1", constraints.schema()) if interaction_mode is LeadInteractionMode.EXPLORATION else _lead_front_result_contract(
+                            expected_relation,
+                            tuple(item.input_id for item in inputs),
+                            tuple(offered_tasks),
+                            constraints=constraints,
+                            fresh_revision_only=successor_only or (task_receipt is not None and task_receipt.target_task_id is not None),
+                        )
+                lead_rule_seed = await run_blocking(prepare_lead_rule_seed)
                 group_protocol = (preparation is None and not discussion_only
                     and interaction_mode is LeadInteractionMode.ORCHESTRATION
                     and lead_rule_seed.contract_id in {"lead-response-v6", "lead-response-v7", "lead-response-v8"})
