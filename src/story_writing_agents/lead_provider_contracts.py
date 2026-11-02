@@ -2084,11 +2084,14 @@ class LeadProviderConstraints:
                 and not self.continuation and not self.recommendation_only
                 and self.preparation_kind is None):
             # This is one declared current owner arm, not an ordinary-answer exception.
+            ordinary_fields = ("response_type", "response_text", "writing_task_scope")
             ordinary = next((item for item in roots
                 if item.get("properties", {}).get("response_type", {}).get("enum") == ["answer"]
-                and "writing_task_scope" in item.get("properties", {})), None)
+                and set(item.get("properties", {})) - {"document_change_request_update"} == set(ordinary_fields)
+                and set(item.get("required", ())) == set(ordinary_fields)), None)
             if ordinary is not None:
                 preliminary = deepcopy(ordinary)
+                preliminary["properties"] = {name: preliminary["properties"][name] for name in ordinary_fields}
                 preliminary["properties"]["preliminary_review"] = preliminary_intent_schema(self.preliminary_targets)
                 preliminary["required"] = list(preliminary["properties"])
                 roots = [*roots, preliminary]
