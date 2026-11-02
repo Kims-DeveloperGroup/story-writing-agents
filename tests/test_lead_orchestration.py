@@ -1959,7 +1959,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         scope_profiles = {f'lead-response-v8:family:{number}': ('task_scope', 'object') for number in range(8)}
         scope_profiles.update({f'lead-response-v8:family:{number}': ('writing_task_scope', 'null')
                                for number in (9, 10)})
-        scope_profiles.update({f'lead-response-v8:family:{number}': ('writing_task_scope', 'object')
+        scope_profiles.update({f'lead-response-v8:family:{number}': ('task_scope', 'object')
                                for number in (11, 12, 13)})
         self.assertEqual(set(family_by_id.values()), set(scope_profiles))
         schema_by_id = {fixture_schema_node(full_schema, schema['properties']['schema_id'])['enum'][0]: schema
