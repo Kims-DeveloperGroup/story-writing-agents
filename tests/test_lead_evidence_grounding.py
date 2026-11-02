@@ -230,12 +230,12 @@ class DurableLeadEvidenceMatrixTests(unittest.TestCase):
         self.assertEqual((receipt.boundary_kind, receipt.boundary_start, receipt.boundary_end), ("records", 9, 9))
         for field, changed in (("kind", CollaborationInputKind.AGENT_STATE), ("locator", "conversation/foreign"),
                 ("state", CollaborationInputState.ABSENT), ("revision_digest", _DIGEST_A)):
-            with self.assertRaisesRegex(ValueError, "conflicts with existing input: " + field):
+            with self.assertRaisesRegex(BackendProtocolError, "conflicts with existing input: " + field):
                 materialize((replace(existing, **{field: changed}),), evidence)
         for field in ("source_kind", "locator", "content_digest"):
             incomplete = replace(receipt)
             object.__setattr__(incomplete, field, None)
-            with self.assertRaisesRegex(ValueError, "incomplete: " + field):
+            with self.assertRaisesRegex(BackendProtocolError, "incomplete: " + field):
                 materialize((existing,), replace(evidence, receipts=(incomplete,)))
         artifact = replace(receipt, evidence_id="artifact_read", source_kind=CollaborationInputKind.WRITING_ARTIFACT,
             locator="core_documents/global_outline.md", boundary_kind="artifact_lines",
@@ -245,7 +245,7 @@ class DurableLeadEvidenceMatrixTests(unittest.TestCase):
         self.assertEqual(artifact_input.locator, "${core_documents/global_outline.md}#L2-L3")
         self.assertIs(materialize((artifact_input,), artifact_evidence)[0], artifact_input)
         for field, value in (("start_line", 1), ("end_line", 4)):
-            with self.assertRaisesRegex(ValueError, "conflicts with existing input: " + field):
+            with self.assertRaisesRegex(BackendProtocolError, "conflicts with existing input: " + field):
                 materialize((replace(artifact_input, **{field: value}),), artifact_evidence)
 
 
@@ -542,8 +542,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 return _current_proposal_outcome([{"agent_id": PLOT_ARCHITECT,
                     "instruction": "Review the exact assigned source without inventing absent facts.",
                     "input_ids": ["user_input", reads[-1]], "mode": "review"}], domains=("plot_structure",),
-                    author_review_basis=True, authoring_assessment=task_assessment(foundation_ids=("user_input",),
-                    actions=("bounded missing-evidence review judgments",)))(call, provider)
+                    author_review_basis=True, authoring_assessment=asdict(task_assessment(foundation_ids=("user_input",),
+                    actions=("bounded missing-evidence review judgments",))))(call, provider)
             self.backend.enqueue(_search("phrase absent from every source", ["w", "c"]), _search(marker, ["c"]),
                 _read_history_hit, proposal, control_plan=selection_plan("consultation.authoring.review", before_script_response=3))
             proposed = await self.runtime.lead_turn(self.session_id, conversation_id,
