@@ -1,5 +1,6 @@
 """Own shell-local chronological conversation entries and nested JSON navigation."""
 
+from bisect import bisect_right
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -43,6 +44,18 @@ class TimelineEntry:
     lines: tuple[str, ...] = ()
     frames: tuple[OutputFrame, ...] = ()
     preview: MultiAgentScrollState | None = None
+    pending: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _EntryRows:
+    """Cached neutral rows and frame bounds for one immutable entry revision."""
+
+    entry: TimelineEntry
+    capabilities: TerminalCapabilities
+    preview_height: int
+    lines: tuple[str, ...]
+    frames: tuple[tuple[int, int, int], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +92,13 @@ class ConversationTimeline:
         self._visible_frame_ids: tuple[int, ...] = ()
         self.focused_id: int | None = None
         self.timeline_focused = False
+        self._revision = 0
+        self._indexed_revision = -1
+        self._indexed_capabilities: TerminalCapabilities | None = None
+        self._indexed_height = 0
+        self._row_cache: dict[int, _EntryRows] = {}
+        self._entry_starts: tuple[int, ...] = ()
+        self._indexed_rows: tuple[_EntryRows, ...] = ()
 
     def _identity(self) -> int:
         identity = self._next_identity
@@ -143,26 +163,32 @@ class ConversationTimeline:
     def append_component(self, component: Component) -> int:
         identity = self._identity()
         self._entries.append(TimelineEntry(identity, self.origin, component=component))
+        self._revision += 1
         return identity
 
     def append_lines(self, lines: tuple[str, ...]) -> int:
         """Keep already sanitized nonsemantic output in chronological order."""
         identity = self._identity()
         self._entries.append(TimelineEntry(identity, self.origin, lines=lines))
+        self._revision += 1
         return identity
 
     def begin_operation(self) -> int:
         """Reserve an operation's location before its first progress update."""
         identity = self._identity()
-        self._entries.append(TimelineEntry(identity, self.origin))
+        self._entries.append(TimelineEntry(identity, self.origin, pending=True))
+        self._revision += 1
         return identity
 
     def update_operation(self, identity: int, *, lines: tuple[str, ...] = (), preview: MultiAgentScrollState | None = None) -> None:
         index = self._entry_index(identity)
         self._entries[index] = replace(self._entries[index], lines=lines, preview=preview)
+        self._revision += 1
 
     def discard_operation(self, identity: int) -> None:
         del self._entries[self._entry_index(identity)]
+        self._row_cache.pop(identity, None)
+        self._revision += 1
 
     def retain(self, state: MultiAgentScrollState, *, operation_id: int | None = None) -> None:
         """Finalize the reserved slot rather than copying JSON beside a later input."""
@@ -172,7 +198,8 @@ class ConversationTimeline:
             self._entries.append(TimelineEntry(self._identity(), self.origin, frames=frames))
         else:
             index = self._entry_index(operation_id)
-            self._entries[index] = replace(self._entries[index], lines=(), preview=None, frames=frames)
+            self._entries[index] = replace(self._entries[index], lines=(), preview=None, frames=frames, pending=False)
+        self._revision += 1
 
     def _entry_index(self, identity: int) -> int:
         for index, entry in enumerate(self._entries):
@@ -180,67 +207,133 @@ class ConversationTimeline:
                 return index
         raise ValueError("unknown timeline operation")
 
-    def render(self, capabilities: TerminalCapabilities, height: int, *, mouse_mode: bool = False, pointer_mode: bool | None = None) -> HistoryLayout:
-        """Concatenate real message/output rows; never pad between turn entries."""
+    def _cached_rows(self, entry: TimelineEntry, capabilities: TerminalCapabilities, height: int) -> _EntryRows:
+        preview_height = height if entry.preview is not None else 0
+        cached = self._row_cache.get(entry.identity)
+        if (cached is not None and cached.entry is entry
+                and cached.capabilities == capabilities and cached.preview_height == preview_height):
+            return cached
+        rows: list[str] = []
+        frames: list[tuple[int, int, int]] = []
+        if entry.component is not None:
+            rows.extend(render_component(entry.component, capabilities).text.split("\n"))
+        for line in entry.lines:
+            rows.extend(_wrap_cells(line, capabilities.width - 1))
+        if entry.preview is not None:
+            view = entry.preview.focused_view
+            if view is not None:
+                bounded = replace(view, visible_height=min(view.visible_height, max(1, height - 2)))
+                bounded = replace(bounded, visible_lines=bounded.visible_lines[:bounded.visible_height])
+                state = replace(entry.preview, views=tuple(bounded if index == entry.preview.focused_index else candidate
+                                                           for index, candidate in enumerate(entry.preview.views)))
+                rows.extend(render_nested_scroll_view(state, capabilities).text.split("\n"))
+        for frame in entry.frames:
+            start = len(rows)
+            rows.extend(self._frame_rows(frame, capabilities, False, False))
+            frames.append((frame.identity, start, len(rows)))
+        cached = _EntryRows(entry, capabilities, preview_height, tuple(" " + row for row in rows), tuple(frames))
+        self._row_cache[entry.identity] = cached
+        return cached
+
+    def publication_rows(self, after_identity: int, capabilities: TerminalCapabilities) -> tuple[tuple[int, tuple[str, ...]], ...]:
+        """Return only the immutable prefix after the driver's publication cursor."""
+        rows = []
+        frame_capabilities = replace(capabilities, width=max(1, capabilities.width - 1))
+        for entry in self._entries:
+            if entry.identity <= after_identity:
+                continue
+            if entry.pending or entry.origin in self._origins:
+                break
+            rows.append((entry.identity, self._cached_rows(entry, frame_capabilities, 6).lines))
+        return tuple(rows)
+
+    def _ensure_index(self, capabilities: TerminalCapabilities, height: int) -> None:
+        if (self._indexed_revision == self._revision and self._indexed_capabilities == capabilities
+                and self._indexed_height == height):
+            return
+        frame_capabilities = replace(capabilities, width=capabilities.width - 1)
+        cached = tuple(self._cached_rows(entry, frame_capabilities, height) for entry in self._entries)
+        same_rows = (len(cached) == len(self._indexed_rows) and all(
+            current.entry.identity == previous.entry.identity and len(current.lines) == len(previous.lines)
+            for current, previous in zip(cached, self._indexed_rows)
+        ))
+        if not same_rows:
+            starts: list[int] = []
+            keys: list[tuple[int, int]] = []
+            self._entry_tops = {}
+            for rendered in cached:
+                starts.append(len(keys))
+                self._entry_tops[rendered.entry.identity] = len(keys)
+                keys.extend((rendered.entry.identity, index) for index in range(len(rendered.lines)))
+            self._entry_starts = tuple(starts)
+            self._row_keys = tuple(keys)
+        self._indexed_rows = cached
+        self._indexed_revision = self._revision
+        self._indexed_capabilities = capabilities
+        self._indexed_height = height
+
+    def render(self, capabilities: TerminalCapabilities, height: int, *, mouse_mode: bool = False,
+               pointer_mode: bool | None = None, after_identity: int | None = None) -> HistoryLayout:
+        """Select cached visible rows; an unpublished suffix always follows its tail."""
         if height <= 0 or capabilities.width < 8 or not self._entries:
             self.focused_id = None
             self.timeline_focused = False
-            self._row_keys = ()
             self._visible_frame_ids = ()
+            self._row_keys = ()
+            self._indexed_rows = ()
+            self._entry_starts = ()
+            self._entry_tops = {}
+            self._indexed_revision = -1
             return HistoryLayout()
+        self._ensure_index(capabilities, height)
         pointer_mode = mouse_mode if pointer_mode is None else pointer_mode
-        frame_capabilities = replace(capabilities, width=capabilities.width - 1)
-        rows: list[str] = []
-        keys: list[tuple[int, int]] = []
-        rectangles: list[tuple[int, int, int]] = []
-        self._entry_tops = {}
-        for entry in self._entries:
-            self._entry_tops[entry.identity] = len(rows)
-            entry_rows: list[str] = []
-            if entry.component is not None:
-                entry_rows.extend(render_component(entry.component, frame_capabilities).text.split("\n"))
-            if entry.lines:
-                entry_rows.extend(_clip_cells(line, frame_capabilities.width - 1) for line in entry.lines)
-            if entry.preview is not None:
-                view = entry.preview.focused_view
-                if view is not None:
-                    bounded = replace(view, visible_height=min(view.visible_height, max(1, height - 2)))
-                    bounded = replace(bounded, visible_lines=bounded.visible_lines[:bounded.visible_height])
-                    state = replace(entry.preview, views=tuple(bounded if index == entry.preview.focused_index else candidate
-                                                               for index, candidate in enumerate(entry.preview.views)))
-                    entry_rows.extend(render_nested_scroll_view(state, frame_capabilities).text.split("\n"))
-            base = len(rows)
-            for frame in entry.frames:
-                start = base + len(entry_rows)
-                frame_rows = self._frame_rows(frame, frame_capabilities, mouse_mode, pointer_mode)
-                entry_rows.extend(frame_rows)
-                rectangles.append((frame.identity, start, start + len(frame_rows)))
-            rows.extend(" " + row for row in entry_rows)
-            keys.extend((entry.identity, index) for index in range(len(entry_rows)))
-        maximum = max(0, len(rows) - height)
+        maximum = max(0, len(self._row_keys) - height)
         offset = maximum if self._offset is None else min(self._offset, maximum)
         if self._offset is not None and self._anchor is not None:
-            try:
-                offset = min(keys.index(self._anchor), maximum)
-            except ValueError:
-                pass
-        self._height = height
-        self._row_keys = tuple(keys)
-        if self._offset is not None:
+            top = self._entry_tops.get(self._anchor[0])
+            if top is not None:
+                offset = min(top + self._anchor[1], maximum)
+        if after_identity is not None:
+            first = next((self._entry_tops[entry.identity] for entry in self._entries
+                          if entry.identity > after_identity), len(self._row_keys))
+            offset = max(first, maximum)
+        elif self._offset is not None:
             self._offset = offset
-            self._anchor = keys[offset] if keys else None
+            self._anchor = self._row_keys[offset] if self._row_keys else None
+        self._height = height
         self._visible_offset = offset
-        visible = rows[offset:offset + height]
+        end = min(len(self._row_keys), offset + height)
+        visible: list[str] = []
+        rectangles: list[tuple[OutputFrame, int, int]] = []
+        if offset < end:
+            index = max(0, bisect_right(self._entry_starts, offset) - 1)
+            while index < len(self._indexed_rows) and self._entry_starts[index] < end:
+                cached = self._indexed_rows[index]
+                base = self._entry_starts[index]
+                local_start, local_end = max(0, offset - base), min(len(cached.lines), end - base)
+                entry_rows = list(cached.lines[local_start:local_end])
+                for frame, (_, start, stop) in zip(cached.entry.frames, cached.frames):
+                    if start < local_end and stop > local_start:
+                        rectangles.append((frame, base + start, base + stop))
+                visible.extend(entry_rows)
+                index += 1
+        visible_ids = tuple(frame.identity for frame, _, _ in rectangles)
+        if mouse_mode and self.focused_id not in visible_ids:
+            self.focused_id = visible_ids[-1] if visible_ids and not self.timeline_focused else None
+            self.timeline_focused = self.timeline_focused or not visible_ids
         hits: list[FrameHit] = []
-        for identity, start, stop in rectangles:
-            if start < offset + height and stop > offset:
-                top = max(0, start - offset)
-                bottom = min(len(visible), stop - offset)
-                hits.append(FrameHit(identity, top + 1, bottom, capabilities.width - 1))
-                if identity == self.focused_id and not self.timeline_focused:
-                    for index in range(top, bottom):
-                        visible[index] = ">" + visible[index][1:]
-        self._visible_frame_ids = tuple(hit.identity for hit in hits)
+        frame_capabilities = replace(capabilities, width=capabilities.width - 1)
+        for frame, start, stop in rectangles:
+            top, bottom = max(0, start - offset), min(len(visible), stop - offset)
+            hits.append(FrameHit(frame.identity, top + 1, bottom, capabilities.width - 1))
+            if mouse_mode:
+                frame_rows = self._frame_rows(frame, frame_capabilities, True, pointer_mode)
+                for row in range(top, bottom):
+                    visible[row] = " " + frame_rows[row + offset - start]
+            if frame.identity == self.focused_id and not self.timeline_focused:
+                for row in range(top, bottom):
+                    visible[row] = ">" + visible[row][1:]
+        self._visible_frame_ids = visible_ids
         if mouse_mode and self.timeline_focused:
             visible = ["T" + line[1:] for line in visible]
         return HistoryLayout(tuple(visible), tuple(hits))
@@ -260,7 +353,7 @@ class ConversationTimeline:
         visible_height = min(6, view.visible_height)
         buffer = view.buffer_lines or view.visible_lines
         start = min(view.start_line, max(1, view.total_lines - visible_height + 1))
-        focused = frame.identity == self.focused_id and not self.timeline_focused
+        focused = mouse_mode and frame.identity == self.focused_id and not self.timeline_focused
         projected = replace(view, visible_height=visible_height, start_line=start,
                             visible_lines=tuple(buffer[start - 1:start - 1 + visible_height])
                             if view.buffer_lines else view.visible_lines[:visible_height], is_focused=focused)
@@ -288,7 +381,8 @@ class ConversationTimeline:
         inside = 1 <= event.row <= len(layout.lines)
         if event.pressed and event.button in {64, 65} and inside:
             if hit is not None:
-                self._scroll(hit.identity, KeyEvent(KeyKind.UP if event.button == 64 else KeyKind.DOWN), 3)
+                if not self._scroll(hit.identity, KeyEvent(KeyKind.UP if event.button == 64 else KeyKind.DOWN), 3):
+                    self._scroll_timeline(-3 if event.button == 64 else 3)
             else:
                 self._scroll_timeline(-3 if event.button == 64 else 3)
             return True
@@ -311,7 +405,7 @@ class ConversationTimeline:
             self.timeline_focused = False
             return event.kind is not KeyKind.TEXT
         if event.kind in {KeyKind.TAB, KeyKind.SHIFT_TAB}:
-            if self.focused_id is None and self._visible_frame_ids:
+            if self.focused_id not in self._visible_frame_ids and self._visible_frame_ids:
                 self.focused_id = self._visible_frame_ids[-1]
                 self.timeline_focused = False
             else:
@@ -322,8 +416,9 @@ class ConversationTimeline:
         if event.kind not in navigation:
             return False
         if not self.timeline_focused and self.focused_id is not None:
-            self._scroll(self.focused_id, event)
-        elif event.kind is KeyKind.HOME:
+            if self._scroll(self.focused_id, event) or event.kind in {KeyKind.LEFT, KeyKind.RIGHT}:
+                return True
+        if event.kind is KeyKind.HOME:
             self._set_offset(0)
         elif event.kind is KeyKind.END:
             self._offset = None
@@ -345,7 +440,7 @@ class ConversationTimeline:
         current = max(0, len(self._row_keys) - self._height) if self._offset is None else self._offset
         self._set_offset(current + delta)
 
-    def _scroll(self, identity: int, event: KeyEvent, count: int = 1) -> None:
+    def _scroll(self, identity: int, event: KeyEvent, count: int = 1) -> bool:
         for entry_index, entry in enumerate(self._entries):
             for frame_index, frame in enumerate(entry.frames):
                 if frame.identity != identity:
@@ -361,19 +456,28 @@ class ConversationTimeline:
                     state = transition_nested_scroll(state, event)
                 frames = list(entry.frames)
                 frames[frame_index] = replace(frame, view=state.views[0])
-                self._entries[entry_index] = replace(entry, frames=tuple(frames))
-                return
+                if frames[frame_index] != frame:
+                    self._entries[entry_index] = replace(entry, frames=tuple(frames))
+                    self._revision += 1
+                return (state.views[0].start_line, state.views[0].h_offset) != (view.start_line, view.h_offset)
+        return False
 
 
-def _clip_cells(text: str, width: int) -> str:
+def _wrap_cells(text: str, width: int) -> tuple[str, ...]:
+    """Keep complete sanitized raw output when the review width changes."""
     cells = 0
     result: list[str] = []
+    lines: list[str] = []
     for character in text:
-        cells += display_character_width(character)
-        if cells > max(1, width):
-            break
+        size = display_character_width(character)
+        if result and cells + size > max(1, width):
+            lines.append("".join(result))
+            result = []
+            cells = 0
+        cells += size
         result.append(character)
-    return "".join(result)
+    lines.append("".join(result))
+    return tuple(lines)
 
 
 # The old private name remains usable by existing focused terminal integrations.
