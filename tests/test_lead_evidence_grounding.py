@@ -347,7 +347,9 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None, input
         row = value["proposal"]["assignments"][0]
         allocated = lead_fixture_assignments(author_positive_fixture_review_bases([{
             "agent_id": row["agent_id"], "task_instructions": row["instruction"],
-            "assignment_type": "review_content", "input_source_ids": row["input_ids"]}],
+            "assignment_type": "review_content", "input_source_ids": row["input_ids"],
+            **({"review_basis": {"candidate_input_ids": ["user_input"], "criteria": row["instruction"]}}
+               if input_ids is not None else {})}],
                 candidate_choices=choices["review_candidate_ids"]),
             input_choices=choices["allocation_input_ids"],
             review_choices=choices["review_candidate_ids"],
