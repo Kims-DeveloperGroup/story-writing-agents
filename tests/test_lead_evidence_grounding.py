@@ -354,7 +354,7 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None, input
             input_choices=choices["allocation_input_ids"],
             review_choices=choices["review_candidate_ids"],
             anchors={row["agent_id"]: row["input_ids"][0]},
-            recipients={source: row["agent_id"] for source in row["input_ids"]})
+            recipients={source: row["agent_id"] for source in row["input_ids"] if source in choices["required_input_ids"]})
         return lead_fixture_response(call, {
             "response_type": "specialist_consultation_proposal",
             "response_text": value["message"], "response_details": {
