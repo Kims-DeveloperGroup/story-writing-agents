@@ -851,12 +851,17 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.assertEqual(tuple(agent for agent, _ in self.backend.call_records[before:]), (LEAD_ORCHESTRATOR,) * 4)
             self.assertEqual(tuple(call.contract.schema_group_phase for call in self.backend.calls[before:]),
                              (LeadGroupPhase.SELECT,) * 3 + (LeadGroupPhase.GENERATE,))
+            events = self.history(conversation)
+            judgment_event = next(event for event in reversed(events)
+                if type(event.payload) is c.CollaborationLeadJudgmentPayload
+                and event.payload.provider_invocation_id == result.provider_invocation_id)
+            scope = judgment_event.payload.authoring_scope
             report = result.preliminary_review
             self.assertIs(type(report), review.LeadPreliminaryReview)
             self.assertEqual((report.task_id, report.task_revision),
-                             (result.authoring_scope.task_id, result.authoring_scope.task_revision))
-            self.assertEqual(set(result.authoring_scope.target_paths), set(declared_paths))
-            self.assertTrue(required_authoring_domains(result.authoring_scope))
+                             (scope.task_id, scope.task_revision))
+            self.assertEqual(set(scope.target_paths), set(declared_paths))
+            self.assertTrue(required_authoring_domains(scope))
             self.assertTrue(set(read_ids).issubset(report.inspected_input_ids))
             self.assertEqual(report.findings[0].message, finding)
             self.assertEqual(report.next_action.value, authored[0]["next_action"])
@@ -880,20 +885,16 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.assertIsNone(result.proposal)
             self.assertIsNone(result.artifact_application_request)
             self.assertIsNone(result.story_commit_request)
-            events = self.history(conversation)
             self.assertFalse(any(event.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for event in events))
-            judgments = [event.payload for event in events if type(event.payload) is c.CollaborationLeadJudgmentPayload]
-            self.assertEqual(judgments[-1].preliminary_review, report)
+            self.assertEqual(judgment_event.payload.preliminary_review, report)
             attested = next(target for target in report.targets if target.input_id == read_ids[0])
-            judgment_event = next(event for event in reversed(events)
-                                  if type(event.payload) is c.CollaborationLeadJudgmentPayload)
             for field, value in (("revision", "tampered-receipt-revision"),
                                  ("content_digest", "sha256:" + hashlib.sha256(b"tampered selected bytes").hexdigest())):
                 changed_target = replace(attested, **{field: value})
                 changed_report = replace(report, targets=tuple(changed_target if target.input_id == attested.input_id
                     else target for target in report.targets))
                 with self.assertRaises(ValueError):
-                    replace(judgments[-1], preliminary_review=changed_report)
+                    replace(judgment_event.payload, preliminary_review=changed_report)
                 changed_wire = json.loads(c.encode_collaboration_event(judgment_event))
                 wire_target = next(target for target in changed_wire["payload"]["preliminary_review"]["targets"]
                                    if target["input_id"] == attested.input_id)

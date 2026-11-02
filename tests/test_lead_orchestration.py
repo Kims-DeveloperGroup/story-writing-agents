@@ -1959,6 +1959,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         scope_profiles = {f'lead-response-v8:family:{number}': ('task_scope', 'object') for number in range(8)}
         scope_profiles.update({f'lead-response-v8:family:{number}': ('writing_task_scope', 'null')
                                for number in (9, 10)})
+        scope_profiles.update({f'lead-response-v8:family:{number}': ('writing_task_scope', 'object')
+                               for number in (11, 12, 13)})
         self.assertEqual(set(family_by_id.values()), set(scope_profiles))
         schema_by_id = {fixture_schema_node(full_schema, schema['properties']['schema_id'])['enum'][0]: schema
                         for schema in result_schemas}
@@ -1972,7 +1974,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             else:
                 yield node
         for schema_id, schema in schema_by_id.items():
-            scope_field, scope_type = scope_profiles[family_by_id[schema_id]]
+            family = family_by_id[schema_id]
+            scope_field, scope_type = scope_profiles[family]
             self.assertEqual(set(schema['required']),
                              {'schema_id', 'response_type', 'response_text', 'response_details'})
             self.assertEqual(set(schema['properties']), set(schema['required']))
@@ -1980,6 +1983,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             for branch in native_leaves(details):
                 self.assertEqual(branch['type'], 'object')
                 self.assertIn(scope_field, branch['required'])
+                if family == 'lead-response-v8:family:11':
+                    self.assertIn('preliminary_review', branch['required'])
+                elif family in {'lead-response-v8:family:12', 'lead-response-v8:family:13'}:
+                    for allocation in native_leaves(branch['properties']['specialist_consultation_proposal']):
+                        self.assertIn('stage_plan', allocation['required'])
                 scope_choices = tuple(native_leaves(branch['properties'][scope_field]))
                 self.assertTrue(scope_choices)
                 for scope_choice in scope_choices:
