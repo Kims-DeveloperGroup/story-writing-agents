@@ -99,6 +99,15 @@ class SuiteBudgetTests(unittest.TestCase):
                     suite_budget.check_monotonic(
                         dict(native_source, max_test_source_lines=limit),
                         dict(origin, max_test_source_lines=old))
+        continuity_source = dict(native_source, max_test_source_lines=147338)
+        self.assertIsNone(suite_budget.check_monotonic(continuity_source, native_source))
+        for old, limit in ((146828, continuity_source["max_test_source_lines"]),
+                           (146830, continuity_source["max_test_source_lines"]),
+                           (146829, continuity_source["max_test_source_lines"] - 1),
+                           (146829, continuity_source["max_test_source_lines"] + 1)):
+            with self.assertRaises(suite_budget.BudgetError):
+                suite_budget.check_monotonic(dict(continuity_source, max_test_source_lines=limit),
+                                             dict(native_source, max_test_source_lines=old))
         for old, limit in ((142603, 142887), (142605, 142887), (142604, 142886),
                            (142604, 142888), (142887, 142888)):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
@@ -114,6 +123,9 @@ class SuiteBudgetTests(unittest.TestCase):
             ("subtest_caps", {**source_base["subtest_caps"], "a.test": 1}),
             ("subtest_caps", {key: cap for key, cap in source_base["subtest_caps"].items() if key != "b.test"}),
         ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                              dict(continuity_source, **{key: value}),
+                              dict(native_source, **{key: value}) if key != "subtest_caps" else native_source)
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
                               {**source, key: value}, source_base)
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,

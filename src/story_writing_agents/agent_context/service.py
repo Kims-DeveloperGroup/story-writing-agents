@@ -5,7 +5,7 @@ from __future__ import annotations
 from .accounting import normalized_provider_usage
 from .group_observation import LeadGroupObservation, LeadGroupObservationKind, LeadGroupObservationSink
 
-from ..provider_adapter import ProviderContextWitness
+from ..provider_adapter import ProviderContextWitness, NativeContextCheck
 from ..provider_wire import SchemaSelectionInput, LEAD_GROUP_PHASE_GUIDES
 from .accounting import canonical_provider_json
 
@@ -185,6 +185,7 @@ __all__ = [
     "ContextExecutionErrorCode",
     "ContextExecutionEvent",
     "ContextExecutionEventKind",
+    "ContextNativeDisposition",
     "ContextExecutionEventSink",
     "ContextInvocationBinding",
     "ContextInvocationKind",
@@ -1193,6 +1194,18 @@ class ContextExecutionEventKind(StrEnum):
     TAINTED = "tainted"
     CHECKPOINT_ADVANCED = "checkpoint_advanced"
     CHECKPOINT_NOT_ADVANCED = "checkpoint_not_advanced"
+    NATIVE_CONTEXT = "native_context"
+
+
+class ContextNativeDisposition(StrEnum):
+    OBSERVED = "observed"
+    RESPONSE_REJECTED = "response_rejected"
+    CONTROL_ACCEPTED = "control_accepted"
+    RESULT_ACCEPTED = "result_accepted"
+    RETRY_NOT_STARTED = "retry_not_started"
+    RETRY_STARTED = "retry_started"
+    RETRY_SUCCEEDED = "retry_succeeded"
+    RETRY_FAILED = "retry_failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1218,6 +1231,11 @@ class ContextExecutionEvent:
     history_record_count: int | None = None
     observation_utf8_bytes: int | None = None
     truncated: bool | None = None
+    native_context_check: NativeContextCheck | None = field(default=None, kw_only=True)
+    native_disposition: ContextNativeDisposition | None = field(default=None, kw_only=True)
+    group_phase: LeadGroupPhase | None = field(default=None, kw_only=True)
+    attempt_id: str | None = field(default=None, kw_only=True)
+    invocation_id: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if (
@@ -1277,6 +1295,20 @@ class ContextExecutionEvent:
             self.provider_input_tokens,
             self.truncated,
         )
+        native_facts = (self.native_context_check, self.native_disposition,
+                        self.group_phase, self.attempt_id, self.invocation_id)
+        if self.kind is ContextExecutionEventKind.NATIVE_CONTEXT:
+            if (type(self.native_context_check) is not NativeContextCheck
+                    or type(self.native_disposition) is not ContextNativeDisposition
+                    or self.group_phase is not None and type(self.group_phase) is not LeadGroupPhase
+                    or any(value is not None for value in all_optional_facts)):
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+            for value in (self.attempt_id, self.invocation_id):
+                if value is not None:
+                    _safe_identity(value)
+            return
+        if any(value is not None for value in native_facts):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if self.kind in {
             ContextExecutionEventKind.BOOTSTRAP,
             ContextExecutionEventKind.DELTA,
@@ -2181,12 +2213,7 @@ def _group_native_deliveries(
                 or snapshot.conditions != conditions or not snapshot.source_valid()):
             return ()
     anchor, witness = accepted.witness, transport.witness
-    if (witness.thread_id != provider_thread_id or anchor.thread_id != witness.thread_id
-            or anchor.rollout_path != witness.rollout_path or anchor.rollout_id != witness.rollout_id
-            or anchor.file_identity != witness.file_identity or anchor.scope_digest != witness.scope_digest
-            or anchor.settings_digest != witness.settings_digest
-            or anchor.prefix_utf8_bytes > witness.prefix_utf8_bytes
-            or anchor.prefix_utf8_bytes == witness.prefix_utf8_bytes and anchor.prefix_sha256 != witness.prefix_sha256):
+    if witness.thread_id != provider_thread_id or not witness.has_lineage_anchor(anchor):
         return ()
     return accepted, transport
 
@@ -2365,8 +2392,11 @@ class ContextProviderFailureFacts:
     response_rejection_code: ContextProviderTerminalCode | None = None
     continuation_rejection: ContextContinuationRejection | None = None
     group_state: ContextGroupInvocationState | None = field(default=None, kw_only=True, repr=False)
+    native_context_check: NativeContextCheck | None = field(default=None, kw_only=True, repr=False)
 
     def __post_init__(self) -> None:
+        if self.native_context_check is not None and type(self.native_context_check) is not NativeContextCheck:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if self.group_state is not None and type(self.group_state) is not ContextGroupInvocationState:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if self.continuation_rejection is not None and (
@@ -2642,8 +2672,11 @@ class ContextProviderCallResult:
     finalizer: ContextProviderCallFinalizer = field(repr=False, compare=False)
 
     context_witness: ProviderContextWitness | None = field(default=None, kw_only=True, repr=False)
+    native_context_check: NativeContextCheck | None = field(default=None, kw_only=True, repr=False)
 
     def __post_init__(self) -> None:
+        if self.native_context_check is not None and type(self.native_context_check) is not NativeContextCheck:
+            raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         if self.context_witness is not None and (type(self.context_witness) is not ProviderContextWitness or self.context_witness.thread_id != self.thread_id):
             raise TypeError("context result witness belongs to another thread")
         if self.context_witness is not None and type(self.context_witness) is not ProviderContextWitness:
@@ -6109,7 +6142,10 @@ class AgentContextService:
         policy_fingerprint = self._execution_policy_fingerprint
         operation_id = request.operation_id
 
-        def observe_group(kind, *, delivery=None, action_type=None, terminal_code=None):
+        last_native_check: NativeContextCheck | None = None
+
+        def observe_group(kind, *, delivery=None, action_type=None, terminal_code=None,
+                          native_check=None, native_disposition=None):
             if group_observation_sink is None or group_state is None or group_state.workflow is None:
                 return
             try:
@@ -6153,6 +6189,11 @@ class AgentContextService:
                     None if binding is None else _canonical_bytes(binding),
                     None if delivery is None else _canonical_bytes(delivery), action_type,
                     None if call_contract is None or call_contract.lineage is None else call_contract.lineage.kind, terminal_code,
+                native_context_snapshot=None if native_check is None else _canonical_bytes({
+                        "check": native_check.as_object(), "disposition": native_disposition.value,
+                        "attempt_id": attempt_id,
+                        "call_phase": None if call_contract is None or call_contract.schema_group_phase is None else call_contract.schema_group_phase.value,
+                        "native_process_completed": None if native_check.normal_exit_code is None else native_check.normal_exit_code == 0}),
                 )))
             except BaseException:
                 # Observation cannot change execution, authority, or the primary failure.
@@ -6239,6 +6280,19 @@ class AgentContextService:
                 **facts,
             )
 
+        def observe_native_context(check, disposition):
+            if check is None:
+                return
+            try:
+                observe_group(LeadGroupObservationKind.NATIVE_CONTEXT,
+                    native_check=check, native_disposition=disposition)
+                _emit_context_event_without_replacing(event_sink, execution_event(
+                    ContextExecutionEventKind.NATIVE_CONTEXT, native_context_check=check,
+                    native_disposition=disposition, attempt_id=attempt_id,
+                    group_phase=None if call_contract is None else call_contract.schema_group_phase))
+            except BaseException:
+                pass
+
         def reject_response(
             finalizer: ContextProviderCallFinalizer,
             code: ContextProviderTerminalCode,
@@ -6264,6 +6318,7 @@ class AgentContextService:
                 return None
             if call_contract is None or call_decoded is None or group_state.workflow is None:
                 raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+            observe_native_context(last_native_check, ContextNativeDisposition.RESULT_ACCEPTED)
             observe_group(LeadGroupObservationKind.TERMINAL, terminal_code="accepted")
             return replace(group_state, workflow=group_state.workflow.complete(call_contract.generation_binding(), call_decoded.selected_result))
 
@@ -6735,7 +6790,9 @@ class AgentContextService:
                     else:
                         payload, component_paths, reference_paths = _render_context_payload(
                             payload, component_paths, reference_paths, schema=schema, projection=projection)
-                    call_request = (BoundContextProviderCallRequest(contract=call_contract, policy_fingerprint=policy_fingerprint, call_kind=call_kind, payload=payload, component_paths=component_paths, mandatory_reference_paths=reference_paths, expected_thread_id=current_thread_id, continuation_identity=None if continuation is None else continuation.identity, execution_workspace=request.execution_workspace, context_witness=(None if group_state is None or group_state.transport_delivery is None or payload["response_contract"]["schema_selection"]["context_delivery"]["mode"] != "delta" else group_state.transport_delivery.witness), context_anchor=(group_state.accepted_delivery.witness if group_state is not None and group_state.accepted_delivery is not None and payload["response_contract"]["schema_selection"]["context_delivery"]["mode"] == "delta" else None))
+                    delta_delivery = (payload.get("response_contract", {}).get("schema_selection", {})
+                        .get("context_delivery", {}).get("mode") == "delta")
+                    call_request = (BoundContextProviderCallRequest(contract=call_contract, policy_fingerprint=policy_fingerprint, call_kind=call_kind, payload=payload, component_paths=component_paths, mandatory_reference_paths=reference_paths, expected_thread_id=current_thread_id, continuation_identity=None if continuation is None else continuation.identity, execution_workspace=request.execution_workspace, context_witness=((None if group_state is None or group_state.transport_delivery is None or payload["response_contract"]["schema_selection"]["context_delivery"]["mode"] != "delta" else group_state.transport_delivery.witness) if delta_delivery else None), context_anchor=((group_state.accepted_delivery.witness if group_state is not None and group_state.accepted_delivery is not None and payload["response_contract"]["schema_selection"]["context_delivery"]["mode"] == "delta" else None) if delta_delivery else None))
                                     if call_contract is not None else ContextProviderCallRequest(scope=scope, policy_fingerprint=policy_fingerprint, call_id=call_id, call_kind=call_kind, schema=schema, payload=payload, component_paths=component_paths, mandatory_reference_paths=reference_paths, expected_thread_id=current_thread_id, continuation_identity=None if continuation is None else continuation.identity, execution_workspace=request.execution_workspace))
                     if group_state is not None:
                         pending_group_payload = canonical_provider_json(call_request.payload)
@@ -6930,6 +6987,8 @@ class AgentContextService:
                     raise failure
                 provider_failure = False
                 current_thread_id = result.thread_id
+                last_native_check = result.native_context_check
+                observe_native_context(last_native_check, ContextNativeDisposition.OBSERVED)
                 if group_state is not None and pending_group_input is not None:
                     group_state = replace(group_state, transport_delivery=ContextDeliverySnapshot(
                         group_state.request_basis, planning_conditions, attempt_id, generation, call_id,
@@ -7049,6 +7108,7 @@ class AgentContextService:
                     action_session.advance_group_control(correlation)
                     history_advanced = True
                     require_execution_workspace_current()
+                    observe_native_context(last_native_check, ContextNativeDisposition.CONTROL_ACCEPTED)
                     finalizer = call_finalizer
                     call_finalizer = None
                     if finalizer is not None:
@@ -7433,6 +7493,12 @@ class AgentContextService:
             stage = "exhausted"
             raise _execution_error(ContextExecutionErrorCode.ACTION_EXHAUSTED)
         except BaseException as failure:
+            native_facts = context_provider_failure_facts(failure)
+            check = native_facts.native_context_check
+            if check is None and last_native_check is not None and last_native_check.call_id == call_id:
+                check = last_native_check
+                record_context_provider_failure(failure, replace(native_facts, native_context_check=check))
+            observe_native_context(check, ContextNativeDisposition.RESPONSE_REJECTED)
             observe_group(LeadGroupObservationKind.TERMINAL, terminal_code=(response_rejection_code.value if response_rejection_code is not None else type(failure).__name__))
             if group_state is not None:
                 if (stage == "exhausted" and group_state.workflow is not None
@@ -7626,6 +7692,7 @@ class AgentContextService:
                     ),
                     response_rejection_code=response_rejection_code,
                     continuation_rejection=existing_facts.continuation_rejection,
+                    native_context_check=existing_facts.native_context_check,
                     group_state=group_state,
                 ),
             )

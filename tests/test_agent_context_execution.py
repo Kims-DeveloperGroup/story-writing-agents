@@ -1535,14 +1535,16 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
         self.assertEqual(tuple((item.value for item in ContextExecutionEventKind)), ('bootstrap',
             'delta', 'omission', 'search_started', 'search_completed', 'read_started',
             'read_completed', 'answer_authorized', 'invalidated', 'budget_exhausted',
-            'action_exhausted', 'tainted', 'checkpoint_advanced', 'checkpoint_not_advanced'))
+            'action_exhausted', 'tainted', 'checkpoint_advanced', 'checkpoint_not_advanced',
+                'native_context'))
         self.assertEqual(tuple((field.name for field in fields(ContextExecutionEvent))), ('kind',
             'scope', 'operation_id', 'phase', 'round_number', 'action_index',
             'selected_source_count', 'selected_source_utf8_bytes',
             'omitted_searchable_source_count', 'omitted_searchable_source_utf8_bytes',
             'search_hit_count', 'retrieved_source_count', 'retrieved_source_utf8_bytes',
             'mandatory_reference_count', 'mandatory_reference_utf8_bytes', 'provider_input_tokens',
-            'history_record_count', 'observation_utf8_bytes', 'truncated'))
+            'history_record_count', 'observation_utf8_bytes', 'truncated',
+                'native_context_check', 'native_disposition', 'group_phase', 'attempt_id', 'invocation_id'))
         scope = self.service.scope('session', ContextSubjectKind.CONVERSATION, 'conversation', LEAD_ORCHESTRATOR)
         plan_facts = {'selected_source_count': 0, 'selected_source_utf8_bytes': 0,
             'omitted_searchable_source_count': 0, 'omitted_searchable_source_utf8_bytes': 0,

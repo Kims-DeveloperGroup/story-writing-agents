@@ -1147,7 +1147,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
 
     def test_exact_surface_states_fields_and_no_content_in_repr(self) -> None:
         self.assertEqual(tuple(service_module.__all__), ("AgentContextService", "ContextExecutionError",
-            "ContextExecutionErrorCode", "ContextExecutionEvent", "ContextExecutionEventKind",
+            "ContextExecutionErrorCode", "ContextExecutionEvent", "ContextExecutionEventKind", "ContextNativeDisposition",
             "ContextExecutionEventSink", "ContextInvocationBinding", "ContextInvocationKind",
             "ContextInvocationRequest", "ContextInvocationResult", "ContextInvocationSession",
             "ContextInvocationState", "ContextJsonObjectResultContract", "ContextProvider",
@@ -1161,7 +1161,8 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             "selected_source_utf8_bytes", "omitted_searchable_source_count",
             "omitted_searchable_source_utf8_bytes", "search_hit_count", "retrieved_source_count",
             "retrieved_source_utf8_bytes", "mandatory_reference_count", "mandatory_reference_utf8_bytes",
-            "provider_input_tokens", "history_record_count", "observation_utf8_bytes", "truncated", ), )
+            "provider_input_tokens", "history_record_count", "observation_utf8_bytes", "truncated",
+                'native_context_check', 'native_disposition', 'group_phase', 'attempt_id', 'invocation_id'), )
         progress = service_module.ContextExecutionEvent( service_module.ContextExecutionEventKind.BOOTSTRAP, _SCOPE,
             "operation", selected_source_count=2, selected_source_utf8_bytes=128, omitted_searchable_source_count=1,
             omitted_searchable_source_utf8_bytes=64, mandatory_reference_count=0, mandatory_reference_utf8_bytes=0, )
@@ -1189,7 +1190,8 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             self.assertFalse(hasattr(facade, "ContextInvocationKind"))
             self.assertFalse(hasattr(facade, "ContextJsonObjectResultContract"))
         self.assertEqual( tuple(field.name for field in fields(service_module.ContextProviderCallResult) ),
-            ("response_text", "thread_id", "accounting", "finalizer", "context_witness"), )
+            ("response_text", "thread_id", "accounting", "finalizer", "context_witness",
+                'native_context_check'), )
         witness_field = next(field for field in fields(service_module.ContextProviderCallResult) if field.name == "context_witness")
         self.assertEqual((witness_field.default, witness_field.kw_only, witness_field.repr), (None, True, False))
         self.assertEqual(tuple(field.name for field in fields(ContextInvocationBinding)), ("scope",
@@ -1237,7 +1239,8 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             service_module.ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED, )
         self.assertEqual( tuple(field.name for field in fields(service_module.ContextProviderFailureFacts) ),
             ( "accounting", "timed_out", "taint_existing_thread", "submitted_accountings",
-            "submission_uncertain", "response_rejection_code", "continuation_rejection", "group_state", ), )
+            "submission_uncertain", "response_rejection_code", "continuation_rejection", "group_state",
+                'native_context_check'), )
         for code in rejection_codes:
             with self.subTest(code=code):
                 facts = service_module.ContextProviderFailureFacts(

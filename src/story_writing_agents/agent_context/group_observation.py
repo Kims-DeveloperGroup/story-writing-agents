@@ -17,6 +17,7 @@ class LeadGroupObservationKind(StrEnum):
     CONTEXT_ACTION = "context_action"
     REJECTED = "rejected"
     TERMINAL = "terminal"
+    NATIVE_CONTEXT = "native_context"
 
 
 def _snapshot(value: bytes | None) -> None:
@@ -43,6 +44,7 @@ class LeadGroupObservation:
     action_type: str | None = None
     lineage_kind: str | None = None
     terminal_code: str | None = None
+    native_context_snapshot: bytes | None = field(default=None, kw_only=True, repr=False)
 
     def __post_init__(self) -> None:
         if type(self.kind) is not LeadGroupObservationKind or type(self.phase) is not LeadGroupPhase:
@@ -52,7 +54,7 @@ class LeadGroupObservation:
         for value in (self.call_id, self.action_type, self.lineage_kind, self.terminal_code):
             if value is not None and (type(value) is not str or not value or len(value) > 256):
                 raise ValueError("group observation identity is invalid")
-        for value in (self.catalog_snapshot, self.binding_snapshot, self.delivery_snapshot):
+        for value in (self.catalog_snapshot, self.binding_snapshot, self.delivery_snapshot, self.native_context_snapshot):
             _snapshot(value)
         if type(self.selection_snapshots) is not tuple:
             raise TypeError("group selection history must be immutable")
@@ -72,12 +74,13 @@ class LeadGroupObservation:
             "action_type": self.action_type,
             "lineage_kind": self.lineage_kind,
             "terminal_code": self.terminal_code,
+            "native_context": None if self.native_context_snapshot is None else json.loads(self.native_context_snapshot),
         }
 
     @classmethod
     def from_object(cls, value: object) -> LeadGroupObservation:
         names = {"kind", "request_basis", "phase", "call_id", "catalog", "selections",
-                 "binding", "delivery", "action_type", "lineage_kind", "terminal_code"}
+                 "binding", "delivery", "action_type", "lineage_kind", "terminal_code", "native_context"}
         if type(value) is not dict or set(value) != names:
             raise ValueError("invalid group observation fields")
         basis = value["request_basis"]
@@ -94,6 +97,7 @@ class LeadGroupObservation:
             None if value["binding"] is None else canonical_provider_json(value["binding"]),
             None if value["delivery"] is None else canonical_provider_json(value["delivery"]),
             value["action_type"], value["lineage_kind"], value["terminal_code"],
+            native_context_snapshot=None if value["native_context"] is None else canonical_provider_json(value["native_context"]),
         )
 
 
