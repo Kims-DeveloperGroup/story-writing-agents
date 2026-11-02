@@ -76,6 +76,7 @@ from ..agent_context.progress import (
     bind_provider_stream_sink,
     reset_provider_stream_sink,
 )
+from ..agent_context.service import ContextExecutionEvent
 from ._driver import (
     AdvisoryProgressError as AdvisoryProgressError,
     RawTerminalDriver,
@@ -2102,6 +2103,10 @@ class InteractiveAdvisoryProgress:
         """Apply one provider streaming event."""
 
         self._state.observe_stream(event)
+
+    def observe_context(self, event: ContextExecutionEvent) -> None:
+        """Apply content-free native context diagnostics."""
+        self._state.observe_context(event)
 
     def finish(self) -> str:
         """Discard transient state and return the final elapsed duration."""

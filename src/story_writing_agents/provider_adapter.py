@@ -33,6 +33,190 @@ DEFAULT_PROVIDER_TIMEOUT_SECONDS = 900.0
 PROVIDER_TIMEOUT_GRACE_SECONDS = 30.0
 
 
+class NativeContextCheckStage(StrEnum):
+    PRE_SUBMIT = "pre_submit"
+    POST_COMPLETE = "post_complete"
+    UNKNOWN = "unknown"
+
+
+class NativeContextSourceStage(StrEnum):
+    INPUT = "input"
+    WORKSPACE = "workspace"
+    DATABASE = "database"
+    ROLLOUT = "rollout"
+    RECORDS = "records"
+    COMPLETE = "complete"
+    UNKNOWN = "unknown"
+
+
+class NativeContextCheckReason(StrEnum):
+    VERIFIED = "verified"
+    INPUT_INVALID = "input_invalid"
+    ANCHOR_MISSING = "anchor_missing"
+    WORKSPACE_UNAVAILABLE = "workspace_unavailable"
+    ROOT_INVALID = "root_invalid"
+    SCOPE_MISMATCH = "scope_mismatch"
+    DATABASE_LIMIT = "database_limit"
+    DATABASE_HEADER_INVALID = "database_header_invalid"
+    WAL_NOT_VISIBLE = "wal_not_visible"
+    WAL_HEADER_UNSTABLE = "wal_header_unstable"
+    WAL_CHECKSUM_UNSTABLE = "wal_checksum_unstable"
+    DATABASE_MODULE_UNAVAILABLE = "database_module_unavailable"
+    DATABASE_SCHEMA_UNSUPPORTED = "database_schema_unsupported"
+    DATABASE_BUSY = "database_busy"
+    DATABASE_QUERY_FAILED = "database_query_failed"
+    DATABASE_CHANGED = "database_changed"
+    DATABASE_IDENTITY_CHANGED = "database_identity_changed"
+    THREAD_NOT_VISIBLE = "thread_not_visible"
+    THREAD_RECORD_INVALID = "thread_record_invalid"
+    ROLLOUT_PATH_CHANGED = "rollout_path_changed"
+    ROLLOUT_NOT_VISIBLE = "rollout_not_visible"
+    ROLLOUT_PATH_INVALID = "rollout_path_invalid"
+    ROLLOUT_NAME_INVALID = "rollout_name_invalid"
+    ROLLOUT_LIMIT = "rollout_limit"
+    ROLLOUT_IDENTITY_CHANGED = "rollout_identity_changed"
+    ROLLOUT_CHANGED = "rollout_changed"
+    ROLLOUT_FLUSH_PENDING = "rollout_flush_pending"
+    PREFIX_MISMATCH = "prefix_mismatch"
+    ANCHOR_MISMATCH = "anchor_mismatch"
+    PRE_SUBMIT_HISTORY_CHANGED = "pre_submit_history_changed"
+    RECORD_LIMIT = "record_limit"
+    CALL_MISMATCH = "call_mismatch"
+    RECORD_INVALID = "record_invalid"
+    RECORD_UNSUPPORTED = "record_unsupported"
+    METADATA_MISMATCH = "metadata_mismatch"
+    EVENT_UNSUPPORTED = "event_unsupported"
+    ITEM_UNSUPPORTED = "item_unsupported"
+    CONCURRENT_TURN = "concurrent_turn"
+    SETTINGS_MISMATCH = "settings_mismatch"
+    RESPONSE_ITEM_UNSUPPORTED = "response_item_unsupported"
+    REQUEST_NOT_VISIBLE = "request_not_visible"
+    REQUEST_MATCH_INVALID = "request_match_invalid"
+    TURN_FLUSH_PENDING = "turn_flush_pending"
+    TURN_MISMATCH = "turn_mismatch"
+    SOURCE_IO_UNAVAILABLE = "source_io_unavailable"
+    SOURCE_UNSAFE = "source_unsafe"
+    INSPECTION_FAILED = "inspection_failed"
+    THREAD_MISMATCH = "thread_mismatch"
+    INPUT_CHANGED = "input_changed"
+    LINEAGE_MISMATCH = "lineage_mismatch"
+    LINEAGE_NOT_VISIBLE = "lineage_not_visible"
+    TURN_ORDER_MISMATCH = "turn_order_mismatch"
+    HISTORY_EFFECT_UNKNOWN = "history_effect_unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class NativeContextObservation:
+    """One content-free check; exception text and native paths stay private."""
+
+    stage: NativeContextCheckStage
+    source_stage: NativeContextSourceStage
+    reason: NativeContextCheckReason
+    exception_type: str | None = None
+    error_code: int | None = None
+
+    def __post_init__(self) -> None:
+        if (type(self.stage) is not NativeContextCheckStage
+                or type(self.source_stage) is not NativeContextSourceStage
+                or type(self.reason) is not NativeContextCheckReason):
+            raise TypeError("native context observation requires closed categories")
+        if self.exception_type is not None and (
+                type(self.exception_type) is not str or not self.exception_type
+                or len(self.exception_type) > 80
+                or not self.exception_type.isascii()
+                or not self.exception_type.replace("_", "").isalnum()):
+            raise ValueError("native context exception category is invalid")
+        if self.error_code is not None and type(self.error_code) is not int:
+            raise TypeError("native context error code must be an integer")
+
+    def as_object(self) -> dict[str, object]:
+        return {"stage": self.stage.value, "source_stage": self.source_stage.value,
+                "reason": self.reason.value, "exception_type": self.exception_type,
+                "error_code": self.error_code}
+
+    @classmethod
+    def from_object(cls, value: object) -> NativeContextObservation:
+        if type(value) is not dict or set(value) != {
+                "stage", "source_stage", "reason", "exception_type", "error_code"}:
+            raise ValueError("invalid native context observation")
+        return cls(NativeContextCheckStage(value["stage"]),
+                   NativeContextSourceStage(value["source_stage"]),
+                   NativeContextCheckReason(value["reason"]),
+                   value["exception_type"], value["error_code"])
+
+
+@dataclass(frozen=True, slots=True)
+class NativeContextCheck:
+    """Ordered observations of one physical call; never grants authority."""
+
+    call_id: str | None
+    prior_call_id: str | None
+    observations: tuple[NativeContextObservation, ...]
+    observed_thread_id: str | None = field(default=None, kw_only=True)
+    normal_exit_code: int | None = field(default=None, kw_only=True)
+
+    def __post_init__(self) -> None:
+        for value in (self.call_id, self.prior_call_id, self.observed_thread_id):
+            if value is not None and (type(value) is not str or not value
+                                      or len(value) > 256
+                                      or not value.isascii()
+                                      or any(not (c.isalnum() or c in "_-.") for c in value)):
+                raise ValueError("native context call identity is invalid")
+        if type(self.observations) is not tuple or not 1 <= len(self.observations) <= 4 or any(
+                type(item) is not NativeContextObservation for item in self.observations):
+            raise ValueError("native context check requires actual ordered observations")
+        if self.verified and (self.call_id is None or self.stage is NativeContextCheckStage.UNKNOWN):
+            raise ValueError("verified native context requires a known call and stage")
+        if self.normal_exit_code is not None and (type(self.normal_exit_code) is not int or self.normal_exit_code != 0):
+            raise ValueError("normal native completion must have exit code zero")
+
+    @property
+    def stage(self) -> NativeContextCheckStage:
+        return self.observations[-1].stage
+
+    @property
+    def reason(self) -> NativeContextCheckReason:
+        return self.observations[-1].reason
+
+    @property
+    def verified(self) -> bool:
+        return self.reason is NativeContextCheckReason.VERIFIED
+
+    @property
+    def outcome(self) -> str:
+        if self.verified:
+            return "verified"
+        return "contradiction" if self.reason in {
+            NativeContextCheckReason.SCOPE_MISMATCH, NativeContextCheckReason.CALL_MISMATCH,
+            NativeContextCheckReason.THREAD_MISMATCH, NativeContextCheckReason.INPUT_CHANGED,
+            NativeContextCheckReason.LINEAGE_MISMATCH, NativeContextCheckReason.TURN_ORDER_MISMATCH,
+            NativeContextCheckReason.ANCHOR_MISMATCH, NativeContextCheckReason.CONCURRENT_TURN,
+        } else "unavailable"
+
+    @property
+    def pre_submit_verified(self) -> bool:
+        return any(item.stage is NativeContextCheckStage.PRE_SUBMIT
+                   and item.reason is NativeContextCheckReason.VERIFIED for item in self.observations)
+
+    def as_object(self) -> dict[str, object]:
+        return {"call_id": self.call_id, "prior_call_id": self.prior_call_id,
+                "outcome": self.outcome,
+                "observed_thread_id": self.observed_thread_id, "normal_exit_code": self.normal_exit_code,
+                "observations": [item.as_object() for item in self.observations]}
+
+    @classmethod
+    def from_object(cls, value: object) -> NativeContextCheck:
+        if type(value) is not dict or set(value) != {
+                "call_id", "prior_call_id", "outcome", "observations", "observed_thread_id", "normal_exit_code"} or type(value["observations"]) is not list:
+            raise ValueError("invalid native context check")
+        result = cls(value["call_id"], value["prior_call_id"],
+                     tuple(NativeContextObservation.from_object(item) for item in value["observations"]),
+                     observed_thread_id=value["observed_thread_id"], normal_exit_code=value["normal_exit_code"])
+        if value["outcome"] != result.outcome:
+            raise ValueError("native context outcome differs from final observation")
+        return result
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderContextWitness:
     """실제 전송과 한 native 이력의 연속성을 연결하는 불변 관측값이다."""
@@ -49,23 +233,44 @@ class ProviderContextWitness:
     turn_id: str
     settings_digest: str
     cli_version: str = "0.164.0"
+    bootstrap_turn_id: str = field(kw_only=True)
+    bootstrap_payload_sha256: str = field(kw_only=True)
+    bootstrap_call_id: str = field(kw_only=True)
+    input_lineage_sha256: str = field(kw_only=True)
+    input_lineage_count: int = field(kw_only=True)
 
     def __post_init__(self) -> None:
-        if (self.cli_version != "0.164.0" or type(self.rollout_path) is not Path
+        if (type(self.cli_version) is not str or len(self.cli_version) > 80 or type(self.rollout_path) is not Path
                 and not isinstance(self.rollout_path, Path)):
             raise ValueError("native context witness has an invalid source")
         if not self.rollout_path.is_absolute():
             raise ValueError("native context witness needs an absolute owned path")
-        for value in (self.thread_id, self.rollout_id, self.call_id, self.turn_id):
+        for value in (self.thread_id, self.rollout_id, self.call_id, self.turn_id,
+                      self.bootstrap_turn_id, self.bootstrap_call_id):
             if type(value) is not str or not value or len(value) > 256:
                 raise ValueError("native context witness has an invalid identity")
-        for value in (self.scope_digest, self.prefix_sha256, self.payload_sha256, self.settings_digest):
+        for value in (self.scope_digest, self.prefix_sha256, self.payload_sha256, self.settings_digest,
+                      self.bootstrap_payload_sha256, self.input_lineage_sha256):
             if type(value) is not str or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
                 raise ValueError("native context witness has an invalid digest")
         if (type(self.file_identity) is not tuple or len(self.file_identity) != 2
                 or any(type(v) is not int or v < 0 for v in self.file_identity)
                 or type(self.prefix_utf8_bytes) is not int or self.prefix_utf8_bytes < 1):
             raise ValueError("native context witness has invalid file facts")
+        if type(self.input_lineage_count) is not int or self.input_lineage_count < 1:
+            raise ValueError("native context witness has invalid logical lineage")
+
+    def has_lineage_anchor(self, anchor: ProviderContextWitness) -> bool:
+        """Compare logical lineage facts; file identity is observational only."""
+        return (type(anchor) is ProviderContextWitness
+                and (self.thread_id, self.scope_digest, self.bootstrap_turn_id,
+                     self.bootstrap_payload_sha256, self.bootstrap_call_id)
+                == (anchor.thread_id, anchor.scope_digest, anchor.bootstrap_turn_id,
+                    anchor.bootstrap_payload_sha256, anchor.bootstrap_call_id)
+                and self.input_lineage_count >= anchor.input_lineage_count
+                and (self.input_lineage_count != anchor.input_lineage_count
+                     or (self.input_lineage_sha256, self.turn_id, self.payload_sha256)
+                     == (anchor.input_lineage_sha256, anchor.turn_id, anchor.payload_sha256)))
 
 
 class ExecutionValueSource(StrEnum):
@@ -173,14 +378,8 @@ class ProviderInvocation:
         if (self.context_witness is None) != (self.context_anchor is None):
             raise ValueError("delta needs both accepted and transport native witnesses")
         if self.context_witness is not None and (self.thread_id != self.context_witness.thread_id
-                or self.context_anchor.thread_id != self.context_witness.thread_id
-                or self.context_anchor.rollout_path != self.context_witness.rollout_path
-                or self.context_anchor.rollout_id != self.context_witness.rollout_id
-                or self.context_anchor.file_identity != self.context_witness.file_identity
-                or self.context_anchor.scope_digest != self.context_witness.scope_digest
-                or self.context_anchor.settings_digest != self.context_witness.settings_digest
-                or self.context_anchor.prefix_utf8_bytes > self.context_witness.prefix_utf8_bytes):
-            raise ValueError("delta witness lineage is inconsistent")
+                or not self.context_witness.has_lineage_anchor(self.context_anchor)):
+            raise ValueError("delta witness logical lineage is inconsistent")
         if self.context_call_id is not None and (type(self.context_call_id) is not str or not self.context_call_id):
             raise ValueError("provider context call identity is invalid")
         if self.stream_sink is None:
@@ -273,6 +472,8 @@ class ProviderResult:
     elapsed_ns: int | None = field(default=None, kw_only=True, compare=False)
     actual_transport_utf8_bytes: int | None = field(default=None, compare=False)
     context_witness: ProviderContextWitness | None = field(default=None, kw_only=True, repr=False)
+    native_context_check: NativeContextCheck | None = field(default=None, kw_only=True, repr=False)
+    native_context_cause: BaseException | None = field(default=None, kw_only=True, repr=False, compare=False)
     response_diagnostic: ProviderResponseDiagnostic | None = field(
         default=None,
         compare=False,
@@ -280,6 +481,10 @@ class ProviderResult:
     )
 
     def __post_init__(self) -> None:
+        if self.native_context_check is not None and type(self.native_context_check) is not NativeContextCheck:
+            raise TypeError("provider native context check is invalid")
+        if self.native_context_cause is not None and not isinstance(self.native_context_cause, BaseException):
+            raise TypeError("provider native context cause is invalid")
         if self.usage_observation is not None and (
             type(self.usage_observation) is not ProviderUsageObservation
             or self.usage_observation.raw != self.usage
@@ -372,9 +577,13 @@ class ProviderInvocationError(Exception):
         continuation_rejection: ProviderContinuationRejection | None = None,
         authentication_failure: ProviderAuthenticationRequiredError | None = None,
         timed_out: bool = False,
+        native_context_check: NativeContextCheck | None = None,
     ) -> None:
         super().__init__(diagnostic)
         self.diagnostic = diagnostic
+        if native_context_check is not None and type(native_context_check) is not NativeContextCheck:
+            raise TypeError("provider native context check is invalid")
+        self.native_context_check = native_context_check
         if authentication_failure is not None and (
             type(authentication_failure) is not ProviderAuthenticationRequiredError
         ):

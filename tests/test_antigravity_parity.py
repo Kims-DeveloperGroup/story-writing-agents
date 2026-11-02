@@ -1233,6 +1233,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(front_call_kinds, [ProviderCallKind.COLLABORATION_INITIAL,
                                            ProviderCallKind.COLLABORATION_INITIAL])
         self.assertEqual([result.context_witness for result in front_provider_results], [None, None])
+        self.assertEqual([result.native_context_check for result in front_provider_results], [None, None])
+        self.assertEqual([result.native_context_cause for result in front_provider_results], [None, None])
         self.assertEqual([json.loads(invocation.payload_json)["response_contract"]["schema_selection"]["phase"]
             for index, invocation in invocations if index == 0], ["select", "generate"])
 
@@ -1876,7 +1878,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             'executable', 'model', 'timeout_seconds', 'backend_overrides', 'antigravity_executable',
             'antigravity_model', 'antigravity_effort'))
         self.assertEqual(tuple(inspect.signature(ProviderResult).parameters), ('thread_id',
-            'response_text', 'usage', 'actual_transport_utf8_bytes', 'response_diagnostic', 'usage_observation', 'elapsed_ns', 'context_witness'))
+            'response_text', 'usage', 'actual_transport_utf8_bytes', 'response_diagnostic', 'usage_observation', 'elapsed_ns', 'context_witness',
+                'native_context_check', 'native_context_cause'))
         owner = WorkspaceProviderErrorArtifacts(self.workspace)
         self.assertFalse(owner.directory.exists())
         backend = self.backend()
