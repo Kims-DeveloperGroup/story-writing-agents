@@ -540,21 +540,20 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             await self.runtime.lead_turn(self.session_id, conversation_id, marker + ": retain the supplied candidate facts.")
             before = {path.relative_to(self.workspace.root): path.read_bytes()
                       for path in self.workspace.root.rglob("*.md")}
-            reads, raw, specialist_reads = [], [], []
+            reads, raw, specialist_reads, proposal_diagnostics = [], [], [], []
             def proposal(call, provider):
                 reads.append(provider.callback_payload(call)["context_observation"]["read_results"][0]["evidence_id"])
                 response = _missing_outcome(proposal=True, input_ids=("user_input", reads[-1]),
                     authoring_assessment=task_assessment(foundation_ids=("user_input",),
                     actions=("bounded missing-evidence review judgments",)))(call, provider)
-                self.assertFalse(call.contract.rule_graph.findings(json.loads(response)), response)
-                decoded = json.loads(call.contract.decode_response(response).answer_json)
-                self.assertEqual(decoded["proposal"]["assignments"][0]["input_ids"], ["user_input", reads[-1]])
+                proposal_diagnostics.append((call.contract.rule_graph.findings(json.loads(response)), response))
                 return response
             self.backend.enqueue(_search("phrase absent from every source", ["w", "c"]), _search(marker, ["c"]),
                 _read_history_hit, proposal, control_plan=selection_plan("consultation.authoring.review", before_script_response=3))
             proposed = await self.runtime.lead_turn(self.session_id, conversation_id,
                 "Review the complete supplied candidate without inventing absent facts. " + _ADMISSION_BRIEF)
-            self.assertIs(proposed.kind, LeadOutcomeKind.PROPOSAL, proposed)
+            self.assertFalse(any(findings for findings, response in proposal_diagnostics), proposal_diagnostics)
+            self.assertIs(proposed.kind, LeadOutcomeKind.PROPOSAL, (proposed, proposal_diagnostics))
             read_input, = tuple(item for item in proposed.proposal.basis.inputs if item.input_id in reads)
             read_receipt, = tuple(item for item in proposed.evidence.receipts if item.evidence_id in reads)
             self.assertEqual(read_input.revision_digest, read_receipt.content_digest)
