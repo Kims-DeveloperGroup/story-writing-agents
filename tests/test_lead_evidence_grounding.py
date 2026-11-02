@@ -586,7 +586,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 response = json.dumps(packet)
                 raw.append(response)
                 return response
-            self.backend.enqueue_for(LEAD_ORCHESTRATOR, synthesis, *([synthesis] if conflict else []))
+            self.backend.enqueue_for(LEAD_ORCHESTRATOR, synthesis)
+            if conflict: self.backend.enqueue_for(LEAD_ORCHESTRATOR, synthesis)
             calls = len(self.backend.calls)
             materialize = self.runtime._materialize_lead_evidence_inputs
             def conflict_input(inputs, evidence, **kwargs):
