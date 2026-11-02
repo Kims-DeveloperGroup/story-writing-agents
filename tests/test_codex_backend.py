@@ -3210,7 +3210,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             record = next(row for row in owned_history.records if row["type"] == "response_item"
                           and row["payload"].get("role") == "user")
             changed = json.loads(record["payload"]["content"][0]["text"])
-            changed["task_input"]["user_request_text"] = "CHANGED_PRIOR_NATIVE_INPUT"
+            changed["task_input"] = "CHANGED_PRIOR_NATIVE_INPUT"
             record["payload"]["content"][0]["text"] = canonical_provider_json(changed).decode("utf-8")
             owned_history.path.write_bytes(b"".join(canonical_provider_json(row) + b"\n"
                                                    for row in owned_history.records))
