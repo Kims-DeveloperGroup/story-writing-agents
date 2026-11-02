@@ -3143,7 +3143,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         reselect_observations = []
         with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
             reselected = await service.invoke(reselect_request, ObservedProvider(),
-                group_observation_sink=reselect_observations.append)
+                group_observation_sink=reselect_observations.append, **authorities)
         self.assertEqual((len(invocations), len(native_commands), len(reselected.provider_calls)), (3, 3, 3))
         self.assertEqual(tuple(call.contract.schema_group_phase for call in requests), phases)
         self.assertEqual(tuple(call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"]
@@ -3235,7 +3235,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
             with self.assertRaises(ContextExecutionError) as interrupted:
                 await service.invoke(interrupted_request, ObservedProvider(),
-                    group_observation_sink=interrupted_observations.append)
+                    group_observation_sink=interrupted_observations.append, **authorities)
         interrupted_facts = context_provider_failure_facts(interrupted.exception)
         self.assertEqual((len(invocations), len(native_commands), len(interrupted_facts.submitted_accountings)), (2, 2, 2))
         self.assertEqual(requests[1].contract.structural_findings(raw_responses[1]), ())
@@ -3283,7 +3283,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                                 group_state=interrupted_facts.group_state)
         with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
             retried = await service.invoke(retry_request, ObservedProvider(),
-                group_observation_sink=retried_observations.append)
+                group_observation_sink=retried_observations.append, **authorities)
         self.assertEqual((len(invocations), len(native_commands), len(retried.provider_calls)), (4, 4, 2))
         self.assertIsNone(invocations[2].thread_id)
         self.assertNotEqual(history.thread_id, first_thread)
@@ -3398,11 +3398,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     mock.patch.object(codex_adapter_module, "_native_file_facts", new=file_facts):
                 if report_thread:
                     observed_result = await service.invoke(unavailable_request, ObservedProvider(),
-                        group_observation_sink=observations.append)
+                        group_observation_sink=observations.append, **authorities)
                 else:
                     with self.assertRaises(ContextExecutionError) as no_report:
                         await service.invoke(unavailable_request, ObservedProvider(),
-                            group_observation_sink=observations.append)
+                            group_observation_sink=observations.append, **authorities)
             check = native_results[1].native_context_check
             self.assertTrue(check.pre_submit_verified)
             self.assertEqual(check.normal_exit_code, 0)
@@ -3453,13 +3453,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         and row["payload"].get("role") == "user" and
                         json.loads(row["payload"]["content"][0]["text"])["response_contract"]["schema_selection"]["issued_contract"]["call_id"] == marker]
             self.assertEqual(len(matching), 1)
-            packet = json.loads(matching[0]["payload"]["content"][0]["text"])
-            packet["request_correlation_token"] = "ALTERED_MIDDLE_READ"
-            matching[0]["payload"]["content"][0]["text"] = canonical_provider_json(packet).decode("utf-8")
+            if lose_read == "delete":
+                owned_history.records.remove(matching[0])
+            else:
+                packet = json.loads(matching[0]["payload"]["content"][0]["text"])
+                packet["request_correlation_token"] = "ALTERED_MIDDLE_READ"
+                matching[0]["payload"]["content"][0]["text"] = canonical_provider_json(packet).decode("utf-8")
             owned_history.path.write_bytes(persist_owned_records(owned_history))
         for lose_read, native_thread in (
             (False, "12121212-1212-4212-8212-121212121212"),
             (True, "13131313-1313-4313-8313-131313131313"),
+            ("delete", "14141414-1414-4414-8414-141414141414"),
         ):
             requests, invocations, raw_responses, native_witnesses, native_commands = [], [], [], [], []
             native_results, native_usage_cases = [], None

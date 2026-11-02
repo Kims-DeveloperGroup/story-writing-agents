@@ -513,7 +513,7 @@ def _inspect_codex_native_observation(
                 raise _NativeContextUnavailable(NativeContextCheckReason.TURN_ORDER_MISMATCH)
             for witness in (previous, anchor):
                 logical = digests.get(witness.turn_id)
-                if logical is None or logical[1] < witness.input_lineage_count:
+                if logical is None:
                     raise _NativeContextUnavailable(NativeContextCheckReason.LINEAGE_NOT_VISIBLE)
                 if logical != (witness.input_lineage_sha256, witness.input_lineage_count):
                     raise _NativeContextUnavailable(NativeContextCheckReason.LINEAGE_MISMATCH)

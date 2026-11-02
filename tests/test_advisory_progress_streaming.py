@@ -206,7 +206,7 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
                 exception_type="OperationalError", error_code=5),),
             observed_thread_id="11111111-1111-4111-8111-111111111111", normal_exit_code=0)
         event = ContextExecutionEvent(ContextExecutionEventKind.NATIVE_CONTEXT,
-            ContextScope("session-native", ContextSubjectKind.CONVERSATION, "conversation-native", "author_agent"),
+            ContextScope("workspace-native", "session-native", ContextSubjectKind.CONVERSATION, "conversation-native", "author_agent"),
             "op_99", native_context_check=check, native_disposition=ContextNativeDisposition.CONTROL_ACCEPTED,
             group_phase=LeadGroupPhase.GENERATE, attempt_id="attempt-native", invocation_id="invocation-native")
         progress = InteractiveAdvisoryProgress.__new__(InteractiveAdvisoryProgress)

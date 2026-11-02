@@ -1147,7 +1147,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
 
     def test_exact_surface_states_fields_and_no_content_in_repr(self) -> None:
         self.assertEqual(tuple(service_module.__all__), ("AgentContextService", "ContextExecutionError",
-            "ContextExecutionErrorCode", "ContextExecutionEvent", "ContextExecutionEventKind",
+            "ContextExecutionErrorCode", "ContextExecutionEvent", "ContextExecutionEventKind", "ContextNativeDisposition",
             "ContextExecutionEventSink", "ContextInvocationBinding", "ContextInvocationKind",
             "ContextInvocationRequest", "ContextInvocationResult", "ContextInvocationSession",
             "ContextInvocationState", "ContextJsonObjectResultContract", "ContextProvider",
