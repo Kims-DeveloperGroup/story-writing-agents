@@ -3387,20 +3387,22 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 {"total_token_usage": {"input_tokens": 3000, "output_tokens": 30, "cached_input_tokens": 0},
                  "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
             ]
-            hidden = []
+            hidden, inspect_native = [], codex_adapter_module._inspect_codex_native_observation_async
             def restore_rollout():
                 if hidden and hidden[-1][0].exists():
                     hidden[-1][0].replace(hidden[-1][1])
+            async def inspect_before_publication(*args, **kwargs):
+                observed = await inspect_native(*args, **kwargs)
+                if transient and hidden and observed.check.reason is NativeContextCheckReason.ROLLOUT_NOT_VISIBLE:
+                    restore_rollout()
+                return observed
             def hide_rollout(owned_history):
                 saved = owned_history.path.with_suffix(".pending")
                 owned_history.path.replace(saved)
                 hidden.append((saved, owned_history.path))
                 self.addCleanup(restore_rollout)
-                if transient:
-                    asyncio.get_running_loop().call_soon(restore_rollout)
             native_mutations, native_cleanups = {2: hide_rollout}, {2: restore_rollout}
-            inspection_fault = RuntimeError("PRIVATE_NATIVE_INSPECTION_DETAIL")
-            fault_active = [False]
+            inspection_fault, fault_active = RuntimeError("PRIVATE_NATIVE_INSPECTION_DETAIL"), [False]
             original_file_facts = codex_adapter_module._native_file_facts
             def file_facts(path, *args, **kwargs):
                 if fault_active[0] and Path(path) == history.path:
@@ -3427,16 +3429,15 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     self.assertIs(before_native.exception.__cause__, inspection_fault)
                     self.assertIs(before_native.exception.native_context_check.stage, NativeContextCheckStage.PRE_SUBMIT)
                     self.assertFalse(before_native.exception.native_context_check.pre_submit_verified)
-            unavailable_native_calls = {2}
-            omitted_thread_reports = set() if report_thread else {2}
+            unavailable_native_calls, omitted_thread_reports, observations = {2}, set() if report_thread else {2}, []
             provider = bound.context_provider()
             unavailable_request = _group_request(replace(request, group_state=None,
                 operation_id="native-observation-" + native_thread,
                 result_correlation_id="native-observation-result-" + native_thread,
                 physical_call_limit=3, mandatory_references=(), reference_operation_id=None))
-            observations = []
             with mock.patch.object(backend._codex_adapter, "invoke", new=invoke), \
-                    mock.patch.object(codex_adapter_module, "_native_file_facts", new=file_facts):
+                    mock.patch.object(codex_adapter_module, "_native_file_facts", new=file_facts), \
+                    mock.patch.object(codex_adapter_module, "_inspect_codex_native_observation_async", new=inspect_before_publication):
                 if report_thread:
                     observed_result = await service.invoke(unavailable_request, ObservedProvider(),
                         group_observation_sink=observations.append, **authorities)
