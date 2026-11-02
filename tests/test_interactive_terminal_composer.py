@@ -640,6 +640,27 @@ class SemanticInputDriverTests(unittest.TestCase):
     def test_chat_exact_double_dollar_opens_before_activation_key(
         self,
     ) -> None:
+        for draft in ("", " \u2003"):
+            driver, _input, output, fallback, _termios, _size = _driver(
+                draft + "\n",
+                main_transition=_controls.transition_main_command_input,
+            )
+            self.assertEqual(
+                _core.read_reference_composition_line(
+                    driver,
+                    _core._composer_input_view(
+                        ComposeMode.CHAT, PLOT_ARCHITECT, ComposerState(),
+                    ),
+                    lambda _buffer, _cursor: None,
+                    lambda: (),
+                    mock.Mock(side_effect=AssertionError("unexpected source read")),
+                    mock.Mock(side_effect=AssertionError("unexpected source failure")),
+                ),
+                draft,
+            )
+            self.assertNotIn("Enter a message", "".join(output.records))
+            self.assertEqual(driver._history_state, MainInputHistoryState())
+            fallback.assert_not_called()
         path = "manuscript/older drafts/{世界$ 章#1.md"
         paths = (path, "manuscript/root.md")
         for mode, agent_id, activation_key in (
@@ -1525,6 +1546,8 @@ class SemanticComposerCoreTests(unittest.TestCase):
         text = mock.Mock()
         scripted = iter(
             (
+                "",
+                " \u2003",
                 "chat ${core_documents/character_sheets.md}#L2-L3",
                 "/send",
             )
@@ -1549,12 +1572,12 @@ class SemanticComposerCoreTests(unittest.TestCase):
             chat,
             TerminalAction(
                 TerminalActionKind.SEND,
-                text="chat ${core_documents/character_sheets.md}#L2-L3",
-                line_count=1,
-                character_count=48,
+                text="\n \u2003\nchat ${core_documents/character_sheets.md}#L2-L3",
+                line_count=3,
+                character_count=52,
             ),
         )
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 4)
         self.assertTrue(all(call[1:] == (scope, paths, text) for call in calls))
         self.assertTrue(calls[0][0].prompt.name.startswith("compose[chat:plot:"))
         ordinary.assert_not_called()

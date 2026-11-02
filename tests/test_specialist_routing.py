@@ -81,6 +81,33 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertEqual(required_authoring_specialists(self.scope(domains=tuple(Domain))),
                          ("plot_architect", "character_custodian", "execution_specialist"))
 
+        from story_writing_agents.structured_output_validation import SchemaRules
+        rules = tuple((domains, SchemaRules.declare(routing.artifact_path_rule(domains)))
+            for domains in ((Domain.PLOT_STRUCTURE,), (Domain.CHARACTER_WORLD,),
+                            (Domain.TONE_EXECUTION,), tuple(Domain)))
+        for path, expected in (
+            ("core_documents/global_outline.md", Domain.PLOT_STRUCTURE),
+            ("core_documents/character_sheets.md", Domain.CHARACTER_WORLD),
+            ("core_documents/narrative_rules.md", Domain.TONE_EXECUTION),
+            ("manuscript/a.md", Domain.TONE_EXECUTION),
+            ("manuscript/space dir/한글.md", Domain.TONE_EXECUTION),
+            ("manuscript/private-\ue000.md", Domain.TONE_EXECUTION),
+            ("manuscript/unassigned-\u0378.md", Domain.TONE_EXECUTION),
+            ("manuscript/.../a..md", Domain.TONE_EXECUTION),
+            ("core_documents/unknown.md", None), ("manuscript/.md", None),
+            ("manuscript/./a.md", None), ("manuscript/../a.md", None),
+            ("manuscript//a.md", None), ("manuscript/a.MD", None),
+            ("manuscript/a.md.txt", None), ("manuscript/a.md\n", None),
+            ("manuscript/a\x00.md", None), ("manuscript/a\u200d.md", None),
+            ("manuscript/a\u2028.md", None), ("manuscript/}/a.md", None),
+            ("manuscript/\ud800.md", None),
+        ):
+            try: actual = artifact_domain(path)
+            except ValueError: actual = None
+            self.assertIs(actual, expected, repr(path))
+            for domains, declared in rules:
+                self.assertEqual(not declared.findings(path), expected in domains, repr(path))
+
     def test_mixed_paths_and_semantics_union_without_inventory_inference(self):
         mixed = self.mixed_scope()
         self.assertEqual(required_authoring_domains(mixed), tuple(Domain))

@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 from .provider_wire import common_contract_guide
+from .provider_adapter import (ProviderContextWitness, ProviderContinuationRejection,
+    NativeContextCheck, NativeContextObservation, NativeContextCheckStage,
+    NativeContextSourceStage, NativeContextCheckReason)
+from .agent_context.accounting import ProviderUsageObservation, ProviderUsageScope
 
 import asyncio
+from dataclasses import dataclass, field, replace
+import time
+import hashlib
+from urllib.parse import quote
 import json
 import math
 import os
@@ -216,6 +224,436 @@ def _resolve_aliased_field(
     if not s2:
         return None, True
     return (s2.lower() if normalize_case else s2), False
+
+
+_CONTEXT_WITNESS_BYTES = 8 * 1024 * 1024
+_CONTEXT_WITNESS_LINES = 20000
+
+
+def _native_file_facts(path: Path, *, directory: bool = False):
+    value = path.lstat()
+    if (not (stat.S_ISDIR if directory else stat.S_ISREG)(value.st_mode)
+            or value.st_uid != os.geteuid() or stat.S_IMODE(value.st_mode) & 0o022):
+        raise _NativeContextUnavailable(NativeContextCheckReason.SOURCE_UNSAFE)
+    return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns
+
+
+class _NativeContextUnavailable(Exception):
+    def __init__(self, reason):
+        super().__init__(reason.value)
+        self.reason = reason
+
+
+@dataclass(frozen=True, slots=True)
+class _CodexNativeObservation:
+    witness: ProviderContextWitness | None
+    check: NativeContextCheck
+    usage_pair: tuple[ProviderUsage, ProviderUsage] | None = None
+    previous_usage: ProviderUsage | None = None
+    first_native_turn: bool = False
+    cause: BaseException | None = None
+    source_path: Path | None = field(default=None, repr=False)
+    rediscovered: bool = False
+
+
+def _native_observation_success(invocation, previous, before, witness,
+                                usage_pair=None, previous_usage=None, first=False):
+    check = NativeContextCheck(invocation.context_call_id,
+        previous.call_id if type(previous) is ProviderContextWitness else None,
+        (NativeContextObservation(NativeContextCheckStage.PRE_SUBMIT if before else NativeContextCheckStage.POST_COMPLETE,
+            NativeContextSourceStage.COMPLETE, NativeContextCheckReason.VERIFIED),))
+    return _CodexNativeObservation(witness, check, usage_pair, previous_usage, first)
+
+
+def _native_observation_failure(invocation, previous, before, point, reason, cause):
+    original = cause.__cause__ if cause.__cause__ is not None else cause
+    exception_type = (None if type(original) is _NativeContextUnavailable else
+                      re.sub(r"[^A-Za-z0-9_]", "_", type(original).__name__)[:80] or "Exception")
+    code = getattr(original, "sqlite_errorcode", getattr(original, "errno", None))
+    code = code if type(code) is int else None
+    check = NativeContextCheck(invocation.context_call_id,
+        previous.call_id if type(previous) is ProviderContextWitness else None,
+        (NativeContextObservation(NativeContextCheckStage.PRE_SUBMIT if before else NativeContextCheckStage.POST_COMPLETE,
+            point, reason, exception_type, code),))
+    return _CodexNativeObservation(None, check, cause=cause)
+
+
+def _codex_rollout_candidate(root: Path, thread_id: str) -> Path:
+    """Discover one thread path; unrelated native writes do not invalidate it."""
+    database = root / "state_5.sqlite"
+    observed = _native_file_facts(database)
+    if observed[2] > 256 * 1024 * 1024:
+        raise _NativeContextUnavailable(NativeContextCheckReason.DATABASE_LIMIT)
+    descriptor = os.open(database, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        opened = os.fstat(descriptor)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid()
+                or stat.S_IMODE(opened.st_mode) & 0o022):
+            raise _NativeContextUnavailable(NativeContextCheckReason.SOURCE_UNSAFE)
+        if opened.st_size > 256 * 1024 * 1024:
+            raise _NativeContextUnavailable(NativeContextCheckReason.DATABASE_LIMIT)
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            header = stream.read(100)
+    finally:
+        os.close(descriptor)
+    if len(header) != 100 or header[:16] != b"SQLite format 3\x00":
+        raise _NativeContextUnavailable(NativeContextCheckReason.DATABASE_HEADER_INVALID)
+    if header[18:20] == b"\x02\x02":
+        for suffix in ("-wal", "-shm"):
+            sidecar = database.with_name(database.name + suffix)
+            if not sidecar.exists():
+                raise _NativeContextUnavailable(NativeContextCheckReason.WAL_NOT_VISIBLE)
+            _native_file_facts(sidecar)
+    try:
+        import sqlite3
+    except ImportError as failure:
+        raise _NativeContextUnavailable(NativeContextCheckReason.DATABASE_MODULE_UNAVAILABLE) from failure
+    try:
+        connection = sqlite3.connect("file:" + quote(str(database)) + "?mode=ro", uri=True, timeout=0.05)
+        try:
+            connection.execute("PRAGMA query_only=ON")
+            connection.set_progress_handler(lambda: 1, 10000)
+            connection.execute("BEGIN")
+            columns = {row[1]: row for row in connection.execute("PRAGMA table_info(threads)")}
+            if (not {"id", "rollout_path", "archived"} <= columns.keys()
+                    or columns["id"][5] != 1
+                    or sum(bool(column[5]) for column in columns.values()) != 1
+                    or any(columns[key][2].upper() != kind for key, kind in
+                           (("id", "TEXT"), ("rollout_path", "TEXT"), ("archived", "INTEGER")))):
+                raise _NativeContextUnavailable(NativeContextCheckReason.DATABASE_SCHEMA_UNSUPPORTED)
+            rows = connection.execute(
+                "SELECT rollout_path FROM threads WHERE id = ? AND archived = 0 LIMIT 2", (thread_id,)).fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error as failure:
+        code = getattr(failure, "sqlite_errorcode", None)
+        reason = (NativeContextCheckReason.DATABASE_BUSY
+                  if type(code) is int and code & 255 in {5, 6}
+                  else NativeContextCheckReason.DATABASE_QUERY_FAILED)
+        raise _NativeContextUnavailable(reason) from failure
+    _native_file_facts(database)
+    if not rows:
+        raise _NativeContextUnavailable(NativeContextCheckReason.THREAD_NOT_VISIBLE)
+    if len(rows) != 1 or type(rows[0][0]) is not str:
+        raise _NativeContextUnavailable(NativeContextCheckReason.THREAD_RECORD_INVALID)
+    return Path(rows[0][0])
+
+
+def _inspect_codex_native_observation(
+    native_state: Path, invocation: ProviderInvocation, thread_id: str, *,
+    previous: ProviderContextWitness | None = None, anchor: ProviderContextWitness | None = None,
+    before: bool = False,
+    rollout_path: Path | None = None, allow_discovery: bool = True,
+) -> _CodexNativeObservation:
+    """Check logical input lineage; file and metadata identity are observations."""
+    point = NativeContextSourceStage.INPUT
+    path, rediscovered = None, False
+    try:
+        if (type(thread_id) is not str or not thread_id
+                or previous is not None and type(previous) is not ProviderContextWitness
+                or anchor is not None and type(anchor) is not ProviderContextWitness):
+            raise _NativeContextUnavailable(NativeContextCheckReason.INPUT_INVALID)
+        if (previous is None) != (anchor is None) or before and previous is None:
+            raise _NativeContextUnavailable(NativeContextCheckReason.ANCHOR_MISSING)
+        workspace = invocation.execution_workspace
+        if workspace is None or invocation.context_call_id is None or invocation.payload_json is None:
+            raise _NativeContextUnavailable(NativeContextCheckReason.WORKSPACE_UNAVAILABLE)
+        selection = invocation.payload.get("response_contract", {}).get("schema_selection", {})
+        if selection.get("issued_contract", {}).get("call_id") != invocation.context_call_id:
+            raise _NativeContextUnavailable(NativeContextCheckReason.CALL_MISMATCH)
+        point = NativeContextSourceStage.WORKSPACE
+        workspace.require_current()
+        root = Path(os.path.realpath(native_state))
+        if root != native_state or not root.is_absolute():
+            raise _NativeContextUnavailable(NativeContextCheckReason.ROOT_INVALID)
+        _native_file_facts(root, directory=True)
+        scope = hashlib.sha256(canonical_provider_json({"session_id": invocation.session_id,
+            "cwd": str(workspace.worktree_root), "generation": workspace.generation_provenance})).hexdigest()
+        if previous is not None and (previous.thread_id != thread_id or previous.scope_digest != scope):
+            raise _NativeContextUnavailable(NativeContextCheckReason.SCOPE_MISMATCH)
+        if previous is not None and not previous.has_lineage_anchor(anchor):
+            raise _NativeContextUnavailable(NativeContextCheckReason.ANCHOR_MISMATCH)
+        point = NativeContextSourceStage.DATABASE
+        path = rollout_path if rollout_path is not None else (
+            previous.rollout_path if previous is not None else _codex_rollout_candidate(root, thread_id))
+        if previous is not None and rollout_path is None and not path.exists():
+            if not allow_discovery:
+                raise _NativeContextUnavailable(NativeContextCheckReason.ROLLOUT_NOT_VISIBLE)
+            rediscovered = True
+            path = _codex_rollout_candidate(root, thread_id)
+        point = NativeContextSourceStage.ROLLOUT
+        if path is None:
+            raise _NativeContextUnavailable(NativeContextCheckReason.ROLLOUT_NOT_VISIBLE)
+        if not path.is_absolute() or path != Path(os.path.realpath(path)):
+            raise _NativeContextUnavailable(NativeContextCheckReason.ROLLOUT_PATH_INVALID)
+        relative = path.relative_to(root / "sessions")
+        parent = root / "sessions"
+        _native_file_facts(parent, directory=True)
+        for part in relative.parts[:-1]:
+            parent = parent / part
+            _native_file_facts(parent, directory=True)
+        observed = _native_file_facts(path)
+        if observed[2] > _CONTEXT_WITNESS_BYTES:
+            raise _NativeContextUnavailable(NativeContextCheckReason.ROLLOUT_LIMIT)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            opened = os.fstat(descriptor)
+            if (not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid()
+                    or stat.S_IMODE(opened.st_mode) & 0o022):
+                raise _NativeContextUnavailable(NativeContextCheckReason.SOURCE_UNSAFE)
+            with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                raw = stream.read(_CONTEXT_WITNESS_BYTES + 1)
+        finally:
+            os.close(descriptor)
+        if len(raw) > _CONTEXT_WITNESS_BYTES:
+            raise _NativeContextUnavailable(NativeContextCheckReason.ROLLOUT_LIMIT)
+        if not raw.endswith(b"\n"):
+            raise _NativeContextUnavailable(NativeContextCheckReason.ROLLOUT_FLUSH_PENDING)
+        lines = raw.splitlines()
+        if len(lines) > _CONTEXT_WITNESS_LINES:
+            raise _NativeContextUnavailable(NativeContextCheckReason.RECORD_LIMIT)
+        point = NativeContextSourceStage.RECORDS
+        metadata, active_turn = None, None
+        completed, inputs, settings, usage_records, history_effects = set(), [], {}, [], []
+        for position, line in enumerate(lines):
+            record = json.loads(line)
+            if type(record) is not dict:
+                raise _NativeContextUnavailable(NativeContextCheckReason.RECORD_INVALID)
+            kind, value = record.get("type"), record.get("payload")
+            if kind not in {"session_meta", "event_msg", "response_item", "turn_context"}:
+                if kind == "compacted":
+                    history_effects.append(position)
+                continue
+            if type(value) is not dict:
+                raise _NativeContextUnavailable(NativeContextCheckReason.RECORD_INVALID)
+            if kind == "session_meta":
+                if value.get("id") is None or type(value.get("cwd")) is not str:
+                    raise _NativeContextUnavailable(NativeContextCheckReason.METADATA_MISMATCH)
+                if value["id"] != thread_id:
+                    raise _NativeContextUnavailable(NativeContextCheckReason.THREAD_MISMATCH)
+                if (not Path(value["cwd"]).is_absolute()
+                        or Path(os.path.realpath(value["cwd"])) != Path(os.path.realpath(workspace.worktree_root))):
+                    raise _NativeContextUnavailable(NativeContextCheckReason.SCOPE_MISMATCH)
+                metadata = value
+                if any(value.get(key) is not None for key in
+                       ("history_base", "forked_from_id", "parent_thread_id", "forked_from_ordinal_exclusive")):
+                    history_effects.append(position)
+            elif kind == "event_msg":
+                event = value.get("type")
+                if event == "task_started":
+                    if active_turn is not None and active_turn not in completed:
+                        raise _NativeContextUnavailable(NativeContextCheckReason.CONCURRENT_TURN)
+                    active_turn = value.get("turn_id")
+                    if type(active_turn) is not str or not active_turn or active_turn in completed:
+                        raise _NativeContextUnavailable(NativeContextCheckReason.TURN_ORDER_MISMATCH)
+                elif event == "task_complete":
+                    completed.add(value.get("turn_id"))
+                elif event == "token_count":
+                    info = value.get("info")
+                    total = _native_usage(info.get("total_token_usage")) if type(info) is dict else None
+                    last = _native_usage(info.get("last_token_usage")) if type(info) is dict else None
+                    if total is not None and last is not None:
+                        usage_records.append((active_turn, total, last))
+                elif event == "thread_rolled_back":
+                    history_effects.append(position)
+            elif kind == "turn_context":
+                settings[value.get("turn_id") or active_turn] = hashlib.sha256(canonical_provider_json(
+                    {key: value.get(key) for key in ("model", "comp_hash", "multi_agent_version")})).hexdigest()
+            elif value.get("type") == "message" and value.get("role") == "user":
+                content = value.get("content")
+                if (type(content) is not list or len(content) != 1
+                        or type(content[0]) is not dict or type(content[0].get("text")) is not str
+                        or type(active_turn) is not str):
+                    raise _NativeContextUnavailable(NativeContextCheckReason.RECORD_INVALID)
+                inputs.append((active_turn, hashlib.sha256(content[0]["text"].encode()).hexdigest(), position))
+        if metadata is None:
+            raise _NativeContextUnavailable(NativeContextCheckReason.METADATA_MISMATCH)
+
+        def require_input(turn_id, payload_hash):
+            matches = [row for row in inputs if row[0] == turn_id]
+            if not matches:
+                raise _NativeContextUnavailable(NativeContextCheckReason.REQUEST_NOT_VISIBLE)
+            if len(matches) != 1:
+                raise _NativeContextUnavailable(NativeContextCheckReason.REQUEST_MATCH_INVALID)
+            if matches[0][1] != payload_hash:
+                raise _NativeContextUnavailable(NativeContextCheckReason.INPUT_CHANGED)
+            if turn_id not in completed:
+                raise _NativeContextUnavailable(NativeContextCheckReason.TURN_FLUSH_PENDING)
+            return matches[0]
+
+        expected = hashlib.sha256(invocation.payload_json).hexdigest()
+        if before:
+            target = require_input(previous.turn_id, previous.payload_sha256)
+        else:
+            matches = [row for row in inputs if row[1] == expected]
+            if not matches:
+                raise _NativeContextUnavailable(NativeContextCheckReason.REQUEST_NOT_VISIBLE)
+            if len(matches) != 1:
+                raise _NativeContextUnavailable(NativeContextCheckReason.REQUEST_MATCH_INVALID)
+            target = require_input(matches[0][0], expected)
+        if target[0] != active_turn or inputs[-1] != target:
+            raise _NativeContextUnavailable(NativeContextCheckReason.TURN_ORDER_MISMATCH)
+        bootstrap = (require_input(previous.bootstrap_turn_id, previous.bootstrap_payload_sha256)
+                     if previous is not None else target)
+        lineage = [row for row in inputs if bootstrap[2] <= row[2] <= target[2]]
+        if history_effects:
+            raise _NativeContextUnavailable(NativeContextCheckReason.HISTORY_EFFECT_UNKNOWN)
+        digest = hashlib.sha256(b"native-user-input-lineage-v1").hexdigest()
+        digests = {}
+        for ordinal, row in enumerate(lineage, 1):
+            if row[0] not in completed:
+                raise _NativeContextUnavailable(NativeContextCheckReason.TURN_FLUSH_PENDING)
+            digest = hashlib.sha256(canonical_provider_json({
+                "previous": digest, "turn_id": row[0], "payload_sha256": row[1]})).hexdigest()
+            digests[row[0]] = (digest, ordinal)
+        if previous is not None:
+            prior = require_input(previous.turn_id, previous.payload_sha256)
+            accepted = require_input(anchor.turn_id, anchor.payload_sha256)
+            if not bootstrap[2] <= accepted[2] <= prior[2] <= target[2] or not before and prior[2] >= target[2]:
+                raise _NativeContextUnavailable(NativeContextCheckReason.TURN_ORDER_MISMATCH)
+            for witness in (previous, anchor):
+                logical = digests.get(witness.turn_id)
+                if logical is None:
+                    raise _NativeContextUnavailable(NativeContextCheckReason.LINEAGE_NOT_VISIBLE)
+                if logical != (witness.input_lineage_sha256, witness.input_lineage_count):
+                    raise _NativeContextUnavailable(NativeContextCheckReason.LINEAGE_MISMATCH)
+            if len(lineage) != previous.input_lineage_count + int(not before):
+                raise _NativeContextUnavailable(NativeContextCheckReason.TURN_ORDER_MISMATCH)
+        workspace.require_current()
+        if before:
+            return replace(_native_observation_success(invocation, previous, before, previous), source_path=path, rediscovered=rediscovered)
+        name = re.fullmatch(r"rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9a-f-]{36})(?:_([0-9a-f-]{36}))?\.jsonl", path.name)
+        rollout_id = (name[2] or name[1]) if name else hashlib.sha256(path.name.encode()).hexdigest()
+        witness = ProviderContextWitness(thread_id, rollout_id, path, scope,
+            (opened.st_dev, opened.st_ino), len(raw), hashlib.sha256(raw).hexdigest(),
+            expected, invocation.context_call_id, target[0],
+            settings.get(target[0], hashlib.sha256(b"{}").hexdigest()),
+            str(metadata.get("cli_version") or "unknown")[:80],
+            bootstrap_turn_id=bootstrap[0], bootstrap_payload_sha256=bootstrap[1],
+            bootstrap_call_id=invocation.context_call_id if previous is None else previous.bootstrap_call_id,
+            input_lineage_sha256=digest, input_lineage_count=len(lineage))
+        current = [row for row in usage_records if row[0] == target[0]]
+        prior_usage = [row for row in usage_records if previous is not None and row[0] == previous.turn_id]
+        return replace(_native_observation_success(invocation, previous, before, witness,
+            current[-1][1:] if current else None, prior_usage[-1][1] if prior_usage else None, len(completed) == 1), source_path=path, rediscovered=rediscovered)
+    except _NativeContextUnavailable as failure:
+        return replace(_native_observation_failure(invocation, previous, before, point, failure.reason, failure), source_path=path, rediscovered=rediscovered)
+    except (OSError, ValueError, TypeError, KeyError, RecursionError) as failure:
+        reason = NativeContextCheckReason.SOURCE_IO_UNAVAILABLE if isinstance(failure, OSError) else NativeContextCheckReason.INSPECTION_FAILED
+        if isinstance(failure, OSError) and failure.errno == 2:
+            reason = NativeContextCheckReason.THREAD_NOT_VISIBLE if point is NativeContextSourceStage.DATABASE else NativeContextCheckReason.ROLLOUT_NOT_VISIBLE
+        return replace(_native_observation_failure(invocation, previous, before, point, reason, failure), source_path=path, rediscovered=rediscovered)
+    except Exception as failure:
+        return replace(_native_observation_failure(invocation, previous, before,
+            NativeContextSourceStage.UNKNOWN, NativeContextCheckReason.INSPECTION_FAILED, failure),
+            source_path=path, rediscovered=rediscovered)
+
+
+def _native_usage(value: object) -> ProviderUsage | None:
+    if type(value) is not dict:
+        return None
+    names = ("input_tokens", "output_tokens", "cached_input_tokens")
+    if any(type(value.get(name)) is not int or value[name] < 0 for name in names):
+        return None
+    return ProviderUsage(**{name: value[name] for name in names})
+
+
+_POST_COMPLETE_TRANSIENT_REASONS = frozenset({
+    NativeContextCheckReason.WAL_NOT_VISIBLE,
+    NativeContextCheckReason.WAL_HEADER_UNSTABLE,
+    NativeContextCheckReason.WAL_CHECKSUM_UNSTABLE,
+    NativeContextCheckReason.DATABASE_BUSY,
+    NativeContextCheckReason.DATABASE_CHANGED,
+    NativeContextCheckReason.THREAD_NOT_VISIBLE,
+    NativeContextCheckReason.ROLLOUT_NOT_VISIBLE,
+    NativeContextCheckReason.ROLLOUT_CHANGED,
+    NativeContextCheckReason.ROLLOUT_FLUSH_PENDING,
+    NativeContextCheckReason.REQUEST_NOT_VISIBLE,
+    NativeContextCheckReason.LINEAGE_NOT_VISIBLE,
+    NativeContextCheckReason.TURN_FLUSH_PENDING,
+})
+
+
+async def _observe_completed_native_context(native_state, invocation, thread_id, *, deadline, precheck=None,
+                                          initial_path=None, discovery_used=False):
+    """At most three observations and one safe rediscovery, with no native call."""
+    observations = [] if precheck is None else list(precheck.observations)
+    rediscovered, rollout_path = discovery_used, initial_path
+    for ordinal in range(3):
+        observed = _inspect_codex_native_observation(native_state, invocation, thread_id,
+            previous=invocation.context_witness, anchor=invocation.context_anchor,
+            rollout_path=rollout_path, allow_discovery=not rediscovered)
+        observations.extend(observed.check.observations)
+        if observed.rediscovered:
+            rediscovered, rollout_path = True, observed.source_path
+        if (observed.witness is not None or observed.check.reason not in _POST_COMPLETE_TRANSIENT_REASONS
+                or ordinal == 2 or time.monotonic() >= deadline):
+            break
+        if (invocation.context_witness is not None and not rediscovered
+                and observed.check.reason in {NativeContextCheckReason.REQUEST_NOT_VISIBLE,
+                                              NativeContextCheckReason.ROLLOUT_NOT_VISIBLE}):
+            rediscovered = True
+            try:
+                rollout_path = _codex_rollout_candidate(native_state, thread_id)
+            except (OSError, ValueError, TypeError, KeyError, RecursionError, _NativeContextUnavailable) as failure:
+                reason = (failure.reason if type(failure) is _NativeContextUnavailable else
+                          NativeContextCheckReason.SOURCE_IO_UNAVAILABLE if isinstance(failure, OSError) else
+                          NativeContextCheckReason.INSPECTION_FAILED)
+                observed = _native_observation_failure(invocation, invocation.context_witness, False,
+                    NativeContextSourceStage.DATABASE, reason, failure)
+                observations.extend(observed.check.observations)
+                break
+        await asyncio.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
+        if time.monotonic() >= deadline:
+            break
+    return replace(observed, check=NativeContextCheck(invocation.context_call_id,
+        None if invocation.context_witness is None else invocation.context_witness.call_id,
+        tuple(observations)))
+
+
+def inspect_codex_context_witness(
+    native_state: Path, invocation: ProviderInvocation, thread_id: str, *,
+    previous: ProviderContextWitness | None = None,
+    anchor: ProviderContextWitness | None = None, before: bool = False,
+) -> ProviderContextWitness | None:
+    """Preserve the existing native continuity contract and read guards."""
+    observed = _inspect_codex_native_observation(native_state, invocation, thread_id,
+        previous=previous, anchor=anchor, before=before)
+    return observed.witness
+
+
+def _codex_usage_observation(raw, observed, invocation):
+    if raw is None:
+        return None
+    unknown = ProviderUsageObservation(raw, ProviderUsageScope.UNKNOWN, "codex.turn.completed.usage")
+    if observed is None or observed.usage_pair is None:
+        return unknown
+    witness, (total, last), previous_total, first_native_turn = (observed.witness, observed.usage_pair, observed.previous_usage, observed.first_native_turn)
+    previous = invocation.context_witness
+    if previous is not None and previous.settings_digest != witness.settings_digest:
+        return unknown
+    if raw != total:
+        return unknown
+    names = ("input_tokens", "output_tokens", "cached_input_tokens")
+    if previous is None:
+        if invocation.thread_id is not None or not first_native_turn or total != last:
+            return unknown
+    elif previous_total is None or any(
+        getattr(total, name) < getattr(previous_total, name)
+        or getattr(total, name) - getattr(previous_total, name) != getattr(last, name)
+        for name in names
+    ):
+        return unknown
+    def prefix(value):
+        return hashlib.sha256(canonical_provider_json({"scope": value.scope_digest,
+            "thread": value.thread_id, "turn": value.turn_id, "count": value.input_lineage_count,
+            "lineage": value.input_lineage_sha256, "settings": value.settings_digest})).hexdigest()
+    session = hashlib.sha256(canonical_provider_json({"scope": witness.scope_digest,
+        "thread": witness.thread_id, "settings": witness.settings_digest})).hexdigest()
+    return ProviderUsageObservation(raw, ProviderUsageScope.SESSION_CUMULATIVE,
+        "codex.turn.completed+native.token_count.total_and_last", session_ref=session,
+        prefix_ref=prefix(witness), previous_prefix_ref=None if previous is None else prefix(previous),
+        session_start=previous is None and first_native_turn)
 
 
 class CodexAdapter:
@@ -485,6 +923,9 @@ class CodexAdapter:
             )
         execution_workspace.require_current()
 
+        native_deadline = time.monotonic() + self.timeout_seconds
+        native_precheck = None
+        native_pre_source_path, native_pre_rediscovered = None, False
         temporary_directory = Path(
             self._make_temporary_directory()(prefix="story-codex-output-")
         )
@@ -516,6 +957,19 @@ class CodexAdapter:
                 execution_workspace,
             )
             stdin = invocation.payload_json
+            native_state = self._native_state_directory(
+                session_root=execution_workspace.worktree_root,
+                session_container=self._control_root.with_name(self._control_root.name + GIT_SESSION_WORKTREE_SIBLING_SUFFIX),
+                staging=binding.staging_directory, output=output_path)
+            if invocation.context_witness is not None:
+                prior = _inspect_codex_native_observation(native_state, invocation, invocation.thread_id,
+                    previous=invocation.context_witness, anchor=invocation.context_anchor, before=True)
+                native_precheck = prior.check
+                native_pre_source_path, native_pre_rediscovered = prior.source_path, prior.rediscovered
+                if prior.witness is None:
+                    raise ProviderInvocationError("native context continuity is unavailable",
+                        taint_existing_thread=True, continuation_rejection=ProviderContinuationRejection.UNAVAILABLE,
+                        native_context_check=prior.check) from prior.cause
             create_process = self._create_process()
             agent_id = binding.definition.agent_id
             stream_sink = invocation.stream_sink
@@ -881,9 +1335,20 @@ class CodexAdapter:
                 if thread_id is not None and any(
                     reported != thread_id for reported in reported_thread_ids
                 ):
+                    reported = next(value for value in reported_thread_ids if value != thread_id)
+                    observed_thread = (reported if type(reported) is str
+                                       and _SAFE_THREAD_ID.fullmatch(reported) is not None else None)
+                    check = (NativeContextCheck(invocation.context_call_id,
+                        None if invocation.context_witness is None else invocation.context_witness.call_id,
+                        (() if native_precheck is None else native_precheck.observations) + (
+                            NativeContextObservation(NativeContextCheckStage.POST_COMPLETE,
+                                NativeContextSourceStage.RECORDS, NativeContextCheckReason.THREAD_MISMATCH),),
+                        observed_thread_id=observed_thread, normal_exit_code=result.returncode)
+                        if invocation.context_call_id is not None else None)
                     raise ProviderInvocationError(
                         "Codex CLI returned a different continuation identity",
                         taint_existing_thread=True,
+                        native_context_check=check,
                     )
                 if thread_id is None:
                     thread_id = self.started_thread(events)
@@ -905,12 +1370,22 @@ class CodexAdapter:
                         "Codex CLI returned malformed structured output",
                         taint_existing_thread=True,
                     ) from exc
+                native_observation = (await _observe_completed_native_context(native_state, invocation, thread_id,
+                    deadline=native_deadline, precheck=native_precheck,
+                    initial_path=native_pre_source_path, discovery_used=native_pre_rediscovered)
+                    if invocation.context_call_id is not None else None)
+                raw_usage = self.provider_usage(events)
                 provider_result = ProviderResult(
                     thread_id=thread_id,
                     response_text=response_text,
-                    usage=self.provider_usage(events),
+                    usage=raw_usage,
+                    usage_observation=_codex_usage_observation(raw_usage, native_observation, invocation),
                     actual_transport_utf8_bytes=len(stdin),
-                )
+                    context_witness=None if native_observation is None else native_observation.witness,
+                    native_context_check=None if native_observation is None else replace(native_observation.check,
+                        observed_thread_id=reported_thread_ids[0] if reported_thread_ids else None,
+                        normal_exit_code=result.returncode),
+                    native_context_cause=None if native_observation is None else native_observation.cause)
                 execution_workspace.require_current()
                 return provider_result
             except BaseException as exc:

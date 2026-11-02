@@ -55,18 +55,13 @@ from story_writing_agents.interactive_terminal._render import render_plain
 
 
 PUBLIC_EXPORTS = (
-    "AttachmentKind",
-    "ComposeMode",
+    "project_conversation_messages",
+    "AttachmentKind", "ComposeMode",
     "ConfirmationResult",
-    "TerminalActionKind",
-    "TerminalMessageKind",
-    "InteractiveErrorCode",
-    "TerminalAction",
-    "InteractiveErrorSpec",
-    "INTERACTIVE_ERROR_SPECS",
-    "InteractiveError",
-    "sanitize_terminal_text",
-    "InteractiveTerminal",
+    "TerminalActionKind", "TerminalMessageKind",
+    "InteractiveErrorCode", "TerminalAction", "InteractiveErrorSpec",
+    "INTERACTIVE_ERROR_SPECS", "InteractiveError",
+    "sanitize_terminal_text", "InteractiveTerminal",
     "InteractiveTranscriptViewer",
 )
 
@@ -392,11 +387,12 @@ def visible_escape(character: str) -> str:
 class PublicContractTests(unittest.TestCase):
     def test_direct_module_public_surface_is_exact_and_ordered(self) -> None:
         self.assertEqual(tuple(terminal_module.__all__), PUBLIC_EXPORTS)
+        self.assertTrue(callable(terminal_module.project_conversation_messages))
         self.assertNotIn("build_contextual_terminal", terminal_module.__all__)
         self.assertIs(terminal_module.InteractiveTranscriptViewer, InteractiveTranscriptViewer)
         self.assertEqual(tuple(inspect.signature(InteractiveTranscriptViewer.open).parameters),
             ("self", "events", "request", "result", "continuation", "show_details", "history_events"))
-        for name in PUBLIC_EXPORTS[:-1]:
+        for name in PUBLIC_EXPORTS[1:-1]:
             with self.subTest(name=name):
                 self.assertIs(getattr(terminal_module, name), globals()[name])
         for changed_callable in (
@@ -980,6 +976,21 @@ class PromptAndRenderingTests(unittest.TestCase):
                 "[compose] Sending 1 line, 16 characters to lead.\n",
             ],
         )
+        main_input = terminal_module.InteractiveMainInput(terminal)
+        main_callbacks.reads.extend((KeyboardInterrupt(), "/quit", EOFError(), "/status"))
+        main_input.queue_alert(terminal_module.Notice("Retry the command.", label="command"))
+        self.assertIs(main_input.read_main(lambda _text, _cursor: None).kind, TerminalActionKind.INTERRUPT)
+        self.assertEqual(general_callbacks.records[-1], "[command] Retry the command.\n")
+        record_count = len(general_callbacks.records)
+        self.assertEqual(main_input.read_main(lambda _text, _cursor: None).text, "/quit")
+        self.assertEqual(len(general_callbacks.records), record_count)
+        main_input.queue_alert(terminal_module.Notice("Try again.", label="command"))
+        self.assertIs(main_input.read_main(lambda _text, _cursor: None).kind, TerminalActionKind.EOF)
+        record_count = len(general_callbacks.records)
+        self.assertEqual(main_input.read_main(lambda _text, _cursor: None).text, "/status")
+        self.assertEqual(len(general_callbacks.records), record_count)
+        with self.assertRaises(TypeError):
+            main_input.queue_alert(object())  # type: ignore[arg-type]
 
     def test_contextual_factory_routes_each_operation_without_prompt_inference(
         self,
@@ -2394,6 +2405,29 @@ class HelpAndErrorTests(unittest.TestCase):
                 f"{'-' * 32}\n"
             ],
         )
+        terminal, callbacks = make_terminal("/status", width=1000)
+        main_input = terminal_module.InteractiveMainInput(terminal)
+        main_input.queue_alert(
+            InteractiveError(
+                InteractiveErrorCode.INTERNAL_ERROR,
+                summary="\x1b[2J\n" + "x" * 600,
+                hint="\r" + "y" * 300,
+            ),
+            debug_log_path="debug_logs/runtime.jsonl",
+        )
+        self.assertEqual(main_input.read_main(lambda _text, _cursor: None).text, "/status")
+        self.assertEqual(len(callbacks.records), 3)
+        self.assertEqual(
+            len(callbacks.records[0].removeprefix("[error internal_error] ").rstrip("\n")),
+            512,
+        )
+        self.assertEqual(
+            len(callbacks.records[1].removeprefix("[hint] ").rstrip("\n")), 256,
+        )
+        self.assertIn("[debug log]", callbacks.records[2])
+        self.assertTrue(all(record.count("\n") == 1 for record in callbacks.records))
+        self.assertNotIn("\x1b", "".join(callbacks.records))
+        self.assertNotIn("Interactive error", "".join(callbacks.records))
 
 
 class SanitizerTests(unittest.TestCase):
@@ -2454,7 +2488,7 @@ class TerminalBoundaryTests(unittest.TestCase):
         )
         self.assertNotIn("interactive_terminal", story_writing_agents.__all__)
         self.assertFalse(hasattr(story_writing_agents, "InteractiveTranscriptViewer"))
-        for name in PUBLIC_EXPORTS[:-1]:
+        for name in PUBLIC_EXPORTS[1:-1]:
             with self.subTest(name=name):
                 self.assertNotIn(name, story_writing_agents.__all__)
                 self.assertFalse(hasattr(story_writing_agents, name))

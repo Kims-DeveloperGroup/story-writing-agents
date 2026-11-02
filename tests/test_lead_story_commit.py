@@ -49,6 +49,7 @@ from story_writing_agents.workspace.initialization import provision_session_reso
 from tests import test_lead_artifact_application as lead_artifact_application_tests
 from tests.collaboration_contract_fixture import seed_reviewed_artifact
 from tests.helpers import pristine_initialized_workspace
+from tests.provider_wire_fixture import selection_plan, lead_fixture_result, lead_fixture_response
 from tests.test_artifact_proposal_orchestration import (
     _RULES,
     _artifact_outcome,
@@ -141,7 +142,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             check=True,
             stdout=subprocess.DEVNULL,
         )
-        self.backend = _LeadBackend(vendor="fixture")
+        self.backend = _LeadBackend(vendor="fixture", test_case=self)
         self.runtime = StoryRuntime(self.workspace, self.backend)  # type: ignore[arg-type]
 
     async def reviewed_create(
@@ -154,14 +155,14 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation(subject)
         self.backend.enqueue(
             _artifact_outcome(
-                operations=lambda _call, material: [
+                operations=lambda _call, material, *, input_payload: [
                     {"evidence_id": _reference_ids(material)[0], "kind": "replace", "new_text": new_text}
                 ],
                 evidence_status="empty",
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
                 authoring_scope=lambda call: _live_scope(call, activity='review', domains=('tone_execution',), paths=(_RULES,)),
-            )
-        )
+            ),
+                             control_plan=selection_plan("artifact.changes"))
         user_material = "\nSupplied replacement:\n" + new_text if user_brief is None else "\nSupplied narrative-style brief:\n" + user_brief
         proposed = await self.runtime.lead_turn(
             self.session_id,
@@ -293,7 +294,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         )
         before_files = self.artifact_snapshot()
         before_git = self.session_git_snapshot()
-        restarted_backend = _LeadBackend()
+        restarted_backend = _LeadBackend(test_case=self)
         restarted = StoryRuntime(self.workspace, restarted_backend)  # type: ignore[arg-type]
         redisclosed = await restarted.lead_turn(
             self.session_id, applied.request.reviewed_proposal.conversation_id,
@@ -338,7 +339,11 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         self.assertEqual(self.session_git_snapshot(), before_git)
 
         conversation = applied.request.reviewed_proposal.conversation_id
-        self.backend.enqueue(_discussion_reply("Discussion preserves this exact Commit request."))
+        def pending_discussion(call, _provider):
+            self.assertIsNone(call.contract.schema_group_phase)
+            return lead_fixture_response(call, lead_fixture_result({"response_type": "answer",
+                "response_text": "Discussion preserves this exact Commit request.", "used_evidence_ids": {}}), family=0)
+        self.backend.enqueue(pending_discussion)
         discussion = await self.runtime.decide_lead_task(task.LeadTaskDecision.for_conversation(
             self.session_id, conversation, task.LeadTaskAction.DISCUSS, text="Explain the pending Commit.",
         ))

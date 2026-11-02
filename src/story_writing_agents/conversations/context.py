@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from .events import CollaborationLeadGroupTracePayload
+from ..agent_context.group_observation import LeadGroupTrace
+
 from ..core_document_readiness import CORE_DOCUMENTS, CoreDocumentReadinessBasis
 from ..authoring_admission import AdmissionSource, AdmissionSourceKind, AuthoringAdmissionBasis
 
@@ -4642,6 +4645,8 @@ def _project_validated_collaboration_history(
 
         for event in batch:
             event_by_id[event.event_id] = event
+            if type(event.payload) is CollaborationLeadGroupTracePayload:
+                continue
             current_step_id = event.step_id
             payload = event.payload
             proposal = proposals.get(event.step_id)
@@ -4887,6 +4892,7 @@ def _project_validated_collaboration_history(
                     if prepared_step_id != event.step_id or prepared_payload != replace(
                         payload,
                         state=CollaborationProviderCallState.PREPARED,
+                        accounting=None,
                         validation_details=(),
                 usage=None,
                     ):
@@ -6379,6 +6385,17 @@ def _validate_collaboration_co_batch(
     active_proposals: dict[str, CollaborationProposal],
     task_control_history: tuple[CollaborationEventV2, ...] = (),
 ) -> None:
+    for trace_event in batch:
+        if type(trace_event.payload) is not CollaborationLeadGroupTracePayload:
+            continue
+        trace = trace_event.payload.trace
+        terminal_type = (CollaborationLeadJudgmentPayload if trace.terminal_code == "accepted"
+                         else CollaborationLeadOutcomeFailurePayload)
+        if not any(type(source.payload) is terminal_type
+                   and (source.turn_id, source.step_id) == (trace_event.turn_id, trace_event.step_id)
+                   and getattr(source.payload, "provider_invocation_id" if trace.terminal_code == "accepted" else "invocation_id", None) == trace.invocation_id
+                   for source in batch):
+            raise ValueError("private group trace requires its exact co-published terminal result")
     awaiting = [
         item
         for item in states
@@ -6783,6 +6800,8 @@ def _collaboration_readable_fields(
 ) -> tuple[CollaborationReadableField, ...]:
     """Project the closed searchable field set for one typed public payload."""
 
+    if type(payload) is CollaborationLeadGroupTracePayload:
+        return ()
     if type(payload) is CollaborationLeadTaskDecisionPayload:
         decision = payload.decision
         return (CollaborationReadableField(CollaborationReadableFieldKey.LEAD_TASK_CONTROL,
@@ -7334,3 +7353,13 @@ __all__ = [
     'LeadPublicResponseView',
     'LeadTaskDecisionResult',
 ]
+
+
+def project_lead_group_traces(events: tuple[CollaborationEventV2, ...]) -> tuple[LeadGroupTrace, ...]:
+    """Explicit private read projection; never part of task or reply authority."""
+    project_collaboration_history(events)
+    result = tuple(event.payload.trace for event in events
+                   if type(event.payload) is CollaborationLeadGroupTracePayload)
+    if len({item.invocation_id for item in result}) != len(result):
+        raise ValueError("logical invocation has duplicate group traces")
+    return result

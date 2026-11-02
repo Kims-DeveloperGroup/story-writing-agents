@@ -81,8 +81,8 @@ from .codex_adapter import CodexAdapter
 from .conversations import CollaborationEventStore
 from .conversations.session_context import (
     MAX_PROVIDER_INPUT_UTF8_BYTES,
+    MAX_PROVIDER_PAYLOAD_UTF8_BYTES,
     MAX_PROVIDER_SCHEMA_UTF8_BYTES,
-    MAX_SESSION_CONTEXT_UTF8_BYTES,
     SessionContextCapacityError,
 )
 from .conversation_retrieval import (
@@ -215,6 +215,27 @@ _ACCESS_DIAGNOSTIC_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _SAFE_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
 _SAFE_CONTEXT_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+async def _timed_provider_invoke(
+    adapter: ProviderAdapter, binding: ProviderBinding, invocation: ProviderInvocation,
+) -> ProviderResult:
+    """Observe actual adapter latency without changing its result or failure."""
+
+    started = time.monotonic_ns()
+    try:
+        result = await adapter.invoke(binding, invocation)
+    except BaseException as failure:
+        facts = provider_failure_accounting(failure)
+        if facts.state is ProviderCallState.SUBMITTED:
+            record_provider_failure_accounting(
+                failure, state=facts.state,
+                actual_transport_utf8_bytes=facts.actual_transport_utf8_bytes,
+                usage=facts.usage, usage_observation=facts.usage_observation,
+                elapsed_ns=time.monotonic_ns() - started,
+            )
+        raise
+    return replace(result, elapsed_ns=time.monotonic_ns() - started) if type(result) is ProviderResult else result
 
 
 @dataclass(frozen=True, slots=True)
@@ -4356,6 +4377,8 @@ class AgentBackend:
                     failure_accounting.actual_transport_utf8_bytes
                 ),
                 usage=failure_accounting.usage,
+                usage_observation=failure_accounting.usage_observation,
+                elapsed_ns=failure_accounting.elapsed_ns,
             )
         )
 
@@ -4927,7 +4950,7 @@ class AgentBackend:
         )
         try:
             async with provider_activity(bound_agent.vendor) as auth_generation:
-                result = await adapter.invoke(
+                result = await _timed_provider_invoke(adapter,
                     bound_agent._provider_binding,
                     invocation,
                 )
@@ -4996,6 +5019,8 @@ class AgentBackend:
                             result.actual_transport_utf8_bytes
                         ),
                         usage=result.usage,
+                        usage_observation=result.usage_observation,
+                        elapsed_ns=result.elapsed_ns,
                     )
                 )
             )
@@ -5177,6 +5202,8 @@ class AgentBackend:
                 failure_accounting.actual_transport_utf8_bytes
             ),
             usage=failure_accounting.usage,
+            usage_observation=failure_accounting.usage_observation,
+            elapsed_ns=failure_accounting.elapsed_ns,
         )
 
     @staticmethod
@@ -5376,8 +5403,7 @@ class AgentBackend:
             component_paths=component_paths,
             mandatory_reference_paths=mandatory_reference_paths,
             binding_components=bound_agent._provider_binding.binding_components,
-            execution_workspace=execution_workspace,
-        )
+            execution_workspace=execution_workspace, context_witness=request.context_witness, context_anchor=request.context_anchor, context_call_id=(request.call_id if type(request) is BoundContextProviderCallRequest and request.contract.schema_group_phase is not None else None))
         if invocation.call_accounting is None or invocation.payload_json is None:
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         if bound_agent.definition.agent_id == LEAD_ORCHESTRATOR and "agent_action" in schema.get("properties", {}):
@@ -5389,8 +5415,10 @@ class AgentBackend:
                 > MAX_PROVIDER_INPUT_UTF8_BYTES
             ):
                 raise SessionContextCapacityError()
-        elif continuation_identity is not None and len(invocation.payload_json) > MAX_SESSION_CONTEXT_UTF8_BYTES:
-            raise SessionContextCapacityError()
+        elif continuation_identity is not None and len(invocation.payload_json) > MAX_PROVIDER_PAYLOAD_UTF8_BYTES:
+            raise SessionContextCapacityError(
+                stage="provider_payload", actual_utf8_bytes=len(invocation.payload_json)
+            )
 
         replay_validator = self._context_replay_validator(
             bound_agent,
@@ -5416,7 +5444,7 @@ class AgentBackend:
                             else "identity"
                         ),
                     )
-                result = await adapter.invoke(bound_agent._provider_binding, invocation)
+                result = await _timed_provider_invoke(adapter, bound_agent._provider_binding, invocation)
                 self._require_postsubmission_workspace(invocation)
             self._capture_provider_return_without_replacing(exchange, result)
         except ProviderInvocationError as failure:
@@ -5463,6 +5491,7 @@ class AgentBackend:
                         and not timed_out
                         else None
                     ),
+                    native_context_check=failure.native_context_check,
                 ),
             )
             self._capture_provider_failure_without_replacing(
@@ -5476,9 +5505,7 @@ class AgentBackend:
                 ),
                 failure=failure,
             )
-            if failure.__cause__ is None:
-                raise translated from None
-            raise translated from failure.__cause__
+            raise translated from failure
         except ProviderAuthenticationRequiredError:
             # A replay veto carries the already-recorded original physical facts.
             raise
@@ -5548,6 +5575,8 @@ class AgentBackend:
                 else None
             ),
             usage=result.usage if type(result) is ProviderResult else None,
+            usage_observation=result.usage_observation if type(result) is ProviderResult else None,
+            elapsed_ns=result.elapsed_ns if type(result) is ProviderResult else None,
         )
         self._observe_context_accounting(accounting)
         if type(result) is not ProviderResult or type(result.response_text) is not str:
@@ -5616,6 +5645,28 @@ class AgentBackend:
                 AgentExchangeTerminalCode.RESPONSE_CORRELATION_MISMATCH,
             )
             raise failure
+        native_check = result.native_context_check
+        completed_without_post_witness = (
+            invocation.context_witness is not None and native_check is not None
+            and native_check.outcome == "unavailable"
+            and native_check.stage.value == "post_complete"
+            and native_check.pre_submit_verified
+            and native_check.call_id == invocation.context_call_id
+            and native_check.prior_call_id == invocation.context_witness.call_id
+            and native_check.normal_exit_code == 0
+            and native_check.observed_thread_id == result.thread_id == invocation.thread_id)
+        if (native_check is not None and native_check.outcome == "contradiction"
+                or invocation.context_witness is not None and result.context_witness is None
+                and not completed_without_post_witness):
+            failure = ContextExecutionError(ContextExecutionErrorCode.CONTINUATION_MISMATCH)
+            record_context_provider_failure(failure, ContextProviderFailureFacts(
+                accounting, taint_existing_thread=True,
+                continuation_rejection=ContextContinuationRejection.UNAVAILABLE,
+                native_context_check=result.native_context_check))
+            self._taint_context_thread_without_replacing(
+                storage_scope, bound_agent.vendor, definition_fingerprint, effective_policy_fingerprint)
+            self._capture_rejected_without_replacing(exchange, AgentExchangeTerminalCode.CONTEXT_RUNTIME_FAILED)
+            raise failure from result.native_context_cause
         try:
             self._require_postsubmission_workspace(invocation)
             self._store_context_thread(
@@ -5657,8 +5708,8 @@ class AgentBackend:
                 result.response_text,
                 result.thread_id,
                 accounting,
-                _ContextExchangeFinalizer(exchange),
-            )
+            _ContextExchangeFinalizer(exchange), context_witness=result.context_witness,
+            native_context_check=result.native_context_check)
         except asyncio.CancelledError:
             self._capture_cancelled_without_replacing(exchange)
             raise

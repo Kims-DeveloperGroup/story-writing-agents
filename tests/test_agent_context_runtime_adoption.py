@@ -7,6 +7,12 @@ from types import SimpleNamespace
 from unittest import mock
 from story_writing_agents.agent_context import canonical_provider_json
 from story_writing_agents.agent_context.accounting import account_provider_payload
+from story_writing_agents.conversations.session_context import (
+    MAX_PROVIDER_INPUT_UTF8_BYTES,
+    MAX_PROVIDER_PAYLOAD_UTF8_BYTES,
+    MAX_PROVIDER_SCHEMA_UTF8_BYTES,
+    MAX_SESSION_CONTEXT_UTF8_BYTES,
+)
 from story_writing_agents.agent_context import service as service_module
 from story_writing_agents.agent_context.planning import ContextCheckpointState, ContextDeliveryMode
 from story_writing_agents.provider_wire import add_contract_guidance, project_context_payload
@@ -182,6 +188,13 @@ class CandidateWireContractTests(unittest.TestCase):
             _CandidateWireInterpreter().apply(self.payload(records=[self.record(1, {"content_reference": "/current_draft/content_text"})]))
 
     def test_production_candidate_operation_bytes_and_full_fallbacks_are_exact(self):
+        self.assertEqual(MAX_SESSION_CONTEXT_UTF8_BYTES, 262_144)
+        self.assertEqual(MAX_PROVIDER_PAYLOAD_UTF8_BYTES, 524_288)
+        self.assertEqual(MAX_PROVIDER_SCHEMA_UTF8_BYTES, 524_288)
+        self.assertEqual(MAX_PROVIDER_INPUT_UTF8_BYTES, 1_048_576)
+        self.assertEqual(
+            MAX_PROVIDER_INPUT_UTF8_BYTES,
+            MAX_PROVIDER_PAYLOAD_UTF8_BYTES + MAX_PROVIDER_SCHEMA_UTF8_BYTES)
         def record(alias, content):
             encoded = content.encode("utf-8")
             return service_module._WireCandidateRecord("s1", alias, content, "sha256:" + hashlib.sha256(encoded).hexdigest(), len(encoded))
@@ -246,30 +259,30 @@ class CandidateWireContractTests(unittest.TestCase):
                 self.assertEqual(selected, full)
                 self.assertEqual(selected[0]["context_record_updates"][0]["records"][0]["content_text"], {"content_reference": "/current_draft/content_text"})
                 if index == 2:
-                    padding = "p" * (service_module.MAX_SESSION_CONTEXT_UTF8_BYTES - size(full))
+                    padding = "p" * (MAX_PROVIDER_PAYLOAD_UTF8_BYTES - size(full))
                     with mock.patch.object(service_module, "_latest_debate_candidate_record", side_effect=(record(1, short_base), record(index, short_target))):
                         selected, full, compact, _ = projected(short_target, duplicate=index, padding=padding, diagnostics=True)
-                    self.assertEqual(size(selected), service_module.MAX_SESSION_CONTEXT_UTF8_BYTES)
-                    self.assertGreater(size(compact), service_module.MAX_SESSION_CONTEXT_UTF8_BYTES)
+                    self.assertEqual(size(selected), MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
+                    self.assertGreater(size(compact), MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
                     service_module._require_context_capacity(schema, selected[0], stage="provider_payload")
                     escaped = '한\n\\"'
                     with mock.patch.object(service_module, "_latest_debate_candidate_record",
                         side_effect=(record(1, short_base), record(index, short_target))):
                         below, _, _, _ = projected(short_target, duplicate=index,
                             padding=escaped + padding[10:], diagnostics=True)
-                    self.assertEqual(size(below), service_module.MAX_SESSION_CONTEXT_UTF8_BYTES - 1)
+                    self.assertEqual(size(below), MAX_PROVIDER_PAYLOAD_UTF8_BYTES - 1)
                     service_module._require_context_capacity(schema, below[0], stage="provider_payload")
                     with mock.patch.object(service_module, "_latest_debate_candidate_record",
                         side_effect=(record(1, short_base), record(index, short_target))):
                         over, _, _, _ = projected(short_target, duplicate=index,
                             padding=escaped + padding[8:], diagnostics=True)
-                    self.assertEqual(size(over), service_module.MAX_SESSION_CONTEXT_UTF8_BYTES + 1)
+                    self.assertEqual(size(over), MAX_PROVIDER_PAYLOAD_UTF8_BYTES + 1)
                     with self.assertRaises(service_module.SessionContextCapacityError) as caught:
                         service_module._require_context_capacity(schema, over[0], stage="provider_payload")
                     self.assertEqual(caught.exception.stage, "provider_payload")
                     self.assertEqual(caught.exception.actual_utf8_bytes, size(over))
                     self.assertEqual(caught.exception.maximum_utf8_bytes,
-                        service_module.MAX_SESSION_CONTEXT_UTF8_BYTES)
+                        MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
                     self.assertEqual(caught.exception.excess_utf8_bytes, 1)
                     self.assertNotIn(escaped, str(caught.exception))
                     self.assertNotIn(escaped, repr(caught.exception))

@@ -338,8 +338,11 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 163)
-        self.assertEqual(len(edges), 731)
+        self.assertEqual(len(modules), 166)
+        self.assertEqual(len(edges), 758)
+        self.assertIn(("story_writing_agents.agent_context.service", "story_writing_agents.provider_adapter"), edges)
+        self.assertIn(("story_writing_agents.interactive_terminal._advisory_progress", "story_writing_agents.agent_context.service"), edges)
+        self.assertIn(("story_writing_agents.interactive_terminal._core", "story_writing_agents.agent_context.service"), edges)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -368,6 +371,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.git.story_commit_contracts",
                 "story_writing_agents.writing_artifacts", "story_writing_agents.authoring_admission",
                 "story_writing_agents.core_document_readiness",
+                'story_writing_agents.agent_context.accounting',
+                'story_writing_agents.agent_context.group_observation',
             },
             "story_writing_agents.conversations.context": {
                 "story_writing_agents.lead_task_transitions",
@@ -382,6 +387,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.git.story_commit_contracts",
                 "story_writing_agents.writing_artifacts", "story_writing_agents.authoring_admission",
                 "story_writing_agents.core_document_readiness",
+                'story_writing_agents.agent_context.group_observation',
             },
         }
         for source, expected in conversation_dependencies.items():
@@ -732,6 +738,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             },
             {
                 "story_writing_agents.provider_wire",
+                "story_writing_agents.provider_adapter",
                 "story_writing_agents.agent_context.accounting",
                 "story_writing_agents.agent_context.actions",
                 "story_writing_agents.agent_context.continuation",
@@ -745,11 +752,13 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversations.session_context",
                 "story_writing_agents.errors",
                 "story_writing_agents.lead_provider_contracts",
+                "story_writing_agents.lead_schema_groups",
                 "story_writing_agents.provider_auth_recovery",
                 "story_writing_agents.provider_execution_workspace",
                 "story_writing_agents.structured_output_validation",
                 "story_writing_agents.workspace",
                 "story_writing_agents.writing_artifacts.read_actions",
+                "story_writing_agents.agent_context.group_observation",
             },
         )
         self.assertIn(
@@ -849,6 +858,30 @@ class RagModuleBoundaryTests(unittest.TestCase):
             },
         )
 
+        self.assertEqual(
+            {target for source, target in edges
+             if source == "story_writing_agents.agent_context.group_observation"},
+            {"story_writing_agents.agent_context.accounting", "story_writing_agents.lead_schema_groups"},
+        )
+        self.assertEqual(
+            {target for source, target in edges
+             if source == "story_writing_agents.agent_context.group_reporting"},
+            {"story_writing_agents.agent_context.accounting",
+             "story_writing_agents.agent_context.group_observation", "story_writing_agents.provider_adapter"},
+        )
+        self.assertEqual(
+            {source for source, target in edges
+             if target == "story_writing_agents.agent_context.group_observation"},
+            {"story_writing_agents.agent_context.group_reporting", "story_writing_agents.agent_context.service",
+             "story_writing_agents.conversations.context", "story_writing_agents.conversations.events",
+             "story_writing_agents.orchestrator"},
+        )
+        self.assertEqual(
+            {source for source, target in edges
+             if target == "story_writing_agents.agent_context.group_reporting"},
+            {"story_writing_agents.orchestrator"},
+        )
+
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
         self.assertEqual(len(story_writing_agents.__all__), 106)
         rag_names = set().union(
@@ -882,6 +915,16 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "inspect_authorized_conversation_rag",
             ),
         )
+
+        for module_name in ("group_observation", "group_reporting"):
+            spec = importlib.util.find_spec("story_writing_agents.agent_context." + module_name)
+            self.assertIsNotNone(spec)
+            self.assertEqual(Path(spec.origin), _SOURCE_ROOT / "agent_context" / (module_name + ".py"))
+        for name in ("LeadGroupObservation", "LeadGroupObservationKind", "LeadGroupObservationSink",
+                     "LeadGroupTrace", "LeadGroupRequestMeasurement", "group_request_size_report",
+                     "group_trace_report"):
+            self.assertNotIn(name, story_writing_agents.__all__)
+            self.assertFalse(hasattr(story_writing_agents, name))
 
 
 class RagPackagingBoundaryTests(unittest.TestCase):
@@ -1079,6 +1122,22 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 ),
                 requires,
             )
+            group_package_paths = (
+                "story_writing_agents/agent_context/group_observation.py",
+                "story_writing_agents/agent_context/group_reporting.py",
+            )
+            with zipfile.ZipFile(story_wheel) as archive:
+                for package_path in group_package_paths:
+                    self.assertEqual(archive.read(package_path),
+                        (_REPOSITORY_ROOT / "src" / package_path).read_bytes())
+            with tarfile.open(story_sdist, "r:gz") as archive:
+                for package_path in group_package_paths:
+                    members = tuple(member for member in archive.getmembers()
+                                    if member.name.endswith("/" + package_path))
+                    self.assertEqual(len(members), 1)
+                    with archive.extractfile(members[0]) as handle:
+                        self.assertEqual(handle.read(),
+                            (_REPOSITORY_ROOT / "src" / package_path).read_bytes())
             conversation_package_paths = (
                 "story_writing_agents/conversations/__init__.py",
                 "story_writing_agents/conversations/catalog.py",

@@ -27,6 +27,7 @@ from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
     preparation, recommendation, rewrite_history,
     task_assessment, )
+from tests.provider_wire_fixture import selection_plan
 from tests import test_lead_orchestration as lead
 from tests import test_artifact_proposal_orchestration as artifact
 from tests import test_lead_artifact_application as application
@@ -64,7 +65,7 @@ class LeadRecommendationTests(RecommendationCase):
             self.assertIs(initial.contract.factory, call.contract.factory)
             self.assertEqual(initial.scope, call.scope)
             self.assertIs(initial.call_kind, lead.ProviderCallKind.COLLABORATION_INITIAL)
-            material = lead._live_material(call)["structured_recommendation_execution"]
+            material = lead._workflow_material(provider.callback_payload(initial))["structured_recommendation_execution"]
             self.assertEqual(initial.payload["context_reuse"]["format"], "shared-objects-v1")
             self.assertLess(len(json.dumps(dict(initial.payload), ensure_ascii=False)),
                             len(json.dumps(lead._expanded_context_payload(initial.payload),
@@ -114,7 +115,7 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertEqual(self.snapshots(), before)
 
         for call in self.backend.calls:
-            self.assertNotIn("response_correction", lead._live_material(call))
+            self.assertNotIn('"response_correction":', json.dumps(self.backend.callback_payload(call)))
             self.assertNotIn("structured_response_repair", call.payload)
         from tests.provider_wire_fixture import finite_fixture_selection
         for aliases, omit_source in (((), False), (("recommendation_request",), False),
@@ -123,7 +124,7 @@ class LeadRecommendationTests(RecommendationCase):
             cid = self.conversation("Raw confirmed drafting consultation")
             self.backend.enqueue(recommendation(recommended_action=action(kind="prepare_consultation", source_ids=("user_input",)),
                 authoring_scope=lambda call: lead._live_scope(call, activity="review", domains=("plot_structure",)),
-                authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation'))))
+                authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation'))), control_plan=selection_plan("prepare.consultation.authoring"))
             offered = await self.runtime.lead_turn(self.session_id, cid,
                 ("Recommend Plot review of this complete supplied candidate: " + DRAFT + "\nYou may make bounded Plot review judgments and prepare a separate Plot review proposal; preserve the supplied candidate facts."))
             self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
@@ -399,7 +400,9 @@ class LeadRecommendationTests(RecommendationCase):
 
 class LeadRecommendationRecoveryTests(RecommendationCase):
     async def reference_offer(self, *, kind="prepare_consultation", objective_id=None):
-        return await self.recommend(recommended_action=action(kind=kind, source_ids=("reference_1", "current_response"), objective_id=objective_id),
+        return await self.recommend(selection_group={"prepare_artifact": "prepare.artifact",
+            "prepare_consultation": "prepare.consultation.authoring"}[kind],
+            recommended_action=action(kind=kind, source_ids=("reference_1", "current_response"), objective_id=objective_id),
             text=f"Inspect ${{{OUTLINE}}} and recommend exactly one preparation.")
 
 

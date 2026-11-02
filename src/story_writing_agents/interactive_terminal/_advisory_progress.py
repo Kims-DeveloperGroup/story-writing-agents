@@ -16,6 +16,11 @@ from ..agent_context.progress import (
     ProviderStreamEventKind,
     ProviderStreamSink,
 )
+from ..agent_context.service import (
+    ContextExecutionEvent,
+    ContextExecutionEventKind,
+    ContextNativeDisposition,
+)
 
 _FRAMES = ("█▓▒░░░░░", "░█▓▒░░░░", "░░█▓▒░░░", "░░░█▓▒░░", "░░░░█▓▒░")
 
@@ -46,6 +51,56 @@ def _sanitize_preview_text(text: str) -> str:
     return "".join(rendered)
 
 
+def _native_context_lines(event: ContextExecutionEvent, *, detailed: bool = False) -> tuple[str, ...]:
+    check = event.native_context_check
+    disposition = event.native_disposition
+    if check is None or disposition is None:
+        raise TypeError("native context event is incomplete")
+    phase = {
+        "select": "Phase 1", "generate": "Phase 2", "done": "Done", "stop": "Stopped",
+    }.get(event.group_phase.value) if event.group_phase is not None else None
+    disposition_label = {
+        ContextNativeDisposition.OBSERVED: "check observed",
+        ContextNativeDisposition.RESPONSE_REJECTED: "response rejected",
+        ContextNativeDisposition.CONTROL_ACCEPTED: "control accepted",
+        ContextNativeDisposition.RESULT_ACCEPTED: "result accepted",
+        ContextNativeDisposition.RETRY_NOT_STARTED: "retry not started",
+        ContextNativeDisposition.RETRY_STARTED: "retry started",
+        ContextNativeDisposition.RETRY_SUCCEEDED: "retry succeeded",
+        ContextNativeDisposition.RETRY_FAILED: "retry failed",
+    }[disposition]
+    stage = {
+        "pre_submit": "before submit", "post_complete": "after completion", "unknown": "unknown stage",
+    }[check.stage.value]
+    lines = [
+        " · ".join(part for part in ("Native", phase, disposition_label) if part),
+        f"Check: {stage} · {check.outcome} · {check.reason.value.replace('_', ' ')}",
+    ]
+    identities = (
+        ("call", check.call_id), ("prior call", check.prior_call_id),
+        ("attempt", event.attempt_id), ("invocation", event.invocation_id),
+    )
+    if detailed:
+        lines.append(f"Operation: {event.operation_id}")
+        lines.extend(f"{label.title()}: {value}" for label, value in identities if value is not None)
+        lines.extend(
+            "Observed: " + " · ".join((
+                observation.stage.value.replace("_", " "),
+                observation.source_stage.value.replace("_", " "),
+                observation.reason.value.replace("_", " "),
+            ))
+            for observation in check.observations
+        )
+    else:
+        links = [
+            f"{label} {value if len(value) <= 12 else value[:12] + '…'}"
+            for label, value in identities if value is not None and label in {"call", "attempt"}
+        ]
+        if links:
+            lines.append(" · ".join(links))
+    return tuple(lines)
+
+
 @dataclass(frozen=True, slots=True)
 class AdvisoryProgressRequest:
     agent_id: str
@@ -60,6 +115,7 @@ class AdvisoryProgressState:
         self.started_at: float | None = None
         self.requests: tuple[AdvisoryProgressRequest, ...] = ()
         self.events: dict[tuple[str, str, int], ContextActionProgressEvent] = {}
+        self.context_events: dict[tuple[str, str], ContextExecutionEvent] = {}
         self.stream_status: dict[tuple[str, str], str] = {}
         self.stream_preview: dict[tuple[str, str], str] = {}
         self.last_error_message: str | None = None
@@ -94,6 +150,7 @@ class AdvisoryProgressState:
             self.started_at = time.monotonic()
         self.requests = requests
         self.events.clear()
+        self.context_events.clear()
         self.stream_status.clear()
         self.stream_preview.clear()
         self.last_error_message = None
@@ -114,8 +171,11 @@ class AdvisoryProgressState:
         if type(event) is not ContextActionProgressEvent:
             raise TypeError("progress event is invalid")
         self.events[(event.agent_id, event.operation_id, event.action_index)] = event
-        provisional_key = (event.agent_id, "")
-        target_key = (event.agent_id, event.operation_id)
+        self._adopt_operation(event.agent_id, event.operation_id)
+
+    def _adopt_operation(self, agent_id: str, operation_id: str) -> None:
+        provisional_key = (agent_id, "")
+        target_key = (agent_id, operation_id)
         if provisional_key in self.stream_status:
             if target_key not in self.stream_status:
                 self.stream_status[target_key] = self.stream_status.pop(provisional_key)
@@ -145,6 +205,21 @@ class AdvisoryProgressState:
         if provisional_key in self.last_buffer_event_was_text:
             self.last_buffer_event_was_text[target_key] = self.last_buffer_event_was_text.pop(provisional_key)
 
+    def observe_context(self, event: ContextExecutionEvent) -> None:
+        """Project native facts without treating unavailable observations as failures."""
+        if type(event) is not ContextExecutionEvent:
+            raise TypeError("context execution event is invalid")
+        if event.kind is not ContextExecutionEventKind.NATIVE_CONTEXT:
+            return
+        key = (event.scope.agent_id, event.operation_id)
+        self._adopt_operation(*key)
+        self.context_events[key] = event
+        self.last_buffer_event_was_text[key] = False
+        buffer = self.agent_buffers.setdefault(key, [])
+        buffer.extend(_native_context_lines(event, detailed=True))
+        if len(buffer) > 2000:
+            del buffer[:-2000]
+
     def observe_stream(self, event: ProviderStreamEvent) -> None:
         if type(event) is not ProviderStreamEvent:
             raise TypeError("stream event is invalid")
@@ -156,6 +231,11 @@ class AdvisoryProgressState:
                     break
             if op_id is None:
                 for (event_agent_id, event_op_id, _) in self.events:
+                    if event_agent_id == event.agent_id:
+                        op_id = event_op_id
+                        break
+            if op_id is None:
+                for event_agent_id, event_op_id in self.context_events:
                     if event_agent_id == event.agent_id:
                         op_id = event_op_id
                         break
@@ -247,6 +327,7 @@ class AdvisoryProgressState:
             self.snapshot_failure()
         self.requests = ()
         self.events.clear()
+        self.context_events.clear()
         self.stream_status.clear()
         self.stream_preview.clear()
         self.agent_errors.clear()
@@ -265,7 +346,7 @@ class AdvisoryProgressState:
             if identity not in known:
                 ordered.append(AdvisoryProgressRequest(*identity, ""))
                 known.add(identity)
-        for key in list(self.stream_status.keys()) + list(self.stream_preview.keys()):
+        for key in list(self.context_events) + list(self.stream_status.keys()) + list(self.stream_preview.keys()):
             if key not in known:
                 ordered.append(AdvisoryProgressRequest(*key, ""))
                 known.add(key)
@@ -284,10 +365,13 @@ class AdvisoryProgressState:
             status_summary = ""
             key = (focused_req.agent_id, focused_req.operation_id)
             status_text = self.stream_status.get(key)
+            context_event = self.context_events.get(key)
             if status_text:
                 status_summary = f" · {status_text[:40]}"
-            elif focused_req.request:
+            elif context_event is None and focused_req.request:
                 status_summary = f" · {focused_req.request[:40]}"
+            if context_event is not None:
+                status_summary += f" · {_native_context_lines(context_event)[0]}"
             return f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · {active_label}{status_summary} (press 't' to expand)"
         lines = [f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · Working"]
         for request in ordered:
@@ -307,7 +391,7 @@ class AdvisoryProgressState:
             status = self.stream_status.get(key)
             preview = self.stream_preview.get(key)
             if not related:
-                if not status and not preview:
+                if not status and not preview and key not in self.context_events:
                     lines.append("  Preparing context")
             else:
                 event = related[-1]
@@ -383,6 +467,9 @@ class AdvisoryProgressState:
                         for idx, pline in enumerate(preview_lines[-5:]):
                             label = "Preview: " if idx == 0 else "         "
                             lines.append(f"  {label}{pline[-120:]}")
+            context_event = self.context_events.get(key)
+            if context_event is not None:
+                lines.extend(f"  {line}" for line in _native_context_lines(context_event))
         if len(lines) > 10:
             lines = [lines[0]] + lines[-9:]
         return "\n".join(lines)

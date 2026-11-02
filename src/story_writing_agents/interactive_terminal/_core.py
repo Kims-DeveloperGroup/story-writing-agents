@@ -56,9 +56,11 @@ from ._controls import (
 )
 from ._collaboration_view import (
     collaboration_view_context,
+    project_conversation_messages as project_conversation_messages,
     project_collaboration_event,
     validate_collaboration_event_order,
 )
+from ..conversations import CollaborationEventKind
 from ._advisory_progress import (
     AdvisoryProgressRequest,
     AdvisoryProgressState,
@@ -74,6 +76,7 @@ from ..agent_context.progress import (
     bind_provider_stream_sink,
     reset_provider_stream_sink,
 )
+from ..agent_context.service import ContextExecutionEvent
 from ._driver import (
     AdvisoryProgressError as AdvisoryProgressError,
     RawTerminalDriver,
@@ -554,11 +557,46 @@ _STARTUP_WELCOME_SEQUENCE = (
 )
 
 
+def _interactive_error_notices(
+    error: InteractiveError,
+    *,
+    secrets: Iterable[str] = (),
+    debug_log_path: str | None = None,
+) -> tuple[Notice, ...]:
+    """Project the same bounded diagnostics for persistent and inline errors."""
+
+    if not isinstance(error, InteractiveError):
+        raise TypeError("error must be an InteractiveError")
+    if debug_log_path is not None:
+        _validate_default_message("debug_log_path", debug_log_path)
+    spec = INTERACTIVE_ERROR_SPECS[error.code]
+    variants = _redaction_variants(secrets)
+    notices = (
+        Notice(
+            _prepare_error_message(
+                error.summary, spec.summary, variants, _SUMMARY_LIMIT,
+            ),
+            label=f"error {error.code.value}",
+            role=SemanticRole.ERROR,
+            state=ViewState.ERROR,
+        ),
+        Notice(
+            _prepare_error_message(error.hint, spec.hint, variants, _HINT_LIMIT),
+            label="hint",
+        ),
+    )
+    if debug_log_path is not None:
+        notices += (Notice(sanitize_terminal_text(debug_log_path), label="debug log"),)
+    return notices
+
+
 class InteractiveTerminal:
     """Render plain terminal records and collect one input operation at a time."""
 
     __slots__ = (
         "_accepted_input_write",
+        "_component_write",
+        "_submission_scope",
         "_capability_provider",
         "_composition_read_line",
         "_composition_reference_read_line",
@@ -614,6 +652,8 @@ class InteractiveTerminal:
         if width < 20:
             raise ValueError("width must be at least 20")
         self._accepted_input_write: Callable[[str], None] = lambda _text: None
+        self._component_write: Callable[[Component], None] | None = None
+        self._submission_scope = None
         self._input_session: Callable[[], contextlib.AbstractContextManager[None]] = (
             contextlib.nullcontext
         )
@@ -630,17 +670,7 @@ class InteractiveTerminal:
                 self._main_choice_read_line(prompt, choice_provider)
             )
         )
-        self._main_context_read_line = (
-            lambda prompt, choice_provider, scope, paths, text, _header: (
-                self._main_reference_read_line(
-                    prompt,
-                    choice_provider,
-                    scope,
-                    paths,
-                    text,
-                )
-            )
-        )
+        self._main_context_read_line = self._read_main_context_line
         self._composition_read_line = _plain_input_reader(read_line, width)
         self._composition_reference_read_line = (
             lambda view, _scope, _paths, _text: self._composition_read_line(view)
@@ -1185,6 +1215,9 @@ class InteractiveTerminal:
         for event in events:
             if event.sequence <= after_sequence:
                 continue
+            if event.kind is CollaborationEventKind.LEAD_GROUP_TRACE:
+                cursor = event.sequence
+                continue
             self._write_component(
                 project_collaboration_event(
                     event,
@@ -1347,46 +1380,34 @@ class InteractiveTerminal:
     ) -> None:
         """Render one typed, redacted error, hint, and optional debug-log path."""
 
-        if not isinstance(error, InteractiveError):
-            raise TypeError("error must be an InteractiveError")
-        if debug_log_path is not None:
-            _validate_default_message("debug_log_path", debug_log_path)
-        spec = INTERACTIVE_ERROR_SPECS[error.code]
-        variants = _redaction_variants(secrets)
-        summary = _prepare_error_message(
-            error.summary,
-            spec.summary,
-            variants,
-            _SUMMARY_LIMIT,
-        )
-        hint = _prepare_error_message(
-            error.hint,
-            spec.hint,
-            variants,
-            _HINT_LIMIT,
-        )
-        notices = [
-            Notice(
-                summary,
-                label=f"error {error.code.value}",
-                role=SemanticRole.ERROR,
-                state=ViewState.ERROR,
-            ),
-            Notice(hint, label="hint"),
-        ]
-        if debug_log_path is not None:
-            notices.append(
-                Notice(
-                    sanitize_terminal_text(debug_log_path),
-                    label="debug log",
-                )
-            )
         self._write_component(
             Panel(
                 "Interactive error",
-                tuple(notices),
+                _interactive_error_notices(
+                    error,
+                    secrets=secrets,
+                    debug_log_path=debug_log_path,
+                ),
                 state=ViewState.ERROR,
             )
+        )
+
+    def _read_main_context_line(
+        self,
+        prompt: str,
+        choice_provider: Callable[[str, int], Picker | None],
+        scope: Callable[[str, int], ReferenceInputScope | None] | None,
+        paths: Callable[[], tuple[str, ...]] | None,
+        text: Callable[[str], str] | None,
+        header: Callable[[str, int], Notice | None] | None,
+        initial_alerts: tuple[Notice, ...] = (),
+    ) -> str:
+        """Present queued notices through ordinary callback-only input."""
+
+        for alert in initial_alerts:
+            self._write_component(alert)
+        return self._main_reference_read_line(
+            prompt, choice_provider, scope, paths, text,
         )
 
     def _record_discarded_composition(
@@ -1474,7 +1495,10 @@ class InteractiveTerminal:
         """Render and write one semantic component through the bound callback."""
 
         frame = render_component(component, self._capability_provider())
-        self._write_text(f"{frame.text}\n")
+        if self._component_write is None:
+            self._write_text(f"{frame.text}\n")
+        else:
+            self._component_write(component)
 
     def _write_accepted_input(self, component: Component) -> None:
         """Render one accepted input through the bound mode-aware callback."""
@@ -1525,7 +1549,7 @@ class InteractiveInputLifecycle:
 class InteractiveSemanticOutput:
     """Bind one terminal's ordinary and mode-gated semantic write paths."""
 
-    __slots__ = ("_write", "_write_accepted")
+    __slots__ = ("_write", "_write_accepted", "_submission")
 
     def __init__(self, terminal: InteractiveTerminal) -> None:
         """Bind semantic output without inspecting capabilities or streams."""
@@ -1536,6 +1560,19 @@ class InteractiveSemanticOutput:
         self._write_accepted: Callable[[Component], None] = (
             terminal._write_accepted_input
         )
+        self._submission = terminal._submission_scope
+
+    @contextlib.contextmanager
+    def submission(self, session_id: str, conversation_id: str, user: Message) -> Iterator[None]:
+        """Keep one User frame and all its operations in an explicit display scope."""
+        if type(user) is not Message:
+            raise TypeError("user must be a Message")
+        if self._submission is None:
+            self.write_component(user)
+            yield
+        else:
+            with self._submission(session_id, conversation_id, user):
+                yield
 
     def write_component(self, component: Component) -> None:
         """Delegate one closed semantic component to exactly one terminal write."""
@@ -1604,6 +1641,7 @@ class InteractiveMainInput:
         "_reference_paths_provider",
         "_reference_scope_provider",
         "_reference_text_reader",
+        "_pending_alerts",
     )
 
     def __init__(self, terminal: InteractiveTerminal) -> None:
@@ -1619,6 +1657,7 @@ class InteractiveMainInput:
                 Callable[[], tuple[str, ...]] | None,
                 Callable[[str], str] | None,
                 Callable[[str, int], Notice | None] | None,
+                tuple[Notice, ...],
             ],
             str,
         ] = terminal._main_context_read_line
@@ -1627,6 +1666,28 @@ class InteractiveMainInput:
         ) = None
         self._reference_paths_provider: Callable[[], tuple[str, ...]] | None = None
         self._reference_text_reader: Callable[[str], str] | None = None
+        self._pending_alerts: tuple[Notice, ...] = ()
+
+    def queue_alert(
+        self,
+        alert: InteractiveError | Notice,
+        *,
+        debug_log_path: str | None = None,
+    ) -> None:
+        """Retain semantic diagnostics for the next main read only."""
+
+        if isinstance(alert, InteractiveError):
+            notices = _interactive_error_notices(alert, debug_log_path=debug_log_path)
+        elif type(alert) is Notice:
+            notices = (alert,)
+            if debug_log_path is not None:
+                _validate_default_message("debug_log_path", debug_log_path)
+                notices += (
+                    Notice(sanitize_terminal_text(debug_log_path), label="debug log"),
+                )
+        else:
+            raise TypeError("alert must be an InteractiveError or Notice")
+        self._pending_alerts += notices
 
     def read_main(
         self,
@@ -1723,6 +1784,8 @@ class InteractiveMainInput:
                 "reference scope, paths, and text collaborators must be supplied together"
             )
         prompt = _main_prompt(session_id=session_id, agent_id=agent_id)
+        initial_alerts = self._pending_alerts
+        self._pending_alerts = ()
         try:
             line = self._read(
                 prompt,
@@ -1731,6 +1794,7 @@ class InteractiveMainInput:
                 reference_paths_provider,
                 reference_text_reader,
                 header_provider,
+                initial_alerts,
             )
         except KeyboardInterrupt:
             return TerminalAction(TerminalActionKind.INTERRUPT)
@@ -1948,7 +2012,7 @@ class InteractiveExternalViewer:
 
 
 class InteractiveTranscriptViewer:
-    """Bind transient rich transcript presentation without owning history storage."""
+    """Bind transient conversation presentation without owning history storage."""
 
     __slots__ = ("_viewer",)
 
@@ -2039,6 +2103,10 @@ class InteractiveAdvisoryProgress:
         """Apply one provider streaming event."""
 
         self._state.observe_stream(event)
+
+    def observe_context(self, event: ContextExecutionEvent) -> None:
+        """Apply content-free native context diagnostics."""
+        self._state.observe_context(event)
 
     def finish(self) -> str:
         """Discard transient state and return the final elapsed duration."""
@@ -2831,6 +2899,7 @@ def read_main_command_line(
         Callable[[ReferenceInputFailureKind], None] | None
     ) = None,
     input_context_provider: Callable[[str, int], Notice | None] | None = None,
+    initial_alerts: tuple[Notice, ...] = (),
 ) -> str:
     """Read one canonical selectable main command through the sole driver."""
 
@@ -2840,6 +2909,7 @@ def read_main_command_line(
         raise TypeError("choice_provider must be callable or None")
     if input_context_provider is not None and not callable(input_context_provider):
         raise TypeError("input_context_provider must be callable or None")
+    MainCommandControlState(alerts=initial_alerts)
     reference_collaborators = (
         reference_scope_provider,
         reference_paths_provider,
@@ -2929,6 +2999,7 @@ def read_main_command_line(
             render_component,
             input_frame_provider,
             reference_bindings,
+            initial_alerts=initial_alerts,
         )
 
     if reference_bindings is None:
@@ -2937,6 +3008,7 @@ def read_main_command_line(
             completion_provider,
             palette_projector,
             render_component,
+            initial_alerts=initial_alerts,
         )
     return driver.read_reference_main_command_line(
         prompt,
@@ -2944,6 +3016,7 @@ def read_main_command_line(
         palette_projector,
         render_component,
         reference_bindings,
+        initial_alerts=initial_alerts,
     )
 
 
@@ -3007,6 +3080,8 @@ def build_stream_terminal(
         main_read_line=lambda prompt: read_main_command_line(driver, prompt),
     )
     terminal._accepted_input_write = driver.write_accepted_input
+    terminal._component_write = driver.write_component
+    terminal._submission_scope = driver.submission
     terminal._input_session = driver.input_session
     terminal._native_input_handoff = driver.native_input_handoff
     terminal._main_choice_read_line = lambda prompt, provider: (
@@ -3032,19 +3107,22 @@ def build_stream_terminal(
         )
     )
     terminal._main_context_read_line = (
-        lambda prompt, choices, scope, paths, text, header: read_main_command_line(
-            driver,
-            prompt,
-            choice_provider=choices,
-            reference_scope_provider=scope,
-            reference_paths_provider=paths,
-            reference_text_reader=text,
-            reference_failure_writer=(
-                None
-                if scope is None
-                else lambda kind: terminal.write_error(_reference_input_error(kind))
-            ),
-            input_context_provider=header,
+        lambda prompt, choices, scope, paths, text, header, initial_alerts=(): (
+            read_main_command_line(
+                driver,
+                prompt,
+                choice_provider=choices,
+                reference_scope_provider=scope,
+                reference_paths_provider=paths,
+                reference_text_reader=text,
+                reference_failure_writer=(
+                    None
+                    if scope is None
+                    else lambda kind: terminal.write_error(_reference_input_error(kind))
+                ),
+                input_context_provider=header,
+                initial_alerts=initial_alerts,
+            )
         )
     )
     terminal._composition_read_line = lambda view: driver.read_input_line(

@@ -302,7 +302,7 @@ def adoption_capture_from_dict(value: Any) -> ExplorationAdoptionCapture:
 
 
 def _result_text_rule() -> dict[str, object]:
-    return {"type": "string", "pattern": r"^[^\u0000]+$(?![\s\S])", "maxLength": 32768}
+    return {"type": "string", "pattern": r"^[^\u0000]+\z", "maxLength": 32768}
 
 
 def _result_strings(values: tuple[str, ...] | None = None, *, minimum: int = 0, maximum: int | None = None) -> dict[str, object]:

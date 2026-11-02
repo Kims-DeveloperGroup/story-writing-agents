@@ -448,6 +448,28 @@ advisory progress presenter. The
 component has no lifecycle replay or durable observer store.
 
 <a id="provider-usage-cache-and-limits"></a>
+## 두 국면 관측의 저장 경계
+
+`agent_context.group_observation`은 불변 DTO와 typed sink를 소유하고, service는
+실제 bound phase와 최종 전달 정보를 발행한다. orchestration의 현재 logical invocation
+버퍼가 이를 모아 기존 성공·실패·중단의 terminal 게시 묶음에 함께 넣는다. Provider
+호출 도중 trace만을 위한 conversation 쓰기를 추가하지 않으므로 현재 READ/source
+snapshot을 관측 자체가 바꾸지 않는다. 기존 PREPARED/SUBMITTED 회계는 독립적으로 남는다.
+
+private trace는 당시 전체 카드 정의·기준과 선택 기록을 보존하지만 일반 대화·task
+권한 projection에서는 제외된다. `StoryRuntime.lead_group_reports()`의 명시적 조회가
+순수 `agent_context.group_reporting` 집계를 소비한다. 이 모듈은 계약을 컴파일하거나
+Provider를 실행·저장하지 않는다. 크기 비교도 같은 원래 요청·컨텍스트·profile로
+준비한 실제 native full/SELECT/모든 GENERATE를 입력받으며 준비를 제출로 간주하지 않는다.
+
+명시적 전체 감사 API인 `project_collaboration_readable_history()`는 모든 저장 이벤트의 typed record를 보존한다. trace record의 읽을 수 있는 필드와 바이트는 비어 있으며, 일반 Lead 메모리·검색·공개 응답에는 trace 내용이 전달되지 않는다. 비공개 원본 payload가 필요한 호출자만 이 전체 감사 API나 `lead_group_reports()`를 명시적으로 조회한다.
+
+원시 usage와 관측 범위·출처를 보존하고 검증된 호출별 값만 footer/report에서 합산한다.
+세션·prefix·출처·단위가 맞지 않거나 reset/누락이면 차이를 추정하지 않는다. 첫 BOUND부터
+terminal 게시 직전까지의 관측 시간과 Provider 호출 지연 합, 전체 턴 지연은 구분한다.
+상세 판정 기준과 59개 조건의 소스/정규 ID 연결은
+[두 국면 설계](lead-two-phase-schema-selection.md#관측과-비교의-판정-기준)에 있다.
+
 ## Provider usage, cache, and limits
 
 Physical-call accounting uses canonical UTF-8 JSON and attributes binding,
@@ -457,19 +479,17 @@ nonnegative integers. A terminal progress event aggregates input tokens only
 when every submitted provider call reported an exact
 value; otherwise the field is `None`. No estimate is labeled exact.
 
-Provider-native cache, conversation history, and compaction may improve
-performance but are never correctness authority. Thread loss selects a
-bootstrap from local authoritative data on the next safe authorized work.
-For Lead session delivery, the inclusive canonical payload cap is 262,144
-UTF-8 bytes and the history inventory cap is 4,096 conversations. Known input,
-history, current state, and framing are preflighted before provider work;
-generated reference observations are checked before substantive submission.
-Overflow raises `exact session context exceeds the delivery capacity` without
-lossy summary or silent omission. Actual payload accounting includes `h`;
-source-selection progress counts do not. This byte cap is independent of the
-provider's token window. The finite planner, action, source,
-reference, and ledger limits are enforced independently; exhaustion is an
-explicit content-free failure rather than silent omission of required data.
+Provider의 native cache, 대화 이력과 compaction은 성능에 도움이 될 수 있지만 정확성이나
+권한의 근거는 아니다. Thread가 사라지면 다음의 안전하고 승인된 작업에서 로컬의 권위
+있는 데이터를 사용해 bootstrap한다.
+Lead 세션의 canonical payload는 524,288 UTF-8 bytes 이하, 이력 목록은 4,096개 대화
+이하로 제한된다. 알려진 입력·이력·현재 상태·framing을 provider 실행 전에 확인하며,
+생성된 reference observation은 실질적인 제출 전에 다시 검사한다. 초과하면
+`exact session context exceeds the delivery capacity`를 발생시키고 필요한 내용을 요약하거나
+조용히 생략하지 않는다. 실제 payload 회계에는 `h`가 포함되며 source 선택의
+내용 비노출 진행 수치와는 구분한다. 이 byte 한도는 provider의 token window와 독립적이다.
+Planner, action, source, reference, ledger의 각 유한 한도도 독립적으로 검사한다.
+한도를 소진하면 필요한 내용을 생략하는 대신 내용을 노출하지 않는 명시적 실패를 반환한다.
 
 <a id="privacy-recovery-and-compatibility"></a>
 ## Privacy, recovery, and compatibility

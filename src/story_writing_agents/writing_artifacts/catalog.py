@@ -87,17 +87,17 @@ def artifact_kind_path_rule(artifact_kind: ArtifactKind) -> dict[str, object]:
 
     if type(artifact_kind) is not ArtifactKind:
         raise TypeError("artifact kind must be an exact ArtifactKind")
-    end = r"$(?![\s\S])"
     if artifact_kind is ArtifactKind.CORE_DOCUMENT:
         body = "(?:" + "|".join(re.escape(path) for path in CORE_ARTIFACT_PATHS) + ")"
     else:
         component = _PATH_COMPONENT.pattern
-        filename = r"(?=[^/]*\.md" + end + ")" + component
+        # The suffix intersection leaves a 1..128 ASCII component.
+        filename = r"[A-Za-z0-9][A-Za-z0-9_.-]{0,124}\.md"
         body = "manuscript/" + _PART_ID.pattern + "/(?:" + component + "/)*" + filename
     return {
         "type": "string",
         "maxLength": MAX_ARTIFACT_PATH_BYTES,
-        "pattern": "^(?:" + body + ")" + end,
+        "pattern": "^(?:" + body + r")\z",
     }
 
 

@@ -2557,6 +2557,65 @@ class PickerDriverTests(unittest.TestCase):
         for forbidden in ("\x1b[?1049", "\x1b[2J", "\x1b[3J", "\x1b]", "\x1b[M"):
             self.assertNotIn(forbidden, rendered)
 
+        from tests._external_view_support import recording_driver
+        for case in ("plain", "reviewing", "reviewing_no_cpr", "choices", "blocked", "blocked_form"):
+            reviewing, shrinking, blocked = case.startswith("reviewing"), case == "choices", case.startswith("blocked")
+            cpr_available = case != "reviewing_no_cpr"
+            navigation = "\x1b[17~\x1b[B\x1b" if reviewing else ""
+            decision = "\r\x1b" if blocked else "\x1b[B\r"
+            with recording_driver("seed\r" + navigation + decision, width=120, height=18 if shrinking else 24,
+                                  response="valid" if cpr_available else "none") as rig:
+                managed = rig.driver
+                if reviewing:
+                    managed._os_provider().environ["NO_COLOR"] = "1"
+                self.assertEqual(managed.read_main_line("main> ", lambda _: ()), "seed")
+                if reviewing:
+                    managed.write_component(_model.Message("User", "OLDER_INPUT"))
+                    managed.write_component(_model.Message("Lead", "\n".join(f"OLDER_ROW_{row}" for row in range(35))))
+                    timeline = managed._output_history
+                    timeline.focus_visible(timeline.render(managed.semantic_capabilities(), 23))
+                    timeline.handle_key(KeyEvent(KeyKind.HOME))
+                    timeline.handle_key(KeyEvent(KeyKind.ENTER))
+                    managed._paint_timeline()
+                user = _model.Message("User", "USER_VISIBLE", presentation=_model.MessagePresentation.INLINE if shrinking else _model.MessagePresentation.CHAT_BLOCK)
+                with managed.submission("session", "conversation", user):
+                    managed.write_component(Panel("Proposal", (Field("Target", "TARGET_VISIBLE"), Field("Reviewers", "REVIEWERS_VISIBLE"), Field("Authority", "AUTHORITY_VISIBLE"))))
+                    if not shrinking:
+                        view = _model.NestedScrollViewport("review:one", "JSON review", 3, 1, ("JSON_ONE",), 1, False, buffer_lines=("JSON_ONE", "JSON_TWO", "JSON_THREE"))
+                        managed._output_history.retain(_model.MultiAgentScrollState((view,), 0))
+                        managed._paint_timeline()
+                    before = tuple(map(tuple, rig.screen.primary))
+                    choices = tuple(Choice(str(index), f"CHOICE_{index:02}") for index in range(20)) if shrinking else (Choice("confirm", "Confirm"), Choice("reject", "Reject"), Choice("revise", "Revise"))
+                    pending = initialize_picker(Picker(Prompt("CONFIRM_REVIEW", instruction="Explain immutable review authority. " * 180 if blocked else None), choices,
+                        presentation=InputPresentation.FORM if case == "blocked_form" else InputPresentation.STANDARD, visible_choice_limit=9 if shrinking else 7, transient_context=()))
+                    self.assertEqual(pending.picker.transient_context, ())
+                    rig.phase = "picker"
+                    outcome = _read_picker(managed, pending, transient=True)
+                    self.assertEqual(outcome, ControlOutcome(ControlOutcomeKind.CANCEL) if blocked else ControlOutcome(ControlOutcomeKind.COMMIT, text="1" if shrinking else "reject"))
+                    reads = [read for read in rig.reads if read.phase == "picker"]
+                    for read in reads:
+                        self.assertEqual(re.findall(r"USER_VISIBLE|TARGET_VISIBLE|REVIEWERS_VISIBLE|AUTHORITY_VISIBLE", read.text),
+                                         ["USER_VISIBLE", "TARGET_VISIBLE", "REVIEWERS_VISIBLE", "AUTHORITY_VISIBLE"])
+                        self.assertTrue(all(word in read.text.lower() for word in (("resize", "esc") if blocked else ("confirm_review",))))
+                        if shrinking:
+                            self.assertTrue(0 < sum(choice.label in read.text for choice in choices) < 9)
+                    decisions = [read for read in reads if read.character == "\r"]
+                    self.assertEqual(len(decisions), 1)
+                    self.assertFalse(decisions[0].mouse)
+                    self.assertEqual(any(read.mouse for read in reads), reviewing and cpr_available)
+                    self.assertFalse(any("USER_VISIBLE" in row for row in rig.screen.history))
+                    self.assertEqual(tuple(map(tuple, rig.screen.primary)), before, {"case": case, "physical_cursor": rig.screen.cursor,
+                        "timeline_cursor_row": managed._timeline_cursor_row, "timeline_origin": managed._timeline_origin,
+                        "changed_rows": [(index, "".join(old).rstrip(), "".join(new).rstrip()) for index, (old, new) in enumerate(zip(before, rig.screen.primary)) if tuple(new) != old]})
+                    if shrinking:
+                        self.assertEqual((pending.picker.visible_choice_limit, managed._output_history.frames), (9, ()))
+                    else:
+                        self.assertEqual(managed._output_history.frames[0].view.start_line, 2 if reviewing else 1)
+                    self.assertEqual((sum(entry.component == user for entry in managed._output_history.entries), managed._history_state, list(managed._typeahead_buffer)),
+                                     (1, MainInputHistoryState(("seed",)), []))
+                    rig.fallback.assert_not_called()
+                    self.assertEqual((rig.termios.events.count("activate"), rig.termios.attributes), (rig.termios.events.count("restore"), rig.termios.original))
+
     def test_control_terminated_and_parameterized_sequences_are_discarded(self) -> None:
         state = initialize_picker(
             Picker(
@@ -3626,8 +3685,8 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
         self.assertEqual(
             tuple(terminal_facade.__all__),
             (
-                "AttachmentKind",
-                "ComposeMode",
+                "project_conversation_messages",
+                "AttachmentKind", "ComposeMode",
                 "ConfirmationResult",
                 "TerminalActionKind",
                 "TerminalMessageKind",

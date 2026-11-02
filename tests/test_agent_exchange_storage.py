@@ -395,8 +395,9 @@ class AgentExchangeConcurrencyTests(unittest.TestCase):
                 _input(agent_id=agent_id, exchange_id=f"thread_{index}"))
             return receipt.workspace_sequence, receipt.sequence, agent_id
 
-        with ThreadPoolExecutor(max_workers=16) as pool:
-            results = list(pool.map(append, range(16)))
+        with mock.patch.object(storage_module, "_LOCK_TIMEOUT_SECONDS", 3.0):
+            with ThreadPoolExecutor(max_workers=16) as pool:
+                results = list(pool.map(append, range(16)))
         self.assertEqual(sorted(item[0] for item in results), list(range(1, 17)))
         for agent_id in ROSTER[:2]:
             sequences = sorted(item[1] for item in results if item[2] == agent_id)

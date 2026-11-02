@@ -198,7 +198,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         )
         self.assertEqual(
             InteractiveSemanticOutput.__slots__,
-            ("_write", "_write_accepted"),
+            ("_write", "_write_accepted", "_submission"),
         )
 
         self.assertIs(
@@ -518,6 +518,26 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             output.write_accepted_input(object())  # type: ignore[arg-type]
         self.assertEqual(reads, [])
         self.assertEqual(records, [])
+
+        user = Message("User", "EXPLICIT_USER_ORIGIN", presentation=MessagePresentation.CHAT_BLOCK)
+        reply = Message("Lead", "SCOPED_REPLY")
+        with output.submission("session", "conversation", user):
+            output.write_component(reply)
+        self.assertEqual(len(records), 2)
+        self.assertIn("EXPLICIT_USER_ORIGIN", records[0]); self.assertIn("SCOPED_REPLY", records[1])
+        self.assertEqual(reads, [])
+        with self.assertRaisesRegex(RuntimeError, "scope failure"):
+            with output.submission("other_session", "conversation", user):
+                raise RuntimeError("scope failure")
+        self.assertEqual(len(records), 3)
+        with output.submission("session", "conversation", user):
+            output.write_component(reply)
+        self.assertEqual(len(records), 5)
+        self.assertEqual(records[0], records[3]); self.assertEqual(records[1], records[4])
+        with self.assertRaises(TypeError):
+            with output.submission("session", "conversation", object()):  # type: ignore[arg-type]
+                self.fail("invalid user component entered a submission")
+        self.assertEqual(len(records), 5)
 
     def test_adapter_rejects_non_terminal_and_propagates_render_and_writer_failures(
         self,

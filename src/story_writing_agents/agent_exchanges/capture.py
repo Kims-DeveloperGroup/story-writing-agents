@@ -6,6 +6,7 @@ import base64
 import json
 import math
 import threading
+from dataclasses import asdict
 from enum import StrEnum
 from uuid import uuid4
 
@@ -124,6 +125,10 @@ def _response_content(result: ProviderResult) -> str:
             }
         ),
     }
+    if result.usage_observation is not None:
+        content["usage_observation"] = asdict(result.usage_observation)
+    if result.elapsed_ns is not None:
+        content["elapsed_ns"] = result.elapsed_ns
     if result.response_diagnostic is not None:
         content["response_diagnostic"] = _response_diagnostic(
             result.response_diagnostic

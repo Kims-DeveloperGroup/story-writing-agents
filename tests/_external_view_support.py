@@ -1,6 +1,7 @@
 """Deterministic borrowed-terminal fixtures and independent portable screen model."""
 from __future__ import annotations
 import copy
+from contextlib import contextmanager
 import os
 import re
 import unicodedata
@@ -9,6 +10,7 @@ from unittest import mock
 from story_writing_agents.interactive_terminal._controls import (
     append_main_input_history, transition_line_input, transition_main_command_input,
 )
+from story_writing_agents.interactive_terminal import _driver
 from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
 
 class _Input:
@@ -66,15 +68,16 @@ class _Termios:
     TCSANOW = 10
     TCSADRAIN = 11
 
-    def __init__(self) -> None:
+    def __init__(self, *, stateful: bool = False) -> None:
         self.original = [0, 0, 0, self.ICANON | self.ECHO, 0, 0, [b'\x04', b'\x03', 0, 0, 9, 9]]
+        self.attributes = copy.deepcopy(self.original) if stateful else None
         self.events: list[str] = []
         self.restoration_failure: BaseException | None = None
 
     def tcgetattr(self, _descriptor: int) -> list[object]:
         self.events.append("get")
-        value = list(self.original)
-        value[6] = list(self.original[6])  # type: ignore[arg-type]
+        value = list(self.original if self.attributes is None else self.attributes)
+        value[6] = list(value[6])  # type: ignore[arg-type]
         return value
 
     def tcsetattr(
@@ -87,6 +90,8 @@ class _Termios:
         self.events.append(event)
         if event == "restore" and self.restoration_failure is not None:
             raise self.restoration_failure
+        if self.attributes is not None:
+            self.attributes = copy.deepcopy(_attributes)
 
 def _raw_driver(
     characters: str,
@@ -95,11 +100,12 @@ def _raw_driver(
     answers: tuple[object, ...] = ("q",),
     width: int = 91,
     height: int = 27,
+    stateful_terminal: bool = False,
 ) -> tuple[RawTerminalDriver, _Input, _Output, mock.Mock, _Termios]:
     input_stream = _Input(characters, tty=tty)
     output_stream = _Output(tty=tty)
     fallback = mock.Mock(side_effect=answers)
-    termios = _Termios()
+    termios = _Termios(stateful=stateful_terminal)
     os_double = SimpleNamespace(
         name="posix",
         environ={"TERM": "xterm-256color"},
@@ -184,6 +190,17 @@ class PortableTerminalScreen:
                 elif final in "Hf":
                     parts = [int(p or "1") for p in parameters.split(";")]
                     self.cursor = (min((parts[0] if parts else 1) - 1, self.height - 1), min((parts[1] if len(parts) > 1 else 1) - 1, self.width - 1))
+                elif final in "ABCD":
+                    count = int(parameters or "1") or 1
+                    row, col = self.cursor
+                    row += count if final == "B" else -count if final == "A" else 0
+                    col += count if final == "C" else -count if final == "D" else 0
+                    self.cursor = (max(0, min(self.height - 1, row)), max(0, min(self.width - 1, col)))
+                elif final == "J" and parameters in {"", "0"}:
+                    row, col = self.cursor
+                    self.screen[row][col:] = [" "] * (self.width - col)
+                    for cleared in range(row + 1, self.height):
+                        self.screen[cleared] = [" "] * self.width
                 elif final == "J" and parameters == "2":
                     occupied = ["".join(row).rstrip() for row in self.screen]
                     if any(occupied):
@@ -214,6 +231,50 @@ class PortableTerminalScreen:
                     self.cursor = row, 0
                     self._newline()
         return len(value)
+
+@contextmanager
+def recording_driver(characters="", *, width=100, height=24, response="valid"):
+    """Observe real control reads and physical rows with optional terminal CPR."""
+    driver, incoming, output, fallback, termios = _raw_driver(characters, width=width, height=height, stateful_terminal=True)
+    screen = PortableTerminalScreen(width=width, height=height)
+    screen.primary[:] = [[" "] * width for _ in range(height)]
+    screen.cursor, screen.history = (0, 0), []
+    probe = SimpleNamespace(driver=driver, incoming=incoming, output=output, fallback=fallback, termios=termios,
+                            screen=screen, reads=[], attempts=0, phase="", queried=False, after_query="", query_input="", mouse=False, observe=lambda: None)
+    probe.text = lambda: "\n".join("".join(row) for row in screen.primary)
+    original_write, original_read = output.write, RawTerminalDriver._read_character
+    def reply():
+        row, column = screen.cursor
+        return f"\x1b[{height + 1 if response == 'invalid' else row + 1};{column + 1}R"
+    def paint(value):
+        written = original_write(value)
+        screen.write(value.replace("\n", "\r\n"))
+        enabled, disabled = value.rfind("\x1b[?1000h"), value.rfind("\x1b[?1000l")
+        if max(enabled, disabled) >= 0:
+            probe.mouse = enabled > disabled
+        if "\x1b[6n" in value:
+            probe.queried = True
+            if response in {"valid", "invalid"}:
+                incoming.characters[:0] = list(reply().encode())
+            incoming.characters.extend(probe.query_input.encode())
+            probe.query_input = ""
+        return written
+    def read(owner, **kwargs):
+        probe.attempts += 1
+        if kwargs.get("before_read") is not None:
+            return original_read(owner, **kwargs)
+        if probe.queried and probe.after_query:
+            incoming.characters.extend(((reply() if response == "late" else "") + probe.after_query).encode())
+            probe.after_query = ""
+        text, cursor, mouse, data = probe.text(), screen.cursor, probe.mouse, probe.observe()
+        character = original_read(owner, **kwargs)
+        probe.reads.append(SimpleNamespace(phase=probe.phase, character=character, text=text, cursor=cursor, mouse=mouse, data=data))
+        return character
+    output.write = paint
+    with (mock.patch.object(RawTerminalDriver, "_read_character", autospec=True, side_effect=read),
+          mock.patch.object(_driver._select, "select", side_effect=lambda read, write, error, _timeout: (read if incoming.characters else (), write, error))):
+        yield probe
+
 
 class _Host:
     def __init__(self, *, close_failure: BaseException | None = None) -> None:
