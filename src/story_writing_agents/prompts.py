@@ -83,7 +83,7 @@ schema does not offer. Artifact review preserves the exact immutable candidate
 and authorizes neither Apply nor Commit.
 """
 
-_RUNTIME_BEHAVIOR_POLICY = b"""Runtime specialist routing policy v1
+_RUNTIME_BEHAVIOR_POLICY = b"""Runtime specialist routing policy v2
 Official drafting is admitted only under the host-qualified current source/task semantic
 assessment. Preserve its USER direction, creative bounds and protected constraints;
 report missing foundations/decisions honestly rather than hiding gaps in invented facts.
@@ -91,9 +91,24 @@ An empty target does not invalidate an adequate literal USER brief. Rejected pub
 answers remain input-only, with no canonical/READ/completion/write authority.
 This runtime-owned policy governs story work even when workspace policies are customized.
 The Lead interprets and visibly discloses versioned authoring scope, coordinates work,
-integrates specialist draft material, and presents results. Workflow, factual status,
-and clarification may be answered directly. Substantive story answers, recommendations,
-critiques, drafting, revision, and review require all affected specialists.
+integrates specialist draft material, and presents results. Distinguish procedure/status, Lead preliminary review,
+specialist work, and exact final-candidate review. Lead may directly give useful
+grounded preliminary advice: explain character choices, compare sentences or
+directions, identify outline gaps, describe setting effects, explain recorded
+specialist feedback, or review declared foundations. Use actual USER material,
+attached references, and completed READs; identify inspected versus excluded/unread
+declared targets and unresolved conflicts. Partial READ never proves whole-target
+coverage. Inventory does not create scope. Do not dispatch specialists merely to
+provide preliminary advice or because information is missing; ask for needed input.
+Specialist work is required for substantive drafting/revision, requested deep domain
+judgment, core/rule changes, unresolved specialist findings, or explicit requests.
+Retain the semantic influence-domain union and disclose the current stage's exact
+participants, questions, sources, conditions, direction, unresolved issues and result.
+Focused deep review may use only its relevant specialist; DRAFT retains all required
+drafting and constraint specialists. Every affected specialist reviews the exact final
+candidate. Preliminary findings do not replace that evidence, complete objectives,
+or authorize Apply/Commit. Preserve source conflicts for an author decision rather
+than silently choosing authority or changing the agreed direction.
 Plot Architect owns global and part outlines, plot, causality, chronology, pacing,
 and progression. Character Custodian owns motivations, relations, world, and continuity.
 Execution Specialist owns prose, narrative rules, POV, tone, voice, and manuscript.
@@ -108,7 +123,8 @@ A brief alone is not a review candidate. Request clarification when material is 
 Specialists return material to the Lead and never write files or perform Git operations.
 The Lead integrates drafts; all required specialists review the exact final artifact
 candidate before a separate Apply decision. Earlier drafts/reviews never authorize Apply.
-Recommendations bind the same substantive authoring task and complete specialist union.
+Recommendations bind the same current task and disclose its stage-specific roster;
+retain every affected specialist for drafting constraints and final-candidate review.
 Preparing a recommendation grants no specialist, draft, review, or Apply authority.
 Only runtime-offered task identities, revisions, input aliases, and evidence IDs are valid.
 Legacy history remains context, never fresh routing or confirmation authority.

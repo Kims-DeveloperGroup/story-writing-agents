@@ -118,7 +118,8 @@ you -> lead turn
      -> lead answers workflow/status questions or clarifies directly
         or recommends one preparation -> you Confirm, Reject, or Revise
              -> lead prepares a separately confirmable proposal or asks a question
-        or proposes specialist drafting/review in every affected domain
+        or answers grounded preliminary questions with disclosed coverage
+         -> proposes specialist work with the participants required for this stage
         or integrates required drafts into an exact artifact candidate
      -> you Confirm, Reject, or Revise the exact request
      -> runtime calls the disclosed specialists with isolated inputs
@@ -547,10 +548,10 @@ document, or surface a conflict before proposing a change. Runtime does not
 turn an explicit missing reference into a missing-file judgment: an invalid
 `${missing/path.md}` reference fails before the substantive lead call.
 
-For two conflicting nonempty sources, the lead cites both, routes all affected
-domains, and proposes a synchronized candidate only when the evidence supports
-one. It may reject your requested change when it would make the core documents
-less consistent.
+For two conflicting nonempty sources, Lead can explain the inspected difference
+directly, preserve all affected domains and propose specialist work for an
+unresolved judgment. It proposes a synchronized candidate only when evidence
+supports one. It may reject a change that would make core documents less consistent.
 
 ## Shared premises and contribution roles
 
@@ -686,19 +687,25 @@ directs you to inspect the session.
 
 ```text
 You: What makes a scene feel tense?
-Lead: I propose an Execution assignment for the prose/tension recommendation.
+Lead: I can explain the inspected details and limits of this first-pass finding.
+      Deeper prose judgment can use a separately confirmed Execution assignment.
 
 You: Is the current scene tense enough under our rules?
-Lead: I need concrete manuscript text and the narrative-rule evidence, then
-      I can propose an Execution review with explicit criteria.
+Lead: I need manuscript text and narrative-rule evidence before assessing it.
+      I can give a bounded preliminary finding, or propose an Execution review
+      when deeper specialist judgment is needed.
 
 You: Would slowing this scene help the plot and the character arc?
-Lead: I propose Plot and Character; an affected manuscript also requires Execution.
+Lead: I can compare inspected consequences and explain unresolved questions.
+      The proposal names specialists needed for deeper work. Final manuscript
+      review still checks the same candidate across all required domains.
 ```
 
-The lead clarifies material choices before routing. Workflow/status answers
-can remain direct. Substantive story recommendations and critiques require
-specialists even when no file edit is requested.
+Lead clarifies material choices before routing. Workflow/status answers and
+qualified preliminary findings can remain direct. Official drafting, substantial
+revision, deeper domain judgment and final candidate review retain specialist
+requirements. Preliminary findings record sources and coverage and cannot
+authorize final review, Apply or Commit. See [Lead preliminary review](lead-agent.md#lead-preliminary-review-and-specialist-work).
 
 ## Scenario 7: policy composition and isolation
 

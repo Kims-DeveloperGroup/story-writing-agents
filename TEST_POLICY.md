@@ -150,6 +150,19 @@ compilation, or an offline harness pass does not establish native acceptance. Pr
 failed calls and incomplete outcomes as verification gaps. Keep credential-bearing checks
 outside the canonical deterministic suite and ordinary CI.
 
+### #838의 직접 1차 검토·단계 배정 회귀 소스 배정
+
+사용자의 필요시 테스트 소스 예산 확대 허용을 정확한 **147338→148196**
+전환에 적용한다. 기준 raw146304에 기존 ID의 1차 검토·단계 배정·최종 근거·
+저장/복구·UI 회귀847행과 정책 회귀10행을 더해 **raw147161**이다.
+기존 청구 helper1034행에 단일 source 전환 정책1행을 더한 **helper1035행**을
+합산하여148196행으로 배정하며 여유는 추가하지 않는다. 관련 미독 범위,
+실제 Character 의견의 이력 READ, receipt 변조, 최종 근거와 실제 원본 변경을
+기존 정규 ID에서 검증한다. 그래프 companion8파일의 숫자 변경은 순증0이다.
+기존2527개 ID, ID별 subTest cap,18000/3600초 한도와 Whole Front timeout
+발생 시 모든 작업 즉시 중단 원칙을 유지한다. 이 source 배정은 새 실제
+provider 실행이나 기존 큐 격리/닫힌 실행 허가의 예외를 승인하지 않는다.
+
 ### Canonical CI
 
 `pr-validation` runs the fast tier and all five full shards for any change under

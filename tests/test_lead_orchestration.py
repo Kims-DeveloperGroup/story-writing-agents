@@ -4527,6 +4527,208 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertIs(reselected.history[0], original)
         self.assertIs(reselected.phase, LeadGroupPhase.GENERATE)
 
+        # Native preliminary intent selects inspection only; host snapshots supply all identity.
+        from story_writing_agents import review_contracts as review
+        provided = factory.constraints.preliminary_targets
+        self.assertEqual(tuple(item.input_id for item in provided
+            if item.availability is review.ReviewTargetAvailability.SUPPLIED), ('user_input',))
+        current_reads = (call.contract.offers.completed_read_facts
+                         + call.contract.offers.delivery_read_facts)
+        read_facts = tuple({item.evidence_id: item for item in current_reads}.values())
+        self.assertTrue(read_facts)
+        target_records = [{
+            'input_id': item.input_id, 'kind': item.kind.value, 'target_id': item.target_id,
+            'revision': item.revision, 'content_digest': item.content_digest,
+            'source_digest': item.source_digest, 'boundary_digest': item.boundary_digest,
+            'whole_source': item.whole_source, 'boundary_kind': item.boundary_kind,
+            'boundary_start': item.boundary_start, 'boundary_end': item.boundary_end,
+            'availability': item.availability.value, 'source_status': item.source_status,
+            'source_manifest_digest': item.source_manifest_digest,
+        } for item in provided if item.availability is not review.ReviewTargetAvailability.UNREAD] + [{
+            'input_id': item.evidence_id,
+            'kind': 'writing_artifact' if item.source_kind is ContextSourceKind.WRITING_ARTIFACT
+                    else 'read_source',
+            'target_id': item.artifact_locator or item.source_id, 'revision': item.revision,
+            'content_digest': item.boundary_digest, 'source_digest': item.source_digest,
+            'boundary_digest': item.boundary_digest, 'whole_source': item.whole_source,
+            'boundary_kind': item.boundary_kind, 'boundary_start': item.boundary_start,
+            'boundary_end': item.boundary_end,
+            'availability': 'completed_read', 'source_status': None, 'source_manifest_digest': None,
+        } for item in read_facts]
+        target_ids = tuple(item['input_id'] for item in target_records)
+        excluded_id = read_facts[-1].evidence_id
+        preliminary_facts = replace(declared, scope=profile_scope,
+                                    preliminary_targets=provided)
+        preliminary_seed = orchestrator_module._lead_front_result_contract(
+            orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',),
+            constraints=preliminary_facts)
+        preliminary_bound = replace(factory, rule_seed=preliminary_seed,
+            constraints=preliminary_facts).for_offer(call.contract.offers)
+        preliminary_keys = set()
+        for candidate_member in preliminary_bound.semantic_index.contracts:
+            graph = candidate_member.rule_graph.schema_value()
+            details = fixture_schema_node(graph, graph['properties']['response_details'])
+            if 'preliminary_review' in details['properties']:
+                preliminary_keys.add(
+                    candidate_member.owner.variant.branch_key.partition(':partition:')[0])
+        self.assertEqual(len(preliminary_keys), 1)
+        preliminary_key, = preliminary_keys
+        native_target_ids = tuple(dict.fromkeys((*[item.input_id for item in provided], *target_ids)))
+        unread_ids = {item.input_id for item in provided
+                      if item.availability is review.ReviewTargetAvailability.UNREAD}
+        intent = {
+            'stage': 'lead_preliminary_review',
+            'inspection': {identity: 'excluded' if identity == excluded_id or identity in unread_ids else 'inspected'
+                           for identity in native_target_ids},
+            'findings': [{'message': 'The supplied premise discloses a motive.',
+                          'evidence_input_ids': ['user_input']}],
+            'conflicts': [], 'missing_information': ['The excluded source was not inspected.'],
+            'further_review_required': True, 'next_action': 'request_information',
+        }
+        def preliminary_frame(record):
+            return json.loads(lead_fixture_response(SimpleNamespace(contract=preliminary_bound), {
+                'response_type': 'answer',
+                'response_text': 'This is a bounded preliminary finding.',
+                'response_details': {'task_scope': lead_fixture_scope_record(profile_record,
+                    fixed_targets=True, fixed_dependencies=True), 'preliminary_review': record}},
+                family=0, branch_key=preliminary_key))
+        native_preliminary = preliminary_frame(intent)
+        self.assertEqual(preliminary_bound.rule_graph.findings(native_preliminary), ())
+        expected_preliminary = {
+            'kind': 'answer', 'message': 'This is a bounded preliminary finding.',
+            'authoring_scope': expected_profile_scope,
+            'preliminary_review': {
+                'task_id': task['task_id'], 'task_revision': 1, 'targets': target_records,
+                'inspected_input_ids': [identity for identity in target_ids
+                                        if identity != excluded_id],
+                'excluded_input_ids': [excluded_id], 'findings': intent['findings'],
+                'conflicts': [], 'missing_information': intent['missing_information'],
+                'further_review_required': True, 'next_action': 'request_information',
+                'stage': 'lead_preliminary_review',
+            },
+        }
+        decoded_preliminary = preliminary_bound.decode_response(json.dumps(native_preliminary))
+        self.assertEqual(json.loads(decoded_preliminary.answer_json), expected_preliminary)
+        typed_preliminary = review.preliminary_review_from_dict(
+            expected_preliminary['preliminary_review'])
+        self.assertFalse(typed_preliminary.whole_target_coverage)
+        self.assertEqual(typed_preliminary.task_id, profile_scope.task_id)
+        # Ordinary undeclared record properties may be omitted; an offered-ID map may not.
+        extended = copy.deepcopy(native_preliminary)
+        extended['agent_action']['task_result']['response_details']['ordinary_extension'] = True
+        extended_result = preliminary_bound.decode_response(json.dumps(extended))
+        self.assertEqual(json.loads(extended_result.answer_json), expected_preliminary)
+        for map_change in ('fabricated', 'missing', 'invalid_status'):
+            bad = copy.deepcopy(native_preliminary)
+            inspection = bad['agent_action']['task_result']['response_details'][
+                'preliminary_review']['inspection']
+            if map_change == 'fabricated':
+                inspection['unoffered_input'] = 'inspected'
+            elif map_change == 'missing':
+                del inspection['user_input']
+            else:
+                inspection['user_input'] = 'unknown'
+            self.assertTrue(preliminary_bound.rule_graph.findings(bad))
+            with self.assertRaises(LeadContractRejection):
+                preliminary_bound.decode_response(json.dumps(bad))
+        for invalid_intent in (
+            {**intent, 'findings': [{'message': 'Excluded evidence cannot support a finding.',
+                                   'evidence_input_ids': [excluded_id]}]},
+            {**intent, 'conflicts': [{'message': 'A conflict requires two inspected sources.',
+                                    'evidence_input_ids': ['user_input']}]},
+        ):
+            with self.assertRaises(LeadContractRejection):
+                preliminary_bound.decode_response(json.dumps(preliminary_frame(invalid_intent)))
+
+        # A focused review changes participants, while the declared semantic domains remain intact.
+        staged_record = {**profile_record, 'intent': 'review_only',
+            'domains': ['plot_structure', 'character_world', 'tone_execution'],
+            'contributions': [{'domain': domain, 'role': 'constraint_assessor'}
+                              for domain in ('plot_structure', 'character_world',
+                                             'tone_execution')]}
+        staged_scope = authoring_scope_from_dict(staged_record)
+        staged_facts = replace(declared, scope=staged_scope)
+        staged_seed = orchestrator_module._lead_front_result_contract(
+            orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',),
+            constraints=staged_facts)
+        staged_bound = replace(factory, rule_seed=staged_seed,
+            constraints=staged_facts).for_offer(call.contract.offers)
+        stage_keys = set()
+        for candidate_member in staged_bound.semantic_index.contracts:
+            graph = candidate_member.rule_graph.schema_value()
+            details = fixture_schema_node(graph, graph['properties']['response_details'])
+            proposal_rule = details['properties'].get('specialist_consultation_proposal')
+            if proposal_rule is None:
+                continue
+            proposal_rule = fixture_schema_node(graph, proposal_rule)
+            plan_rule = proposal_rule['properties'].get('stage_plan')
+            if plan_rule is None:
+                continue
+            plan_rule = fixture_schema_node(graph, plan_rule)
+            work_rule = fixture_schema_node(graph, plan_rule['properties']['work_kind'])
+            assignments = fixture_schema_node(graph, proposal_rule['properties']['assignments'])
+            if ('deep_review' in work_rule['enum']
+                    and set(assignments['properties']) == {CHARACTER_CUSTODIAN}):
+                stage_keys.add(
+                    candidate_member.owner.variant.branch_key.partition(':partition:')[0])
+        self.assertEqual(len(stage_keys), 1)
+        stage_key, = stage_keys
+        stage_plan = {
+            'stage': 'specialist_work', 'work_kind': 'deep_review',
+            'task_id': task['task_id'], 'task_revision': 1,
+            'focus_domains': ['character_world'], 'specialist_ids': [CHARACTER_CUSTODIAN],
+            'questions': [{'question_id': 'motive', 'task_id': task['task_id'], 'task_revision': 1,
+                'question': 'Explain the supplied motive conflict and its consequences.',
+                'source_input_ids': ['user_input'], 'required_condition_ids': ['user_input']}],
+            'required_condition_ids': ['user_input'],
+            'agreed_direction': 'Preserve the supplied premise.',
+            'unresolved_questions': ['Which conflicting motive does the USER prefer?'],
+            'expected_result': 'Character-focused judgment, without drafting or final approval.',
+        }
+        native_stage_plan = {key: value for key, value in stage_plan.items()
+                             if key not in {'task_id', 'task_revision', 'questions'}}
+        native_stage_plan['questions'] = [{key: value for key, value in question.items()
+            if key not in {'task_id', 'task_revision'}} for question in stage_plan['questions']]
+        stage_choices = dict(staged_bound.semantic_index.policy.choices)
+        stage_inputs = stage_choices['allocation_input_ids']
+        allocation = lead_fixture_assignments([{
+            'agent_id': CHARACTER_CUSTODIAN,
+            'task_instructions': 'Assess the disclosed motive conflict.',
+            'assignment_type': 'review_content', 'input_source_ids': list(stage_inputs),
+            'review_basis': {'candidate_input_ids': ['user_input'],
+                             'criteria': 'Preserve the supplied motive; explain unresolved conflict.'},
+        }], input_choices=stage_inputs, review_choices=stage_choices['review_candidate_ids'],
+            anchors={CHARACTER_CUSTODIAN: 'user_input'},
+            recipients={})
+        allocation.update({'shared_premises': [], 'stage_plan': native_stage_plan})
+        staged_packet = json.loads(lead_fixture_response(SimpleNamespace(contract=staged_bound), {
+            'response_type': 'specialist_consultation_proposal',
+            'response_text': 'Review the motive before deciding whether to change the story.',
+            'response_details': {'task_scope': lead_fixture_scope_record(staged_record,
+                fixed_targets=True, fixed_dependencies=True),
+                'specialist_consultation_proposal': allocation}}, family=0, branch_key=stage_key))
+        self.assertEqual(staged_bound.rule_graph.findings(staged_packet), ())
+        staged_decoded = staged_bound.decode_response(json.dumps(staged_packet))
+        staged_value = json.loads(staged_decoded.answer_json)
+        self.assertEqual(staged_value['authoring_scope']['domains'], staged_record['domains'])
+        self.assertEqual(staged_value['proposal']['stage_plan'], stage_plan)
+        self.assertEqual([row['agent_id'] for row in staged_value['proposal']['assignments']],
+                         [CHARACTER_CUSTODIAN])
+        for field, value in (('task_id', 'foreign_task'), ('task_revision', 2),
+                             ('stage', 'final_candidate_review')):
+            invalid = copy.deepcopy(staged_packet)
+            invalid['agent_action']['task_result']['response_details'][
+                'specialist_consultation_proposal']['stage_plan'][field] = value
+            self.assertTrue(staged_bound.rule_graph.findings(invalid))
+            with self.assertRaises(LeadContractRejection):
+                staged_bound.decode_response(json.dumps(invalid))
+        invalid = copy.deepcopy(staged_packet)
+        question = invalid['agent_action']['task_result']['response_details'][
+            'specialist_consultation_proposal']['stage_plan']['questions'][0]
+        question['task_id'] = 'foreign_task'
+        self.assertTrue(staged_bound.rule_graph.findings(invalid))
+        with self.assertRaises(LeadContractRejection):
+            staged_bound.decode_response(json.dumps(invalid))
 
     async def test_front_schema_rejection_is_repaired_once(self) -> None:
         from story_writing_agents.lead_schema_groups import LeadGroupPhase

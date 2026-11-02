@@ -6,6 +6,14 @@ freshness, completed READ receipts, confirmation, candidate construction and sta
 
 from __future__ import annotations
 
+from .specialist_routing import (ReviewStage, SpecialistWorkKind, SpecialistStagePlan,
+    stage_plan_from_dict, stage_plan_to_dict, validate_stage_routing, stage_required_specialists,
+    stage_participant_rosters, stage_focus_domains, stage_is_focused_review)
+
+from .review_contracts import (ReviewTarget, ReviewTargetAvailability, LeadPreliminaryReview, preliminary_intent_schema,
+    preliminary_scope_eligible, bind_preliminary_intent, preliminary_review_to_dict,
+    review_target_to_dict)
+
 import json
 import hashlib
 import inspect
@@ -250,6 +258,24 @@ def _allocation_wire_rule(template: Mapping[str, object], *, active: tuple[str, 
     result.update(properties=properties, required=[
         name for name in properties if name in template["required"] or name == "required_input_recipients"])
     return result
+
+
+def _stage_plan_wire_rule(rule, active, inputs, required, work):
+    # Task identity is bound once by this same owner's enclosing writing_task_scope.
+    def refs(choices, minimum=0):
+        return string_array(choices, minimum=minimum, maximum=len(choices))
+    focus = tuple(domain.value for domain in stage_focus_domains(rule, ReviewStage.SPECIALIST_WORK,
+        SpecialistWorkKind.DRAFT if work == "draft" else SpecialistWorkKind.DEEP_REVIEW, active))
+    question = closed_object({"question_id": nonempty_text_schema(), "question": nonempty_text_schema(),
+        "source_input_ids": refs(inputs, 1), "required_condition_ids": refs(required, 1)})
+    return closed_object({"stage": {"type": "string", "enum": ["specialist_work"]},
+        "work_kind": {"type": "string", "enum": ["draft"] if work == "draft" else ["deep_review", "constraint_review"]},
+        "focus_domains": refs(focus, len(focus)), "specialist_ids": refs(active, len(active)),
+        "questions": {"type": "array", "items": question, "minItems": 1, "maxItems": 64},
+        "required_condition_ids": refs(required, len(required)),
+        "agreed_direction": alternatives([nonempty_text_schema(), {"type": "null"}]),
+        "unresolved_questions": {"type": "array", "items": nonempty_text_schema(), "maxItems": 64},
+        "expected_result": nonempty_text_schema()})
 
 
 def _decode_allocation_wire(value: dict[str, object], inputs: tuple[str, ...],
@@ -1939,7 +1965,14 @@ class LeadProviderConstraints:
     adoption_targets: tuple[str, ...] = ()
     readiness_source_basis_ref: str | None = None
 
+    preliminary_targets: tuple[ReviewTarget, ...] = field(default=(), kw_only=True)
     def __post_init__(self) -> None:
+        if (type(self.preliminary_targets) is not tuple
+                or any(type(item) is not ReviewTarget for item in self.preliminary_targets)
+                or len({item.input_id for item in self.preliminary_targets}) != len(self.preliminary_targets)
+                or not {item.input_id for item in self.preliminary_targets
+                 if item.availability is not ReviewTargetAvailability.UNREAD}.issubset(self.input_ids)):
+            raise ValueError("preliminary targets require the exact current captured inputs")
         for values in (self.per_assignment_input_ids, self.required_input_ids,
                        self.review_candidate_ids):
             if values is not None and (type(values) is not tuple
@@ -1987,6 +2020,7 @@ class LeadProviderConstraints:
 
     def choice_snapshot(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
         return (
+            ("preliminary_targets", tuple(json.dumps(review_target_to_dict(item), ensure_ascii=False, sort_keys=True, separators=(",", ":")) for item in self.preliminary_targets)),
             ("input_ids", self.input_ids),
             ("allocation_input_ids", self._allocation_input_ids()),
             ("required_input_ids", self.required_assignment_input_ids()),
@@ -2046,6 +2080,33 @@ class LeadProviderConstraints:
         allocation_inputs = self._allocation_input_ids()
         projected = _current_lead_rule_schema(contract)
         roots = projected.get("anyOf", [projected])
+        if (any(item.availability is not ReviewTargetAvailability.UNREAD for item in self.preliminary_targets)
+                and not self.continuation and not self.recommendation_only
+                and self.preparation_kind is None):
+            # This is one declared current owner arm, not an ordinary-answer exception.
+            ordinary = next((item for item in roots
+                if item.get("properties", {}).get("response_type", {}).get("enum") == ["answer"]
+                and "writing_task_scope" in item.get("properties", {})), None)
+            if ordinary is not None:
+                preliminary = deepcopy(ordinary)
+                preliminary["properties"]["preliminary_review"] = preliminary_intent_schema(self.preliminary_targets)
+                preliminary["required"] = list(preliminary["properties"])
+                roots = [*roots, preliminary]
+        staged_roots = []
+        for original in roots:
+            if not (allocation_inputs and self.required_assignment_input_ids()
+                    and (self.task_revisions or self.scope is not None)):
+                continue
+            if original.get("properties", {}).get("response_type", {}).get("enum") != ["specialist_consultation_proposal"]:
+                continue
+            staged = deepcopy(original)
+            allocation = staged.get("properties", {}).get("specialist_consultation_proposal")
+            if type(allocation) is not dict or "assignments" not in allocation.get("properties", {}):
+                continue
+            allocation["properties"]["stage_plan"] = closed_object({})
+            allocation["required"] = [*allocation["required"], "stage_plan"]
+            staged_roots.append(staged)
+        roots = [*roots, *staged_roots]
         container_description = (
             projected.get("description") if "anyOf" in projected else None
         )
@@ -2149,6 +2210,10 @@ class LeadProviderConstraints:
                 and set(root.get("required", ())) == {"response_type", "response_text", "writing_task_scope"}
                 and properties["response_type"].get("enum") == ["answer"]
             )
+            preliminary_answer = "preliminary_review" in properties
+            stage_template = properties.get("specialist_consultation_proposal", {}).get("properties", {}).get("stage_plan")
+            stage_work = None
+            owner_tasks = tasks
             scope_template = properties.get("writing_task_scope")
             scoped = type(scope_template) is dict and scope_template.get("type") == "object"
             scope_kinds = ()
@@ -2195,11 +2260,15 @@ class LeadProviderConstraints:
             for scope_number, rule in enumerate(rules):
                 if rule is not None and rule.schema_version != AUTHORING_SCOPE_SCHEMA_VERSION:
                     raise ValueError("current Lead graph has a noncurrent rule")
+                if stage_template is not None:
+                    if rule is None or rule.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE, AuthoringActivity.REVIEW}:
+                        continue
+                    stage_work = "draft" if rule.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} else "deep_review"
                 scope_paths = ()
                 eligible_kinds = ()
                 if scope_kinds:
                     for native_kind, kind in scope_kinds:
-                        paths = lead_outcome_scope_paths(
+                        paths = ((targets or ()) if preliminary_answer and preliminary_scope_eligible(rule.activity.value, targets or (), self.preliminary_targets) else None) if preliminary_answer else lead_outcome_scope_paths(
                             kind, rule.activity, rule.required_domains, writing_read_facts,
                             target_paths=targets or (), ordinary_answer=ordinary_answer,
                         )
@@ -2245,7 +2314,7 @@ class LeadProviderConstraints:
                 if scope_kinds:
                     root_schema["properties"]["response_type"]["enum"] = list(eligible_kinds)
                 if scoped:
-                    root_schema["properties"]["writing_task_scope"] = _scope_wire_rule(rule, scope_template, self.scope, targets, tasks)
+                    root_schema["properties"]["writing_task_scope"] = _scope_wire_rule(rule, scope_template, self.scope, targets, owner_tasks)
                     if (ordinary_answer and rule.activity is AuthoringActivity.REVIEW
                             and targets is None):
                         scope_properties = root_schema["properties"]["writing_task_scope"]["properties"]
@@ -2475,7 +2544,11 @@ class LeadProviderConstraints:
                 if allocation_paths:
                     rosters = (tuple(combination for count in range(1, len(SPECIALIST_IDS) + 1) for combination in combinations(tuple(SPECIALIST_IDS), count))
                                if premise else legal_specialist_rosters(rule) if rule is not None else ())
-                    rosters = tuple(roster for roster in rosters if set(agent for agent, _ in self.reviewer_inputs).issubset(roster)
+                    if stage_work == "deep_review":
+                        rosters = stage_participant_rosters(rule, ReviewStage.SPECIALIST_WORK, SpecialistWorkKind.DEEP_REVIEW)
+                    if stage_work == "draft":
+                        rosters = stage_participant_rosters(rule, ReviewStage.SPECIALIST_WORK, SpecialistWorkKind.DRAFT)
+                    rosters = tuple(roster for roster in rosters if (stage_work == "deep_review" or set(agent for agent, _ in self.reviewer_inputs).issubset(roster))
                                     and (not self.preparation_specialists or roster == self.preparation_specialists))
                 else:
                     rosters = ((),)
@@ -2496,6 +2569,9 @@ class LeadProviderConstraints:
                                             if SPECIALIST_IDS[number] in active)
                             question["properties"]["dependent_domains"] = _fixed_selection(domains)
                             keyed_paths.append((path + ("premise_decision", "dependent_domains"), domains))
+                        if stage_work is not None:
+                            replacement["properties"]["stage_plan"] = _stage_plan_wire_rule(
+                                rule, active, allocation_inputs, self.required_assignment_input_ids(), stage_work)
                         node.clear(); node.update(replacement)
                     def finite_choices(name, child):
                         if (child.get("type") != "array"
@@ -2503,6 +2579,7 @@ class LeadProviderConstraints:
                                                 "candidate_input_ids",
                                                 "used_evidence_ids", "evidence_input_ids",
                                                 "dependency_source_ids", "specialist_ids",
+                                                "source_input_ids", "required_condition_ids", "focus_domains",
                                                 "alternative_keys", "target_artifact_paths"}
                                 or (name == "target_artifact_paths"
                                     and not child.get("items", {}).get("enum"))):
@@ -2750,7 +2827,23 @@ class LeadProviderConstraints:
                                 parent = parent[name]
                             parent[assessment_path[-1]] = decode_current_assessment(parent[assessment_path[-1]])
                         map_current_task_literals(result, tasks)
-                        return normalize_result(result, contract.contract_id)
+                        normalized = normalize_result(result, contract.contract_id)
+                        if "preliminary_review" in normalized:
+                            scope_value = normalized["authoring_scope"]
+                            task_id, revision = scope_value["task"].rsplit("@", 1)
+                            normalized["preliminary_review"] = preliminary_review_to_dict(
+                                bind_preliminary_intent(normalized["preliminary_review"],
+                                    self.preliminary_targets, task_id, int(revision),
+                                    target_paths=tuple(scope_value["target_paths"])))
+                        proposal_value = normalized.get("proposal")
+                        if type(proposal_value) is dict and "stage_plan" in proposal_value:
+                            scope_value = normalized["authoring_scope"]
+                            task_id, revision = scope_value["task"].rsplit("@", 1)
+                            plan = proposal_value["stage_plan"]
+                            plan.update(task_id=task_id, task_revision=int(revision))
+                            for question in plan["questions"]:
+                                question.update(task_id=task_id, task_revision=int(revision))
+                        return normalized
                     branch_key = f"{contract.contract_id}:{root_number}:{scope_number}:{roster_number}"
                     if grouped:
                         branch_key += ":group:" + group_id
@@ -2776,6 +2869,7 @@ class LeadProviderConstraints:
             **({"offered_premise_question_id": self.premise_question_id,
                 "premise_analysis_rule": "Only an undecided question needs target-free alternatives analysis. Reuse disclosed resolved inputs. Analysis requires its own Confirm and cannot draft, review a candidate, select a premise, or update an objective."}
                if self.premise_question_id is not None else {}),
+            "preliminary_review_rule": "For useful direct preliminary advice select the offered preliminary arm, inspect actual supplied/READ inputs and exclude unread declared targets. Inventory does not expand scope; preserve conflicts and gaps without automatically dispatching specialists. This is not final review or objective completion.",
             "offered_admission_source_ids": list(self.input_ids),
             "authoring_admission_rule": (
                 "Before official drafting or document-change preparation, assess the actual supplied story foundations, "
@@ -3116,7 +3210,14 @@ class LeadProviderConstraints:
                         by_role[item["agent_id"]] = set(aliases)
                 if not required.issubset(selected):
                     rules.append(R.CONTINUATION_INPUT_COVERAGE if self.continuation else R.INPUT_COVERAGE)
-                if any(alias not in by_role.get(agent, set()) for agent, alias in (*self.reviewer_inputs, *read_reviewers)):
+                try:
+                    declared_plan = stage_plan_from_dict(proposal["stage_plan"]) if "stage_plan" in proposal else None
+                except (TypeError, ValueError, KeyError):
+                    declared_plan = None
+                    rules.append(R.SPECIALIST_REQUIRED)
+                if any(alias not in by_role.get(agent, set())
+                       for agent, alias in (*self.reviewer_inputs, *read_reviewers)
+                       if not stage_is_focused_review(declared_plan) or agent in roles):
                     rules.append(R.REVIEWER_INPUT)
                 scope = self.scope
                 if scope is None and type(raw_scope) is dict:
@@ -3127,7 +3228,15 @@ class LeadProviderConstraints:
                     except (KeyError, TypeError, ValueError):
                         scope = None
                 if scope:
-                    required_roles = required_authoring_specialists(scope)
+                    try:
+                        plan = stage_plan_from_dict(proposal["stage_plan"]) if "stage_plan" in proposal else None
+                        required_roles = stage_required_specialists(scope, plan)
+                        validate_stage_routing(scope, tuple(roles), plan,
+                            source_input_ids=tuple((*self.input_ids, *read_ids)),
+                            required_condition_ids=self.required_assignment_input_ids())
+                    except (TypeError, ValueError, KeyError):
+                        rules.append(R.SPECIALIST_REQUIRED)
+                        required_roles = required_authoring_specialists(scope)
                     if not set(required_roles).issubset(roles):
                         rules.append(R.SPECIALIST_REQUIRED)
                     expected_mode = "review" if scope.activity is AuthoringActivity.REVIEW else "draft"

@@ -77,6 +77,7 @@ that matches your task.
 - [Agent-context internals](design/agent-context.md)
 - [Native schema regex compatibility](design/provider-regex-compatibility.md)
 - [Lead 두 국면의 최종 native 검증](design/lead-two-phase-native-verification.md)
+- [Lead review-stage authority design](design/lead-review-stages.md)
 - [Consensus algorithm record](design/consensus-workflow.md)
 - [Interactive CLI design record](design/interactive-cli-design-system.md)
 - [Persistence](design/persistence.md)

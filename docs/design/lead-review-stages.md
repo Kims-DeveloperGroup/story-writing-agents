@@ -1,6 +1,6 @@
 # Lead review stages
 
-This design contract defines the authority boundaries for [Issue #838](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/838). Runtime implementation and verification are tracked in that issue; this document alone does not enable a new response or execution path.
+This contract defines the review-stage authority boundaries for [Issue #838](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/838). The issue and its linked PR retain implementation and verification evidence.
 
 A Lead response should distinguish useful advice about existing material from work that needs specialist drafting, deeper domain judgment, or review of the exact final candidate. Mentioning several affected domains does not by itself justify calling every specialist.
 

@@ -1108,6 +1108,22 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         _proposed, decided = await self.reviewed_create(conversation_id)
         reviewed = decided.turn.artifact_proposal.reviewed_proposal
         filesystem_history = self.history(conversation_id)
+        from story_writing_agents.review_contracts import FinalReviewEvidence
+        evidence = reviewed.final_review_evidence
+        self.assertIs(type(evidence), FinalReviewEvidence)
+        self.assertEqual((evidence.candidate_id, evidence.candidate_revision, evidence.candidate_digest),
+                         (reviewed.candidate.candidate_id, reviewed.candidate.candidate_revision,
+                          reviewed.candidate.candidate_digest))
+        self.assertEqual(evidence.reviewer_ids, tuple(item.specialist_id for item in reviewed.reviews))
+        self.assertEqual(evidence.reply_event_ids, tuple(item.reply_event_id for item in reviewed.reviews))
+        self.assertTrue(set(evidence.reply_event_ids).issubset({event.event_id for event in filesystem_history}))
+        qualified = self.runtime.qualify_artifact_final_review(session_id=self.session_id,
+            reviewed_proposal=reviewed, consultation=_proposed.proposal, events=filesystem_history)
+        self.assertTrue(qualified.eligible)
+        self.assertEqual(qualified.evidence_digest, evidence.evidence_digest)
+        self.assertFalse(reviewed.apply_authority_granted)
+        self.assertFalse(reviewed.artifact_write_occurred)
+        self.assertFalse(reviewed.git_action_occurred)
 
         coordinator = WorkspaceConversationStorageMutationCoordinator(self.control_workspace)
         with coordinator.borrow(timeout_seconds=2.0) as lease:
@@ -1134,6 +1150,13 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         projection = project_collaboration_history(sqlite_history)
         self.assertEqual(projection.current_reviewed_artifact_proposal, reviewed)
         self.assertIs(projection.current_artifact_state, ArtifactProposalState.REVIEWED)
+        restarted = StoryRuntime(self.control_workspace, backend=self.backend)
+        restored = restarted.conversation_storage_services.event_store.read(self.session_id, conversation_id)
+        self.assertEqual(restored, filesystem_history)
+        qualified_after_restart = restarted.qualify_artifact_final_review(session_id=self.session_id,
+            reviewed_proposal=projection.current_reviewed_artifact_proposal,
+            consultation=_proposed.proposal, events=restored)
+        self.assertEqual(qualified_after_restart, qualified)
 
     async def test_search_read_answer_can_add_an_artifact_candidate(self) -> None:
         from tests.recommendation_fixture import task_assessment

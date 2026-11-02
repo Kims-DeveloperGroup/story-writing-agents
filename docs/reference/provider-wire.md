@@ -464,6 +464,31 @@ Follow the current branch's mode, role and coverage restrictions.
 | `consultation-summary-v4` | `consultation_summary` and `response_text`; permitted variants can add `follow_up_consultation` or `proposal_drafting_request`. |
 | `artifact-review-summary-v4` | `artifact_review_summary`, `review_outcome`, and `response_text`. |
 
+The SELECT catalog keeps preliminary answers in `answer.observed_facts`.
+The selected GENERATE contract offers their detailed record; providers do not
+add a separate group or change the scope to workflow to avoid domain rules.
+
+When offered, the preliminary-answer branch adds `preliminary_review` to the
+answer's declared fields. Its stage is `lead_preliminary_review`. The required
+`inspection` map marks every offered target ID as `inspected` or `excluded`;
+findings and conflicts cite exact inspected IDs. The record also declares
+`missing_information`, `further_review_required`, and `next_action`. Runtime
+binds the task, target revisions, digests, and coverage from captured inputs and
+actual READ facts. Providers do not supply replacement target identities or
+mint evidence. A partial finding must keep its excluded or ranged coverage
+visible and cannot become a final review or a mutation request.
+
+Known unread targets permit only `excluded` in the offered inspection map.
+They cannot be cited by a finding or conflict. Their status adds no content
+evidence and causes no additional READ merely to populate the record.
+
+An offered specialist-stage plan discloses related questions and their exact
+source and condition IDs, task, focused domains and participants, agreed
+direction, unresolved questions, and expected result. It retains the enclosing
+scope's affected domains. Draft work includes required writers and declared
+constraint assessors; focused deeper review may select a subset. Final review
+retains complete required domain coverage.
+
 Plain result availability also depends on the offered scope. Workflow guidance
 keeps answers, questions and critiques. For a writing scope, a plain answer is
 available only for factual `review_writing` inspection backed by current
@@ -472,7 +497,9 @@ can be valid. Draft/revise answers and writing-scope critiques are unavailable;
 questions, proposals and recommendations keep their existing scoped rules.
 Cancel-request answer/critique variants are workflow-only. These choices grant
 no specialist execution, candidate, Apply or Commit authority. Readiness and
-premise-analysis null-scope branches retain their own exact contracts.
+premise-analysis null-scope branches retain their own exact contracts. The
+separate preliminary-answer branch requires its complete qualified record;
+omitting that record does not relax these plain-answer rules.
 
 An illustrative specialist draft response is:
 

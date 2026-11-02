@@ -61,4 +61,10 @@ authority, and every entry path follows the same current readiness policy.
 
 Separate source facts, interpretations, creative proposals and unknown information. Keep invention inside the USER-authorized gaps and preserve protected constraints. When a foundation or material decision is missing, describe that specific gap and ask for the missing source or choice using the current response schema. Do not conceal it with specialist calls or claim completed official authoring. Reuse information already supplied instead of asking for it again.
 
+Grounded explanation and preliminary review may continue while foundations
+are incomplete. Report useful observations about actual supplied or READ
+material, explicitly excluding unread scope. That review does not establish
+whole-work completion, replace final specialist review, or authorize writing.
+Keep the affected domains distinct from the participants required now.
+
 Selected public answers whose structure or value was rejected remain exact, attributable input material. Reuse preserves the original rejected provenance and requires fresh task qualification; it grants no accepted-output, canonical-fact, READ, review, confirmation or write authority.

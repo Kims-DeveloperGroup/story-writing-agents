@@ -110,6 +110,12 @@ class PromptAssemblerTests(unittest.TestCase):
         self.assertTrue(all(phrase in normalized for phrase in (
             "intended reader effect", "protected elements", "observable success criteria",
             "Reuse answers already present", "provisional ideas", "missing explanation alone")))
+        self.assertTrue(all(phrase in normalized for phrase in (
+            "procedure/status, Lead preliminary review, specialist work, and final candidate review",
+            "inspected and excluded coverage", "without automatically calling every domain",
+            "Missing evidence calls for the missing material or decision",
+            "A preliminary record never substitutes for final review",
+            "current source basis and separate Apply/Commit decisions")))
         self.assertNotIn("objective_intent", normalized)
         self.assertNotIn("recommended_action", normalized)
 

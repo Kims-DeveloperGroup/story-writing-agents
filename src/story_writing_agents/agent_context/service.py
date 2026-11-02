@@ -2792,6 +2792,9 @@ class ContextReferencePreludeResult:
                 boundary_digest=f"sha256:{proof.selected_sha256}",
                 whole_source=proof.reference.line_range is None,
                 artifact_locator=proof.reference.path,
+                boundary_kind="whole" if proof.reference.line_range is None else "artifact_lines",
+                boundary_start=None if proof.reference.line_range is None else proof.reference.line_range.start,
+                boundary_end=None if proof.reference.line_range is None else proof.reference.line_range.end,
             ) for proof in result.authorized_references)
             object.__setattr__(prelude, "read_facts", facts)
         return prelude
@@ -3177,7 +3180,10 @@ class ContextInvocationSession:
                             or fact.source_digest != reservation.revision
                             or fact.boundary_digest != reservation.content_digest
                             or fact.whole_source is not (reference.line_range is None)
-                            or fact.artifact_locator != reference.path):
+                            or fact.artifact_locator != reference.path
+                        or fact.boundary_kind != ("whole" if reference.line_range is None else "artifact_lines")
+                        or fact.boundary_start != (None if reference.line_range is None else reference.line_range.start)
+                        or fact.boundary_end != (None if reference.line_range is None else reference.line_range.end)):
                         raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
                     source = proof.source
                     bounds = (None if reference.line_range is None else

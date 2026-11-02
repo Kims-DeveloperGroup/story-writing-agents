@@ -2631,3 +2631,26 @@ for _value, _meaning in {
 _catalog("depends_on_author_decision_ids", "Exact declared author-decision dependencies for this criterion; an unresolved required choice cannot satisfy it.")
 
 _catalog("readiness_authority", "Retained whole-book judgment is input only; current host source qualification and every workflow/write decision remain separate.")
+
+_catalog("preliminary_review inspection inspected excluded findings conflicts missing_information further_review_required next_action",
+    "Bounded Lead preliminary inspection only: disclose inspected and excluded exact current targets, findings, conflicts, gaps and next work. This grants no final review or execution authority.")
+_catalog("stage_plan stage work_kind focus_domains questions question_id source_input_ids required_condition_ids agreed_direction unresolved_questions expected_result",
+    "Disclose one current-task specialist stage, exact sources and all required conditions before confirmation. Semantic influence domains remain complete; focus controls only eligible this-stage participants.")
+
+ENUM_MEANINGS.update({
+    "procedure_status": "Procedure or factual status only, with no authoring or execution authority.",
+    "lead_preliminary_review": "Useful Lead advice grounded in inspected inputs, explicitly limited by excluded or unread declared targets; not final review.",
+    "specialist_work": "The disclosed current-task specialist work stage, distinct from semantic influence and final-candidate review.",
+    "final_candidate_review": "Every required affected specialist reviews the same exact immutable candidate.",
+    "deep_review": "Focused specialist analysis of the declared questions and captured input basis; not drafting or final-candidate approval.",
+    "constraint_review": "Assess the declared constraints against the same current-task inputs without rewriting another specialist's work.",
+    "inspected": "This qualified supplied input or completed READ was actually inspected for this preliminary answer.",
+    "excluded": "This target was not inspected; unread status-only targets must remain excluded and cannot support a finding.",
+    "finish_direct": "Finish the supported preliminary answer without automatically dispatching specialists or completing an authoring objective.",
+    "request_information": "Ask for the specific missing input or author decision needed for supported further work.",
+    "propose_specialist_work": "Offer separately confirmed specialist work for the disclosed need; no automatic dispatch.",
+    "propose_change_task": "Offer an explicit task change for the user to decide; do not silently change direction.",
+})
+_catalog("availability source_status source_manifest_digest", "Host-issued source availability/status facts. Unread metadata is not content, an inspected source, or final-review evidence.")
+
+DYNAMIC_CHOICE_FIELDS = DYNAMIC_CHOICE_FIELDS | frozenset({"source_input_ids", "required_condition_ids"})

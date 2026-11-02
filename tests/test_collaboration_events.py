@@ -207,9 +207,17 @@ def _exception_graph(exception: BaseException) -> tuple[BaseException, ...]:
 
 
 def _reviewed_artifact_proposal() -> ArtifactReviewedProposal:
+    from story_writing_agents.review_contracts import FinalReviewEvidence, ReviewTarget, ReviewTargetKind
     _base, candidate, _projected = _combined_candidate()
     mandatory = artifact_review_specialists(candidate.mandatory_review_domains)
     disclosed = artifact_review_specialists(candidate.disclosed_review_domains)
+    # Pure codec fixture; this record is not a Host-issued Apply capability.
+    final_evidence = FinalReviewEvidence(candidate.candidate_id, candidate.candidate_revision,
+        candidate.candidate_digest, "task_a", 1,
+        (ReviewTarget("candidate", ReviewTargetKind.CANDIDATE, candidate.candidate_id, str(candidate.candidate_revision),
+                      candidate.candidate_digest, candidate.candidate_digest, candidate.candidate_digest, True),),
+        DIGEST_A, DIGEST_A, DIGEST_A, disclosed,
+        tuple(f"artifact_reply_{ordinal}" for ordinal in range(1, len(disclosed) + 1)))
     return ArtifactReviewedProposal.create(
         proposal_id="reviewed_artifact",
         proposal_revision=1,
@@ -236,6 +244,7 @@ def _reviewed_artifact_proposal() -> ArtifactReviewedProposal:
         user_impact="The proposal remains review-only.",
         limitations="No Apply, artifact-write, or Git authority is granted.",
         grounding_evidence_ids=candidate.grounding_evidence_ids,
+        final_review_evidence=final_evidence,
     )
 
 
@@ -548,7 +557,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             (lead_evidence, ("scope", "status", "receipts")),
             (
                 lead_judgment,
-                ('kind', 'message', 'evidence', 'authoring_scope', 'trace', 'authoring_admission', 'core_document_readiness', 'provider_invocation_id'),
+                ('kind', 'message', 'evidence', 'authoring_scope', 'trace', 'authoring_admission', 'core_document_readiness', 'provider_invocation_id', 'preliminary_review'),
             ),
             (lead_failure, ("code", "invocation_id", "call_id")),
             (
