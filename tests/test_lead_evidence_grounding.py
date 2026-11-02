@@ -535,7 +535,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         for conflict in (False, True):
             call_start = len(self.backend.calls)
             conversation_id = self.conversation("Stable mixed zero hit and historical READ")
-            marker, unrelated = "EXACT_ASSIGNED_USER_RECORD", "UNASSIGNED_PRIVATE_LEAD_RECORD"
+            marker, unrelated = f"EXACT_ASSIGNED_USER_RECORD_{int(conflict)}", f"UNASSIGNED_PRIVATE_LEAD_RECORD_{int(conflict)}"
             self.backend.enqueue(_visible_outcome("answer", unrelated), control_plan=selection_plan("answer.workflow"))
             await self.runtime.lead_turn(self.session_id, conversation_id, marker + ": retain the supplied candidate facts.")
             before = {path.relative_to(self.workspace.root): path.read_bytes()
@@ -558,6 +558,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             read_receipt, = tuple(item for item in proposed.evidence.receipts if item.evidence_id in reads)
             self.assertEqual(read_input.revision_digest, read_receipt.content_digest)
             self.assertEqual(read_receipt.boundary_kind, "records")
+            self.assertEqual(read_receipt.locator, "conversation/" + conversation_id)
             def assigned_search(call, provider):
                 observation = provider.callback_payload(call)["context_observation"]
                 self.assertEqual(observation["search_results"], [])
@@ -600,7 +601,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             with mock.patch.object(self.runtime, "_materialize_lead_evidence_inputs", side_effect=conflict_input), mock.patch.object(_LeadContextProvider, "_account", side_effect=accounted):
                 completed = await self.runtime.decide_lead_step(_decision(proposed, self._confirm_decision()))
             result = completed.turn
-            self.assertEqual(len(raw), 2 if conflict else 1)
+            self.assertEqual(len(raw), 2 if conflict else 1, (result, _submitted_calls(self.history(conversation_id))))
             self.assertEqual(len(self.backend.calls) - calls, 6 if conflict else 5)
             if conflict:
                 self.assertIsNone(result.recommendation_request)
