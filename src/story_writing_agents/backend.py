@@ -5491,6 +5491,7 @@ class AgentBackend:
                         and not timed_out
                         else None
                     ),
+                    native_context_check=failure.native_context_check,
                 ),
             )
             self._capture_provider_failure_without_replacing(
@@ -5504,9 +5505,7 @@ class AgentBackend:
                 ),
                 failure=failure,
             )
-            if failure.__cause__ is None:
-                raise translated from None
-            raise translated from failure.__cause__
+            raise translated from failure
         except ProviderAuthenticationRequiredError:
             # A replay veto carries the already-recorded original physical facts.
             raise
@@ -5646,15 +5645,28 @@ class AgentBackend:
                 AgentExchangeTerminalCode.RESPONSE_CORRELATION_MISMATCH,
             )
             raise failure
-        if invocation.context_witness is not None and result.context_witness is None:
+        native_check = result.native_context_check
+        completed_without_post_witness = (
+            invocation.context_witness is not None and native_check is not None
+            and native_check.outcome == "unavailable"
+            and native_check.stage.value == "post_complete"
+            and native_check.pre_submit_verified
+            and native_check.call_id == invocation.context_call_id
+            and native_check.prior_call_id == invocation.context_witness.call_id
+            and native_check.normal_exit_code == 0
+            and native_check.observed_thread_id == result.thread_id == invocation.thread_id)
+        if (native_check is not None and native_check.outcome == "contradiction"
+                or invocation.context_witness is not None and result.context_witness is None
+                and not completed_without_post_witness):
             failure = ContextExecutionError(ContextExecutionErrorCode.CONTINUATION_MISMATCH)
             record_context_provider_failure(failure, ContextProviderFailureFacts(
                 accounting, taint_existing_thread=True,
-                continuation_rejection=ContextContinuationRejection.UNAVAILABLE))
+                continuation_rejection=ContextContinuationRejection.UNAVAILABLE,
+                native_context_check=result.native_context_check))
             self._taint_context_thread_without_replacing(
                 storage_scope, bound_agent.vendor, definition_fingerprint, effective_policy_fingerprint)
             self._capture_rejected_without_replacing(exchange, AgentExchangeTerminalCode.CONTEXT_RUNTIME_FAILED)
-            raise failure
+            raise failure from result.native_context_cause
         try:
             self._require_postsubmission_workspace(invocation)
             self._store_context_thread(
@@ -5696,7 +5708,8 @@ class AgentBackend:
                 result.response_text,
                 result.thread_id,
                 accounting,
-                _ContextExchangeFinalizer(exchange), context_witness=result.context_witness)
+            _ContextExchangeFinalizer(exchange), context_witness=result.context_witness,
+            native_context_check=result.native_context_check)
         except asyncio.CancelledError:
             self._capture_cancelled_without_replacing(exchange)
             raise

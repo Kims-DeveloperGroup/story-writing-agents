@@ -505,6 +505,7 @@ class InteractiveLeadAdapter:
                         conversation_id,
                         text,
                         action_progress_sink=self._progress.observe,
+                        context_event_sink=self._progress.observe_context,
                         **({"interaction_mode": interaction_mode} if interaction_mode is LeadInteractionMode.EXPLORATION else {}),
                     **({"adoption": adoption} if adoption is not None else {}),
                     **({"premise_selection": premise_selection} if premise_selection is not None else {}),

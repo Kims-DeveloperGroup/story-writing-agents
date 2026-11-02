@@ -193,6 +193,45 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
         # Line 1 should not be in the 5-line preview
         self.assertNotIn("Line 1: The cold wind howled.", rendered)
 
+        from story_writing_agents.agent_context.service import (ContextExecutionEvent,
+            ContextExecutionEventKind, ContextNativeDisposition, ContextScope, ContextSubjectKind)
+        from story_writing_agents.lead_schema_groups import LeadGroupPhase
+        from story_writing_agents.provider_adapter import (NativeContextCheck, NativeContextObservation,
+            NativeContextCheckStage, NativeContextSourceStage, NativeContextCheckReason)
+        check = NativeContextCheck("native-call-2", "native-call-1", (
+            NativeContextObservation(NativeContextCheckStage.PRE_SUBMIT,
+                NativeContextSourceStage.COMPLETE, NativeContextCheckReason.VERIFIED),
+            NativeContextObservation(NativeContextCheckStage.POST_COMPLETE,
+                NativeContextSourceStage.DATABASE, NativeContextCheckReason.DATABASE_BUSY,
+                exception_type="OperationalError", error_code=5),),
+            observed_thread_id="11111111-1111-4111-8111-111111111111", normal_exit_code=0)
+        event = ContextExecutionEvent(ContextExecutionEventKind.NATIVE_CONTEXT,
+            ContextScope("session-native", ContextSubjectKind.CONVERSATION, "conversation-native", "author_agent"),
+            "op_99", native_context_check=check, native_disposition=ContextNativeDisposition.CONTROL_ACCEPTED,
+            group_phase=LeadGroupPhase.GENERATE, attempt_id="attempt-native", invocation_id="invocation-native")
+        progress = InteractiveAdvisoryProgress.__new__(InteractiveAdvisoryProgress)
+        progress._state = state
+        progress.observe_context(event)
+        self.assertIs(state.context_events[("author_agent", "op_99")], event)
+        detailed = state.render(frame=0)
+        self.assertIn("Thinking...", detailed)
+        self.assertIn("Phase 2", detailed)
+        self.assertIn("control accepted", detailed)
+        self.assertIn("after completion", detailed)
+        self.assertIn("unavailable", detailed)
+        self.assertIn("database busy", detailed)
+        self.assertIsNone(state.last_error_message)
+        self.assertEqual(state.agent_errors, {})
+        self.assertIsNone(state.failure_snapshot)
+        state.collapsed = True
+        collapsed = state.render(frame=0)
+        self.assertIn("Thinking...", collapsed)
+        self.assertIn("Native", collapsed)
+        self.assertIn("Phase 2", collapsed)
+        self.assertIn("control accepted", collapsed)
+        state.finish()
+        self.assertEqual(state.context_events, {})
+
     def test_long_single_line_preview_wraps_across_multiple_lines(self) -> None:
         state = AdvisoryProgressState()
         state.begin((AdvisoryProgressRequest("author_agent", "op_1", "Writing paragraph"),))

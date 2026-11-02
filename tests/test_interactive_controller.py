@@ -1770,7 +1770,7 @@ class ControllerContractTests(ControllerTestCase):
         for module_name in graph:
             visit(module_name)
         self.assertEqual(len(modules), 166)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 756)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 758)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6298,8 +6298,10 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         def __init__(self) -> None:
             self.begins: list[tuple[object, ...]] = []
             self.observed: list[object] = []
+            self.context_observed: list[object] = []
         def begin(self, requests: tuple[object, ...] = ()) -> None: self.begins.append(requests)
         def observe(self, event: object) -> None: self.observed.append(event)
+        def observe_context(self, event: object) -> None: self.context_observed.append(event)
         def finish(self) -> str: return "00:00:00"
         async def run(self, operation: object) -> object:
             return await operation  # type: ignore[misc]
@@ -6533,11 +6535,11 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 self._Prompt(self._commit("core_documents/global_outline.md")), output,
                 read_events=lambda conversation: history if conversation == _UNIQUE_C else ())
             self.assertFalse(adapter.submit(_UNIQUE_C, "Explore directions.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION))
-            self.assertEqual((set(forwarded[-1]), forwarded[-1]["interaction_mode"]), ({"action_progress_sink", "interaction_mode"}, exploration.LeadInteractionMode.EXPLORATION))
+            self.assertEqual((set(forwarded[-1]), forwarded[-1]["interaction_mode"]), ({"action_progress_sink", "context_event_sink", "interaction_mode"}, exploration.LeadInteractionMode.EXPLORATION))
             self.assertIn("Exploration (provisional)", "\n".join(render_plain(component, width=120).text for component in output.components))
             current[:] = [self._terminal_turn(CollaborationStepState.COMPLETED)]
             self.assertFalse(adapter.adopt(_UNIQUE_C))
-            self.assertEqual((set(forwarded[-1]), forwarded[-1]["adoption"]), ({"action_progress_sink", "adoption"}, exploration.ExplorationAdoptionSelection(_UNIQUE_C, "ui-result", idea.idea_id, idea.material_digest, ("core_documents/global_outline.md",))))
+            self.assertEqual((set(forwarded[-1]), forwarded[-1]["adoption"]), ({"action_progress_sink", "context_event_sink", "adoption"}, exploration.ExplorationAdoptionSelection(_UNIQUE_C, "ui-result", idea.idea_id, idea.material_digest, ("core_documents/global_outline.md",))))
             self.assertEqual(tuple((component.items[0].label, component.items[0].value,
                                     component.items[6].content, component.items[8].value)
                                    for component in output.components
@@ -6687,15 +6689,21 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
     def test_ordinary_lead_progress_sink_finishes_before_lead_and_elapsed_output(self) -> None:
         session = RuntimeSession.__new__(RuntimeSession); runner = asyncio.Runner(); self.addCleanup(runner.close)
         progress, output, sinks = self._Progress(), self._Output(), []
-        async def lead_turn(_session, cid, text, *, action_progress_sink):
+        context_sinks, context_marker = [], object()
+        async def lead_turn(_session, cid, text, *, action_progress_sink, context_event_sink):
             self.assertEqual(output.active_scope[:2], ("session", _UNIQUE_C))
             self.assertEqual(output.active_scope[2].content, "ordinary")
+            context_sinks.append(context_event_sink)
+            context_event_sink(context_marker)
             sinks.append(action_progress_sink); return self._terminal_turn(CollaborationStepState.COMPLETED)
         with mock.patch.object(RuntimeSession, "lead_turn", lead_turn):
             adapter = lead_policy_module.InteractiveLeadAdapter(session, runner, progress,
                 self._Picker(), self._Prompt(), output)
             self.assertFalse(adapter.submit(_UNIQUE_C, "ordinary"))
         self.assertEqual(sinks, [progress.observe]); self.assertEqual(progress.begins, [()])
+        self.assertEqual(context_sinks, [progress.observe_context])
+        self.assertEqual(progress.context_observed, [context_marker])
+        self.assertEqual(progress.observed, [])
         self.assertEqual(len(output.submissions), 1); self.assertIsNone(output.active_scope)
         self.assertIsInstance(output.components[-1], terminal_module.Panel)
         self.assertIn("Elapsed: 00:00:00", output.components[-1].items[0].metadata)
@@ -6719,7 +6727,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 finally:
                     if driver is not None: driver._clear_progress_frame()
             progress.run = run
-            async def lead_turn(_session, cid, text, *, action_progress_sink):
+            async def lead_turn(_session, cid, text, *, action_progress_sink, context_event_sink):
                 self.assertEqual(cid, _UNIQUE_C); self.assertIn(text, texts)
                 rendered = stream.getvalue()
                 self.assertEqual(rendered.count("User"), texts.index(text) + 1)
@@ -6765,7 +6773,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         progress, output = self._Progress(), self._Output()
         progress.last_error_message = "Error: No capacity available for model gpt-oss-120b-medium on the server"
 
-        async def failing_turn(_session, _cid, _text, *, action_progress_sink=None):
+        async def failing_turn(_session, _cid, _text, *, action_progress_sink=None, context_event_sink=None):
             raise BackendProtocolError("Antigravity CLI exited with status 1")
 
         with mock.patch.object(RuntimeSession, "lead_turn", failing_turn):

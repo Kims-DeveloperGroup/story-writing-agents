@@ -120,6 +120,19 @@ CI나 최종 검토에서 추가 변경이 생기면 비용을 다시 정확히 
 인접한 임의 수치나 시간·ID 변경은 기존 gate와 추가 정책 회귀로 거절한다.
 이 배정은 실제 Provider 실행이나 큐 예외의 허가가 아니다.
 
+
+### #904의 최소 연속성·사후 관측 회귀 소스 배정
+
+사용자의 필요시 테스트 소스 예산 확대 허용을 정확한 **146829→147338** 전환에
+적용한다. 기존 raw145801에서503행을 더한 **raw146304**, 기존 청구 helper1028행에
+실제 owned native-history fixture5행과 이번 monotonic 정책 helper1행을 더한
+**helper1034행**으로 총147338행을 계수했다. 정상2회·재선택3회·사후 관측 불가를
+재요청하지 않는3회·명확한 모순의 복구4회·READ 입력 계보5회와 진단 표시를
+기존 정규 ID에서 검증한다. 원본 자료와 앞선 검증 도구의 비용/닫힌 실행 허가는
+그대로 보존하며 새 실제 Provider 호출을 승인하지 않는다. 기존2527개 ID와 전체
+subTest cap,18000/3600초 한도,Whole Front 타임아웃 즉시 중단 원칙은 유지한다.
+이 정확한 소스 전환만 허용하고 인접값·다른 임의 증가는 계속 거절한다.
+
 ### Provider schema changes
 
 Changes to schema producers, native projection, or pattern syntax must check the final

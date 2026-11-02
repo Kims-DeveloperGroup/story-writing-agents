@@ -156,6 +156,8 @@ from .agent_context.service import (
     ContextAnswerAuthorization,
     ContextEvidenceReceipt,
     ContextExecutionEvent,
+    ContextExecutionEventKind,
+    ContextNativeDisposition,
     ContextInvocationKind,
     ContextInvocationRequest,
     ContextInvocationResult,
@@ -18854,6 +18856,42 @@ class StoryRuntime:
         **arguments: Any,
     ) -> ContextInvocationResult:
         """Replace once only after a transport-proven rejection before execution."""
+        original_event_sink = arguments.get("event_sink")
+        last_native_event: ContextExecutionEvent | None = None
+
+        def observe_context_event(event):
+            nonlocal last_native_event
+            if event.kind is ContextExecutionEventKind.NATIVE_CONTEXT:
+                event = replace(event, invocation_id=provider._invocation_id)
+                last_native_event = event
+                if original_event_sink is not None:
+                    try:
+                        original_event_sink(event)
+                    except BaseException:
+                        pass
+                return None
+            return None if original_event_sink is None else original_event_sink(event)
+
+        def observe_recovery(disposition):
+            if last_native_event is None:
+                return
+            try:
+                event = replace(last_native_event, native_disposition=disposition)
+                if provider._group_observations:
+                    prior = provider._group_observations[-1]
+                    snapshot = json.dumps({"check": event.native_context_check.as_object(),
+                        "disposition": disposition.value, "attempt_id": event.attempt_id,
+                        "call_phase": None if event.group_phase is None else event.group_phase.value,
+                        "native_process_completed": None if event.native_context_check.normal_exit_code is None else event.native_context_check.normal_exit_code == 0},
+                        ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+                    provider.record_group_observation(LeadGroupObservation(
+                        LeadGroupObservationKind.NATIVE_CONTEXT, prior.request_basis, prior.phase,
+                        event.native_context_check.call_id, native_context_snapshot=snapshot))
+                observe_context_event(event)
+            except BaseException:
+                pass
+
+        arguments["event_sink"] = observe_context_event
 
         submitted_before = provider.submitted_physical_calls
         try:
@@ -18863,6 +18901,7 @@ class StoryRuntime:
             if facts.group_state is not None:
                 if (facts.group_state.workflow is not None
                         and facts.group_state.workflow.phase in {LeadGroupPhase.STOP, LeadGroupPhase.DONE}):
+                    observe_recovery(ContextNativeDisposition.RETRY_NOT_STARTED)
                     raise
                 request = replace(request, group_state=facts.group_state)
             spent = provider.submitted_physical_calls - submitted_before
@@ -18874,10 +18913,12 @@ class StoryRuntime:
                 or limit is None
                 or limit - spent < 1 + int(bool(request.mandatory_references))
             ):
+                observe_recovery(ContextNativeDisposition.RETRY_NOT_STARTED)
                 raise
             rejected_facts = facts
         retry_submitted_before = provider.submitted_physical_calls
         try:
+            observe_recovery(ContextNativeDisposition.RETRY_STARTED)
             reference_read = reference_operation.begin_invocation(
                 agent_id=request.agent_id,
                 phase=cast(ContextInvocationKind, request.invocation_kind).value,
@@ -18894,11 +18935,14 @@ class StoryRuntime:
             prior_history = arguments.get("session_history")
             arguments["session_history"] = (refreshed_history.with_editorial_capture(prior_history)
                 if type(prior_history) is SessionHistorySnapshot else refreshed_history)
-            return await self._agent_context_service.invoke(
+            retry_result = await self._agent_context_service.invoke(
                 replace(request, physical_call_limit=limit - spent),
                 provider, **arguments,
             )
+            observe_recovery(ContextNativeDisposition.RETRY_SUCCEEDED)
+            return retry_result
         except BaseException as failure:
+            observe_recovery(ContextNativeDisposition.RETRY_FAILED)
             if provider.submitted_physical_calls == retry_submitted_before:
                 # A locally rejected recovery did not create an uncertain second
                 # submission. Preserve the exact known first rejection closure.

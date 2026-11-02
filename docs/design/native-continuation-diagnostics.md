@@ -2,8 +2,8 @@
 
 이 문서는 [#904](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/904)의
 원본 관측, 조사 범위와 수용한 구현 경계를 기록한다. 기준 소스는
-`2b36fcb40ea9f2a91fbe12cc449d58b5a857c40e`이다. 아래의 개선 설계는 구현·검증
-완료를 뜻하지 않는다. 완료 근거는 이슈와 PR의 현재 검증 기록에서 확인한다.
+`2b36fcb40ea9f2a91fbe12cc449d58b5a857c40e`이다. 아래는 구현의 책임과 보장
+범위를 설명한다. 실제 실행·수용 판정의 근거는 이슈와 PR의 현재 검증 기록에서 확인한다.
 
 ## 사용자가 겪은 상황
 
@@ -51,6 +51,26 @@ Codex adapter는 raw 응답과 usage를 받은 후에도 native witness를 확�
 스냅샷은 없다. 원본에서 실패한 세부 guard는 **미확인**이다. 최종 기록이 있다는
 사실로 당시의 가시성·동시 변경 상태를 재구성하거나 검사가 틀렸다고 단정하지 않는다.
 
+## Witness가 확인하는 파일과 범위
+
+이전 입력 보존 검사가 읽는 파일은 해당 native thread의 Codex rollout JSONL이다.
+경로는 witness의 `rollout_path`에 저장하고, native SQLite의 thread 레코드로 연결을
+확인한다. 예를 들면 `CODEX_HOME/sessions/YYYY/MM/DD/rollout-…-<thread>.jsonl`이다.
+Story 협업 로그는 이 검사에서 native 이력을 대신하지 않는다.
+
+기준 소스의 witness는 thread·rollout·call·turn ID, 파일의 device/inode, 당시
+prefix의 길이와 SHA-256, payload 해시, 실행 범위와 설정의 digest를 연결했다.
+사용자의 완화 지시에 따라 파일의 물리적 동일성 대신 의미 있는 입력 turn의
+논리적 계보를 확인하는 방향으로 변경한다. 파일 정보와 설정은 관측 자료로 구분한다.
+
+필수 연결은 같은 thread·현재 실행 범위, 현재 입력에 연결된 유일한 완료 turn,
+실제 마지막 full bootstrap 이후 이전 입력들의 순서와 payload 해시다. 입력 계보의
+canonical digest/count로 중간 READ delta의 소실도 확인한다. SEARCH/READ로 최근
+수용 지점이 갱신됐다는 이유만으로 full-bootstrap 기준을 재설정하지 않는다.
+
+이 증거의 범위는 이력과 입력의 연속성이다. 모델의 이해·판단·답변 품질은 별도로
+평가해야 하며, 토큰 usage의 관측 가능 여부도 witness와 별개다.
+
 ## 진단 결과의 책임
 
 provider 중립 계약이 검사 단계·검증 결과·안정적인 실패 범주·call 연결을 가진
@@ -67,26 +87,43 @@ shell과 trace는 이 공용 사실을 표시하며 자체적으로 재선택이
 연결하지 않는다. raw 응답 수신, 타입 검증, 제어 결과 수용, 업무 결과 수용,
 후속 맥락 보존 여부를 각각 구분한다.
 
-## 검사 엄격성과 로컬 재관측
+## 최소 조건과 응답 수용의 분리
 
-현재 검사는 target thread와 무관한 DB·WAL 변경도 관측 실패로 만들 수 있다.
-개선은 provider가 완료된 뒤에만, 명시적으로 분류한 일시적 관측 실패에 대해
-유한한 로컬 재관측을 수행한다. 재관측은 provider 호출을 추가하지 않으며 같은
-invocation·이전 witness·입력 anchor로 모든 guard를 다시 검사해야 한다.
+기준 소스는 target thread와 무관한 DB·WAL 변경도 관측 실패로 만들 수 있다.
+이전 inode·전체 raw prefix 바이트·전역 DB/WAL/SHM stat·비핵심 metadata/설정이나
+고정 CLI 버전의 동일성은 연속성 실패 조건에서 제외한다. continuation은 알려진
+rollout 경로를 안전하게 읽으며, DB는 최초 thread 경로 발견에 사용한다.
+경로 범위·symlink 제외·안전한 regular-file 열기·읽기 한도는 유지한다.
 
-실제 prefix 변경·잘림, inode·실행 범위·설정 불일치, 다른 미완료 turn,
-미지원 provenance는 완화하지 않는다. pre-submit 검사를 건너뛰지 않으며,
-관측 실패나 알 수 없는 실패를 검증 성공으로 바꾸지 않는다. 유한 재관측 뒤에도
-증명하지 못하면 기존 거절·taint·한 번의 복구·예산 처리로 돌아간다.
+의미 있는 입력 계보에서 확인된 thread·범위·payload·순서 모순과, 필요한 기록을
+관측하지 못한 상태를 구분한다. 정상 metadata 추가는 맥락 소실의 근거가 아니다.
+reset/fork/rollback도 이름만으로 거절하지 않고 실제 유효 계보의 의미를 적용한다.
+효과를 안전하게 해석하지 못하는 기록은 `HISTORY_EFFECT_UNKNOWN` 관측 불가로 남긴다.
+미지원 record 안에 적힌 임의 문자열을 입력이나 turn 완료 증거로 채택하지 않는다.
+
+응답 수용과 다음 delta 가능 여부도 분리한다. 현재 call의 실제 pre-submit 검증,
+정상 native 종료, 실제 event에서 보고된 thread 및 정확한 wire 결합을 확인했다면
+post-call의 단순 관측 불가만으로 받은 응답을 재요청하지 않는다. 요청의 thread 값을
+그대로 반환한 사실만으로 실제 native thread를 관측했다고 간주하지 않는다.
+
+응답은 기존 decoder와 Host checks를 그대로 통과해야 한다. witness는 `None`으로
+남기고 다음 물리 호출은 필요한 전체 맥락을 전달하므로 미확인 상태를 검증된 delta로
+승격하지 않는다. 명확한 thread·범위·wire·입력 계보 모순이나 timeout, 취소,
+불확실한 제출·종료에는 이 수용 완화를 적용하지 않는다. 예상 밖 로컬 사후 검사
+예외는 원래 원인을 남기는 관측 불가로 처리하며, native 실행의 불확실성과 구분한다.
+기존 한 번의 복구와
+호출 예산은 늘리지 않는다. 강화 조건은 실제 필요가 입증될 때 검토한다.
 
 ## 검증과 남은 한계
 
 기존 정규 테스트에서 다음 경우를 독립적으로 확인한다.
 
 - 일반 SELECT→GENERATE는 두 번, 정상 재선택과 새 그룹 결과는 세 번 호출한다.
-- 첫 재선택의 수용 전 연속성 실패는 실제 복구 사유와 추가 호출을 연결한다.
-- 일시적 관측 실패가 회복되면 provider 추가 호출 없이 witness를 얻는다.
-- prefix·범위·미완료 등 실제 실패는 계속 거절하며 불확실성을 지우지 않는다.
+- 사후 단순 관측 불가의 재선택은 기존 업무 검증으로 수용하고, 다음 full 생성까지
+  세 번 호출하며 같은 재선택을 다시 요청하지 않는다.
+- 명확한 입력 계보 모순 때문에 재선택을 거절했다면 실제 복구와 네 번째 호출을 연결한다.
+- metadata 추가·다른 thread의 DB 쓰기·내용 그대로 파일 교체는 정상 허용한다.
+- 실제 필수 입력·중간 READ delta 소실/변조, 범위·turn 모순은 검출한다.
 - 거절 원문·제출 회계·usage와 예산, 재시도 상한을 보존한다.
 - Phase·검사 단계·실패 범주·call/attempt와 수용/복구 상태가 shell과 로그에 남는다.
 

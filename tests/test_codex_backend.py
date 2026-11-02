@@ -2795,8 +2795,14 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.agent_context.accounting import (
             ProviderUsage, ProviderUsageScope, normalized_provider_usage,
         )
-        from story_writing_agents.agent_context.group_observation import LeadGroupTrace
+        from story_writing_agents.agent_context.group_observation import LeadGroupTrace, LeadGroupObservationKind
         from story_writing_agents.agent_context.group_reporting import group_trace_report
+        from story_writing_agents.provider_adapter import (NativeContextCheck, NativeContextCheckStage,
+            NativeContextCheckReason, NativeContextSourceStage, ProviderInvocationError)
+        from story_writing_agents import codex_adapter as codex_adapter_module
+        native_mutations, native_cleanups, unavailable_native_calls, native_results = {}, {}, set(), []
+        omitted_thread_reports = set()
+        pre_submit_probe = None
         first_usage = {"input_tokens": 25043, "output_tokens": 149, "cached_input_tokens": 0}
         second_usage = {"input_tokens": 53410, "output_tokens": 298, "cached_input_tokens": 0}
         native_usage_cases = (
@@ -2826,6 +2832,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             if not reader_faults_checked:
                 self._assert_owned_native_context_witness(invocation)
                 reader_faults_checked = True
+            if pre_submit_probe is not None and len(invocations) == 2:
+                await pre_submit_probe(binding, invocation)
             staged = (binding.staging_directory / "AGENTS.md").read_bytes()
             role = binding.definition.system_prompt_file.content
             self.assertIn(domain_policy, role)
@@ -2841,24 +2849,41 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(instructions.encode("utf-8"), staged)
                 self.assertEqual(request.stdin, invocation.payload_json)
                 native_info = None if native_usage_cases is None else native_usage_cases[len(native_commands) - 1]
+                schema_bytes = Path(request.command[request.command.index("--output-schema") + 1]).read_bytes()
+                self.assertEqual(schema_bytes, canonical_provider_json(invocation.schema))
                 if native_info is not None:
-                    native_schema_bytes.append(Path(request.command[request.command.index("--output-schema") + 1]).read_bytes())
-                history.complete(invocation, token_usage=native_info)
+                    native_schema_bytes.append(schema_bytes)
+                history.complete(invocation, token_usage=native_info,
+                    after_write=native_mutations.get(len(native_commands)),
+                    expect_unavailable=len(native_commands) in unavailable_native_calls)
                 raw = responses.pop(0)(requests[-1], None)
                 raw_responses.append(raw)
                 output = Path(request.command[request.command.index("--output-last-message") + 1])
                 output.write_text(raw, encoding="utf-8")
                 event = {"type": "thread.started", "thread_id": history.thread_id}
-                stdout = canonical_provider_json(event) + b"\n"
+                stdout = b"" if len(native_commands) in omitted_thread_reports else canonical_provider_json(event) + b"\n"
                 if native_info is not None:
                     stdout += canonical_provider_json({"type": "turn.completed",
                         "usage": native_info["total_token_usage"]}) + b"\n"
                 return ProcessResult(stdout=stdout, stderr=b"", returncode=0)
-            with (mock.patch.dict(os.environ, {"CODEX_HOME": str(history.root)}),
-                  mock.patch("story_writing_agents.codex_adapter.run_process", new=native_process)):
-                result = await native_invoke(binding, invocation)
+            try:
+                with (mock.patch.dict(os.environ, {"CODEX_HOME": str(history.root)}),
+                      mock.patch("story_writing_agents.codex_adapter.run_process", new=native_process)):
+                    result = await native_invoke(binding, invocation)
+            finally:
+                cleanup = native_cleanups.get(len(native_commands))
+                if cleanup is not None:
+                    cleanup()
+            if history.witnesses[-1] is None and result.context_witness is not None:
+                self.assertTrue(result.native_context_check.verified)
+                post = [item for item in result.native_context_check.observations
+                        if item.stage is NativeContextCheckStage.POST_COMPLETE]
+                self.assertGreater(len(post), 1)
+                self.assertIs(post[0].reason, NativeContextCheckReason.ROLLOUT_NOT_VISIBLE)
+                history.witnesses[-1] = result.context_witness
             self.assertEqual(result.context_witness, history.witnesses[-1])
             native_witnesses.append(result.context_witness)
+            native_results.append(result)
             return result
 
         request = _group_request(ContextInvocationRequest(session_id=session_id,
@@ -3072,6 +3097,415 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             and json.loads(record["content"])["response_text"].encode("utf-8") == raw_responses[1].encode("utf-8")
             for record in _agent_exchange_records(self.workspace)))
 
+        # 동일한 합법 재선택은 native 연속성 증명이 유지되면 정확히 세 호출로 끝난다.
+        requests, invocations, raw_responses, native_witnesses, native_commands = [], [], [], [], []
+        native_schema_bytes = []
+        history = OwnedNativeHistory(self, thread_id="88888888-8888-4888-8888-888888888888")
+        responses = [_group_control("question.workflow"), _group_control("answer.workflow"), _group_answer]
+        phases = (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE)
+        native_usage_cases = [
+            {"total_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0},
+             "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
+            {"total_token_usage": {"input_tokens": 2000, "output_tokens": 20, "cached_input_tokens": 0},
+             "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
+            {"total_token_usage": {"input_tokens": 3000, "output_tokens": 30, "cached_input_tokens": 0},
+             "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
+        ]
+        def persist_owned_records(owned_history):
+            return b"".join(canonical_provider_json(row) + b"\n" for row in owned_history.records)
+        def add_noncritical_metadata(owned_history):
+            owned_history.records.insert(1, {"type": "world_state", "payload": {"note": "metadata" * 16384}})
+            owned_history.path.write_bytes(persist_owned_records(owned_history))
+        def replace_metadata_without_changing_inputs(owned_history):
+            for row in owned_history.records:
+                if row["type"] == "world_state":
+                    row["payload"]["note"] = "short metadata"
+                elif row["type"] == "session_meta":
+                    row["payload"]["cli_version"] = "0.164.1"
+            import sqlite3
+            with sqlite3.connect(owned_history.root / "state_5.sqlite") as connection:
+                connection.execute("INSERT INTO threads VALUES (?, ?, 0)",
+                    ("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", str(owned_history.path)))
+            replacement = owned_history.path.with_suffix(".replacement")
+            replacement.write_bytes(persist_owned_records(owned_history))
+            replacement.chmod(0o600)
+            replacement.replace(owned_history.path)
+        def change_observed_settings(owned_history):
+            context = next(row for row in reversed(owned_history.records) if row["type"] == "turn_context")
+            context["payload"]["comp_hash"] = "changed-noncritical-settings"
+            owned_history.path.write_bytes(persist_owned_records(owned_history))
+        native_mutations = {1: add_noncritical_metadata, 2: replace_metadata_without_changing_inputs,
+                            3: change_observed_settings}
+        provider = bound.context_provider()
+        reselect_request = _group_request(replace(request, group_state=None,
+            operation_id="grouped-reader-reselection", result_correlation_id="grouped-reader-reselection-result",
+            physical_call_limit=3, mandatory_references=(), reference_operation_id=None))
+        reselect_observations = []
+        with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
+            reselected = await service.invoke(reselect_request, ObservedProvider(),
+                group_observation_sink=reselect_observations.append)
+        self.assertEqual((len(invocations), len(native_commands), len(reselected.provider_calls)), (3, 3, 3))
+        self.assertEqual(tuple(call.contract.schema_group_phase for call in requests), phases)
+        self.assertEqual(tuple(call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"]
+                               for call in requests), ("bootstrap", "delta", "delta"))
+        self.assertEqual(tuple(item.group_id for item in reselected.group_state.workflow.history),
+                         ("question.workflow", "answer.workflow"))
+        self.assertIs(reselected.group_state.workflow.phase, LeadGroupPhase.DONE)
+        self.assertEqual(json.loads(raw_responses[1])["agent_action"]["task_result"]["response_type"],
+                         "schema_group_reselection")
+        self.assertEqual(requests[1].contract.structural_findings(raw_responses[1]), ())
+        self.assertEqual(requests[1].contract.group_workflow.active_selection.group_id, "question.workflow")
+        self.assertEqual(requests[2].contract.group_workflow.active_selection.group_id, "answer.workflow")
+        controls = [item for item in reselect_observations if item.kind is LeadGroupObservationKind.CONTROL_ACCEPTED]
+        self.assertEqual(tuple(item.call_id for item in controls), tuple(call.call_id for call in requests[:2]))
+        self.assertEqual(tuple(len(item.selection_snapshots) for item in controls), (1, 2))
+        self.assertIs(invocations[1].context_witness, native_witnesses[0])
+        self.assertIs(invocations[2].context_witness, native_witnesses[1])
+        self.assertIs(invocations[2].context_anchor, native_witnesses[1])
+        self.assertIs(reselected.group_state.accepted_delivery.witness, native_witnesses[1])
+        self.assertIs(reselected.group_state.transport_delivery.witness, native_witnesses[2])
+        reselect_report = group_trace_report(LeadGroupTrace("native-reader-reselection",
+            tuple(reselect_observations), "accepted"),
+            tuple((item.call_id, item.accounting) for item in reselected.provider_calls))
+        self.assertEqual(reselect_report["phase_submitted_calls"], {"select": 1, "generate": 2})
+        self.assertEqual((reselect_report["submitted_calls"], reselect_report["reselection_count"],
+                          reselect_report["repairs"], reselect_report["replays"]), (3, 1, 0, 0))
+        self.assertEqual((reselect_report["full_deliveries"], reselect_report["delta_deliveries"]), (1, 2))
+        self.assertIsNone(reselect_report["input_tokens"])
+        self.assertIsNone(reselect_report["output_tokens"])
+        self.assertTrue(all(result.native_context_check.verified for result in native_results[-3:]))
+        self.assertEqual(tuple(witness.input_lineage_count for witness in native_witnesses), (1, 2, 3))
+        self.assertTrue(all(witness.bootstrap_turn_id == native_witnesses[0].turn_id and
+                            witness.bootstrap_payload_sha256 == native_witnesses[0].payload_sha256 and
+                            witness.bootstrap_call_id == requests[0].call_id for witness in native_witnesses))
+        self.assertTrue(native_witnesses[2].has_lineage_anchor(native_witnesses[1]))
+        self.assertNotEqual(native_witnesses[1].file_identity, native_witnesses[0].file_identity)
+        self.assertLess(native_witnesses[1].prefix_utf8_bytes, native_witnesses[0].prefix_utf8_bytes)
+        self.assertIs(native_results[-2].usage_observation.scope, ProviderUsageScope.SESSION_CUMULATIVE)
+        self.assertEqual(native_results[-2].usage, ProviderUsage(2000, 20, 0))
+        self.assertEqual(reselect_report["physical_calls"][1]["attributable_usage"],
+                         {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0})
+        self.assertIs(native_results[-1].usage_observation.scope, ProviderUsageScope.UNKNOWN)
+        self.assertIsNone(reselect_report["physical_calls"][2]["attributable_usage"])
+        assert_done_ledger(reselected)
+
+        # 실제 과거 입력 모순일 때만 같은 재선택을 거절하고 새 thread에서 한 번 복구한다.
+        requests, invocations, raw_responses, native_witnesses, native_commands = [], [], [], [], []
+        native_results = []
+        history = OwnedNativeHistory(self, thread_id="99999999-9999-4999-8999-999999999999")
+        responses = [_group_control("question.workflow"), _group_control("answer.workflow"),
+                     _group_control("answer.workflow"), _group_answer]
+        phases = (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE)
+        native_usage_cases = [
+            {"total_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0},
+             "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
+            {"total_token_usage": {"input_tokens": 2000, "output_tokens": 20, "cached_input_tokens": 0},
+             "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
+            {"total_token_usage": {"input_tokens": 1100, "output_tokens": 11, "cached_input_tokens": 0},
+             "last_token_usage": {"input_tokens": 1100, "output_tokens": 11, "cached_input_tokens": 0}},
+            {"total_token_usage": {"input_tokens": 2100, "output_tokens": 21, "cached_input_tokens": 0},
+             "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
+        ]
+        def change_bootstrap_input(owned_history):
+            record = next(row for row in owned_history.records if row["type"] == "response_item"
+                          and row["payload"].get("role") == "user")
+            changed = json.loads(record["payload"]["content"][0]["text"])
+            changed["task_input"]["user_request_text"] = "CHANGED_PRIOR_NATIVE_INPUT"
+            record["payload"]["content"][0]["text"] = canonical_provider_json(changed).decode("utf-8")
+            owned_history.path.write_bytes(b"".join(canonical_provider_json(row) + b"\n"
+                                                   for row in owned_history.records))
+        import sqlite3
+        held_databases = []
+        def hold_native_database(owned_history):
+            connection = sqlite3.connect(owned_history.root / "state_5.sqlite")
+            self.addCleanup(connection.close)
+            connection.execute("BEGIN EXCLUSIVE")
+            held_databases.append(connection)
+        def release_native_database():
+            held_databases[-1].rollback()
+        native_mutations = {2: change_bootstrap_input, 3: hold_native_database}
+        native_cleanups = {3: release_native_database}
+        unavailable_native_calls = {2, 3}
+        provider = bound.context_provider()
+        interrupted_request = _group_request(replace(request, group_state=None,
+            operation_id="grouped-reader-reselection-interrupted",
+            result_correlation_id="grouped-reader-reselection-interrupted-result",
+            physical_call_limit=5, mandatory_references=(), reference_operation_id=None))
+        interrupted_observations = []
+        with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
+            with self.assertRaises(ContextExecutionError) as interrupted:
+                await service.invoke(interrupted_request, ObservedProvider(),
+                    group_observation_sink=interrupted_observations.append)
+        interrupted_facts = context_provider_failure_facts(interrupted.exception)
+        self.assertEqual((len(invocations), len(native_commands), len(interrupted_facts.submitted_accountings)), (2, 2, 2))
+        self.assertEqual(requests[1].contract.structural_findings(raw_responses[1]), ())
+        self.assertEqual(json.loads(raw_responses[1])["agent_action"]["task_result"]["response_type"],
+                         "schema_group_reselection")
+        self.assertEqual(tuple(item.group_id for item in interrupted_facts.group_state.workflow.history),
+                         ("question.workflow",))
+        self.assertEqual(sum(item.kind is LeadGroupObservationKind.CONTROL_ACCEPTED
+                             for item in interrupted_observations), 1)
+        self.assertIs(interrupted_facts.submitted_accountings[-1].usage_observation.scope, ProviderUsageScope.UNKNOWN)
+        self.assertEqual(interrupted_facts.submitted_accountings[-1].usage, ProviderUsage(2000, 20, 0))
+        rejected_check = native_results[1].native_context_check
+        self.assertEqual(interrupted_facts.native_context_check, rejected_check)
+        self.assertIs(rejected_check.stage, NativeContextCheckStage.POST_COMPLETE)
+        self.assertEqual(rejected_check.outcome, "contradiction")
+        self.assertIs(rejected_check.observations[-1].source_stage, NativeContextSourceStage.RECORDS)
+        self.assertEqual((rejected_check.call_id, rejected_check.prior_call_id),
+                         (requests[1].call_id, requests[0].call_id))
+        self.assertFalse(rejected_check.verified)
+        self.assertTrue(rejected_check.pre_submit_verified)
+        self.assertEqual(rejected_check.observed_thread_id, native_results[1].thread_id)
+        self.assertEqual(rejected_check.normal_exit_code, 0)
+        self.assertEqual(sum(item.stage is NativeContextCheckStage.POST_COMPLETE
+                             for item in rejected_check.observations), 1)
+        diagnostic = rejected_check.as_object()
+        self.assertEqual(set(diagnostic), {"call_id", "prior_call_id", "outcome", "observations",
+                                          "observed_thread_id", "normal_exit_code"})
+        self.assertEqual(set(diagnostic["observations"][-1]),
+                         {"stage", "source_stage", "reason", "exception_type", "error_code"})
+        self.assertEqual(NativeContextCheck.from_object(diagnostic), rejected_check)
+        self.assertNotIn(str(history.root), json.dumps(diagnostic))
+        self.assertNotIn(_PRIVATE_INPUT, json.dumps(diagnostic))
+        injected_diagnostic = json.loads(json.dumps(diagnostic))
+        injected_diagnostic["observations"][-1]["error_message"] = "/private/diagnostic-source.sql"
+        self.assertRaises(ValueError, NativeContextCheck.from_object, injected_diagnostic)
+        self.assertTrue(any(record["request_type"] == "response" and
+            json.loads(record["content"])["response_text"].encode("utf-8") == raw_responses[1].encode("utf-8")
+            for record in _agent_exchange_records(self.workspace)))
+        with provider.invocation(scope, requests[-1].policy_fingerprint):
+            self.assertIsNone(provider.inspect_context_thread(scope, requests[-1].policy_fingerprint))
+        first_thread = history.thread_id
+        history = OwnedNativeHistory(self, thread_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+        retried_observations = []
+        retry_request = replace(interrupted_request, physical_call_limit=3,
+                                group_state=interrupted_facts.group_state)
+        with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
+            retried = await service.invoke(retry_request, ObservedProvider(),
+                group_observation_sink=retried_observations.append)
+        self.assertEqual((len(invocations), len(native_commands), len(retried.provider_calls)), (4, 4, 2))
+        self.assertIsNone(invocations[2].thread_id)
+        self.assertNotEqual(history.thread_id, first_thread)
+        self.assertEqual(invocations[3].thread_id, history.thread_id)
+        self.assertEqual(tuple(call.payload["response_contract"]["schema_selection"]["remaining_provider_calls"]
+                               for call in requests), (5, 4, 3, 2))
+        self.assertEqual(tuple(call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"]
+                               for call in requests), ("bootstrap", "delta", "bootstrap", "bootstrap"))
+        self.assertEqual(tuple(item.group_id for item in retried.group_state.workflow.history),
+                         ("question.workflow", "answer.workflow"))
+        self.assertEqual(tuple(json.loads(raw_responses[index])["agent_action"]["task_result"]["group_id"]
+                               for index in (1, 2)), ("answer.workflow", "answer.workflow"))
+        self.assertEqual(tuple(call.contract.group_workflow.active_selection.group_id
+                               for call in requests[1:]), ("question.workflow", "question.workflow", "answer.workflow"))
+        self.assertIs(retried.group_state.workflow.phase, LeadGroupPhase.DONE)
+        self.assertEqual(tuple(result.context_witness is None for result in native_results),
+                         (False, True, True, False))
+        self.assertIs(native_results[2].native_context_check.reason, NativeContextCheckReason.DATABASE_BUSY)
+        self.assertEqual(native_results[2].native_context_check.outcome, "unavailable")
+        self.assertTrue(native_results[3].native_context_check.verified)
+        self.assertIs(retried.provider_calls[0].accounting.usage_observation.scope, ProviderUsageScope.UNKNOWN)
+        self.assertEqual(sum(item.kind is LeadGroupObservationKind.CONTROL_ACCEPTED
+                             for item in retried_observations), 1)
+        self.assertTrue(all(item.accounting.state.value == "submitted" for item in retried.provider_calls))
+        self.assertEqual(next(json.loads(item.delivery_snapshot)["decision_reason"] for item in retried_observations
+                              if item.kind is LeadGroupObservationKind.BOUND and item.call_id == requests[3].call_id),
+                         "preservation_unproven")
+        self.assertEqual(tuple(result.response_text for result in native_results), tuple(raw_responses))
+        self.assertEqual(sum(item.kind is LeadGroupObservationKind.CONTROL_ACCEPTED
+                             for item in (*interrupted_observations, *retried_observations)), 2)
+        retry_report = group_trace_report(LeadGroupTrace("native-reader-reselection-retry",
+            tuple((*interrupted_observations, *retried_observations)), "accepted"),
+            tuple((call.call_id, accounting) for call, accounting in
+                  zip(requests[:2], interrupted_facts.submitted_accountings, strict=True)) +
+            tuple((item.call_id, item.accounting) for item in retried.provider_calls))
+        self.assertEqual((retry_report["submitted_calls"], retry_report["reselection_count"]), (4, 1))
+        self.assertEqual(retry_report["phase_submitted_calls"], {"select": 1, "generate": 3})
+        self.assertEqual((retry_report["full_deliveries"], retry_report["delta_deliveries"]), (3, 1))
+        self.assertIsNone(retry_report["input_tokens"])
+        self.assertIsNone(retry_report["output_tokens"])
+        assert_done_ledger(retried)
+
+        # 관측 부재와 실제 모순은 다르며, 재관측은 물리 Provider 호출을 늘리지 않는다.
+        for transient, report_thread, unexpected, native_thread in (
+            (True, True, False, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+            (False, True, False, "cccccccc-cccc-4ccc-8ccc-cccccccccccc"),
+            (False, False, False, "dddddddd-dddd-4ddd-8ddd-dddddddddddd"),
+            (False, True, True, "abababab-abab-4bab-8bab-abababababab"),
+        ):
+            requests, invocations, raw_responses, native_witnesses, native_commands = [], [], [], [], []
+            native_results = []
+            history = OwnedNativeHistory(self, thread_id=native_thread)
+            responses = [_group_control("question.workflow"), _group_control("answer.workflow"), _group_answer]
+            phases = (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE)
+            native_usage_cases = [
+                {"total_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0},
+                 "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
+                {"total_token_usage": {"input_tokens": 2000, "output_tokens": 20, "cached_input_tokens": 0},
+                 "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
+                {"total_token_usage": {"input_tokens": 3000, "output_tokens": 30, "cached_input_tokens": 0},
+                 "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
+            ]
+            hidden = []
+            def restore_rollout():
+                if hidden and hidden[-1][0].exists():
+                    hidden[-1][0].replace(hidden[-1][1])
+            def hide_rollout(owned_history):
+                saved = owned_history.path.with_suffix(".pending")
+                owned_history.path.replace(saved)
+                hidden.append((saved, owned_history.path))
+                self.addCleanup(restore_rollout)
+                if transient:
+                    asyncio.get_running_loop().call_soon(restore_rollout)
+            native_mutations, native_cleanups = {2: hide_rollout}, {2: restore_rollout}
+            inspection_fault = RuntimeError("PRIVATE_NATIVE_INSPECTION_DETAIL")
+            fault_active = [False]
+            original_file_facts = codex_adapter_module._native_file_facts
+            def file_facts(path, *args, **kwargs):
+                if fault_active[0] and Path(path) == history.path:
+                    raise inspection_fault
+                return original_file_facts(path, *args, **kwargs)
+            pre_submit_probe = None
+            if unexpected:
+                def fail_post_inspection(_owned_history):
+                    fault_active[0] = True
+                def finish_post_inspection():
+                    fault_active[0] = False
+                native_mutations, native_cleanups = {2: fail_post_inspection}, {2: finish_post_inspection}
+                async def pre_submit_probe(binding, invocation):
+                    no_native = mock.AsyncMock(side_effect=AssertionError("precheck reached native execution"))
+                    fault_active[0] = True
+                    try:
+                        with mock.patch.dict(os.environ, {"CODEX_HOME": str(history.root)}), \
+                                mock.patch("story_writing_agents.codex_adapter.run_process", new=no_native), \
+                                self.assertRaises(ProviderInvocationError) as before_native:
+                            await native_invoke(binding, invocation)
+                    finally:
+                        fault_active[0] = False
+                    no_native.assert_not_awaited()
+                    self.assertIs(before_native.exception.__cause__, inspection_fault)
+                    self.assertIs(before_native.exception.native_context_check.stage, NativeContextCheckStage.PRE_SUBMIT)
+                    self.assertFalse(before_native.exception.native_context_check.pre_submit_verified)
+            unavailable_native_calls = {2}
+            omitted_thread_reports = set() if report_thread else {2}
+            provider = bound.context_provider()
+            unavailable_request = _group_request(replace(request, group_state=None,
+                operation_id="native-observation-" + native_thread,
+                result_correlation_id="native-observation-result-" + native_thread,
+                physical_call_limit=3, mandatory_references=(), reference_operation_id=None))
+            observations = []
+            with mock.patch.object(backend._codex_adapter, "invoke", new=invoke), \
+                    mock.patch.object(codex_adapter_module, "_native_file_facts", new=file_facts):
+                if report_thread:
+                    observed_result = await service.invoke(unavailable_request, ObservedProvider(),
+                        group_observation_sink=observations.append)
+                else:
+                    with self.assertRaises(ContextExecutionError) as no_report:
+                        await service.invoke(unavailable_request, ObservedProvider(),
+                            group_observation_sink=observations.append)
+            check = native_results[1].native_context_check
+            self.assertTrue(check.pre_submit_verified)
+            self.assertEqual(check.normal_exit_code, 0)
+            self.assertEqual(native_results[1].thread_id, native_thread)
+            self.assertEqual(check.observed_thread_id, native_thread if report_thread else None)
+            self.assertEqual(requests[1].contract.structural_findings(raw_responses[1]), ())
+            post = [item for item in check.observations if item.stage is NativeContextCheckStage.POST_COMPLETE]
+            self.assertIs(post[0].reason, NativeContextCheckReason.INSPECTION_FAILED if unexpected
+                          else NativeContextCheckReason.ROLLOUT_NOT_VISIBLE)
+            if not report_thread:
+                facts = context_provider_failure_facts(no_report.exception)
+                self.assertEqual((len(native_commands), len(facts.submitted_accountings)), (2, 2))
+                self.assertEqual(len(facts.group_state.workflow.history), 1)
+                self.assertEqual(sum(item.kind is LeadGroupObservationKind.CONTROL_ACCEPTED for item in observations), 1)
+                self.assertEqual(len(responses), 1)
+                continue
+            self.assertEqual((len(invocations), len(native_commands), len(observed_result.provider_calls)), (3, 3, 3))
+            self.assertEqual(tuple(item.group_id for item in observed_result.group_state.workflow.history),
+                             ("question.workflow", "answer.workflow"))
+            self.assertIs(observed_result.group_state.workflow.phase, LeadGroupPhase.DONE)
+            self.assertEqual(sum(item.kind is LeadGroupObservationKind.CONTROL_ACCEPTED for item in observations), 2)
+            self.assertEqual(len(post), 1 if unexpected else 2 if transient else 3)
+            self.assertEqual(check.outcome, "verified" if transient else "unavailable")
+            if unexpected:
+                self.assertIs(native_results[1].native_context_cause, inspection_fault)
+                self.assertEqual(post[0].exception_type, "RuntimeError")
+                self.assertNotIn(str(inspection_fault), json.dumps(check.as_object()))
+            self.assertEqual(tuple(call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"]
+                                   for call in requests), ("bootstrap", "delta", "delta" if transient else "bootstrap"))
+            self.assertEqual(tuple(result.response_text for result in native_results), tuple(raw_responses))
+            self.assertEqual(responses, [])
+            assert_done_ledger(observed_result)
+
+        # 최신 accepted 선택보다 앞의 READ 입력도 최초 bootstrap 계보에 남아야 한다.
+        from tests.test_agent_context_execution import _read_search_hit
+        read_marker = "NATIVE_LINEAGE_READ_SOURCE_904"
+        self.workspace.path("core_documents/global_outline.md").write_text(read_marker, encoding="utf-8")
+        def search_lineage_source(call, _provider):
+            packet = json.loads(_search(call, None))
+            packet["agent_action"]["queries"][0]["search_text"] = read_marker
+            return json.dumps(packet)
+        read_view = SimpleNamespace(callback_payload=callback_views.for_request)
+        def read_lineage_source(call, _provider):
+            return _read_search_hit(call, read_view)
+        def change_middle_read(owned_history):
+            marker = requests[2].call_id
+            matching = [row for row in owned_history.records if row["type"] == "response_item"
+                        and row["payload"].get("role") == "user" and
+                        json.loads(row["payload"]["content"][0]["text"])["response_contract"]["schema_selection"]["issued_contract"]["call_id"] == marker]
+            self.assertEqual(len(matching), 1)
+            packet = json.loads(matching[0]["payload"]["content"][0]["text"])
+            packet["request_correlation_token"] = "ALTERED_MIDDLE_READ"
+            matching[0]["payload"]["content"][0]["text"] = canonical_provider_json(packet).decode("utf-8")
+            owned_history.path.write_bytes(persist_owned_records(owned_history))
+        for lose_read, native_thread in (
+            (False, "12121212-1212-4212-8212-121212121212"),
+            (True, "13131313-1313-4313-8313-131313131313"),
+        ):
+            requests, invocations, raw_responses, native_witnesses, native_commands = [], [], [], [], []
+            native_results, native_usage_cases = [], None
+            pre_submit_probe = None
+            history = OwnedNativeHistory(self, thread_id=native_thread)
+            responses = [_group_control("question.workflow"), search_lineage_source, read_lineage_source,
+                         _group_control("answer.workflow"), _group_answer]
+            phases = (LeadGroupPhase.SELECT,) + (LeadGroupPhase.GENERATE,) * 4
+            native_mutations = {5: change_middle_read} if lose_read else {}
+            native_cleanups, omitted_thread_reports = {}, set()
+            unavailable_native_calls = {5} if lose_read else set()
+            provider = bound.context_provider()
+            read_request = _group_request(replace(request, group_state=None,
+                operation_id="native-read-lineage-" + native_thread,
+                result_correlation_id="native-read-lineage-result-" + native_thread,
+                physical_call_limit=5, mandatory_references=(), reference_operation_id=None))
+            observations = []
+            with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
+                if lose_read:
+                    with self.assertRaises(ContextExecutionError) as missing_read:
+                        await service.invoke(read_request, ObservedProvider(),
+                            group_observation_sink=observations.append, **authorities)
+                else:
+                    complete_read = await service.invoke(read_request, ObservedProvider(),
+                        group_observation_sink=observations.append, **authorities)
+            self.assertEqual((len(invocations), len(native_commands)), (5, 5))
+            self.assertEqual(tuple(call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"]
+                                   for call in requests), ("bootstrap", "delta", "delta", "delta", "delta"))
+            self.assertEqual(tuple(witness.input_lineage_count for witness in native_witnesses[:4]), (1, 2, 3, 4))
+            self.assertEqual(requests[3].contract.group_workflow.active_selection.group_id, "question.workflow")
+            self.assertEqual(requests[4].contract.group_workflow.active_selection.group_id, "answer.workflow")
+            self.assertIn(read_marker, canonical_provider_json(callback_views.for_request(requests[3])).decode("utf-8"))
+            self.assertEqual(requests[4].contract.structural_findings(raw_responses[4]), ())
+            if lose_read:
+                facts = context_provider_failure_facts(missing_read.exception)
+                self.assertEqual(len(facts.submitted_accountings), 5)
+                self.assertEqual(native_results[-1].native_context_check.outcome, "contradiction")
+                self.assertIs(native_results[-1].native_context_check.reason, NativeContextCheckReason.LINEAGE_MISMATCH)
+                self.assertEqual(len(facts.group_state.workflow.history), 2)
+            else:
+                self.assertEqual(native_witnesses[-1].input_lineage_count, 5)
+                self.assertTrue(native_witnesses[-1].has_lineage_anchor(native_witnesses[3]))
+                self.assertIs(complete_read.group_state.workflow.phase, LeadGroupPhase.DONE)
+                self.assertEqual(len(complete_read.provider_calls), 5)
+                assert_done_ledger(complete_read)
+
     def _assert_owned_native_context_witness(self, invocation) -> None:
         import sqlite3
         from story_writing_agents import codex_adapter
@@ -3134,18 +3568,24 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(continued.file_identity, witness.file_identity)
             self.assertGreater(continued.prefix_utf8_bytes, witness.prefix_utf8_bytes)
             self.assertEqual(hashlib.sha256(path.read_bytes()[:witness.prefix_utf8_bytes]).hexdigest(), witness.prefix_sha256)
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness, before=True))
+            self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness, before=True))
             invalid = [
                 [*records, *turn(second, "turn-2")[:-1]],
                 [*records, {"type": "compacted", "payload": {}}, *turn(second, "turn-2")],
                 [*records, {"type": "event_msg", "payload": {"type": "thread_rolled_back", "turn_id": "turn-2"}}, *turn(second, "turn-2")],
-                [*records, {"type": "unknown_record", "payload": {}}, *turn(second, "turn-2")],
                 [*records, *turn(second, "turn-2"), *turn(second, "turn-3")],
-                [*records, {"type": "turn_context", "payload": {**settings["payload"], "comp_hash": "different-configuration"}}, *turn(second, "turn-2")],
             ]
             for bad_records in invalid:
                 write(bad_records)
                 self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            # 비핵심 기록·설정 변화는 보존된 실제 입력 계보를 무효화하지 않는다.
+            for metadata_only in (
+                [*records, {"type": "unknown_record", "payload": {}}, *turn(second, "turn-2")],
+                [*records, {"type": "turn_context", "payload": {**settings["payload"], "comp_hash": "different-configuration"}}, *turn(second, "turn-2")],
+            ):
+                write(metadata_only)
+                self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread,
+                    previous=witness, anchor=witness))
             for key in ("history_base", "forked_from_id", "parent_thread_id", "forked_from_ordinal_exclusive"):
                 write([{**metadata, "payload": {**metadata["payload"], key: "unproven-branch"}}, settings, *turn(first, "turn-1")])
                 self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
@@ -3158,13 +3598,13 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
             wrong_prefix = path.read_bytes().replace(b"configuration-hash", b"configuration-edit", 1)
             path.write_bytes(wrong_prefix)
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
             write(extended)
             replacement = path.with_suffix(".replacement")
             replacement.write_bytes(path.read_bytes())
             replacement.chmod(0o600)
             replacement.replace(path)
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
             with sqlite3.connect(database) as connection:
                 connection.execute("UPDATE threads SET archived=1")
             self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
@@ -3184,13 +3624,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             alternate = path.with_name(path.name.replace(rollout, "55555555-5555-4555-8555-555555555555"))
             alternate.write_bytes(path.read_bytes())
             alternate.chmod(0o600)
+            original = path.with_suffix(".original")
+            path.replace(original)
             with sqlite3.connect(database) as connection:
                 connection.execute("UPDATE threads SET rollout_path=?", (str(alternate),))
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=current, anchor=current, before=True))
+            self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=current, anchor=current, before=True))
             self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=current, anchor=current))
+            self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            original.replace(path)
             with sqlite3.connect(database) as connection:
                 connection.execute("UPDATE threads SET rollout_path=?", (str(path),))
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread,
+            self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread,
                 previous=current, anchor=replace(current, prefix_sha256="0" * 64), before=True))
             with mock.patch.object(codex_adapter.os, "geteuid", return_value=path.stat().st_uid + 1):
                 self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread))
@@ -3202,14 +3646,14 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 facts = real_facts(candidate, **kwargs)
                 if candidate == path:
                     observed += 1
-                    if observed == 2:
+                    if observed == 1:
                         with path.open("ab") as stream:
                             stream.write(b'{"type":"world_state","payload":{}}\n')
-                        return real_facts(candidate, **kwargs)
                 return facts
 
             with mock.patch.object(codex_adapter, "_native_file_facts", side_effect=concurrent_change):
-                self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=current, anchor=current))
+                self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            self.assertGreaterEqual(observed, 1)
             write(extended)
             with sqlite3.connect(database) as connection:
                 self.assertEqual(connection.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
