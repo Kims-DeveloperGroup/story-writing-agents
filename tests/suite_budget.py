@@ -95,7 +95,7 @@ def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
             or (base["max_test_source_lines"], current["max_test_source_lines"]) == (146667, 146829)
             or (base["max_test_source_lines"], current["max_test_source_lines"]) == (142604, 146829)
              or (base["max_test_source_lines"], current["max_test_source_lines"]) == (146829, 147338)
-            or (base["max_test_source_lines"], current["max_test_source_lines"]) == (147338, 148277))
+            or (base["max_test_source_lines"], current["max_test_source_lines"]) == (147338, 148273))
             and tuple(base[name] for name in time_fields) == (18000, 3600)
             and all(current[key] == base[key] for key in (*time_fields, "subtest_caps"))):
         approved_increases.add("max_test_source_lines")

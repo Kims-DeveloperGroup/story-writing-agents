@@ -5215,6 +5215,7 @@ def _artifact_reviewed_proposal_value(
     include_digest: bool,
 ) -> dict[str, object]:
     value: dict[str, object] = {
+        "final_review_evidence": final_review_evidence_to_dict(proposal.final_review_evidence),
         "apply_authority_granted": proposal.apply_authority_granted,
         "artifact_write_occurred": proposal.artifact_write_occurred,
         "base_tail_sequence": proposal.base_tail_sequence,

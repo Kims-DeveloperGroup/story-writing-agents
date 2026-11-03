@@ -640,7 +640,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
 
         from story_writing_agents import specialist_routing as routing, review_contracts as review
         from story_writing_agents.agent_context.manifest import ContextSourceKind
-        from story_writing_agents.provider_adapter import canonical_provider_json
+        from story_writing_agents.agent_context.accounting import canonical_provider_json
         from tests.provider_wire_fixture import fixture_schema_node
         conversation = self.conversation("Focused motivation review and retained feedback")
         def focused_plan(value, _material):
@@ -748,7 +748,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIs(question.kind, c.LeadOutcomeKind.QUESTION)
 
         from story_writing_agents import review_contracts as review
-        from story_writing_agents.provider_adapter import canonical_provider_json
+        from story_writing_agents.agent_context.accounting import canonical_provider_json
         from story_writing_agents.specialist_routing import required_authoring_domains
         from tests.provider_wire_fixture import (fixture_schema_node, offered_fixture_bindings,
                                                 indexed_response, finite_fixture_read_selection)

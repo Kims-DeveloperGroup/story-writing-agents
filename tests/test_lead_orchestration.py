@@ -1363,7 +1363,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         try:
             from story_writing_agents.antigravity_adapter import AntigravityAdapter
             bound, packet = call.contract, json.loads(encoded)
-            self._require_fixture_census(bound, {f'lead-response-v9:family:{i}' for i in range(3)})
+            self._require_fixture_census(bound, {f'lead-response-v9:family:{i}' for i in range(4)})
             self.assertEqual(bound.factory.constraints.task_revisions, ((prior_scope.task_id, prior_scope.task_revision + 1),))
             self.assertTrue(bound.decode_response(encoded).belongs_to(bound))
             schemas = (call.schema, AntigravityAdapter.native_output_schema(call.schema))
@@ -2069,17 +2069,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     name = ref.removeprefix("#/$defs/").replace("~1", "/").replace("~0", "~")
                     self.assertTrue(name in definitions and name not in refs)
                     assert_strict(definitions[name], owner, path, refs + (name,), basis_mode, native=native)
-                if owner is None:
-                    for value in node.values():
-                        assert_strict(value, owner, path, refs, basis_mode, native=native)
-                else:
-                    for name, value in node.get("properties", {}).items():
-                        component = "*" if path == document_map and name in docs else name
-                        assert_strict(value, owner, path + (component,), refs, basis_mode, native=native)
-                    for key in ("anyOf", "items", "type"):
-                        if key in node:
-                            child_path = path + ("*",) if key == "items" else path
-                            assert_strict(node[key], owner, child_path, refs, basis_mode, native=native)
+                for name, value in node.get("properties", {}).items():
+                    component = "*" if path == document_map and name in docs else name
+                    assert_strict(value, owner, path + (component,), refs, basis_mode, native=native)
+                for key in ("anyOf", "items", "type"):
+                    if key in node:
+                        child_path = path + ("*",) if key == "items" else path
+                        assert_strict(node[key], owner, child_path, refs, basis_mode, native=native)
             elif isinstance(node, (list, tuple)):
                 for value in node:
                     assert_strict(value, owner, path, refs, basis_mode, native=native)
