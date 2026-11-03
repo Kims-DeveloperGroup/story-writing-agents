@@ -91,10 +91,7 @@ class MainInputHistoryContractTests(unittest.TestCase):
     def test_internal_contracts_are_exact_frozen_picklable_and_unlisted(
         self,
     ) -> None:
-        self.assertEqual(
-            tuple(inspect.signature(MainInputHistoryState).parameters),
-            ("entries",),
-        )
+        self.assertEqual(tuple(inspect.signature(MainInputHistoryState).parameters), ('entries',))
         self.assertEqual(
             tuple(inspect.signature(MainInputControlState).parameters),
             ("line_state", "history_index", "saved_draft", "overlay_open"),
@@ -162,7 +159,7 @@ class MainInputHistoryContractTests(unittest.TestCase):
                 "_timeline_published", "_timeline_linear_entries", "_timeline_failure", "_timeline_review_owner",
                 "_inspector_anchored", "_inspector_top", "_inspector_width",
                 "_input_stream",
-                "_input_latch",
+                "_input_latch", "_input_sources",
                 "_input_session_active",
                 "_input_session_configuration",
                 "_line_transition",
@@ -202,10 +199,7 @@ class MainInputHistoryContractTests(unittest.TestCase):
 
         self.assertIs(terminal_facade.MainInputHistoryState, MainInputHistoryState)
         self.assertIs(terminal_facade.MainInputControlState, MainInputControlState)
-        self.assertIs(
-            terminal_facade.append_main_input_history,
-            append_main_input_history,
-        )
+        self.assertIs(terminal_facade.append_main_input_history, append_main_input_history)
         self.assertIs(terminal_facade.transition_main_input, transition_main_input)
         self.assertIs(_model.MainInputHistoryState, MainInputHistoryState)
         self.assertIs(_controls.transition_main_input, transition_main_input)
