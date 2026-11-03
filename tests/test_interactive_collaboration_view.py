@@ -359,6 +359,15 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("None", preliminary_text)
         self.assertNotIn("whole:None-None", preliminary_text)
         self.assertFalse(preliminary.whole_target_coverage)
+        empty_preliminary = replace(preliminary, findings=())
+        empty_frame = replace(frame, payload=replace(judgment, message="Only inspection limits are reported.",
+            preliminary_review=empty_preliminary))
+        empty_text = render_component(_collaboration_view.project_collaboration_event(event=empty_frame),
+            _capability(CapabilityProfile.LINE, width=120)).text
+        self.assertIn(unread.target_id, empty_text)
+        self.assertIn("Narrative rules were not inspected.", empty_text)
+        self.assertIn("no final review, fulfillment, Apply or Commit authority", empty_text)
+        self.assertNotIn(finding, empty_text)
 
 
 

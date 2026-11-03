@@ -1795,12 +1795,12 @@ def _preliminary_review_items(record: LeadPreliminaryReview) -> tuple:
                 "whole" if item.whole_source else "unread scope" if item.boundary_kind == "unread" else f"{item.boundary_kind}:{item.boundary_start}-{item.boundary_end}"),
             Field("Inspection", "inspected" if item.input_id in record.inspected_input_ids else "excluded")))
             for item in record.targets)),
-        ListView("Preliminary findings", tuple(Record(str(index), fields=(
+        *((ListView("Preliminary findings", tuple(Record(str(index), fields=(
             Field("Sources", _joined(item.evidence_input_ids)),), content=item.message)
-            for index, item in enumerate(record.findings, 1))),
-        ListView("Conflicts requiring a decision", tuple(Record(str(index), fields=(
+            for index, item in enumerate(record.findings, 1))),) if record.findings else ()),
+        *((ListView("Conflicts requiring a decision", tuple(Record(str(index), fields=(
             Field("Sources", _joined(item.evidence_input_ids)),), content=item.message)
-            for index, item in enumerate(record.conflicts, 1))),
+            for index, item in enumerate(record.conflicts, 1))),) if record.conflicts else ()),
         Field("Missing information", _joined(record.missing_information)),
         Field("Further review required", str(record.further_review_required)),
         Field("Next action", record.next_action.value))
