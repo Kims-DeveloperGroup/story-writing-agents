@@ -538,6 +538,19 @@ class InputLatchAndDriverTests(unittest.TestCase):
                 raise ValueError("primary")
         with latch.input_operation():
             pass
+        with _session_driver() as (driver, *_unused), _signal_state(signal.SIG_DFL):
+            primary = RuntimeError("progress cleanup")
+            sources = mock.Mock(spec=InputSourceLifecycle)
+            sources.finish.side_effect = ValueError("source cleanup")
+            driver._input_sources = sources
+            with mock.patch.object(RawTerminalDriver, "_reclaim_process_progress", side_effect=primary) as reclaim:
+                with self.assertRaises(RuntimeError) as raised:
+                    with driver.input_session(): pass
+                self.assertIs(raised.exception, primary)
+                reclaim.assert_called_once_with(close=True)
+                sources.finish.assert_called_once_with()
+                self.assertFalse(driver._input_session_active)
+
         for failure in (None, KeyboardInterrupt("interrupt"), EOFError("eof"), ValueError("operation")):
             with _session_driver(b"s", b"e", b"e", b"d", b"\n", b"\x03", b"\x04", b"") as (driver, termios, _stream, _output, fallback), _signal_state(signal.SIG_DFL) as signals:
                 sources, adapter, baseline, english = _input_sources()

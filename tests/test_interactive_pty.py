@@ -1791,6 +1791,42 @@ print(f"SHELL_VALUE={input('shell> ')}")
         self,
     ) -> None:
         """Cover retained conversation management and main-input cleanup."""
+        gate = self.temporary_root / "progress-block"
+        release = gate.with_suffix(".release")
+        probe = self._spawn_python("""
+import asyncio, os, sys, time
+from pathlib import Path
+from story_writing_agents.interactive_terminal._core import build_stream_terminal, InteractiveAdvisoryProgress, InteractiveInputLifecycle
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+progress = InteractiveAdvisoryProgress(terminal)
+progress.begin()
+async def operation():
+    gate = Path(os.environ["STORY_PTY_PROGRESS_GATE"])
+    gate.touch(); deadline = time.monotonic() + 5
+    while not gate.with_suffix(".release").exists():
+        if time.monotonic() > deadline: raise RuntimeError("parent block watchdog expired")
+    await asyncio.sleep(5)
+with InteractiveInputLifecycle(terminal).session():
+    try: asyncio.run(progress.run(operation(), keep_frame=False))
+    except KeyboardInterrupt: print("PROGRESS_INTERRUPTED", flush=True)
+print("PROGRESS_FINAL", flush=True)
+""", environment_overrides={"TERM": "xterm-256color", "STORY_PTY_PROGRESS_GATE": str(gate)})
+        try:
+            probe.wait_for_text("Working", readiness=gate.exists)
+            mark = probe.output_mark()
+            probe.resize(47, 12)
+            probe.wait_for_text("Working", after=mark, timeout=1, readiness=lambda:
+                len(set(re.findall(r"\[([^\]\r\n]+)\] \d\d:\d\d:\d\d", probe.text_after(mark)))) >= 3)
+            self.assertFalse(release.exists())
+        finally:
+            release.touch()
+        probe.send_interrupt()
+        probe.wait_for_text("PROGRESS_FINAL")
+        self.assertEqual(probe.wait_for_exit(), 0)
+        self.assertIn("PROGRESS_INTERRUPTED", probe.normalized_text)
+        self.assertNotIn("animation unavailable", probe.normalized_text.casefold())
+        self.assertNotIn("Working", probe.normalized_text.split("PROGRESS_FINAL", 1)[1])
+        self.assertEqual(probe.final_terminal_attributes, probe.original_terminal_attributes)
         for edit_query in (False, True):
             self._exercise_external_library_pty(edit_query=edit_query)
         for signum in (signal.SIGTERM, signal.SIGHUP):
