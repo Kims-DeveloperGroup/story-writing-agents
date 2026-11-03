@@ -16,6 +16,8 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest import mock
 
+from tests.test_interactive_terminal_input_lifecycle import _input_sources
+
 import story_writing_agents
 from story_writing_agents import interactive_commands as commands_module
 from story_writing_agents import interactive_line_editor as editor_module
@@ -255,6 +257,13 @@ def capable_terminal(
         yield
 
 
+def _assert_raw_restoration(test, termios) -> None:
+    test.assertEqual(
+        tuple(call[1] for call in termios.set_calls),
+        (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+    )
+
+
 def make_editor(
     characters: str,
     *,
@@ -463,10 +472,7 @@ class SuggestionContractTests(unittest.TestCase):
         for buffer, expected in cases:
             with self.subTest(buffer=buffer):
                 suggestions = composition_slash_command_suggestions(buffer)
-                self.assertEqual(
-                    tuple(suggestion.token for suggestion in suggestions),
-                    expected,
-                )
+                self.assertEqual(tuple((suggestion.token for suggestion in suggestions)), expected)
                 self.assertEqual(
                     tuple(suggestion.canonical_token for suggestion in suggestions),
                     expected,
@@ -509,14 +515,8 @@ class SuggestionContractTests(unittest.TestCase):
                 mock.call(editor, "compose[second]> ", second_provider),
             ],
         )
-        main_read.assert_called_once_with(
-            editor._driver,
-            "story[lobby]> ",
-        )
-        self.assertEqual(
-            InteractiveMainLineEditor.__slots__,
-            ("_driver",),
-        )
+        main_read.assert_called_once_with(editor._driver, 'story[lobby]> ')
+        self.assertEqual(InteractiveMainLineEditor.__slots__, ('_driver',))
         self.assertEqual(input_stream.read_calls, 0)
         self.assertEqual(output.records, [])
         fallback.assert_not_called()
@@ -583,15 +583,9 @@ class LiveEditingTests(unittest.TestCase):
             self.assertEqual(other._driver._history_state, MainInputHistoryState())
             self.assertEqual(other.read_line("other> "), "other")
 
-        self.assertEqual(
-            editor._driver._history_state,
-            MainInputHistoryState(("alpha", "alpha")),
-        )
+        self.assertEqual(editor._driver._history_state, MainInputHistoryState(('alpha', 'alpha')))
         self.assertEqual(other._driver._history_state, MainInputHistoryState(("other",)))
-        self.assertIsNot(
-            editor._driver._history_state,
-            other._driver._history_state,
-        )
+        self.assertIsNot(editor._driver._history_state, other._driver._history_state)
         fallback.assert_not_called()
         other_fallback.assert_not_called()
 
@@ -622,10 +616,7 @@ class LiveEditingTests(unittest.TestCase):
 
         fallback.assert_not_called()
         self.assertEqual(input_stream.read_calls, len(characters.encode("utf-8")))
-        self.assertEqual(
-            tuple(call[1] for call in termios_double.set_calls),
-            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-        )
+        _assert_raw_restoration(self, termios_double)
         editor_attributes = termios_double.set_calls[0][2]
         self.assertFalse(editor_attributes[3] & (FakeTermios.ICANON | FakeTermios.ECHO))
         self.assertEqual(
@@ -653,13 +644,16 @@ class LiveEditingTests(unittest.TestCase):
                 fallback.assert_not_called()
 
     def test_unicode_buffer_is_returned_exactly_without_normalization(self) -> None:
-        value = "한글 e\u0301 🌊\u2028"
+        value = "/search 한글 e\u0301 🌊\u2028"
         editor, _input, output, fallback = make_editor(value + "\n")
+        _sources, adapter, _baseline, _english = _input_sources(driver=editor._driver)
+        adapter.select_source.side_effect = TimeoutError("input service")
 
         with capable_terminal(FakeTermios(), width=40):
             self.assertEqual(editor.read_line("이야기> "), value)
 
         fallback.assert_not_called()
+        adapter.select_source.assert_called()
         rendered = "".join(output.records)
         self.assertIn("한글 e\u0301 🌊", rendered)
         self.assertIn("\\u2028", rendered)
@@ -755,10 +749,7 @@ class LiveEditingTests(unittest.TestCase):
                     else MainInputHistoryState()
                 )
                 self.assertEqual(editor._driver._history_state, expected_history)
-                self.assertEqual(
-                    tuple(call[1] for call in termios_double.set_calls),
-                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-                )
+                _assert_raw_restoration(self, termios_double)
 
     def test_contextual_panel_clears_on_whitespace_no_match_and_submit(self) -> None:
         cases = (
@@ -810,14 +801,8 @@ class LiveEditingTests(unittest.TestCase):
                         bind_suggestion_reader(editor, provider)(
                             "compose[chat:plot:1]> "
                         )
-                self.assertEqual(
-                    output.records[-1],
-                    "\r\r\x1b[J\n",
-                )
-                self.assertEqual(
-                    tuple(call[1] for call in termios_double.set_calls),
-                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-                )
+                self.assertEqual(output.records[-1], '\r\r\x1b[J\n')
+                _assert_raw_restoration(self, termios_double)
                 provider.assert_called_once_with("")
                 fallback.assert_not_called()
 
@@ -846,10 +831,7 @@ class LiveEditingTests(unittest.TestCase):
         )
         editor, _input, output, fallback = make_editor("/\n")
         with capable_terminal(FakeTermios(), width=20):
-            self.assertEqual(
-                bind_suggestion_reader(editor, unsafe_provider)("compose> "),
-                "/",
-            )
+            self.assertEqual(bind_suggestion_reader(editor, unsafe_provider)('compose> '), '/')
         rendered = "".join(output.records)
         self.assertIn("/unsafe\\x1b[31m", rendered)
         self.assertNotIn("/unsafe\x1b[31m", rendered)
@@ -976,14 +958,8 @@ class CapabilityAndFailureTests(unittest.TestCase):
         fallback.assert_not_called()
         self.assertEqual(input_stream.read_calls, 0)
         self.assertEqual(output.records, [])
-        self.assertEqual(
-            editor._driver._history_state,
-            MainInputHistoryState(),
-        )
-        self.assertEqual(
-            tuple(call[1] for call in termios_double.set_calls),
-            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-        )
+        self.assertEqual(editor._driver._history_state, MainInputHistoryState())
+        _assert_raw_restoration(self, termios_double)
 
     def test_active_input_and_output_failures_propagate_after_restoration(self) -> None:
         cases = (
@@ -1008,14 +984,8 @@ class CapabilityAndFailureTests(unittest.TestCase):
                     with self.assertRaises(error_type):
                         editor.read_line("p> ")
                 fallback.assert_not_called()
-                self.assertEqual(
-                    editor._driver._history_state,
-                    MainInputHistoryState(),
-                )
-                self.assertEqual(
-                    tuple(call[1] for call in termios_double.set_calls),
-                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-                )
+                self.assertEqual(editor._driver._history_state, MainInputHistoryState())
+                _assert_raw_restoration(self, termios_double)
 
     def test_restoration_failure_overrides_normal_and_active_results(self) -> None:
         for characters, active_failure in (("ok\n", False), ("\x03", True)):
@@ -1036,10 +1006,7 @@ class CapabilityAndFailureTests(unittest.TestCase):
                 else:
                     self.assertFalse(hasattr(caught.exception, "__notes__"))
                 fallback.assert_not_called()
-                self.assertEqual(
-                    editor._driver._history_state,
-                    MainInputHistoryState(),
-                )
+                self.assertEqual(editor._driver._history_state, MainInputHistoryState())
 
         editor, _input, _output, fallback = make_editor("unused")
         termios_double = FakeTermios()
@@ -1055,10 +1022,7 @@ class CapabilityAndFailureTests(unittest.TestCase):
         self.assertIs(caught.exception.__cause__, restoration_failure)
         self.assertEqual(len(caught.exception.__notes__), 1)
         fallback.assert_not_called()
-        self.assertEqual(
-            editor._driver._history_state,
-            MainInputHistoryState(),
-        )
+        self.assertEqual(editor._driver._history_state, MainInputHistoryState())
 
     def test_main_history_appends_after_restoration_and_not_after_final_write_failure(
         self,
@@ -1081,10 +1045,7 @@ class CapabilityAndFailureTests(unittest.TestCase):
         with capable_terminal(termios_double):
             self.assertEqual(editor.read_line("p> "), "visible")
         self.assertEqual(observed_during_restoration, [MainInputHistoryState()])
-        self.assertEqual(
-            editor._driver._history_state,
-            MainInputHistoryState(("visible",)),
-        )
+        self.assertEqual(editor._driver._history_state, MainInputHistoryState(('visible',)))
         fallback.assert_not_called()
 
         output = RecordingOutput()
@@ -1144,10 +1105,7 @@ class CapabilityAndFailureTests(unittest.TestCase):
         with capable_terminal(termios_double):
             returned = editor.read_line("fallback> ")
         self.assertIs(returned, value)
-        self.assertEqual(
-            editor._driver._history_state,
-            MainInputHistoryState(("  /unknown 🌊  ",)),
-        )
+        self.assertEqual(editor._driver._history_state, MainInputHistoryState(('  /unknown 🌊  ',)))
 
         input_stream.is_terminal = True
         with capable_terminal(termios_double):
@@ -1176,10 +1134,7 @@ class CapabilityAndFailureTests(unittest.TestCase):
         self.assertEqual(input_stream.read_calls, 0)
         self.assertEqual(output.records, [])
         self.assertEqual(editor._driver._history_state, MainInputHistoryState())
-        self.assertEqual(
-            tuple(call[1] for call in termios_double.set_calls),
-            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-        )
+        _assert_raw_restoration(self, termios_double)
 
     def test_constructor_and_reader_validate_without_acquiring_resources(self) -> None:
         input_stream = ScriptedInput("x")
@@ -1258,10 +1213,7 @@ class CapabilityAndFailureTests(unittest.TestCase):
                     editor,
                     composition_slash_command_suggestions,
                 )("compose> ")
-        self.assertEqual(
-            tuple(call[1] for call in termios_double.set_calls),
-            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-        )
+        _assert_raw_restoration(self, termios_double)
         self.assertIn("[suggestions]", output.records[1])
         self.assertEqual(output.records[-1], "\r\r\x1b[J\n")
         fallback.assert_not_called()

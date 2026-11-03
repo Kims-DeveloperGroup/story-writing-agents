@@ -8,6 +8,7 @@ import os
 import re
 import select as _select
 import signal
+import sys
 import threading
 import time
 from collections import deque
@@ -20,6 +21,7 @@ from typing import TextIO, TypeAlias, TypeVar
 from ._output_history import ConversationTimeline, HistoryLayout
 from ._progress_process import ProgressContent, ProgressProcess, ProgressSnapshot
 from ._pointer import PointerEvent, decode_pointer
+from ._input_sources import InputSourceAdapter, InputSourceLifecycle
 from ._render import render_component
 
 from ._input_lifecycle import (
@@ -514,7 +516,7 @@ def _timeline_borrowed(operation):
     """Keep a borrowed picker/view outside the retained conversation surface."""
     @wraps(operation)
     def run(self, *args, **kwargs):
-        with self._suspend_timeline():
+        with self._input_sources.suspended(), self._suspend_timeline():
             return operation(self, *args, **kwargs)
     return run
 
@@ -532,9 +534,77 @@ def _timeline_borrowed_async(operation):
     """Keep the async live composer within the same borrowed-surface lifecycle."""
     @wraps(operation)
     async def run(self, *args, **kwargs):
-        with self._suspend_timeline():
+        with self._input_sources.suspended(), self._suspend_timeline():
             return await operation(self, *args, **kwargs)
     return run
+
+
+def _main_input_source_scope(operation):
+    """Keep source cleanup correlated with one actual main-input read."""
+
+    @wraps(operation)
+    def run(self, *args, **kwargs):
+        with self._input_sources.main_input():
+            return operation(self, *args, **kwargs)
+
+    return run
+
+
+def _local_desktop_terminal(input_stream: TextIO, output_stream: TextIO) -> bool:
+    """Reject remote, multiplexed, redirected and background source control."""
+
+    if any(
+        os.environ.get(name)
+        for name in (
+            "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "MOSH_CONNECTION",
+            "MOSH_KEY", "WSL_DISTRO_NAME", "WSL_INTEROP", "TMUX", "STY",
+        )
+    ):
+        return False
+    try:
+        input_fd = input_stream.fileno()
+        output_fd = output_stream.fileno()
+        if not (
+            input_stream.isatty() and output_stream.isatty()
+            and os.isatty(input_fd) and os.isatty(output_fd)
+            and os.ttyname(input_fd) == os.ttyname(output_fd)
+            and os.tcgetpgrp(input_fd) == os.getpgrp()
+        ):
+            return False
+    except (AttributeError, OSError, ValueError):
+        return False
+    if sys.platform == "darwin":
+        return any(
+            os.environ.get(name)
+            for name in (
+                "TERM_PROGRAM", "TERM_SESSION_ID", "ITERM_SESSION_ID",
+                "KITTY_WINDOW_ID", "ALACRITTY_WINDOW_ID", "WEZTERM_PANE",
+            )
+        )
+    if sys.platform.startswith("linux"):
+        return bool(
+            (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+            and os.environ.get("DBUS_SESSION_BUS_ADDRESS", "").startswith("unix:")
+        )
+    return False
+
+
+def _desktop_input_source_adapter(
+    input_stream: TextIO, output_stream: TextIO,
+) -> InputSourceAdapter | None:
+    """Compose only the applicable platform adapter at session startup."""
+
+    if not _local_desktop_terminal(input_stream, output_stream):
+        return None
+    if sys.platform == "darwin":
+        from ._input_sources_macos import MacOSInputSourceAdapter
+
+        return MacOSInputSourceAdapter()
+    if sys.platform.startswith("linux"):
+        from ._input_sources_linux import linux_input_source_adapter
+
+        return linux_input_source_adapter()
+    return None
 
 
 class RawTerminalDriver:
@@ -563,6 +633,7 @@ class RawTerminalDriver:
         "_inspector_width",
         "_input_stream",
         "_input_latch",
+        "_input_sources",
         "_input_session_active",
         "_input_session_configuration",
         "_line_transition",
@@ -626,6 +697,7 @@ class RawTerminalDriver:
         self._fallback_capabilities: TerminalCapabilities | None = None
         self._input_stream = input_stream
         self._input_latch = TerminalInputLatch()
+        self._input_sources = InputSourceLifecycle(_desktop_input_source_adapter)
         self._input_session_active = False
         self._input_session_configuration: _TerminalConfiguration | None = None
         self._native_input_handoff_active = False
@@ -695,6 +767,10 @@ class RawTerminalDriver:
                         self._live_configuration = _guard_terminal_echo(configuration)
                     self._input_session_configuration = configuration
                     self._input_session_active = True
+                    self._input_sources.start(
+                        self._input_stream, self._output_stream,
+                        live=configuration is not None,
+                    )
                     self._timeline_enabled = configuration is not None
                     self._progress_notice_emitted = False
                     if (configuration is not None and os.name == "posix"
@@ -718,6 +794,10 @@ class RawTerminalDriver:
                         self._reclaim_process_progress(close=True)
                     except BaseException as failure:
                         review_failure = failure
+                    try:
+                        self._input_sources.finish()
+                    except BaseException as failure:
+                        review_failure = review_failure or failure
                     if self._progress_output_reset and not self._progress_output_blocked:
                         try:
                             self._write_raw_text("")
@@ -727,7 +807,7 @@ class RawTerminalDriver:
                         try:
                             self._set_history_review_mode(self._timeline_review_owner, False)
                         except BaseException as failure:
-                            review_failure = failure
+                            review_failure = review_failure or failure
                     if configuration is not None:
                         _restore_terminal_or_raise(configuration, active_failure or review_failure)
                     if review_failure is not None and active_failure is None:
@@ -759,7 +839,7 @@ class RawTerminalDriver:
     @contextmanager
     def native_input_handoff(self) -> Iterator[None]:
         """Lend native input without capturing authentication in the timeline."""
-        with self._suspend_timeline():
+        with self._input_sources.suspended(), self._suspend_timeline():
             with self._native_input_handoff_body():
                 yield
 
@@ -3219,6 +3299,7 @@ class RawTerminalDriver:
             initial_alerts,
         )
 
+    @_main_input_source_scope
     def _read_main_command_line(
         self,
         prompt: str,
@@ -3267,12 +3348,14 @@ class RawTerminalDriver:
             )
             if reference_outcome is not None:
                 return state, reference_outcome
-            return self._main_prompt_transition(
+            updated, outcome = self._main_prompt_transition(
                 state,
                 event,
                 self._history_state,
                 completion_provider,
             )
+            self._input_sources.observe_buffer(_control_line_state(updated).buffer)
+            return updated, outcome
 
         with self._input_latch.input_operation():
             observed_capabilities = self._observe_input_capabilities()
