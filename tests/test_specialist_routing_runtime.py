@@ -203,22 +203,30 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             source = next(event.payload for event in reversed(history) if type(event.payload) is c.CollaborationProposal and event.step_id == proposed.proposal.step_id)
             terminal = next(event.payload for event in reversed(history) if type(event.payload) is c.CollaborationStepStatePayload and event.step_id == proposed.proposal.step_id and event.payload.proposal_digest == proposed.proposal.proposal_digest)
             self.assertEqual(source, proposed.proposal)
-            self.assertIs(terminal.state, c.CollaborationStepState.COMPLETED)
+            self.assertIs(terminal.state, c.CollaborationStepState.COMPLETED, (result.turn.kind, result.turn.message, result.turn.validation_details, [(e.payload.assessment, e.payload.message[:500]) for e in history if type(e.payload) is c.CollaborationSpecialistReplyPayload], [(e.payload.synthesis_outcome, e.payload.synthesis_submitted_physical_calls, e.payload.overall_outcome) for e in history if type(e.payload) is c.CollaborationExecutionResult], [(e.payload.scope, e.payload.outcome, e.payload.submitted_physical_calls) for e in history if type(e.payload) is c.CollaborationTerminalOutcomePayload], getattr(self, "_synthesis_checks", None)))
         else:
             self.assertIs(result.turn.state, c.CollaborationStepState.COMPLETED)
         return proposed, result
 
     async def test_empty_target_adequate_brief_produces_draft_without_writes(self):
+        before_invalid = self.artifact_bytes()
+        rejected = await self._rejected_pair(self.conversation('Missing executable authoring target'), _ADMISSION_BRIEF,
+            self._native_scoped(PLOT_ARCHITECT, paths=(), authoring_assessment=_fixture_assessment()),
+            selection_group='consultation.authoring.content')
+        self.assertIn('task_scope.paths', '\n'.join(rejected.validation_details)); self.assertEqual(self.artifact_bytes(), before_invalid)
+        self.assertTrue(any(item.response.acceptance.value == 'rejected' for item in rejected.public_responses))
+        self.assertEqual((rejected.proposal, rejected.recommendation_request, rejected.artifact_application_request,
+            rejected.story_commit_request, rejected.confirmation_request_id), (None,) * 5)
         self.workspace.path(OUTLINE).write_bytes(b"")
         conversation = self.conversation()
         assessment = admission.assessment_to_dict(_fixture_assessment())
-        before = self.artifact_bytes()
+        before = self.artifact_bytes(); self._synthesis_checks = []
         def recommend(call, provider):
             material = _workflow_material(provider.callback_payload(call))
             draft_reply = next(reply["reply_event_id"] for reply in material["replies"] if reply["mode"] == "draft")
-            return _synthesis_outcome(
+            raw = _synthesis_outcome(
                 recommendation_family=1, message=material["authoring_scope"]["interpretation"],
-                recommended_action=action(source_ids=(draft_reply,), target_paths=(OUTLINE,)))(call, provider)
+                recommended_action=action(source_ids=(draft_reply,), target_paths=(OUTLINE,)))(call, provider); self._synthesis_checks.append(call.contract.structural_findings(raw)); return raw
         proposed, result = await self.finish_draft(conversation, synthesis=recommend)
         self.assertEqual(proposed.proposal.participants, (PLOT_ARCHITECT,))
         replies = [e.payload for e in self.history(conversation) if type(e.payload) is c.CollaborationSpecialistReplyPayload]
@@ -811,10 +819,22 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIs(user.kind, admission.AdmissionSourceKind.USER)
         self.assertEqual((user.original_authority, user.utf8_bytes), ("literal_user", len(_ADMISSION_BRIEF.encode())))
         assessment = _fixture_assessment()
-        pins = dict(
-            sources=(user,), request_digest=user.revision_digest, task_id=scope.task_id,
+        for structural_only in (replace(assessment, creative_scope=None), replace(assessment, allowed_creative_actions=())):
+            self.assertEqual(admission.assessment_from_dict(admission.assessment_to_dict(structural_only)), structural_only)
+        pins = dict( sources=(user,), request_digest=user.revision_digest, task_id=scope.task_id,
             task_revision=scope.task_revision,
             scope_digest=admission.admission_digest(c.authoring_scope_to_dict(scope)), )
+        for structural_only in (replace(assessment, creative_scope=None), replace(assessment, allowed_creative_actions=())):
+            self.assertIsInstance(admission.qualify_authoring_assessment(structural_only, **pins), admission.AuthoringAdmissionNeeded)
+        for container, field, maximum in (('foundations', 'requirement', 256), ('decisions', 'decision', 256),
+                ('direction', 'justification', 4096), ('decisions', 'explanation', 4096)):
+            for text, valid in (('x' * maximum, True), ('x' * (maximum + 1), False),
+                    ('한' * (maximum // 3), True), ('한' * (maximum // 3 + 1), False)):
+                encoded_assessment = admission.assessment_to_dict(assessment); row = encoded_assessment[container]
+                row = row[0] if isinstance(row, list) else row; row[field] = text
+                if valid: self.assertIsInstance(admission.assessment_from_dict(encoded_assessment), admission.AuthoringAssessment)
+                else:
+                    with self.assertRaises(ValueError): admission.assessment_from_dict(encoded_assessment)
         self.assertIsInstance(
             admission.qualify_authoring_assessment(replace(assessment, foundations=()), **pins),
             admission.AuthoringAdmissionNeeded, )
@@ -825,24 +845,19 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIsInstance(
             admission.qualify_authoring_assessment(replace(assessment, decisions=(missing,)), **pins),
             admission.AuthoringAdmissionNeeded, )
-        self.assertIsInstance(
-            admission.qualify_authoring_assessment(
+        self.assertIsInstance( admission.qualify_authoring_assessment(
                 assessment, **{**pins, "sources": (replace(user, utf8_bytes=0),)},
             ), admission.AuthoringAdmissionNeeded, )
-        self.assertIsInstance(
-            admission.qualify_authoring_assessment(
+        self.assertIsInstance( admission.qualify_authoring_assessment(
                 assessment, **{**pins, "sources": (replace(user, utf8_bytes=None),)},
             ), admission.AuthoringAdmissionNeeded, )
         with self.assertRaisesRegex(ValueError, "unqualified source"):
             admission.qualify_authoring_assessment(_fixture_assessment(foundation_ids=("unoffered",)), **pins)
-        material = admission.AdmissionSource(
-            "input_material", admission.AdmissionSourceKind.MATERIAL,
-            "fixture:nonempty-material", user.revision_digest, "input_only", len(_ADMISSION_BRIEF.encode()),
-        )
+        material = admission.AdmissionSource( "input_material", admission.AdmissionSourceKind.MATERIAL,
+            "fixture:nonempty-material", user.revision_digest, "input_only", len(_ADMISSION_BRIEF.encode()), )
         material_assessment = _fixture_assessment(foundation_ids=(material.source_id,))
         material_pins = {**pins, "sources": (material, user)}
-        self.assertIsInstance(
-            admission.qualify_authoring_assessment(material_assessment, **material_pins),
+        self.assertIsInstance( admission.qualify_authoring_assessment(material_assessment, **material_pins),
             admission.AuthoringAdmissionBasis, )
         empty_user = admission.AdmissionSource(
             "empty_user", admission.AdmissionSourceKind.USER, "fixture:empty-user",
@@ -852,17 +867,13 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         empty_delegation = replace( material_assessment, decisions=(replace(assessment.decisions[0], source_ids=(empty_user.source_id,)),), )
         empty_pins = {**pins, "sources": (material, user, empty_user)}
         unknown_pins = {**pins, "sources": (material, user, unknown_user)}
-        self.assertIsInstance(
-            admission.qualify_authoring_assessment(empty_direction, **empty_pins),
+        self.assertIsInstance( admission.qualify_authoring_assessment(empty_direction, **empty_pins),
             admission.AuthoringAdmissionNeeded, )
-        self.assertIsInstance(
-            admission.qualify_authoring_assessment(empty_direction, **unknown_pins),
+        self.assertIsInstance( admission.qualify_authoring_assessment(empty_direction, **unknown_pins),
             admission.AuthoringAdmissionNeeded, )
-        self.assertIsInstance(
-            admission.qualify_authoring_assessment(empty_delegation, **empty_pins),
+        self.assertIsInstance( admission.qualify_authoring_assessment(empty_delegation, **empty_pins),
             admission.AuthoringAdmissionNeeded, )
-        self.assertIsInstance(
-            admission.qualify_authoring_assessment(empty_delegation, **unknown_pins),
+        self.assertIsInstance( admission.qualify_authoring_assessment(empty_delegation, **unknown_pins),
             admission.AuthoringAdmissionNeeded, )
         result = await self.runtime.propose_specialist_advisory(
             self.session_id, conversation, PLOT_ARCHITECT, _ADMISSION_BRIEF,
@@ -881,9 +892,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         with self.assertRaises(ValueError):
             admission.admission_basis_from_dict({k: v for k, v in encoded.items() if k != "sources"})
 
-    def artifact_bytes(self):
-        return tuple(
-            (item.path, item.content)
+    def artifact_bytes(self): return tuple( (item.path, item.content)
             for item in WritingArtifactRepository(self.workspace.root).capture_complete_state() )
 
     async def test_draft_integrates_exact_all_role_review_apply_and_storage_parity(self):

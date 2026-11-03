@@ -379,6 +379,23 @@ drift, and unsupported native projection still fail before provider invocation.
 Only typed decoding and explicitly named, justified host checks may extend this
 boundary; representable field/value restrictions remain in the frozen graph.
 
+Lead proposals and preparation recommendations in the targeted authoring branches
+require a non-null `authoring_assessment` object. Its closed rule graph binds required fields,
+nonblank evidence and decision text, current source IDs, and status relations.
+A `sufficient` assessment has foundations, direction and covered decisions, no
+missing information, and creative-scope evidence or named allowed actions.
+`needs_information` and `analysis_only` retain their valid unresolved values.
+The same owner feeds the final native schema, typed decoding and repair facts.
+Provider character limits accompany the existing exact UTF-8 byte checks.
+
+Executable authoring draft/revise assignment and artifact branches require an
+actual nonempty target selection. Questions, workflow, review-only work and
+preparation recommendations keep their applicable scope contracts. Existing
+source-bound authoring admission still qualifies USER creative permissions,
+both creative scope and allowed actions, and actual source evidence; document
+readiness follows separately. A valid information-gap assessment can produce a
+question. Specialist Confirm, Apply and Commit retain their separate authority.
+
 Identical rule bodies may share a local `$defs` target while each occurrence keeps
 its description beside `$ref`. Central fingerprints retain both node-local and
 referenced descriptions, including repeated annotations, and distinguish changed
