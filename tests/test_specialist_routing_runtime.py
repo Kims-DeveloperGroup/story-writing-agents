@@ -3,7 +3,7 @@ from tests.test_lead_orchestration import _live_material, _live_task
 from tests.provider_wire_fixture import selection_plan
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
 from tests.provider_wire_fixture import ( result as wire_result, lead_fixture_bound_scope, lead_fixture_assignments,
-    finite_fixture_selection, lead_fixture_result, fixture_schema_node, lead_fixture_response,)
+    finite_fixture_selection, lead_fixture_result, fixture_schema_node, indexed_response, lead_fixture_response,)
 from tests.provider_wire_fixture import author_positive_fixture_review_bases
 from story_writing_agents.agent_context.accounting import ProviderCallKind
 from story_writing_agents.lead_provider_contracts import LeadResultContractOwner
@@ -664,10 +664,30 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 "required_condition_ids": ["user_input"], "agreed_direction": "Preserve the promise and leave the secret unresolved.",
                 "unresolved_questions": ["Is the decision trigger established?"],
                 "expected_result": "A bounded Character judgment, not a replacement draft or final candidate approval."}
-        response = scoped_proposal(CHARACTER_CUSTODIAN, activity="review", domains=tuple(domain.value
+        staged_response = scoped_proposal(CHARACTER_CUSTODIAN, activity="review", domains=tuple(domain.value
             for domain in ArtifactReviewDomain), mutate=focused_plan, native_inputs={
                 "source_choices": ("user_input",), "input_choices": ("user_input",),
                 "anchors": {CHARACTER_CUSTODIAN: "user_input"}, "recipients": {"user_input": CHARACTER_CUSTODIAN}, "family": 0})
+        def response(call, provider):
+            packet = json.loads(staged_response(call, provider))["agent_action"]
+            details = packet["task_result"]["response_details"]
+            native_plan = details["specialist_consultation_proposal"]["stage_plan"]
+            choices = dict(call.contract.semantic_index.policy.choices)
+            native_plan["focus_domains"] = finite_fixture_selection(
+                native_plan["focus_domains"], native_plan["focus_domains"])
+            native_plan["specialist_ids"] = finite_fixture_selection(
+                native_plan["specialist_ids"], native_plan["specialist_ids"])
+            native_plan["required_condition_ids"] = finite_fixture_selection(
+                choices["required_input_ids"], native_plan["required_condition_ids"])
+            question = native_plan["questions"][0]
+            question["source_input_ids"] = finite_fixture_selection(
+                choices["allocation_input_ids"], question["source_input_ids"])
+            question["required_condition_ids"] = finite_fixture_selection(
+                choices["required_input_ids"], question["required_condition_ids"])
+            outer_id, inner_id = packet.pop("schema_id"), packet["task_result"].pop("schema_id")
+            details.pop("variant_id", None)
+            return indexed_response(packet, outer_schema_id=outer_id,
+                inner_schema_id=inner_id, contract=call.contract)
         before = len(self.backend.calls)
         self.backend.enqueue(response, control_plan=selection_plan("consultation.authoring.review"))
         focused = await self.runtime.lead_turn(self.session_id, conversation,
@@ -837,11 +857,15 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                         candidates.append((member.owner.variant.branch_key.partition(":partition:")[0], inspection))
                 self.assertEqual(len(candidates), 1)
                 branch, inspection = candidates[0]
+                preliminary_choices = tuple(target["input_id"] for target in map(json.loads,
+                    dict(call.contract.semantic_index.policy.choices)["preliminary_targets"])
+                    if target["availability"] != review.ReviewTargetAvailability.UNREAD.value)
+                read_selection = finite_fixture_selection(preliminary_choices, read_ids)
                 native_review = {"stage": "lead_preliminary_review",
                     "inspection": {identity: "inspected" if identity == "user_input" or identity in facts else "excluded"
                                    for identity in inspection["properties"]},
-                    "findings": [{"message": finding, "evidence_input_ids": list(read_ids)}],
-                    "conflicts": [{"message": finding, "evidence_input_ids": list(read_ids)}] if label == "conflict" else [],
+                    "findings": [{"message": finding, "evidence_input_ids": read_selection}],
+                    "conflicts": [{"message": finding, "evidence_input_ids": read_selection}] if label == "conflict" else [],
                     "missing_information": (["Part outline and narrative rules were not inspected."] if label == "foundations"
                         else ["The user has not selected which direction to adopt."] if needs_decision else []),
                     "further_review_required": needs_decision,

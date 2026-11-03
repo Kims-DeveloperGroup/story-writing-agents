@@ -3926,7 +3926,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         from story_writing_agents.agent_context.actions import ContextCallReadFact
         from story_writing_agents.agent_context.manifest import ContextSourceKind
         unit_metadata = dict(evidence_id='unit-read', source_id='unit-source', revision='unit-v1',
-                             source_digest='a' * 64, boundary_digest='b' * 64, whole_source=True)
+                             source_digest='a' * 64, boundary_digest='a' * 64, whole_source=True)
         unit_writing = ContextCallReadFact(**unit_metadata, source_kind=ContextSourceKind.WRITING_ARTIFACT,
             artifact_locator='core_documents/global_outline.md')
         unit_generic = ContextCallReadFact(**unit_metadata,
@@ -4016,7 +4016,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertRaises(ValueError, replace, read_plan, read_facts=())
         self.assertRaises(ValueError, replace, read_plan, read_facts=(replace(unit_writing, evidence_id="foreign"),))
         for field, value in (("revision", "unit-v2"), ("source_digest", "c" * 64), ("boundary_digest", "d" * 64)):
-            changed_fact = replace(unit_writing, **{field: value})
+            changes = {field: value}
+            if field != "revision":
+                self.assertRaises(ValueError, replace, unit_writing, **changes)
+                changes.update(source_digest=value, boundary_digest=value)
+            changed_fact = replace(unit_writing, **changes)
             changed_offers = replace(observed_generation.offers, call_id="read-update-" + field,
                                     completed_read_facts=(changed_fact,), delivery_read_facts=())
             refreshed = observed_generation.factory.for_offer(changed_offers,
@@ -4596,7 +4600,14 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             'conflicts': [], 'missing_information': ['The excluded source was not inspected.'],
             'further_review_required': True, 'next_action': 'request_information',
         }
+        preliminary_choices = tuple(target["input_id"] for target in map(json.loads,
+            dict(preliminary_bound.semantic_index.policy.choices)["preliminary_targets"])
+            if target["availability"] != review.ReviewTargetAvailability.UNREAD.value)
         def preliminary_frame(record):
+            record = copy.deepcopy(record)
+            for finding in record["findings"] + record["conflicts"]:
+                finding["evidence_input_ids"] = finite_fixture_selection(
+                    preliminary_choices, finding["evidence_input_ids"])
             return json.loads(lead_fixture_response(SimpleNamespace(contract=preliminary_bound), {
                 'response_type': 'answer',
                 'response_text': 'This is a bounded preliminary finding.',
@@ -4696,9 +4707,16 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             'unresolved_questions': ['Which conflicting motive does the USER prefer?'],
             'expected_result': 'Character-focused judgment, without drafting or final approval.',
         }
-        native_stage_plan = {key: value for key, value in stage_plan.items()
-                             if key not in {'task_id', 'task_revision', 'questions'}}
-        native_stage_plan['questions'] = [{key: value for key, value in question.items()
+        stage_choices = dict(staged_bound.semantic_index.policy.choices)
+        stage_selections = {"focus_domains": tuple(stage_plan["focus_domains"]),
+            "specialist_ids": tuple(stage_plan["specialist_ids"]),
+            "source_input_ids": stage_choices["allocation_input_ids"],
+            "required_condition_ids": stage_choices["required_input_ids"]}
+        native_stage_plan = {key: finite_fixture_selection(stage_selections[key], value)
+            if key in stage_selections else value for key, value in stage_plan.items()
+            if key not in {'task_id', 'task_revision', 'questions'}}
+        native_stage_plan['questions'] = [{key: finite_fixture_selection(stage_selections[key], value)
+            if key in stage_selections else value for key, value in question.items()
             if key not in {'task_id', 'task_revision'}} for question in stage_plan['questions']]
         stage_choices = dict(staged_bound.semantic_index.policy.choices)
         stage_inputs = stage_choices['allocation_input_ids']
