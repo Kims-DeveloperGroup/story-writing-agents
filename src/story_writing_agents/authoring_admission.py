@@ -383,17 +383,18 @@ def assessment_schema(source_ids: tuple[str, ...] | None = None) -> dict[str, ob
     description = "Assess supplied foundations and USER-bounded creative work; host qualification remains separate."
     information = closed_rule(fields, description=description)
     if evidence is None:
-        return information
+        return json.loads(json.dumps(information))
     sufficient = {**fields,
         "status": {"type": "string", "enum": [AdmissionStatus.SUFFICIENT.value]},
         "foundations": {**fields["foundations"], "minItems": 1},
         "direction": evidence,
         "decisions": {**fields["decisions"], "minItems": 1, "items": {"anyOf": decisions[:-1]}},
         "missing_information": {**strings, "maxItems": 0}}
-    return {"anyOf": [
+    # Guidance projection mutates occurrences; export a tree without shared nodes.
+    return json.loads(json.dumps({"anyOf": [
         closed_rule({**sufficient, "creative_scope": evidence},
                     description="Sufficient assessment needs concrete foundations, direction and covered decisions; creative scope is grounded here."),
         closed_rule({**sufficient, "creative_scope": {"type": "null"},
                      "allowed_creative_actions": {**strings, "minItems": 1}},
                     description="Without creative-scope evidence, sufficient structure requires named allowed actions; host USER-permission qualification remains separate."),
-        information], "description": description}
+        information], "description": description}))
