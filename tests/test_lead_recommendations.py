@@ -44,6 +44,29 @@ class LeadRecommendationTests(RecommendationCase):
 
 
     async def test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review(self):
+        from story_writing_agents import authoring_admission as admission
+        assessment = task_assessment(foundation_ids=('user_input',), actions=('bounded draft',))
+        for absent in (False, True):
+            def omit_parent(value):
+                if absent: value.pop('authoring_assessment')
+                else: value['authoring_assessment'] = None
+            rejected = await self._rejected_pair(self.conversation('Invalid preparation assessment'), 'Prepare a bounded story consultation.',
+                recommendation(recommended_action=action(kind='prepare_consultation', source_ids=('user_input',)),
+                    authoring_scope=lambda call: lead._live_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)),
+                    authoring_assessment=assessment, mutate=omit_parent), selection_group='prepare.consultation.authoring')
+            self.assertIn('authoring_assessment', '\n'.join(rejected.validation_details)); self.assert_no_downstream(rejected.conversation_id)
+            self.assertTrue(any(item.response.acceptance.value == 'rejected' for item in rejected.public_responses))
+        unresolved = replace(assessment, status=admission.AdmissionStatus.NEEDS_INFORMATION, direction=None,
+            creative_scope=None, allowed_creative_actions=(), missing_information=('Memoir or fiction?',),
+            decisions=(admission.AdmissionDecision('Genre', admission.DecisionCoverage.MISSING, (), 'Choose memoir or fiction.'),))
+        cid = self.conversation('Actual unresolved USER choice'); before_gap, calls_gap = self.snapshots(), len(self.backend.calls)
+        self.backend.enqueue(recommendation(recommended_action=action(kind='prepare_consultation', source_ids=('user_input',)),
+            authoring_scope=lambda call: lead._live_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)),
+            authoring_assessment=unresolved), control_plan=selection_plan('prepare.consultation.authoring'))
+        question = await self.runtime.lead_turn(self.session_id, cid, 'Prepare a consultation: memoir versus fiction is undecided. Ask for that choice.')
+        self.assertIs(question.kind, c.LeadOutcomeKind.QUESTION, question); self.assertIn('Memoir or fiction?', question.message)
+        self.assertFalse(question.validation_details); self.assertTrue(any(item.response.acceptance.value == 'accepted' for item in question.public_responses))
+        self.assertEqual(len(self.backend.calls) - calls_gap, 2); self.assert_no_downstream(cid); self.assertEqual(self.snapshots(), before_gap)
         self.workspace.path(OUTLINE).write_text("Outline source.\n", encoding="utf-8")
         before = self.snapshots()
         conversation_id, turn = await self.recommend()
@@ -141,14 +164,12 @@ class LeadRecommendationTests(RecommendationCase):
                 for row in proposal["assignments"].values():
                     row.update(input_anchor_id=selected[0], optional_inputs={alias: alias in selected for alias in choices["allocation_input_ids"]})
                     row["review_basis"]["candidate_input_ids"] = finite_fixture_selection(choices["review_candidate_ids"], review_ids)
-                if omit_source:
-                    proposal["required_input_recipients"] = {}
+                if omit_source: proposal["required_input_recipients"] = {}
                 encoded = json.dumps({"agent_action": packet})
                 raw_observations.append((packet, choices, call.contract.outer_inner_schema_ids, lead.diagnose_json_text(encoded, call.schema)))
                 return encoded
             self.backend.enqueue(raw)
-            if omit_source:
-                self.backend.enqueue(raw)
+            if omit_source: self.backend.enqueue(raw)
             calls = len(self.backend.calls)
             prepared = await self.runtime.decide_lead_recommendation(decision(offered))
             self.assertTrue(raw_observations, prepared)
@@ -172,8 +193,7 @@ class LeadRecommendationTests(RecommendationCase):
                     self.assertTrue(missing.issubset(issues), issues)
                     self.assertTrue(all(any(issue.startswith(path) and issue.endswith(basis_error) for issue in issues) for path in basis_paths), issues)
                     self.assertTrue(all(issue in missing or (issue.startswith(basis_paths) and issue.endswith(basis_error)) for issue in issues), issues)
-                else:
-                    self.assertEqual(issues, (), (aliases, issues))
+                else: self.assertEqual(issues, (), (aliases, issues))
             self.assertEqual(len(self.backend.calls) - calls, 2 if omit_source else 1, prepared)
             self.assert_no_downstream(cid)
             if omit_source:

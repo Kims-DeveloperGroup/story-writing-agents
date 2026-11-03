@@ -2241,11 +2241,21 @@ class LeadProviderConstraints:
                     group_id = schema_group_for(semantics).group_id
                     if selected_group_id is not None and group_id != selected_group_id:
                         continue
+                target_required = (rule is not None
+                    and rule.intent is AuthoringIntent.AUTHORING
+                    and rule.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
+                    and (current_assignments or current_artifact_work))
+                if target_required and targets == ():
+                    continue
                 root_schema = deepcopy(root)
                 if scope_kinds:
                     root_schema["properties"]["response_type"]["enum"] = list(eligible_kinds)
                 if scoped:
                     root_schema["properties"]["writing_task_scope"] = _scope_wire_rule(rule, scope_template, self.scope, targets, tasks)
+                    if target_required and targets is None:
+                        root_schema["properties"]["writing_task_scope"]["properties"]["target_artifact_paths"].update(
+                            minItems=1,
+                            description="Executable drafting requires an actual target; ask a question when it is not established.")
                     if (ordinary_answer and rule.activity is AuthoringActivity.REVIEW
                             and targets is None):
                         scope_properties = root_schema["properties"]["writing_task_scope"]["properties"]
@@ -2265,16 +2275,17 @@ class LeadProviderConstraints:
                     for name, child in tuple(props.items()):
                         if name == "authoring_assessment":
                             fresh = admission_rule(self.input_ids)
-                            decisions = fresh["properties"]["decisions"]["items"]
-                            for decision in decisions.get("anyOf", (decisions,)):
-                                coverage = decision["properties"]["coverage"]
-                                if coverage["enum"] == ['supplied']:
-                                    coverage["description"] = (
-                                        'the decision is supported by cited actual inputs')
-                                elif coverage["enum"] == ['delegated']:
-                                    coverage["description"] = (
-                                        'actual literal USER input explicitly permits this '
-                                        'bounded creative decision')
+                            for assessment in fresh.get("anyOf", (fresh,)):
+                                decisions = assessment["properties"]["decisions"]["items"]
+                                for decision in decisions.get("anyOf", (decisions,)):
+                                    coverage = decision["properties"]["coverage"]
+                                    if coverage["enum"] == ['supplied']:
+                                        coverage["description"] = (
+                                            'the decision is supported by cited actual inputs')
+                                    elif coverage["enum"] == ['delegated']:
+                                        coverage["description"] = (
+                                            'actual literal USER input explicitly permits this '
+                                            'bounded creative decision')
                             if child.get("anyOf") and any(v.get("type") == "null" for v in child["anyOf"]):
                                 fresh = {"anyOf": [fresh, next(
                                     dict(v) for v in child["anyOf"]
@@ -2781,8 +2792,9 @@ class LeadProviderConstraints:
                 "Before official drafting or document-change preparation, assess the actual supplied story foundations, "
                 "USER direction, bounded creative permissions/protected constraints and required decisions. "
                 "Use exact offered USER/material IDs or completed READ evidence IDs; a file indicator, summary or "
-                "confidence is not a READ or semantic sufficiency. A detailed literal USER brief may suffice with "
-                "empty targets. Identify only actual missing decisions; do not ask again for already supplied facts. "
+                "confidence is not a READ or semantic sufficiency. A detailed literal USER brief may suffice for assessment. "
+                "Executable drafting needs an actual target; target-free grounded analysis remains available. "
+                "Identify only actual missing decisions; do not ask again for already supplied facts. "
                 "Use needs_information/analysis_only and grounded questions when inadequate. Rejected public "
                 "answers stay input-only. The assessment grants no confirmation, write or budget authority."
             ),
