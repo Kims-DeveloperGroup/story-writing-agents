@@ -8,6 +8,8 @@ import unicodedata
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 
+from ._progress_process import ProgressContent
+
 from ..agent_context.actions import ContextSourceBoundaryKind
 from ..agent_context.progress import (
     ContextActionProgressEvent,
@@ -113,6 +115,7 @@ class AdvisoryProgressState:
 
     def __init__(self) -> None:
         self.started_at: float | None = None
+        self.presentation_revision: int = 0
         self.requests: tuple[AdvisoryProgressRequest, ...] = ()
         self.events: dict[tuple[str, str, int], ContextActionProgressEvent] = {}
         self.context_events: dict[tuple[str, str], ContextExecutionEvent] = {}
@@ -132,6 +135,7 @@ class AdvisoryProgressState:
     def toggle_collapsed(self) -> bool:
         """Toggle collapsed mode and return the new state."""
         self.collapsed = not self.collapsed
+        self.presentation_revision += 1
         return self.collapsed
 
     def snapshot_failure(self) -> None:
@@ -146,6 +150,7 @@ class AdvisoryProgressState:
         self.failure_agent_errors.clear()
 
     def begin(self, requests: tuple[AdvisoryProgressRequest, ...] = ()) -> None:
+        self.presentation_revision += 1
         if self.started_at is None:
             self.started_at = time.monotonic()
         self.requests = requests
@@ -164,12 +169,14 @@ class AdvisoryProgressState:
         """Explicitly record a terminal diagnostic for outcome presentation."""
         sanitized = _sanitize_preview_text(message).strip()
         if sanitized:
+            self.presentation_revision += 1
             self.last_error_message = sanitized
             self.snapshot_failure()
 
     def observe(self, event: ContextActionProgressEvent) -> None:
         if type(event) is not ContextActionProgressEvent:
             raise TypeError("progress event is invalid")
+        self.presentation_revision += 1
         self.events[(event.agent_id, event.operation_id, event.action_index)] = event
         self._adopt_operation(event.agent_id, event.operation_id)
 
@@ -211,6 +218,7 @@ class AdvisoryProgressState:
             raise TypeError("context execution event is invalid")
         if event.kind is not ContextExecutionEventKind.NATIVE_CONTEXT:
             return
+        self.presentation_revision += 1
         key = (event.scope.agent_id, event.operation_id)
         self._adopt_operation(*key)
         self.context_events[key] = event
@@ -223,6 +231,7 @@ class AdvisoryProgressState:
     def observe_stream(self, event: ProviderStreamEvent) -> None:
         if type(event) is not ProviderStreamEvent:
             raise TypeError("stream event is invalid")
+        self.presentation_revision += 1
         op_id = event.operation_id
         if op_id is None:
             for req in self.requests:
@@ -317,6 +326,7 @@ class AdvisoryProgressState:
         return 0 if self.started_at is None else int(time.monotonic() - self.started_at)
 
     def finish(self) -> int:
+        self.presentation_revision += 1
         elapsed = self.elapsed_seconds()
         self.started_at = None
         if (
@@ -352,28 +362,41 @@ class AdvisoryProgressState:
                 known.add(key)
         return ordered
 
+    def _header_suffix(self, ordered: list[AdvisoryProgressRequest]) -> str:
+        if not self.collapsed:
+            return " · Working"
+        if not ordered:
+            return " · Working (press 't' to expand)"
+        focused_idx = self.focused_agent_index % len(ordered)
+        focused_req = ordered[focused_idx]
+        multi_indicator = f" ({focused_idx + 1}/{len(ordered)})" if len(ordered) > 1 else ""
+        active_label = f"{focused_req.agent_id}{multi_indicator}"
+        status_summary = ""
+        key = (focused_req.agent_id, focused_req.operation_id)
+        status_text = self.stream_status.get(key)
+        context_event = self.context_events.get(key)
+        if status_text:
+            status_summary = f" · {status_text[:40]}"
+        elif context_event is None and focused_req.request:
+            status_summary = f" · {focused_req.request[:40]}"
+        if context_event is not None:
+            status_summary += f" · {_native_context_lines(context_event)[0]}"
+        return f" · {active_label}{status_summary} (press 't' to expand)"
+
+    def process_content(self) -> ProgressContent:
+        """Capture ticker data without lending mutable runtime or provider state."""
+        if self.started_at is None:
+            raise ValueError("progress has not started")
+        suffix = self._header_suffix(self._ordered_requests()).splitlines()[0]
+        return ProgressContent(self.started_at, _FRAMES, suffix)
+
     def render(self, frame: int) -> str:
         elapsed = format_elapsed(self.elapsed_seconds())
         ordered = self._ordered_requests()
+        header = f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed}{self._header_suffix(ordered)}"
         if self.collapsed:
-            if not ordered:
-                return f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · Working (press 't' to expand)"
-            focused_idx = self.focused_agent_index % len(ordered)
-            focused_req = ordered[focused_idx]
-            multi_indicator = f" ({focused_idx + 1}/{len(ordered)})" if len(ordered) > 1 else ""
-            active_label = f"{focused_req.agent_id}{multi_indicator}"
-            status_summary = ""
-            key = (focused_req.agent_id, focused_req.operation_id)
-            status_text = self.stream_status.get(key)
-            context_event = self.context_events.get(key)
-            if status_text:
-                status_summary = f" · {status_text[:40]}"
-            elif context_event is None and focused_req.request:
-                status_summary = f" · {focused_req.request[:40]}"
-            if context_event is not None:
-                status_summary += f" · {_native_context_lines(context_event)[0]}"
-            return f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · {active_label}{status_summary} (press 't' to expand)"
-        lines = [f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · Working"]
+            return header
+        lines = [header]
         for request in ordered:
             key = (request.agent_id, request.operation_id)
             related = sorted(
