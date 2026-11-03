@@ -2772,18 +2772,46 @@ def _derive_hook_guard(callback: Callable, *, _digests: tuple,
 def _require_hook_guards(callbacks: tuple[Callable, ...], identities: tuple[str, ...],
                          guards: tuple, anchor: tuple, *, _attest_captures: bool,
                          message: str) -> None:
-    if (guards is not anchor[0] or anchor[1] is not _hook_guard_matches
+    if (len(anchor) != 7 or guards is not anchor[0] or anchor[1] is not _hook_guard_matches
             or anchor[2] is not _hook_guard_matches.__code__
             or anchor[5] is not _hook_guard_matches.__defaults__
             or len(callbacks) != len(guards) or len(identities) != len(guards)):
         raise ValueError(message)
-    digests = ({}, {}, {})
+    def require_implementation():
+        if (_require_hook_guards is not anchor[3]
+                or _require_hook_guards.__code__ is not anchor[4]
+                or anchor[1] is not _hook_guard_matches
+                or anchor[1].__code__ is not anchor[2]
+                or anchor[1].__defaults__ is not anchor[5]
+                or _permitted_hook_identity is not anchor[6][0]
+                or not anchor[1](anchor[6][1], *anchor[5])):
+            raise ValueError(message)
+    require_implementation()
+    lookup, ambiguous = {}, set()
+    for callback, identity, guard in zip(callbacks, identities, guards):
+        function = callback.__func__ if inspect.ismethod(callback) else callback
+        receiver = callback.__self__ if inspect.ismethod(callback) else None
+        if guard[2] is not _attest_captures or guard[3] != identity:
+            raise ValueError(message)
+        if (function is guard[0] and receiver is guard[1] and guard[4]
+                and all(function is not helper for helper in (
+                    _permitted_hook_identity, _hook_default_identity, _require_hook_guards,
+                    _hook_guard_matches, _derive_hook_guard, _compact_hook_metadata))):
+            key = (id(function), id(receiver), _attest_captures)
+            if key in lookup and lookup[key][3] != identity:
+                ambiguous.add(key)
+                lookup.pop(key)
+            elif key not in ambiguous:
+                lookup.setdefault(key, guard)
+    # Only this anchored operation owns the lookup; no derived or incomplete proof enters it.
+    digests = ({}, {}, {}, (lookup, set(), anchor, message))
     current = []
     for callback, identity, guard in zip(callbacks, identities, guards):
         function = callback.__func__ if inspect.ismethod(callback) else callback
         receiver = callback.__self__ if inspect.ismethod(callback) else None
         if guard[2] is not _attest_captures or guard[3] != identity:
             raise ValueError(message)
+        require_implementation()
         if function is guard[0] and receiver is guard[1] and guard[4] is not None:
             # An earlier fallback may have changed the matcher or its helpers.
             matcher = anchor[1]
@@ -2793,9 +2821,10 @@ def _require_hook_guards(callbacks: tuple[Callable, ...], identities: tuple[str,
             if matcher(guard[4], *anchor[5]):
                 current.append(identity)
                 continue
+        lookup.pop((id(function), id(receiver), _attest_captures), None)
         current.append(_permitted_hook_identity(
-            callback, _digests=digests, _attest_captures=_attest_captures,
-        ))
+            callback, _digests=digests, _attest_captures=_attest_captures))
+        require_implementation()
     if tuple(current) != identities:
         raise ValueError(message)
 
@@ -2803,12 +2832,12 @@ def _require_hook_guards(callbacks: tuple[Callable, ...], identities: tuple[str,
 def _hook_default_identity(
     value: object, seen: set[int], *,
     _digests: tuple[dict[int, tuple[object, str]], dict[int, tuple[object, str]],
-                    dict[int, tuple[object, object, bool]]] | None = None,
+                    dict[int, tuple[object, object, bool]], tuple | None] | None = None,
     _attest_captures: bool = False,
     _guard: list[tuple | None] | None = None,
 ) -> object:
     if _digests is None:
-        _digests = ({}, {}, {})
+        _digests = ({}, {}, {}, None)
     if value is None or (kind := type(value)) in {str, int, bool}:
         if (_guard is not None and value is not None
                 and kind is not str and kind is not int and kind is not bool):
@@ -2942,11 +2971,13 @@ def _hook_default_identity(
             if type(value) is TypedDecoder or type(value) is NamedHostCheck:
                 guards = object.__getattribute__(value, "_hook_guards")
                 anchor = object.__getattribute__(value, "_hook_guard_anchor")
-                if (guards is not anchor[0] or anchor[1] is not _hook_guard_matches
+                if (len(anchor) != 7 or guards is not anchor[0] or anchor[1] is not _hook_guard_matches
                         or anchor[2] is not _hook_guard_matches.__code__
                         or anchor[3] is not _require_hook_guards
                         or anchor[4] is not _require_hook_guards.__code__
-                        or anchor[5] is not _hook_guard_matches.__defaults__):
+                        or anchor[5] is not _hook_guard_matches.__defaults__
+                        or anchor[6][0] is not _permitted_hook_identity
+                        or not anchor[1](anchor[6][1], *anchor[5])):
                     message = ("frozen typed decoder hook provenance changed"
                                if type(value) is TypedDecoder
                                else "frozen named owner hook provenance changed")
@@ -3015,13 +3046,13 @@ def _hook_default_identity(
 def _permitted_hook_identity(
     callback: Callable, seen: set[int] | None = None, *,
     _digests: tuple[dict[int, tuple[object, str]], dict[int, tuple[object, str]],
-                    dict[int, tuple[object, object, bool]]] | None = None,
+                    dict[int, tuple[object, object, bool]], tuple | None] | None = None,
     _attest_captures: bool = False,
     _guard: list[tuple | None] | None = None,
 ) -> str:
     """Derived content-free actual hook provenance, never a caller-supplied pin."""
     if _digests is None:
-        _digests = ({}, {}, {})
+        _digests = ({}, {}, {}, None)
     if inspect.ismethod(callback):
         function, receiver = callback.__func__, callback.__self__
     elif inspect.isfunction(callback):
@@ -3031,6 +3062,38 @@ def _permitted_hook_identity(
     if (inspect.iscoroutinefunction(function) or inspect.isgeneratorfunction(function)
             or inspect.isasyncgenfunction(function)):
         raise TypeError("owner hooks must be synchronous nongenerator functions")
+    operation = _digests[3]
+    if operation is not None:
+        lookup, active, anchor, message = operation
+        key = (id(function), id(receiver), _attest_captures)
+        guard = lookup.get(key)
+        if guard is not None and key not in active:
+            # Complete declared acyclic graphs only; an in-progress lookup cannot prove itself.
+            active.add(key)
+            try:
+                matcher = anchor[1]
+                def implementation_current():
+                    return (_require_hook_guards is anchor[3]
+                            and _require_hook_guards.__code__ is anchor[4]
+                            and _permitted_hook_identity is anchor[6][0]
+                            and matcher is _hook_guard_matches
+                            and matcher.__code__ is anchor[2]
+                            and matcher.__defaults__ is anchor[5]
+                            and matcher(anchor[6][1], *anchor[5]))
+                if not implementation_current():
+                    raise ValueError(message)
+                matched = (function is guard[0] and receiver is guard[1]
+                           and guard[2] is _attest_captures and bool(guard[4])
+                           and matcher(guard[4], *anchor[5]))
+                if not implementation_current():
+                    raise ValueError(message)
+                if matched:
+                    if _guard is not None:
+                        _guard.extend(guard[4])
+                    return guard[3]
+                lookup.pop(key, None)
+            finally:
+                active.remove(key)
     code_object = function.__code__
     cached_code = _digests[0].get(id(code_object))
     if cached_code is None or cached_code[0] is not code_object:
@@ -3147,7 +3210,14 @@ class TypedDecoder(Generic[_ContractValue]):
                 or not self.revision or type(self.dependencies) is not tuple):
             raise ValueError("incomplete typed decoder declaration")
         _require_hook_arity(self.decode, 1)
-        digests = ({}, {}, {})
+        identity_implementation = (_permitted_hook_identity, (
+            ("code", _permitted_hook_identity, _permitted_hook_identity.__code__),
+            ("defaults", _permitted_hook_identity, _permitted_hook_identity.__defaults__,
+             _permitted_hook_identity.__kwdefaults__),
+            ("mapping", _permitted_hook_identity.__kwdefaults__,
+             tuple(_permitted_hook_identity.__kwdefaults__.items())),
+        ))
+        digests = ({}, {}, {}, None)
         guards = tuple(_derive_hook_guard(
             item, _digests=digests, _attest_captures=True,
         ) for item in (self.decode, *self.dependencies))
@@ -3159,7 +3229,7 @@ class TypedDecoder(Generic[_ContractValue]):
         object.__setattr__(self, "_hook_guard_anchor", (
             guards, _hook_guard_matches, _hook_guard_matches.__code__,
             _require_hook_guards, _require_hook_guards.__code__,
-            _hook_guard_matches.__defaults__,
+            _hook_guard_matches.__defaults__, identity_implementation,
         ))
         object.__setattr__(self, "binding_fingerprint", fingerprint)
 
@@ -3218,7 +3288,14 @@ class NamedHostCheck(Generic[_ContractValue]):
         _require_hook_arity(self.check, 2)
         if type(self.dependencies) is not tuple:
             raise TypeError("host hook dependencies must be immutable declarations")
-        digests = ({}, {}, {})
+        identity_implementation = (_permitted_hook_identity, (
+            ("code", _permitted_hook_identity, _permitted_hook_identity.__code__),
+            ("defaults", _permitted_hook_identity, _permitted_hook_identity.__defaults__,
+             _permitted_hook_identity.__kwdefaults__),
+            ("mapping", _permitted_hook_identity.__kwdefaults__,
+             tuple(_permitted_hook_identity.__kwdefaults__.items())),
+        ))
+        digests = ({}, {}, {}, None)
         guards = tuple(_derive_hook_guard(
             item, _digests=digests, _attest_captures=False,
         ) for item in (self.check, *self.dependencies))
@@ -3228,7 +3305,7 @@ class NamedHostCheck(Generic[_ContractValue]):
         object.__setattr__(self, "_hook_guard_anchor", (
             guards, _hook_guard_matches, _hook_guard_matches.__code__,
             _require_hook_guards, _require_hook_guards.__code__,
-            _hook_guard_matches.__defaults__,
+            _hook_guard_matches.__defaults__, identity_implementation,
         ))
         object.__setattr__(self, "binding_fingerprint", hashlib.sha256(json.dumps(identities, separators=(",", ":")).encode("utf-8")).hexdigest())
         value = strict_json_object(self.corrective_facts.decode("utf-8", "strict"))
