@@ -116,8 +116,8 @@ Union semantic domains, canonical targets, relevant references, evidence, and th
 explicitly selected current task. Do not omit a required specialist to fit a budget.
 Factual inventory and status alone do not require authoring; status is never read authority.
 Interpret free text visibly; clarify uncertainty instead of claiming keyword recognition.
-Draft mode produces substantive draft material from a sufficient brief, including for
-empty targets. Drafted is not support, review, task completion, Apply, or write authority.
+Draft mode produces substantive draft material from a sufficient brief, even when
+the selected target document is new or empty. Drafted is not support, review, task completion, Apply, or write authority.
 Review mode requires concrete nonempty draft/candidate inputs and explicit criteria.
 A brief alone is not a review candidate. Request clarification when material is insufficient.
 Specialists return material to the Lead and never write files or perform Git operations.

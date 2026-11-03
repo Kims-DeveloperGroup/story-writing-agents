@@ -357,26 +357,44 @@ def admission_basis_from_dict(value: object) -> AuthoringAdmissionBasis:
 def assessment_schema(source_ids: tuple[str, ...] | None = None) -> dict[str, object]:
     """The source-owned closed semantic shape used by wire and typed parsing."""
     text = nonblank_text_rule(maximum_characters=4096)
+    label = nonblank_text_rule(maximum_characters=256)
     strings = {"type": "array", "items": text, "minItems": 0, "maxItems": 32}
     refs = {"type": "array", "items": text, "minItems": 0, "maxItems": 32}
     if source_ids is not None:
         refs = ({**refs, "items": {"type": "string", "enum": list(source_ids)}} if source_ids else
                 {"type": "array", "items": {"type": "string"}, "maxItems": 0})
-    evidence = (None if source_ids == () else closed_rule({"requirement": text,
+    evidence = (None if source_ids == () else closed_rule({"requirement": label,
         "source_ids": {**refs, "minItems": 1}, "justification": text},
         description="Justify this requirement with exact offered sources."))
     unavailable = {"type": "null", "description": "This required USER decision is unavailable."}
     nullable = unavailable if evidence is None else {"anyOf": [evidence, unavailable]}
-    decisions = [closed_rule({"decision": {**text, "description": "Creative choice."},
+    decisions = [closed_rule({"decision": {**label, "description": "Creative choice."},
         "coverage": {"type": "string", "enum": [coverage.value]},
         "source_ids": {**refs, "minItems": 0 if coverage is DecisionCoverage.MISSING else 1},
         "explanation": text}, description="Bind this decision to its actual source or USER delegation.")
         for coverage in DecisionCoverage if source_ids != () or coverage is DecisionCoverage.MISSING]
-    return closed_rule({"status": {"type": "string", "enum": [value.value for value in AdmissionStatus]},
+    fields = {"status": {"type": "string", "enum": [AdmissionStatus.NEEDS_INFORMATION.value, AdmissionStatus.ANALYSIS_ONLY.value]},
         "foundations": {"type": "array", "items": evidence or closed_rule({}), "minItems": 0,
                         "maxItems": 0 if evidence is None else 32},
         "direction": nullable, "creative_scope": nullable, "allowed_creative_actions": strings,
         "protected_constraints": strings, "decisions": {"type": "array", "minItems": 0, "maxItems": 32,
             "items": decisions[0] if len(decisions) == 1 else {"anyOf": decisions}},
-        "missing_information": strings, "rationale": text},
-        description="Assess supplied foundations and USER-bounded creative work; host qualification remains separate.")
+        "missing_information": strings, "rationale": text}
+    description = "Assess supplied foundations and USER-bounded creative work; host qualification remains separate."
+    information = closed_rule(fields, description=description)
+    if evidence is None:
+        return json.loads(json.dumps(information))
+    sufficient = {**fields,
+        "status": {"type": "string", "enum": [AdmissionStatus.SUFFICIENT.value]},
+        "foundations": {**fields["foundations"], "minItems": 1},
+        "direction": evidence,
+        "decisions": {**fields["decisions"], "minItems": 1, "items": {"anyOf": decisions[:-1]}},
+        "missing_information": {**strings, "maxItems": 0}}
+    # Guidance projection mutates occurrences; export a tree without shared nodes.
+    return json.loads(json.dumps({"anyOf": [
+        closed_rule({**sufficient, "creative_scope": evidence},
+                    description="Sufficient assessment needs concrete foundations, direction and covered decisions; creative scope is grounded here."),
+        closed_rule({**sufficient, "creative_scope": {"type": "null"},
+                     "allowed_creative_actions": {**strings, "minItems": 1}},
+                    description="Without creative-scope evidence, sufficient structure requires named allowed actions; host USER-permission qualification remains separate."),
+        information], "description": description}))

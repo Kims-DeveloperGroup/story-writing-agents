@@ -973,17 +973,13 @@ def _lead_front_result_contract(
                 scoped_variant = json.loads(json.dumps(variant))
                 scoped_variant["properties"]["authoring_scope"]["properties"]["intent"]["enum"] = [intent]
                 if intent == AuthoringIntent.AUTHORING.value:
-                    scoped_variant["properties"]["authoring_assessment"] = {"anyOf": [
-                        assessment_schema(None if facts.allow_read_sources else facts.input_ids),
-                        {"type": "null", "description": 'No assessment: clarify missing authoring decisions using retained sources.'},
-                    ]}
+                    scoped_variant["properties"]["authoring_assessment"] = assessment_schema(
+                        None if facts.allow_read_sources else facts.input_ids)
                     scoped_variant["required"].append("authoring_assessment")
                 qualified_variants.append(scoped_variant)
         else:
-            properties["authoring_assessment"] = {"anyOf": [
-                assessment_schema(None if facts.allow_read_sources else facts.input_ids),
-                {"type": "null", "description": 'No assessment: clarify missing authoring decisions using retained sources.'},
-            ]}
+            properties["authoring_assessment"] = assessment_schema(
+                None if facts.allow_read_sources else facts.input_ids)
             variant["required"].append("authoring_assessment")
             qualified_variants.append(variant)
     variants = qualified_variants
