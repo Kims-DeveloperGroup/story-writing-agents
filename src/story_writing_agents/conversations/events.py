@@ -5163,6 +5163,7 @@ def _proposal_value(
         "step_kind": proposal.step_kind.value,
         "user_impact": proposal.user_impact,
         **_authoring_scope_fields(proposal.authoring_scope),
+        **({"stage_plan": stage_plan_to_dict(proposal.stage_plan)} if proposal.stage_plan is not None else {}),
     }
     if include_digest:
         value["proposal_digest"] = proposal.proposal_digest

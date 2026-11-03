@@ -17219,6 +17219,7 @@ class StoryRuntime:
                 basis=basis,
                 authoring_scope=proposal.authoring_scope,
                 premise_decision=proposal.premise_decision,
+                stage_plan=proposal.stage_plan,
             )
             all_events = self._session_authoring_events(session_id)
             validate_authoring_capture_pin(current, all_events)
@@ -17232,6 +17233,7 @@ class StoryRuntime:
                         input_ids=item.input_ids, mode=item.mode, review_basis=item.review_basis,
                     ) for item in proposal.assignments),
                     shared_premises=self._captured_premise_intents(proposal.basis),
+                    stage_plan=proposal.stage_plan,
                 ), inputs)
                 if captured != proposal.basis.shared_premises:
                     raise BackendProtocolError("captured premise source ownership or revision changed")
@@ -18564,9 +18566,10 @@ class StoryRuntime:
         if intent.authoring_scope is not None:
             validation_call(
                 '$.proposal.assignments',
-                validate_specialist_routing,
+                validate_stage_routing,
                 intent.authoring_scope,
                 tuple(item.agent_id for item in intent.assignments),
+                intent.stage_plan,
                 affected_paths=cls._authoring_affected_paths(inputs, None),
             )
         specialist_ids = tuple(item.agent_id for item in intent.assignments)
@@ -18610,6 +18613,8 @@ class StoryRuntime:
                 continue
             reviewer = cls._core_reviewer(item.locator)
             if reviewer is not None and (
+                not stage_is_focused_review(intent.stage_plan) or reviewer in specialist_ids
+            ) and (
                 reviewer not in assignment_inputs
                 or item.input_id not in assignment_inputs[reviewer]
             ):

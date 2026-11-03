@@ -4583,6 +4583,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         for candidate_member in preliminary_bound.semantic_index.contracts:
             graph = candidate_member.rule_graph.schema_value()
             details = fixture_schema_node(graph, graph['properties']['response_details'])
+            details = fixture_schema_node(graph, details.get('anyOf', (details,))[0])
             if 'preliminary_review' in details['properties']:
                 preliminary_keys.add(
                     candidate_member.owner.variant.branch_key.partition(':partition:')[0])
@@ -4679,18 +4680,18 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         for candidate_member in staged_bound.semantic_index.contracts:
             graph = candidate_member.rule_graph.schema_value()
             details = fixture_schema_node(graph, graph['properties']['response_details'])
+            details = fixture_schema_node(graph, details.get('anyOf', (details,))[0])
             proposal_rule = details['properties'].get('specialist_consultation_proposal')
             if proposal_rule is None:
                 continue
             proposal_rule = fixture_schema_node(graph, proposal_rule)
+            proposal_rule = fixture_schema_node(graph, proposal_rule.get('anyOf', (proposal_rule,))[0])
             plan_rule = proposal_rule['properties'].get('stage_plan')
             if plan_rule is None:
                 continue
             plan_rule = fixture_schema_node(graph, plan_rule)
             work_rule = fixture_schema_node(graph, plan_rule['properties']['work_kind'])
-            assignments = fixture_schema_node(graph, proposal_rule['properties']['assignments'])
-            if ('deep_review' in work_rule['enum']
-                    and set(assignments['properties']) == {CHARACTER_CUSTODIAN}):
+            if 'deep_review' in work_rule['enum']:
                 stage_keys.add(
                     candidate_member.owner.variant.branch_key.partition(':partition:')[0])
         self.assertEqual(len(stage_keys), 1)

@@ -152,13 +152,13 @@ outside the canonical deterministic suite and ordinary CI.
 
 ### #838의 직접 1차 검토·단계 배정 회귀 소스 배정
 
-사용자의 필요시 테스트 소스 예산 확대 허용을 정확한 **147338→148369**
+사용자의 필요시 테스트 소스 예산 확대 허용을 정확한 **147338→148382**
 전환에 적용한다. 최신 main #907/#910의 raw146304는 기존 기준과 같다.
 기존 ID의 기능 회귀847행, 정책 회귀10행, REVIEW fixture1행, 구조화 오류
 진단12행, 저장 scope oracle1행, 새 family 분류8행, 병합된 blocking_work
-소유권 검증4행과 단계 계획 metadata·nullable·family 검증7행을 더하고 실제 속성 경로 순회 통일로4행을 줄이고 확정 준비안의 단계 배정27행과 실제 응답 형태 선택12행, whole READ 정합성과 명시적 native selector 변환과 정확한 발급 어휘42행과 ordinary unbound stage의 실제 task identity 회귀1행을 더해 **raw147272**이다. 기존 청구 helper1034행에 source
+소유권 검증4행과 단계 계획 metadata·nullable·family 검증7행을 더하고 실제 속성 경로 순회 통일로4행을 줄이고 확정 준비안의 단계 배정27행과 실제 응답 형태 선택12행, whole READ 정합성과 명시적 native selector 변환과 정확한 발급 어휘42행과 ordinary unbound stage의 실제 task identity 회귀1행과 factored schema의 positive inspector·논리 family census·발급 어휘 선택13행을 더해 **raw147285**이다. 기존 청구 helper1034행에 source
 전환 정책1행을 더하고, 비공개 실제 native 기술 검증 도구819행이 기존757행을
-대체하는 순증62행까지 청구하여 **helper1097행**, 총148369행으로 배정한다.
+대체하는 순증62행까지 청구하여 **helper1097행**, 총148382행으로 배정한다.
 여유는 추가하지 않는다. 관련 미독 범위, 실제 Character 의견의 이력 READ,
 receipt 변조, 최종 근거·실제 원본 변경을 기존 정규 ID에서 검증한다.
 기존2527개 ID, ID별 subTest cap,18000/3600초 한도와 Whole Front timeout

@@ -727,25 +727,33 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             history_ids = tuple(identity for identity, item in facts.items()
                                 if item.source_kind is ContextSourceKind.CONVERSATION)
             self.assertTrue(history_ids)
-            members = []
+            members = {}
             for member in call.contract.semantic_index.contracts:
                 if type(member.owner) is not LeadResultContractOwner:
                     continue
                 schema = member.rule_graph.schema_value()
                 details = fixture_schema_node(schema, schema["properties"]["response_details"])
+                details = fixture_schema_node(schema, details.get("anyOf", (details,))[0])
                 if "preliminary_review" in details["properties"]:
                     record = fixture_schema_node(schema, details["properties"]["preliminary_review"])
                     inspection = fixture_schema_node(schema, record["properties"]["inspection"])
-                    members.append((member.owner.variant.branch_key.partition(":partition:")[0], inspection))
+                    key = member.owner.variant.branch_key.partition(":partition:")[0]
+                    known_inspection = members.setdefault(key, inspection)
+                    self.assertEqual(set(known_inspection["properties"]), set(inspection["properties"]))
             self.assertEqual(len(members), 1)
-            branch, inspection = members[0]
+            branch, = members
+            inspection = members[branch]
+            preliminary_choices = tuple(target["input_id"] for target in map(json.loads,
+                dict(call.contract.semantic_index.policy.choices)["preliminary_targets"])
+                if target["availability"] != review.ReviewTargetAvailability.UNREAD.value)
             return lead_fixture_response(call, {"response_type": "answer", "response_text": explained,
                 "response_details": {"task_scope": lead_fixture_bound_scope(call,
                     _live_scope(call, activity="review", domains=("character_world",)), record=True),
                     "preliminary_review": {"stage": "lead_preliminary_review",
                         "inspection": {identity: "inspected" if identity == "user_input" or identity in history_ids else "excluded"
                                        for identity in inspection["properties"]},
-                        "findings": [{"message": explained, "evidence_input_ids": list(history_ids)}],
+                        "findings": [{"message": explained,
+                    "evidence_input_ids": finite_fixture_selection(preliminary_choices, history_ids)}],
                         "conflicts": [], "missing_information": [], "further_review_required": False, "next_action": "finish_direct"}}},
                 family=0, branch_key=branch)
         before = len(self.backend.calls)
@@ -846,18 +854,22 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 by_path = {item.artifact_locator: item.evidence_id for item in facts.values()}
                 self.assertTrue(set(paths).issubset(by_path))
                 read_ids[:] = [by_path[path] for path in paths]
-                candidates = []
+                candidates = {}
                 for member in call.contract.semantic_index.contracts:
                     if type(member.owner) is not LeadResultContractOwner:
                         continue
                     schema = member.rule_graph.schema_value()
                     details = fixture_schema_node(schema, schema["properties"]["response_details"])
+                    details = fixture_schema_node(schema, details.get("anyOf", (details,))[0])
                     if "preliminary_review" in details["properties"]:
                         record = fixture_schema_node(schema, details["properties"]["preliminary_review"])
                         inspection = fixture_schema_node(schema, record["properties"]["inspection"])
-                        candidates.append((member.owner.variant.branch_key.partition(":partition:")[0], inspection))
+                        key = member.owner.variant.branch_key.partition(":partition:")[0]
+                        known_inspection = candidates.setdefault(key, inspection)
+                        self.assertEqual(set(known_inspection["properties"]), set(inspection["properties"]))
                 self.assertEqual(len(candidates), 1)
-                branch, inspection = candidates[0]
+                branch, = candidates
+                inspection = candidates[branch]
                 preliminary_choices = tuple(target["input_id"] for target in map(json.loads,
                     dict(call.contract.semantic_index.policy.choices)["preliminary_targets"])
                     if target["availability"] != review.ReviewTargetAvailability.UNREAD.value)
