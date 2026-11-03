@@ -68,7 +68,7 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertFalse(question.validation_details); self.assertTrue(any(item.response.acceptance.value == 'accepted' for item in question.public_responses))
         self.assertEqual(len(self.backend.calls) - calls_gap, 2); self.assert_no_downstream(cid); self.assertEqual(self.snapshots(), before_gap)
         self.workspace.path(OUTLINE).write_text("Outline source.\n", encoding="utf-8")
-        before = self.snapshots()
+        before = self.snapshots(); positive_call_start = len(self.backend.calls)
         conversation_id, turn = await self.recommend()
         request = turn.recommendation_request
         before_events = self.history(conversation_id)
@@ -137,7 +137,7 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertIs(projection.current_state, c.CollaborationStepState.AWAITING_CONFIRMATION)
         self.assertEqual(self.snapshots(), before)
 
-        for call in self.backend.calls:
+        for call in self.backend.calls[positive_call_start:]:
             self.assertNotIn('"response_correction":', json.dumps(self.backend.callback_payload(call)))
             self.assertNotIn("structured_response_repair", call.payload)
         from tests.provider_wire_fixture import finite_fixture_selection

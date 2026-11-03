@@ -203,7 +203,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             source = next(event.payload for event in reversed(history) if type(event.payload) is c.CollaborationProposal and event.step_id == proposed.proposal.step_id)
             terminal = next(event.payload for event in reversed(history) if type(event.payload) is c.CollaborationStepStatePayload and event.step_id == proposed.proposal.step_id and event.payload.proposal_digest == proposed.proposal.proposal_digest)
             self.assertEqual(source, proposed.proposal)
-            self.assertIs(terminal.state, c.CollaborationStepState.COMPLETED)
+            self.assertIs(terminal.state, c.CollaborationStepState.COMPLETED, (result.turn.kind, result.turn.message, result.turn.validation_details, [(e.payload.assessment, e.payload.message[:500]) for e in history if type(e.payload) is c.CollaborationSpecialistReplyPayload]))
         else:
             self.assertIs(result.turn.state, c.CollaborationStepState.COMPLETED)
         return proposed, result
