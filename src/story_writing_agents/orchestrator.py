@@ -15283,6 +15283,7 @@ class StoryRuntime:
             assignments=tuple(assignments),
             authoring_scope=authoring_scope,
                 shared_premises=StoryRuntime._decode_shared_premise_intents(proposal_value.get("shared_premises", [])),
+                stage_plan=(stage_plan_from_dict(proposal_value["stage_plan"]) if "stage_plan" in proposal_value else None),
             )
             return LeadProviderOutcome(
                 kind,
