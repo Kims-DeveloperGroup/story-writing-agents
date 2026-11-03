@@ -203,7 +203,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             source = next(event.payload for event in reversed(history) if type(event.payload) is c.CollaborationProposal and event.step_id == proposed.proposal.step_id)
             terminal = next(event.payload for event in reversed(history) if type(event.payload) is c.CollaborationStepStatePayload and event.step_id == proposed.proposal.step_id and event.payload.proposal_digest == proposed.proposal.proposal_digest)
             self.assertEqual(source, proposed.proposal)
-            self.assertIs(terminal.state, c.CollaborationStepState.COMPLETED, (result.turn.kind, result.turn.message, result.turn.validation_details, [(e.payload.assessment, e.payload.message[:500]) for e in history if type(e.payload) is c.CollaborationSpecialistReplyPayload]))
+            self.assertIs(terminal.state, c.CollaborationStepState.COMPLETED, (result.turn.kind, result.turn.message, result.turn.validation_details, [(e.payload.assessment, e.payload.message[:500]) for e in history if type(e.payload) is c.CollaborationSpecialistReplyPayload], [(e.payload.synthesis_outcome, e.payload.synthesis_submitted_physical_calls, e.payload.overall_outcome) for e in history if type(e.payload) is c.CollaborationExecutionResult], [(e.payload.scope, e.payload.outcome, e.payload.submitted_physical_calls) for e in history if type(e.payload) is c.CollaborationTerminalOutcomePayload], getattr(self, "_synthesis_checks", None)))
         else:
             self.assertIs(result.turn.state, c.CollaborationStepState.COMPLETED)
         return proposed, result
@@ -220,13 +220,13 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.workspace.path(OUTLINE).write_bytes(b"")
         conversation = self.conversation()
         assessment = admission.assessment_to_dict(_fixture_assessment())
-        before = self.artifact_bytes()
+        before = self.artifact_bytes(); self._synthesis_checks = []
         def recommend(call, provider):
             material = _workflow_material(provider.callback_payload(call))
             draft_reply = next(reply["reply_event_id"] for reply in material["replies"] if reply["mode"] == "draft")
-            return _synthesis_outcome(
+            raw = _synthesis_outcome(
                 recommendation_family=1, message=material["authoring_scope"]["interpretation"],
-                recommended_action=action(source_ids=(draft_reply,), target_paths=(OUTLINE,)))(call, provider)
+                recommended_action=action(source_ids=(draft_reply,), target_paths=(OUTLINE,)))(call, provider); self._synthesis_checks.append(call.contract.structural_findings(raw)); return raw
         proposed, result = await self.finish_draft(conversation, synthesis=recommend)
         self.assertEqual(proposed.proposal.participants, (PLOT_ARCHITECT,))
         replies = [e.payload for e in self.history(conversation) if type(e.payload) is c.CollaborationSpecialistReplyPayload]
