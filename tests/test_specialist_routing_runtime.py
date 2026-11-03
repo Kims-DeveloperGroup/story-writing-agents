@@ -800,7 +800,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
 
         from story_writing_agents import review_contracts as review
         from story_writing_agents.agent_context.accounting import canonical_provider_json
-        from story_writing_agents.specialist_routing import required_authoring_domains
+        from story_writing_agents.specialist_routing import required_authoring_domains, artifact_domain
         from tests.provider_wire_fixture import (fixture_schema_node, offered_fixture_bindings,
                                                 indexed_response, finite_fixture_read_selection)
         from tests.test_lead_orchestration import _live_scope
@@ -902,7 +902,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                         else ["The user has not selected which direction to adopt."] if needs_decision else []),
                     "further_review_required": needs_decision,
                     "next_action": "request_information" if needs_decision else "finish_direct"}
-                scope = lead_fixture_bound_scope(call, _live_scope(call, activity="review", paths=declared_paths), record=True)
+                declared_domains = {artifact_domain(path) for path in declared_paths}
+                scope = lead_fixture_bound_scope(call, _live_scope(call, activity="review", domains=tuple(domain.value for domain in ArtifactReviewDomain if domain in declared_domains),
+                                                                                            paths=declared_paths), record=True)
                 raw = lead_fixture_response(call, {"response_type": "answer", "response_text": finding,
                     "response_details": {"task_scope": scope, "preliminary_review": native_review}},
                     family=0, branch_key=branch)
