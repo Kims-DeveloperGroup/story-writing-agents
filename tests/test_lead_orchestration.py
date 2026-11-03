@@ -3725,7 +3725,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                 else: self.assertFalse(compatible_types)
                                 continue
                             if semantic_kind == 'recommendation' and intent == 'authoring':
-                                extra['authoring_assessment'] = native_assessment; semantic_extra['authoring_assessment'] = native_assessment
+                                extra['authoring_assessment'] = native_assessment; semantic_extra['authoring_assessment'] = incomplete_assessment
                             packet = json.loads(lead_fixture_response(fixture_call,
                                 {**base, 'response_type': response_kind,
                                  'response_details': {'task_scope': case_native_scope, **extra}},
