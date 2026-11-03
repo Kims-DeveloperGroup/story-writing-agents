@@ -401,7 +401,14 @@ shards on one immutable source and locked four-core ARM64 environment.
 Record each shard's test wall time, native job duration, outcome and completion;
 report the complete five-shard sum and workflow elapsed time. Reconcile exact
 coverage, source bindings and the accepted 18,000/3,600-second ceilings. Partial
-or timed-out reports remain nonpassing evidence. An affected-test preflight may
+or timed-out reports remain nonpassing evidence.
+
+The expanded #838 direct-advice method completed in 1613.82 and 1619.65 seconds.
+Give it the first regular-shard-1 method slot, retaining the isolated Whole Front
+as the global first entry. This priority-only adjustment preserves the audited
+147-method membership, other shards' order, four-worker cap and all deadlines.
+
+An affected-test preflight may
 run separately; verify its exact implementation/tree equivalence before delivery,
 then obtain all five canonical reports for the current delivery source. Record
 each report's native run and attempt. Isolated attempts retain successful
