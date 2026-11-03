@@ -37,7 +37,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             if values.get("stage") == "lead.front":
                 self.assertIs(values["schema_group_protocol"], True)
                 source_front_flags.append(values["schema_group_protocol"])
-                values = {**values, "schema_group_protocol": False}
+                return objectives._SourceOnlyFactory(factory(**values), 'consultation.authoring.content')
             return factory(**values)
         def source_enqueue(*responses, **values):
             source_enqueues.append(1)
@@ -51,6 +51,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(len(self.backend.calls) - call_start, 5)
         self.assertFalse(self.backend.calls[call_start].contract.factory.schema_group_protocol)
         self.assertIsNone(self.backend.calls[call_start].contract.schema_group_phase)
+        objectives._assert_source_only_call(self, self.backend.calls[call_start], 'consultation.authoring.content')
         return result
 
     async def _assert_default_budget_refusal(self, path, text, brief, native_inputs):

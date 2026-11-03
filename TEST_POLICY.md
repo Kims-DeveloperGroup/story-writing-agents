@@ -152,19 +152,23 @@ outside the canonical deterministic suite and ordinary CI.
 
 ### #838의 직접 1차 검토·단계 배정 회귀 소스 배정
 
-사용자의 필요시 테스트 소스 예산 확대 허용을 정확한 **147338→148586**
+사용자의 필요시 테스트 소스 예산 확대 허용을 정확한 **147338→148643**
 전환에 적용한다. 최신 main 통합을 포함한 실제 배정은 다음과 같다.
 
 | 소스 구분 | 청구 행 수 |
 | --- | ---: |
-| `tests/test*.py`의 비어 있지 않은 비주석 행 | 147489 |
+| `tests/test*.py`의 비어 있지 않은 비주석 행 | 147546 |
 | 승인된 fixture·실제 검증 helper | 1097 |
-| 전체 상한 | 148586 |
+| 전체 상한 | 148643 |
 
 여유는 추가하지 않는다. helper1097행은 기존1034행, 이번 전환 정책1행,
 실제 native 도구819행이 기존757행을 대체하는 순증62행을 포함한다.
-직전 배정148455 대비131행은 기존 W의 현재 SELECT→GEN 검증 정렬134행과
+배정148455 이후131행은 기존 W의 현재 SELECT→GEN 검증 정렬134행과
 기존 correction fixture의 두 SELECT 호출 정렬에서 줄어든3행이다.
+그 뒤 SOURCE-only fixture57행을 추가했다. 이는 현재 compiler의 typed business
+owner만 선언하는 test-owned BoundCallFactory 조합이며, 원래 decoder·검증·task·
+한도와 기본6회 source/6+7회 예산 거절을 유지한다. SELECT 완료나 별도
+권한을 꾸미지 않고, 기존 후속 작업 입력 fixture의 실제5회 기록을 보존한다.
 전체 family의 canonical census와 실제 각 선택 GEN의 strict·바인딩·바이트
 경계·부정 사례를 유지한다. 2527개 ID, ID별 subTest 상한,18000/3600초,
 worker·정리·권한 검증은 변경하지 않는다.
