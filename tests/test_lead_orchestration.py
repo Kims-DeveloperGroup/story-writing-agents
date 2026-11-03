@@ -1929,8 +1929,35 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.backend.enqueue(_visible_outcome("answer"))
         from story_writing_agents.agent_context.service import AgentContextService
         from unittest import mock; front_results = []; original_invoke = AgentContextService.invoke
+        front_failures = []
         async def retain_front_authority(service, *args, **kwargs):
-            result = await original_invoke(service, *args, **kwargs)
+            try:
+                result = await original_invoke(service, *args, **kwargs)
+            except Exception as error:
+                import traceback
+                code = getattr(error, 'code', None)
+                code = getattr(code, 'value', code)
+                if (type(code) not in (str, int, bool, type(None))
+                        or (type(code) is str and len(code) > 128)):
+                    code = None
+                frames = tuple((frame.filename.rsplit('/', 1)[-1], frame.name, frame.lineno)
+                    for frame in traceback.extract_tb(error.__traceback__, limit=-8))
+                schema_metrics = None
+                trace = error.__traceback__
+                while trace is not None and trace.tb_next is not None:
+                    trace = trace.tb_next
+                if trace is not None and trace.tb_frame.f_code is SchemaRules.provider_schema_value.__code__:
+                    values = trace.tb_frame.f_locals
+                    rules, schema_root, sizer = (values.get(name) for name in ('self', 'root', 'encoded_size'))
+                    if (type(rules) is SchemaRules and type(schema_root) is dict and inspect.isfunction(sizer)
+                            and sizer.__code__.co_name == 'encoded_size'
+                            and sizer.__globals__ is SchemaRules.provider_schema_value.__globals__
+                            and any(sizer.__code__ is item for item in trace.tb_frame.f_code.co_consts)):
+                        from tests.test_provider_schema_spec import check_schema
+                        schema_metrics = (sizer(schema_root), rules.maximum_bytes,
+                            tuple(sorted({rule for _, rule in check_schema(schema_root)})[:32]))
+                front_failures.append((type(error).__module__, type(error).__name__, code, frames, schema_metrics))
+                raise
             front_results.append(result)
             return result
         original_factory = orchestrator_module._lead_call_contract_factory
@@ -1939,7 +1966,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         with mock.patch.object(AgentContextService, 'invoke', retain_front_authority), \
                 mock.patch.object(orchestrator_module, '_lead_call_contract_factory', side_effect=baseline_factory):
             outcome = await self.runtime.lead_turn( self.session_id, conversation_id, "Explain collaboration workflow.")
-        self.assertTrue(self.backend.calls, outcome)
+        self.assertTrue(self.backend.calls, (outcome, front_failures))
         def plain(value):
             if isinstance(value, Mapping): return {key: plain(item) for key, item in value.items()}
             return [plain(item) for item in value] if type(value) in (tuple, list) else value
