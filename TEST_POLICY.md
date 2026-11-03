@@ -152,22 +152,28 @@ outside the canonical deterministic suite and ordinary CI.
 
 ### #838의 직접 1차 검토·단계 배정 회귀 소스 배정
 
-사용자의 필요시 테스트 소스 예산 확대 허용을 정확한 **147338→148455**
-전환에 적용한다. 기존 기준 main2d8e953의 raw146304에서 최신 mainc48795d의 정합화로10행이 줄어 raw146294가 됐다. 이 통합 차이도 아래 실측값에 반영한다.
-기존 ID의 기능 회귀847행, 정책 회귀10행, REVIEW fixture1행, 구조화 오류
-진단12행, 저장 scope oracle1행, 새 family 분류8행, 병합된 blocking_work
-소유권 검증4행과 단계 계획 metadata·nullable·family 검증7행을 더하고 실제 속성 경로 순회 통일로4행을 줄이고 확정 준비안의 단계 배정27행과 실제 응답 형태 선택12행, whole READ 정합성과 명시적 native selector 변환과 정확한 발급 어휘42행과 ordinary unbound stage의 실제 task identity 회귀1행과 factored schema의 positive inspector·논리 family census·발급 어휘 선택13행과 GEN logical_root 대응 회귀1행, 공개 계약 기대값19행·집중 검토 준비 평가12행·실제 규칙 참조와 최종 근거 연결16행 및 후크 출처·기본값의 변조 회귀46행과 auth 준비 완료 신호 대기의 단일 callsite 조정1행과 확정 단계 계획의 실제 전문가·Lead 입력 전달 회귀7행과 명시적 READ offer의 schema fixture 연결2행과 실제 검토 의도·예산에 맞춘 fixture 및 안전한 callback 관찰의 순증10행과 양성 task scope의 canonical domain 연결2행과 완성된 stage packet의 정확한 native binding 및 REVIEW 준비 family 관찰26행을 더해 **raw147358**이다. 기존 청구 helper1034행에 source
-전환 정책1행을 더하고, 비공개 실제 native 기술 검증 도구819행이 기존757행을
-대체하는 순증62행까지 청구하여 **helper1097행**, 총148455행으로 배정한다.
-현재 제공 어휘에 맞춘 미독 대상 fixture 1행과 bounded READ 한계 명시 4행을 추가로 청구했다. UI 호출 수정은 소스 행 수를 늘리지 않는다. 발견·충돌이 모두 빈 유효 보고서의 표시 회귀9행과 strict schema·정규화·호스트 작업 정보 불변성의 분리 회귀8행을 추가로 청구했다.
-여유는 추가하지 않는다. 관련 미독 범위, 실제 Character 의견의 이력 READ,
-receipt 변조, 최종 근거·실제 원본 변경을 기존 정규 ID에서 검증한다.
-기존2527개 ID, ID별 subTest cap,18000/3600초 한도와 Whole Front timeout
-발생 시 모든 작업 즉시 중단 원칙을 유지한다. 이 source 배정은 새 실제
-provider 실행이나 기존 큐 격리/닫힌 실행 허가의 예외를 승인하지 않는다.
-도구는 별도의 새 #838 admission 전까지 실행하지 않으며, 두 사례 각각2회·
-총4회 이하·새 실행1개씩 직렬로만 계획한다. 기존40/40, 격리4건과 닫힌
-#894/#896/#898 허가는 보존한다. #806 사용자/품질 비교 평가는 Backlog이다.
+사용자의 필요시 테스트 소스 예산 확대 허용을 정확한 **147338→148586**
+전환에 적용한다. 최신 main 통합을 포함한 실제 배정은 다음과 같다.
+
+| 소스 구분 | 청구 행 수 |
+| --- | ---: |
+| `tests/test*.py`의 비어 있지 않은 비주석 행 | 147489 |
+| 승인된 fixture·실제 검증 helper | 1097 |
+| 전체 상한 | 148586 |
+
+여유는 추가하지 않는다. helper1097행은 기존1034행, 이번 전환 정책1행,
+실제 native 도구819행이 기존757행을 대체하는 순증62행을 포함한다.
+직전 배정148455 대비131행은 기존 W의 현재 SELECT→GEN 검증 정렬134행과
+기존 correction fixture의 두 SELECT 호출 정렬에서 줄어든3행이다.
+전체 family의 canonical census와 실제 각 선택 GEN의 strict·바인딩·바이트
+경계·부정 사례를 유지한다. 2527개 ID, ID별 subTest 상한,18000/3600초,
+worker·정리·권한 검증은 변경하지 않는다.
+
+이 소스 배정은 새 provider 실행이나 큐 예외를 부여하지 않는다. #838의 필요한
+실제 호출·테스트에 대한 별도 사용자 허가와 source-bound admission을 따른다.
+원래40/40·격리4건과 닫힌 #894/#896/#898 허가는 보존한다. 같은 운영 소스의
+기존 실제 검증을 재사용할 때는 코드·설정·도구·환경의 동일성을 명시한다.
+실제 품질·사용자 비교 평가 #806은 사후평가 Backlog로 유지한다.
 
 ### Canonical CI
 
