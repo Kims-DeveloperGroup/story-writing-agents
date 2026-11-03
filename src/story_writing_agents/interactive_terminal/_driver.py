@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 import re
 import select as _select
@@ -17,6 +18,7 @@ from functools import wraps
 from typing import TextIO, TypeAlias, TypeVar
 
 from ._output_history import ConversationTimeline, HistoryLayout
+from ._progress_process import ProgressContent, ProgressProcess, ProgressSnapshot
 from ._pointer import PointerEvent, decode_pointer
 from ._render import render_component
 
@@ -574,6 +576,17 @@ class RawTerminalDriver:
         "_progress_frame",
         "_progress_renderer",
         "_progress_rows",
+        "_progress_process",
+        "_progress_process_attempted",
+        "_progress_content_provider",
+        "_progress_revision_provider",
+        "_progress_presentation_key",
+        "_progress_snapshot_geometry",
+        "_progress_model_dirty",
+        "_progress_degraded",
+        "_progress_notice_emitted",
+        "_progress_output_blocked",
+        "_progress_output_reset",
         "_termios_provider",
         "_typeahead_buffer",
     )
@@ -643,6 +656,17 @@ class RawTerminalDriver:
         self._progress_frame = 0
         self._progress_renderer: Callable[[int], str] | None = None
         self._progress_rows = 0
+        self._progress_process: ProgressProcess | None = None
+        self._progress_process_attempted = False
+        self._progress_content_provider: Callable[[], ProgressContent] | None = None
+        self._progress_revision_provider: Callable[[], object] | None = None
+        self._progress_presentation_key: object = None
+        self._progress_snapshot_geometry: tuple[int, int] | None = None
+        self._progress_model_dirty = False
+        self._progress_degraded = False
+        self._progress_notice_emitted = False
+        self._progress_output_blocked = False
+        self._progress_output_reset = False
         self._typeahead_buffer: deque[str] = deque()
         self._termios_provider = (
             (lambda: _termios) if termios_provider is None else termios_provider
@@ -655,6 +679,8 @@ class RawTerminalDriver:
 
         if self._input_session_active:
             raise RuntimeError("terminal input session is already active")
+        if self._progress_output_blocked:
+            raise OSError("progress writer termination is unconfirmed")
         with self._input_latch.input_operation():
             if self._progress_active:
                 raise RuntimeError("terminal input session cannot overlap progress")
@@ -670,6 +696,17 @@ class RawTerminalDriver:
                     self._input_session_configuration = configuration
                     self._input_session_active = True
                     self._timeline_enabled = configuration is not None
+                    self._progress_notice_emitted = False
+                    if (configuration is not None and os.name == "posix"
+                            and type(self._output_stream) is io.TextIOWrapper
+                            and (self._output_stream.encoding or "").lower().replace("-", "") == "utf8"):
+                        self._progress_process_attempted = True
+                        try:
+                            self._progress_process = ProgressProcess.prestart(_stream_descriptor(self._output_stream))
+                        except Exception:
+                            self._progress_process = None
+                        self._progress_degraded = (self._progress_process is None
+                            or not self._progress_process.available)
                 yield
             except BaseException as failure:
                 active_failure = failure
@@ -677,6 +714,15 @@ class RawTerminalDriver:
             finally:
                 try:
                     review_failure = None
+                    try:
+                        self._reclaim_process_progress(close=True)
+                    except BaseException as failure:
+                        review_failure = failure
+                    if self._progress_output_reset and not self._progress_output_blocked:
+                        try:
+                            self._write_raw_text("")
+                        except BaseException as failure:
+                            review_failure = review_failure or failure
                     if self._timeline_review_owner is not None:
                         try:
                             self._set_history_review_mode(self._timeline_review_owner, False)
@@ -704,6 +750,11 @@ class RawTerminalDriver:
                     self._timeline_failure = None
                     self._timeline_review_owner = None
                     self._native_input_handoff_active = False
+                    if self._progress_process is not None and not self._progress_process.active:
+                        self._progress_process = None
+                    self._progress_process_attempted = False
+                    self._progress_content_provider = None
+                    self._progress_revision_provider = None
 
     @contextmanager
     def native_input_handoff(self) -> Iterator[None]:
@@ -716,6 +767,8 @@ class RawTerminalDriver:
     def _native_input_handoff_body(self) -> Iterator[None]:
         """Lend original terminal settings to native login, then resume echo ownership."""
 
+        if self._progress_output_blocked:
+            raise OSError("progress writer termination is unconfirmed")
         configuration = self._input_session_configuration
         if configuration is None:
             yield
@@ -902,6 +955,11 @@ class RawTerminalDriver:
         """Paint usable geometry, or leave current output to the linear writer."""
         if not self._timeline_enabled or self._timeline_suspended or self._native_input_handoff_active:
             return False
+        if self._progress_process is not None and self._progress_process.active:
+            # Runtime callbacks may change the semantic model, but never wait
+            # for paint or compete with the helper for terminal output.
+            self._progress_model_dirty = True
+            return True
         width, height = self._text_viewer_geometry(self.capabilities().width, bounded_height=False)
         capabilities = _capabilities_with_width(self.capabilities(), max(1, width - 1))
         self._publish_timeline(capabilities)
@@ -1067,10 +1125,109 @@ class RawTerminalDriver:
     def _write_raw_text(self, text: str) -> None:
         """Write one payload without progress interception."""
 
-        written = self._output_stream.write(text)
-        if written is not None and written != len(text):
+        if self._progress_output_blocked:
+            raise OSError("progress writer termination is unconfirmed")
+        if self._progress_process is not None and self._progress_process.active:
+            raise RuntimeError("terminal writing is lent to progress")
+
+        payload = text
+        if self._progress_output_reset:
+            self._progress_output_reset = False
+            payload = "\x18\x1b[0m\r\n" + payload
+        written = self._output_stream.write(payload)
+        if written is not None and written != len(payload):
             raise OSError("interactive terminal write was incomplete")
         self._output_stream.flush()
+
+    def _process_progress_snapshot(self) -> ProgressSnapshot:
+        provider = self._progress_content_provider
+        if provider is None or self._timeline_operation is None:
+            raise ValueError("independent progress requires built-in request content")
+        content = provider()
+        width, height = self._text_viewer_geometry(self.capabilities().width, bounded_height=False)
+        if width < 8 or height < 2:
+            raise ValueError("independent progress geometry is unavailable")
+        capabilities = _capabilities_with_width(self.capabilities(), max(1, width - 1))
+        available = max(1, min(height, _MAX_VIEWER_HEIGHT) - 1)
+        layout = self._output_history.render(capabilities, available, after_identity=self._timeline_published)
+        lines = list(layout.lines)
+        top = self._output_history.entry_top(self._timeline_operation)
+        header_row = -1 if top is None else top - 1
+        if not 0 <= header_row < len(lines):
+            # Keep the working row visible even when a tiny viewport clips the
+            # operation's first line. Retention still uses the original model.
+            lines = [" " + content.header(time.monotonic())] + (lines[-(available - 1):] if available > 1 else [])
+            header_row = 0
+        return ProgressSnapshot(width, height, tuple(lines), len(lines) - 1, 0,
+                                header_row, " ", content)
+
+    def _publish_process_progress(self, *, begin: bool = False) -> bool:
+        owner = self._progress_process
+        if owner is None:
+            return False
+        if not owner.active and (not begin or not owner.available or self._progress_degraded):
+            return False
+        try:
+            snapshot = self._process_progress_snapshot()
+            if self._progress_revision_provider is not None:
+                self._progress_presentation_key = self._progress_revision_provider()
+            self._progress_snapshot_geometry = (snapshot.columns, snapshot.height)
+            self._progress_model_dirty = False
+            if owner.active:
+                owner.publish(snapshot)
+                return True
+            if owner.begin(snapshot, owned_rows=self._timeline_rows,
+                           cursor_row=self._timeline_cursor_row):
+                return True
+        except (OSError, ValueError, TypeError):
+            # Model preparation failure never makes a request wait for IPC.
+            self._progress_degraded = True
+            owner.disable()
+        if owner.active:
+            return True
+        self._progress_degraded = True
+        return False
+
+    def _reclaim_process_progress(self, *, close: bool = False) -> None:
+        owner = self._progress_process
+        if owner is None:
+            return
+        was_active = owner.active
+        try:
+            release = owner.close() if close else owner.quiesce()
+        except BaseException:
+            self._progress_output_blocked = owner.active
+            self._progress_degraded = True
+            if not owner.active:
+                self._timeline_rows = self._timeline_cursor_row = self._progress_rows = 0
+                self._timeline_origin = self._timeline_geometry = None
+                self._progress_output_reset = True
+            raise
+        if not release.confirmed:
+            self._progress_output_blocked = True
+            self._progress_degraded = True
+            return
+        self._progress_output_blocked = False
+        if was_active:
+            if release.uncertain:
+                self._timeline_rows = self._timeline_cursor_row = self._progress_rows = 0
+                self._timeline_origin = self._timeline_geometry = None
+                # Cancel any partially written escape, then establish a fresh
+                # surface without clearing through unknown historical rows.
+                self._progress_output_reset = True
+            else:
+                self._timeline_rows = release.rows
+                self._timeline_cursor_row = release.cursor_row
+                self._timeline_geometry = (release.columns, release.height)
+                self._timeline_origin = None
+                self._progress_rows = 0
+        if owner.failure is not None:
+            self._progress_degraded = True
+            if was_active and not close and not self._progress_notice_emitted:
+                self._progress_notice_emitted = True
+                # Queue the notice semantically; the next ordinary paint after
+                # terminal restoration performs the physical publication.
+                self._output_history.append_lines((owner.failure,))
 
     def _clear_progress_frame(self) -> None:
         """Clear every physical row owned by the current indicator."""
@@ -1128,6 +1285,10 @@ class RawTerminalDriver:
         display_frame = frame if plain_frame != frame else "\n".join(lines)
         if self._timeline_operation is not None:
             self._output_history.update_operation(self._timeline_operation, lines=tuple(lines))
+            if (self._progress_content_provider is not None and self._progress_process_attempted
+                    and self._publish_process_progress(begin=True)):
+                self._progress_rows = 0
+                return
             if self._paint_timeline():
                 self._progress_rows = 0
                 return
@@ -1148,6 +1309,8 @@ class RawTerminalDriver:
         nested_scroll_renderer: _NestedScrollRenderer | None = None,
         toggle_callback: Callable[[], bool] | None = None,
         keep_frame: bool | Callable[[], bool] | None = None,
+        process_content_provider: Callable[[], ProgressContent] | None = None,
+        process_revision_provider: Callable[[], object] | None = None,
     ) -> _T:
         """Keep the operation and its final preview in one chronological slot."""
         with self._timeline_operation_scope():
@@ -1155,7 +1318,8 @@ class RawTerminalDriver:
                 operation, frame_renderer, scroll_state_provider=scroll_state_provider,
                 is_failure=is_failure, nested_scroll_transition=nested_scroll_transition,
                 nested_scroll_renderer=nested_scroll_renderer, toggle_callback=toggle_callback,
-                keep_frame=keep_frame,
+                keep_frame=keep_frame, process_content_provider=process_content_provider,
+                process_revision_provider=process_revision_provider,
             )
 
     async def _run_advisory_progress(
@@ -1172,6 +1336,8 @@ class RawTerminalDriver:
         nested_scroll_renderer: _NestedScrollRenderer | None = None,
         toggle_callback: Callable[[], bool] | None = None,
         keep_frame: bool | Callable[[], bool] | None = None,
+        process_content_provider: Callable[[], ProgressContent] | None = None,
+        process_revision_provider: Callable[[], object] | None = None,
     ) -> _T:
         """Join one advisory operation with a capable-terminal indicator."""
 
@@ -1186,9 +1352,13 @@ class RawTerminalDriver:
         def fitted_frame_renderer(frame: int) -> str:
             """Reserve the rightmost cell on every safe logical row."""
 
-            rendered = frame_renderer(frame)
+            degraded = self._progress_degraded and process_content_provider is not None
+            rendered = frame_renderer(0 if degraded else frame)
             if type(rendered) is not str:
                 raise TypeError("frame_renderer must return a string")
+            if degraded:
+                first, separator, rest = rendered.partition("\n")
+                rendered = first + " · animation unavailable" + separator + rest
             if sanitize_terminal_text(rendered) != rendered or any(
                 character in rendered for character in ("\r", "\x1b")
             ):
@@ -1254,11 +1424,22 @@ class RawTerminalDriver:
             self._progress_active = True
             self._progress_frame = 0
             self._progress_renderer = fitted_frame_renderer
+            self._progress_content_provider = process_content_provider
+            self._progress_revision_provider = process_revision_provider
+            self._progress_presentation_key = None
+            self._progress_snapshot_geometry = None
+            self._progress_model_dirty = True
             try:
                 self._draw_progress_frame(fitted_frame_renderer)
             except BaseException as exc:
                 self._progress_active = False
                 self._progress_renderer = None
+                try:
+                    self._reclaim_process_progress()
+                except BaseException as cleanup_failure:
+                    exc.add_note(f"progress cleanup failed: {type(cleanup_failure).__name__}")
+                self._progress_content_provider = None
+                self._progress_revision_provider = None
                 try:
                     self._clear_progress_frame()
                 except BaseException:
@@ -1353,6 +1534,10 @@ class RawTerminalDriver:
                     except BaseException as exc:
                         progress_failure = progress_failure or exc
 
+                    try:
+                        self._reclaim_process_progress()
+                    except BaseException as exc:
+                        progress_failure = progress_failure or exc
                     if configuration is not None:
                         try:
                             _restore_terminal_or_raise(
@@ -1365,6 +1550,8 @@ class RawTerminalDriver:
                 finally:
                     self._progress_active = False
                     self._progress_renderer = None
+                    self._progress_content_provider = None
+                    self._progress_revision_provider = None
 
         if restoration_failure is not None:
             try:
@@ -2158,6 +2345,10 @@ class RawTerminalDriver:
 
         while True:
             await asyncio.sleep(_PROGRESS_INTERVAL_SECONDS)
+            if self._progress_process is not None and self._progress_process.active:
+                self._progress_process.poll_status()
+                if self._progress_process.failure is not None:
+                    self._progress_degraded = True
             if configuration is not None and toggle_callback is not None:
                 while True:
                     try:
@@ -2195,7 +2386,17 @@ class RawTerminalDriver:
                         toggle_callback()
                     else:
                         self._typeahead_buffer.append(character)
-            self._progress_frame = (self._progress_frame + 1) % _PROGRESS_FRAME_COUNT
+            if self._progress_process is not None and self._progress_process.active:
+                self._progress_process.flush_pending()
+                key = (self._progress_revision_provider()
+                       if self._progress_revision_provider is not None else None)
+                geometry = self._text_viewer_geometry(self.capabilities().width, bounded_height=False)
+                if (self._progress_model_dirty or key != self._progress_presentation_key
+                        or geometry != self._progress_snapshot_geometry):
+                    self._draw_progress_frame(frame_renderer)
+                continue
+            self._progress_frame = (0 if self._progress_degraded and self._progress_content_provider is not None
+                                    else (self._progress_frame + 1) % _PROGRESS_FRAME_COUNT)
             if self._progress_rows > 0:
                 self._clear_progress_frame()
             self._draw_progress_frame(frame_renderer)

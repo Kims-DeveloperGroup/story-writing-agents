@@ -19,6 +19,7 @@ import re
 import shutil
 import stat
 import tempfile
+import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -351,6 +352,72 @@ class _CodexNativeInspectionInput:
     generation_provenance: str
 
 
+def _native_environment_prelude(text: str, worktree_root: Path) -> bool:
+    """Recognize native metadata without accepting a second business request."""
+    text = text.strip()
+    if not text.startswith("<environment_context>") or not text.endswith("</environment_context>") or "<!" in text:
+        return False
+    try:
+        root = ElementTree.fromstring(text)
+    except ElementTree.ParseError:
+        return False
+    children = list(root)
+    names = tuple(child.tag for child in children)
+    if (root.tag != "environment_context" or root.attrib
+            or (root.text or "").strip() or (root.tail or "").strip()
+            or len(set(names)) != len(names) or "cwd" not in names
+            or not set(names) <= {"cwd", "shell", "current_date", "timezone", "filesystem"}):
+        return False
+    for child in children:
+        if (child.tail or "").strip():
+            return False
+        if child.tag == "filesystem":
+            allowed = {
+                "filesystem": ({"workspace_roots", "permission_profile"}, set()),
+                "workspace_roots": ({"root"}, set()),
+                "permission_profile": ({"file_system"}, {"type"}),
+                "file_system": ({"entry"}, {"type"}),
+                "entry": ({"path", "special"}, {"access"}),
+                "root": (set(), set()), "path": (set(), set()), "special": (set(), set()),
+            }
+            for node in child.iter():
+                if node.tag not in allowed:
+                    return False
+                tags, attributes = allowed[node.tag]
+                if (not set(node.attrib) <= attributes or not {item.tag for item in node} <= tags
+                        or (node.tail or "").strip()):
+                    return False
+                if list(node):
+                    if (node.text or "").strip():
+                        return False
+                elif node.tag in {"root", "path"}:
+                    if not Path(node.text or "").is_absolute():
+                        return False
+                elif node.tag == "special":
+                    if node.text != ":root":
+                        return False
+                elif (node.text or "").strip():
+                    return False
+                if any(re.fullmatch(r"[A-Za-z_-]+", value) is None for value in node.attrib.values()):
+                    return False
+            continue
+        if child.attrib or list(child) or not child.text:
+            return False
+        if child.tag == "cwd":
+            if (not Path(child.text).is_absolute()
+                    or os.path.realpath(child.text) != os.path.realpath(worktree_root)):
+                return False
+        elif child.tag == "shell":
+            if re.fullmatch(r"[A-Za-z0-9_./-]+", child.text) is None:
+                return False
+        elif child.tag == "current_date":
+            if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", child.text) is None:
+                return False
+        elif re.fullmatch(r"[A-Za-z0-9_+./:-]+", child.text) is None:
+            return False
+    return True
+
+
 def _prepare_codex_native_inspection(invocation, thread_id, *, previous, anchor, before):
     point = NativeContextSourceStage.INPUT
     path, rediscovered = None, False
@@ -446,6 +513,7 @@ def _read_codex_native_observation(
         point = NativeContextSourceStage.RECORDS
         metadata, active_turn = None, None
         completed, inputs, settings, usage_records, history_effects = set(), [], {}, [], []
+        environment_inputs = []
         for position, line in enumerate(lines):
             record = json.loads(line)
             if type(record) is not dict:
@@ -496,9 +564,17 @@ def _read_codex_native_observation(
                         or type(content[0]) is not dict or type(content[0].get("text")) is not str
                         or type(active_turn) is not str):
                     raise _NativeContextUnavailable(NativeContextCheckReason.RECORD_INVALID)
-                inputs.append((active_turn, hashlib.sha256(content[0]["text"].encode()).hexdigest(), position))
+                row = (active_turn, hashlib.sha256(content[0]["text"].encode()).hexdigest(), position)
+                if _native_environment_prelude(content[0]["text"], facts.worktree_root):
+                    environment_inputs.append(row)
+                else:
+                    inputs.append(row)
         if metadata is None:
             raise _NativeContextUnavailable(NativeContextCheckReason.METADATA_MISMATCH)
+        if environment_inputs and (len(environment_inputs) != 1 or not inputs
+                or environment_inputs[0][0] != inputs[0][0]
+                or environment_inputs[0][2] >= inputs[0][2]):
+            raise _NativeContextUnavailable(NativeContextCheckReason.REQUEST_MATCH_INVALID)
 
         def require_input(turn_id, payload_hash):
             matches = [row for row in inputs if row[0] == turn_id]
@@ -718,25 +794,37 @@ def inspect_codex_context_witness(
 def _codex_usage_observation(raw, observed, invocation):
     if raw is None:
         return None
-    unknown = ProviderUsageObservation(raw, ProviderUsageScope.UNKNOWN, "codex.turn.completed.usage")
-    if observed is None or observed.usage_pair is None:
-        return unknown
+
+    def unknown(reason):
+        return ProviderUsageObservation(raw, ProviderUsageScope.UNKNOWN,
+            "codex.turn.completed.usage:" + reason)
+
+    if observed is None:
+        return unknown("context_not_inspected")
+    if observed.witness is None:
+        return unknown("native_" + observed.check.reason.value)
+    if observed.usage_pair is None:
+        return unknown("usage_missing")
     witness, (total, last), previous_total, first_native_turn = (observed.witness, observed.usage_pair, observed.previous_usage, observed.first_native_turn)
     previous = invocation.context_witness
     if previous is not None and previous.settings_digest != witness.settings_digest:
-        return unknown
+        return unknown("settings_changed")
     if raw != total:
-        return unknown
+        return unknown("raw_total_mismatch")
     names = ("input_tokens", "output_tokens", "cached_input_tokens")
+    session_start = previous is None and invocation.thread_id is None and first_native_turn
     if previous is None:
-        if invocation.thread_id is not None or not first_native_turn or total != last:
-            return unknown
-    elif previous_total is None or any(
-        getattr(total, name) < getattr(previous_total, name)
-        or getattr(total, name) - getattr(previous_total, name) != getattr(last, name)
-        for name in names
-    ):
-        return unknown
+        if session_start and total != last:
+            return unknown("first_turn_counters_mismatch")
+        # A verified resumed prefix is a baseline, not this call's usage. Its
+        # successor may establish an exact delta without inventing the gap.
+    elif previous_total is None:
+        return unknown("predecessor_missing")
+    elif any(getattr(total, name) < getattr(previous_total, name) for name in names):
+        return unknown("cumulative_reset")
+    elif any(getattr(total, name) - getattr(previous_total, name) != getattr(last, name) for name in names):
+        return unknown("native_last_mismatch")
+
     def prefix(value):
         return hashlib.sha256(canonical_provider_json({"scope": value.scope_digest,
             "thread": value.thread_id, "turn": value.turn_id, "count": value.input_lineage_count,
@@ -746,7 +834,7 @@ def _codex_usage_observation(raw, observed, invocation):
     return ProviderUsageObservation(raw, ProviderUsageScope.SESSION_CUMULATIVE,
         "codex.turn.completed+native.token_count.total_and_last", session_ref=session,
         prefix_ref=prefix(witness), previous_prefix_ref=None if previous is None else prefix(previous),
-        session_start=previous is None and first_native_turn)
+        session_start=session_start)
 
 
 class CodexAdapter:
