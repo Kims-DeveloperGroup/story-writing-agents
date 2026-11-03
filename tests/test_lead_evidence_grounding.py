@@ -704,7 +704,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                                     filename = "src/story_writing_agents/" + filename.split(marker, 1)[1]
                                 if filename.startswith("src/story_writing_agents/"):
                                     key = (filename[:512], code.co_name[:160],
-                                           frame.f_lineno, code.co_firstlineno)
+                                           line if (line := frame.f_lineno) is not None else -1, code.co_firstlineno)
                                     categories = ("inclusive_runtime",) if nearest_found else (
                                         "nearest_runtime", "inclusive_runtime")
                                     for category in categories:
@@ -757,7 +757,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             }
             for category, counts in sample_counts.items():
                 report[category] = [] if alive else [
-                    {"filename": key[0], "function": key[1], "line": key[2],
+                    {"filename": key[0], "function": key[1], "line": key[2] if key[2] != -1 else None,
                      "function_first_line": key[3], "samples": count}
                     for key, count in sorted(counts.items(), key=lambda row: (-row[1], row[0]))[:40]
                 ]
