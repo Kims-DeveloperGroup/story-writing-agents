@@ -333,7 +333,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             ArtifactReviewDomain, AuthoringContribution, AuthoringContributionRole)
         from story_writing_agents.conversations import CollaborationLeadJudgmentPayload, LeadOutcomeKind
         from tests.collaboration_contract_fixture import make_lead_evidence
-        from story_writing_agents.writing_artifacts.references import parse_artifact_references
+        from story_writing_agents.writing_artifacts.directives import parse_artifact_references
         evidence = make_lead_evidence()
         receipt = evidence.receipts[0]
         supplied = ReviewTarget(receipt.evidence_id, ReviewTargetKind.WRITING_ARTIFACT,

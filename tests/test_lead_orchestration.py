@@ -3317,8 +3317,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         if "variant_id" in node.get("properties", {})
                         for literal in fixture_schema_node(graph, node["properties"]["variant_id"])["enum"]}
                     if not identities:
-                        self.assertEqual(len(members[group]), 1)
-                        identities = set(members[group])
+                        identities = {item.branch_key for item in selector.prepared_compilation.semantic_variants
+                            if item.group_id == group and item.logical_root == inner.owner.variant.logical_root}
+                        self.assertEqual(len(identities), 1, (group, inner.owner.variant.logical_root))
                     represented.extend(identities)
                 self.assertEqual(Counter(represented), Counter(members[group]), f"{group}: advertised semantic members must survive selected GENERATE")
                 generations[group] = current

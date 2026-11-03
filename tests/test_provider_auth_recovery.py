@@ -857,7 +857,8 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
             assisted = []
             with self.assertRaises(ProviderAuthenticationRequiredError) as caught:
                 await drive_recovery(self.runtime.lead_turn(self.session_id, conversation,
-                    'Retain this timed-out request.'), lambda key: assisted.append(key) or True)
+                    'Retain this timed-out request.'), lambda key: assisted.append(key) or True,
+                                     progress_timeout=120)
 
         self.assertIs(caught.exception, failure)
         self.assertEqual(assisted, [("antigravity", 0)])

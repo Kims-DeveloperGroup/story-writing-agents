@@ -664,7 +664,19 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 "required_condition_ids": ["user_input"], "agreed_direction": "Preserve the promise and leave the secret unresolved.",
                 "unresolved_questions": ["Is the decision trigger established?"],
                 "expected_result": "A bounded Character judgment, not a replacement draft or final candidate approval."}
-        staged_response = scoped_proposal(CHARACTER_CUSTODIAN, activity="review", domains=tuple(domain.value
+        focused_assessment = admission.AuthoringAssessment(
+            admission.AdmissionStatus.SUFFICIENT,
+            (admission.AdmissionEvidence("Supplied motivation", ("user_input",),
+                "Mina promised to protect her brother and hides a letter."),),
+            admission.AdmissionEvidence("Direction", ("user_input",),
+                "Review only supplied motivation and decision; preserve promise; leave secret unresolved."),
+            admission.AdmissionEvidence("Creative scope", ("user_input",),
+                "Assess the supplied motivation and decision without rewriting."),
+            ("bounded motivation and decision assessment",),
+            ("preserve promise", "leave secret unresolved", "do not rewrite"), (), (),
+            "The focused USER direction supplies facts and boundaries for this deep review.")
+        staged_response = scoped_proposal(CHARACTER_CUSTODIAN, activity="review",
+            authoring_assessment=focused_assessment, domains=tuple(domain.value
             for domain in ArtifactReviewDomain), mutate=focused_plan, native_inputs={
                 "source_choices": ("user_input",), "input_choices": ("user_input",),
                 "anchors": {CHARACTER_CUSTODIAN: "user_input"}, "recipients": {"user_input": CHARACTER_CUSTODIAN}, "family": 0})
@@ -1390,6 +1402,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         latest = next(e for e in reversed(self.history(source_conversation))
                       if type(e.payload) is c.CollaborationLeadExplorationResultPayload)
         fresh_path = "manuscript/part-01/changed-condition.md"
+        rule_path = "core_documents/narrative_rules.md"
+        rule_locator = "${core_documents/narrative_rules.md}"
+        rule_bytes = self.workspace.path(rule_path).read_bytes()
+        rule_digest = "sha256:" + hashlib.sha256(rule_bytes).hexdigest()
         fresh_selection = _adoption_selection(source_conversation, latest, (fresh_path,))
         condition_before = self.artifact_bytes()
         def changed_recommend(call, provider):
@@ -1397,18 +1413,16 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             source_id = next(reply["reply_event_id"] for reply in material["replies"] if reply["mode"] == "draft")
             return _synthesis_outcome(
                 recommendation_family=1, recommended_action=action(target_paths=(fresh_path,),
-                       source_ids=("user_input", "adopted_idea", source_id)))(call, provider)
+                       source_ids=("user_input", "adopted_idea", "reference_1", source_id)))(call, provider)
         (fresh,
             fresh_draft,
         ) = await self.finish_draft(
-            new_owner, text=_ADOPTION_DIRECTION, response=self._native_scoped(
+            new_owner, text=_ADOPTION_DIRECTION + "\n" + rule_locator, response=self._native_scoped(
             *ROSTER,
             paths=(fresh_path,),
             domains=("plot_structure", "character_world", "tone_execution"),
-            candidate_ids=("adopted_idea",),
-            authoring_assessment=_fixture_assessment(foundation_ids=(
-                "adopted_idea",
-            )),
+            candidate_ids=("adopted_idea", "reference_1"),
+            authoring_assessment=_fixture_assessment(foundation_ids=("adopted_idea", "reference_1")),
         ), adoption=fresh_selection, synthesis=changed_recommend)
         self.assertIsNotNone(fresh.proposal, fresh)
         self.assertNotEqual(fresh.proposal.authoring_scope.task_id, task_id)
@@ -1417,17 +1431,26 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         changed_response = _artifact_outcome(operations=[{"kind": "create", "suggested_path": fresh_path,
                            "new_text": "The changed tide preserves the current consequence.\n"}],
                            evidence_status="incomplete", evidence_ids=lambda call, material, *, input_payload:
-                           [input_payload["core_document_statuses"][0]["evidence_id"]],
+                           ["reference_1", input_payload["core_document_statuses"][0]["evidence_id"]],
             objective_intent={"action": "start", "target_paths": {fresh_path: True},
                 "next_step": "prepare"},
             authoring_scope=lambda _: c.authoring_scope_to_dict(fresh.proposal.authoring_scope),
-            authoring_assessment=asdict(_fixture_assessment(foundation_ids=("adopted_idea",))),)
+            authoring_assessment=asdict(_fixture_assessment(foundation_ids=("adopted_idea", "reference_1"))),)
         def changed_integrate(call, provider):
             return changed_response(call, provider)
         self.backend.enqueue(changed_integrate)
         prepared = await self.runtime.decide_lead_recommendation(recommendation_decision(fresh_draft.turn))
         self.assertIsNotNone(prepared.proposal, prepared)
         self.assertEqual(prepared.proposal.participants, ROSTER)
+        self.assertTrue(all("reference_1" in assignment.input_ids for assignment in fresh.proposal.assignments))
+        rule_input = next(item for item in prepared.proposal.basis.inputs if item.input_id == "reference_1")
+        rule_receipt = next(item for item in prepared.proposal.basis.evidence.receipts
+                            if item.evidence_id == "reference_1")
+        self.assertIs(rule_receipt.acquisition, c.CollaborationEvidenceAcquisition.ATTACHED_REFERENCE)
+        self.assertEqual((rule_input.locator, rule_receipt.locator), (rule_locator, rule_locator))
+        self.assertEqual(rule_receipt.revision_digest, rule_input.revision_digest)
+        self.assertEqual((rule_receipt.content_digest, rule_receipt.utf8_bytes, rule_receipt.boundary_kind),
+                         (rule_digest, len(rule_bytes), "whole"))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         self.backend.enqueue_for(CHARACTER_CUSTODIAN, _specialist_outcome())
         self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome())
@@ -1480,8 +1503,13 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                          self.session_id, source_conversation), self.history(source_conversation))
         self.assertEqual(tuple(c.encode_collaboration_event(e) for e in persisted),tuple(c.encode_collaboration_event(e) for e in history))
         current_final = current_review.turn.artifact_proposal.reviewed_proposal
-        rule_path = "core_documents/narrative_rules.md"
-        self.assertIn(rule_path, {source.target_id for source in current_final.final_review_evidence.sources})
+        self.assertIn(rule_locator, {source.target_id for source in current_final.final_review_evidence.sources})
+        rule_source = next(source for source in current_final.final_review_evidence.sources
+                           if source.input_id == rule_input.input_id)
+        self.assertEqual((rule_source.target_id, rule_source.revision, rule_source.source_digest,
+                          rule_source.boundary_digest, rule_source.whole_source),
+                         (rule_locator, rule_input.revision_digest, rule_receipt.revision_digest,
+                          rule_receipt.content_digest, True))
         current_history = self.history(new_owner)
         qualified_current = self.runtime.qualify_artifact_final_review(session_id=self.session_id,
             reviewed_proposal=current_final, consultation=prepared.proposal, events=current_history)
