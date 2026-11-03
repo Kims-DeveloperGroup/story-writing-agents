@@ -1789,6 +1789,28 @@ print(f"SHELL_VALUE={input('shell> ')}")
         self,
     ) -> None:
         """Cover retained conversation management and main-input cleanup."""
+        probe = self._spawn_python("""
+import asyncio, sys
+from story_writing_agents.interactive_terminal._core import build_stream_terminal, InteractiveAdvisoryProgress, InteractiveInputLifecycle
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+progress = InteractiveAdvisoryProgress(terminal)
+progress.begin()
+async def operation():
+    await asyncio.sleep(5)
+with InteractiveInputLifecycle(terminal).session():
+    try: asyncio.run(progress.run(operation(), keep_frame=False))
+    except KeyboardInterrupt: print("PROGRESS_INTERRUPTED", flush=True)
+print("PROGRESS_FINAL", flush=True)
+""")
+        probe.wait_for_text("Working")
+        probe.resize(47, 12)
+        probe.send_interrupt()
+        probe.wait_for_text("PROGRESS_FINAL")
+        self.assertEqual(probe.wait_for_exit(), 0)
+        self.assertIn("PROGRESS_INTERRUPTED", probe.normalized_text)
+        self.assertNotIn("Progress animation unavailable", probe.normalized_text)
+        self.assertNotIn("Working", probe.normalized_text.split("PROGRESS_FINAL", 1)[1])
+        self.assertEqual(probe.final_terminal_attributes, probe.original_terminal_attributes)
         for edit_query in (False, True):
             self._exercise_external_library_pty(edit_query=edit_query)
         for signum in (signal.SIGTERM, signal.SIGHUP):

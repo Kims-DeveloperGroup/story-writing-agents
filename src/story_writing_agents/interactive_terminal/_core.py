@@ -3222,6 +3222,14 @@ def build_stream_terminal(
             )
             return (not terminal.progress_frame_collapsed) and is_active_turn
 
+        active_state = active_advisory_progress_state()
+        process_kwargs = {}
+        if active_state is not None and active_state.started_at is not None:
+            process_kwargs = {
+                "process_content_provider": active_state.process_content,
+                "process_revision_provider": lambda: (active_state.presentation_revision,
+                    active_state.collapsed, active_state.focused_agent_index),
+            }
         return await driver.run_advisory_progress(
             operation,
             render_advisory_progress_frame,
@@ -3231,6 +3239,7 @@ def build_stream_terminal(
             nested_scroll_renderer=render_nested_scroll_view,
             toggle_callback=terminal.toggle_progress_frame,
             keep_frame=_resolve_keep_frame,
+            **process_kwargs,
         )
 
     async def run_debate_progress(

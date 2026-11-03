@@ -1970,19 +1970,15 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         """Build a driver whose output can observe progress serialization."""
 
         output = io.StringIO()
-        driver = RawTerminalDriver(
-            lambda _prompt: "",
-            io.StringIO(),
-            output,
-            transition_line_input,
-            transition_main_input,
-            append_main_input_history,
-        )
+        driver = RawTerminalDriver(lambda _prompt: "", io.StringIO(), output,
+            transition_line_input, transition_main_input, append_main_input_history)
         return driver, output
 
     def test_advisory_progress_is_silent_for_plain_line_and_callback_terminals(
         self,
     ) -> None:
+        self.enterContext(mock.patch("story_writing_agents.interactive_terminal._progress_process.subprocess.Popen",
+                                     side_effect=AssertionError("fallback spawned a progress helper")))
         async def operation() -> str:
             return "answer"
 

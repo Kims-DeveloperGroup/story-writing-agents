@@ -51,12 +51,26 @@ card. A specialist card retains its exact request. Before an action, the card
 says `Preparing context`; once an action is known, it shows the indexed
 `SEARCH` or `READ` and whether it is running or completed.
 
-The first working frame appears before request preparation starts, including
-when a request resumes after native authentication. Bounded history and native
-context inspection run outside the display's event loop, so the bar can keep
-moving before any provider text arrives. The bar indicates activity rather
-than a percentage of completion. Cancellation waits for any started inspection
-to finish its cleanup before releasing its resources and returning to input.
+The progress writer is activated before request preparation starts, including
+when a request resumes after native authentication. On supported live POSIX
+terminals, the built-in request bar uses an independent presentation process.
+The request does not wait for the first frame to be painted.
+Its animation and monotonic timer continue from the latest prepared display
+while the request is busy, waiting for a provider, or waiting for a Git lock.
+Status and preview contents change when the request publishes a new snapshot;
+an advancing bar indicates activity rather than percentage completion.
+
+Progress updates are bounded and do not wait for a frame to be drawn. If the
+terminal stops accepting output, visible animation can pause while request
+work continues. A failed presentation helper is safely stopped before the
+terminal is reclaimed; the request is not retried and isolated animation is
+disabled for that terminal session. Final responses and retained previews
+remain owned by the normal terminal lifecycle.
+
+Cancellation waits for started request work to finish its required cleanup.
+The progress writer is then stopped before final output or input resumes.
+Native authentication and external viewers likewise receive exclusive
+terminal ownership, and the same elapsed timer resumes afterward.
 
 A SEARCH start displays its active literal query as `Searching for: "..."`
 and the exact requested resource/source-kind values (`runtime_input`,
