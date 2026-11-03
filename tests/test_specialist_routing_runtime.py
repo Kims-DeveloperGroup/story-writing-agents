@@ -909,9 +909,12 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 self.assertEqual(len(candidates), 1)
                 branch, = candidates
                 inspection = candidates[branch]
-                preliminary_choices = tuple(target["input_id"] for target in map(json.loads,
-                    dict(call.contract.semantic_index.policy.choices)["preliminary_targets"])
+                preliminary_targets = tuple(map(json.loads,
+                    dict(call.contract.semantic_index.policy.choices)["preliminary_targets"]))
+                preliminary_choices = tuple(target["input_id"] for target in preliminary_targets
                     if target["availability"] != review.ReviewTargetAvailability.UNREAD.value)
+                excluded_scope = any(target["availability"] == review.ReviewTargetAvailability.UNREAD.value and
+                    target["target_id"] in declared_paths for target in preliminary_targets)
                 read_selection = finite_fixture_selection(preliminary_choices, read_ids)
                 native_review = {"stage": "lead_preliminary_review",
                     "inspection": {identity: "inspected" if identity == "user_input" or identity in facts else "excluded"
@@ -919,7 +922,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                     "findings": [{"message": finding, "evidence_input_ids": read_selection}],
                     "conflicts": [{"message": finding, "evidence_input_ids": read_selection}] if label == "conflict" else [],
                     "missing_information": (["Part outline and narrative rules were not inspected."] if label == "foundations"
-                        else ["The user has not selected which direction to adopt."] if needs_decision else []),
+                        else ["The user has not selected which direction to adopt."] if needs_decision else []) + (["Only bounded READ ranges were inspected; whole-document coverage remains excluded."]
+                        if excluded_scope else []),
                     "further_review_required": needs_decision,
                     "next_action": "request_information" if needs_decision else "finish_direct"}
                 declared_domains = {artifact_domain(path) for path in declared_paths}
@@ -965,7 +969,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 self.assertEqual(targets[path].source_digest,
                                  "sha256:" + hashlib.sha256(self.workspace.path(path).read_bytes()).hexdigest())
             if label == "foundations":
-                self.assertEqual({targets[path].input_id for path in (part_outline, rules)}, set(report.excluded_input_ids))
+                self.assertEqual({targets[path].input_id for path in declared_paths}, set(report.excluded_input_ids))
                 for path in (part_outline, rules):
                     self.assertIs(targets[path].availability, review.ReviewTargetAvailability.UNREAD)
                     self.assertEqual(targets[path].source_status, "present")

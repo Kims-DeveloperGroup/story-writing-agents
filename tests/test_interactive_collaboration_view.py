@@ -349,7 +349,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
         judgment = CollaborationLeadJudgmentPayload(LeadOutcomeKind.ANSWER, finding, evidence,
             authoring_scope=declared_scope, preliminary_review=preliminary)
         frame = replace(history[0], kind=CollaborationEventKind.MESSAGE, sender=LEAD, recipient=USER, payload=judgment)
-        preliminary_text = _collaboration_view.project_collaboration_event(frame,
+        preliminary_text = render_component(_collaboration_view.project_collaboration_event(event=frame),
             _capability(CapabilityProfile.LINE, width=120)).text
         self.assertIn(finding, preliminary_text)
         self.assertIn(unread.target_id, preliminary_text)

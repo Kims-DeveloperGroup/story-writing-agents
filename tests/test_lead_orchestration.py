@@ -4592,9 +4592,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     candidate_member.owner.variant.branch_key.partition(':partition:')[0])
         self.assertEqual(len(preliminary_keys), 1)
         preliminary_key, = preliminary_keys
-        native_target_ids = tuple(dict.fromkeys((*[item.input_id for item in provided], *target_ids)))
-        unread_ids = {item.input_id for item in provided
-                      if item.availability is review.ReviewTargetAvailability.UNREAD}
+        offered_targets = tuple(map(json.loads,
+            dict(preliminary_bound.semantic_index.policy.choices)["preliminary_targets"]))
+        native_target_ids = tuple(item["input_id"] for item in offered_targets)
+        unread_ids = {item["input_id"] for item in offered_targets
+                      if item["availability"] == review.ReviewTargetAvailability.UNREAD.value}
         intent = {
             'stage': 'lead_preliminary_review',
             'inspection': {identity: 'excluded' if identity == excluded_id or identity in unread_ids else 'inspected'
@@ -4604,9 +4606,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             'conflicts': [], 'missing_information': ['The excluded source was not inspected.'],
             'further_review_required': True, 'next_action': 'request_information',
         }
-        preliminary_choices = tuple(target["input_id"] for target in map(json.loads,
-            dict(preliminary_bound.semantic_index.policy.choices)["preliminary_targets"])
-            if target["availability"] != review.ReviewTargetAvailability.UNREAD.value)
+        preliminary_choices = tuple(item["input_id"] for item in offered_targets
+                                    if item["availability"] != review.ReviewTargetAvailability.UNREAD.value)
         def preliminary_frame(record):
             record = copy.deepcopy(record)
             for finding in record["findings"] + record["conflicts"]:
