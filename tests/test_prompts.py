@@ -127,7 +127,7 @@ class PromptAssemblerTests(unittest.TestCase):
                 self.assertTrue(all(phrase in normalized for phrase in (
                     "character self-contradiction", "limited point of view", "intentionally unresolved elements",
                     "never present a proposed idea as a source fact")))
-                for phrase in ("assess_constraints", "host-captured shared premise", "every final reviewer", "exact assignment", "contract_guidance", "response_type specialist_assignment_result", "assignment_status", "draft_completed", "supports_proposal", "concerns_found", "conflicts_found", "insufficient_evidence", "neither review support", "permission to Apply or Commit"):
+                for phrase in ("assess_constraints", "host-captured shared premise", "Every affected specialist reviews the exact final candidate", "exact assignment", "contract_guidance", "response_type specialist_assignment_result", "assignment_status", "draft_completed", "supports_proposal", "concerns_found", "conflicts_found", "insufficient_evidence", "neither review support", "permission to Apply or Commit"):
                     self.assertIn(phrase, normalized)
 
     def test_lead_overlay_supersedes_retained_policy_and_preserves_specialist_bytes(self):

@@ -16,6 +16,8 @@ from story_writing_agents.interactive_terminal._controls import (
 )
 from story_writing_agents.interactive_terminal import _input_lifecycle as lifecycle
 from story_writing_agents.interactive_terminal import _driver as driver_module
+from story_writing_agents.interactive_terminal import _input_sources_linux as linux_sources
+from story_writing_agents.interactive_terminal._input_sources import InputSourceLifecycle, InputSourceState
 from story_writing_agents.interactive_terminal._driver import (
     RawTerminalDriver,
     _TerminalConfiguration,
@@ -33,6 +35,21 @@ from story_writing_agents.interactive_terminal._model import (
     Prompt,
     TerminalCapabilities,
 )
+
+
+def _input_sources(default="ja", driver=None):
+    baseline = InputSourceState((default,), default.startswith("en"))
+    english = InputSourceState(("en-US",), True)
+    adapter = mock.Mock()
+    adapter.current_source.return_value = baseline
+    adapter.default_source.return_value = None
+    adapter.english_source.return_value = english
+    adapter.select_source.side_effect = lambda source: setattr(adapter.current_source, "return_value", source)
+    owner = InputSourceLifecycle(lambda _input, _output: adapter)
+    if driver is not None:
+        owner.start(None, None, live=True)
+        driver._input_sources = owner
+    return owner, adapter, baseline, english
 
 
 class _ByteBackedInput:
@@ -267,10 +284,7 @@ class LiveCharacterReaderTests(unittest.TestCase):
         self.assertEqual(reader.read_character(), "A")
         self.assertEqual(reader.read_character(), "")
         self.assertEqual(reader.read_character(), "")
-        self.assertEqual(
-            stream.calls,
-            [("read1", 1)] * (len(raw) + 1),
-        )
+        self.assertEqual(stream.calls, [('read1', 1)] * (len(raw) + 1))
 
     def test_decoder_suffix_is_bounded_and_consumed_without_another_read(self) -> None:
         class SuffixDecoder:
@@ -453,6 +467,56 @@ class InputLatchAndDriverTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "cannot switch to fallback"):
             latch.latch_fallback()
 
+        for language in ("ja", "ko"):
+            sources, adapter, baseline, english = _input_sources(language)
+            adapter.current_source.assert_not_called()
+            sources.start(None, None, live=True)
+            with sources.main_input():
+                sources.observe_buffer("ordinary / literal")
+                adapter.select_source.assert_not_called()
+                sources.observe_buffer("/")
+                self.assertEqual(adapter.current_source(), english)
+                adapter.current_source.return_value = InputSourceState(("manual",), False)
+                sources.observe_buffer("/status 한글")
+                adapter.select_source.assert_called_once_with(english)
+                with sources.suspended():
+                    self.assertEqual(adapter.current_source(), baseline)
+                self.assertEqual(adapter.current_source(), english)
+                sources.observe_buffer("ordinary")
+                self.assertEqual(adapter.current_source(), baseline)
+            adapter.current_source.return_value = InputSourceState(("later",), False)
+            with sources.main_input():
+                sources.observe_buffer("/status")
+            self.assertEqual(adapter.current_source(), baseline)
+            adapter.default_source.assert_called_once_with()
+            sources.finish()
+
+        sources, adapter, baseline, english = _input_sources("en-GB")
+        sources.start(None, None, live=True)
+        with sources.main_input():
+            sources.observe_buffer("/status")
+        adapter.select_source.assert_not_called()
+        adapter.current_source.return_value = english
+        with sources.main_input():
+            sources.observe_buffer("/status")
+            adapter.select_source.assert_not_called()
+        adapter.select_source.assert_called_once_with(baseline)
+        sources.finish()
+
+        sources, adapter, _startup, english = _input_sources()
+        configured = InputSourceState(("os-default",), False)
+        adapter.default_source.return_value = configured
+        sources.start(None, None, live=True)
+        primary = KeyboardInterrupt("primary input failure")
+        with self.assertRaises(KeyboardInterrupt) as raised:
+            with sources.main_input():
+                sources.observe_buffer("/status")
+                adapter.select_source.side_effect = TimeoutError("restore")
+                raise primary
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(adapter.select_source.call_args_list, [mock.call(english), mock.call(configured)])
+        sources.finish()
+
     def test_fallback_latch_is_sticky_and_never_constructs_a_live_reader(self) -> None:
         latch = TerminalInputLatch()
         latch.latch_fallback()
@@ -474,12 +538,28 @@ class InputLatchAndDriverTests(unittest.TestCase):
                 raise ValueError("primary")
         with latch.input_operation():
             pass
+        with _session_driver() as (driver, *_unused), _signal_state(signal.SIG_DFL):
+            primary = RuntimeError("progress cleanup")
+            sources = mock.Mock(spec=InputSourceLifecycle)
+            sources.finish.side_effect = ValueError("source cleanup")
+            driver._input_sources = sources
+            with mock.patch.object(RawTerminalDriver, "_reclaim_process_progress", side_effect=primary) as reclaim:
+                with self.assertRaises(RuntimeError) as raised:
+                    with driver.input_session(): pass
+                self.assertIs(raised.exception, primary)
+                reclaim.assert_called_once_with(close=True)
+                sources.finish.assert_called_once_with()
+                self.assertFalse(driver._input_session_active)
+
         for failure in (None, KeyboardInterrupt("interrupt"), EOFError("eof"), ValueError("operation")):
             with _session_driver(b"s", b"e", b"e", b"d", b"\n", b"\x03", b"\x04", b"") as (driver, termios, _stream, _output, fallback), _signal_state(signal.SIG_DFL) as signals:
+                sources, adapter, baseline, english = _input_sources()
+                driver._input_sources = sources
                 original = list(termios.attributes)
                 original_signals = dict(signals)
                 try:
                     with driver.input_session():
+                        adapter.current_source.assert_called_once_with()
                         guarded = list(termios.attributes)
                         guarded_signals = dict(signals)
                         self.assertTrue(all(callable(handler) for handler in signals.values()))
@@ -494,14 +574,18 @@ class InputLatchAndDriverTests(unittest.TestCase):
                         with self.assertRaisesRegex(RuntimeError, "session is already active"):
                             with driver.input_session():
                                 pass
-                        with driver.native_input_handoff():
-                            self.assertEqual(termios.attributes, original)
-                            self.assertEqual(signals, guarded_signals)
-                            with self.assertRaisesRegex(RuntimeError, "handoff is already active"):
-                                with driver.native_input_handoff():
-                                    pass
-                            with self.assertRaisesRegex(RuntimeError, "suspended"):
-                                driver.read_line("forbidden> ")
+                        with sources.main_input():
+                            sources.observe_buffer("/")
+                            with driver.native_input_handoff():
+                                self.assertEqual(adapter.current_source(), baseline)
+                                self.assertEqual(termios.attributes, original)
+                                self.assertEqual(signals, guarded_signals)
+                                with self.assertRaisesRegex(RuntimeError, "handoff is already active"):
+                                    with driver.native_input_handoff():
+                                        pass
+                                with self.assertRaisesRegex(RuntimeError, "suspended"):
+                                    driver.read_line("forbidden> ")
+                            self.assertEqual(adapter.current_source(), english)
                         self.assertEqual(termios.attributes, guarded)
                         self.assertEqual(signals, guarded_signals)
                         if failure is not None:
@@ -643,6 +727,63 @@ class InputLatchAndDriverTests(unittest.TestCase):
             fallback.assert_not_called()
 
     def test_driver_construction_does_not_inspect_resources(self) -> None:
+        engines = "hangul\nxkb:gb::eng\nxkb:us::eng"
+        answers = {("engine",): "hangul", ("list-engine", "--name-only"): engines}
+        with mock.patch.object(linux_sources, "_run_helper", side_effect=lambda _exe, *args: answers.get(args, "")) as helper:
+            ibus = linux_sources.IBusInputSourceAdapter("ibus")
+            self.assertEqual(ibus.current_source().identity, ("ibus", "hangul"))
+            english = ibus.english_source()
+            self.assertEqual(english, InputSourceState(("ibus", "xkb:us::eng"), True))
+            ibus.select_source(english)
+            helper.assert_any_call("ibus", "engine", "xkb:us::eng")
+            with self.assertRaises(OSError):
+                ibus.select_source(InputSourceState(("ibus", "missing"), False))
+        profile = ("[Groups/0]\nName=Default\nDefault Layout=us\n"
+                   "[Groups/0/Items/0]\nName=keyboard-us\n[Groups/0/Items/1]\nName=hangul\n")
+        active = {(): "2", ("-q",): "Default", ("-n",): "hangul"}
+        def fcitx_reply(executable, *arguments):
+            self.assertEqual((executable, arguments[0]), ("fcitx5-remote", "--check"))
+            action = arguments[1:]
+            if action == ("-c",):
+                active.update({(): "1", ("-n",): "keyboard-us"})
+            elif action == ("-s", "hangul"):
+                active.update({(): "2", ("-n",): "hangul"})
+            elif action == ("-o",):
+                active[()] = "2"
+            return active.get(action, "")
+        with mock.patch.dict(linux_sources.os.environ, {"XDG_CONFIG_HOME": "/tmp/story-ime-profile"}), mock.patch.object(linux_sources.Path, "open", mock.mock_open(read_data=profile)), mock.patch.object(linux_sources, "_run_helper", side_effect=fcitx_reply) as helper:
+            fcitx = linux_sources.Fcitx5InputSourceAdapter("fcitx5-remote")
+            baseline, english = fcitx.current_source(), fcitx.english_source()
+            self.assertEqual(baseline, InputSourceState(("fcitx5", "Default", "hangul", "2"), False))
+            self.assertEqual(english, InputSourceState(("fcitx5", "Default", "keyboard-us", "1"), True))
+            fcitx.select_source(english)
+            self.assertEqual(fcitx.current_source(), english)
+            fcitx.select_source(baseline)
+            self.assertEqual(fcitx.current_source(), baseline)
+            helper.assert_any_call("fcitx5-remote", "--check", "-c")
+            helper.assert_any_call("fcitx5-remote", "--check", "-s", "hangul")
+            fcitx.select_source(english)
+            fcitx.select_source(InputSourceState((*english.identity[:3], "2"), True))
+            helper.assert_any_call("fcitx5-remote", "--check", "-o")
+        for configured in ({}, {"GTK_IM_MODULE": "ibus", "QT_IM_MODULE": "fcitx"}):
+            with mock.patch.dict(linux_sources.os.environ, configured, clear=True), mock.patch.object(linux_sources.shutil, "which", return_value=None) as which:
+                self.assertIsNone(linux_sources.linux_input_source_adapter())
+                if configured:
+                    which.assert_not_called()
+        with mock.patch.object(linux_sources.subprocess, "run", return_value=mock.Mock(stdout="hangul\n")) as run:
+            self.assertEqual(linux_sources._run_helper("ibus", "engine"), "hangul")
+            self.assertTrue(0 < run.call_args.kwargs["timeout"] <= 1)
+            run.side_effect = linux_sources.subprocess.TimeoutExpired("ibus", 0.25)
+            with self.assertRaises(linux_sources.subprocess.TimeoutExpired):
+                linux_sources._run_helper("ibus", "engine")
+        factory = mock.Mock(side_effect=TimeoutError("optional input service"))
+        for live in (False, True):
+            sources = InputSourceLifecycle(factory)
+            sources.start(None, None, live=live)
+            with sources.main_input():
+                sources.observe_buffer("/status")
+            sources.finish()
+        factory.assert_called_once_with(None, None)
         fallback = mock.Mock(return_value="unused")
         driver, input_stream, output_stream = _resource_free_driver(fallback)
         self.assertIs(driver._input_latch.mode, TerminalInputMode.UNDECIDED)
@@ -699,13 +840,8 @@ class InputLatchAndDriverTests(unittest.TestCase):
         live_output.write.return_value = len(payload)
         live.write_accepted_input(payload)
         self.assertEqual(live_input.mock_calls, [])
-        self.assertEqual(
-            live_output.mock_calls,
-            [mock.call.write(payload), mock.call.flush()],
-        )
-        self.assertFalse(
-            any("accepted" in name for name in RawTerminalDriver.__slots__)
-        )
+        self.assertEqual(live_output.mock_calls, [mock.call.write(payload), mock.call.flush()])
+        self.assertFalse(any(('accepted' in name for name in RawTerminalDriver.__slots__)))
 
     def test_first_fallback_is_permanent_and_skips_future_capability_inspection(self) -> None:
         fallback = mock.Mock(side_effect=("first", "second"))
@@ -724,10 +860,7 @@ class InputLatchAndDriverTests(unittest.TestCase):
         capabilities.assert_called_once_with(driver)
         self.assertEqual(input_stream.mock_calls, [])
         self.assertEqual(output_stream.mock_calls, [])
-        self.assertEqual(
-            fallback.call_args_list,
-            [mock.call("one> "), mock.call("two> ")],
-        )
+        self.assertEqual(fallback.call_args_list, [mock.call('one> '), mock.call('two> ')])
 
     def test_semantic_render_validation_fails_before_mode_selection(self) -> None:
         fallback = mock.Mock(return_value="unused")
@@ -757,12 +890,7 @@ class InputLatchAndDriverTests(unittest.TestCase):
         self,
     ) -> None:
         baseline = _live_capabilities(80)
-        self.assertTrue(
-            driver_module._same_live_capabilities(
-                baseline,
-                _live_capabilities(24),
-            )
-        )
+        self.assertTrue(driver_module._same_live_capabilities(baseline, _live_capabilities(24)))
         self.assertFalse(
             driver_module._same_live_capabilities(
                 baseline,
@@ -793,12 +921,7 @@ class InputLatchAndDriverTests(unittest.TestCase):
             _configuration(_TermiosIdentity()),
         ):
             with self.subTest(changed=changed):
-                self.assertFalse(
-                    driver_module._same_terminal_configuration(
-                        configuration,
-                        changed,
-                    )
-                )
+                self.assertFalse(driver_module._same_terminal_configuration(configuration, changed))
 
     def test_live_revalidation_rejects_decoder_capability_and_configuration_drift(
         self,
