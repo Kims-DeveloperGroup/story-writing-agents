@@ -4754,15 +4754,23 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             invalid['agent_action']['task_result']['response_details'][
                 'specialist_consultation_proposal']['stage_plan'][field] = value
             self.assertTrue(staged_bound.rule_graph.findings(invalid))
-            with self.assertRaises(LeadContractRejection):
-                staged_bound.decode_response(json.dumps(invalid))
+            with self.assertRaises(ValueError):
+                staged_bound.rule_graph.require(invalid)
+            if field == 'stage':
+                with self.assertRaises(LeadContractRejection):
+                    staged_bound.decode_response(json.dumps(invalid))
+            else:
+                self.assertEqual(json.loads(staged_bound.decode_response(json.dumps(invalid)).answer_json)
+                                 ['proposal']['stage_plan'], stage_plan)
         invalid = copy.deepcopy(staged_packet)
         question = invalid['agent_action']['task_result']['response_details'][
             'specialist_consultation_proposal']['stage_plan']['questions'][0]
         question['task_id'] = 'foreign_task'
         self.assertTrue(staged_bound.rule_graph.findings(invalid))
-        with self.assertRaises(LeadContractRejection):
-            staged_bound.decode_response(json.dumps(invalid))
+        with self.assertRaises(ValueError):
+            staged_bound.rule_graph.require(invalid)
+        self.assertEqual(json.loads(staged_bound.decode_response(json.dumps(invalid)).answer_json)
+                         ['proposal']['stage_plan'], stage_plan)
 
     async def test_front_schema_rejection_is_repaired_once(self) -> None:
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
