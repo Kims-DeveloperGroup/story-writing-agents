@@ -1970,19 +1970,15 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         """Build a driver whose output can observe progress serialization."""
 
         output = io.StringIO()
-        driver = RawTerminalDriver(
-            lambda _prompt: "",
-            io.StringIO(),
-            output,
-            transition_line_input,
-            transition_main_input,
-            append_main_input_history,
-        )
+        driver = RawTerminalDriver(lambda _prompt: "", io.StringIO(), output,
+            transition_line_input, transition_main_input, append_main_input_history)
         return driver, output
 
     def test_advisory_progress_is_silent_for_plain_line_and_callback_terminals(
         self,
     ) -> None:
+        self.enterContext(mock.patch("story_writing_agents.interactive_terminal._progress_process.subprocess.Popen",
+                                     side_effect=AssertionError("fallback spawned a progress helper")))
         async def operation() -> str:
             return "answer"
 
@@ -3375,11 +3371,12 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         terminal_root = package_root / "interactive_terminal"
         expected_dependencies = {
             '__init__.py': {'._advisory_progress', '._core'},
-            '_advisory_progress.py': {'..agent_context.actions', '..agent_context.progress', '..agent_context.service'},
+            '_advisory_progress.py': {'..agent_context.actions', '..agent_context.progress', '..agent_context.service', '._progress_process'},
             '_collaboration_view.py': {'..agents', '..conversations', '..core_document_readiness', '..editorial_state', '..lead_premise_decisions', '..lead_task_transitions', '..reply_trace', '..specialist_routing', '..writing_artifacts', '._model', '._response_usage'},
             '_external_view.py': set(), '_input_lifecycle.py': set(),
             '_live_composer.py': {'._model'},
             '_model.py': set(),
+            '_progress_process.py': set(),
             '_controls.py': {'._model'},
             '_render.py': {'._advisory_progress', '._box', '._markdown', '._model'},
             '_viewer_model.py': set(),
@@ -3389,7 +3386,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             '_viewer_render.py': {'._box', '._model', '._viewer_model'},
             '_transcript_view.py': {'..conversations', '._collaboration_view', '._external_view', '._model', '._render'},
             '_reference_activation.py': {'..writing_artifacts', '._model'},
-            '_driver.py': {'._external_view', '._input_lifecycle', '._live_composer', '._model', '._output_history', '._pointer', '._reference_activation', '._render', '._viewer_model'},
+            '_driver.py': {'._external_view', '._input_lifecycle', '._live_composer', '._model', '._output_history', '._pointer', '._progress_process', '._reference_activation', '._render', '._viewer_model'},
             '_core.py': {'..agent_context.progress', '..agent_context.service', '..agents', '..conversations', '..errors', '..interactive_commands', '._advisory_progress', '._collaboration_view', '._controls', '._driver', '._external_view', '._live_composer', '._model', '._reference_activation', '._render', '._transcript_view', '._viewer_controls', '._viewer_model', '._viewer_render'},
             '_box.py': {'._model'},
             '_markdown.py': {'._model'},
@@ -3409,7 +3406,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 if isinstance(node, ast.ImportFrom) and node.level
             }
             # Keep the frozen subtest count; each new dependency set is still checked exactly.
-            if filename in {"_box.py", "_markdown.py", "_response_usage.py", "_transcript_view.py", "_pointer.py", "_output_history.py"}:
+            if filename in {"_box.py", "_markdown.py", "_response_usage.py", "_transcript_view.py", "_pointer.py", "_output_history.py", "_progress_process.py"}:
                 self.assertEqual(dependencies, expected)
                 continue
             with self.subTest(filename=filename):
@@ -3420,7 +3417,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         modules = (
             "story_writing_agents.interactive_terminal._external_view", "story_writing_agents.interactive_terminal._transcript_view",
-            "story_writing_agents.interactive_terminal._input_lifecycle",
+            "story_writing_agents.interactive_terminal._input_lifecycle", "story_writing_agents.interactive_terminal._progress_process",
             "story_writing_agents.interactive_terminal._box",
             "story_writing_agents.interactive_terminal._model",
             "story_writing_agents.interactive_terminal._controls",
