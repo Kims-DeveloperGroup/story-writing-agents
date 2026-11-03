@@ -152,14 +152,14 @@ outside the canonical deterministic suite and ordinary CI.
 
 ### #838의 직접 1차 검토·단계 배정 회귀 소스 배정
 
-사용자의 필요시 테스트 소스 예산 확대 허용을 정확한 **147338→148662**
+사용자의 필요시 테스트 소스 예산 확대 허용을 정확한 **147338→148667**
 전환에 적용한다. 최신 main 통합을 포함한 실제 배정은 다음과 같다.
 
 | 소스 구분 | 청구 행 수 |
 | --- | ---: |
-| `tests/test*.py`의 비어 있지 않은 비주석 행 | 147514 |
+| `tests/test*.py`의 비어 있지 않은 비주석 행 | 147519 |
 | 승인된 fixture·실제 검증 helper | 1148 |
-| 전체 상한 | 148662 |
+| 전체 상한 | 148667 |
 
 여유는 추가하지 않는다. helper1148행은 기존1034행, 이번 전환 정책1행,
 실제 native 도구819행이 기존757행을 대체하는 순증62행과 공유 fixed-business fixture42행과 명시적 typed-root selector9행을 포함한다.
@@ -179,6 +179,9 @@ SOURCE 조합을 공유 helper로 이동하며 raw34행을 줄이고 helper42행
 전체 family의 canonical census와 실제 각 선택 GEN의 strict·바인딩·바이트
 경계·부정 사례를 유지한다. 2527개 ID, ID별 subTest 상한,18000/3600초,
 worker·정리·권한 검증은 변경하지 않는다.
+
+재생의 정확한 owner 순서·동일한 compilation·Two Phase 보존 검사와
+업무 owner census 및 기존 단일 국면 fixture 정렬에 정확히 5행을 더했다.
 
 이 소스 배정은 새 provider 실행이나 큐 예외를 부여하지 않는다. #838의 필요한
 실제 호출·테스트에 대한 별도 사용자 허가와 source-bound admission을 따른다.

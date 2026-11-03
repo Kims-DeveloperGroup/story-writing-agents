@@ -3054,8 +3054,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(replayed.logical_origin_call_id, bound.logical_origin_call_id)
         self.assertEqual(replayed.semantic_index.policy.physical_call_id, replay_offers.call_id)
         self.assertEqual(replayed.semantic_index.policy.offer_digest, replay_offers.offer_digest)
-        (self.assertEqual(tuple((owner.variant.branch_key for owner in replayed.semantic_index.
-            owners)), tuple((owner.variant.branch_key for owner in bound.semantic_index.owners))) )
+        self.assertEqual(tuple(map(id, replayed.semantic_index.owners)),
+                         tuple(map(id, bound.semantic_index.owners)))
+        self.assertIs(replayed.prepared_compilation, bound.prepared_compilation)
+        self.assertIs(replayed.schema_group_phase, bound.schema_group_phase)
         pair_index = bound.semantic_index; pair_contracts = pair_index.contracts; pair_replacement = replace(pair_index)
         self.assertIsNot(pair_replacement, pair_index)
         self.assertEqual(pair_replacement.expected_schema_ids, pair_index.expected_schema_ids)
@@ -3388,7 +3390,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         from collections import Counter
         def require_final_case(seed, supplied, expected, *, branch=None, logical_root=None, constraints=declared,
                                offers=call.contract.offers, group=None):
-            owner = replace(factory, rule_seed=seed, constraints=constraints)
+            owner = replace(factory, rule_seed=seed, constraints=constraints,
+                            schema_group_protocol=group is not None)
             selected = current_group(owner, offers, group) if group is not None else owner.for_offer(offers)
             family_counts = {'lead-discussion-response-v1': 1, 'lead-exploration-response-v1': 3, 'lead-response-v8': 1,
                 'premise-decision-summary-v1': 2, 'consultation-summary-v4': 3, 'artifact-review-summary-v4': 1}
@@ -3480,8 +3483,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 logical_root=0, constraints=recommendation_facts,
                 group={'prepare_artifact': 'prepare.artifact',
                        'prepare_consultation': 'prepare.consultation.authoring'}[kind])
-            self.assertEqual({item.owner.variant.branch_key
-                              for item in selected_bound.semantic_index.contracts}, {'lead-response-v7:family:0'})
+            self.assertEqual({selected_bound.factory.rule_seed.contract_id + ':family:' +
+                              str(item.owner.variant.logical_root) for item in selected_bound.semantic_index.contracts
+                              if type(item.owner) is LeadResultContractOwner}, {'lead-response-v7:family:0'})
             for field, wrong in (('task_instructions', ''), ('task_instructions', ' '),
                                  ('action_type', 'unoffered_recommendation_kind')):
                 bad = copy.deepcopy(selected_packet)
@@ -3523,7 +3527,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                  'recommended_action': {'kind': kind, 'instruction': 'Use supplied concern.',
                      'source_ids': ['user_input'], 'objective_id': 'fixture-objective',
                      'target_paths' if choices is None else selector: selected}},
-                branch='lead-response-v7:family:0', constraints=linked_facts)
+                logical_root=0, constraints=linked_facts,
+                group={'prepare_artifact': 'prepare.artifact', 'prepare_consultation': 'prepare.consultation.authoring'}[kind])
         recommendation_bound = current_group(bound.factory, bound.offers, "prepare.consultation.authoring")
         recommendation_call = SimpleNamespace(contract=recommendation_bound)
         issued_sources = dict(recommendation_bound.semantic_index.policy.choices)['source_ids']
