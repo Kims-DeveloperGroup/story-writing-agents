@@ -15,6 +15,7 @@ from ._model import (
     CommandCompletionProjection,
     ComposerState,
     ConfirmationView,
+    confirmation_grammar,
     ControlOutcome,
     ControlOutcomeKind,
     KeyEvent,
@@ -727,21 +728,6 @@ def transition_confirmation_picker(
         if event.kind is KeyKind.ENTER:
             return _reject_confirmation(state, "Choose an action first."), ControlOutcome(ControlOutcomeKind.REJECTED)
     return transition_picker(state, event)
-
-
-def confirmation_grammar(state: PickerControlState, *, binary: bool) -> str:
-    """Describe the exact scoped line grammar using visible ordinal values."""
-    if type(state) is not PickerControlState or type(binary) is not bool:
-        raise TypeError("confirmation grammar requires picker state and bool binary")
-    tokens = []
-    for index, choice in enumerate(state.picker.choices, 1):
-        if choice.enabled:
-            aliases = f"{index}/{choice.identity}"
-            if binary:
-                aliases += "/y" if choice.identity == "yes" else "/n"
-            tokens.append(aliases)
-    default = "default=no" if binary else "no default"
-    return ", ".join((*tokens, default, "/cancel"))
 
 
 def _reject_confirmation(state: PickerControlState, text: str) -> PickerControlState:

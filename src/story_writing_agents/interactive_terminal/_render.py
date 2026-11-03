@@ -11,6 +11,7 @@ from ._box import Box
 from ._model import (
     CapabilityProfile,
     ConfirmationView,
+    confirmation_grammar,
     Choice,
     Component,
     Field,
@@ -41,7 +42,6 @@ from ._model import (
 )
 from ._advisory_progress import render_detailed_advisory_progress
 from ._markdown import MarkdownLine, MarkdownSpan, literal_lines, project_markdown
-from ._controls import confirmation_grammar
 
 
 _RESET = "\x1b[0m"
