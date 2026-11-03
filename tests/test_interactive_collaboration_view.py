@@ -350,8 +350,8 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             public = task.LeadPublicResponse(invocation_id=lead.payload.invocation_id, call_id="usage_call_5", ordinal=5,
                 call_kind=lead.payload.call_kind.value, acceptance=acceptance, response_text=shared_text,
                 material_digest=exploration.material_sha256(shared_text))
-            ref = task.LeadMaterialRef(lead.session_id, lead.conversation_id, "usage_public",
-                task.LeadMaterialKind.PUBLIC_RESPONSE, public.material_digest)
+            ref = task.LeadMaterialRef(session_id=lead.session_id, conversation_id=lead.conversation_id, event_id="usage_public",
+                kind=task.LeadMaterialKind.PUBLIC_RESPONSE, material_digest=public.material_digest)
             question = c.LeadTurnResult(lead.session_id, lead.conversation_id, lead.turn_id, lead.step_id,
                 c.LeadOutcomeKind.QUESTION, shared_text, None, None, None, c.CollaborationNextAction.REPLY_TO_LEAD,
                 public_responses=(c.LeadPublicResponseView(ref, public),), provider_invocation_id=lead.payload.invocation_id)

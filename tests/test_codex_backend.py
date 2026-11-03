@@ -3520,7 +3520,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             def user(text):
                 return {"type": "response_item", "payload": {"type": "message", "role": "user",
                     "content": [{"type": "input_text", "text": text}]}}
-            started, wire, completed = turn(first, "turn-1")
+            started, context, wire, completed = turn(first, "turn-1")
             environment = user(environment_text)
             other_wire = user(json.dumps({**json.loads(first.payload_json), "other_business_request": True}))
             for messages, accepted in (([environment, wire], True), ([environment, wire, wire], False),
@@ -3528,11 +3528,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     ([environment, environment, wire], False), ([user("Unrelated author instruction"), wire], False),
                     ([user("prefix" + environment_text), wire], False), ([user(environment_text + "business prose"), wire], False),
                     ([environment, other_wire], False)):
-                write([metadata, started, *messages, completed])
+                write([metadata, started, context, *messages, completed])
                 observed = codex_adapter.inspect_codex_context_witness(root, first, thread)
                 self.assertEqual(observed is not None, accepted, messages)
                 if accepted: self.assertEqual(observed.input_lineage_count, 1)
-            write([metadata, started, environment, wire])
+            write([metadata, started, context, environment, wire])
             self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
             write(records)
             from story_writing_agents.agent_context.accounting import ProviderUsage, ProviderUsageScope, normalized_provider_usage
