@@ -566,7 +566,7 @@ def _public_response_items(
 ) -> tuple[Field | Message | Notice, ...]:
     items = [Field("Public response disposition", response.acceptance.value),
              Field("Provider call", f"{response.call_kind} #{response.ordinal} ({response.call_id})"),
-             (_message("Literal final response_text", response.response_text, metadata=response_footer(response.acceptance.value, usage or ResponseUsage())) if show_text else
+             (_message("Literal final response_text", response.response_text, metadata=response_footer(response.acceptance.value, usage or ResponseUsage(scope="physical_call", call_count=1))) if show_text else
               Notice("This call's accepted text is shown in the Lead response above."))]
     if response.repair_of_call_id is not None:
         items.append(Field("Repairs call", response.repair_of_call_id))
@@ -1536,7 +1536,7 @@ def _response_items(items: tuple, content: str, footer: str | None, accent: Spea
     for item in items:
         if type(item) is Message:
             item = replace(item, accent=accent,
-                           metadata=footer if footer is not None and item.content == content else item.metadata)
+                           metadata=footer if footer is not None and item.content == content and item.metadata is None else item.metadata)
         elif type(item) is Section:
             item = replace(item, items=_response_items(item.items, content, footer, accent))
         projected.append(item)
@@ -1637,7 +1637,7 @@ def _public_usage(events: tuple[CollaborationEvent, ...], response: LeadPublicRe
     matches = tuple(event for event in events if type(event.payload) is CollaborationLeadPublicResponsePayload
                     and event.payload.response == response)
     if len(matches) != 1:
-        return ResponseUsage()
+        return ResponseUsage(scope="physical_call", call_count=1)
     event = matches[0]
     events = tuple(fact for fact in events if fact.sequence <= event.sequence)
     return response_usage(events, session_id=event.session_id, conversation_id=event.conversation_id,

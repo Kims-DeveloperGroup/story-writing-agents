@@ -2376,75 +2376,24 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             with self.subTest(content=content[:32]):
                 self.assertIn(content, staged)
 
-    def test_codex_usage_accepts_only_one_recognized_exact_terminal_snapshot(
-        self,
-    ) -> None:
+    def test_codex_usage_accepts_only_one_recognized_exact_terminal_snapshot( self, ) -> None:
         backend = self._backend_with_fake_codex()
         self.addCleanup(backend.close)
         parse = backend._codex_adapter.provider_usage
-        cases = (
-            ((), None),
-            (({"type": "turn.completed"},), None),
-            (({"type": "turn.completed", "usage": {"unknown": 7}},), None),
-            (
-                (
-                    {
-                        "type": "turn.completed",
-                        "usage": {
-                            "input_tokens": 0,
-                            "output_tokens": 2,
-                            "cached_input_tokens": 3,
-                        },
-                    },
-                ),
-                ProviderUsage(0, 2, 3),
-            ),
-            (
-                ({"type": "turn.completed", "usage": {"input_tokens": 4}},),
-                ProviderUsage(input_tokens=4),
-            ),
-            (
-                (
-                    {
-                        "type": "turn.completed",
-                        "usage": {
-                            "input_tokens": 5,
-                            "output_tokens": -1,
-                            "cached_input_tokens": True,
-                            "unknown": 9,
-                        },
-                    },
-                ),
-                ProviderUsage(input_tokens=5),
-            ),
-            (
-                (
-                    {
-                        "type": "turn.completed",
-                        "usage": {
-                            "input_tokens": -1,
-                            "output_tokens": "2",
-                            "cached_input_tokens": False,
-                        },
-                    },
-                ),
-                None,
-            ),
-            (
-                (
-                    {"type": "turn.completed", "usage": {"input_tokens": 1}},
-                    {"type": "turn.completed", "usage": {"input_tokens": 2}},
-                ),
-                None,
-            ),
-        )
+        cases = ( ((), None), (({"type": "turn.completed"},), None),
+            (({"type": "turn.completed", "usage": {"unknown": 7}},), None), ( ( { "type": "turn.completed",
+                        "usage": { "input_tokens": 0, "output_tokens": 2, "cached_input_tokens": 3, }, }, ),
+                ProviderUsage(0, 2, 3), ), ( ({"type": "turn.completed", "usage": {"input_tokens": 4}},),
+                ProviderUsage(input_tokens=4), ), ( ( { "type": "turn.completed", "usage": {
+                            "input_tokens": 5, "output_tokens": -1, "cached_input_tokens": True, "unknown": 9,
+                        }, }, ), ProviderUsage(input_tokens=5), ), ( ( { "type": "turn.completed", "usage": {
+                            "input_tokens": -1, "output_tokens": "2", "cached_input_tokens": False, }, }, ),
+                None, ), ( ( {"type": "turn.completed", "usage": {"input_tokens": 1}},
+                    {"type": "turn.completed", "usage": {"input_tokens": 2}}, ), None, ), )
         for events, expected in cases:
-            with self.subTest(events=events):
-                self.assertEqual(parse(events), expected)
+            with self.subTest(events=events): self.assertEqual(parse(events), expected)
 
-    async def test_malformed_usage_never_invalidates_a_valid_provider_reply(
-        self,
-    ) -> None:
+    async def test_malformed_usage_never_invalidates_a_valid_provider_reply( self, ) -> None:
         session_id = "malformed_usage_reply"
         backend = self._backend_with_fake_codex()
         self.addCleanup(backend.close)
@@ -2452,19 +2401,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         backend._context_accounting_sink = records.append
         self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
-        malformed_usage = json.dumps(
-            {
-                "input_tokens": True,
-                "output_tokens": -1,
-                "cached_input_tokens": "3",
-                "unknown": 4,
-            },
-            separators=(",", ":"),
-        )
+        malformed_usage = json.dumps( { "input_tokens": True, "output_tokens": -1, "cached_input_tokens": "3",
+                "unknown": 4, }, separators=(",", ":"), )
 
-        with mock.patch.dict(
-            os.environ,
-            {"STORY_FAKE_CODEX_USAGE": malformed_usage},
+        with mock.patch.dict( os.environ, {"STORY_FAKE_CODEX_USAGE": malformed_usage},
         ):
             reply = await bound.invoke(self.request(session_id=session_id))
 
@@ -2795,8 +2735,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         phases = (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE)
 
         from story_writing_agents.agent_context.accounting import (
-            ProviderUsage, ProviderUsageScope, normalized_provider_usage,
-        )
+            ProviderUsage, ProviderUsageScope, normalized_provider_usage, )
         from story_writing_agents.agent_context.group_observation import LeadGroupTrace, LeadGroupObservationKind
         from story_writing_agents.agent_context.group_reporting import group_trace_report
         from story_writing_agents.provider_adapter import (NativeContextCheck, NativeContextCheckStage,
@@ -2805,18 +2744,15 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         native_mutations, native_cleanups, unavailable_native_calls, native_results = {}, {}, set(), []
         omitted_thread_reports = set()
         pre_submit_probe = None
-        first_usage = {"input_tokens": 25043, "output_tokens": 149, "cached_input_tokens": 0}
-        second_usage = {"input_tokens": 53410, "output_tokens": 298, "cached_input_tokens": 0}
-        native_usage_cases = (
-            {"total_token_usage": first_usage, "last_token_usage": first_usage},
+        first_usage = {"input_tokens": 28997, "output_tokens": 195, "cached_input_tokens": 0}
+        second_usage = {"input_tokens": 88866, "output_tokens": 1411, "cached_input_tokens": 0}
+        native_usage_cases = ( {"total_token_usage": first_usage, "last_token_usage": first_usage},
             {"total_token_usage": second_usage, "last_token_usage": {
-                "input_tokens": 28367, "output_tokens": 149, "cached_input_tokens": 0}},
-        )
+                "input_tokens": 59869, "output_tokens": 1216, "cached_input_tokens": 0}}, )
         group_observations, native_schema_bytes = [], []
 
         class ObservedProvider:
-            def __getattr__(self, name):
-                return getattr(provider, name)
+            def __getattr__(self, name): return getattr(provider, name)
 
             async def invoke_context(self, request):
                 requests.append(request)
@@ -2853,8 +2789,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 native_info = None if native_usage_cases is None else native_usage_cases[len(native_commands) - 1]
                 schema_bytes = Path(request.command[request.command.index("--output-schema") + 1]).read_bytes()
                 self.assertEqual(schema_bytes, canonical_provider_json(invocation.schema))
-                if native_info is not None:
-                    native_schema_bytes.append(schema_bytes)
+                if native_info is not None: native_schema_bytes.append(schema_bytes)
                 history.complete(invocation, token_usage=native_info,
                     after_write=native_mutations.get(len(native_commands)),
                     expect_unavailable=len(native_commands) in unavailable_native_calls)
@@ -2864,8 +2799,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 output.write_text(raw, encoding="utf-8")
                 event = {"type": "thread.started", "thread_id": history.thread_id}
                 stdout = b"" if len(native_commands) in omitted_thread_reports else canonical_provider_json(event) + b"\n"
-                if native_info is not None:
-                    stdout += canonical_provider_json({"type": "turn.completed",
+                if native_info is not None: stdout += canonical_provider_json({"type": "turn.completed",
                         "usage": native_info["total_token_usage"]}) + b"\n"
                 return ProcessResult(stdout=stdout, stderr=b"", returncode=0)
             creator, scan_threads, guard_threads = threading.get_ident(), set(), set()
@@ -2886,8 +2820,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     result = await native_invoke(binding, invocation)
             finally:
                 cleanup = native_cleanups.get(len(native_commands))
-                if cleanup is not None:
-                    cleanup()
+                if cleanup is not None: cleanup()
             self.assertEqual(guard_threads, {creator})
             self.assertTrue(scan_threads - {creator}, "native inspection blocked the event loop")
             if history.witnesses[-1] is None and result.context_witness is not None:
@@ -2930,8 +2863,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             return compile_group(plan)
         class CustomFactory(BoundCallFactory):
             contract_id = _LEAD_CALL_FACTORY.contract_id
-            def require_declaration(self):
-                custom_threads.append(threading.get_ident())
+            def require_declaration(self): custom_threads.append(threading.get_ident())
             def declare_result_owners(self, offers):
                 custom_threads.append(threading.get_ident())
                 raise ValueError("custom declaration remains on the calling loop")
@@ -2975,20 +2907,20 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         assert_done_ledger(result)
 
         self.assertEqual(tuple(call.accounting.usage for call in result.provider_calls),
-                         (ProviderUsage(25043, 149, 0), ProviderUsage(53410, 298, 0)))
+                         (ProviderUsage(28997, 195, 0), ProviderUsage(88866, 1411, 0)))
         usage_observations = tuple(call.accounting.usage_observation for call in result.provider_calls)
         self.assertTrue(all(item.scope is ProviderUsageScope.SESSION_CUMULATIVE for item in usage_observations))
         self.assertTrue(usage_observations[0].session_start)
         self.assertEqual(usage_observations[1].previous_prefix_ref, usage_observations[0].prefix_ref)
         self.assertEqual(usage_observations[1].session_ref, usage_observations[0].session_ref)
         self.assertEqual(normalized_provider_usage(usage_observations[1], usage_observations[0]),
-                         ProviderUsage(28367, 149, 0))
+                         ProviderUsage(59869, 1216, 0))
         observed_trace = LeadGroupTrace("native-reader-observation", tuple(group_observations), "accepted")
         native_report = group_trace_report(observed_trace,
             tuple((item.call_id, item.accounting) for item in result.provider_calls))
         self.assertEqual((native_report["submitted_calls"], native_report["input_tokens"],
                           native_report["output_tokens"], native_report["cached_input_tokens"]),
-                         (2, 53410, 298, 0))
+                         (2, 88866, 1411, 0))
         self.assertEqual((native_report["full_deliveries"], native_report["delta_deliveries"]), (1, 1))
         self.assertEqual(native_report["phase_submitted_calls"]["select"], 1)
         self.assertEqual(native_report["phase_submitted_calls"]["generate"], 1)
@@ -3150,8 +3082,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             {"total_token_usage": {"input_tokens": 2000, "output_tokens": 20, "cached_input_tokens": 0},
              "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
             {"total_token_usage": {"input_tokens": 3000, "output_tokens": 30, "cached_input_tokens": 0},
-             "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
-        ]
+             "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}}, ]
         def persist_owned_records(owned_history):
             return b"".join(canonical_provider_json(row) + b"\n" for row in owned_history.records)
         def add_noncritical_metadata(owned_history):
@@ -3159,10 +3090,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             owned_history.path.write_bytes(persist_owned_records(owned_history))
         def replace_metadata_without_changing_inputs(owned_history):
             for row in owned_history.records:
-                if row["type"] == "world_state":
-                    row["payload"]["note"] = "short metadata"
-                elif row["type"] == "session_meta":
-                    row["payload"]["cli_version"] = "0.164.1"
+                if row["type"] == "world_state": row["payload"]["note"] = "short metadata"
+                elif row["type"] == "session_meta": row["payload"]["cli_version"] = "0.164.1"
             import sqlite3
             with sqlite3.connect(owned_history.root / "state_5.sqlite") as connection:
                 connection.execute("INSERT INTO threads VALUES (?, ?, 0)",
@@ -3245,8 +3174,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             {"total_token_usage": {"input_tokens": 1100, "output_tokens": 11, "cached_input_tokens": 0},
              "last_token_usage": {"input_tokens": 1100, "output_tokens": 11, "cached_input_tokens": 0}},
             {"total_token_usage": {"input_tokens": 2100, "output_tokens": 21, "cached_input_tokens": 0},
-             "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
-        ]
+             "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}}, ]
         def change_bootstrap_input(owned_history):
             record = next(row for row in owned_history.records if row["type"] == "response_item"
                           and row["payload"].get("role") == "user")
@@ -3262,8 +3190,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.addCleanup(connection.close)
             connection.execute("BEGIN EXCLUSIVE")
             held_databases.append(connection)
-        def release_native_database():
-            held_databases[-1].rollback()
+        def release_native_database(): held_databases[-1].rollback()
         native_mutations = {2: change_bootstrap_input, 3: hold_native_database}
         native_cleanups = {3: release_native_database}
         unavailable_native_calls = {2, 3}
@@ -3372,8 +3299,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             (True, True, False, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
             (False, True, False, "cccccccc-cccc-4ccc-8ccc-cccccccccccc"),
             (False, False, False, "dddddddd-dddd-4ddd-8ddd-dddddddddddd"),
-            (False, True, True, "abababab-abab-4bab-8bab-abababababab"),
-        ):
+            (False, True, True, "abababab-abab-4bab-8bab-abababababab"), ):
             requests, invocations, raw_responses, native_witnesses, native_commands = [], [], [], [], []
             native_results = []
             history = OwnedNativeHistory(self, thread_id=native_thread)
@@ -3385,12 +3311,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 {"total_token_usage": {"input_tokens": 2000, "output_tokens": 20, "cached_input_tokens": 0},
                  "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
                 {"total_token_usage": {"input_tokens": 3000, "output_tokens": 30, "cached_input_tokens": 0},
-                 "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
-            ]
+                 "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}}, ]
             hidden, inspect_native = [], codex_adapter_module._inspect_codex_native_observation_async
             def restore_rollout():
-                if hidden and hidden[-1][0].exists():
-                    hidden[-1][0].replace(hidden[-1][1])
+                if hidden and hidden[-1][0].exists(): hidden[-1][0].replace(hidden[-1][1])
             async def inspect_before_publication(*args, **kwargs):
                 observed = await inspect_native(*args, **kwargs)
                 if transient and hidden and observed.check.reason is NativeContextCheckReason.ROLLOUT_NOT_VISIBLE:
@@ -3405,15 +3329,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             inspection_fault, fault_active = RuntimeError("PRIVATE_NATIVE_INSPECTION_DETAIL"), [False]
             original_file_facts = codex_adapter_module._native_file_facts
             def file_facts(path, *args, **kwargs):
-                if fault_active[0] and Path(path) == history.path:
-                    raise inspection_fault
+                if fault_active[0] and Path(path) == history.path: raise inspection_fault
                 return original_file_facts(path, *args, **kwargs)
             pre_submit_probe = None
             if unexpected:
-                def fail_post_inspection(_owned_history):
-                    fault_active[0] = True
-                def finish_post_inspection():
-                    fault_active[0] = False
+                def fail_post_inspection(_owned_history): fault_active[0] = True
+                def finish_post_inspection(): fault_active[0] = False
                 native_mutations, native_cleanups = {2: fail_post_inspection}, {2: finish_post_inspection}
                 async def pre_submit_probe(binding, invocation):
                     no_native = mock.AsyncMock(side_effect=AssertionError("precheck reached native execution"))
@@ -3423,8 +3344,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                                 mock.patch("story_writing_agents.codex_adapter.run_process", new=no_native), \
                                 self.assertRaises(ProviderInvocationError) as before_native:
                             await native_invoke(binding, invocation)
-                    finally:
-                        fault_active[0] = False
+                    finally: fault_active[0] = False
                     no_native.assert_not_awaited()
                     self.assertIs(before_native.exception.__cause__, inspection_fault)
                     self.assertIs(before_native.exception.native_context_check.stage, NativeContextCheckStage.PRE_SUBMIT)
@@ -3487,26 +3407,22 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             packet["agent_action"]["queries"][0]["search_text"] = read_marker
             return json.dumps(packet)
         read_view = SimpleNamespace(callback_payload=callback_views.for_request)
-        def read_lineage_source(call, _provider):
-            return _read_search_hit(call, read_view)
+        def read_lineage_source(call, _provider): return _read_search_hit(call, read_view)
         def change_middle_read(owned_history):
             marker = requests[2].call_id
             matching = [row for row in owned_history.records if row["type"] == "response_item"
                         and row["payload"].get("role") == "user" and
                         json.loads(row["payload"]["content"][0]["text"])["response_contract"]["schema_selection"]["issued_contract"]["call_id"] == marker]
             self.assertEqual(len(matching), 1)
-            if lose_read == "delete":
-                owned_history.records.remove(matching[0])
+            if lose_read == "delete": owned_history.records.remove(matching[0])
             else:
                 packet = json.loads(matching[0]["payload"]["content"][0]["text"])
                 packet["request_correlation_token"] = "ALTERED_MIDDLE_READ"
                 matching[0]["payload"]["content"][0]["text"] = canonical_provider_json(packet).decode("utf-8")
             owned_history.path.write_bytes(persist_owned_records(owned_history))
-        for lose_read, native_thread in (
-            (False, "12121212-1212-4212-8212-121212121212"),
+        for lose_read, native_thread in ( (False, "12121212-1212-4212-8212-121212121212"),
             (True, "13131313-1313-4313-8313-131313131313"),
-            ("delete", "14141414-1414-4414-8414-141414141414"),
-        ):
+            ("delete", "14141414-1414-4414-8414-141414141414"), ):
             requests, invocations, raw_responses, native_witnesses, native_commands = [], [], [], [], []
             native_results, native_usage_cases = [], None
             pre_submit_probe = None
@@ -3528,8 +3444,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaises(ContextExecutionError) as missing_read:
                         await service.invoke(read_request, ObservedProvider(),
                             group_observation_sink=observations.append, **authorities)
-                else:
-                    complete_read = await service.invoke(read_request, ObservedProvider(),
+                else: complete_read = await service.invoke(read_request, ObservedProvider(),
                         group_observation_sink=observations.append, **authorities)
             self.assertEqual((len(invocations), len(native_commands)), (5, 5))
             self.assertEqual(tuple(call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"]
@@ -3568,8 +3483,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             root.chmod(0o700)
             path = root / "sessions" / "2026" / "10" / "30" / f"rollout-2026-10-30T00-00-00-{thread}_{rollout}.jsonl"
             path.parent.mkdir(parents=True, mode=0o700)
-            for parent in (root / "sessions", path.parent.parent, path.parent):
-                parent.chmod(0o700)
+            for parent in (root / "sessions", path.parent.parent, path.parent): parent.chmod(0o700)
             database = root / "state_5.sqlite"
             with sqlite3.connect(database) as connection:
                 connection.execute("CREATE TABLE threads(id TEXT PRIMARY KEY, rollout_path TEXT, archived INTEGER)")
@@ -3598,6 +3512,35 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(witness.call_id, selection.call_id)
             self.assertEqual(witness.payload_sha256, hashlib.sha256(first.payload_json).hexdigest())
             self.assertEqual(witness.turn_id, "turn-1")
+            environment_text = ("<environment_context>\n<cwd>" + str(first.execution_workspace.worktree_root)
+                + "</cwd>\n<shell>zsh</shell>\n<current_date>2026-11-03</current_date>\n<timezone>Asia/Seoul</timezone>\n"
+                + "<filesystem><workspace_roots><root>" + str(first.execution_workspace.worktree_root)
+                + "</root></workspace_roots><permission_profile type=\"managed\"><file_system type=\"restricted\">"
+                + "<entry access=\"read\"><special>:root</special></entry></file_system></permission_profile></filesystem>\n</environment_context>")
+            def user(text):
+                return {"type": "response_item", "payload": {"type": "message", "role": "user",
+                    "content": [{"type": "input_text", "text": text}]}}
+            started, wire, completed = turn(first, "turn-1")
+            environment = user(environment_text)
+            other_wire = user(json.dumps({**json.loads(first.payload_json), "other_business_request": True}))
+            for messages, accepted in (([environment, wire], True), ([environment, wire, wire], False),
+                    ([environment, wire, other_wire], False), ([wire, environment], False),
+                    ([environment, environment, wire], False), ([user("Unrelated author instruction"), wire], False),
+                    ([user("prefix" + environment_text), wire], False), ([user(environment_text + "business prose"), wire], False),
+                    ([environment, other_wire], False)):
+                write([metadata, started, *messages, completed])
+                observed = codex_adapter.inspect_codex_context_witness(root, first, thread)
+                self.assertEqual(observed is not None, accepted, messages)
+                if accepted: self.assertEqual(observed.input_lineage_count, 1)
+            write([metadata, started, environment, wire])
+            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
+            write(records)
+            from story_writing_agents.agent_context.accounting import ProviderUsage, ProviderUsageScope, normalized_provider_usage
+            raw_usage = ProviderUsage(7, 3, 0)
+            uninspected = codex_adapter._codex_usage_observation(raw_usage, None, replace(first, context_call_id=None))
+            self.assertEqual(uninspected.raw, raw_usage)
+            self.assertIs(uninspected.scope, ProviderUsageScope.UNKNOWN)
+            self.assertEqual(uninspected.source, "codex.turn.completed.usage:context_not_inspected")
             self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread, previous=witness, before=True))
             self.assertIs(codex_adapter.inspect_codex_context_witness(root, first, thread, previous=witness, anchor=witness, before=True), witness)
             self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, rollout))
@@ -3611,16 +3554,37 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             continued = codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness)
             self.assertIsNotNone(continued)
             self.assertEqual(continued.turn_id, "turn-2")
+            total_first, total_second, last_second = ProviderUsage(28997, 195, 0), ProviderUsage(88866, 1411, 0), ProviderUsage(59869, 1216, 0)
+            first_observed = SimpleNamespace(witness=witness, usage_pair=(total_first, total_first), previous_usage=None, first_native_turn=True)
+            resumed = codex_adapter._codex_usage_observation(total_first, first_observed, replace(first, thread_id=thread))
+            self.assertIs(resumed.scope, ProviderUsageScope.SESSION_CUMULATIVE)
+            self.assertFalse(resumed.session_start)
+            self.assertIsNone(resumed.previous_prefix_ref)
+            self.assertIsNone(normalized_provider_usage(resumed))
+            second_observed = SimpleNamespace(witness=continued, usage_pair=(total_second, last_second), previous_usage=total_first, first_native_turn=False)
+            next_invocation = replace(second, context_witness=witness, context_anchor=witness)
+            recovered = codex_adapter._codex_usage_observation(total_second, second_observed, next_invocation)
+            self.assertEqual(recovered.previous_prefix_ref, resumed.prefix_ref)
+            self.assertEqual(normalized_provider_usage(recovered, resumed), last_second)
+            for changes, raw, reason in (({"usage_pair": None}, total_second, "usage_missing"),
+                    ({}, total_first, "raw_total_mismatch"), ({"previous_usage": None}, total_second, "predecessor_missing"),
+                    ({"previous_usage": ProviderUsage(90000, 1500, 0)}, total_second, "cumulative_reset"),
+                    ({"usage_pair": (total_second, total_first)}, total_second, "native_last_mismatch"),
+                    ({"witness": replace(continued, settings_digest="0" * 64)}, total_second, "settings_changed")):
+                observed = SimpleNamespace(**{**vars(second_observed), **changes})
+                unavailable = codex_adapter._codex_usage_observation(raw, observed, next_invocation)
+                self.assertIs(unavailable.scope, ProviderUsageScope.UNKNOWN)
+                self.assertEqual(unavailable.raw, raw)
+                self.assertEqual(unavailable.source, "codex.turn.completed.usage:" + reason)
+            self.assertIsNone(codex_adapter._codex_usage_observation(None, second_observed, next_invocation))
             self.assertEqual(continued.file_identity, witness.file_identity)
             self.assertGreater(continued.prefix_utf8_bytes, witness.prefix_utf8_bytes)
             self.assertEqual(hashlib.sha256(path.read_bytes()[:witness.prefix_utf8_bytes]).hexdigest(), witness.prefix_sha256)
             self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness, before=True))
-            invalid = [
-                [*records, *turn(second, "turn-2")[:-1]],
+            invalid = [ [*records, *turn(second, "turn-2")[:-1]],
                 [*records, {"type": "compacted", "payload": {}}, *turn(second, "turn-2")],
                 [*records, {"type": "event_msg", "payload": {"type": "thread_rolled_back", "turn_id": "turn-2"}}, *turn(second, "turn-2")],
-                [*records, *turn(second, "turn-2"), *turn(second, "turn-3")],
-            ]
+                [*records, *turn(second, "turn-2"), *turn(second, "turn-3")], ]
             for bad_records in invalid:
                 write(bad_records)
                 self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
@@ -3651,8 +3615,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             replacement.chmod(0o600)
             replacement.replace(path)
             self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
-            with sqlite3.connect(database) as connection:
-                connection.execute("UPDATE threads SET archived=1")
+            with sqlite3.connect(database) as connection: connection.execute("UPDATE threads SET archived=1")
             self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
             with sqlite3.connect(database) as connection:
                 connection.execute("UPDATE threads SET archived=0, rollout_path=?", (str(root / "outside.jsonl"),))
@@ -3693,8 +3656,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 if candidate == path:
                     observed += 1
                     if observed == 1:
-                        with path.open("ab") as stream:
-                            stream.write(b'{"type":"world_state","payload":{}}\n')
+                        with path.open("ab") as stream: stream.write(b'{"type":"world_state","payload":{}}\n')
                 return facts
 
             with mock.patch.object(codex_adapter, "_native_file_facts", side_effect=concurrent_change):
@@ -3713,8 +3675,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 try:
                     self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread))
                     self.assertFalse(shared.exists())
-                finally:
-                    saved.replace(shared)
+                finally: saved.replace(shared)
 
     async def test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread(self) -> None:
         session_id = "contextual_physical"
@@ -3727,8 +3688,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         policy = "sha256:" + "7" * 64
         payload, component_paths = compact_context_payload(_shared_context_payload(), {
             ("task_input",): ContextComponentKind.CURRENT_INPUT,
-            ("session_history",): ContextComponentKind.CONVERSATION_CONTEXT,
-        })
+            ("session_history",): ContextComponentKind.CONVERSATION_CONTEXT, })
         payload.update({"request_correlation_token": "A" * 43, "response_contract": {"workflow_phase": "conversation", "result_contract_id": "text"}})
         schema = {"type": "object", "properties": {"action": {"anyOf": [
             {"type": "string", "enum": ["answer"]}, {"type": "string", "enum": ["clarify"]}]}},
@@ -3758,8 +3718,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.accounting.usage, ProviderUsage(0, 2))
         self.assertEqual(first.accounting.actual_transport_utf8_bytes, len(captured[0].payload_json))
         self.assertEqual(captured[0].execution_workspace.worktree_root, provision_session_resources(self.workspace.root, session_id).identity.worktree_root)
-        with self.assertRaises(SessionArtifactBindingError):
-            captured[0].execution_workspace.require_current()
+        with self.assertRaises(SessionArtifactBindingError): captured[0].execution_workspace.require_current()
         exchanges = _agent_exchange_records(self.workspace)
         self.assertEqual(len(exchanges), 6)
         self.assertEqual(sum(record["request_type"] == "request" for record in exchanges), 2)

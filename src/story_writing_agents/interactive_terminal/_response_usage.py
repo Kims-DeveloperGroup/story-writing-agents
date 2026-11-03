@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ..agent_context.accounting import normalized_provider_usage
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..conversations import (
     CollaborationEvent,
@@ -18,6 +18,8 @@ from ..conversations import (
 class ResponseUsage:
     input_tokens: int | None = None
     output_tokens: int | None = None
+    scope: str = field(default="invocation", kw_only=True, compare=False)
+    call_count: int | None = field(default=None, kw_only=True, compare=False)
 
 
 def response_usage(
@@ -28,8 +30,10 @@ def response_usage(
     call_id: str | None = None,
 ) -> ResponseUsage:
     """Sum the complete distinct submitted set for one exact response owner."""
+    scope = "physical_call" if call_id is not None else "invocation"
+    unavailable = ResponseUsage(scope=scope, call_count=1 if call_id is not None else None)
     if invocation_id is None:
-        return ResponseUsage()
+        return unavailable
     identity = session_id, conversation_id, turn_id, step_id
     calls: dict[str, CollaborationProviderCallPayload] = {}
     kinds: set[CollaborationInvocationKind] = set()
@@ -39,24 +43,24 @@ def response_usage(
             continue
         if ((event.session_id, event.conversation_id, event.turn_id, event.step_id) != identity
                 or payload.role != role or payload.invocation_kind not in invocation_kinds):
-            return ResponseUsage()
+            return unavailable
         kinds.add(payload.invocation_kind)
         if payload.state is not CollaborationProviderCallState.SUBMITTED:
             continue
         prior = calls.get(payload.call_id)
         if prior is not None and prior != payload:
-            return ResponseUsage()
+            return unavailable
         calls[payload.call_id] = payload
     if len(kinds) != 1 or not calls:
-        return ResponseUsage()
+        return unavailable
     observed_ordinals = [call.ordinal for call in calls.values()]
     if len(set(observed_ordinals)) != len(observed_ordinals):
-        return ResponseUsage()
+        return unavailable
     if call_id is None and set(observed_ordinals) != set(range(1, len(calls) + 1)):
-        return ResponseUsage()
+        return unavailable
     if call_id is not None:
         if call_id not in calls:
-            return ResponseUsage()
+            return unavailable
         calls = {call_id: calls[call_id]}
 
     predecessors = {}
@@ -89,7 +93,8 @@ def response_usage(
             return None
         return sum(value for value in values if value is not None)
 
-    return ResponseUsage(counter("input_tokens"), counter("output_tokens"))
+    return ResponseUsage(counter("input_tokens"), counter("output_tokens"),
+                         scope=scope, call_count=len(calls))
 
 
 def response_footer(outcome: str, usage: ResponseUsage, *, elapsed: str | None = None) -> str:
@@ -99,4 +104,8 @@ def response_footer(outcome: str, usage: ResponseUsage, *, elapsed: str | None =
         first += f" | Elapsed: {elapsed}"
     input_count = "unavailable" if usage.input_tokens is None else f"{usage.input_tokens:,}"
     output_count = "unavailable" if usage.output_tokens is None else f"{usage.output_tokens:,}"
-    return first + f"\nInput tokens: {input_count} | Output tokens: {output_count}"
+    count = (f" ({usage.call_count} {'call' if usage.call_count == 1 else 'calls'})"
+             if usage.call_count is not None else "")
+    scope = ("physical call" if usage.scope == "physical_call" else
+             "invocation" + count)
+    return first + f"\nUsage scope: {scope}\nInput tokens: {input_count} | Output tokens: {output_count}"
