@@ -473,7 +473,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             return True
         adapter = InteractiveLeadAdapter(
             RuntimeSession.__new__(RuntimeSession), runner, progress,
-            mock.MagicMock(), mock.MagicMock(), mock.MagicMock(), recover_authentication=recover)
+            mock.MagicMock(), mock.MagicMock(), mock.MagicMock(), recover_authentication=recover, confirmation=mock.MagicMock())
         async def fake_operation() -> str:
             events.append("setup")
             observed_sinks.append(active_provider_stream_sink())

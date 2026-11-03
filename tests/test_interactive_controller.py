@@ -4362,9 +4362,12 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         original_picker = terminal_module.InteractivePickerInput.read_picker
         original_prompt = terminal_module.InteractivePromptInput.read_prompt
+        original_confirmation = terminal_module.InteractiveConfirmationInput.read_confirmation
         with (
             _observed_picker_patch(original_picker) as picker,
             _observed_prompt_patch(original_prompt) as prompt,
+            mock.patch.object(terminal_module.InteractiveConfirmationInput, "read_confirmation",
+                              autospec=True, side_effect=original_confirmation) as confirmation,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
@@ -4378,15 +4381,12 @@ class ControllerSettingsTests(ControllerTestCase):
                 for call in picker.call_args_list
             )
         )
-        confirmation_calls = [
-            call
-            for call in picker.call_args_list
-            if call.args[1].name in {"Apply changes?", "Discard changes?"}
-        ]
+        confirmation_calls = confirmation.call_args_list
         self.assertEqual(len(confirmation_calls), 1)
-        self.assertEqual(len(confirmation_calls[0].kwargs["transient_context"]), 1)
+        self.assertTrue(confirmation_calls[0].kwargs["binary"])
+        self.assertEqual(len(confirmation_calls[0].kwargs["context"]), 1)
         self.assertIsInstance(
-            confirmation_calls[0].kwargs["transient_context"][0],
+            confirmation_calls[0].kwargs["context"][0],
             terminal_module.Panel,
         )
         self.assertTrue(
@@ -6830,7 +6830,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         from hashlib import sha256
         from story_writing_agents.writing_artifacts import ArtifactCreateOperation, ArtifactKind
         operation = ArtifactCreateOperation("manuscript/part-01/chapter.md", ArtifactKind.MANUSCRIPT,
-            b"candidate", "sha256:" + sha256(b"candidate").hexdigest())
+            b"candidate", sha256(b"candidate").hexdigest())
         digest = "sha256:" + "a" * 64
         candidate_id = "b" * 64
         reviewed = SimpleNamespace(
@@ -7024,7 +7024,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 return wrapper()
 
         session = RuntimeSession.__new__(RuntimeSession)
-        adapter = InteractiveLeadAdapter(
+        adapter = self._adapter(
             session,
             runner,
             FakeProgress(),  # type: ignore[arg-type]
@@ -7046,7 +7046,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         runner = asyncio.Runner()
         self.addCleanup(runner.close)
 
-        adapter = InteractiveLeadAdapter(
+        adapter = self._adapter(
             session,
             runner,
             mock.MagicMock(),
