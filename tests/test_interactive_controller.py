@@ -5914,8 +5914,8 @@ class ControllerConversationCommandTests(ControllerTestCase):
         commit = InteractiveLeadAdapterTests._commit
         controller._picker_input = InteractiveLeadAdapterTests._Picker(commit(source), commit(idea.idea_id),
                               commit("partial"), commit("authoring"), ControlOutcome(ControlOutcomeKind.CANCEL))
-        controller._prompt_input = InteractiveLeadAdapterTests._Prompt(commit("8:23"),
-                                           commit("core_documents/global_outline.md"))
+        controller._prompt_input = InteractiveLeadAdapterTests._Prompt(commit("8:23"), commit("core_documents/global_outline.md"))
+        controller._confirmation_input = SimpleNamespace(read_confirmation=controller._picker_input.read_picker, read_revision=controller._prompt_input.read_prompt)
         self.assertFalse(controller._dispatch_session_lobby_action(
                          controller_core_module.parse_interactive_line("/adopt"), "/adopt"))
         captured = next(e.payload.capture for e in case.history(owner)
