@@ -2814,7 +2814,7 @@ def _require_hook_guards(callbacks: tuple[Callable, ...], identities: tuple[str,
 def _hook_default_identity(
     value: object, seen: set[int], *,
     _digests: tuple[dict[int, tuple[object, str]], dict[int, tuple[object, str]],
-                    dict[int, tuple[object, object, bool]]] | None = None,
+                    dict[int, tuple[object, object, bool] | tuple[object, object, bool, tuple]]] | None = None,
     _attest_captures: bool = False,
     _guard: list[tuple | None] | None = None,
 ) -> object:
@@ -2939,6 +2939,14 @@ def _hook_default_identity(
                 value, seen, _digests=_digests, _attest_captures=_attest_captures,
                 _guard=_guard,
             ))
+        cached_dataclass = _digests[2].get(id(value)) if _guard is not None else None
+        if (cached_dataclass is not None and len(cached_dataclass) == 4
+                and cached_dataclass[0] is value
+                and cached_dataclass[2] is _attest_captures
+                and _hook_guard_matches(cached_dataclass[3])):
+            _guard.extend(cached_dataclass[3])
+            return cached_dataclass[1]
+        dataclass_start = len(_guard) if _guard is not None else 0
         dataclass_guard = _capture_hook_dataclass(value) if _guard is not None else None
         if is_dataclass(value) and getattr(type(value), "__dataclass_params__").frozen:
             declared_fields = fields(value)
@@ -3019,7 +3027,13 @@ def _hook_default_identity(
                 )))
             if _guard is not None and all(inspect.ismemberdescriptor(item) for item, _ in edges):
                 _guard[guard_start] = ("slots", value, type(value), tuple(edges))
-            return ("frozen_dataclass", module, name, tuple(identities))
+            identity = ("frozen_dataclass", module, name, tuple(identities))
+            if _guard is not None:
+                guarded = _compact_hook_metadata(_guard[dataclass_start:])
+                # Owner declarations also validate their anchors; keep that path intact.
+                if guarded is not None and not any(step[0] == "declaration" for step in guarded):
+                    _digests[2][id(value)] = (value, identity, _attest_captures, guarded)
+            return identity
         raise TypeError("unsupported semantic hook default declaration")
     finally:
         seen.remove(id(value))
