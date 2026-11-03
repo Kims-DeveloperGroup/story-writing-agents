@@ -100,10 +100,9 @@
 > keeps all seven clean-root or all nine dirty-root choices visible in the
 > current rendered frame while leaving global `/auth` and other generic pickers
 > unchanged.
-> #391 makes the changed-only Settings comparison part of the capable
-> Apply/Discard confirmation frame itself. The complete frame clears on every
-> exit, while ordinary-line fallback omits comparison context that it could not
-> erase.
+> #391 made the changed-only comparison part of the capable confirmation
+> frame. #918 retains its transient cleanup and also discloses comparison and
+> activation context in ordinary-line fallback, with NO initially focused.
 > #397 keeps true Settings state facts beside their row labels when physical
 > width leaves a useful shared summary column, and stacks those facts when it
 > does not. Descriptions, disabled reasons, and guidance keep their established
@@ -151,6 +150,7 @@ current production behavior.
 
 | Slice | Current availability |
 | --- | --- |
+| #918 shared confirmation decisions | Purpose-bound message-style framing; numbered regions and P/C/E role markers/colors/rails; binary NO/action unselected; scoped aliases and Revise retry/return; full settings fallback comparison and exact authority; ordinary picker/public legacy contracts remain unchanged. |
 | #82 terminal foundation | Implemented: package boundary, private semantic values, current line-edit transitions and suggestion projection, responsive renderer, capability observation, sole raw driver, unified CLI construction, compatibility facades, and index reconciliation. |
 | #83 output-view migration | Implemented: orientation/current context, interactive status and inspection, central errors and recovery, and accepted management, advisory, retrieval, and consensus output use semantic components with responsive plain/fixed-ANSI rendering. Facts, copy, order, callback granularity, and noninteractive contracts remain unchanged. |
 | #84 information-dense view migration | Implemented: semantic full/context help, agent roster, session/conversation lists, search, transcript, and focused history preserve exact facts, copy, order, callback boundaries, cancellation, and empty behavior across responsive plain/fixed-ANSI rendering. |
@@ -190,8 +190,8 @@ current production behavior.
 | #340 wider loading row | Implemented: the generic text-free block-shade shimmer now uses a sixteen-cell track when width permits, while preserving width fitting, rightmost-cell reservation, color, and spatially equivalent `NO_COLOR` motion. Detailed Lead/specialist progress preserves its eight-cell bar alongside `HH:MM:SS · Working`. |
 | #332 startup loading progress | Implemented: capable interactive startup shows the same text-free colorful shimmer during conversation-storage activation before the welcome and during one continuous authenticated CLI-context/backend/controller preparation span before the lobby; both rows clear before the next view, fallback is silent, and startup copy, errors, ordering, and ownership transfer remain unchanged. |
 | #333 delayed picker progress | Implemented: native authentication status probes and persisted session/conversation reads before omitted resume pickers run off-loop beneath the same text-free colorful shimmer; progress clears before refreshed authentication, picker, empty, or error views, while choices, fresh-read guarantees, cancellation, mapping, and silent fallback remain unchanged. |
-| #115 settings lifecycle | Implemented: capable committed `/settings` input is cleared from the live display without deleting its history entry; dirty-only Apply and Discard use transient selectable YES/NO confirmations; capable confirmation context shows only changed Current/Pending fields with `(Changed)` cues, while a no-changes panel remains defensive internal projection; fallback paths preserve visible committed input and report no cleanup they cannot perform. #391 defines the current capable-frame ownership and fallback omission. |
-| #391 transient Settings confirmation context | Implemented: on capable streams, the changed-only Current/Pending comparison and applicable activation notice are prepended to the same live FORM frame as the Apply/Discard YES/NO picker. The driver clears that complete frame before every returned outcome and attempts the same cleanup before propagating a failure, so the comparison is not a separate durable semantic panel. Ordinary-line, `TERM=dumb`, non-POSIX, and uncertain-capability fallback omits the comparison and activation context, including validation retries, because it cannot erase printed output. Apply/Discard outcomes and persistence behavior are unchanged. |
+| #115 settings lifecycle | Implemented: capable committed `/settings` input is cleared from the live display without deleting its history entry; dirty-only Apply and Discard use transient selectable YES/NO confirmations; capable confirmation context shows only changed Current/Pending fields with `(Changed)` cues, while a no-changes panel remains defensive internal projection; fallback paths preserve visible committed input and report no cleanup they cannot perform. #391 defines the historical capable-frame ownership; #918 adds fallback comparison and activation disclosure. |
+| #391 transient Settings confirmation context | Capable changed-only comparison and activation context remain transient and clear before return/failure. #918 supersedes the earlier fallback omission: shared confirmation now includes the same facts in ordinary-line output, with NO initially focused. |
 | #119 debate visibility | Implemented and superseded in presentation by #353/#368: its handoff/action facts and durable messages now appear together in one atomic phase-named Panel per progress event. |
 | #123 Panel splitters | Implemented: every semantic `Panel` renders a responsive ASCII top splitter carrying its title and state plus a bottom splitter, without side borders or changes to interaction/runtime behavior. |
 | #126 Enter completion and spacing | Implemented: at capable main prompts, Enter applies a highlighted suggestion without submitting and dismisses the palette so a second Enter submits; Enter and Tab add one ASCII trailing space only when the replaced token ends at the buffer end. |
@@ -278,7 +278,8 @@ runtime services, or storage handles.
 ### Shared Box presentation
 
 `Box` is the private framed-output presentation primitive shared by chat
-messages and the provider-output viewer. It reuses the viewer's continuous
+messages, shell confirmation decisions, and the provider-output viewer. It
+reuses the viewer's continuous
 Unicode borders, display-cell-aware title fitting, and body padding. It adds
 no member to the semantic `Component` union and owns no input, scrolling,
 stream, or view state. Renderers supply content and semantic color roles.
@@ -352,6 +353,8 @@ from style, punctuation, or cursor position.
 | `error` | The control or operation ended in a trusted, user-visible failure state. |
 | `cancelled` | The interaction ended without commit. Established cancellation consequences remain authoritative. |
 | `completed` | The interaction or operation committed and finished successfully. |
+
+Shell confirmation decisions may have an OPEN picker with no highlight or selection until explicit navigation; ordinary picker initialization remains unchanged. Input validation rejection is distinct from recording a domain Reject decision.
 
 Focus belongs to a control, not to an item. A focused palette may highlight one
 candidate; a focused picker may highlight one enabled item. Disabled items are
@@ -749,7 +752,8 @@ changing the established controls.
 | Hosted external JSONL viewer | Story transports decoded physical text/keys or literal ordinary lines. The external engine owns all bindings, actions, and line grammar. | Goto and search change only transient viewer state; there is no content commit, selection return, replay, or source edit. | The external engine applies main-view Escape/Ctrl-C cancel behavior; `q`, EOF, or final cancel closes. Story restores its terminal. |
 | Hosted viewer search/goto draft | The external engine owns the draft and printable logical cursor. Left/Right, Home/End, Backspace/Delete, and Ctrl-A/E/U/K/W edit there; command letters are literal text, while Up/Down and Page keys are inert. | Enter submits the stage; invalid input remains in the draft with a visible validation error. | The engine interprets Escape or decoded unknown-Escape input as draft cancellation, preserving committed state. Interrupt or EOF closes. Decoding or transport failures use Story's terminal-error/restoration path. |
 | Line-oriented composer | Each ordinary line appends exact content. Up/Down, Tab, Shift-Tab, and Escape are no-ops; no full-screen editing or command-history traversal is introduced. | `/send` commits the exact LF-joined content when nonblank. | `/cancel`, Ctrl-C, and EOF preserve established discard outcomes and counts. |
-| Confirmation | Existing accepted yes/no input and blank-default behavior remain authoritative. Up/Down, Tab, Shift-Tab, and Escape are no-ops. Invalid input marks the choices as erroneous, writes one hint, and asks again. | A valid answer or blank default returns the established `yes` or `no` result. | Ctrl-C and EOF return the established `interrupt` or `eof` result. |
+| Public legacy yes/no confirmation | Existing yes/no input and explicit blank default remain authoritative. Up/Down, Tab, Shift-Tab, and Escape are no-ops. Invalid input writes one hint and retries. | A valid answer or blank default returns the established yes/no result. | Ctrl-C and EOF retain established typed results. |
+| Shell confirmation decision | Binary requests start on NO; action requests start unselected. Up/Down chooses enabled actions; F6 reviews without deciding. | Enter accepts the exact focused action; initial action Enter reports unselected. Scoped aliases are defined below. | Esc leaves unconfirmed; Ctrl-C/EOF retain caller semantics. Revise Esc returns to the same pending choice. |
 
 `/say /send` and `/say /cancel` in composition continue to append literal
 `/send` and `/cancel` lines. The composer remains line-oriented; preview,
@@ -823,7 +827,7 @@ they are LF-joined for `/send` and discarded for `/cancel`, Ctrl-C, or EOF.
 Composition retains the fixed ordered `/send`, `/cancel` preview, but the
 preview is not selectable and `/say` remains ordinary composer input.
 
-Each confirmation attempt renders `Question`, `Choices`, `Default`, then the
+Each public legacy confirmation attempt renders `Question`, `Choices`, `Default`, then the
 final focused prompt. It has no suggestion provider. Invalid input writes one
 semantic error hint, marks `Choices` as erroneous on the retry view, and reads
 again. A valid answer, blank default, Ctrl-C, or EOF retains its established
@@ -842,6 +846,195 @@ entry, `error` for an empty `/send`, `completed` on send, and `cancelled` on
 discard. Each event and each invalid-confirmation hint remains one render and
 one callback write. The public generic `write_status` method remains for
 compatibility, but no internal composer call site uses it.
+
+### Confirmation presentation and decisions
+
+Issue #918 defines a purpose-bound shell confirmation presentation composed from
+the existing semantic primitives and picker/prompt state. It does not add a
+general `Component` kind, public decision API, persistent view state, or another
+terminal owner. Public legacy `request_confirmation(message, default=...)` and
+ordinary picker initialization, reserved keys, and exact line grammar remain
+separate compatibility contracts.
+
+#### Structure and shared geometry
+
+The frame reads top to bottom: actual action title, summary, any specialist
+assignments, cost and impact, decision actions, then `KEYS`. Use the shared
+rounded `Box`, left alignment, body padding, physical-cell measurement, and
+message word wrapping. Reserve the terminal's last column once; frame width is
+`min(120, max(1, terminal_columns - 1))`. At least 40 available cells use the
+full box; 3–39 use a compact header/body rail, and 1–2 omit decoration.
+Existing generic `Panel`, `STANDARD`, and settings-editor `FORM` presentation
+do not acquire this framing implicitly.
+
+Sections have a bold numbered label, rather than relying only on splitters.
+A three-specialist request uses `[01 SUMMARY]`, `[02 SPECIALISTS · 3]`,
+`[03 COST & IMPACT]`, and `[04 DECISION · Pending]`. Smaller requests number
+only their present sections. Numbers identify reading regions, not execution
+phases or domain authorization. The final `KEYS` region is unnumbered.
+Do not display diagnostic `[focused]`, `[open]`, `[available]`, or
+`[highlighted]` markers in this purpose-bound presentation.
+
+#### Tokens, identity, and focus
+
+| Element | Meaningful text and reinforcement | Existing color role |
+| --- | --- | --- |
+| Title/outer rail | `Confirmation · <actual action>`; bold title | INFO/cyan |
+| Section title/separator | Number and region name in bold; continuous separator | Cyan title, metadata-blue separator |
+| Plot assignment | `[P] PLOT`, `plot_architect`, short connected left rail | SpeakerAccent.YELLOW |
+| Character assignment | `[C] CHARACTER`, `character_custodian`, short connected left rail | SpeakerAccent.GREEN |
+| Execution assignment | `[E] EXECUTION`, `execution_specialist`, short connected left rail | SpeakerAccent.BLUE |
+| Cost/authority | `[COST]`, `[SCOPE]`, `[SEPARATE APPROVAL]`; bold exact maximum | Default text; WARNING/yellow for approval boundaries |
+| Active action | Exactly one `>`, ordinal, and bold active action | INFO/cyan and existing capable emphasis |
+| Error/result | Explicit `ERROR`, `Pending`, `Rejected`, or actual outcome | ERROR/red or confirmed SUCCESS/green |
+| Supporting identity/keys | Exact agent ID and complete `KEYS` guidance | Muted, with readable contrast |
+
+Role accents apply to the marker, role name, and short role rail, not whole
+paragraphs or backgrounds. The Character green is speaker identity, never a
+success claim. Restore the local style after each span. Initial unselected
+actions have no pointer or reverse highlight. Only the explicitly focused
+action receives emphasis; borders and wrapped secondary descriptions remain
+readable. Plain and `NO_COLOR` preserve the same words, numbers, P/C/E markers,
+rails, ordering, and focus pointer without decorative SGR.
+
+#### Exact disclosed work
+
+Show purpose, target, expected result, cost, and impact before the actions.
+Display every specialist's task, sources/ranges, actual assignment mode, and
+call bound. A final review states that reviewers share the same immutable
+candidate; drafting/advisory assignments do not make that claim automatically.
+Keep the complete instructions, premises, sources, operation metadata,
+budgets, and exact request/proposal revisions and digests in the same active
+submission group, available through F6 independently of Message details.
+Do not substitute a compact response footer for required disclosure.
+
+Use authoritative runtime budget facts. A breakdown is displayed only when
+actually supplied by the request; do not infer an extra synthesis call or a
+total from UI labels. The illustrative three-reviewer layout below assumes
+two calls per specialist plus one Lead synthesis call:
+
+```text
+[01 SUMMARY]
+Same immutable candidate · 3 parallel reviews → Lead synthesis
+At a glance: up to 7 additional calls; no file or Git changes.
+
+[02 SPECIALISTS · 3]
+[P] PLOT       plot_architect
+ | Task: causal structure and ending alignment
+ | Source: core_documents/global_outline.md
+ | Calls: up to 2
+
+[C] CHARACTER  character_custodian
+ | Task: motivation and behavioral consistency
+ | Source: core_documents/character_sheets.md
+ | Calls: up to 2
+
+[E] EXECUTION  execution_specialist
+ | Task: narrative rules and scene feasibility
+ | Source: core_documents/narrative_rules.md
+ | Calls: up to 2
+
+[03 COST & IMPACT]
+[COST] Specialists 6 + Lead 1; maximum 7 additional calls
+[SCOPE] Provider work only
+[SEPARATE APPROVAL] Apply and local Commit each need a new decision.
+```
+
+P/C/E are stable role labels, not checkboxes or separate approvals. Confirm
+authorizes the exact whole disclosed proposal once. Changing assignments or
+scope uses Revise and a freshly validated proposal. Apply discloses immutable
+paths, operation kinds, digests, hunks and byte counts without introducing a
+source-content/diff viewer. Commit discloses the exact branch, paths, message
+and boundary; it never implies remote push or pre-existing staging.
+
+#### Selection, revision, and fallback
+
+| Shell confirmation input | Required transition |
+| --- | --- |
+| Binary initial state / empty Enter | NO/return is highlighted; empty Enter returns NO |
+| Three-action initial state | Neither highlight nor selection; no work started |
+| Unselected Down / Up | Focus first/last enabled action without committing |
+| Unselected Enter | One replaceable inline hint; stay open without any decision |
+| Focused Up/Down | Existing enabled-only clamped navigation |
+| Focused Enter | Return the exact enabled action identity once |
+| Esc | Cancel without recording domain Reject; preserve caller scope |
+| Ctrl-C / EOF | Preserve existing typed interrupt/EOF and caller cleanup |
+| F6 / resize | Inspect/reflow without sending a decision or losing draft/focus |
+| Empty Revise | One error in the same editor; continue reading |
+| Revise Esc | Return to the same pending picker with Revise focused |
+
+Settings Apply and Discard both initially highlight NO/return. Their changed
+Current/Pending values and candidate-specific activation notice are included
+in capable and line-fallback presentation. NO/Esc keeps the editing candidate;
+only explicit YES applies or discards it. Settings interrupt/EOF retain their
+existing whole-workflow exit without persistence.
+
+Confirmation-only fallback accepts current ASCII ordinals without leading
+zero and exact current action tokens after trimming/casefolding:
+binary `y/yes/n/no`; preparation/specialist `confirm/reject/revise`;
+Apply `apply/reject/revise`; Commit `commit/reject/revise`.
+Empty binary input returns NO; empty action input reports unselected.
+`/cancel` uses the caller's cancellation boundary. `yes` is not an alias
+for specialist Confirm, Apply, or Commit. Other input retries the same exact
+request with one hint and current grammar. This opt-in normalization does not
+change the strict ordinary picker or public legacy confirmation grammar.
+Main-prompt approval words remain ordinary Lead input.
+
+An invalid input result is not a domain Reject decision. A pending focus is
+not success. The state examples are deliberately distinct:
+
+```text
+[04 DECISION · Pending]
+  1. Confirm
+  2. Reject
+  3. Revise
+No action selected. Choose an action first.
+
+[04 DECISION · Pending]
+  1. Confirm
+> 2. Reject
+  3. Revise
+Enter: reject this exact proposal | Esc: leave unconfirmed
+
+[01 REVISION]
+Revision request >
+[ERROR] Revision request must not be empty.
+Enter: submit revision | Esc: return to pending decision
+```
+
+The first state has no selection emphasis; the second highlights only row 2;
+the third uses a red error label without changing the request or invoking a
+provider. NO_COLOR uses the same labels and pointer. Esc reports that work is
+unconfirmed, whereas an executed Reject reports the recorded rejection.
+
+#### Ownership, recovery, and verification
+
+The controller supplies typed request facts and owns exact decision creation.
+Pure control wrappers/renderers own call-local selection and presentation.
+They use the existing driver's collaborator injection; raw input, capability
+observation, terminal modes, height budgeting, and cleanup remain driver-owned.
+There is no file/Git read, new hash, provider call, command parse, or persistence
+during selection, validation retry, layout, F6, or resize. Runtime still validates
+freshness and single-use identities at the actual decision boundary.
+
+Keep complete disclosures attached to their originating User submission.
+Reduce decoration and spacing before essential action/impact/control facts on
+short terminals. If a safe complete decision control cannot fit beside its
+disclosure, use the existing resize/Esc blocked-control path and prevent Enter
+or aliases from executing. F6 returns to unchanged input. Never replay pending
+historical controls after restart or turn older candidate prose into byte-exact
+evidence. Every live exit/failure follows the existing cleanup and failure
+precedence; no fallback begins after LIVE. Existing native scrollback, retained
+JSON ownership, credentials, and accepted-input echo rules remain intact.
+
+Issue #918 cases A–L and visual states E-1–E-4 map to existing composer/picker
+render and transition tests, controller/collaboration request tests, and
+history/input-lifecycle/PTY restoration tests. Verify public legacy and ordinary
+picker compatibility separately. ANSI-stripped/plain/NO_COLOR retain the same
+semantic facts, and full/compact layouts are checked at the 40-cell boundary
+with actual physical width. Runtime/test changes require the canonical
+affected tests and complete full CI gate without expanding test inventory,
+subTest caps, or source/time budgets.
 
 ### Speaker-aware messages and agent-reply presentation
 
@@ -1058,7 +1251,7 @@ otherwise duplicate parser grammar.
 > pre-Enter dynamic-choice commit is already explicit and bypasses this picker.
 > No supported public picker API is added.
 
-A `Picker` is single-select. Initialization uses an explicit enabled highlight,
+A generic `Picker` is single-select. Initialization uses an explicit enabled highlight,
 then an enabled selected value, then the first enabled choice. Up/Down moves the
 highlight among enabled choices, skips disabled rows, and clamps at the first or
 last enabled choice without changing selection or calling a consumer. Enter
@@ -1231,17 +1424,17 @@ runtime-owned freshness state rather than an editable settings field. Desired
 storage and Conversation RAG remain next-shell settings even when execution
 settings from the same Apply Changes action activate in the current shell.
 
-The presentation reuses `Prompt`, `Picker`, `Choice`, `Field`, and `Notice`
+Ordinary settings-editor presentation reuses `Prompt`, `Picker`, `Choice`, `Field`, and `Notice`
 through the package-internal `FORM` presentation; it is not a new component or
-a general-purpose form abstraction. Every control entered from `/settings`
-uses that presentation, including the authentication picker borrowed while
+a general-purpose form abstraction. Ordinary editors entered from `/settings`
+use that presentation, including the authentication picker borrowed while
 editing Provider. Global `/auth`, omitted-resume selection, and every other
 generic picker retain `STANDARD` presentation. Settings form controls show a
 simple current-view title, optional `Context:`, separate guidance, a blank-
 separated `Choices N/M` region, responsive state summaries, and stacked
 descriptions. They do not render a breadcrumb-like `Settings/Agents/...` title
 or the standard `[focused]`, `[open]`, `[available]`, or `[highlighted]`
-labels.
+labels. Apply/Discard instead opt into the shared [shell confirmation presentation](#confirmation-presentation-and-decisions); ordinary settings editors and borrowed authentication retain FORM.
 
 A clean root contains exactly Language, Persona, Maximum debate rounds,
 Conversation storage, Conversation RAG, Message details, and Agents, with no
@@ -1257,13 +1450,7 @@ Escape exits without confirmation. Confirmation context shows only changed
 fields in both Current and Pending, with each displayed value marked
 `(Changed)`, followed by one activation notice joining only the applicable
 sentences for live runtime, next-shell storage, and next-shell Conversation RAG
-effects. On a capable stream, that context is prepended to the same live FORM
-frame as the YES/NO picker and the complete frame is cleared before any
-outcome returns; cleanup is also attempted before a failure propagates. The
-controller does not emit the comparison as a separate durable semantic panel.
-Ordinary-line fallback, including `TERM=dumb`, omits both the comparison and
-activation context because it cannot erase them; its YES/NO action remains the
-same.
+effects. Both Apply and Discard initially highlight NO/return. The shared confirmation frame includes that comparison and activation context in capable and ordinary-line fallback, including `TERM=dumb`. Capable input clears the complete transient frame before every outcome and attempts cleanup before failure propagation; fallback retains its ordinary printed comparison and prompt. The controller does not emit a second durable comparison panel. NO or Escape retains the pending candidate and returns to settings.
 A defensive clean confirmation shows only `No pending settings changes.` and is
 not selectable clean-root UX.
 Within Agents, every canonical agent choice includes one effective
@@ -1492,13 +1679,13 @@ one control is focused:
   Enter on that value or Escape returns to Settings under the same retained-
   editor rules.
 - Enter on dirty-only Apply Changes opens a transient `Apply changes?` picker
-  with highlighted YES and NO choices plus the changed-only Current/Pending
+  with YES and NO choices and NO initially focused plus the changed-only Current/Pending
   context and a candidate-specific notice containing only applicable
   current-shell-runtime, next-shell-storage, and next-shell-RAG sentences. YES
   first rechecks the exact immutable candidate. On capable streams the context
   and picker form one live frame that clears before YES, NO, Escape, Ctrl-C, or
   EOF returns and is also cleaned up on the established failure path. Line
-  fallback omits the context and displays only the confirmation control. If Message details
+  fallback includes the same comparison and activation context in its printed confirmation control. If Message details
   is its sole difference from the opening baseline, the controller prepares,
   verifies, and commits configuration without authentication, backend/runtime
   staging or activation, storage readiness, route switching or generation, or
@@ -1560,11 +1747,11 @@ one control is focused:
   until restart. This is guarded storage coordination plus a three-target
   prepared persistence boundary, not a global or power-loss-safe transaction.
 - Enter on dirty-only Discard Changes opens a transient `Discard changes?`
-  picker with highlighted YES and NO choices plus the same separately rendered
-  changed-only context `Panel`. Capable raw input initially highlights YES; Enter
+  picker with YES and NO choices and NO initially focused plus the same separately rendered
+  changed-only context `Panel`. Capable raw input initially highlights NO; Enter
   commits and closes this one-shot confirmation, while Escape returns to the
   top-level picker.
-  Line fallback accepts blank to commit the highlighted choice (initially YES),
+  Line fallback accepts blank to commit the highlighted choice (initially NO),
   decimal ordinal `1` for YES or `2` for NO, and `/cancel` to return; free-form
   `yes`/`y` and `no`/`n` are rejected. Committed YES returns `cancelled`
   without writing; committed NO returns to the top-level picker. Top-level
@@ -1732,6 +1919,8 @@ Welcome and auth timing remain private constants behind
 configuration surface is added.
 
 ## Rendering and capability policy
+
+Shell confirmation decisions use the [purpose-bound confirmation contract](#confirmation-presentation-and-decisions) for shared Box/compact geometry, role span resets, scoped fallback, and height-budget blocking. Other components keep the capability selection and ordinary rendering rules below.
 
 #82 implements three capability profiles and package-private semantic output and
 input renderers. #83 and #84 route all migrated output view groups through that
@@ -1930,6 +2119,8 @@ option-preparation paths use this animation lifecycle;
 it remains unavailable to other views and operations.
 
 ## Compatibility contract
+
+#918 changes only the opted-in shell confirmation presentation and call-local decision policies. Public legacy yes/no signatures/results/reserved keys, ordinary picker initialization and strict ordinal grammar, Component membership, public enums, and generic Panel framing retain their established contracts.
 
 Human interactive layout may intentionally change as its owning migration
 slice lands; #83 and #84 have changed their migrated output groups in that
@@ -2233,6 +2424,8 @@ module ownership.
 
 ## Migration coverage
 
+#918 migrates shell binary/settings/Lead/Apply/Commit/Revise decisions to the shared purpose-bound confirmation presentation. Public legacy yes/no, ordinary pickers, settings editors, and generic Panel framing retain their contracts. The [confirmation specification](#confirmation-presentation-and-decisions) defines the opt-in differences.
+
 Issue #82 delivered the common models, renderer/capability profiles, driver
 seam, package facade, and module-index reconciliation. Issues #83 and #84
 delivered their output rows below without redistributing runtime or storage
@@ -2282,7 +2475,7 @@ edge.
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field`, `Message` | Loading, citations/context accounting, full reply; profile and event Turn/Kind only with details On, while source Subject/Conversation and event Sequence remain visible; result/error/cancelled | #83 and #352 (implemented accepted views) |
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field`, `Message` | Accepted exact-body inline/fresh/composed user prompt before request context and progress; validated output path; draft source path without source bytes; one atomic phase panel with ordered facts, contiguous persisted full speeches, fixed error/read-warning safety, optional Handoff/Kind details, and post-write cursor/cache commits; successful consensus gets a separate final `Consensus` Record, while deadlock/failed outcomes use typed errors | #83/#119 progress, #275 prompt context, and #353 atomic presentation (implemented) |
 | Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics; post-workspace application errors supply one fixed sanitized debug-log availability notice, while pre-workspace errors include no debug-log path | #83, #131 terminal seam, and #132 application wiring (implemented) |
-| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Form-only separation of title/context, guidance, choices, state summaries, descriptions, current value, and new input; complete seven-row clean or nine-row dirty root frame; seven-row nested windows with absolute `Choices N/M`; exact Settings/Conversation RAG/Agents/Agent settings hierarchy; muted `Current` and warning-semantic `Pending` summaries plus the nonzero Agents count; complete-picker physical-cell alignment with exact 20-cell inline/19-cell stacked behavior and untruncated continuation; dirty-only `Apply Changes (*Required)` then `Discard Changes`; retained value editors and provider-qualified agent summaries; capable-only changed comparison and candidate-specific activation notice inside the transient confirmation frame, with complete cleanup on every exit and fallback omission; exact Message-details-only live fast path; exact RAG-only no-auth/no-storage/no-runtime/no-probe next-shell persistence path; mixed guarded persistence with only applicable live, RAG-next-shell, and storage-restart results; provider-switch fresh-thread/story-session-context guidance; and complete narrow/plain/`NO_COLOR` compatibility | #93, #106, #115, #252, #261, #270, #271, #287, #299, #303, #312, #319, #321, #343, #349, #350, #377, #391, and #397 (implemented) |
+| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Form-only separation of title/context, guidance, choices, state summaries, descriptions, current value, and new input; complete seven-row clean or nine-row dirty root frame; seven-row nested windows with absolute `Choices N/M`; exact Settings/Conversation RAG/Agents/Agent settings hierarchy; muted `Current` and warning-semantic `Pending` summaries plus the nonzero Agents count; complete-picker physical-cell alignment with exact 20-cell inline/19-cell stacked behavior and untruncated continuation; dirty-only `Apply Changes (*Required)` then `Discard Changes`; retained value editors and provider-qualified agent summaries; shared changed comparison and candidate-specific activation notice inside the transient confirmation frame, with complete cleanup on every exit and fallback omission; exact Message-details-only live fast path; exact RAG-only no-auth/no-storage/no-runtime/no-probe next-shell persistence path; mixed guarded persistence with only applicable live, RAG-next-shell, and storage-restart results; provider-switch fresh-thread/story-session-context guidance; and complete narrow/plain/`NO_COLOR` compatibility | #93, #106, #115, #252, #261, #270, #271, #287, #299, #303, #312, #319, #321, #343, #349, #350, #377, #391, and #397 (implemented) |
 | Welcome and provider authentication | Private startup wordmark renderer, `Prompt`, `Picker`, `Choice`, `Notice` | Four bounded capable welcome frames with physical-width wide/compact/narrow projections; clean prefix-free ASCII wordmark; static accessibility fallback; four explicit provider states; disabled unavailable choice; transient guidance/result; completion-aware exact-child return; no provider-controlled content | #209, #237, #241, #249 (implemented) |
 
 ### Control groups
@@ -2292,7 +2485,8 @@ edge.
 | Main one-line input and editing | `Prompt`, optional `SuggestionPalette` | Unified key/focus state, editable buffer, selectable completion/history coordination, parser-once commit | #85 and #79 (implemented) |
 | Process-local main history | Main `Prompt` buffer state | Up/Down, 100 exact nonblank entries, draft/cursor restoration, non-main isolation | #85 (implemented) |
 | Line-oriented composer | `Field`, `Notice`, `Prompt` | Ordered context, exact line collection, fixed preview, and semantic open/error/completed/cancelled events | #86 (implemented) |
-| Confirmation | `Field`, `Prompt`, `Notice` | Ordered question/choices/default, invalid retry, no suggestions, and typed terminal events | #86 (implemented) |
+| Public legacy confirmation | `Field`, `Prompt`, `Notice` | Explicit yes/no/default, invalid retry, no suggestions, typed outcomes; reserved keys remain no-ops | #86 (implemented) |
+| Shell confirmation decisions | Existing primitives and private picker/prompt composition | Shared Box/compact framing, numbered regions, role markers/colors/rails, binary NO/action unselected, scoped aliases, Revise retry/return, full disclosure and sole-driver cleanup | #918 |
 | Main command/subcommand palette | `SuggestionPalette`, `Prompt`, `Notice` | Slash-open, Up/Down clamped highlight, Tab full-token replacement, Escape snapshot restoration and dismissal | #79 (implemented) |
 | Fixed command values | `SuggestionPalette`, `Field` | Canonical finite grammar choices, including metadata-exposed agent IDs/aliases; palette activity has no effects beyond call-local input state | #79 (implemented) |
 | Single-select and selectable-list choices | `Picker`, `ListView`, `Record`, `Notice` | Disabled-skipping clamped Up/Down highlight, Enter commit, Escape cancel, typed interrupt/EOF, bounded live/full fallback rendering, internal terminal states without a synthetic final control frame | #87 foundation, #93 and #142 consumers (implemented) |
@@ -2312,6 +2506,8 @@ model/reasoning fields without broadening picker ownership. Its one internal
 `interactive_settings` module owns snapshot validation and persistence.
 
 ## Verification and acceptance
+
+For #918, verify cases A–L and E-1–E-4 against the [confirmation contract](#confirmation-presentation-and-decisions): geometry and plain/ANSI equivalence; role identity and monochrome markers; initial NO/unselected and exact scoped grammar; Revise retry/return; exact request authority; settings fallback context; F6/resize/short-height blocking and cleanup. Existing canonical IDs and frozen inventory/source/subTest/time budgets remain authoritative.
 
 Each delivery slice must add deterministic tests at the lowest owning boundary
 and focused integration coverage. The complete program is accepted only when
@@ -2447,7 +2643,7 @@ provider-native threads.
 | Picker and live resume choices | Highlight-versus-selection, disabled-skipping clamped navigation, exact resume ordering/highlights, Tab no-op and one-Enter dynamic commit, Escape cancel/dismissal, typed interrupt/EOF, empty/all-disabled/one/long lists, exact fallback acceptance/rejection, stable identity reconciliation and fresh controller validation, selected-outside-window summary, no synthetic final control frame, complete capable cleanup on every returned outcome/failure, honest fallback visibility, and resize on each live redraw. |
 | Permanent input lifecycle | Resource-free `UNDECIDED` construction; first-read irreversible `LIVE`/`FALLBACK`; sticky fallback and no post-live downgrade; stable source/decoder/configuration correlation; canonical ASCII/UTF-8/ISO-8859-1 plus built-in strict/surrogateescape admission; exact one-byte reads; fragmented code points; maximum four-code-point pending suffix before Escape readiness; clean and partial EOF; read/decode/shape poison; interrupt reset without mode change; synchronous reentry rejection; PENDIN-only tolerated configuration drift; capable history-free subject frames; and cross-prompt/viewer preservation without mixed wrapper/raw reads. |
 | Ranged text viewer | Exact `str`, display-name, strict-UTF-8, private 8 MiB source, exact 65,536-line and 16 MiB complete-fallback boundaries, initial-line, empty/final-LF validation before terminal access; ordinary and Shift+Arrow clamped selection including reversal; configured VINTR/VEOF raw-byte disable/decode/round-trip classification and priority; singleton/range commit; distinct cancel/interrupt/EOF; one row per logical line; safe CR/U+2028/control display; bounded-prefix plain/ANSI current and selected cues; wide/combining/ellipsis behavior; suffix-independent redraw work; bounded height and next-nonexit-key resize; exact untruncated `START-END` or `/cancel` fallback with reverse normalization and visible retry; content-free results; close-on-select/cancel, repeat-open disposal; and no workspace/artifact/runtime/controller dependencies. |
-| Settings | Two-snapshot current/pending separation; canonical twelve-key system persistence; form-only title/context/guidance/choice/state-summary/description/value regions without generic bracket labels; exact complete seven-row clean Language/Persona/Maximum debate rounds/Conversation storage/Conversation RAG/Message details/Agents root plus complete nine-row dirty root with Apply Changes/Discard Changes; seven-row nested windows and absolute `Choices N/M`; nested RAG Provider Disabled/Local and Automatic Off/On invariants; Settings-scoped Current/Pending summaries with complete-picker physical-cell alignment, exact 20-cell inline/19-cell stacked behavior, untruncated wrapping, live/fallback parity, and color-independent meaning; stacked descriptions and one-level Escape hierarchy; capable-only changed comparison inside the single transient confirmation frame, complete cleanup on all exits/failures, no separate durable comparison panel, and line-fallback omission; exact retained-editor, Agents profile, launch-override, discovery, SQLite readiness, guarded persistence, rollback, activation, speaker/detail, and fallback contracts; Message-details-only live presentation persistence; RAG-only system-config persistence with no authentication, storage selection/readiness, backend/runtime prepare/commit/discard/activation, route/thread, composition, probe/install, catalog, subprocess, socket, network, or live-RAG work; full-path mixed activation with startup-fixed storage and RAG; exact applicable live, RAG-next-shell, and storage-restart results; provider-switch fresh-thread/story-session-context guidance; downgrade rejection by older closed schemas; and unchanged global `/auth`, generic picker, precedence, public, machine, parser, search, debate, consensus, and storage-adapter contracts. |
+| Settings | Two-snapshot current/pending separation; canonical twelve-key system persistence; form-only title/context/guidance/choice/state-summary/description/value regions without generic bracket labels; exact complete seven-row clean Language/Persona/Maximum debate rounds/Conversation storage/Conversation RAG/Message details/Agents root plus complete nine-row dirty root with Apply Changes/Discard Changes; seven-row nested windows and absolute `Choices N/M`; nested RAG Provider Disabled/Local and Automatic Off/On invariants; Settings-scoped Current/Pending summaries with complete-picker physical-cell alignment, exact 20-cell inline/19-cell stacked behavior, untruncated wrapping, live/fallback parity, and color-independent meaning; stacked descriptions and one-level Escape hierarchy; shared changed comparison inside the single transient confirmation frame, complete cleanup on all exits/failures, no separate durable comparison panel, and complete line-fallback context; exact retained-editor, Agents profile, launch-override, discovery, SQLite readiness, guarded persistence, rollback, activation, speaker/detail, and fallback contracts; Message-details-only live presentation persistence; RAG-only system-config persistence with no authentication, storage selection/readiness, backend/runtime prepare/commit/discard/activation, route/thread, composition, probe/install, catalog, subprocess, socket, network, or live-RAG work; full-path mixed activation with startup-fixed storage and RAG; exact applicable live, RAG-next-shell, and storage-restart results; provider-switch fresh-thread/story-session-context guidance; downgrade rejection by older closed schemas; and unchanged global `/auth`, generic picker, precedence, public, machine, parser, search, debate, consensus, and storage-adapter contracts. |
 | Authentication startup | Exact Codex and resolved-executable Antigravity probes and logins; text-free storage-activation progress before welcome; four states; disabled unavailable choice; bounded null-stream monitoring while native login remains open; fresh-status-only authority; exact-child bounded stop/reap and automatic return; at most one provider-controlled code paste with no extra exit/confirmation; initial authentication access gate; separate missing-default picker with highlight-only recommendation, explicit authenticated choice, guarded absent-only persistence, and early typed exits; effective-route hard gates; `/auth`; settings integration; inherited terminal/environment/root/process group; no output/URL/code/account/token/credential capture; four physical-width-aware welcome frames with exactly three 0.4-second waits; bold cyan/magenta/yellow/blue/green wordmark spans with local resets; one continuous post-authentication context/backend/controller progress span; reduced-motion one-final-colored-welcome-frame path; 0.8-second transient notices; right-margin/resize safety; foreground-process-group and termios restoration; no cursor hiding or alternate screen; `NO_COLOR` preserves progress motion without SGR while selecting a static plain welcome; callback/non-TTY/`TERM=dumb`/non-POSIX/uncertain paths use silent progress and a static welcome. |
 | Generic, startup, picker, consensus, and Settings progress | One width-fitted, text-free sixteen-cell block-shade shimmer with a fixed bold cyan/blue/magenta/red/yellow/green ANSI color cycle for capable raw startup storage and authenticated runtime preparation, native authentication probes, persisted omitted-resume preparation, consensus awaitables, and Provider/Model/Effort option preparation; rightmost-cell reservation; spatially equivalent `NO_COLOR`; complete-row clear/redraw around semantic writes; clear and task joining before welcome, lobby, refreshed authentication, resume picker, empty/error result, final/cancel/error record, or completed Settings picker; silent callback/non-TTY/`TERM=dumb`/uncertain fallback; operation-error precedence; indicator-only internal-error mapping; no false completion, status copy, `[routing]`/`[waiting]` records, or reusable animation API. |
 | Detailed Lead and specialist progress | One transient multiline frame on capable raw streams: an eight-cell animated bar with monotonic `HH:MM:SS · Working`, followed by ordered agent cards containing exact requests, SEARCH/READ resource, scope, locator, and boundary metadata, and bounded rolling previews during provider execution; ANSI and plain `NO_COLOR` redraw the frame, with mode-dependent completion retention (`/progress on` retains the nested view for inspection, `/progress off` clears it cleanly before persistent output); terminal callback construction and line-mode presentation remain silent; authentication recovery preserves the timer; durable specialist panels, Lead result, and elapsed notice follow cleanup. Specialist projection requires one exact durable identity chain and fails closed on missing, duplicated, reordered, or mismatched authority. Exact queries, safe relative locators/ranges, and rolling previews may remain in terminal capture or scrollback, while SEARCH and READ cards exclude source snippets, absolute paths, and credentials, and hidden reasoning remains excluded from all progress frames. |

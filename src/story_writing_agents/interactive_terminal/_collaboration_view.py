@@ -83,6 +83,7 @@ from ._model import (
     MessagePresentation,
     Notice,
     Panel,
+    Prompt,
     Record,
     Section,
     SemanticRole,
@@ -420,6 +421,84 @@ def project_core_document_readiness(readiness: CoreDocumentReadiness | CoreDocum
         raise TypeError("readiness view must be typed")
     items.append(Notice("Document completion does not grant final review, Confirm, Apply or Commit authority.", label="authority"))
     return Panel("Whole-book document readiness", tuple(items))
+
+
+def project_lead_confirmation(
+    result: LeadTurnResult, *, commit_request: StoryCommitRequestPayload | None = None,
+) -> dict:
+    """Project summary facts without copying or creating decision authority."""
+    request = commit_request or result.story_commit_request
+    if request is not None:
+        candidate = request.candidate
+        return dict(prompt=Prompt("Local commit"), summary=(
+            Field("Purpose", "Create the exact disclosed local session-branch commit."),
+            Field("Branch", candidate.branch),
+            Field("Files", _joined(tuple(item.path for item in candidate.paths))),
+            Field("Message", candidate.proposed_message),
+            Field("Git index", "not staged"),
+        ), impact=(Notice("Local staging and commit only; no remote push.", label="SCOPE"),))
+    application = result.artifact_application_request
+    if application is not None:
+        operations = application.application_request.change_set.operations
+        operation_facts = tuple(_operation_record(operation) for operation in operations)
+        summary: tuple[Field | Notice, ...] = (
+            Field("Purpose", "Apply the exact reviewed candidate to session files."),
+            Field("Target", _operation_paths(operations)),
+            Field("Changes", "; ".join(record.identity + ": " + ", ".join(
+                field.label + "=" + field.value for field in record.fields)
+                for record in operation_facts)),
+        )
+        return dict(prompt=Prompt("Apply reviewed changes"), summary=summary, impact=(
+            Notice("Artifact application only; Git index remains unstaged.", label="SCOPE"),
+            Notice("A local Commit requires a separate decision.", label="SEPARATE APPROVAL", role=SemanticRole.WARNING),
+        ))
+    recommendation = result.recommendation_request
+    if recommendation is not None:
+        return dict(prompt=Prompt("Lead preparation"), summary=(
+            Field("Purpose", recommendation.purpose),
+            Field("Target", _joined(recommendation.target_paths)),
+            Field("Specialists", _joined(recommendation.specialist_ids)),
+            Field("Expected result", recommendation.expected_result),
+            Field("User impact", recommendation.user_impact),
+            Field("Sources", _joined(tuple(_range_reference(item.locator, item.start_line, item.end_line)
+                for item in recommendation.basis.inputs))),
+        ), impact=(
+            Field("Additional calls", f"at most {recommendation.max_preparation_physical_calls}"),
+            Notice("One bounded Lead preparation; no artifact write or Git commit.", label="SCOPE"),
+            Notice("Review, Apply and Commit each require their own decision.", label="SEPARATE APPROVAL", role=SemanticRole.WARNING),
+        ))
+    proposal = result.proposal
+    if proposal is None:
+        raise ValueError("a confirmation requires an exact pending request")
+    inputs = {item.input_id: item for item in proposal.basis.inputs}
+    specialists = tuple(Record(assignment.specialist_id,
+        title=AGENT_SPECS[assignment.specialist_id].display_name,
+        fields=(
+            Field("Task", assignment.instruction),
+            Field("Mode", assignment.mode.value if assignment.mode is not None else "consultation"),
+            Field("Sources", _joined(tuple(_range_reference(inputs[input_id].locator,
+                inputs[input_id].start_line, inputs[input_id].end_line)
+                for input_id in assignment.input_ids if input_id in inputs))),
+            Field("Calls", str(assignment.max_physical_calls)),
+        )) for assignment in proposal.assignments)
+    modes = {assignment.mode.value if assignment.mode is not None else "consultation" for assignment in proposal.assignments}
+    titles = {"review": "Specialist review", "draft": "Specialist drafting",
+        "constraint_assessment": "Specialist assessment", "premise_analysis": "Premise analysis",
+        "consultation": "Specialist consultation"}
+    title = titles[next(iter(modes))] if len(modes) == 1 else "Specialist preparation"
+    summary = (Field("Purpose", proposal.purpose),
+        Field("Progress", "Parallel specialist work -> Lead synthesis"),
+        Field("User impact", proposal.user_impact))
+    candidate_bases = tuple(assignment.review_basis.candidate_input_ids
+        for assignment in proposal.assignments if assignment.review_basis is not None)
+    if modes == {"review"} and len(candidate_bases) == len(proposal.assignments) and len(set(candidate_bases)) == 1:
+        summary += (Field("Candidate", "All reviewers assess the same immutable candidate."),)
+    budget = proposal.budget
+    return dict(prompt=Prompt(title), summary=summary, specialists=specialists, impact=(
+        Field("Additional calls", f"at most {budget.max_additional_physical_calls}"),
+        Field("Lead synthesis calls", f"at most {budget.synthesis_max_physical_calls}"),
+        Notice("Provider work only; no artifact write or Git commit.", label="SCOPE"),
+    ))
 
 
 def project_lead_turn_result(

@@ -3381,7 +3381,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             '_live_composer.py': {'._model'},
             '_model.py': set(),
             '_controls.py': {'._model'},
-            '_render.py': {'._advisory_progress', '._box', '._markdown', '._model'},
+            '_render.py': {'._advisory_progress', '._box', '._controls', '._markdown', '._model'},
             '_viewer_model.py': set(),
             '_pointer.py': set(),
             '_output_history.py': {'._box', '._controls', '._model', '._pointer', '._render', '._viewer_render'},

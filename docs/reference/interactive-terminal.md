@@ -119,7 +119,7 @@ metadata footer by a divider. Full frames use the shared Box presentation with
 rounded Unicode corners and continuous borders, reusing the existing
 provider-output viewer's box geometry. Proposal disclosures, confirmation
 identities, Apply/Commit controls, and recovery guidance remain complete outside
-compact response metadata.
+compact response metadata. The [confirmation presentation](#confirmation-decisions) reuses this geometry without turning its controls into speaker messages.
 
 Frames are left-aligned and use
 `min(120, max(1, terminal_columns - 1))` physical cells. The complete layout
@@ -164,6 +164,93 @@ Illustrative output and counts:
 │ Input tokens: 128 | Output tokens: 64                                │
 ╰──────────────────────────────────────────────────────────────────────╯
 ```
+
+## Confirmation decisions
+
+Shell binary questions, settings Apply/Discard, Lead preparation and specialist
+proposals, reviewed artifact Apply, local Commit, and revision input share the
+message frame's rounded borders, width, padding, and compact behavior. The
+canonical rules are in the [design-system confirmation contract](../design/interactive-cli-design-system.md#confirmation-presentation-and-decisions).
+The internal adapter is not a new supported Python API: public
+`request_confirmation(message, default=...)` retains its legacy yes/no,
+explicit blank default, typed outcomes, and reserved-key behavior.
+
+The shell frame groups the actual action summary, specialist assignments when
+present, cost/impact, decision choices, and `KEYS`. Numbered region labels and
+bold headings supplement separators. Specialist `[P] PLOT`, `[C] CHARACTER`,
+and `[E] EXECUTION` markers use the same yellow, green, and blue identity
+accents as their messages, with a short connected role rail. Long descriptions
+and paths retain ordinary body color. Plain/NO_COLOR retains the markers,
+roles, rails, region names, and active `>`; color never establishes authority
+or success.
+
+| Confirmation | Initial shell choice | Exact authorized effect |
+| --- | --- | --- |
+| Session resume/pause, current-conversation archive | NO/return | The named management operation only |
+| Settings Apply/Discard | NO/return | Apply or discard the current editing candidate only |
+| Lead preparation | Unselected | The disclosed bounded preparation only |
+| Specialist work | Unselected | The disclosed assignments and synthesis only |
+| Apply | Unselected | The exact reviewed artifact candidate only |
+| Commit | Unselected | The exact local commit candidate only |
+
+Use Up/Down to choose and Enter to accept. Initial Enter on an unselected action
+shows one hint and starts nothing. Esc leaves a proposal unconfirmed; Reject
+records its rejection. Revise opens the revision editor; whitespace-only input
+shows one error in that editor, and Esc returns to the same pending choices
+with Revise focused. Ctrl-C/EOF preserve the caller's existing terminal/exit
+semantics and never create approval.
+
+A three-reviewer layout reads as follows. Counts here are illustrative; actual
+values always come from the validated request:
+
+```text
+[01 SUMMARY]
+Same immutable candidate · 3 parallel reviews → Lead synthesis
+[02 SPECIALISTS · 3]
+[P] PLOT       causal structure · up to 2 calls
+[C] CHARACTER  character logic · up to 2 calls
+[E] EXECUTION  narrative rules · up to 2 calls
+[03 COST & IMPACT]
+[COST] Up to 7 additional calls: specialists 6 + Lead 1
+[SCOPE] Provider review/synthesis only
+[SEPARATE APPROVAL] Apply and Commit each need a new decision.
+[04 DECISION · Pending]
+  1. Confirm
+  2. Reject
+  3. Revise
+KEYS  Up/Down: choose · Enter: select · Esc: leave unconfirmed
+```
+
+Each role's complete task, references/ranges, modes and bounds remain disclosed.
+Only final candidate review claims a shared immutable candidate; preparation
+and drafting retain their actual different assignments. There is one whole
+proposal decision, rather than per-role checkboxes. Revise requests a fresh
+valid proposal when scope changes.
+
+F6 reviews complete current instructions, sources, premises, costs and exact
+request/proposal identities without deciding. Message details does not hide
+required approval information. Closing review returns to unchanged input.
+Very short terminals show a dense role/task/call summary and retain full
+disclosure in the active conversation; if safe complete decision controls
+still cannot fit, the shell asks for resize or Esc and blocks execution.
+Below 40 available frame cells, the presentation uses the message-style compact
+header/rail; already printed native scrollback is not rewritten on resize.
+
+Line fallback prints the same facts and current grammar. Binary shell questions
+accept current ordinals or y/yes/n/no and default to NO. Action decisions accept
+current ordinals or their exact scoped tokens: confirm/reject/revise,
+apply/reject/revise, or commit/reject/revise. Trim/casefold applies only to this
+internal confirmation route. Empty action input retries without deciding;
+`/cancel` leaves without a decision. A specialist/Apply/Commit prompt does not
+interpret `yes` as approval, and ordinary main-prompt text remains Lead input.
+Generic picker and public legacy confirmation grammars remain unchanged.
+
+Settings comparison includes changed Current/Pending values and exact
+current-shell/next-shell activation guidance in capable and line-fallback
+modes. NO/Esc retains pending edits. Capable confirmation frames clear on
+return and failure; fallback leaves its ordinary printed records visible.
+Confirmation input is not a new User message or main-history entry.
+
 
 <a id="startup-welcome-and-authentication"></a>
 <a id="main-prompt-live-suggestions"></a>
@@ -218,7 +305,7 @@ does not start with `/` is passed literally to `RuntimeSession.lead_turn()`.
 The terminal renders validated `Outcome`, Lead message, evidence/proposal,
 `Next action`, and state guidance. A proposal opens an exact
 Confirm/Reject/Revise picker. Cancelling it leaves the proposal unconfirmed;
-ordinary free text never confirms work.
+ordinary free text never confirms work. See [Confirmation decisions](#confirmation-decisions) for defaults, scoped fallback grammar, revision retry, and cancellation.
 
 No session or no focused conversation yields the existing typed prerequisite
 error without a Lead call. Retired execution commands remain unavailable;
@@ -266,6 +353,7 @@ Generic live pickers remain active for omitted session/conversation resume,
 settings, authentication, and agent-exchange inspection. Capable terminals use
 live selection; line fallback uses bounded numbered choices. Escape/cancel
 restores the caller's scope without turning a choice into a domain mutation.
+Shell workflow decisions opt into [Confirmation decisions](#confirmation-decisions); their scoped grammar does not change ordinary picker input.
 
 In focused Lead input, `$` opens the canonical artifact-source picker. `$$`
 opens the same picker followed by the independent text viewer; Shift+Up/Down

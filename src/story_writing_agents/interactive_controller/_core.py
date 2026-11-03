@@ -129,6 +129,7 @@ from ..interactive_terminal import (
     InteractiveExternalViewer,
     ExternalViewUnavailableError,
     InteractivePickerInput,
+    InteractiveConfirmationInput,
     InteractivePromptInput,
     InteractiveSemanticOutput,
     InteractiveTerminal,
@@ -713,6 +714,7 @@ class InteractiveController:
         self._provider_catalog = resolved_provider_catalog
         self._semantic_output = InteractiveSemanticOutput(terminal)
         self._picker_input = InteractivePickerInput(terminal)
+        self._confirmation_input = InteractiveConfirmationInput(terminal)
         self._prompt_input = InteractivePromptInput(terminal)
         self._external_viewer = InteractiveExternalViewer(terminal)
         self._transcript_viewer = InteractiveTranscriptViewer(terminal)
@@ -1259,6 +1261,27 @@ class InteractiveController:
         )
         return exit_code
 
+    def _request_shell_confirmation(
+        self, title: str, question: str, *, effect: str,
+    ) -> ConfirmationResult:
+        """Opt shell management into safe binary input, leaving legacy API intact."""
+        outcome = self._confirmation_input.read_confirmation(
+            Prompt(title),
+            (Choice("yes", "YES", description=title),
+             Choice("no", "NO", description="Return without changing the target.")),
+            summary=(Field("Question", question), Notice(effect, label="SCOPE")),
+            binary=True,
+        )
+        if outcome.kind is ControlOutcomeKind.EOF:
+            return ConfirmationResult.EOF
+        if outcome.kind is ControlOutcomeKind.INTERRUPT:
+            return ConfirmationResult.INTERRUPT
+        if outcome.kind is ControlOutcomeKind.CANCEL:
+            return ConfirmationResult.NO
+        if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text not in {"yes", "no"}:
+            raise RuntimeError("shell confirmation returned an invalid outcome")
+        return ConfirmationResult(outcome.text)
+
     def _enter_initial_session(self, requested_session: str | None) -> bool:
         """Resume an explicit or default session; return whether startup saw EOF.
 
@@ -1288,9 +1311,9 @@ class InteractiveController:
             )
             return False
         if state.durable_state is SessionDurableState.PAUSED:
-            decision = self._terminal.request_confirmation(
-                f"Resume default session {default_session}?",
-                default=True,
+            decision = self._request_shell_confirmation(
+                "Resume session", f"Resume default session {default_session}?",
+                effect="Resume the session and attach its exact workspace.",
             )
             if decision is ConfirmationResult.EOF:
                 return True
@@ -2185,6 +2208,7 @@ class InteractiveController:
                 self._picker_input,
                 self._prompt_input,
                 self._semantic_output,
+                confirmation=self._confirmation_input,
                 show_details=self._show_message_details,
                 recover_authentication=(
                     getattr(self._auth_coordinator, "recover", None)
@@ -3294,7 +3318,7 @@ class InteractiveController:
                 provider_overrides=self._backend.backend_overrides,
             ),
         )
-        outcome = self._read_settings_picker(
+        outcome = self._confirmation_input.read_confirmation(
             Prompt(
                 ("Apply changes?" if action == "save" else "Discard changes?"),
                 instruction=(
@@ -3303,10 +3327,12 @@ class InteractiveController:
                     else "Choose YES to discard changes, or NO to return."
                 ),
             ),
-            (Choice("yes", "YES"), Choice("no", "NO")),
-            transient_context=transient_context,
-            highlighted_id="yes",
-            transient=True,
+            (Choice("yes", "YES", description="Apply changes" if action == "save" else "Discard pending changes"),
+             Choice("no", "NO", description="Return to settings")),
+            summary=(Field("Purpose", "Apply pending settings changes." if action == "save"
+                else "Discard this editing candidate and leave settings; saved settings are unchanged."),),
+            context=transient_context,
+            binary=True,
         )
         if outcome.kind in {
             ControlOutcomeKind.INTERRUPT,
@@ -6885,9 +6911,9 @@ class InteractiveController:
             None,
         )
         target_handle = visible_conversation_handle(target, entries)
-        decision = self._terminal.request_confirmation(
-            (f'Archive current conversation "{target.subject}" ({target_handle})?'),
-            default=False,
+        decision = self._request_shell_confirmation(
+            "Archive conversation", f'Archive current conversation "{target.subject}" ({target_handle})?',
+            effect="Archive this conversation; this does not permanently delete it.",
         )
         if decision is ConfirmationResult.EOF:
             return True
@@ -7290,9 +7316,9 @@ class InteractiveController:
                 InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
             )
             return False
-        decision = self._terminal.request_confirmation(
-            f"Pause session {session_id}?",
-            default=False,
+        decision = self._request_shell_confirmation(
+            "Pause session", f"Pause session {session_id}?",
+            effect="Pause the attached session and return to the lobby.",
         )
         if decision is ConfirmationResult.EOF:
             return True

@@ -4469,165 +4469,61 @@ class ControllerSettingsTests(ControllerTestCase):
         ordinary_picker.assert_not_called()
         ordinary_prompt.assert_not_called()
 
-    def test_settings_confirmation_panel_is_changed_only_and_selectable(
-        self,
-    ) -> None:
+    def test_settings_confirmation_panel_is_changed_only_and_selectable(self) -> None:
         workspace = self.make_workspace()
-        baseline = settings_module.load_settings_state(workspace)
-        changed = settings_module.update_language(baseline, "EN")
+        changed = settings_module.update_language(settings_module.load_settings_state(workspace), "EN")
         expected = self.expected_panel(changed)
         controller, _backend, callbacks = self.make_controller(
-            workspace,
-            "/settings",
-            "1",
-            "2",
-            "/cancel",
-            "8",
-            "1",
-            "/quit",
-            terminal_width=48,
-        )
-        original_picker = terminal_module.InteractivePickerInput.read_picker
-        with _observed_picker_patch(original_picker) as picker:
+            workspace, "/settings", "1", "2", "/cancel", "8", "1", "/quit", terminal_width=48)
+        original = terminal_module.InteractiveConfirmationInput.read_confirmation
+        with mock.patch.object(terminal_module.InteractiveConfirmationInput, "read_confirmation",
+                               autospec=True, side_effect=original) as confirmation:
             self.assertEqual(controller.run_session_lobby(), 0)
-
-        self.assertGreaterEqual(len(picker.call_args_list), 3)
-        picker_call = picker.call_args_list[-1]
-        self.assertIsNone(picker_call.kwargs.get("notice"))
-        self.assertEqual(
-            picker_call.args[2],
-            (terminal_module.Choice("yes", "YES"), terminal_module.Choice("no", "NO")),
-        )
-        self.assertEqual(picker_call.kwargs["highlighted_id"], "yes")
-        self.assertTrue(picker_call.kwargs["transient"])
-        self.assertEqual(picker_call.kwargs["transient_context"], (expected,))
-        confirmation_prompt = next(
-            prompt for prompt in callbacks.prompts if "Apply changes?" in prompt
-        )
-        self.assertIn("YES", confirmation_prompt)
-        self.assertIn("NO", confirmation_prompt)
-        for omitted in ("--- Settings", "Current", "Pending", "(Changed)"):
+        confirmation.assert_called_once()
+        call = confirmation.call_args
+        self.assertEqual(tuple(choice.identity for choice in call.args[2]), ("yes", "no"))
+        self.assertIs(call.args[0], controller._confirmation_input)
+        self.assertTrue(call.kwargs["binary"])
+        self.assertEqual(call.kwargs["context"], (expected,))
+        prompt = next(p for p in callbacks.prompts if "Apply changes?" in p)
+        self.assertTrue(all(token in prompt for token in ("YES", "NO", "Current", "Pending", "KO", "EN")))
+        for omitted in ("[available]", "[highlighted]", "[focused]", "[open]"):
             with self.subTest(omitted=omitted):
-                self.assertNotIn(omitted, confirmation_prompt)
-        self.assertEqual(
-            [
-                record
-                for record in callbacks.records
-                if record.startswith("--- Settings [open]")
-            ],
-            [],
-        )
-        self.assertIn(
-            "[savedandapplied]Settingssavedandappliedtothisrunningshellnow.",
-            "".join("".join(callbacks.records).split()),
-        )
-        self.assertNotIn(
-            "Restart is required for",
-            "".join(callbacks.records),
-        )
-        self.assertEqual(
-            settings_module.load_settings_state(
-                workspace
-            ).pending.system_defaults.language,
-            "EN",
-        )
+                self.assertNotIn(omitted, prompt)
+        self.assertEqual([record for record in callbacks.records if record.startswith("--- Settings [open]")], [])
+        self.assertIn("[savedandapplied]Settingssavedandappliedtothisrunningshellnow.",
+                      "".join("".join(callbacks.records).split()))
+        self.assertNotIn("Restart is required for", "".join(callbacks.records))
+        self.assertEqual(settings_module.load_settings_state(workspace).pending.system_defaults.language, "EN")
 
-    def test_settings_confirmation_routes_context_without_semantic_write_for_all_outcomes(
-        self,
-    ) -> None:
+    def test_settings_confirmation_routes_context_without_semantic_write_for_all_outcomes(self) -> None:
         workspace = self.make_workspace()
-        state = settings_module.update_language(
-            settings_module.load_settings_state(workspace),
-            "EN",
-        )
+        state = settings_module.update_language(settings_module.load_settings_state(workspace), "EN")
         expected_context = (self.expected_panel(state),)
         controller, _backend, _callbacks = self.make_controller(workspace)
         outcomes = (
-            (
-                "save-yes",
-                "save",
-                _control_commit_text("yes"),
-                "save",
-            ),
-            (
-                "save-no",
-                "save",
-                _control_commit_text("no"),
-                "return",
-            ),
-            (
-                "discard-yes",
-                "cancel",
-                _control_commit_text("yes"),
-                "cancel",
-            ),
-            (
-                "discard-no",
-                "cancel",
-                _control_commit_text("no"),
-                "return",
-            ),
-            (
-                "escape",
-                "save",
-                _cancel_control_outcome(),
-                "return",
-            ),
-            (
-                "interrupt",
-                "cancel",
-                terminal_module.ControlOutcome(
-                    terminal_module.ControlOutcomeKind.INTERRUPT,
-                ),
-                "cancel",
-            ),
-            (
-                "eof",
-                "save",
-                terminal_module.ControlOutcome(
-                    terminal_module.ControlOutcomeKind.EOF,
-                ),
-                "cancel",
-            ),
+            ("save-yes", "save", _control_commit_text("yes"), "save"),
+            ("save-no", "save", _control_commit_text("no"), "return"),
+            ("discard-yes", "cancel", _control_commit_text("yes"), "cancel"),
+            ("discard-no", "cancel", _control_commit_text("no"), "return"),
+            ("escape", "save", _cancel_control_outcome(), "return"),
+            ("interrupt", "cancel", terminal_module.ControlOutcome(terminal_module.ControlOutcomeKind.INTERRUPT), "cancel"),
+            ("eof", "save", terminal_module.ControlOutcome(terminal_module.ControlOutcomeKind.EOF), "cancel"),
         )
         for label, action, outcome, expected in outcomes:
             with self.subTest(label=label):
-                with (
-                    _autospec_return_patch(InteractiveController, "_read_settings_picker", outcome) as picker,
-                    _autospec_method_patch(type(controller._semantic_output), "write_component") as output,
-                ):
-                    self.assertEqual(
-                        controller._settings_save_confirmation(
-                            state,
-                            action=action,
-                        ),
-                        expected,
-                    )
-
+                with (_autospec_return_patch(terminal_module.InteractiveConfirmationInput, "read_confirmation", outcome) as confirmation,
+                      _autospec_method_patch(type(controller._semantic_output), "write_component") as output):
+                    self.assertEqual(controller._settings_save_confirmation(state, action=action), expected)
                 output.assert_not_called()
-                picker.assert_called_once()
-                called_controller, prompt, choices = picker.call_args.args
-                self.assertIs(called_controller, controller)
-                self.assertEqual(
-                    prompt.name,
-                    "Apply changes?" if action == "save" else "Discard changes?",
-                )
-                self.assertEqual(
-                    choices,
-                    (
-                        terminal_module.Choice("yes", "YES"),
-                        terminal_module.Choice("no", "NO"),
-                    ),
-                )
-                self.assertEqual(
-                    picker.call_args.kwargs["transient_context"],
-                    expected_context,
-                )
-                self.assertEqual(
-                    picker.call_args.kwargs["highlighted_id"],
-                    "yes",
-                )
-                self.assertTrue(picker.call_args.kwargs["transient"])
+                confirmation.assert_called_once()
+                capability, prompt, choices = confirmation.call_args.args
+                self.assertIs(capability, controller._confirmation_input)
+                self.assertEqual(prompt.name, "Apply changes?" if action == "save" else "Discard changes?")
+                self.assertEqual(tuple(choice.identity for choice in choices), ("yes", "no"))
+                self.assertEqual(confirmation.call_args.kwargs["context"], expected_context)
+                self.assertTrue(confirmation.call_args.kwargs["binary"])
+                self.assertIsNone(confirmation.call_args.kwargs.get("highlighted_id"))
 
     def test_message_details_only_save_is_confirmed_and_transaction_only(
         self,
@@ -4981,223 +4877,51 @@ class ControllerSettingsTests(ControllerTestCase):
             route_before,
         )
 
-    def test_settings_save_and_cancel_confirmation_controls_are_call_local(
-        self,
-    ) -> None:
+    def test_settings_save_and_cancel_confirmation_controls_are_call_local(self) -> None:
         cases = (
-            (
-                "save-no-then-dirty-cancel",
-                (
-                    "/settings",
-                    "1",
-                    "2",
-                    "/cancel",
-                    "8",
-                    "2",
-                    "9",
-                    "1",
-                    "/quit",
-                ),
-                2,
-                False,
-                1,
-            ),
-            (
-                "save-fallback-cancel-then-dirty-cancel",
-                (
-                    "/settings",
-                    "1",
-                    "2",
-                    "/cancel",
-                    "8",
-                    "/cancel",
-                    "9",
-                    "1",
-                    "/quit",
-                ),
-                2,
-                False,
-                1,
-            ),
-            (
-                "clean-action-ordinal-is-not-selectable",
-                ("/settings", "8", "/cancel", "/quit"),
-                0,
-                False,
-                0,
-            ),
-            ("clean-root-escape", ("/settings", "/cancel", "/quit"), 0, False, 0),
-            (
-                "clean-root-interrupt",
-                ("/settings", KeyboardInterrupt(), "/quit"),
-                0,
-                False,
-                0,
-            ),
-            (
-                "clean-root-eof",
-                ("/settings", EOFError(), "/quit"),
-                0,
-                False,
-                0,
-            ),
-            (
-                "dirty-cancel-no-then-yes",
-                (
-                    "/settings",
-                    "1",
-                    "2",
-                    "/cancel",
-                    "9",
-                    "2",
-                    "9",
-                    "1",
-                    "/quit",
-                ),
-                2,
-                True,
-                1,
-            ),
-            (
-                "dirty-root-escape-confirmation-escape-then-yes",
-                (
-                    "/settings",
-                    "1",
-                    "2",
-                    "/cancel",
-                    "/cancel",
-                    "/cancel",
-                    "9",
-                    "1",
-                    "/quit",
-                ),
-                2,
-                True,
-                1,
-            ),
-            (
-                "dirty-cancel-interrupt",
-                (
-                    "/settings",
-                    "1",
-                    "2",
-                    "/cancel",
-                    "9",
-                    KeyboardInterrupt(),
-                    "/quit",
-                ),
-                1,
-                False,
-                1,
-            ),
-            (
-                "dirty-root-escape-eof",
-                (
-                    "/settings",
-                    "1",
-                    "2",
-                    "/cancel",
-                    "/cancel",
-                    EOFError(),
-                    "/quit",
-                ),
-                1,
-                False,
-                1,
-            ),
-            (
-                "dirty-root-interrupt",
-                ("/settings", "1", "2", "/cancel", KeyboardInterrupt(), "/quit"),
-                0,
-                False,
-                1,
-            ),
-            (
-                "dirty-root-eof",
-                ("/settings", "1", "2", "/cancel", EOFError(), "/quit"),
-                0,
-                False,
-                1,
-            ),
-            (
-                "save-interrupt",
-                (
-                    "/settings",
-                    "1",
-                    "2",
-                    "/cancel",
-                    "8",
-                    KeyboardInterrupt(),
-                    "/quit",
-                ),
-                1,
-                False,
-                1,
-            ),
-            (
-                "save-eof",
-                (
-                    "/settings",
-                    "1",
-                    "2",
-                    "/cancel",
-                    "8",
-                    EOFError(),
-                    "/quit",
-                ),
-                1,
-                False,
-                1,
-            ),
+            ('save-no-then-dirty-cancel', ('/settings', '1', '2', '/cancel', '8', '2', '9', '1', '/quit'), 2, False, 1),
+            ('save-fallback-cancel-then-dirty-cancel', ('/settings', '1', '2', '/cancel', '8', '/cancel', '9', '1', '/quit'), 2, False, 1),
+            ('clean-action-ordinal-is-not-selectable', ('/settings', '8', '/cancel', '/quit'), 0, False, 0),
+            ('clean-root-escape', ('/settings', '/cancel', '/quit'), 0, False, 0),
+            ('clean-root-interrupt', ('/settings', KeyboardInterrupt(), '/quit'), 0, False, 0),
+            ('clean-root-eof', ('/settings', EOFError(), '/quit'), 0, False, 0),
+            ('dirty-cancel-no-then-yes', ('/settings', '1', '2', '/cancel', '9', '2', '9', '1', '/quit'), 2, True, 1),
+            ('dirty-root-escape-confirmation-escape-then-yes', ('/settings', '1', '2', '/cancel', '/cancel', '/cancel', '9', '1', '/quit'), 2, True, 1),
+            ('dirty-cancel-interrupt', ('/settings', '1', '2', '/cancel', '9', KeyboardInterrupt(), '/quit'), 1, False, 1),
+            ('dirty-root-escape-eof', ('/settings', '1', '2', '/cancel', '/cancel', EOFError(), '/quit'), 1, False, 1),
+            ('dirty-root-interrupt', ('/settings', '1', '2', '/cancel', KeyboardInterrupt(), '/quit'), 0, False, 1),
+            ('dirty-root-eof', ('/settings', '1', '2', '/cancel', EOFError(), '/quit'), 0, False, 1),
+            ('save-interrupt', ('/settings', '1', '2', '/cancel', '8', KeyboardInterrupt(), '/quit'), 1, False, 1),
+            ('save-eof', ('/settings', '1', '2', '/cancel', '8', EOFError(), '/quit'), 1, False, 1),
         )
         for label, reads, confirmation_count, returns_to_cancel, discard_count in cases:
             with self.subTest(label=label):
                 workspace = self.make_workspace()
                 before = _tree_snapshot(workspace.root)
-                controller, _backend, callbacks = self.make_controller(
-                    workspace,
-                    *reads,
-                    terminal_width=80,
-                )
+                controller, _backend, callbacks = self.make_controller(workspace, *reads, terminal_width=80)
                 original_picker = terminal_module.InteractivePickerInput.read_picker
-                with _observed_picker_patch(original_picker) as picker:
+                original_confirmation = terminal_module.InteractiveConfirmationInput.read_confirmation
+                with (_observed_picker_patch(original_picker) as picker,
+                      mock.patch.object(terminal_module.InteractiveConfirmationInput, "read_confirmation",
+                                        autospec=True, side_effect=original_confirmation) as confirmation):
                     self.assertEqual(controller.run_session_lobby(), 0)
                 self.assertEqual(_tree_snapshot(workspace.root), before)
                 rendered = "".join(callbacks.records)
-                self.assertEqual(
-                    rendered.count("[cancelled] Pending changes discarded.\n"),
-                    discard_count,
-                )
+                self.assertEqual(rendered.count("[cancelled] Pending changes discarded.\n"), discard_count)
                 self.assertNotIn("[saved] Settings saved.", rendered)
-                confirmation_prompts = [
-                    prompt
-                    for prompt in callbacks.prompts
-                    if "Apply changes?" in prompt or "Discard changes?" in prompt
-                ]
+                self.assertEqual(confirmation.call_count, confirmation_count)
+                for call in confirmation.call_args_list:
+                    self.assertTrue(call.kwargs["binary"])
+                    self.assertTrue(call.kwargs["context"])
+                confirmation_prompts = [p for p in callbacks.prompts if "Apply changes?" in p or "Discard changes?" in p]
                 self.assertEqual(len(confirmation_prompts), confirmation_count)
                 if discard_count:
-                    dirty_settings_calls = [
-                        call
-                        for call in picker.call_args_list
-                        if call.args[1].name == "Settings"
-                        and any(
-                            choice.identity == "cancel"
-                            and choice.description
-                            == "Pending changes will be discarded."
-                            for choice in call.args[2]
-                        )
-                    ]
-                    self.assertTrue(dirty_settings_calls)
+                    dirty = [call for call in picker.call_args_list if call.args[1].name == "Settings"
+                             and any(choice.identity == "cancel" and choice.description for choice in call.args[2])]
+                    self.assertTrue(dirty)
                 if returns_to_cancel:
-                    settings_calls = [
-                        call
-                        for call in picker.call_args_list
-                        if call.args[1].name == "Settings"
-                    ]
-                    self.assertEqual(
-                        settings_calls[-1].kwargs["highlighted_id"],
-                        "cancel",
-                    )
+                    settings_calls = [call for call in picker.call_args_list if call.args[1].name == "Settings"]
+                    self.assertEqual(settings_calls[-1].kwargs["highlighted_id"], "cancel")
 
     def test_internal_clean_save_route_is_silent_and_normalizes_highlight(self) -> None:
         workspace = self.make_workspace()
@@ -6308,17 +6032,20 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
 
     class _Picker:
         def __init__(self, *outcomes: ControlOutcome) -> None:
-            self.outcomes = list(outcomes)
-            self.calls = []
+            self.outcomes, self.calls, self.options = list(outcomes), [], []
 
         def read_picker(self, *_args: object, **_kwargs: object) -> ControlOutcome:
             self.calls.append(_args)
+            self.options.append(_kwargs)
             return self.outcomes.pop(0)
 
     class _Prompt:
-        def __init__(self, *outcomes: ControlOutcome) -> None: self.outcomes = list(outcomes)
+        def __init__(self, *outcomes: ControlOutcome) -> None:
+            self.outcomes, self.calls = list(outcomes), []
 
-        def read_prompt(self, *_args: object, **_kwargs: object) -> ControlOutcome: return self.outcomes.pop(0)
+        def read_prompt(self, *_args: object, **_kwargs: object) -> ControlOutcome:
+            self.calls.append((_args, _kwargs))
+            return self.outcomes.pop(0)
 
     class _Output:
         def __init__(self) -> None:
@@ -6447,7 +6174,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                     prompts = (
                         (self._commit(revision),) if revision is not None else ()
                     )
-                    adapter = lead_policy_module.InteractiveLeadAdapter(
+                    adapter = self._adapter(
                         session,
                         runner,
                         self._Progress(),  # type: ignore[arg-type]
@@ -6465,7 +6192,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                     )
 
             calls.clear()
-            adapter = lead_policy_module.InteractiveLeadAdapter(
+            adapter = self._adapter(
                 session,
                 runner,
                 self._Progress(),  # type: ignore[arg-type]
@@ -6479,7 +6206,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
 
             calls.clear()
             current[:] = [self._terminal_turn(CollaborationStepState.COMPLETED)]
-            adapter = lead_policy_module.InteractiveLeadAdapter(
+            adapter = self._adapter(
                 session,
                 runner,
                 self._Progress(),  # type: ignore[arg-type]
@@ -6528,7 +6255,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             history = events_fixture.store_batch((), batch)
             current[:] = [replace(self._terminal_turn(CollaborationStepState.COMPLETED), message=report.message, kind=LeadOutcomeKind.EXPLORATION, state=None, interaction_mode=exploration.LeadInteractionMode.EXPLORATION, exploration=report, evidence=None, next_action=CollaborationNextAction.CONTINUE_WITH_LEAD)]
             output = self._Output()
-            adapter = lead_policy_module.InteractiveLeadAdapter(
+            adapter = self._adapter(
                 session, runner, self._Progress(),
                 self._Picker(self._commit(_UNIQUE_C), self._commit(idea.idea_id),
                              self._commit("whole"), self._commit("authoring")),
@@ -6571,7 +6298,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             selected = latest.premise_report.options[1]
             output = self._Output()
             current[:] = [self._terminal_turn(CollaborationStepState.COMPLETED)]
-            adapter = lead_policy_module.InteractiveLeadAdapter(session, runner, self._Progress(), self._Picker(self._commit("choose"), self._commit(selected.option_id), self._commit("user_choice")), self._Prompt(self._commit("core_documents/global_outline.md"), self._commit("core_documents/character_sheets.md"), self._commit("")), output, read_events=lambda current_conversation: history)
+            adapter = self._adapter(session, runner, self._Progress(), self._Picker(self._commit("choose"), self._commit(selected.option_id), self._commit("user_choice")), self._Prompt(self._commit("core_documents/global_outline.md"), self._commit("core_documents/character_sheets.md"), self._commit("")), output, read_events=lambda current_conversation: history)
             self.assertFalse(adapter.premise(conversation))
             selection = forwarded[-1]["premise_selection"]
             self.assertEqual((selection.report_event_id, selection.option_id, selection.material_digest), (latest.premise_report_ref.report_event_id, selected.option_id, selected.material_digest))
@@ -6647,7 +6374,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 if uses_material:
                     picks.append(self._commit("material_0"))
                 output = self._Output()
-                adapter = lead_policy_module.InteractiveLeadAdapter(
+                adapter = self._adapter(
                     case.runtime.session(case.session_id), runner, self._Progress(), self._Picker(*picks),
                     self._Prompt(self._commit("Explicit question or new writing intent.")), output,
                 )
@@ -6697,7 +6424,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             context_event_sink(context_marker)
             sinks.append(action_progress_sink); return self._terminal_turn(CollaborationStepState.COMPLETED)
         with mock.patch.object(RuntimeSession, "lead_turn", lead_turn):
-            adapter = lead_policy_module.InteractiveLeadAdapter(session, runner, progress,
+            adapter = self._adapter(session, runner, progress,
                 self._Picker(), self._Prompt(), output)
             self.assertFalse(adapter.submit(_UNIQUE_C, "ordinary"))
         self.assertEqual(sinks, [progress.observe]); self.assertEqual(progress.begins, [()])
@@ -6735,7 +6462,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 if text == texts[-1]: raise BackendProtocolError("Antigravity CLI failed (status 1): 503 Overloaded")
                 return self._terminal_turn(CollaborationStepState.COMPLETED)
             with mock.patch.object(RuntimeSession, "lead_turn", lead_turn):
-                adapter = lead_policy_module.InteractiveLeadAdapter(session, runner, progress, self._Picker(), self._Prompt(), terminal_module.InteractiveSemanticOutput(terminal))
+                adapter = self._adapter(session, runner, progress, self._Picker(), self._Prompt(), terminal_module.InteractiveSemanticOutput(terminal))
                 for text in texts:
                     start = len(stream.getvalue())
                     self.assertFalse(adapter.submit(_UNIQUE_C, text))
@@ -6753,7 +6480,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         capacity_call = mock.AsyncMock(side_effect=capacity)
         self.enterContext(_object_new_patch(RuntimeSession, "lead_turn", capacity_call))
         output, progress, picker = self._Output(), self._Progress(), self._Picker()
-        adapter = lead_policy_module.InteractiveLeadAdapter(
+        adapter = self._adapter(
             session, runner, progress, picker, self._Prompt(), output)
         self.assertFalse(adapter.submit(_UNIQUE_C, "PRIVATE_CAPACITY_USER"))
         notice = next(component for component in output.components
@@ -6777,7 +6504,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             raise BackendProtocolError("Antigravity CLI exited with status 1")
 
         with mock.patch.object(RuntimeSession, "lead_turn", failing_turn):
-            adapter = lead_policy_module.InteractiveLeadAdapter(
+            adapter = self._adapter(
                 session, runner, progress,
                 self._Picker(), self._Prompt(), output,
             )
@@ -6794,7 +6521,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
 
     def test_confirmed_execution_writes_specialists_then_lead_then_elapsed(self) -> None:
         runner = asyncio.Runner(); self.addCleanup(runner.close); output = self._Output()
-        adapter = lead_policy_module.InteractiveLeadAdapter(RuntimeSession.__new__(RuntimeSession),
+        adapter = self._adapter(RuntimeSession.__new__(RuntimeSession),
             runner, self._Progress(), self._Picker(), self._Prompt(), output)
         specialists = (SimpleNamespace(name="first"), SimpleNamespace(name="second"))
         adapter._pending_specialist_panels = specialists; adapter._pending_elapsed = "00:00:07"
@@ -6851,7 +6578,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 with self.subTest(kind=kind):
                     calls.clear(); routes.clear(); picker_calls.clear()
                     revision = "  Narrow only the preparation.  " if kind is c.CollaborationConfirmationDecision.REVISE else None
-                    adapter = lead_policy_module.InteractiveLeadAdapter(
+                    adapter = self._adapter(
                         session, runner, self._Progress(), Picker(self._commit(kind.value)),
                         self._Prompt(*(() if revision is None else (self._commit(revision),))),
                         self._Output(), recover_authentication=lambda _provider: self.fail("unexpected native handoff"))
@@ -6860,16 +6587,16 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                         ("decision", exact_decision(turn, kind, revision_request=revision))])
                     self.assertEqual(routes, ["lead_turn", "decide"])
                     prompt, choices, options = picker_calls[0]
-                    self.assertEqual(prompt.name, "Lead recommendation decision")
+                    self.assertEqual(prompt.name, "Lead preparation")
                     self.assertEqual(tuple(item.identity for item in choices), ("confirm", "reject", "revise"))
                     self.assertIn("preparation only", choices[0].description)
                     self.assertIn("new Confirm", choices[2].description)
-                    self.assertEqual(options["highlighted_id"], "revise")
+                    self.assertIsNone(options.get("highlighted_id"))
                     self.assertEqual(case.history(conversation_id), before)
             for outcome in (ControlOutcomeKind.CANCEL, ControlOutcomeKind.INTERRUPT, ControlOutcomeKind.EOF):
                 with self.subTest(outcome=outcome):
                     calls.clear(); routes.clear()
-                    adapter = lead_policy_module.InteractiveLeadAdapter(
+                    adapter = self._adapter(
                         session, runner, self._Progress(), Picker(ControlOutcome(outcome)),
                         self._Prompt(), self._Output())
                     self.assertEqual(adapter.submit(conversation_id, "still pending"), outcome is ControlOutcomeKind.EOF)
@@ -6881,7 +6608,6 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
     def test_recommendation_revision_cancel_and_eof_preserve_pending_request(self) -> None:
         from story_writing_agents import conversations as c
         from tests.recommendation_fixture import RecommendationCase
-
         case = RecommendationCase()
         case.setUp()
         for cleanup, args, kwargs in case._cleanups:
@@ -6892,15 +6618,14 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         conversation_id, turn = runner.run(case.recommend())
         before, calls = case.history(conversation_id), len(case.backend.calls)
         session = RuntimeSession.__new__(RuntimeSession)
-        for outcome in (ControlOutcome(ControlOutcomeKind.CANCEL),
-                        ControlOutcome(ControlOutcomeKind.INTERRUPT),
-                        ControlOutcome(ControlOutcomeKind.EOF), self._commit(""), self._commit("  ")):
+        outcomes = (ControlOutcome(ControlOutcomeKind.CANCEL), ControlOutcome(ControlOutcomeKind.INTERRUPT),
+                    ControlOutcome(ControlOutcomeKind.EOF), self._commit(""), self._commit("  "))
+        for outcome in outcomes:
             with self.subTest(outcome=outcome), mock.patch.object(
                     RuntimeSession, "decide_lead_recommendation", side_effect=AssertionError("unconfirmed revision")):
-                output = self._Output()
-                adapter = lead_policy_module.InteractiveLeadAdapter(
-                    session, runner, self._Progress(), self._Picker(self._commit("revise")),
-                    self._Prompt(outcome), output)
+                output, picker, prompt = self._Output(), self._Picker(self._commit("revise"),
+                    ControlOutcome(ControlOutcomeKind.CANCEL)), self._Prompt(outcome, ControlOutcome(ControlOutcomeKind.CANCEL))
+                adapter = self._adapter(session, runner, self._Progress(), picker, prompt, output)
                 self.assertEqual(adapter._present_and_decide(turn), outcome.kind is ControlOutcomeKind.EOF)
                 self.assertEqual(case.history(conversation_id), before)
                 self.assertEqual(len(case.backend.calls), calls)
@@ -6908,6 +6633,14 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 self.assertIs(projection.current_recommendation_state, c.LeadRecommendationState.PENDING)
                 self.assertEqual(projection.current_recommendation_request, turn.recommendation_request)
                 self.assertFalse(case.payload_events(conversation_id, c.LeadRecommendationDecisionPayload))
+                returned = outcome.kind in {ControlOutcomeKind.CANCEL, ControlOutcomeKind.COMMIT}
+                self.assertEqual(len(picker.calls), 2 if returned else 1)
+                if returned:
+                    self.assertEqual(picker.options[-1]["highlighted_id"], "revise")
+                if outcome.kind is ControlOutcomeKind.COMMIT:
+                    self.assertEqual(len(prompt.calls), 2)
+                    self.assertEqual(prompt.calls[1][1]["initial_value"], outcome.text)
+                    self.assertIn("must not be empty", prompt.calls[1][1]["notice"].text)
                 if outcome.kind is not ControlOutcomeKind.EOF:
                     self.assertTrue(any(isinstance(item, terminal_module.Notice) for item in output.components))
 
@@ -6970,7 +6703,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                         )
                     ]
                     output = self._Output()
-                    adapter = lead_policy_module.InteractiveLeadAdapter(
+                    adapter = self._adapter(
                         session,
                         runner,
                         self._Progress(),  # type: ignore[arg-type]
@@ -7009,7 +6742,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         progress.last_error_message = "Antigravity CLI exited with status 1: No capacity available"
         output = self._Output()
         with mock.patch.object(RuntimeSession, "lead_turn", lead_turn):
-            adapter = lead_policy_module.InteractiveLeadAdapter(
+            adapter = self._adapter(
                 session, runner, progress, self._Picker(), self._Prompt(), output,
             )
             self.assertFalse(adapter.submit(_UNIQUE_C, "test prompt"))
@@ -7042,7 +6775,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 case.session_id, conversation, task.LeadTaskAction.DISCUSS, text="Discuss; do not draft.",
             )))
             output = self._Output()
-            adapter = lead_policy_module.InteractiveLeadAdapter(
+            adapter = self._adapter(
                 case.runtime.session(case.session_id), runner, self._Progress(),
                 self._Picker(), self._Prompt(), output,
                 read_events=case.history,
@@ -7067,7 +6800,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
 
     def test_pending_commit_redisclosure_reuses_exact_picker_without_apply(self):
         digest = "sha256:" + "a" * 64
-        request = SimpleNamespace(confirmation_request_id="pending-commit", application_result_event_id="applied-event", candidate=SimpleNamespace(candidate_id="b" * 64), request_digest=digest)
+        request = SimpleNamespace(confirmation_request_id="pending-commit", application_result_event_id="applied-event", candidate=SimpleNamespace(candidate_id="b" * 64, branch="session-test", paths=(SimpleNamespace(path="manuscript/chapter.md"),), proposed_message="Apply reviewed candidate"), request_digest=digest)
         turn = self._terminal_turn(CollaborationStepState.COMPLETED)
         object.__setattr__(turn, "next_action", CollaborationNextAction.SUBMIT_COMMIT_DECISION)
         object.__setattr__(turn, "story_commit_request", request)
@@ -7082,18 +6815,22 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             return self._raw(StoryCommitDecisionResult)
         with mock.patch.object(RuntimeSession, "lead_turn", lead_turn), mock.patch.object(RuntimeSession, "decide_artifact_application", side_effect=AssertionError("Apply must not be re-entered")), mock.patch.object(RuntimeSession, "decide_story_commit", commit_decision), mock.patch.object(lead_policy_module, "project_lead_turn_result", return_value=terminal_module.Panel("Lead", ())), mock.patch.object(lead_policy_module, "project_story_commit_decision_result", return_value=SimpleNamespace()):
             for kind in (StoryCommitDecision.COMMIT, StoryCommitDecision.REJECT):
-                lead_policy_module.InteractiveLeadAdapter(session, runner, self._Progress(), self._Picker(self._commit(kind.value)), self._Prompt(), self._Output()).submit(_UNIQUE_C, "Continue.")
+                self._adapter(session, runner, self._Progress(), self._Picker(self._commit(kind.value)), self._Prompt(), self._Output()).submit(_UNIQUE_C, "Continue.")
                 sent = calls[-1]
                 self.assertIs(sent.kind, kind)
                 self.assertEqual(sent.confirmation_request_id, request.confirmation_request_id)
                 self.assertEqual(sent.application_result_event_id, request.application_result_event_id)
                 self.assertEqual(sent.request_digest, digest)
             before = list(calls)
-            lead_policy_module.InteractiveLeadAdapter(session, runner, self._Progress(), self._Picker(ControlOutcome(ControlOutcomeKind.CANCEL)), self._Prompt(), self._Output()).submit(_UNIQUE_C, "Continue.")
+            self._adapter(session, runner, self._Progress(), self._Picker(ControlOutcome(ControlOutcomeKind.CANCEL)), self._Prompt(), self._Output()).submit(_UNIQUE_C, "Continue.")
             self.assertEqual(calls, before)
 
 
     def test_artifact_and_commit_controls_are_distinct_and_correlated(self) -> None:
+        from hashlib import sha256
+        from story_writing_agents.writing_artifacts import ArtifactCreateOperation, ArtifactKind
+        operation = ArtifactCreateOperation("manuscript/chapter.md", ArtifactKind.MANUSCRIPT,
+            b"candidate", "sha256:" + sha256(b"candidate").hexdigest())
         digest = "sha256:" + "a" * 64
         candidate_id = "b" * 64
         reviewed = SimpleNamespace(
@@ -7106,6 +6843,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             candidate_revision=1,
             candidate_digest=digest,
             application_id="application",
+            change_set=SimpleNamespace(operations=(operation,)),
         )
         request = SimpleNamespace(
             confirmation_request_id="application-confirmation",
@@ -7133,7 +6871,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         commit_request = SimpleNamespace(
             confirmation_request_id="commit-confirmation",
             application_result_event_id="application-event",
-            candidate=SimpleNamespace(candidate_id=candidate_id),
+            candidate=SimpleNamespace(candidate_id=candidate_id, branch="session-test", paths=(SimpleNamespace(path="manuscript/chapter.md"),), proposed_message="Apply reviewed candidate"),
             request_digest=digest,
         )
         session = RuntimeSession.__new__(RuntimeSession)
@@ -7183,7 +6921,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 with self.subTest(application=kind):
                     calls.clear()
                     prompts = (self._commit(revision),) if revision else ()
-                    lead_policy_module.InteractiveLeadAdapter(
+                    self._adapter(
                         session,
                         runner,
                         self._Progress(),  # type: ignore[arg-type]
@@ -7197,7 +6935,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                     self.assertEqual(len(calls), 1)
 
             calls.clear()
-            lead_policy_module.InteractiveLeadAdapter(
+            self._adapter(
                 session,
                 runner,
                 self._Progress(),  # type: ignore[arg-type]
@@ -7215,7 +6953,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 with self.subTest(commit=kind):
                     calls.clear()
                     prompts = (self._commit(revision),) if revision else ()
-                    lead_policy_module.InteractiveLeadAdapter(
+                    self._adapter(
                         session,
                         runner,
                         self._Progress(),  # type: ignore[arg-type]
@@ -7251,7 +6989,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                     )
 
             calls.clear()
-            lead_policy_module.InteractiveLeadAdapter(
+            self._adapter(
                 session,
                 runner,
                 self._Progress(),  # type: ignore[arg-type]
@@ -7321,6 +7059,11 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 adapter.submit("conv_1", "test request")
             self.assertIn("terminal restoration crashed", str(ctx.exception))
+
+    def _adapter(self, session, runner, progress, picker, prompt, output, **kwargs):
+        confirmation = SimpleNamespace(read_confirmation=picker.read_picker, read_revision=prompt.read_prompt)
+        return lead_policy_module.InteractiveLeadAdapter(
+            session, runner, progress, picker, prompt, output, confirmation=confirmation, **kwargs)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from collections.abc import Iterable
 from ._box import Box
 from ._model import (
     CapabilityProfile,
+    ConfirmationView,
     Choice,
     Component,
     Field,
@@ -40,6 +41,7 @@ from ._model import (
 )
 from ._advisory_progress import render_detailed_advisory_progress
 from ._markdown import MarkdownLine, MarkdownSpan, literal_lines, project_markdown
+from ._controls import confirmation_grammar
 
 
 _RESET = "\x1b[0m"
@@ -634,6 +636,241 @@ def render_picker_fallback(
     else:
         raise RuntimeError("picker has an unsupported presentation")
     return _render_input_semantic_lines(lines, capabilities, picker=True)
+
+
+def _confirmation_fact(item: Field | Notice) -> MarkdownLine:
+    if type(item) is Notice:
+        text = (f"[{_inline(item.label)}] " if item.label else "") + _inline(item.text)
+        styles = {SemanticRole.WARNING: ("border_yellow",), SemanticRole.ERROR: ("red",),
+                  SemanticRole.MUTED: ("dim",)}.get(item.role, ())
+        return MarkdownLine(text, (MarkdownSpan(0, len(text), styles),) if styles else ())
+    label, value = _inline(item.label), _inline(item.value)
+    if item.label in {"Additional calls", "Maximum additional calls", "Cost"}:
+        label = "[COST] " + label
+    text = f"{label}: {value}"
+    spans = [MarkdownSpan(0, len(label) + 1, ("blue",))]
+    if "call" in item.label.casefold() or item.label in {"Maximum additional calls", "Cost"}:
+        spans.append(MarkdownSpan(len(label) + 2, len(text), ("bold",)))
+    elif item.role is SemanticRole.WARNING:
+        spans.append(MarkdownSpan(len(label) + 2, len(text), ("border_yellow",)))
+    return MarkdownLine(text, tuple(spans))
+
+
+def _confirmation_context(items: tuple) -> list[MarkdownLine]:
+    """Retain settings comparisons and activation facts in every input mode."""
+    result: list[MarkdownLine] = []
+    for item in items:
+        if type(item) is Panel:
+            current = next((part for part in item.items if type(part) is Section and part.title == "Current"), None)
+            pending = next((part for part in item.items if type(part) is Section and part.title == "Pending"), None)
+            if current is not None and pending is not None:
+                values = {field.label: field.value for field in current.items if type(field) is Field}
+                for field in pending.items:
+                    if type(field) is Field and field.label in values:
+                        old = values[field.label].removesuffix(" (Changed)")
+                        new = field.value.removesuffix(" (Changed)")
+                        result.append(_confirmation_fact(Field(field.label, f"{old} -> {new}")))
+                result.extend(_confirmation_context(tuple(part for part in item.items if part is not current and part is not pending)))
+            else:
+                result.extend(_confirmation_context(item.items))
+        elif type(item) is Section:
+            result.append(MarkdownLine(_inline(item.title), (MarkdownSpan(0, len(_inline(item.title)), ("bold",)),)))
+            result.extend(_confirmation_context(item.items))
+        elif type(item) in {Field, Notice}:
+            result.append(_confirmation_fact(item))
+    return result
+
+
+def _confirmation_role(record: Record) -> tuple[str, str, str]:
+    return {
+        "plot_architect": ("P", "PLOT", "border_yellow"),
+        "character_custodian": ("C", "CHARACTER", "border_green"),
+        "execution_specialist": ("E", "EXECUTION", "border_blue"),
+    }.get(record.identity, ("?", _inline(record.title or record.identity), "border_cyan"))
+
+
+def _confirmation_excerpt(text: str, capacity: int) -> str:
+    safe = _inline(text)
+    if _cell_width(safe) <= max(1, capacity):
+        return safe
+    return _word_cell_prefix(safe, max(1, capacity - 1)).rstrip() + "…"
+
+
+def _confirmation_lines(
+    view: ConfirmationView, state: PickerControlState, capabilities: TerminalCapabilities,
+    *, dense: bool = False, fallback: bool = False,
+) -> list[_SemanticLine]:
+    """Compose one purpose-bound frame from immutable semantic facts."""
+    width = min(120, capabilities.width)
+    box = Box(width, rounded=True) if width >= 40 else None
+    capacity = box.body_width() if box is not None else max(1, width - (2 if width >= 4 else 1 if width == 3 else 0))
+    rows: list[_SemanticLine] = []
+    title = "Confirmation · " + _inline(view.picker.prompt.name).removeprefix("Confirmation · ")
+    if box is not None:
+        headers = _word_wrapped_prefixed_lines(title, max(1, width - 6), prefix="", fallback_prefix="")
+        rows.append((box.top(headers[0]), _SpeakerHeaderRole(SpeakerAccent.CYAN)))
+        for extra in headers[1:]:
+            rows.extend(_framed_markdown_lines(MarkdownLine(extra), width, "", box=box, accent=SpeakerAccent.CYAN))
+    else:
+        rows.extend((line, _SpeakerHeaderRole(SpeakerAccent.CYAN)) for line in _word_wrapped_prefixed_lines(
+            "─ " + title + " ─", width, prefix="", fallback_prefix=""))
+
+    pending_section: str | None = None
+
+    def append(line: MarkdownLine) -> None:
+        nonlocal pending_section
+        if pending_section is not None:
+            prefix = pending_section + " "
+            line = MarkdownLine(prefix + line.text,
+                (MarkdownSpan(0, len(pending_section), ("border_cyan",)),) + tuple(
+                    MarkdownSpan(span.start + len(prefix), span.stop + len(prefix), span.styles)
+                    for span in line.spans))
+            pending_section = None
+        rows.extend(_framed_markdown_lines(line, width, "", box=box, accent=SpeakerAccent.CYAN))
+
+    def section(number: int, name: str, *, first: bool = False) -> None:
+        nonlocal pending_section
+        text = f"[{number:02d} {name}]"
+        if dense and name in {"SUMMARY", "COST & IMPACT"}:
+            pending_section = text
+            return
+        if box is not None and not dense and not first:
+            value = box.divider(text)
+            offset = value.find(text)
+            spans = [MarkdownSpan(0, offset, ("blue",)), MarkdownSpan(offset, offset + len(text), ("border_cyan",)),
+                     MarkdownSpan(offset + len(text), len(value), ("blue",))]
+            rows.append((value, _MarkdownRole(tuple(span for span in spans if span.start < span.stop))))
+        else:
+            append(MarkdownLine(text, (MarkdownSpan(0, len(text), ("border_cyan",)),)))
+
+    section(1, "SUMMARY", first=True)
+    if view.summary:
+        for index, fact in enumerate(view.summary):
+            if dense and index > 0:
+                continue
+            line = _confirmation_fact(fact)
+            if dense:
+                line = MarkdownLine(_confirmation_excerpt(line.text, max(1, capacity - 13)))
+            append(line)
+    elif view.picker.prompt.instruction:
+        text = _inline(view.picker.prompt.instruction)
+        append(MarkdownLine(_confirmation_excerpt(text, capacity) if dense else text))
+    for line in _confirmation_context(view.context):
+        append(line)
+    number = 2
+    if view.specialists:
+        section(number, f"SPECIALISTS · {len(view.specialists)}")
+        number += 1
+        for index, specialist in enumerate(view.specialists):
+            marker, label, style = _confirmation_role(specialist)
+            fields = {field.label: field.value for field in specialist.fields}
+            header = f"[{marker}] {label}"
+            if dense:
+                calls = _inline(fields.get("Calls", "unavailable"))
+                suffix = f" · {calls} calls maximum"
+                task = fields.get("Task", specialist.content or specialist.title or "Disclosed task")
+                text = header + " · " + _confirmation_excerpt(task, max(1, capacity - _cell_width(header + " · " + suffix))) + suffix
+                append(MarkdownLine(text, (MarkdownSpan(0, len(header), (style,)),)))
+            else:
+                if index:
+                    append(MarkdownLine(""))
+                text = f"{header}  {_inline(specialist.identity)}"
+                append(MarkdownLine(text, (MarkdownSpan(0, len(header), (style,)),
+                    MarkdownSpan(len(header) + 2, len(text), ("dim",)))))
+                for field in specialist.fields:
+                    text = " │ " + _confirmation_fact(field).text
+                    append(MarkdownLine(text, (MarkdownSpan(1, 2, (style,)),)))
+    if view.impact:
+        section(number, "COST & IMPACT")
+        number += 1
+        if dense:
+            append(MarkdownLine("; ".join(_confirmation_fact(fact).text for fact in view.impact)))
+        else:
+            for fact in view.impact:
+                append(_confirmation_fact(fact))
+    section(number, "DECISION · Pending")
+    for index, choice in enumerate(state.picker.choices, 1):
+        active = choice.identity == state.picker.highlighted_id
+        prefix = "> " if active else "  "
+        text = f"{prefix}{index}. {_inline(choice.label)}"
+        if not dense and choice.description:
+            text += " — " + _inline(choice.description)
+        if not choice.enabled:
+            text += " (disabled)"
+        chunks = _word_wrapped_prefixed_lines(text, capacity, prefix="", fallback_prefix="")
+        for chunk_index, chunk in enumerate(chunks):
+            styles = ("border_cyan", "code") if active and chunk_index == 0 else ("dim",) if not choice.enabled else ()
+            append(MarkdownLine(chunk, (MarkdownSpan(0, len(chunk), styles),) if styles and chunk else ()))
+    if state.picker.notice is not None:
+        append(_confirmation_fact(state.picker.notice))
+    if fallback:
+        keys = "KEYS " + confirmation_grammar(state, binary=view.binary)
+    else:
+        keys = "KEYS ↑↓ choose · Enter select · Esc leave unconfirmed"
+    append(MarkdownLine(keys, (MarkdownSpan(0, 4, ("dim",)),)))
+    if not dense and not view.binary and state.picker.highlighted_id is None and state.picker.notice is None:
+        append(MarkdownLine("No action selected. No work started."))
+    if box is not None:
+        rows.append((box.bottom(), _SpeakerHeaderRole(SpeakerAccent.CYAN)))
+    return rows
+
+
+def render_confirmation_viewport(
+    view: ConfirmationView, viewport: PickerViewport, capabilities: TerminalCapabilities,
+    *, dense: bool = False,
+) -> RenderedFrame:
+    if type(view) is not ConfirmationView or type(viewport) is not PickerViewport:
+        raise TypeError("confirmation rendering requires its view and picker viewport")
+    if type(capabilities) is not TerminalCapabilities or type(dense) is not bool:
+        raise TypeError("confirmation rendering requires capabilities and bool dense")
+    return _render_semantic_lines(_confirmation_lines(view,
+        PickerControlState(viewport.picker, viewport.start), capabilities, dense=dense), capabilities)
+
+
+def render_confirmation_fallback(
+    view: ConfirmationView, state: PickerControlState, capabilities: TerminalCapabilities,
+) -> RenderedInputFrame:
+    if type(view) is not ConfirmationView or type(state) is not PickerControlState:
+        raise TypeError("confirmation fallback requires its view and picker state")
+    if type(capabilities) is not TerminalCapabilities:
+        raise TypeError("capabilities must be TerminalCapabilities")
+    lines = _confirmation_lines(view, state, capabilities, fallback=True)
+    lines.extend((text, SemanticRole.SUCCESS) for text in _word_wrapped_prefixed_lines(
+        "Choice > ", capabilities.width, prefix="", fallback_prefix=""))
+    if not lines[-1][0].endswith(" "):
+        lines[-1] = (lines[-1][0] + " ", lines[-1][1])
+    return _render_input_semantic_lines(lines, capabilities, picker=True)
+
+
+def render_confirmation_prompt(
+    view: InputPromptView, capabilities: TerminalCapabilities,
+) -> RenderedInputFrame:
+    """Keep revision context and validation alongside one active editor."""
+    if type(view) is not InputPromptView or type(capabilities) is not TerminalCapabilities:
+        raise TypeError("revision rendering requires an input view and capabilities")
+    width = min(120, capabilities.width)
+    box = Box(width, rounded=True) if width >= 40 else None
+    lines: list[_SemanticLine] = []
+    title = "Confirmation · " + _inline(view.prompt.name)
+    if box is not None:
+        lines.append((box.top(title), _SpeakerHeaderRole(SpeakerAccent.CYAN)))
+    else:
+        lines.extend((line, SemanticRole.INFO) for line in _word_wrapped_prefixed_lines(title, width, prefix="", fallback_prefix=""))
+    facts = [MarkdownLine("[01 REVISION]", (MarkdownSpan(0, 13, ("border_cyan",)),))]
+    facts.extend(_confirmation_context(view.context))
+    if view.prompt.instruction:
+        facts.append(MarkdownLine(_inline(view.prompt.instruction)))
+    if view.initial_value is not None:
+        facts.append(MarkdownLine("Current draft: " + _inline(view.initial_value)))
+    facts.append(MarkdownLine("KEYS Enter submit revision · Esc return to pending decision"))
+    for line in facts:
+        lines.extend(_framed_markdown_lines(line, width, "", box=box, accent=SpeakerAccent.CYAN))
+    if box is not None:
+        lines.append((box.bottom(), _SpeakerHeaderRole(SpeakerAccent.CYAN)))
+    lines.extend((line, SemanticRole.SUCCESS) for line in _word_wrapped_prefixed_lines("Revision request > ", width, prefix="", fallback_prefix=""))
+    if not lines[-1][0].endswith(" "):
+        lines[-1] = (lines[-1][0] + " ", lines[-1][1])
+    return _render_input_semantic_lines(lines, capabilities)
 
 
 def _render_input_semantic_lines(
@@ -2137,6 +2374,7 @@ def _decorate(text: str, role: _LineRole) -> str:
         sgr = {"bold": "\x1b[1m", "italic": "\x1b[3m", "code": "\x1b[7m",
                "link": "\x1b[4m", "dim": "\x1b[2m", "blue": "\x1b[34m"}
         sgr.update({f"border_{accent.value}": value for accent, value in _SPEAKER_HEADER_SGR.items()})
+        sgr["red"] = _ROLE_SGR[SemanticRole.ERROR]
         rendered: list[str] = []
         offset = 0
         for span in role.spans:
