@@ -3790,7 +3790,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                         operation['proposed_destination_path'] = future_path
                                     invalid = json.loads(lead_fixture_response(fixture_call, {**base,
                                         'response_type': 'artifact_change_proposal', 'response_details': {
-                                            'task_scope': native_scope, 'authoring_assessment': native_assessment,
+                                            'task_scope': case_native_scope, 'authoring_assessment': native_assessment,
                                             'artifact_change_proposal': {'artifact_changes': [operation]}}},
                                         family=0, branch_key=stem + ':family:7'))
                                     self.assertTrue(profile_binding.rule_graph.findings(invalid))
