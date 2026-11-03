@@ -10,7 +10,7 @@ import textwrap
 import time
 import unicodedata
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
-from dataclasses import KW_ONLY, dataclass
+from dataclasses import KW_ONLY, dataclass, replace
 from enum import StrEnum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, TextIO
@@ -35,6 +35,7 @@ from ._controls import (
     append_main_input_history,
     completion_candidate_matches,
     initialize_picker,
+    initialize_confirmation,
     main_command_uses_choices,
     project_main_choice_completion,
     project_main_choice_palette,
@@ -45,6 +46,8 @@ from ._controls import (
     ranged_artifact_picker_selection,
     transition_composer_line,
     transition_confirmation_answer,
+    transition_confirmation_picker,
+    transition_confirmation_fallback,
     transition_main_input as transition_main_input,
     transition_main_command_input,
     transition_picker,
@@ -104,6 +107,7 @@ from ._model import (
     CommandCompletionCandidate,
     CommandCompletionProjection,
     ComposerState,
+    ConfirmationView,
     Component,
     ControlOutcome,
     ControlOutcomeKind,
@@ -143,6 +147,9 @@ from ._render import (
     render_component,
     render_advisory_progress_frame,
     render_input_prompt,
+    render_confirmation_viewport,
+    render_confirmation_fallback,
+    render_confirmation_prompt,
     render_picker_fallback,
     render_picker_viewport,
     render_startup_welcome_frame,
@@ -601,6 +608,8 @@ class InteractiveTerminal:
         "_composition_read_line",
         "_composition_reference_read_line",
         "_confirmation_read_line",
+        "_confirmation_picker_read",
+        "_confirmation_prompt_read",
         "_main_choice_read_line",
         "_main_context_read_line",
         "_main_reference_read_line",
@@ -676,6 +685,8 @@ class InteractiveTerminal:
             lambda view, _scope, _paths, _text: self._composition_read_line(view)
         )
         self._confirmation_read_line = _plain_input_reader(read_line, width)
+        self._confirmation_picker_read = _plain_confirmation_reader(read_line, width)
+        self._confirmation_prompt_read = _plain_revision_reader(read_line, width)
         self._picker_read = _plain_picker_reader(read_line, write_text, width)
         self._prompt_read = _plain_prompt_reader(read_line, width)
         self._startup_welcome = lambda _sleeper: self._write_startup_welcome()
@@ -1846,6 +1857,43 @@ class InteractiveCompositionInput:
         )
 
 
+class InteractiveConfirmationInput:
+    """Bind purpose-bound shell decisions to the existing terminal owner."""
+
+    __slots__ = ("_read", "_revision")
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._read = terminal._confirmation_picker_read
+        self._revision = terminal._confirmation_prompt_read
+
+    def read_confirmation(
+        self, prompt: Prompt, choices: tuple[Choice, ...], *,
+        summary: tuple[Field | Notice, ...] = (), specialists: tuple[Record, ...] = (),
+        impact: tuple[Field | Notice, ...] = (), context: tuple[InputContext, ...] = (),
+        binary: bool = False, highlighted_id: str | None = None,
+    ) -> ControlOutcome:
+        view = ConfirmationView(Picker(prompt, choices, highlighted_id=highlighted_id),
+            summary, specialists, impact, context, binary)
+        outcome = self._read(view, initialize_confirmation(view), transient=True)
+        if type(outcome) is not ControlOutcome:
+            raise TypeError("confirmation reader must return a ControlOutcome")
+        return outcome
+
+    def read_revision(
+        self, prompt: Prompt, *, context: tuple[InputContext, ...] = (),
+        initial_value: str | None = None, notice: Notice | None = None,
+    ) -> ControlOutcome:
+        if notice is not None:
+            context += (notice,)
+        outcome = self._revision(InputPromptView(context, prompt,
+            initial_value=initial_value), transient=True)
+        if type(outcome) is not ControlOutcome:
+            raise TypeError("revision reader must return a ControlOutcome")
+        return outcome
+
+
 class InteractivePickerInput:
     """Retain only one terminal's package-internal picker input capability."""
 
@@ -2488,6 +2536,47 @@ def _plain_input_reader(
         return read_line(frame.plain_text)
 
     return read_input
+
+
+def _plain_confirmation_reader(read_line: Callable[[str], str], width: int):
+    """Keep confirmation aliases and plain disclosure local to one read."""
+    capabilities = _plain_capabilities(width)
+
+    def read_confirmation(view, state, *, transient=True):
+        first = True
+        while True:
+            projection = view if first else replace(view, summary=(), specialists=(), impact=(), context=())
+            first = False
+            frame = render_confirmation_fallback(projection, state, capabilities)
+            try:
+                answer = _validated_input_line(read_line(frame.plain_text))
+            except KeyboardInterrupt:
+                return ControlOutcome(ControlOutcomeKind.INTERRUPT)
+            except EOFError:
+                return ControlOutcome(ControlOutcomeKind.EOF)
+            state, outcome = transition_confirmation_fallback(state, answer, binary=view.binary)
+            if outcome.kind is not ControlOutcomeKind.REJECTED:
+                return outcome
+    return read_confirmation
+
+
+def _plain_revision_reader(read_line: Callable[[str], str], width: int):
+    capabilities = _plain_capabilities(width)
+
+    def read_revision(view, *, transient=True):
+        frame = render_confirmation_prompt(view, capabilities)
+        try:
+            line = _validated_input_line(read_line(frame.plain_text))
+        except KeyboardInterrupt:
+            return ControlOutcome(ControlOutcomeKind.INTERRUPT)
+        except EOFError:
+            return ControlOutcome(ControlOutcomeKind.EOF)
+        if line == "\x1b":
+            return ControlOutcome(ControlOutcomeKind.CANCEL)
+        if not line and view.initial_value is not None:
+            line = view.initial_value
+        return ControlOutcome(ControlOutcomeKind.COMMIT, text=line)
+    return read_revision
 
 
 def _plain_prompt_reader(
@@ -3174,6 +3263,28 @@ def build_stream_terminal(
 
     terminal._picker_read = read_picker
     terminal._prompt_read = read_prompt
+    def read_confirmation(view, state, *, transient=True):
+        seen = False
+
+        def fallback(current, capabilities):
+            nonlocal seen
+            projection = view if not seen else replace(view, summary=(), specialists=(), impact=(), context=())
+            seen = True
+            return render_confirmation_fallback(projection, current, capabilities)
+
+        return driver.read_picker(state, transition_confirmation_picker,
+            lambda current, answer: transition_confirmation_fallback(current, answer, binary=view.binary),
+            project_picker_viewport,
+            lambda viewport, capabilities: render_confirmation_viewport(view, viewport, capabilities),
+            fallback, transient=True,
+            dense_renderer=lambda viewport, capabilities: render_confirmation_viewport(view, viewport, capabilities, dense=True))
+
+    def read_revision(view, *, transient=True):
+        transition = transition_prefilled_prompt_input if view.initial_value is not None else transition_prompt_input
+        return driver.read_prompt(view, render_confirmation_prompt, transition, transient=True)
+
+    terminal._confirmation_picker_read = read_confirmation
+    terminal._confirmation_prompt_read = read_revision
     terminal._startup_welcome = lambda sleeper: driver.run_startup_welcome(
         lambda index, current, physical_width: render_startup_welcome_frame(
             _STARTUP_WELCOME_SEQUENCE[index],

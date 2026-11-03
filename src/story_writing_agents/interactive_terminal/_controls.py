@@ -14,6 +14,8 @@ from ._model import (
     CommandCompletionCandidate,
     CommandCompletionProjection,
     ComposerState,
+    ConfirmationView,
+    confirmation_grammar,
     ControlOutcome,
     ControlOutcomeKind,
     KeyEvent,
@@ -698,6 +700,71 @@ def reconcile_picker(
         reconciled.visible_choice_limit,
     )
     return PickerControlState(reconciled, window_start)
+
+
+def initialize_confirmation(view: ConfirmationView) -> PickerControlState:
+    """Opt one confirmation into safe defaults without changing pickers."""
+    if type(view) is not ConfirmationView:
+        raise TypeError("view must be a ConfirmationView")
+    initialized = initialize_picker(view.picker)
+    highlighted = "no" if view.binary else view.picker.highlighted_id
+    return replace(initialized, picker=replace(initialized.picker,
+        highlighted_id=highlighted, selected_id=None))
+
+
+def transition_confirmation_picker(
+    state: PickerControlState, event: KeyEvent,
+) -> tuple[PickerControlState, ControlOutcome | None]:
+    """Require an explicit enabled action before Enter can decide."""
+    if type(state) is not PickerControlState or type(event) is not KeyEvent:
+        raise TypeError("confirmation requires picker state and a key event")
+    if state.picker.highlighted_id is None and state.picker.state is ViewState.OPEN:
+        if event.kind in {KeyKind.UP, KeyKind.DOWN}:
+            enabled = tuple(choice for choice in state.picker.choices if choice.enabled)
+            if enabled:
+                chosen = enabled[-1] if event.kind is KeyKind.UP else enabled[0]
+                return replace(state, picker=replace(state.picker,
+                    highlighted_id=chosen.identity, notice=None)), None
+        if event.kind is KeyKind.ENTER:
+            return _reject_confirmation(state, "Choose an action first."), ControlOutcome(ControlOutcomeKind.REJECTED)
+    return transition_picker(state, event)
+
+
+def _reject_confirmation(state: PickerControlState, text: str) -> PickerControlState:
+    return replace(state, picker=replace(state.picker, state=ViewState.OPEN,
+        notice=Notice(text, label="ERROR", role=SemanticRole.ERROR, state=ViewState.ERROR)))
+
+
+def transition_confirmation_fallback(
+    state: PickerControlState, answer: str, *, binary: bool = False,
+) -> tuple[PickerControlState, ControlOutcome]:
+    """Translate only explicit confirmation tokens into existing identities."""
+    if type(state) is not PickerControlState or type(answer) is not str:
+        raise TypeError("confirmation requires picker state and a string answer")
+    if type(binary) is not bool:
+        raise TypeError("binary must be bool")
+    if "\r" in answer or "\n" in answer:
+        raise ValueError("answer must not contain CR or LF")
+    normalized = answer.strip().casefold()
+    if normalized == "/cancel":
+        return transition_picker_fallback(state, normalized)
+    if not normalized:
+        if not binary:
+            return _reject_confirmation(state, "Choose an action first."), ControlOutcome(ControlOutcomeKind.REJECTED)
+        normalized = "no"
+    if binary:
+        normalized = {"y": "yes", "n": "no"}.get(normalized, normalized)
+    named = {"yes", "no"} if binary else {"confirm", "apply", "commit", "reject", "revise"}
+    if normalized in named:
+        for index, choice in enumerate(state.picker.choices, 1):
+            if choice.identity == normalized and choice.enabled:
+                return transition_picker_fallback(state, str(index))
+    elif normalized.isascii() and normalized.isdecimal() and not normalized.startswith("0"):
+        result, outcome = transition_picker_fallback(state, normalized)
+        if outcome.kind is not ControlOutcomeKind.REJECTED:
+            return result, outcome
+    notice = "Enter " + confirmation_grammar(state, binary=binary) + "."
+    return _reject_confirmation(state, notice), ControlOutcome(ControlOutcomeKind.REJECTED)
 
 
 def transition_picker(
