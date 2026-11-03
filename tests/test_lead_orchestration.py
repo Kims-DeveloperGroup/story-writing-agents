@@ -2008,6 +2008,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertEqual(sum(value is None for value in pairs.values()),
                              sum(total for (action, _), total in expected.items()
                                  if action != 'submit_result'))
+        docs = tuple("core_documents/" + name + ".md" for name in
+                     ("global_outline", "part_outlines", "character_sheets", "narrative_rules"))
         logical_optional_fields, native_schemas = set(), {}
         def require_current_native(binding, exported=None):
             full_schema = plain(binding.schema_value() if exported is None else exported)
@@ -2070,8 +2072,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 ("specialist_consultation_proposal.stage_plan.agreed_direction", consultation_groups),
                 ("core_document_assessment.document_judgments.*.document_read_source_id", ('readiness.core_documents',)),
             )}
-            docs = tuple("core_documents/" + name + ".md" for name in
-                         ("global_outline", "part_outlines", "character_sheets", "narrative_rules"))
             document_map = ("response_details", "core_document_assessment", "document_judgments")
             assignment_paths = tuple( ("response_details", "specialist_consultation_proposal", "assignments", agent)
                 for agent in ("plot_architect", "character_custodian", "execution_specialist"))
@@ -3937,7 +3937,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                     self.assertTrue(profile_binding.rule_graph.findings(missing_specialist))
                                     with self.assertRaises(ValueError):
                                         profile_binding.decode_response(json.dumps(missing_specialist))
-                                    for projected_rules in profile_projection_rules:
+                                    for _vendor, _schema, projected_rules in profile_projections:
                                         self.assertTrue(projected_rules.findings(missing_specialist))
                         self.assertEqual(checked_profile_cases, [(case[0], case[1]) for case in profile_cases])
                         if intent == 'authoring':
