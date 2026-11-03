@@ -3383,8 +3383,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         with self.assertRaises(ValueError):
             replace(ordered_facts, continuation=True, per_assignment_input_ids=('outline',)).choice_snapshot()
         with self.assertRaisesRegex(ValueError, 'assignment obligations exceed current allocation'):
-            replace(factory, constraints=replace(ordered_facts, continuation=True,
-                reviewer_inputs=((PLOT_ARCHITECT, 'outline'),))).for_offer(call.contract.offers, request_basis=front_selector.request_basis)
+            replace(factory, schema_group_protocol=False, constraints=replace(ordered_facts, continuation=True,
+                reviewer_inputs=((PLOT_ARCHITECT, 'outline'),))).for_offer(call.contract.offers)
 
 
         from collections import Counter
