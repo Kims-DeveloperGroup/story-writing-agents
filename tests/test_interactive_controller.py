@@ -6829,7 +6829,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
     def test_artifact_and_commit_controls_are_distinct_and_correlated(self) -> None:
         from hashlib import sha256
         from story_writing_agents.writing_artifacts import ArtifactCreateOperation, ArtifactKind
-        operation = ArtifactCreateOperation("manuscript/chapter.md", ArtifactKind.MANUSCRIPT,
+        operation = ArtifactCreateOperation("manuscript/part-01/chapter.md", ArtifactKind.MANUSCRIPT,
             b"candidate", "sha256:" + sha256(b"candidate").hexdigest())
         digest = "sha256:" + "a" * 64
         candidate_id = "b" * 64
@@ -6871,7 +6871,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         commit_request = SimpleNamespace(
             confirmation_request_id="commit-confirmation",
             application_result_event_id="application-event",
-            candidate=SimpleNamespace(candidate_id=candidate_id, branch="session-test", paths=(SimpleNamespace(path="manuscript/chapter.md"),), proposed_message="Apply reviewed candidate"),
+            candidate=SimpleNamespace(candidate_id=candidate_id, branch="session-test", paths=(SimpleNamespace(path="manuscript/part-01/chapter.md"),), proposed_message="Apply reviewed candidate"),
             request_digest=digest,
         )
         session = RuntimeSession.__new__(RuntimeSession)

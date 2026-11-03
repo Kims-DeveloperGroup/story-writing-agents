@@ -635,6 +635,7 @@ class InteractiveController:
         "_external_viewer",
         "_main_input",
         "_picker_input",
+        "_confirmation_input",
         "_prompt_input",
         "_provider_catalog",
         "_advisory_progress",
