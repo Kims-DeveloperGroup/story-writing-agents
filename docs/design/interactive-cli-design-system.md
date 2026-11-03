@@ -913,32 +913,81 @@ actually supplied by the request; do not infer an extra synthesis call or a
 total from UI labels. The illustrative three-reviewer layout below assumes
 two calls per specialist plus one Lead synthesis call:
 
+**Full frame / NO_COLOR reference (80-column terminal).** This constructed
+request uses three reviewers and a seven-call additional maximum. ANSI adds
+the token accents above; NO_COLOR keeps this exact structural vocabulary and
+role markers without SGR. Actual values come from the request, not this sample.
+
 ```text
-[01 SUMMARY]
-Same immutable candidate · 3 parallel reviews → Lead synthesis
-At a glance: up to 7 additional calls; no file or Git changes.
-
-[02 SPECIALISTS · 3]
-[P] PLOT       plot_architect
- | Task: causal structure and ending alignment
- | Source: core_documents/global_outline.md
- | Calls: up to 2
-
-[C] CHARACTER  character_custodian
- | Task: motivation and behavioral consistency
- | Source: core_documents/character_sheets.md
- | Calls: up to 2
-
-[E] EXECUTION  execution_specialist
- | Task: narrative rules and scene feasibility
- | Source: core_documents/narrative_rules.md
- | Calls: up to 2
-
-[03 COST & IMPACT]
-[COST] Specialists 6 + Lead 1; maximum 7 additional calls
-[SCOPE] Provider work only
-[SEPARATE APPROVAL] Apply and local Commit each need a new decision.
+╭─ Confirmation · Specialist review ──────────────────────────────────────────╮
+│ [01 SUMMARY]                                                                │
+│ Purpose: Review the disclosed outline candidate.                            │
+│ Progress: Parallel specialist reviews -> Lead synthesis                     │
+│ Candidate: All reviewers assess the same immutable candidate.               │
+├─ [02 SPECIALISTS · 3] ──────────────────────────────────────────────────────┤
+│ [P] PLOT  plot_architect                                                    │
+│  │ Task: Causal structure and ending alignment                              │
+│  │ Mode: review                                                             │
+│  │ Sources: ${core_documents/global_outline.md}                             │
+│  │ Calls: 2                                                                 │
+│                                                                             │
+│ [C] CHARACTER  character_custodian                                          │
+│  │ Task: Motivation and behavioral consistency                              │
+│  │ Mode: review                                                             │
+│  │ Sources: ${core_documents/character_sheets.md}                           │
+│  │ Calls: 2                                                                 │
+│                                                                             │
+│ [E] EXECUTION  execution_specialist                                         │
+│  │ Task: Viewpoint and narrative-rule consistency                           │
+│  │ Mode: review                                                             │
+│  │ Sources: ${core_documents/narrative_rules.md}                            │
+│  │ Calls: 2                                                                 │
+├─ [03 COST & IMPACT] ────────────────────────────────────────────────────────┤
+│ [COST] Additional calls: at most 7                                          │
+│ [COST] Lead synthesis calls: at most 1                                      │
+│ [SCOPE] Provider work only; no artifact write or Git commit.                │
+├─ [04 DECISION · Pending] ───────────────────────────────────────────────────┤
+│   1. Confirm - Start the disclosed specialist work                          │
+│   2. Reject  - Close this proposal                                          │
+│   3. Revise  - Request a revised proposal                                   │
+│ KEYS Up/Down choose · Enter select · Esc leave unconfirmed                  │
+│ No action selected. No work started.                                        │
+╰─────────────────────────────────────────────────────────────────────────────╯
 ```
+
+**Compact/dense structure (below 40 available cells).** On a sufficiently
+tall narrow terminal, role names and facts wrap vertically. Dense controls on a
+shorter terminal retain the same meaningful tasks and bounds; complete source
+ranges/instructions remain in the active disclosure/F6. The following is an
+illustrative monochrome compact arrangement, not a new input grammar.
+
+```text
+─ Confirmation · Specialist review ─
+│ [01 SUMMARY]
+│ Review the disclosed candidate.
+│ [02 SPECIALISTS · 3]
+│ [P] PLOT · causal structure
+│  │ Calls: at most 2
+│ [C] CHARACTER · character logic
+│  │ Calls: at most 2
+│ [E] EXECUTION · narrative rules
+│  │ Calls: at most 2
+│ [03 COST & IMPACT]
+│ [COST] At most 7 additional calls
+│ [SCOPE] Provider work only
+│ No artifact write or Git commit.
+│ [04 DECISION · Pending]
+│   1. Confirm
+│   2. Reject
+│   3. Revise
+│ KEYS Up/Down choose · Enter select
+│ Esc leave unconfirmed · F6 review
+```
+
+Color removal does not remove the section numbers, role identifiers, authority
+words, or active pointer. An explicit selection adds `>` to one action only.
+If even this safe decision content cannot fit, show the existing resize/Esc
+blocked-control notice and do not accept a decision.
 
 P/C/E are stable role labels, not checkboxes or separate approvals. Confirm
 authorizes the exact whole disclosed proposal once. Changing assignments or
@@ -1027,9 +1076,19 @@ evidence. Every live exit/failure follows the existing cleanup and failure
 precedence; no fallback begins after LIVE. Existing native scrollback, retained
 JSON ownership, credentials, and accepted-input echo rules remain intact.
 
-Issue #918 cases A–L and visual states E-1–E-4 map to existing composer/picker
-render and transition tests, controller/collaboration request tests, and
-history/input-lifecycle/PTY restoration tests. Verify public legacy and ordinary
+| Source responsibility | Existing representative coverage | Contract checked |
+| --- | --- | --- |
+| `_model.py` confirmation composition | `PickerModelContractTests.test_schemas_signatures_identity_pickle_and_exports_are_exact` | Frozen/private shape, unchanged public vocabulary |
+| `_controls.py` scoped initialization and aliases | `PurePickerControlTests.test_initialization_precedence_empty_disabled_and_error_are_exact`; `test_fallback_grammar_blank_cancel_ordinals_and_huge_values_are_exact` | Explicit selection, binary NO, strict ordinary-picker isolation |
+| `_render.py` frame/role projection | `PickerRenderingTests.test_narrow_no_color_combined_cues_and_width_change_preserve_facts` | Width, token-free plain equivalence, P/C/E identity |
+| `_core.py` confirmation input adapter | `PickerAdapterCompatibilityTests.test_callback_adapter_is_resource_free_retries_without_synthetic_output` | No raw resources in callbacks, local retries, no synthetic echo |
+| `_driver.py` fitting and restoration | Existing `PickerDriverTests`, history/input-lifecycle and PTY cases | Dense/blocked controls, F6/resize, exact cleanup |
+| Controller and collaboration projection | Existing `ControllerSettingsTests`, `InteractiveLeadAdapterTests`, collaboration views and recovery cases | Exact authority, settings comparison, revision return, safe stage boundaries |
+
+The picker test classes above live in `tests.test_interactive_terminal_picker`;
+controller classes live in `tests.test_interactive_controller`. Issue #918 cases
+A–L and visual states E-1–E-4 link these representatives to the complete affected
+and full-suite evidence. Those references do not add new canonical IDs. Verify public legacy and ordinary
 picker compatibility separately. ANSI-stripped/plain/NO_COLOR retain the same
 semantic facts, and full/compact layouts are checked at the 40-cell boundary
 with actual physical width. Runtime/test changes require the canonical
