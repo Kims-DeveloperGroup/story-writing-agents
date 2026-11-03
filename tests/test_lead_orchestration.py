@@ -4622,7 +4622,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         native_preliminary = preliminary_frame(intent)
         self.assertEqual(preliminary_bound.rule_graph.findings(native_preliminary), ())
         expected_preliminary = {
-            'kind': 'answer', 'message': 'This is a bounded preliminary finding.',
+            'message': 'This is a bounded preliminary finding.',
             'authoring_scope': expected_profile_scope,
             'preliminary_review': {
                 'task_id': task['task_id'], 'task_revision': 1, 'targets': target_records,
