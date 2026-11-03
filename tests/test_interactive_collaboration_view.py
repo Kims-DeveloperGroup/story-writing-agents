@@ -335,7 +335,8 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
         from tests.collaboration_contract_fixture import make_lead_evidence
         from story_writing_agents.writing_artifacts.directives import parse_artifact_references
         evidence = make_lead_evidence()
-        receipt = evidence.receipts[0]
+        receipt = replace(evidence.receipts[0], locator="${core_documents/global_outline.md}")
+        evidence = replace(evidence, receipts=(receipt,))
         supplied = ReviewTarget(receipt.evidence_id, ReviewTargetKind.WRITING_ARTIFACT,
             parse_artifact_references(receipt.locator).references[0].path,
             receipt.revision_digest, receipt.content_digest, receipt.revision_digest, receipt.content_digest,

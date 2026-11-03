@@ -1363,7 +1363,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         try:
             from story_writing_agents.antigravity_adapter import AntigravityAdapter
             bound, packet = call.contract, json.loads(encoded)
-            self._require_fixture_census(bound, {f'lead-response-v9:family:{i}' for i in range(4)})
+            self._require_fixture_census(bound, {f'lead-response-v9:family:{i}' for i in range(3 if artifact else 4)})
             self.assertEqual(bound.factory.constraints.task_revisions, ((prior_scope.task_id, prior_scope.task_revision + 1),))
             self.assertTrue(bound.decode_response(encoded).belongs_to(bound))
             schemas = (call.schema, AntigravityAdapter.native_output_schema(call.schema))
@@ -4545,11 +4545,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
         # Native preliminary intent selects inspection only; host snapshots supply all identity.
         from story_writing_agents import review_contracts as review
+        preliminary_offers = replace(call.contract.offers,
+            completed_read_facts=(unit_writing,), delivery_read_facts=())
         provided = factory.constraints.preliminary_targets
         self.assertEqual(tuple(item.input_id for item in provided
             if item.availability is review.ReviewTargetAvailability.SUPPLIED), ('user_input',))
-        current_reads = (call.contract.offers.completed_read_facts
-                         + call.contract.offers.delivery_read_facts)
+        current_reads = (preliminary_offers.completed_read_facts
+                         + preliminary_offers.delivery_read_facts)
         read_facts = tuple({item.evidence_id: item for item in current_reads}.values())
         self.assertTrue(read_facts)
         target_records = [{
@@ -4579,7 +4581,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',),
             constraints=preliminary_facts)
         preliminary_bound = replace(factory, rule_seed=preliminary_seed,
-            constraints=preliminary_facts).for_offer(call.contract.offers)
+            constraints=preliminary_facts).for_offer(preliminary_offers)
         preliminary_keys = set()
         for candidate_member in preliminary_bound.semantic_index.contracts:
             graph = candidate_member.rule_graph.schema_value()
