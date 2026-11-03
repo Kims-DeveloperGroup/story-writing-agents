@@ -108,12 +108,12 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic(dict(continuity_source, max_test_source_lines=limit),
                                              dict(native_source, max_test_source_lines=old))
-        preliminary_source = dict(continuity_source, max_test_source_lines=148643)
+        preliminary_source = dict(continuity_source, max_test_source_lines=148651)
         self.assertIsNone(suite_budget.check_monotonic(preliminary_source, continuity_source))
-        for old, limit in ((147337, 148643),
-                           (147339, 148643),
-                           (147338, 148642),
-                           (147338, 148644)):
+        for old, limit in ((147337, 148651),
+                           (147339, 148651),
+                           (147338, 148650),
+                           (147338, 148652)):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic(
                     dict(preliminary_source, max_test_source_lines=limit),

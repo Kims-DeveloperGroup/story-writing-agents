@@ -4,6 +4,52 @@ from __future__ import annotations
 import copy
 from collections.abc import Mapping
 import json
+from dataclasses import dataclass, field, replace
+from story_writing_agents.agent_context.service import BoundCallFactory
+from story_writing_agents.lead_provider_contracts import LeadResultContractOwner
+from story_writing_agents.lead_schema_groups import LeadGroupRequestBasis, SchemaGroupControlOwner
+
+
+@dataclass(frozen=True)
+class FixedBusinessFactory(BoundCallFactory):
+    """Fixed current business-owner unit fixture; no SELECT state is claimed."""
+    original: BoundCallFactory
+    business_group: str
+    _identity: tuple = field(init=False, repr=False, compare=False)
+    def __post_init__(self):
+        if (not isinstance(self.original, BoundCallFactory) or self.original.schema_group_protocol is not True
+                or self.business_group not in ('answer.workflow', 'consultation.authoring.content', 'prepare.artifact')):
+            raise ValueError('fixed-business unit fixture requires the current declared business group')
+        self.original.require_declaration()
+        object.__setattr__(self, '_identity', (self.original, self.business_group))
+    @property
+    def contract_id(self):
+        return self.original.contract_id
+    @property
+    def constraints(self):
+        return self.original.constraints
+    @property
+    def rule_seed(self):
+        return self.original.rule_seed
+    def require_declaration(self):
+        if self.original is not self._identity[0] or self.business_group != self._identity[1]:
+            raise ValueError('fixed-business unit fixture declaration changed')
+        self.original.require_declaration()
+    def declare_result_owners(self, offers):
+        self.require_declaration()
+        stage = self.original.declare_schema_groups(offers,
+            LeadGroupRequestBasis('fixed-business-unit', 'fixed-business-result', 'fixed-business-scope'))
+        if stage is None:
+            raise ValueError('fixed-business unit fixture requires the current frozen group compiler')
+        policy = stage.result_policy(self.business_group)
+        owners = tuple(owner for owner in policy.owner_declarations if type(owner) is LeadResultContractOwner)
+        if (not owners or any(owner.variant.group_id != self.business_group for owner in owners)
+                or any(type(owner) not in (LeadResultContractOwner, SchemaGroupControlOwner)
+                       for owner in policy.owner_declarations)):
+            raise ValueError('fixed-business unit fixture must retain exactly the original business owners')
+        return replace(policy, owner_declarations=owners)
+
+
 
 _FIELDS = {'message': 'response_text', 'authoring_scope': 'writing_task_scope',
     'activity': 'activity_type', 'intent': 'writing_intent', 'domains': 'specialist_domains',

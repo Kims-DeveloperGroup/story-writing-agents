@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, replace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime, Workspace
@@ -14,57 +14,14 @@ from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.workspace.initialization import provision_session_resources
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from tests import test_lead_orchestration as lead
-from tests.provider_wire_fixture import selection_plan
+from tests.provider_wire_fixture import FixedBusinessFactory as _SourceOnlyFactory, selection_plan
 from tests import test_artifact_proposal_orchestration as artifact
 from tests import test_lead_artifact_application as application
 from tests import test_lead_story_commit as commit
 from tests.helpers import pristine_initialized_workspace
-from story_writing_agents.agent_context.service import BoundCallFactory
-from story_writing_agents.lead_provider_contracts import LeadResultContractOwner
-from story_writing_agents.lead_schema_groups import LeadGroupRequestBasis, SchemaGroupControlOwner
 
 OUTLINE = "core_documents/global_outline.md"
 DRAFT = "1. A lantern vanishes.\n2. 민 finds its keeper.\n3. The lantern returns.\n[A641 synthetic]\n"
-
-
-@dataclass(frozen=True)
-class _SourceOnlyFactory(BoundCallFactory):
-    """Synthetic downstream source fixture, not an ordinary-front protocol."""
-    original: BoundCallFactory
-    source_group: str
-    _identity: tuple = field(init=False, repr=False, compare=False)
-    def __post_init__(self):
-        if (not isinstance(self.original, BoundCallFactory) or self.original.schema_group_protocol is not True
-                or self.source_group not in ('consultation.authoring.content', 'prepare.artifact')):
-            raise ValueError('SOURCE-only fixture requires the current declared business group')
-        self.original.require_declaration()
-        object.__setattr__(self, '_identity', (self.original, self.source_group))
-    @property
-    def contract_id(self):
-        return self.original.contract_id
-    @property
-    def constraints(self):
-        return self.original.constraints
-    @property
-    def rule_seed(self):
-        return self.original.rule_seed
-    def require_declaration(self):
-        if self.original is not self._identity[0] or self.source_group != self._identity[1]:
-            raise ValueError('SOURCE-only fixture declaration changed')
-        self.original.require_declaration()
-    def declare_result_owners(self, offers):
-        self.require_declaration()
-        stage = self.original.declare_schema_groups(offers,
-            LeadGroupRequestBasis('source-only-fixture', 'source-only-result', 'source-only-scope'))
-        if stage is None:
-            raise ValueError('SOURCE-only fixture requires the current frozen group compiler')
-        policy = stage.result_policy(self.source_group)
-        owners = tuple(owner for owner in policy.owner_declarations if type(owner) is LeadResultContractOwner)
-        if (not owners or any(owner.variant.group_id != self.source_group for owner in owners)
-                or any(type(owner) not in (LeadResultContractOwner, SchemaGroupControlOwner)
-                       for owner in policy.owner_declarations)):
-            raise ValueError('SOURCE-only fixture must retain exactly the original business owners')
-        return replace(policy, owner_declarations=owners)
 
 
 def _assert_source_only_call(case, call, group):
@@ -72,7 +29,7 @@ def _assert_source_only_call(case, call, group):
     from tests.test_provider_schema_spec import check_schema
     case.assertIs(type(call.contract.factory), _SourceOnlyFactory)
     case.assertTrue(call.contract.factory.original.schema_group_protocol)
-    case.assertEqual(call.contract.factory.source_group, group)
+    case.assertEqual(call.contract.factory.business_group, group)
     case.assertEqual({owner.variant.group_id for owner in call.contract.semantic_index.owners}, {group})
     case.assertIsNone(call.contract.schema_group_phase)
     encoded = canonical_provider_json(call.schema)

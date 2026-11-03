@@ -2295,7 +2295,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             for scope_choice in scope_choices:
                 self.assertEqual(scope_choice['type'], scope_type)
         encoded = '\n'.join(item.rules.canonical_bytes.decode('utf-8') for item in frozen_variants)
-        self.assertIn("concrete deliverable and success criteria", encoded)
+        # PRE clauses carry [G] aliases; the actual GEN owns the shared glossary.
+        self.assertIn("concrete deliverable and success criteria", json.dumps(full_schema, ensure_ascii=False))
         for metadata in ("correlation", "schema_version", "evidence_status", "evidence_ids", "interpretation", "review_basis", "additional_review_domains"):
             if metadata == 'review_basis':
                 self.assertIn(f'"{metadata}"', encoded)
@@ -6786,8 +6787,13 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertFalse(any(type(event.payload) is CollaborationLeadOutcomeFailurePayload for event in history))
 
     async def test_response_correction_requires_capacity(self) -> None:
+        from contextlib import nullcontext
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
+        from tests.provider_wire_fixture import FixedBusinessFactory
         original_factory = orchestrator_module._lead_call_contract_factory
+        def fixed_business_factory(*args, **kwargs):
+            original = original_factory(*args, **kwargs)
+            return FixedBusinessFactory(original, 'answer.workflow') if original.schema_group_protocol else original
         def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
             return json.dumps({'action': {'kind': 'answer', 'result': [], 'used_handles': []}}, separators=(',', ':'))
 
@@ -6799,11 +6805,14 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
                 conversation_id = self.conversation(label)
                 if label == "action_exhausted":
-                    backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, malformed),))
-                    backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, response),))
+                    backend.enqueue(malformed, control_plan=())
+                    backend.enqueue(response, control_plan=())
                 else:
                     backend.enqueue(response, control_plan=selection_plan("answer.workflow"))
-                with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 2):
+                # Fixed-owner unit boundary; the other row exercises ordinary SELECT to GENERATE.
+                boundary = (mock.patch.object(orchestrator_module, '_lead_call_contract_factory',
+                    side_effect=fixed_business_factory) if label == 'action_exhausted' else nullcontext())
+                with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 2), boundary:
                     result = await runtime.lead_turn(self.session_id, conversation_id,
                         'Do not exceed the remaining capacity.')
                 self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN,)
@@ -6811,7 +6820,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 self.assertEqual(len(backend.providers), 2 if label == "action_exhausted" else 1)
                 self.assertIs(orchestrator_module._lead_call_contract_factory, original_factory)
                 self.assertEqual(tuple(call.contract.schema_group_phase for call in backend.calls),
-                    (LeadGroupPhase.SELECT, LeadGroupPhase.SELECT) if label == "action_exhausted" else (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
+                    (None, None) if label == "action_exhausted" else (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
                 finalized = [[("rejected", expected_code)]]
                 if label != "action_exhausted":
                     finalized.insert(0, [("accepted", None)])
