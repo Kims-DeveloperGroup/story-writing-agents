@@ -718,10 +718,17 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         feedback = "CHARACTER_REVIEW_838: The promise is established; the decision trigger is absent."
         self.backend.enqueue_for(CHARACTER_CUSTODIAN, _specialist_outcome("supports", feedback))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome(message="A bounded Character review is available for explanation."))
+        confirmed_start = len(self.backend.call_records)
         completed = await self.runtime.decide_lead_step(_decision(focused, c.CollaborationConfirmationDecision.CONFIRM))
         self.assertIs(completed.turn.state, c.CollaborationStepState.COMPLETED)
         self.assertIsNone(completed.turn.artifact_application_request)
         self.assertIsNone(completed.turn.story_commit_request)
+        stage_inputs = [(agent, _workflow_material(call.payload))
+                        for agent, call in self.backend.call_records[confirmed_start:]]
+        self.assertEqual([agent for agent, _ in stage_inputs],
+                         [CHARACTER_CUSTODIAN, LEAD_ORCHESTRATOR])
+        self.assertEqual([material["stage_plan"] for _, material in stage_inputs],
+                         [routing.stage_plan_to_dict(plan)] * 2)
         specialist_calls = [agent for agent, _ in self.backend.call_records[before:] if agent != LEAD_ORCHESTRATOR]
         self.assertEqual(specialist_calls, [CHARACTER_CUSTODIAN])
         original_history = self.history(conversation)

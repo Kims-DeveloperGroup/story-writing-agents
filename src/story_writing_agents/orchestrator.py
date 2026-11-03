@@ -8299,6 +8299,7 @@ class StoryRuntime:
                 self._collaboration_input_value(item, events, evidence=proposal.basis.evidence) for item in selected
             ],
             "authoring_scope": authoring_scope_to_dict(proposal.authoring_scope),
+            **({"stage_plan": stage_plan_to_dict(proposal.stage_plan)} if proposal.stage_plan is not None else {}),
             **({"shared_premises": shared_premises_to_dict(tuple(
                 premise for premise in proposal.basis.shared_premises
                 if proposal.authoring_scope.activity is AuthoringActivity.REVIEW or any(
@@ -8418,6 +8419,7 @@ class StoryRuntime:
         value = {
             "provider_constraints": constraints.prompt_facts(),
             "authoring_scope": authoring_scope_to_dict(proposal.authoring_scope),
+            **({"stage_plan": stage_plan_to_dict(proposal.stage_plan)} if proposal.stage_plan is not None else {}),
             **({"shared_premises": shared_premises_to_dict(proposal.basis.shared_premises)}
                if proposal.authoring_scope.schema_version == 3 else {}),
             "conversation_id": conversation_id,
