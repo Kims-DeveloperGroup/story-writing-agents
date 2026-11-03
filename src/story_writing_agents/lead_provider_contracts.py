@@ -3390,15 +3390,17 @@ class LeadGroupCompilation:
         ids = {item.group_id for item in variants}
         object.__setattr__(self, "semantic_variants", variants)
         shared_dependencies = _lead_codec_dependencies()
-        # The compiler verifies the complete frozen tuple: its first member owns
-        # the shared proof, while every member retains its own decoder hook roots.
+        # The compiler owns this full proof: one wrapper code/default and every
+        # ordered source callback, including duplicates.
         decoders = []
-        for variant in variants:
+        if variants:
+            variant = variants[0]
             def decode(value: ValidatedValue, *, source=variant.decode) -> dict[str, object]:
                 return source(value.as_object())
             decoders.append(TypedDecoder(
                 "lead.prepared_semantic_codec", "894-v1:prepared-owner-source", decode,
-                (variant.decode, *(shared_dependencies if not decoders else ())),
+                (variant.decode, *shared_dependencies,
+                 *(item.decode for item in variants[1:])),
             ))
         object.__setattr__(self, "_semantic_decoders", tuple(decoders))
         object.__setattr__(self, "group_ids", tuple(

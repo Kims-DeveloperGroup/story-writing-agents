@@ -660,6 +660,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
 
         # Per-instance Field state and unsupported descriptors retain original public behavior.
         from dataclasses import Field, dataclass
+        from contextlib import contextmanager
         @dataclass(frozen=True, slots=True)
         class FieldCapture:
             left: str
@@ -734,9 +735,17 @@ class StructuredOutputValidationTests(unittest.TestCase):
             self.assertIsNone(fallback_decoder.require_provenance())
             self.assertEqual(field_reads, ["left", "right", "left", "right"])
             identity_hook = diagnostics._permitted_hook_identity
+            @contextmanager
+            def changed_code():
+                original_code = identity_hook.__code__
+                try:
+                    identity_hook.__code__ = original_code.replace()
+                    yield
+                finally:
+                    identity_hook.__code__ = original_code
             for source_patch in (
                 mock.patch.object(diagnostics, "_permitted_hook_identity", lambda *_args, **_kwargs: None),
-                mock.patch.object(identity_hook, "__code__", identity_hook.__code__.replace()),
+                changed_code(),
                 mock.patch.object(identity_hook, "__defaults__", (set(),)),
                 mock.patch.dict(identity_hook.__kwdefaults__, {"_attest_captures": True}),
             ):
