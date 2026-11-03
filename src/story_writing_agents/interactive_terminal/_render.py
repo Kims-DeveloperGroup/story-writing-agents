@@ -664,6 +664,8 @@ def _confirmation_context(items: tuple) -> list[MarkdownLine]:
             current = next((part for part in item.items if type(part) is Section and part.title == "Current"), None)
             pending = next((part for part in item.items if type(part) is Section and part.title == "Pending"), None)
             if current is not None and pending is not None:
+                legend = "Current -> Pending"
+                result.append(MarkdownLine(legend, (MarkdownSpan(0, len(legend), ("bold",)),)))
                 values = {field.label: field.value for field in current.items if type(field) is Field}
                 for field in pending.items:
                     if type(field) is Field and field.label in values:
