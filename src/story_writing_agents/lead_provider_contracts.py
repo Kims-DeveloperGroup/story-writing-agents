@@ -2241,7 +2241,7 @@ class LeadProviderConstraints:
                     group_id = schema_group_for(semantics).group_id
                     if selected_group_id is not None and group_id != selected_group_id:
                         continue
-                target_required = (rule is not None
+                target_required = (scoped and rule is not None
                     and rule.intent is AuthoringIntent.AUTHORING
                     and rule.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
                     and (current_assignments or current_artifact_work))
