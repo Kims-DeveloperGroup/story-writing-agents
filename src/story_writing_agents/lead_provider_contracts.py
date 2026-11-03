@@ -274,7 +274,7 @@ def _stage_plan_wire_rule(rule, active, inputs, required, work):
         "questions": {"type": "array", "items": question, "minItems": 1, "maxItems": 64},
         "required_condition_ids": refs(required, len(required)),
         "agreed_direction": alternatives([nonempty_text_schema(), {"type": "null"}]),
-        "unresolved_questions": {"type": "array", "items": nonempty_text_schema(), "maxItems": 64},
+        "unresolved_questions": {"type": "array", "items": nonempty_text_schema(), "minItems": 0, "maxItems": 64},
         "expected_result": nonempty_text_schema()})
 
 

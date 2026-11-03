@@ -337,9 +337,9 @@ def preliminary_intent_schema(targets: tuple[ReviewTarget, ...]) -> dict[str, ob
     finding = obj({"message": text(), "evidence_input_ids": refs()})
     return obj({"stage": {"type": "string", "enum": ["lead_preliminary_review"]},
         "inspection": {**obj({target.input_id: {"type": "string", "description": f"Host target {target.target_id}; availability={target.availability.value}; boundary={target.boundary_kind}. Unread targets in the declared scope are excluded; inventory does not create scope.", "enum": (["excluded"] if target.availability is ReviewTargetAvailability.UNREAD else ["inspected", "excluded"])} for target in targets}), "x-swa-property-policy": "closed-map"},
-        "findings": {"type": "array", "items": finding, "maxItems": 256},
-        "conflicts": {"type": "array", "items": finding, "maxItems": 256},
-        "missing_information": {"type": "array", "items": text(), "maxItems": 256},
+        "findings": {"type": "array", "items": finding, "minItems": 0, "maxItems": 256},
+        "conflicts": {"type": "array", "items": finding, "minItems": 0, "maxItems": 256},
+        "missing_information": {"type": "array", "items": text(), "minItems": 0, "maxItems": 256},
         "further_review_required": {"type": "boolean"},
         "next_action": {"type": "string", "enum": [item.value for item in PreliminaryNextAction]}})
 
