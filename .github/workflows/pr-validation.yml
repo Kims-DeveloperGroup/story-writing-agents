@@ -22,6 +22,9 @@ permissions:
   contents: read
   pull-requests: read
 
+env:
+  RUNTIME_TEST_PYTHON_VERSION: '3.11.18'
+
 concurrency:
   group: ${{ format('{0}-{1}', github.workflow, github.event.pull_request.number || github.event.merge_group.head_ref || github.ref) }}
   cancel-in-progress: true
@@ -330,7 +333,7 @@ jobs:
           ref: ${{ needs.classify.outputs.checkout_sha }}
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ env.RUNTIME_TEST_PYTHON_VERSION }}
       - name: Check patch whitespace
         env:
           BASE_SHA: ${{ needs.classify.outputs.base_sha }}
@@ -518,12 +521,12 @@ jobs:
           ref: ${{ needs.classify.outputs.checkout_sha }}
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ env.RUNTIME_TEST_PYTHON_VERSION }}
       - uses: astral-sh/setup-uv@v10.2.0
         with:
           version: '0.12.17'
       - name: Install runtime test dependencies
-        run: uv sync --locked --all-extras --python 3.11 --no-progress
+        run: uv sync --locked --all-extras --python "$RUNTIME_TEST_PYTHON_VERSION" --no-progress
       - name: Configure deterministic test Git identity
         env:
           TEST_HARDWARE_ARCH: "arm64"
@@ -654,12 +657,12 @@ jobs:
           ref: ${{ needs.classify.outputs.checkout_sha }}
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ env.RUNTIME_TEST_PYTHON_VERSION }}
       - uses: astral-sh/setup-uv@v10.2.0
         with:
           version: '0.12.17'
       - name: Install runtime test dependencies
-        run: uv sync --locked --all-extras --python 3.11 --no-progress
+        run: uv sync --locked --all-extras --python "$RUNTIME_TEST_PYTHON_VERSION" --no-progress
       - name: Configure deterministic test Git identity
         env:
           TEST_HARDWARE_ARCH: "arm64"
@@ -783,12 +786,12 @@ jobs:
           ref: ${{ needs.classify.outputs.checkout_sha }}
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ env.RUNTIME_TEST_PYTHON_VERSION }}
       - uses: astral-sh/setup-uv@v10.2.0
         with:
           version: '0.12.17'
       - name: Install runtime test dependencies
-        run: uv sync --locked --all-extras --python 3.11 --no-progress
+        run: uv sync --locked --all-extras --python "$RUNTIME_TEST_PYTHON_VERSION" --no-progress
       - name: Configure deterministic test Git identity
         env:
           TEST_HARDWARE_ARCH: "arm64"

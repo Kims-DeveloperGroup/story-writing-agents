@@ -186,6 +186,10 @@ time. The budget gate uses the wall time in the current Python 3.11 runner
 reports. Report the observed full and shard times and any platform limitation
 when recalibrating weights.
 
+All hosted test jobs use the exact patch in `RUNTIME_TEST_PYTHON_VERSION` for
+`setup-python` and `uv sync`; rolling runner images must not split a campaign
+between Python patches. Reconciliation still requires matching environments.
+
 ### Actions의 지정 영향 검증
 
 `pr-validation` 수동 실행의 `validation_scope: affected`와 줄바꿈으로 구분한
