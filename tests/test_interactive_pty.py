@@ -1811,7 +1811,7 @@ print("PROGRESS_FINAL", flush=True)
 """, environment_overrides={"TERM": "xterm-256color", "STORY_PTY_PROGRESS_GATE": str(gate)})
         try:
             probe.wait_for_text("Working", readiness=gate.exists)
-            mark = probe.mark()
+            mark = probe.output_mark()
             probe.resize(47, 12)
             probe.wait_for_text("Working", after=mark, timeout=1, readiness=lambda:
                 len(set(re.findall(r"\[([^\]\r\n]+)\] \d\d:\d\d:\d\d", probe.text_after(mark)))) >= 3)
