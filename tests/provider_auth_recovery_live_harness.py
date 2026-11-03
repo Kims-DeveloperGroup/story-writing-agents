@@ -258,7 +258,7 @@ class Case:
             self.backend.acquire_session_access("live")
         self.runtime = StoryRuntime(self.workspace, self.backend)
         self.adapter = InteractiveLeadAdapter(self.runtime.session("live"), self.runner, Progress(),
-            None, None, None, recover_authentication=self.recover)
+            None, None, None, recover_authentication=self.recover, confirmation=mock.MagicMock())
 
     def snapshot(self):
         artifacts = {str(p.relative_to(self.workspace.root)): sha(p.read_bytes())

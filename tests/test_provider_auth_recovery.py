@@ -979,7 +979,7 @@ class InteractiveRecoveryTests(unittest.TestCase):
         session.session_id = "session"
         adapter = InteractiveLeadAdapter(session, runner,
             terminal_fixtures._Progress(), terminal_fixtures._Picker(), terminal_fixtures._Prompt(),
-            output, recover_authentication=recover)
+            output, recover_authentication=recover, confirmation=mock.MagicMock())
         return adapter, runner, output
 
     def test_runner_handoff_runs_on_main_thread_with_no_running_loop(self):

@@ -384,10 +384,7 @@ class PickerModelContractTests(unittest.TestCase):
                 self.assertEqual(pickle.loads(pickle.dumps(value)), value)
                 with self.assertRaises(FrozenInstanceError):
                     setattr(value, names[0], None)
-                self.assertEqual(
-                    schema.__module__,
-                    "story_writing_agents.interactive_terminal._model",
-                )
+                self.assertEqual(schema.__module__, 'story_writing_agents.interactive_terminal._model')
 
         functions = (
             (initialize_picker, ("picker",)),
@@ -413,12 +410,10 @@ class PickerModelContractTests(unittest.TestCase):
                 "viewport_renderer",
                 "fallback_renderer",
                 "transient",
+                "dense_renderer",
             ),
         )
-        self.assertEqual(
-            tuple(inspect.signature(InteractivePickerInput).parameters),
-            ("terminal",),
-        )
+        self.assertEqual(tuple(inspect.signature(InteractivePickerInput).parameters), ('terminal',))
         self.assertEqual(
             tuple(inspect.signature(InteractivePickerInput.read_picker).parameters),
             (
@@ -436,10 +431,7 @@ class PickerModelContractTests(unittest.TestCase):
             ),
         )
         self.assertEqual(InteractivePickerInput.__slots__, ("_read",))
-        self.assertEqual(
-            tuple(inspect.signature(InteractivePromptInput).parameters),
-            ("terminal",),
-        )
+        self.assertEqual(tuple(inspect.signature(InteractivePromptInput).parameters), ('terminal',))
         self.assertEqual(
             tuple(inspect.signature(InteractivePromptInput.read_prompt).parameters),
             (
@@ -481,6 +473,23 @@ class PickerModelContractTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIs(getattr(terminal_facade, name), value)
                 self.assertNotIn(name, terminal_facade.__all__)
+
+        view = _model.ConfirmationView(Picker(Prompt("Decide"), (Choice("confirm", "Confirm"),)))
+        self.assertEqual(tuple(field.name for field in fields(view)),
+                         ("picker", "summary", "specialists", "impact", "context", "binary"))
+        self.assertEqual(pickle.loads(pickle.dumps(view)), view)
+        self.assertFalse(hasattr(view, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            view.binary = True
+        self.assertNotIn(_model.ConfirmationView, get_args(Component))
+        self.assertNotIn("ConfirmationView", _model.__all__)
+        self.assertNotIn("InteractiveConfirmationInput", terminal_facade.__all__)
+        self.assertFalse(hasattr(story_writing_agents, "InteractiveConfirmationInput"))
+        self.assertRaises(TypeError, _model.ConfirmationView, object())
+        self.assertRaises(TypeError, _model.ConfirmationView, view.picker, binary=1)
+        self.assertRaises(TypeError, _model.ConfirmationView, view.picker, summary=[])
+        self.assertRaises(TypeError, _model.ConfirmationView, view.picker, specialists=(Field("X", "Y"),))
+        self.assertRaises(ValueError, _model.ConfirmationView, view.picker, binary=True)
 
     def test_choice_form_summary_and_inline_roles_are_strict_immutable_values(
         self,
@@ -771,10 +780,7 @@ class PurePickerControlTests(unittest.TestCase):
     """Cover initialization, reconciliation, navigation, and fallback purity."""
 
     def test_initialization_precedence_empty_disabled_and_error_are_exact(self) -> None:
-        choices = (
-            Choice("one", "One"),
-            Choice("two", "Two"),
-        )
+        choices = (Choice('one', 'One'), Choice('two', 'Two'))
         cases = (
             (
                 Picker(
@@ -821,23 +827,34 @@ class PurePickerControlTests(unittest.TestCase):
         self.assertIs(disabled.picker.state, ViewState.DISABLED)
         self.assertIsNone(disabled.picker.highlighted_id)
 
-        error_notice = Notice(
-            "Trusted failure.",
-            label="error",
-            role=SemanticRole.ERROR,
-            state=ViewState.ERROR,
-        )
-        error = initialize_picker(
-            Picker(
-                Prompt("Choose"),
-                choices,
-                notice=error_notice,
-                state=ViewState.ERROR,
-            )
-        )
+        error_notice = Notice('Trusted failure.', label='error', role=SemanticRole.ERROR, state=ViewState.ERROR)
+        error = initialize_picker(Picker(Prompt('Choose'), choices, notice=error_notice, state=ViewState.ERROR))
         self.assertIs(error.picker.state, ViewState.ERROR)
         self.assertIs(error.picker.notice, error_notice)
         self.assertEqual(error.picker.highlighted_id, "one")
+
+        actions = (Choice("confirm", "Confirm"), Choice("reject", "Reject"), Choice("revise", "Revise"))
+        view = _model.ConfirmationView(Picker(Prompt("Decide"), actions))
+        initial = _controls.initialize_confirmation(view)
+        self.assertIsNone(initial.picker.highlighted_id)
+        self.assertIsNone(initial.picker.selected_id)
+        rejected, outcome = _controls.transition_confirmation_picker(initial, KeyEvent(KeyKind.ENTER))
+        self.assertIs(outcome.kind, ControlOutcomeKind.REJECTED)
+        self.assertIs(rejected.picker.state, ViewState.OPEN)
+        self.assertIn("Choose an action", rejected.picker.notice.text)
+        first, outcome = _controls.transition_confirmation_picker(initial, KeyEvent(KeyKind.DOWN))
+        last, _ = _controls.transition_confirmation_picker(initial, KeyEvent(KeyKind.UP))
+        self.assertIsNone(outcome)
+        self.assertEqual((first.picker.highlighted_id, last.picker.highlighted_id), ("confirm", "revise"))
+        committed, outcome = _controls.transition_confirmation_picker(first, KeyEvent(KeyKind.ENTER))
+        self.assertEqual(outcome, ControlOutcome(ControlOutcomeKind.COMMIT, text="confirm"))
+        self.assertEqual(committed.picker.selected_id, "confirm")
+        _, escaped = _controls.transition_confirmation_picker(first, KeyEvent(KeyKind.ESCAPE))
+        self.assertIs(escaped.kind, ControlOutcomeKind.CANCEL)
+        binary = _model.ConfirmationView(Picker(Prompt("Apply?"), (Choice("yes", "YES"), Choice("no", "NO"))), binary=True)
+        self.assertEqual(_controls.initialize_confirmation(binary).picker.highlighted_id, "no")
+        resumed = _model.ConfirmationView(Picker(Prompt("Decide"), actions, highlighted_id="revise"))
+        self.assertEqual(_controls.initialize_confirmation(resumed).picker.highlighted_id, "revise")
 
     def test_reconciliation_preserves_ids_falls_by_ordinal_and_clamps_window(self) -> None:
         original = initialize_picker(
@@ -1126,20 +1143,14 @@ class PurePickerControlTests(unittest.TestCase):
             )
         )
         committed, outcome = transition_picker_fallback(initial, "")
-        self.assertEqual(
-            outcome,
-            ControlOutcome(ControlOutcomeKind.COMMIT, text="secret-3"),
-        )
+        self.assertEqual(outcome, ControlOutcome(ControlOutcomeKind.COMMIT, text='secret-3'))
         self.assertIs(committed.picker.state, ViewState.COMPLETED)
 
         committed, outcome = transition_picker_fallback(initial, "1")
         self.assertEqual(outcome.text, "secret-1")
         self.assertEqual(committed.picker.selected_id, "secret-1")
         committed, outcome = transition_picker_fallback(initial, "3")
-        self.assertEqual(
-            outcome,
-            ControlOutcome(ControlOutcomeKind.COMMIT, text="secret-3"),
-        )
+        self.assertEqual(outcome, ControlOutcome(ControlOutcomeKind.COMMIT, text='secret-3'))
         self.assertEqual(committed.picker.selected_id, "secret-3")
         cancelled, outcome = transition_picker_fallback(initial, "/cancel")
         self.assertEqual(outcome, ControlOutcome(ControlOutcomeKind.CANCEL))
@@ -1187,6 +1198,30 @@ class PurePickerControlTests(unittest.TestCase):
         rejected, outcome = transition_picker_fallback(without_highlight, "")
         self.assertEqual(outcome.kind, ControlOutcomeKind.REJECTED)
         self.assertIs(rejected.picker.state, ViewState.EMPTY)
+
+        for positive in ("confirm", "apply", "commit"):
+            choices = (Choice(positive, positive.title()), Choice("reject", "Reject"), Choice("revise", "Revise"))
+            state = _controls.initialize_confirmation(_model.ConfirmationView(Picker(Prompt("Decide"), choices)))
+            _, empty = _controls.transition_confirmation_fallback(state, "")
+            self.assertIs(empty.kind, ControlOutcomeKind.REJECTED)
+            for token in ("1", " 1 ", positive.upper(), " " + positive + " "):
+                _, result = _controls.transition_confirmation_fallback(state, token)
+                self.assertEqual(result, ControlOutcome(ControlOutcomeKind.COMMIT, text=positive))
+            for token in ("yes", "01", "+1", "١", "4", "9" * 10000, "approve now"):
+                _, result = _controls.transition_confirmation_fallback(state, token)
+                self.assertIs(result.kind, ControlOutcomeKind.REJECTED)
+            _, cancelled = _controls.transition_confirmation_fallback(state, " /CANCEL ")
+            self.assertIs(cancelled.kind, ControlOutcomeKind.CANCEL)
+            self.assertIn("no default", _controls.confirmation_grammar(state, binary=False))
+        binary = _controls.initialize_confirmation(_model.ConfirmationView(
+            Picker(Prompt("Apply?"), (Choice("yes", "YES"), Choice("no", "NO"))), binary=True))
+        for token in ("", "  nO ", "2", "n"):
+            _, outcome = _controls.transition_confirmation_fallback(binary, token, binary=True)
+            self.assertEqual(outcome.text, "no")
+        for token in ("1", " y ", "YES"):
+            _, outcome = _controls.transition_confirmation_fallback(binary, token, binary=True)
+            self.assertEqual(outcome.text, "yes")
+        self.assertIn("default=no", _controls.confirmation_grammar(binary, binary=True))
 
     def test_huge_fallback_ordinal_rejects_before_integer_conversion(self) -> None:
         initial = initialize_picker(
@@ -1962,10 +1997,7 @@ class PickerRenderingTests(unittest.TestCase):
     def test_narrow_no_color_combined_cues_and_width_change_preserve_facts(self) -> None:
         state = _long_state()
         viewport = project_picker_viewport(state)
-        narrow = render_picker_viewport(
-            viewport,
-            _capabilities(CapabilityProfile.PLAIN, 20),
-        )
+        narrow = render_picker_viewport(viewport, _capabilities(CapabilityProfile.PLAIN, 20))
         self.assertEqual(
             narrow.text,
             "Choose route [focuse\n"
@@ -1998,10 +2030,7 @@ class PickerRenderingTests(unittest.TestCase):
         self.assertEqual(narrow.line_count, 26)
         for line in narrow.text.splitlines():
             self.assertLessEqual(_physical_width(line), 20)
-        no_color = render_picker_viewport(
-            viewport,
-            _capabilities(CapabilityProfile.PLAIN, 80),
-        )
+        no_color = render_picker_viewport(viewport, _capabilities(CapabilityProfile.PLAIN, 80))
         self.assertNotIn("\x1b", no_color.text)
         self.assertEqual(state.picker.highlighted_id, "secret-8")
         self.assertEqual(state.picker.selected_id, "secret-10")
@@ -2030,6 +2059,33 @@ class PickerRenderingTests(unittest.TestCase):
         self.assertNotIn("hidden", combined.text)
         for line in combined.text.splitlines():
             self.assertLessEqual(_physical_width(line), 20)
+
+        choices = (Choice("confirm", "Confirm"), Choice("reject", "Reject"), Choice("revise", "Revise"))
+        records = tuple(_model.Record(role, title=role, fields=(
+            Field("Task", "Review 한界e\u0301 consistency"), Field("Source", "core_documents/narrative_rules.md"),
+            Field("Calls", "2"))) for role in
+            ("plot_architect", "character_custodian", "execution_specialist"))
+        view = _model.ConfirmationView(Picker(Prompt("Specialist review"), choices),
+            summary=(Field("Purpose", "Review one immutable candidate"),), specialists=records,
+            impact=(Field("Maximum additional calls", "7"), Notice("Apply and Commit need separate approval.")))
+        state = _controls.initialize_confirmation(view)
+        viewport = project_picker_viewport(state)
+        for width in (120, 80, 40, 39, 24, 16, 8):
+            plain = _render.render_confirmation_viewport(view, viewport, _capabilities(CapabilityProfile.PLAIN, width))
+            ansi = _render.render_confirmation_viewport(view, viewport, _capabilities(CapabilityProfile.ANSI, width))
+            self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
+            self.assertNotIn("[available]", plain.text)
+            self.assertNotIn("[highlighted]", plain.text)
+            self.assertTrue(all(_physical_width(line) <= width for line in plain.text.splitlines()))
+            compacted = re.sub(r"[╭╮╰╯├┤│─\s]", "", plain.text)
+            self.assertTrue(all(marker in compacted for marker in ("[P]", "[C]", "[E]")))
+            self.assertTrue(all(token in compacted for token in ("Confirm", "Reject", "Revise")))
+            self.assertTrue(plain.text.startswith("╭") if width >= 40 else not plain.text.startswith("╭"))
+        ansi = _render.render_confirmation_viewport(view, viewport, _capabilities(CapabilityProfile.ANSI, 80)).text
+        self.assertTrue(all(sgr in ansi for sgr in ("\x1b[1;33m", "\x1b[1;32m", "\x1b[1;34m")))
+        dense = _render.render_confirmation_viewport(view, viewport, _capabilities(CapabilityProfile.PLAIN, 80), dense=True)
+        self.assertTrue(all(token in dense.text for token in ("[P]", "[C]", "[E]", "Confirm", "Reject", "Revise")))
+        self.assertLess(dense.line_count, _render.render_confirmation_viewport(view, viewport, _capabilities(CapabilityProfile.PLAIN, 80)).line_count)
 
     def test_warning_suffix_numbered_profiles_wrap_and_preserve_state_precedence(
         self,
@@ -2609,6 +2665,37 @@ class PickerDriverTests(unittest.TestCase):
                                      ((), 1, MainInputHistoryState(("seed",)), []))
                     rig.fallback.assert_not_called()
                     self.assertEqual((rig.termios.events.count("activate"), rig.termios.attributes), (rig.termios.events.count("restore"), rig.termios.original))
+
+        roles = ("plot_architect", "character_custodian", "execution_specialist")
+        view = _model.ConfirmationView(Picker(Prompt("Specialist review"), (
+            Choice("confirm", "Confirm"), Choice("reject", "Reject"), Choice("revise", "Revise"))),
+            summary=(Field("Purpose", "Review current candidate"),),
+            specialists=tuple(_model.Record(role, title=role, fields=(
+                Field("Task", "Review constraints."), Field("Calls", "2"))) for role in roles),
+            impact=(Field("Cost", "7 additional calls maximum"),))
+        for height, expected in ((24, ControlOutcomeKind.COMMIT), (8, ControlOutcomeKind.CANCEL)):
+            with recording_driver("seed\r\r\x1b[B\r\x1b", width=80, height=height, response="none") as rig:
+                managed = rig.driver
+                self.assertEqual(managed.read_main_line("main> ", lambda _: ()), "seed")
+                with managed.submission("session", "conversation", _model.Message("User", "REQUEST_VISIBLE",
+                                         presentation=_model.MessagePresentation.CHAT_BLOCK)):
+                    managed.write_component(Panel("Disclosure", (Field("Candidate", "EXACT_CANDIDATE"),)))
+                    initial = _controls.initialize_confirmation(view)
+                    rig.phase = "confirmation"
+                    outcome = managed.read_picker(initial, _controls.transition_confirmation_picker,
+                        lambda state, answer: _controls.transition_confirmation_fallback(state, answer),
+                        project_picker_viewport,
+                        lambda vp, caps: _render.render_confirmation_viewport(view, vp, caps),
+                        lambda state, caps: _render.render_confirmation_fallback(view, state, caps),
+                        transient=True,
+                        dense_renderer=lambda vp, caps: _render.render_confirmation_viewport(view, vp, caps, dense=True))
+                self.assertIs(outcome.kind, expected)
+                if height == 24:
+                    self.assertEqual(outcome.text, "confirm")
+                else:
+                    self.assertIsNone(outcome.text)
+                self.assertFalse(rig.screen.alternate)
+                self.assertNotIn("Specialist review", rig.text())
 
     def test_control_terminated_and_parameterized_sequences_are_discarded(self) -> None:
         state = initialize_picker(
@@ -3501,10 +3588,7 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
             highlighted_id="secret-3",
             selected_id="secret-1",
         )
-        self.assertEqual(
-            outcome,
-            ControlOutcome(ControlOutcomeKind.COMMIT, text="secret-3"),
-        )
+        self.assertEqual(outcome, ControlOutcome(ControlOutcomeKind.COMMIT, text='secret-3'))
         self.assertEqual(len(prompts), 2)
         self.assertNotIn("[validation]", prompts[0])
         self.assertEqual(prompts[1].count("[validation]"), 1)
@@ -3520,6 +3604,37 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
             self.assertNotIn("(Changed)", prompt)
             self.assertNotIn("[activation]", prompt)
         self.assertEqual(writes, [])
+
+        confirmation_prompts, confirmation_writes = [], []
+        answers = iter(("", "yes", " CONFIRM "))
+        terminal = InteractiveTerminal(lambda prompt: (confirmation_prompts.append(prompt), next(answers))[1], confirmation_writes.append)
+        confirmation = _core.InteractiveConfirmationInput(terminal)
+        self.assertEqual(confirmation_prompts, [])
+        choices = (Choice("confirm", "Confirm"), Choice("reject", "Reject"), Choice("revise", "Revise"))
+        result = confirmation.read_confirmation(Prompt("Specialist review"), choices,
+            summary=(Field("Purpose", "Review one fixed candidate"),), context=_transient_context())
+        self.assertEqual(result, ControlOutcome(ControlOutcomeKind.COMMIT, text="confirm"))
+        self.assertEqual(len(confirmation_prompts), 3)
+        self.assertTrue(all("[01 SUMMARY]" in p for p in confirmation_prompts))
+        self.assertIn("KO", confirmation_prompts[0])
+        self.assertIn("EN", confirmation_prompts[0])
+        self.assertIn("no default", confirmation_prompts[-1])
+        self.assertEqual(confirmation_writes, [])
+        binary_prompts = []
+        binary = _core.InteractiveConfirmationInput(InteractiveTerminal(lambda p: (binary_prompts.append(p), "")[1], confirmation_writes.append))
+        self.assertEqual(binary.read_confirmation(Prompt("Apply changes?"), (Choice("yes", "YES"), Choice("no", "NO")), binary=True).text, "no")
+        self.assertIn("default=no", binary_prompts[0])
+        revision_prompts = []
+        revision_answers = iter(("  ", "Narrow the review."))
+        revision = _core.InteractiveConfirmationInput(InteractiveTerminal(lambda p: (revision_prompts.append(p), next(revision_answers))[1], confirmation_writes.append))
+        first_revision = revision.read_revision(Prompt("Revision request"))
+        self.assertEqual(first_revision.text, "  ")
+        error = Notice("Revision request must not be empty.", label="ERROR", role=SemanticRole.ERROR)
+        self.assertEqual(revision.read_revision(Prompt("Revision request"), initial_value=first_revision.text,
+                                               notice=error).text, "Narrow the review.")
+        self.assertEqual(len(revision_prompts), 2)
+        self.assertIn("must not be empty", revision_prompts[1])
+        self.assertEqual(confirmation_writes, [])
 
     def test_adapters_forward_form_presentation_limit_context_and_initial_value(
         self,
@@ -3673,6 +3788,27 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
             render_picker_fallback,
             transient=True,
         )
+        self.assertEqual(factory.call_count, 1)
+
+        driver.read_picker.reset_mock()
+        driver.read_picker.return_value = ControlOutcome(ControlOutcomeKind.COMMIT, text="confirm")
+        confirmation = _core.InteractiveConfirmationInput(terminal)
+        actions = (Choice("confirm", "Confirm"), Choice("reject", "Reject"), Choice("revise", "Revise"))
+        self.assertEqual(confirmation.read_confirmation(Prompt("Specialist review"), actions).text, "confirm")
+        arguments = driver.read_picker.call_args
+        self.assertIsNone(arguments.args[0].picker.highlighted_id)
+        self.assertIs(arguments.args[1], _controls.transition_confirmation_picker)
+        self.assertIs(arguments.args[3], project_picker_viewport)
+        self.assertTrue(arguments.kwargs["transient"])
+        self.assertTrue(callable(arguments.kwargs["dense_renderer"]))
+        self.assertIs(arguments.args[2](arguments.args[0], "yes")[1].kind, ControlOutcomeKind.REJECTED)
+        driver.read_prompt.return_value = ControlOutcome(ControlOutcomeKind.COMMIT, text="Narrow scope.")
+        self.assertEqual(confirmation.read_revision(Prompt("Revision"), initial_value="Draft").text, "Narrow scope.")
+        revision_args = driver.read_prompt.call_args
+        self.assertEqual(revision_args.args[0].initial_value, "Draft")
+        self.assertIs(revision_args.args[1], _render.render_confirmation_prompt)
+        self.assertIs(revision_args.args[2], _controls.transition_prefilled_prompt_input)
+        self.assertTrue(revision_args.kwargs["transient"])
         self.assertEqual(factory.call_count, 1)
 
     def test_public_exports_line_state_and_dependency_edges_remain_unchanged(self) -> None:

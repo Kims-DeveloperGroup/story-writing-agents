@@ -3669,6 +3669,7 @@ class RawTerminalDriver:
         fallback_renderer: _PickerFallbackRenderer,
         *,
         transient: bool = False,
+        dense_renderer: _PickerViewportRenderer | None = None,
     ) -> ControlOutcome:
         """Read one generic picker through a dedicated history-free lifecycle."""
 
@@ -3686,6 +3687,8 @@ class RawTerminalDriver:
             if not callable(collaborator):
                 raise TypeError(f"{name} must be callable")
 
+        if dense_renderer is not None and not callable(dense_renderer):
+            raise TypeError("dense_renderer must be callable or None")
         with self._input_latch.input_operation():
             observed_capabilities = self._observe_input_capabilities()
             capabilities, configuration = self._prepare_input(observed_capabilities)
@@ -3705,6 +3708,7 @@ class RawTerminalDriver:
                 viewport_projector,
                 viewport_renderer,
                 transient=transient,
+                dense_renderer=dense_renderer,
             )
 
     def _read_live_picker_lifecycle(
@@ -3717,6 +3721,7 @@ class RawTerminalDriver:
         viewport_renderer: _PickerViewportRenderer,
         *,
         transient: bool,
+        dense_renderer: _PickerViewportRenderer | None = None,
     ) -> ControlOutcome:
         """Own one selected-LIVE picker activation and exact restoration."""
 
@@ -3739,6 +3744,7 @@ class RawTerminalDriver:
                 transition,
                 viewport_projector,
                 viewport_renderer,
+                dense_renderer=dense_renderer,
             )
             if (
                 outcome.kind
@@ -3754,6 +3760,7 @@ class RawTerminalDriver:
                     capabilities,
                     viewport_projector,
                     viewport_renderer,
+                    dense_renderer=dense_renderer,
                 )
                 self._write_live_text("\n")
                 display_state.rendered_cursor_row = 0
@@ -4867,12 +4874,14 @@ class RawTerminalDriver:
         transition: _PickerTransition,
         viewport_projector: _PickerViewportProjector,
         viewport_renderer: _PickerViewportRenderer,
+        *, dense_renderer: _PickerViewportRenderer | None = None,
     ) -> tuple[PickerControlState, ControlOutcome]:
         """Drive one picker without fabricating an editable-line control."""
 
         def redraw(current: PickerControlState) -> None:
             display_state.rendered_cursor_row = self._redraw_live_picker(
                 current, display_state, capabilities, viewport_projector, viewport_renderer,
+                dense_renderer=dense_renderer,
             )
 
         def apply_picker_event(current, event, selected_transition):
@@ -4880,7 +4889,7 @@ class RawTerminalDriver:
                 event, display_state, configuration, lambda: redraw(current),
             ):
                 return current, None, False
-            if display_state.history_enabled:
+            if display_state.history_enabled or dense_renderer is not None:
                 was_blocked = display_state.inline_control_blocked
                 redraw(current)
                 if was_blocked or display_state.inline_control_blocked:
@@ -4899,6 +4908,7 @@ class RawTerminalDriver:
             capabilities,
             viewport_projector,
             viewport_renderer,
+            dense_renderer=dense_renderer,
         )
         while True:
             try:
@@ -4930,6 +4940,7 @@ class RawTerminalDriver:
                         capabilities,
                         viewport_projector,
                         viewport_renderer,
+                        dense_renderer=dense_renderer,
                     )
                 continue
 
@@ -4957,6 +4968,7 @@ class RawTerminalDriver:
                             capabilities,
                             viewport_projector,
                             viewport_renderer,
+                            dense_renderer=dense_renderer,
                         )
                 if not reprocess:
                     continue
@@ -4985,6 +4997,7 @@ class RawTerminalDriver:
                             capabilities,
                             viewport_projector,
                             viewport_renderer,
+                            dense_renderer=dense_renderer,
                         )
                     continue
                 display_state.escape_sequence = character
@@ -5007,6 +5020,7 @@ class RawTerminalDriver:
                     capabilities,
                     viewport_projector,
                     viewport_renderer,
+                    dense_renderer=dense_renderer,
                 )
 
     def _read_live_text_viewer(
@@ -5181,14 +5195,15 @@ class RawTerminalDriver:
         self, control_lines: list[str], display_state: _LiveEditorState,
         capabilities: TerminalCapabilities, screen_height: int,
         cursor_row: int, cursor_column: int = 0,
+        *, require_fit: bool = False,
     ) -> int:
         """Compose original disclosure entries and transient controls in one block."""
         budget = self._inline_control_budget(capabilities, screen_height)
         if display_state.history_review_active:
             height = min(screen_height, _MAX_VIEWER_HEIGHT)
             budget = min(budget, max(1, height - min(6, max(1, height // 3)) - 1))
-        bounded = (self._timeline_inline_depth and self._output_history.has_entries
-                   and capabilities.width >= 8 and screen_height >= 3)
+        bounded = (require_fit or (self._timeline_inline_depth and self._output_history.has_entries
+                   and capabilities.width >= 8 and screen_height >= 3))
         display_state.inline_control_blocked = bool(bounded and len(control_lines) > budget)
         if display_state.inline_control_blocked:
             notice = _wrap_editor_text("Resize terminal to show this control beside its disclosure.", capabilities.width - 1)
@@ -5282,17 +5297,18 @@ class RawTerminalDriver:
         capabilities: TerminalCapabilities,
         viewport_projector: _PickerViewportProjector,
         viewport_renderer: _PickerViewportRenderer,
+        *, dense_renderer: _PickerViewportRenderer | None = None,
     ) -> int:
         """Replace an inline picker while keeping its original disclosure visible."""
         observed = self.capabilities()
         render_width = max(1, observed.width - 1)
         render_capabilities = _capabilities_with_width(capabilities, render_width)
 
-        def render(current: PickerControlState) -> RenderedFrame:
+        def render(current: PickerControlState, renderer=viewport_renderer) -> RenderedFrame:
             viewport = viewport_projector(current)
             if type(viewport) is not PickerViewport:
                 raise TypeError("viewport_projector must return a PickerViewport")
-            frame = viewport_renderer(viewport, render_capabilities)
+            frame = renderer(viewport, render_capabilities)
             if type(frame) is not RenderedFrame:
                 raise TypeError("viewport_renderer must return a RenderedFrame")
             if frame.width != render_width:
@@ -5300,19 +5316,22 @@ class RawTerminalDriver:
             return frame
 
         frame = render(state)
-        if display_state.history_enabled:
+        if display_state.history_enabled or dense_renderer is not None:
             _, height = self._text_viewer_geometry(observed.width, bounded_height=False)
             hint = ("Reviewing conversation • Enter/Esc: return to decision"
                     if display_state.history_review_active else "F6: inspect conversation before deciding")
-            hint_lines = _wrap_editor_text(hint, render_width)
+            hint_lines = _wrap_editor_text(hint, render_width) if display_state.history_enabled else []
             budget = self._inline_control_budget(render_capabilities, height)
+            if dense_renderer is not None and frame.line_count + len(hint_lines) > budget:
+                frame = render(state, dense_renderer)
             limit = state.picker.visible_choice_limit
-            while frame.line_count + len(hint_lines) > budget and limit > 1:
+            while dense_renderer is None and frame.line_count + len(hint_lines) > budget and limit > 1:
                 limit -= 1
                 frame = render(replace(state, picker=replace(state.picker, visible_choice_limit=limit)))
             return self._render_timeline_control(
                 [*frame.text.split("\n"), *hint_lines], display_state,
                 render_capabilities, height, frame.line_count + len(hint_lines) - 1,
+                require_fit=dense_renderer is not None,
             )
         payload = "".join((_CARRIAGE_RETURN,
                            _CURSOR_UP * display_state.rendered_cursor_row,

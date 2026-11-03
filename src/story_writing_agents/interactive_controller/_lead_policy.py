@@ -45,8 +45,10 @@ from ..interactive_terminal import (
     Panel,
     Section,
     ControlOutcomeKind,
+    ControlOutcome,
     InteractiveAdvisoryProgress,
     InteractivePickerInput,
+    InteractiveConfirmationInput,
     InteractivePromptInput,
     InteractiveSemanticOutput,
     Message,
@@ -61,6 +63,7 @@ from ..interactive_terminal._collaboration_view import (
     project_artifact_application_decision_result,
     project_lead_error_result,
     project_lead_turn_result,
+    project_lead_confirmation,
     project_editorial_state,
     project_core_document_readiness,
     project_specialist_results,
@@ -153,6 +156,7 @@ class InteractiveLeadAdapter:
     __slots__ = (
         "_progress",
         "_picker",
+        "_confirmation",
         "_prompt",
         "_runner",
         "_semantic_output",
@@ -173,6 +177,7 @@ class InteractiveLeadAdapter:
         prompt: InteractivePromptInput,
         semantic_output: InteractiveSemanticOutput,
         *,
+        confirmation: InteractiveConfirmationInput,
         recover_authentication: Callable[[str], bool] | None = None,
         read_events: Callable[[str], tuple[CollaborationEvent, ...]] | None = None,
         show_details: bool = False,
@@ -185,6 +190,7 @@ class InteractiveLeadAdapter:
         self._runner = runner
         self._progress = progress
         self._picker = picker
+        self._confirmation = confirmation
         self._prompt = prompt
         self._semantic_output = semantic_output
         self._recover_authentication = recover_authentication
@@ -630,74 +636,21 @@ class InteractiveLeadAdapter:
             recommendation = turn.recommendation_request
             if recommendation is None and (turn.proposal is None or turn.confirmation_request_id is None):
                 return False
-            outcome = self._picker.read_picker(
-                Prompt(
-                    "Lead recommendation decision" if recommendation is not None else "Lead proposal decision",
-                    instruction=(
-                        "Choose the exact Confirm, Reject, or Revise control. "
-                        "Ordinary text never confirms work."
-                    ),
-                ),
-                (tuple(Choice(item.value, item.value.title(), description={
-                    CollaborationConfirmationDecision.CONFIRM: "Authorize one bounded Lead preparation only.",
-                    CollaborationConfirmationDecision.REJECT: "Close this recommendation without provider work.",
-                    CollaborationConfirmationDecision.REVISE: "Replan a fresh recommendation that requires a new Confirm.",
-                }[item]) for item in CollaborationConfirmationDecision)
-                 if recommendation is not None else _DECISION_CHOICES),
-                highlighted_id=CollaborationConfirmationDecision.REVISE.value,
-            )
+            choices = (tuple(Choice(item.value, item.value.title(), description={
+                CollaborationConfirmationDecision.CONFIRM: "Authorize one bounded Lead preparation only.",
+                CollaborationConfirmationDecision.REJECT: "Close this recommendation without provider work.",
+                CollaborationConfirmationDecision.REVISE: "Replan a fresh recommendation that requires a new Confirm.",
+            }[item]) for item in CollaborationConfirmationDecision)
+                if recommendation is not None else _DECISION_CHOICES)
+            outcome, revision_request = self._read_decision(turn, choices)
             if outcome.kind is ControlOutcomeKind.EOF:
                 return True
-            if outcome.kind in {
-                ControlOutcomeKind.CANCEL,
-                ControlOutcomeKind.INTERRUPT,
-            }:
-                self._semantic_output.write_component(
-                    Notice(
-                        "The proposal remains unconfirmed.",
-                        label="lead proposal",
-                        role=SemanticRole.WARNING,
-                        state=ViewState.CANCELLED,
-                    )
-                )
+            if outcome.kind in {ControlOutcomeKind.CANCEL, ControlOutcomeKind.INTERRUPT}:
+                self._write_unconfirmed("The request remains unconfirmed.")
                 return False
             if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text is None:
-                raise RuntimeError("lead decision picker returned an invalid outcome")
+                raise RuntimeError("lead decision returned an invalid outcome")
             kind = CollaborationConfirmationDecision(outcome.text)
-            revision_request = None
-            if kind is CollaborationConfirmationDecision.REVISE:
-                revision = self._prompt.read_prompt(
-                    Prompt(
-                        "Revision request",
-                        instruction="Describe what the lead should revise.",
-                    )
-                )
-                if revision.kind is ControlOutcomeKind.EOF:
-                    return True
-                if revision.kind in {
-                    ControlOutcomeKind.CANCEL,
-                    ControlOutcomeKind.INTERRUPT,
-                }:
-                    self._semantic_output.write_component(
-                        Notice(
-                            "No revision decision was recorded.",
-                            label="lead proposal",
-                            role=SemanticRole.WARNING,
-                            state=ViewState.CANCELLED,
-                        )
-                    )
-                    return False
-                if revision.kind is not ControlOutcomeKind.COMMIT or not revision.text or not revision.text.strip():
-                    self._semantic_output.write_component(
-                        Notice(
-                            "A revision request must not be empty.",
-                            label="lead proposal",
-                            role=SemanticRole.ERROR,
-                            state=ViewState.ERROR,
-                        )
-                    )
-                    return False
-                revision_request = revision.text
             if recommendation is not None:
                 turn = self._run_turn(self._session.decide_lead_recommendation(
                     LeadRecommendationDecision(
@@ -759,17 +712,8 @@ class InteractiveLeadAdapter:
 
         request = turn.artifact_application_request
         assert request is not None
-        outcome = self._picker.read_picker(
-            Prompt(
-                "Reviewed artifact decision",
-                instruction=(
-                    "Choose Apply, Reject, or Revise. Consultation confirmation "
-                    "did not authorize this artifact write."
-                ),
-            ),
-            _APPLICATION_CHOICES,
-            highlighted_id=ArtifactApplicationDecisionKind.REVISE.value,
-        )
+        outcome, revision_request = self._read_decision(
+            turn, _APPLICATION_CHOICES, revision_name="Artifact revision request")
         if outcome.kind is ControlOutcomeKind.EOF:
             return True
         if outcome.kind in {
@@ -781,12 +725,6 @@ class InteractiveLeadAdapter:
         if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text is None:
             raise RuntimeError("artifact decision picker returned an invalid outcome")
         kind = ArtifactApplicationDecisionKind(outcome.text)
-        revision_request, stopped = self._revision_request(
-            kind is ArtifactApplicationDecisionKind.REVISE,
-            name="Artifact revision request",
-        )
-        if stopped is not None:
-            return stopped
         reviewed = request.reviewed_proposal
         application = request.application_request
         decision = ArtifactApplicationDecision(
@@ -821,7 +759,7 @@ class InteractiveLeadAdapter:
         preparation: StoryCommitPreparationRequest,
     ) -> bool:
         """Offer exact candidate preparation without granting Commit authority."""
-        outcome = self._picker.read_picker(
+        outcome = self._confirmation.read_confirmation(
             Prompt(
                 "Prepare local commit request",
                 instruction=(
@@ -830,10 +768,12 @@ class InteractiveLeadAdapter:
                 ),
             ),
             (
-                Choice("prepare", "Prepare", description="Prepare one exact request."),
-                Choice("later", "Later", description="Keep the applied result pending."),
+                Choice("yes", "Prepare", description="Prepare one exact request."),
+                Choice("no", "Later", description="Keep the applied result pending."),
             ),
-            highlighted_id="later",
+            summary=(Field("Purpose", "Prepare a new exact local Commit request for the known Apply result."),),
+            impact=(Notice("A separate Commit decision is still required.", label="SEPARATE APPROVAL", role=SemanticRole.WARNING),),
+            binary=True,
         )
         if outcome.kind is ControlOutcomeKind.EOF:
             return True
@@ -842,9 +782,9 @@ class InteractiveLeadAdapter:
             return False
         if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text is None:
             raise RuntimeError("commit preparation picker returned an invalid outcome")
-        if outcome.text == "later":
+        if outcome.text == "no":
             return False
-        if outcome.text != "prepare":
+        if outcome.text != "yes":
             raise RuntimeError("commit preparation picker returned an invalid choice")
         request = self._runner.run(
             self._progress.run(self._session.reprepare_story_commit(preparation))
@@ -868,17 +808,8 @@ class InteractiveLeadAdapter:
     ) -> bool:
         """Apply one separately selected exact local commit decision."""
 
-        outcome = self._picker.read_picker(
-            Prompt(
-                "Local commit decision",
-                instruction=(
-                    "Choose Commit, Reject, or Revise. Applying artifacts did "
-                    "not authorize staging or commit."
-                ),
-            ),
-            _COMMIT_CHOICES,
-            highlighted_id=StoryCommitDecision.REVISE.value,
-        )
+        outcome, revision_request = self._read_decision(
+            turn, _COMMIT_CHOICES, commit_request=request, revision_name="Commit revision request")
         if outcome.kind is ControlOutcomeKind.EOF:
             return True
         if outcome.kind in {
@@ -890,12 +821,6 @@ class InteractiveLeadAdapter:
         if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text is None:
             raise RuntimeError("commit decision picker returned an invalid outcome")
         kind = StoryCommitDecision(outcome.text)
-        revision_request, stopped = self._revision_request(
-            kind is StoryCommitDecision.REVISE,
-            name="Commit revision request",
-        )
-        if stopped is not None:
-            return stopped
         decision = StoryCommitDecisionRequest(
             session_id=turn.session_id,
             conversation_id=turn.conversation_id,
@@ -916,38 +841,39 @@ class InteractiveLeadAdapter:
         )
         return False
 
-    def _revision_request(
-        self,
-        required: bool,
-        *,
-        name: str,
-    ) -> tuple[str | None, bool | None]:
-        """Read nonempty revision text; return an optional loop-stop signal."""
-
-        if not required:
-            return None, None
-        revision = self._prompt.read_prompt(
-            Prompt(name, instruction="Describe what should be revised.")
-        )
-        if revision.kind is ControlOutcomeKind.EOF:
-            return None, True
-        if revision.kind in {
-            ControlOutcomeKind.CANCEL,
-            ControlOutcomeKind.INTERRUPT,
-        }:
-            self._write_unconfirmed("No revision decision was recorded.")
-            return None, False
-        if revision.kind is not ControlOutcomeKind.COMMIT or not revision.text:
-            self._semantic_output.write_component(
-                Notice(
-                    "A revision request must not be empty.",
-                    label="decision",
-                    role=SemanticRole.ERROR,
-                    state=ViewState.ERROR,
-                )
-            )
-            return None, False
-        return revision.text, None
+    def _read_decision(
+        self, turn: LeadTurnResult, choices: tuple[Choice, ...], *,
+        commit_request: StoryCommitRequestPayload | None = None,
+        revision_name: str = "Revision request",
+    ) -> tuple[ControlOutcome, str | None]:
+        """Keep revision retries and cancellation bound to this exact request."""
+        presentation = project_lead_confirmation(turn, commit_request=commit_request)
+        prompt = presentation.pop("prompt")
+        highlighted_id = None
+        while True:
+            outcome = self._confirmation.read_confirmation(
+                prompt, choices, highlighted_id=highlighted_id, **presentation)
+            if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text != "revise":
+                return outcome, None
+            draft = None
+            notice = None
+            while True:
+                revision = self._confirmation.read_revision(
+                    Prompt(revision_name, instruction="Describe what should be revised."),
+                    context=presentation.get("summary", ()), initial_value=draft, notice=notice)
+                if revision.kind in {ControlOutcomeKind.EOF, ControlOutcomeKind.INTERRUPT}:
+                    return revision, None
+                if revision.kind is ControlOutcomeKind.CANCEL:
+                    self._write_unconfirmed("Revision not submitted; the original request is still pending.")
+                    highlighted_id = "revise"
+                    break
+                if revision.kind is not ControlOutcomeKind.COMMIT:
+                    raise RuntimeError("revision input returned an invalid outcome")
+                if revision.text is not None and revision.text.strip():
+                    return outcome, revision.text
+                draft = revision.text
+                notice = Notice("Revision request must not be empty.", label="ERROR",
+                    role=SemanticRole.ERROR, state=ViewState.ERROR)
 
     def _write_unconfirmed(self, text: str) -> None:
         self._semantic_output.write_component(
