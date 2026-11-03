@@ -1329,8 +1329,10 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
             for case in cases:
                 coordinate, _path, _operation, _replacement, native_valid, foreign_path = case
                 changed = field_neighbor_value(packet, case)
-                if _path == ('agent_action', 'task_result', 'response_details', 'authoring_assessment') and _operation == 'set' and _replacement is None:
-                    native_valid = False
+                if _path[:4] == ('agent_action', 'task_result', 'response_details', 'authoring_assessment') and _operation == 'set' and _replacement is None:
+                    assessment = packet['agent_action']['task_result']['response_details']['authoring_assessment']
+                    native_valid = (_path[4:] == ('direction',) and assessment['status'] != 'sufficient'
+                        or _path[4:] == ('creative_scope',) and (assessment['status'] != 'sufficient' or bool(assessment['allowed_creative_actions'])))
                 with phase('production-value-and-strict-findings'):
                     self.assertEqual(not bool(bound.rule_graph.findings(changed)), native_valid, coordinate)
                     production_valid = native_valid or foreign_path is not None and not policies[foreign_path]
