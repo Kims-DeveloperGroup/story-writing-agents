@@ -1929,8 +1929,21 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.backend.enqueue(_visible_outcome("answer"))
         from story_writing_agents.agent_context.service import AgentContextService
         from unittest import mock; front_results = []; original_invoke = AgentContextService.invoke
+        front_failures = []
         async def retain_front_authority(service, *args, **kwargs):
-            result = await original_invoke(service, *args, **kwargs)
+            try:
+                result = await original_invoke(service, *args, **kwargs)
+            except Exception as error:
+                import traceback
+                code = getattr(error, 'code', None)
+                code = getattr(code, 'value', code)
+                if (type(code) not in (str, int, bool, type(None))
+                        or (type(code) is str and len(code) > 128)):
+                    code = None
+                frames = tuple((frame.filename.rsplit('/', 1)[-1], frame.name, frame.lineno)
+                    for frame in traceback.extract_tb(error.__traceback__, limit=-8))
+                front_failures.append((type(error).__module__, type(error).__name__, code, frames))
+                raise
             front_results.append(result)
             return result
         original_factory = orchestrator_module._lead_call_contract_factory
@@ -1939,7 +1952,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         with mock.patch.object(AgentContextService, 'invoke', retain_front_authority), \
                 mock.patch.object(orchestrator_module, '_lead_call_contract_factory', side_effect=baseline_factory):
             outcome = await self.runtime.lead_turn( self.session_id, conversation_id, "Explain collaboration workflow.")
-        self.assertTrue(self.backend.calls, outcome)
+        self.assertTrue(self.backend.calls, (outcome, front_failures))
         def plain(value):
             if isinstance(value, Mapping): return {key: plain(item) for key, item in value.items()}
             return [plain(item) for item in value] if type(value) in (tuple, list) else value
