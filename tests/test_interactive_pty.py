@@ -1801,7 +1801,7 @@ with InteractiveInputLifecycle(terminal).session():
     try: asyncio.run(progress.run(operation(), keep_frame=False))
     except KeyboardInterrupt: print("PROGRESS_INTERRUPTED", flush=True)
 print("PROGRESS_FINAL", flush=True)
-""")
+""", environment_overrides={"TERM": "xterm-256color"})
         probe.wait_for_text("Working")
         probe.resize(47, 12)
         probe.send_interrupt()
