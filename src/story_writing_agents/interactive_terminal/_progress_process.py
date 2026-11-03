@@ -515,12 +515,14 @@ class _Writer:
         if geometry[0] < 2 or geometry[1] < 1:
             return
         if geometry != self.geometry:
-            # Reflow invalidates old offsets. Start a safe one-row surface;
-            # only a fresh parent snapshot may restore the larger preview.
+            # Reflow invalidates old offsets. Start a safe one-row surface,
+            # retaining a matching snapshot that may have arrived just before
+            # this geometry observation; the parent need not resend it.
             self.uncertain = True
             self.pending, self.offset, self.commit = b"", 0, None
             self.geometry = geometry
-            self.snapshot = None
+            if self.snapshot is not None and (self.snapshot.columns, self.snapshot.height) != geometry:
+                self.snapshot = None
             self.painted_revision = -1
             self.header_row, self.header_prefix = 0, ""
             self._queue("\x18\x1b[0m\r\n" + _fit(self.content.header(now), geometry[0] - 1) + "\r", 1, 0, 0)

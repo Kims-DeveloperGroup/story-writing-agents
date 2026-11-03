@@ -2315,6 +2315,35 @@ print(json.dumps([data.hex(), stamps]), flush=True)
         _result, captured, _stamps = self._capture_progress_process(partial_epoch)
         self.assertIn(b"NEW_EPOCH", captured)
         self.assertLess(captured.index(b"NATIVE_HANDOFF"), captured.index(b"NEW_EPOCH"))
+        def resize_before_tick(descriptor, _drain):
+            import fcntl, struct, termios
+            started = time.monotonic()
+            writer = process_progress._Writer(descriptor)
+            writer.begin({"epoch": 1, "origin": started, "columns": 80, "height": 24,
+                          "owned_rows": 0, "cursor_row": 0, "cursor_column": 0})
+            while writer.pending: writer.write()
+            writer.update(self._process_snapshot(started, "OLD_PREVIEW").record(1, 1))
+            writer.tick(started)
+            while writer.pending: writer.write()
+            fcntl.ioctl(descriptor, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 47, 0, 0))
+            fresh = process_progress.ProgressSnapshot(47, 12, ("", "CARD_VISIBLE", "PREVIEW_VISIBLE"),
+                2, 0, 0, "", self._process_snapshot(started).content)
+            writer.update(fresh.record(1, 2))
+            for tick in range(1, 4):
+                writer.tick(started + tick * .08)
+                while writer.pending: writer.write()
+                self.assertEqual(writer.snapshot, fresh)
+            self.assertEqual((writer.rows, writer.painted_revision), (3, 2))
+        _result, captured, _stamps = self._capture_progress_process(resize_before_tick)
+        self.assertIn(b"CARD_VISIBLE", captured)
+        self.assertIn(b"PREVIEW_VISIBLE", captured)
+        from tests._external_view_support import PortableTerminalScreen
+        screen = PortableTerminalScreen(width=47, height=12)
+        screen.primary[:] = [[" "] * 47 for _ in range(12)]; screen.history.clear(); screen.cursor = (0, 0)
+        screen.write(captured.decode("utf-8"))
+        visible = "\n".join("".join(row) for row in screen.primary)
+        self.assertIn("CARD_VISIBLE", visible)
+        self.assertIn("PREVIEW_VISIBLE", visible)
 
     def test_nested_scroll_inspector_preserves_buffered_typeahead(self) -> None:
         driver = _progress_driver()
@@ -2539,20 +2568,20 @@ print(json.dumps([data.hex(), stamps]), flush=True)
     def test_run_advisory_progress_frame_clears_when_keep_frame_false(self) -> None:
         self.assertTrue(self._successful_progress_output(False).endswith("\r\x1b[K"))
 
-    def _terminal_progress_mode(self, collapsed):
+    def _terminal_progress_mode(self, collapsed, *, begin=True, result="done", keep_frame=None):
         real_sleep, output = asyncio.sleep, io.StringIO()
         async def fast_sleep(_delay):
             await real_sleep(0)
         async def operation():
             await real_sleep(0.01)
-            return "done"
+            return result
         with mock.patch.object(RawTerminalDriver, "capabilities", return_value=_ansi_terminal_capabilities()), \
                 mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep):
             terminal = _core.build_stream_terminal(lambda _p: "", io.StringIO(), output)
             terminal.progress_frame_collapsed = collapsed
             progress = InteractiveAdvisoryProgress(terminal)
-            progress.begin()
-            return asyncio.run(progress.run(operation())), output
+            if begin: progress.begin()
+            return asyncio.run(progress.run(operation(), keep_frame=keep_frame)), output
 
     def test_terminal_progress_mode_persists_frame_when_on_and_clears_when_off(self) -> None:
         res_on, out_on = self._terminal_progress_mode(False)
@@ -2563,77 +2592,20 @@ print(json.dumps([data.hex(), stamps]), flush=True)
         self.assertTrue(out_off.getvalue().endswith("\r\x1b[K"))
 
     def test_progress_run_without_begin_clears_by_default_even_when_progress_on(self) -> None:
-        from story_writing_agents.interactive_terminal._core import build_stream_terminal
-
-        capabilities = _ansi_terminal_capabilities()
-        real_sleep = asyncio.sleep
-
-        async def fast_sleep(_delay: float) -> None:
-            await real_sleep(0)
-
-        output = io.StringIO()
-        with (
-            mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
-            mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep),
-        ):
-            terminal = build_stream_terminal(lambda _p: "", io.StringIO(), output)
-            terminal.progress_frame_collapsed = False
-            progress = InteractiveAdvisoryProgress(terminal)
-
-            async def startup_op() -> str:
-                await real_sleep(0.01)
-                return "ready"
-
-            # When begin() is NOT called (transient preparation/startup), progress clears
-            res = asyncio.run(progress.run(startup_op()))
-            self.assertEqual(res, "ready")
-            self.assertTrue(output.getvalue().endswith("\r\x1b[K"))
+        res, output = self._terminal_progress_mode(False, begin=False, result="ready")
+        self.assertEqual(res, "ready")
+        self.assertTrue(output.getvalue().endswith("\r\x1b[K"))
 
     def test_progress_run_explicit_keep_frame_overrides(self) -> None:
-        from story_writing_agents.interactive_terminal._core import build_stream_terminal
-
-        capabilities = _ansi_terminal_capabilities()
-        real_sleep = asyncio.sleep
-
-        async def fast_sleep(_delay: float) -> None:
-            await real_sleep(0)
-
         # 1. keep_frame=False clears even when begin() was called and progress == on
-        out1 = io.StringIO()
-        with (
-            mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
-            mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep),
-        ):
-            terminal = build_stream_terminal(lambda _p: "", io.StringIO(), out1)
-            terminal.progress_frame_collapsed = False
-            progress = InteractiveAdvisoryProgress(terminal)
-            progress.begin()
-
-            async def op1() -> str:
-                await real_sleep(0.01)
-                return "op1"
-
-            res1 = asyncio.run(progress.run(op1(), keep_frame=False))
-            self.assertEqual(res1, "op1")
-            self.assertTrue(out1.getvalue().endswith("\r\x1b[K"))
+        res1, out1 = self._terminal_progress_mode(False, result="op1", keep_frame=False)
+        self.assertEqual(res1, "op1")
+        self.assertTrue(out1.getvalue().endswith("\r\x1b[K"))
 
         # 2. keep_frame=True persists even when begin() was NOT called
-        out2 = io.StringIO()
-        with (
-            mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
-            mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep),
-        ):
-            terminal2 = build_stream_terminal(lambda _p: "", io.StringIO(), out2)
-            terminal2.progress_frame_collapsed = True
-            progress2 = InteractiveAdvisoryProgress(terminal2)
-
-            async def op2() -> str:
-                await real_sleep(0.01)
-                return "op2"
-
-            res2 = asyncio.run(progress2.run(op2(), keep_frame=True))
-            self.assertEqual(res2, "op2")
-            self.assertTrue(out2.getvalue().endswith("\r\n"))
+        res2, out2 = self._terminal_progress_mode(True, begin=False, result="op2", keep_frame=True)
+        self.assertEqual(res2, "op2")
+        self.assertTrue(out2.getvalue().endswith("\r\n"))
 
     def test_success_response_invokes_nested_scroll_inspector_with_keep_frame_true(self) -> None:
         """Verify successful operation with keep_frame=True invokes run_nested_scroll_inspector with keep_frame=True."""
