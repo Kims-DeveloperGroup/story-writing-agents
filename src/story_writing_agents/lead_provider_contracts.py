@@ -1628,10 +1628,11 @@ def _scope_extensions(scope: AuthoringScope | None) -> dict[str, object]:
 
 
 def _scope_for_rules(raw: dict[str, object]) -> AuthoringScope:
+    task_id, revision = raw["task"].rsplit("@", 1)
     version = 3 if "contributions" in raw else 2 if "intent" in raw else 1
     return authoring_scope_from_dict({"schema_version": version, "activity": raw["activity"],
         "target_paths": raw["target_paths"], "domains": raw["domains"],
-        "interpretation": "Provider constraint projection", "task_id": "constraint", "task_revision": 1,
+        "interpretation": "Provider constraint projection", "task_id": task_id, "task_revision": int(revision),
         **({"intent": raw.get("intent", "authoring")} if version >= 2 else {}),
         **({"contributions": raw["contributions"], "dependency_slots": raw["dependency_slots"]} if version == 3 else {})})
 

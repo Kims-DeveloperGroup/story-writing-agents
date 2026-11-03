@@ -669,6 +669,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 "source_choices": ("user_input",), "input_choices": ("user_input",),
                 "anchors": {CHARACTER_CUSTODIAN: "user_input"}, "recipients": {"user_input": CHARACTER_CUSTODIAN}, "family": 0})
         def response(call, provider):
+            self.assertIsNone(call.contract.factory.constraints.scope)
             packet = json.loads(staged_response(call, provider))["agent_action"]
             details = packet["task_result"]["response_details"]
             native_plan = details["specialist_consultation_proposal"]["stage_plan"]
