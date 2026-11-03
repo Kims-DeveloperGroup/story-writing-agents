@@ -1996,7 +1996,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertIn("concrete deliverable and success criteria", encoded)
         self.assertLessEqual(max(len(member.rule_graph.canonical_bytes) for member in result_index.contracts),
             64 * 1024)
-        for metadata in ("correlation", "schema_version", "evidence_status", "evidence_ids", "interpretation", "review_basis", "additional_review_domains", "expected_result"):
+        for metadata in ("correlation", "schema_version", "evidence_status", "evidence_ids", "interpretation", "review_basis", "additional_review_domains"):
             if metadata == 'review_basis':
                 self.assertIn(f'"{metadata}"', encoded)
             else:
@@ -2004,9 +2004,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         null_slots = {"response_details." + key: tuple(f'lead-response-v8:family:{number}' for number in owners)
                       for key, owners in (
             ("writing_task_scope", (9, 10)),
-            ("authoring_assessment", (3, 5, 7)),
-            ("authoring_assessment.direction", (3, 5, 7)), ("authoring_assessment.creative_scope", (3, 5, 7)),
-            ("specialist_consultation_proposal.shared_premises.*.selected_premise", (5, 6)),
+            ("authoring_assessment", (3, 5, 7, 12)),
+            ("authoring_assessment.direction", (3, 5, 7, 12)), ("authoring_assessment.creative_scope", (3, 5, 7, 12)),
+            ("specialist_consultation_proposal.shared_premises.*.selected_premise", (5, 6, 12, 13)),
+            ("specialist_consultation_proposal.stage_plan.agreed_direction", (12, 13)),
             ("core_document_assessment.document_judgments.*.document_read_source_id", (10,)),
         )}
         docs = tuple("core_documents/" + name + ".md" for name in
@@ -2033,6 +2034,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.assertNotIn("null", node)
                 if node.get("type") == "array": self.assertIs(type(node.get("minItems")), int)
                 if node.get("type") == "object":
+                    if path[-3:] == ("response_details", "specialist_consultation_proposal", "stage_plan"):
+                        self.assertIn("expected_result", node["required"])
+                    else:
+                        self.assertNotIn("expected_result", node["properties"])
                     self.assertLessEqual(set(node["required"]), set(node["properties"]))
                     if native:
                         self.assertEqual(set(node["required"]), set(node["properties"]))
@@ -3342,8 +3347,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             family_counts = {'lead-discussion-response-v1': 1, 'lead-exploration-response-v1': 3, 'lead-response-v8': 1,
                 'premise-decision-summary-v1': 2, 'consultation-summary-v4': 3, 'artifact-review-summary-v4': 1}
             if seed.contract_id == 'lead-response-v7':
-                family_numbers = ((0,) if constraints.recommendation_only else (0, 1) if constraints.preparation_kind
-                    else (0, 1, 2, 3, 4, 5, 6, 7, 9) if constraints.scope is None
+                family_numbers = ((0,) if constraints.recommendation_only
+                    else (0, 1, 2) if constraints.preparation_kind == 'prepare_consultation'
+                    else (0, 1) if constraints.preparation_kind
+                    else (0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12) if constraints.scope is None
                     and constraints.readiness_source_basis_ref else (0, 1, 2, 3))
             elif seed.contract_id == 'lead-exploration-response-v1':
                 has_writing_read = any(fact.source_kind is ContextSourceKind.WRITING_ARTIFACT
