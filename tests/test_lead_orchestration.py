@@ -1942,7 +1942,21 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     code = None
                 frames = tuple((frame.filename.rsplit('/', 1)[-1], frame.name, frame.lineno)
                     for frame in traceback.extract_tb(error.__traceback__, limit=-8))
-                front_failures.append((type(error).__module__, type(error).__name__, code, frames))
+                schema_metrics = None
+                trace = error.__traceback__
+                while trace is not None and trace.tb_next is not None:
+                    trace = trace.tb_next
+                if trace is not None and trace.tb_frame.f_code is SchemaRules.provider_schema_value.__code__:
+                    values = trace.tb_frame.f_locals
+                    rules, schema_root, sizer = (values.get(name) for name in ('self', 'root', 'encoded_size'))
+                    if (type(rules) is SchemaRules and type(schema_root) is dict and inspect.isfunction(sizer)
+                            and sizer.__code__.co_name == 'encoded_size'
+                            and sizer.__globals__ is SchemaRules.provider_schema_value.__globals__
+                            and any(sizer.__code__ is item for item in trace.tb_frame.f_code.co_consts)):
+                        from tests.test_provider_schema_spec import check_schema
+                        schema_metrics = (sizer(schema_root), rules.maximum_bytes,
+                            tuple(sorted({rule for _, rule in check_schema(schema_root)})[:32]))
+                front_failures.append((type(error).__module__, type(error).__name__, code, frames, schema_metrics))
                 raise
             front_results.append(result)
             return result
