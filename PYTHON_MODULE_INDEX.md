@@ -276,6 +276,7 @@ live composition, reference activation, collaboration presentation, and the term
 Presentation consumes domain contracts without owning runtime state. `interactive_terminal._core`는 공개 `conversations.CollaborationEventKind`로 비공개 Lead 그룹 trace를 건너뛰며 검증한 이력 cursor를 전진시킨다. 일반 상세 이력은 공개 이벤트 panel을 표시하고, 명시적 전체 감사 projection은 모든 typed 이벤트를 보존한다. Private `_box.Box` shares Unicode cell geometry.
 `_markdown` owns sanitized prose; `_response_usage` joins exact scoped call identities. The facade's pure `project_conversation_messages` selects and deduplicates restored/transcript messages; detailed history retains event panels. Live/history/transcript share frames.
 The main-input facade owns queued semantic alerts until the next read. `_output_history` owns semantic message/JSON order, active-group barriers, navigation and cached row indexing. The driver owns once-only native publication, the mutable suffix, alternate-screen review, terminal geometry and input lifecycle; borrowed views own transient rows. Lazy `open_owned` lends validated LIVE transport; jsonl-viewer owns exchange raw/screen/cursor/mouse modes. Callback/fallback refuse before content.
+The driver owns `_input_sources` session baselines and main-command source leases; private macOS TIS and Linux desktop-tool adapters perform optional selection without changing input text or public APIs.
 Resumable idle preserves partial decoding/typeahead. Main-thread termination and `InteractiveInputLifecycle` retain
 native-auth handoff and lobby cleanup. Model/render/control internals are not public APIs.
 

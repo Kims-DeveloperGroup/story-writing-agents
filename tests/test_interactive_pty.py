@@ -1222,6 +1222,8 @@ class InteractiveCliPtyTests(unittest.TestCase):
         if git_executable is None:
             raise AssertionError("PTY integration tests require Git")
         environment = os.environ.copy()
+        for key in ("TERM_PROGRAM", "TERM_SESSION_ID", "ITERM_SESSION_ID", "KITTY_WINDOW_ID", "ALACRITTY_WINDOW_ID", "WEZTERM_PANE", "DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS"):
+            environment.pop(key, None)
         environment.update(
             {
                 "PYTHONPATH": str(_SOURCE_ROOT),
