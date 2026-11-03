@@ -217,6 +217,42 @@ keep their existing presentation.
 Fallback input shows equivalent notices as ordinary text and re-prompts. It
 does not erase terminal echo or promise a fixed physical cursor position.
 
+## Command input language
+
+On supported local macOS and Linux desktop terminals, a leading `/` selects an
+available English OS input source before the next input character is read.
+The command keeps that selection through spaces and completion. Submitting or
+cancelling the input, or removing its leading slash, returns to the shell's
+default input source. Completing a suggestion with Enter or dismissing its
+palette with Escape is not itself a submission or cancellation.
+
+The default is resolved once when the shell's input session starts: an
+authoritative OS default is preferred; otherwise the source active at startup
+is remembered for that shell run. Restoration is therefore not fixed to Korean
+and does not capture a new default before every command. A shell restart
+captures a new startup fallback. The `/settings` Language value continues to
+configure agent responses, rather than selecting the keyboard input source.
+Selecting a source already active is skipped. You can still change the source
+manually within a command, for example to enter a Korean search term; the shell
+does not force English again after every key.
+
+This changes OS source selection, not received characters. Pasted text,
+arguments, history, and ordinary messages remain literal. Input-source control
+is released before native authentication or a borrowed view takes input and is
+reconciled when main input resumes. EOF, interruption, input failures, and shell
+exit also attempt to restore the default without replacing the original error.
+
+macOS uses the native input-source service. Linux uses an available IBus or
+Fcitx5 installation; the selected framework, English source, and restore target
+must be identifiable. Fcitx5 additionally requires a readable configured group
+whose first keyboard has a recognized US/GB layout, so temporary direct input
+can preserve the remembered non-English engine. Input-source selection does not
+reproduce an IME's unfinished composition or every internal conversion mode.
+Non-TTY and line fallback input, SSH/WSL/remote sessions, tmux/screen, unavailable
+or ambiguous input methods, and missing English sources retain manual switching.
+Native Windows support is outside this feature. No additional Python package
+is required.
+
 ## Ordinary lead input
 
 After session attachment and active conversation focus, a nonblank line that

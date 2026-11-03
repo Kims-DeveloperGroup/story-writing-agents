@@ -93,7 +93,10 @@ can answer workflow/status questions directly or disclose a specialist drafting,
 review, or artifact-review proposal.
 Only the terminal's structured decision controls authorize that exact step.
 Slash-prefixed management commands remain provider-free; removed execution
-commands remain unavailable.
+commands remain unavailable. Supported local macOS/Linux terminals temporarily
+select an English OS input source for slash commands and restore the shell's
+default source afterward. See [command input language](docs/reference/interactive-terminal.md#command-input-language)
+for startup defaults, supported input methods, and fallback behavior.
 
 While a Lead or confirmed specialist request is active, capable terminals show
 a transient shared `HH:MM:SS` working bar and per-agent context cards. SEARCH

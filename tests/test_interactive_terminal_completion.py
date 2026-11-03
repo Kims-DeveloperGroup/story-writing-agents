@@ -11,6 +11,8 @@ from types import SimpleNamespace
 from typing import get_args
 from unittest import mock
 
+from tests.test_interactive_terminal_input_lifecycle import _input_sources
+
 import story_writing_agents
 from story_writing_agents import interactive_terminal as terminal_facade
 from story_writing_agents.interactive_terminal import _core, _driver, _model
@@ -185,6 +187,13 @@ class FakeTermios:
         copied = list(attributes)
         copied[6] = list(attributes[6])  # type: ignore[arg-type]
         self.set_calls.append((descriptor, when, copied))
+
+
+def _assert_raw_restoration(test, termios) -> None:
+    test.assertEqual(
+        tuple(call[1] for call in termios.set_calls),
+        (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+    )
 
 
 def _ready_select_patch():
@@ -1464,12 +1473,20 @@ class CompletionDriverTests(unittest.TestCase):
     def test_supported_live_read_selects_commits_appends_and_restores_once(
         self,
     ) -> None:
-        driver, _input, output, fallback, termios, os_module = make_driver(
+        driver, input_stream, output, fallback, termios, os_module = make_driver(
             "/s\x1b[A\t\n"
         )
+        _sources, adapter, baseline, english = _input_sources(driver=driver)
+        observed_sources, original_read = [], input_stream.read1
+        def read_with_source(size):
+            observed_sources.append(adapter.current_source())
+            return original_read(size)
+        input_stream.read1 = read_with_source
         with _ready_reference_select_patch() as readiness:
             self.assertEqual(self.read(driver), "/settings ")
 
+        self.assertEqual(observed_sources, [baseline] + [english] * (len(observed_sources) - 1))
+        self.assertEqual(adapter.select_source.call_args_list, [mock.call(english), mock.call(baseline)])
         fallback.assert_not_called()
         self.assertEqual(
             driver._history_state,
@@ -1477,10 +1494,7 @@ class CompletionDriverTests(unittest.TestCase):
         )
         self.assertGreaterEqual(len(os_module.observed_widths), 2)
         self.assertEqual(set(os_module.observed_widths), {8})
-        self.assertEqual(
-            tuple(call[1] for call in termios.set_calls),
-            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-        )
+        _assert_raw_restoration(self, termios)
         readiness.assert_called_once_with((7,), (), (), 0.05)
         rendered = "".join(output.records)
         self.assertIn("Suggestions [open]", rendered)
@@ -1573,10 +1587,7 @@ class CompletionDriverTests(unittest.TestCase):
                     driver._history_state,
                     MainInputHistoryState((expected,)),
                 )
-                self.assertEqual(
-                    tuple(call[1] for call in termios.set_calls),
-                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-                )
+                _assert_raw_restoration(self, termios)
                 rendered = "".join(output.records)
                 self.assertEqual(rendered.count("\x1b[?1049h"), screen_enters)
                 self.assertEqual(rendered.count("\x1b[?1049l"), screen_exits)
@@ -1686,10 +1697,7 @@ class CompletionDriverTests(unittest.TestCase):
                 text_reader.assert_not_called()
                 failure_writer.assert_not_called()
                 fallback.assert_not_called()
-                self.assertEqual(
-                    tuple(call[1] for call in termios.set_calls),
-                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-                )
+                _assert_raw_restoration(self, termios)
 
         driver, _input, output, fallback, _termios, os_module = make_driver("$C\t\x03")
         os_module.get_terminal_size = lambda _descriptor: SimpleNamespace(
@@ -1777,10 +1785,7 @@ class CompletionDriverTests(unittest.TestCase):
                     paths_provider.assert_not_called()
                 self.assertEqual(driver._history_state, MainInputHistoryState())
                 fallback.assert_not_called()
-                self.assertEqual(
-                    tuple(call[1] for call in termios.set_calls),
-                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-                )
+                _assert_raw_restoration(self, termios)
 
     def test_empty_ranged_picker_renders_before_deferred_live_failure(self) -> None:
         for activation_key in ("\n", "\t"):
@@ -1854,10 +1859,7 @@ class CompletionDriverTests(unittest.TestCase):
                 self.assertEqual(driver._history_state, MainInputHistoryState())
                 fallback.assert_not_called()
                 self.assertEqual(os_module.observed_widths[:2], [8, 8])
-                self.assertEqual(
-                    tuple(call[1] for call in termios.set_calls),
-                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-                )
+                _assert_raw_restoration(self, termios)
 
     def test_reference_fallback_retains_amendment_until_second_confirmation(
         self,
@@ -2556,6 +2558,7 @@ class CompletionDriverTests(unittest.TestCase):
 
     def test_standalone_escape_closes_palette_and_exact_readiness_timeout(self) -> None:
         driver, _input, output, fallback, _termios, _os = make_driver("/\x1b\n")
+        _sources, adapter, baseline, english = _input_sources(driver=driver)
         with mock.patch.object(
             _driver._select,
             "select",
@@ -2564,6 +2567,7 @@ class CompletionDriverTests(unittest.TestCase):
             self.assertEqual(self.read(driver), "/")
         readiness.assert_called_once_with((7,), (), (), 0.05)
         fallback.assert_not_called()
+        self.assertEqual(adapter.select_source.call_args_list, [mock.call(english), mock.call(baseline)])
         self.assertIn("Suggestions [open]", "".join(output.records))
         self.assertNotIn("Suggestions [open]", output.records[-1])
 
@@ -2699,10 +2703,7 @@ class CompletionDriverTests(unittest.TestCase):
                         self.read(driver)
                 fallback.assert_not_called()
                 self.assertEqual(driver._history_state, history)
-                self.assertEqual(
-                    tuple(call[1] for call in termios.set_calls),
-                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-                )
+                _assert_raw_restoration(self, termios)
 
     def test_enter_completion_waits_for_second_enter_before_history_append(
         self,
@@ -2710,6 +2711,7 @@ class CompletionDriverTests(unittest.TestCase):
         driver, input_stream, output, fallback, termios, os_module = make_driver(
             "\n\n \u2003\n/s\n\n"
         )
+        _sources, adapter, baseline, english = _input_sources(driver=driver)
 
         def apply(state, event, history=MainInputHistoryState()):
             return driver._main_prompt_transition(
@@ -2746,6 +2748,7 @@ class CompletionDriverTests(unittest.TestCase):
                 ControlOutcomeKind.INTERRUPT,
             )
         self.assertEqual(self.read(driver), "/settings ")
+        self.assertEqual(adapter.select_source.call_args_list, [mock.call(english), mock.call(baseline)])
 
         fallback.assert_not_called()
         self.assertEqual(input_stream.reads, [])
@@ -2755,10 +2758,7 @@ class CompletionDriverTests(unittest.TestCase):
         )
         self.assertGreaterEqual(len(os_module.observed_widths), 2)
         self.assertEqual(set(os_module.observed_widths), {8})
-        self.assertEqual(
-            tuple(call[1] for call in termios.set_calls),
-            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-        )
+        _assert_raw_restoration(self, termios)
         rendered = "".join(output.records)
         self.assertIn("Suggestions [open]", rendered)
         self.assertNotIn("Suggestions [open]", output.records[-1])
@@ -2787,10 +2787,7 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertEqual(driver._history_state, MainInputHistoryState())
         fallback.assert_not_called()
         self.assertEqual("".join(output.records[-2:]), "\r\r\x1b[2K\r\r\n")
-        self.assertEqual(
-            tuple(call[1] for call in termios.set_calls),
-            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-        )
+        _assert_raw_restoration(self, termios)
 
     def test_dynamic_choice_live_commit_clears_restores_then_appends_identity(
         self,
@@ -2875,10 +2872,7 @@ class CompletionDriverTests(unittest.TestCase):
         fallback.assert_not_called()
         self.assertEqual(driver._history_state, MainInputHistoryState())
         self.assertEqual("".join(output.records[-2:]), "\r\r\x1b[2K\r\r\n")
-        self.assertEqual(
-            tuple(call[1] for call in termios.set_calls),
-            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-        )
+        _assert_raw_restoration(self, termios)
 
     def test_contextual_runtime_header_redraws_for_route_and_backspace_states(
         self,
@@ -2934,10 +2928,7 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertEqual(sum("Retry the command." in frame for frame in output.records), 1)
         self.assertEqual(input_stream.reads, [])
         fallback.assert_not_called()
-        self.assertEqual(
-            tuple(call[1] for call in termios.set_calls),
-            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-        )
+        _assert_raw_restoration(self, termios)
 
     def test_contextual_runtime_header_keeps_labels_in_no_color_narrow_and_fallback(
         self,
@@ -2981,10 +2972,7 @@ class CompletionDriverTests(unittest.TestCase):
                 header.assert_any_call("", 0)
                 header.assert_any_call("x", 1)
                 fallback.assert_not_called()
-                self.assertEqual(
-                    tuple(call[1] for call in termios.set_calls),
-                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-                )
+                _assert_raw_restoration(self, termios)
 
         driver, _input, output, fallback, termios, _os = make_driver(
             "unused",
@@ -3039,10 +3027,7 @@ class CompletionDriverTests(unittest.TestCase):
             visible = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", frame).replace("\r", "")
             self.assertTrue(all(len(line) < 20 for line in visible.splitlines()))
             fallback.assert_not_called()
-            self.assertEqual(
-                tuple(call[1] for call in termios.set_calls),
-                (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-            )
+            _assert_raw_restoration(self, termios)
 
     def test_transient_picker_renderer_failure_clears_and_restores(self) -> None:
         driver, _input, output, fallback, termios, _os = make_driver("unused")
@@ -3069,10 +3054,7 @@ class CompletionDriverTests(unittest.TestCase):
         fallback.assert_not_called()
         self.assertEqual(driver._history_state, MainInputHistoryState())
         self.assertEqual(output.records[-1], "\r\r\x1b[J\n")
-        self.assertEqual(
-            tuple(call[1] for call in termios.set_calls),
-            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-        )
+        _assert_raw_restoration(self, termios)
 
     def test_completion_provider_is_call_local_across_reads_on_one_driver(self) -> None:
         driver, _input, _output, fallback, _termios, _os = make_driver("x\n/ag\t\n")
@@ -3117,10 +3099,7 @@ class CompletionDriverTests(unittest.TestCase):
             MainInputHistoryState(("界e\u0301",)),
         )
         fallback.assert_not_called()
-        self.assertEqual(
-            tuple(call[1] for call in termios.set_calls),
-            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-        )
+        _assert_raw_restoration(self, termios)
 
     def test_malformed_byte_reader_shapes_share_exact_diagnostic(
         self,
@@ -3142,58 +3121,26 @@ class CompletionDriverTests(unittest.TestCase):
                 collaborator.assert_called_once_with(1)
                 fallback.assert_not_called()
                 self.assertEqual(driver._history_state, MainInputHistoryState())
-                self.assertEqual(
-                    tuple(call[1] for call in termios.set_calls),
-                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-                )
+                _assert_raw_restoration(self, termios)
                 self.assertEqual("".join(output.records[-2:]), "\r\r\x1b[2K\r\r\n")
 
     def test_line_fallback_bypasses_all_completion_and_live_collaborators(self) -> None:
-        driver, input_stream, output, fallback, termios, os_module = make_driver(
-            "unused",
-            terminal=False,
-        )
-        completion = mock.Mock(side_effect=AssertionError("completion called"))
-        projector = mock.Mock(side_effect=AssertionError("projector called"))
-        renderer = mock.Mock(side_effect=AssertionError("renderer called"))
-        self.assertEqual(
-            driver.read_main_command_line("main> ", completion, projector, renderer),
-            "fallback",
-        )
-        fallback.assert_called_once_with("main> ")
-        completion.assert_not_called()
-        projector.assert_not_called()
-        renderer.assert_not_called()
-        self.assertEqual(driver._history_state, MainInputHistoryState(("fallback",)))
-        self.assertNotIn(("read", 1), input_stream.calls)
-        self.assertEqual(output.records, [])
-        self.assertEqual(termios.set_calls, [])
-        self.assertEqual(os_module.observed_widths, [])
-
-        dumb, dumb_input, dumb_output, dumb_fallback, dumb_termios, dumb_os = (
-            make_driver("unused")
-        )
-        dumb_os.environ = {"TERM": "dumb"}
-        completion = mock.Mock(side_effect=AssertionError("completion called"))
-        projector = mock.Mock(side_effect=AssertionError("projector called"))
-        renderer = mock.Mock(side_effect=AssertionError("renderer called"))
-        self.assertEqual(
-            dumb.read_main_command_line(
-                "main> ",
-                completion,
-                projector,
-                renderer,
-            ),
-            "fallback",
-        )
-        dumb_fallback.assert_called_once_with("main> ")
-        completion.assert_not_called()
-        projector.assert_not_called()
-        renderer.assert_not_called()
-        self.assertNotIn(("read", 1), dumb_input.calls)
-        self.assertEqual(dumb_output.records, [])
-        self.assertEqual(dumb_termios.set_calls, [])
-        self.assertEqual(dumb_os.observed_widths, [8])
+        for terminal, term, widths in ((False, "xterm-256color", []), (True, "dumb", [8])):
+            driver, input_stream, output, fallback, termios, os_module = make_driver("unused", terminal=terminal)
+            os_module.environ = {"TERM": term}
+            completion, projector, renderer = (
+                mock.Mock(side_effect=AssertionError(name + " called"))
+                for name in ("completion", "projector", "renderer")
+            )
+            self.assertEqual(driver.read_main_command_line("main> ", completion, projector, renderer), "fallback")
+            fallback.assert_called_once_with("main> ")
+            for collaborator in (completion, projector, renderer):
+                collaborator.assert_not_called()
+            self.assertEqual(driver._history_state, MainInputHistoryState(("fallback",)))
+            self.assertNotIn(("read", 1), input_stream.calls)
+            self.assertEqual(output.records, [])
+            self.assertEqual(termios.set_calls, [])
+            self.assertEqual(os_module.observed_widths, widths)
 
         dynamic = mock.Mock(side_effect=AssertionError("choices called"))
         plain, _input, plain_output, plain_fallback, _termios, _os = make_driver(
@@ -3248,10 +3195,7 @@ class CompletionDriverTests(unittest.TestCase):
                     )
                 fallback.assert_not_called()
                 self.assertEqual(driver._history_state, MainInputHistoryState())
-                self.assertEqual(
-                    tuple(call[1] for call in termios.set_calls),
-                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-                )
+                _assert_raw_restoration(self, termios)
 
     def test_core_adapter_uses_only_the_supported_driver_method(self) -> None:
         driver = mock.Mock(spec=RawTerminalDriver)
