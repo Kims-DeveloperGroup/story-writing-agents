@@ -27,6 +27,7 @@ from ._core import (  # noqa: F401
     InteractiveExternalViewer,
     ExternalViewUnavailableError,
     InteractivePickerInput,
+    InteractiveConfirmationInput,
     InteractivePromptInput,
     InteractiveSemanticOutput,
     InteractiveStartupPresentation,

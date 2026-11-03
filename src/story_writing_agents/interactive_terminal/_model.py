@@ -847,6 +847,49 @@ class PickerControlState:
             raise ValueError("window_start must identify one choice")
 
 
+def confirmation_grammar(state: PickerControlState, *, binary: bool) -> str:
+    """Describe the exact scoped line grammar using visible ordinal values."""
+    if type(state) is not PickerControlState or type(binary) is not bool:
+        raise TypeError("confirmation grammar requires picker state and bool binary")
+    tokens = []
+    for index, choice in enumerate(state.picker.choices, 1):
+        if choice.enabled:
+            aliases = f"{index}/{choice.identity}"
+            if binary:
+                aliases += "/y" if choice.identity == "yes" else "/n"
+            tokens.append(aliases)
+    default = "default=no" if binary else "no default"
+    return ", ".join((*tokens, default, "/cancel"))
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmationView:
+    """Compose one call-local decision view without adding a component kind."""
+
+    picker: Picker
+    summary: tuple[Field | Notice, ...] = ()
+    specialists: tuple[Record, ...] = ()
+    impact: tuple[Field | Notice, ...] = ()
+    context: tuple[InputContext, ...] = ()
+    binary: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.picker) is not Picker:
+            raise TypeError("picker must be a Picker")
+        for name in ("summary", "impact"):
+            values = getattr(self, name)
+            if type(values) is not tuple or any(type(item) not in {Field, Notice} for item in values):
+                raise TypeError(f"{name} must be a tuple of Field or Notice values")
+        if type(self.specialists) is not tuple or any(type(item) is not Record for item in self.specialists):
+            raise TypeError("specialists must be a tuple of Record values")
+        if type(self.context) is not tuple or any(type(item) not in {Panel, Section, Field, Notice} for item in self.context):
+            raise TypeError("context must contain existing input components")
+        if type(self.binary) is not bool:
+            raise TypeError("binary must be bool")
+        if self.binary and {choice.identity for choice in self.picker.choices} != {"yes", "no"}:
+            raise ValueError("binary confirmation requires exact yes and no choices")
+
+
 @dataclass(frozen=True, slots=True)
 class PickerViewport:
     """Project one picker into a bounded contiguous live-choice window."""
