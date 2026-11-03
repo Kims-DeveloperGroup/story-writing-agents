@@ -669,7 +669,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             intent="review_only", domains=tuple(domain.value
             for domain in ArtifactReviewDomain), mutate=focused_plan, native_inputs={
                 "source_choices": ("user_input",), "input_choices": ("user_input",),
-                "anchors": {CHARACTER_CUSTODIAN: "user_input"}, "recipients": {"user_input": CHARACTER_CUSTODIAN}, "family": 0})
+                "anchors": {CHARACTER_CUSTODIAN: "user_input"}, "recipients": {}, "family": 0})
+        stage_checks = []
         def response(call, provider):
             self.assertIsNone(call.contract.factory.constraints.scope)
             packet = json.loads(staged_response(call, provider))["agent_action"]
@@ -687,15 +688,34 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 choices["allocation_input_ids"], question["source_input_ids"])
             question["required_condition_ids"] = finite_fixture_selection(
                 choices["required_input_ids"], question["required_condition_ids"])
-            outer_id, inner_id = packet.pop("schema_id"), packet["task_result"].pop("schema_id")
+            packet.pop("schema_id")
+            packet["task_result"].pop("schema_id")
             details.pop("variant_id", None)
-            return indexed_response(packet, outer_schema_id=outer_id,
-                inner_schema_id=inner_id, contract=call.contract)
+            stage_members = {member.schema_id: member for member in call.contract.semantic_index.contracts
+                             if type(member.owner) is LeadResultContractOwner}
+            stage_candidates, stage_rejections = [], []
+            for candidate_outer, candidate_inner in call.contract.outer_inner_schema_ids:
+                if candidate_inner not in stage_members:
+                    continue
+                candidate_raw = indexed_response(packet, outer_schema_id=candidate_outer,
+                    inner_schema_id=candidate_inner, contract=call.contract)
+                candidate_findings = stage_members[candidate_inner].rule_graph.findings(
+                    json.loads(candidate_raw)["agent_action"]["task_result"])
+                if candidate_findings:
+                    stage_rejections.append((candidate_inner, candidate_findings))
+                else:
+                    stage_candidates.append(candidate_raw)
+            stage_checks.append((len(stage_candidates), tuple(stage_rejections),
+                call.contract.structural_findings(stage_candidates[0]) if len(stage_candidates) == 1 else None))
+            self.assertEqual(len(stage_candidates), 1)
+            return stage_candidates[0]
         before = len(self.backend.calls)
         self.backend.enqueue(response, control_plan=selection_plan("consultation.review_only"))
         focused = await self.runtime.lead_turn(self.session_id, conversation,
             "Perform a deep motivation review of this complete supplied scene, not a rewrite: "
             "Mina promised to protect her brother and hides a letter. Preserve the promise and leave the secret unresolved.")
+        self.assertEqual([(count, findings) for count, _rejected, findings in stage_checks],
+                         [(1, ())], stage_checks)
         self.assertIs(focused.kind, c.LeadOutcomeKind.PROPOSAL, focused.message)
         self.assertIs(focused.proposal.authoring_scope.intent, AuthoringIntent.REVIEW_ONLY)
         self.assertEqual(focused.proposal.participants, (CHARACTER_CUSTODIAN,))
@@ -1426,23 +1446,29 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         style_assessment = task_assessment(foundation_ids=("reference_1",),
             actions=("bounded style-review judgments", "separate exact formatting-only candidate preparation"))
         condition_before = self.artifact_bytes()
+        late_synthesis_checks = []
         def changed_recommend(call, provider):
             material = _workflow_material(provider.callback_payload(call))
             source_id = next(reply["reply_event_id"] for reply in material["replies"] if reply["mode"] == "review")
-            return _synthesis_outcome(
-                recommendation_family=1, recommended_action=action(target_paths=(fresh_path,),
+            raw = _synthesis_outcome(
+                recommendation_family=2, recommended_action=action(target_paths=(fresh_path,),
                        source_ids=("user_input", "reference_1", source_id)))(call, provider)
+            late_synthesis_checks.append(call.contract.structural_findings(raw))
+            return raw
         late_calls = len(self.backend.calls)
-        (fresh,
-            fresh_review,
-        ) = await self.finish_draft(
-            new_owner, text=style_request, response=self._native_scoped(
-            EXECUTION_SPECIALIST,
-            activity="review", paths=(fresh_path,),
-            domains=("tone_execution",),
-            candidate_ids=("reference_1",),
-            authoring_assessment=style_assessment,
-        ), selection_group="consultation.authoring.review", synthesis=changed_recommend)
+        try:
+            (fresh,
+                fresh_review,
+            ) = await self.finish_draft(
+                new_owner, text=style_request, response=self._native_scoped(
+                EXECUTION_SPECIALIST,
+                activity="review", paths=(fresh_path,),
+                domains=("tone_execution",),
+                candidate_ids=("reference_1",),
+                authoring_assessment=style_assessment,
+            ), selection_group="consultation.authoring.review", synthesis=changed_recommend)
+        finally:
+            self.assertEqual(late_synthesis_checks, [()])
         self.assertIsNotNone(fresh.proposal, fresh)
         self.assertNotEqual(fresh.proposal.authoring_scope.task_id, task_id)
         self.assertEqual((fresh.proposal.authoring_scope.task_revision, fresh.proposal.budget.rounds_spent,
