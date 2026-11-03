@@ -482,8 +482,12 @@ def fixture_variant_value(schema, value):
 
 
 def offered_fixture_bindings(
-    request, *, action_type, response_type, family, branch_key=None, value=None):
+    request, *, action_type, response_type, family, branch_key=None,
+    logical_root=None, value=None):
     """Look up an explicit original family, then route its unchanged finite fixture selectors."""
+    if logical_root is not None and (action_type != 'submit_result' or branch_key is not None
+            or type(logical_root) is not int or logical_root < 0):
+        raise ValueError('Choose one explicit issued logical root for a business result')
     if action_type != 'submit_result' and response_type is not None:
         raise ValueError('Context-action fixtures have no semantic result family')
     bound = request.contract
@@ -502,14 +506,18 @@ def offered_fixture_bindings(
             declared = fixture_schema_node(graph, root['properties']['response_type'])
             response_types = tuple(declared['enum'])
         if response_type in response_types:
+            if logical_root is not None and (inner is None or type(results[inner].owner) is not LeadResultContractOwner
+                    or results[inner].owner.variant.logical_root != logical_root):
+                continue
             key = member.schema_id if inner is None else results[inner].owner.variant.branch_key
-            original = key.partition(':partition:')[0]
+            original = key.partition(':partition:')[0] if logical_root is None else logical_root
             if branch_key is not None and (inner is None or branch_key not in (key, original)):
                 continue
             offered.setdefault(original, []).append((member.schema_id, inner))
-    if type(family) is not int or not 0 <= family < len(offered):
+    position = family if logical_root is None else 0
+    if type(family) is not int or not 0 <= position < len(offered):
         raise ValueError('The explicitly intended fixture family was not offered')
-    choices = list(offered.values())[family]
+    choices = list(offered.values())[position]
     if len(choices) > 1 and value is not None:
         for pair in choices:
             if _fixture_partition_matches(results[pair[1]].rule_graph.schema_value(), value):
@@ -727,12 +735,13 @@ def lead_fixture_assignments(rows, *, input_choices, review_choices, anchors, re
     return {'assignments': assignments, 'required_input_recipients': copy.deepcopy(recipients)}
 
 
-def lead_fixture_response(request, value, *, family, branch_key=None, response_type=None):
+def lead_fixture_response(request, value, *, family, branch_key=None, response_type=None,
+                          logical_root=None):
     """Pair caller-authored current wire values with one explicitly intended issued family."""
     outer, inner = offered_fixture_bindings(
         request, action_type='submit_result',
         response_type=value['response_type'] if response_type is None else response_type,
-        family=family, branch_key=branch_key, value=value)
+        family=family, branch_key=branch_key, logical_root=logical_root, value=value)
     return indexed_response({'action_type': 'submit_result', 'task_result': value},
                             outer_schema_id=outer, inner_schema_id=inner, contract=request.contract)
 

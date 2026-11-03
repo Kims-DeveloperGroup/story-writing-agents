@@ -2235,9 +2235,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 require_current_native(current)
                 generations[group] = current
             return generations[group]
-        def require_group_case(owner, offers, supplied, expected, group, *, typed=True):
+        def require_group_case(owner, offers, supplied, expected, group, *, logical_root, typed=True):
             current = current_group(owner, offers, group)
-            frame = lead_fixture_response(SimpleNamespace(contract=current), supplied, family=0)
+            frame = lead_fixture_response(SimpleNamespace(contract=current), supplied, family=0, logical_root=logical_root)
             self.assertFalse(current.rule_graph.findings(json.loads(frame)), (group, expected))
             semantic_examples.setdefault(group, (current, json.loads(frame), expected))
             if typed and group not in typed_groups:
@@ -2485,7 +2485,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             'response_details': { 'task_scope': lead_fixture_scope(workflow_scope), 'document_change_request_update': {
                     'update_type': 'start_request', 'target_artifact_paths': [future_path],
                     'requested_workflow_step': 'ask_clarification'}}}, family=0,
-            branch_key=question_bound.factory.rule_seed.contract_id + ':family:1')
+            logical_root=1)
         self.assertEqual(json.loads(question_bound.decode_response(prospective).answer_json), { 'kind': 'question',
             'message': future_message, 'authoring_scope': {'intent': 'authoring', 'activity': 'workflow',
             'target_paths': [], 'domains': [], 'task': task['task_id'] + '@1', 'contributions': [],
@@ -2530,7 +2530,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             if intent == 'authoring': details['authoring_assessment'] = pending_assessment
             encoded = lead_fixture_response(proposal_call, {'response_type': 'specialist_consultation_proposal',
                 'response_text': 'Prepare explicit selected work.',
-                'response_details': details}, family=0, branch_key=proposal_bound.factory.rule_seed.contract_id + ':family:' + ('6' if intent == 'review_only' else '5'))
+                'response_details': details}, family=0, logical_root=6 if intent == 'review_only' else 5)
             native = json.loads(encoded)
             allocation = native['agent_action']['task_result']['response_details'][
                 'specialist_consultation_proposal']['assignments'][PLOT_ARCHITECT]
@@ -2653,7 +2653,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             'response_details': {'task_scope': lead_fixture_scope(artifact_scope),
                 'artifact_change_proposal': {'artifact_changes': literal_operations},'authoring_assessment': pending_assessment}}
         artifact_bound = current_group(bound.factory, bound.offers, "artifact.changes")
-        artifact_native = json.loads(lead_fixture_response(SimpleNamespace(contract=artifact_bound), artifact_value, family=0))
+        artifact_native = json.loads(lead_fixture_response(SimpleNamespace(contract=artifact_bound), artifact_value, family=0, logical_root=7))
         self.assertFalse(artifact_bound.rule_graph.findings(artifact_native))
         self._require_fixture_field_neighbors(artifact_bound, artifact_native)
         self.assertEqual(json.loads(artifact_bound.decode_response(json.dumps(artifact_native)).answer_json), {
@@ -2679,7 +2679,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         workflow_work = lead_fixture_response(SimpleNamespace(contract=workflow_bound), {'response_type': 'specialist_consultation_proposal',
             'response_text': 'Invalid current work.',
             'response_details': {'task_scope': lead_fixture_scope(workflow_scope),
-                'specialist_consultation_proposal': {**current_assignments, 'shared_premises': []}}}, family=0, branch_key=workflow_bound.factory.rule_seed.contract_id + ":family:5")
+                'specialist_consultation_proposal': {**current_assignments, 'shared_premises': []}}}, family=0, logical_root=5)
         self.assertTrue(workflow_bound.rule_graph.findings(json.loads(workflow_work)))
         from story_writing_agents.provider_wire import require_schema_projection, WireShapeError
         integer = {'type': 'object', 'properties': {'n': {'type': 'integer', 'enum': [1]}},
@@ -3386,7 +3386,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
 
         from collections import Counter
-        def require_final_case(seed, supplied, expected, *, branch, constraints=declared,
+        def require_final_case(seed, supplied, expected, *, branch=None, logical_root=None, constraints=declared,
                                offers=call.contract.offers, group=None):
             owner = replace(factory, rule_seed=seed, constraints=constraints)
             selected = current_group(owner, offers, group) if group is not None else owner.for_offer(offers)
@@ -3410,7 +3410,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             require_census(selected,
                 {seed.contract_id + ':family:' + str(i) for i in family_numbers})
             fixture_call = SimpleNamespace(contract=selected)
-            native = json.loads(lead_fixture_response(fixture_call, supplied, family=0, branch_key=branch))
+            native = json.loads(lead_fixture_response(fixture_call, supplied, family=0, branch_key=branch, logical_root=logical_root))
             self.assertFalse(selected.rule_graph.findings(native))
             self._require_fixture_field_neighbors(selected, native)
             message_utf8_budget = 32768
@@ -3439,7 +3439,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 selected.decode_response(json.dumps(bad))
             require_current_correction(selected, rejected.exception,
                 native['agent_action']['schema_id'], native['agent_action']['task_result']['schema_id'])
-            if group is not None: require_group_case(owner, offers, supplied, expected, group)
+            if group is not None: require_group_case(owner, offers, supplied, expected, group, logical_root=logical_root)
             return selected, native
         # Handwritten semantic expectations; schemas only supply current issued identities.
         profile_record = { 'schema_version': 3, 'activity': 'review', 'intent': 'authoring', 'target_paths': [],
@@ -3477,7 +3477,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                  'recommended_action': {'kind': kind, 'instruction': 'Use supplied concern.',
                                         'source_ids': ['user_input'],
                                         'target_paths' if choices is None else selector: selected}},
-                branch='lead-response-v7:family:0', constraints=recommendation_facts,
+                logical_root=0, constraints=recommendation_facts,
                 group={'prepare_artifact': 'prepare.artifact',
                        'prepare_consultation': 'prepare.consultation.authoring'}[kind])
             self.assertEqual({item.owner.variant.branch_key
@@ -3535,7 +3535,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     'task_instructions': 'Use supplied concern.',
                     'source_ids': finite_fixture_selection(issued_sources, ('user_input',)),
                     'specialist_ids': finite_fixture_selection(tuple(SPECIALIST_IDS), (EXECUTION_SPECIALIST,))},
-                'authoring_assessment': pending_assessment}}, family=0, branch_key=recommendation_bound.factory.rule_seed.contract_id + ':family:3'))
+                'authoring_assessment': pending_assessment}}, family=0, logical_root=3))
         self.assertFalse(recommendation_bound.rule_graph.findings(actual_recommendation))
         actual_decoded = recommendation_bound.decode_response(json.dumps(actual_recommendation, ensure_ascii=False))
         self.assertEqual(json.loads(actual_decoded.answer_json), {
@@ -3575,7 +3575,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     'intent': 'authoring', 'activity': 'workflow', 'target_paths': [],
                     'domains': [], 'task': task['task_id'] + '@1', 'contributions': [], 'dependency_slots': []},
                  'objective_intent': {'action': 'cancel', 'objective_id': 'fixture-objective'}},
-                branch='lead-response-v7:family:' + ('0' if kind == 'answer' else '2'), constraints=workflow_facts,
+                logical_root=0 if kind == 'answer' else 2, constraints=workflow_facts,
                 group={'answer': 'answer.workflow', 'critique': 'critique.workflow'}[kind])
         workflow_expected = { 'intent': 'authoring', 'activity': 'workflow', 'target_paths': [],
             'domains': [], 'task': task['task_id'] + '@1', 'contributions': [], 'dependency_slots': []}
@@ -3591,7 +3591,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 fixed_targets=True, fixed_dependencies=True), 'document_change_request_update': native_update}},
                 {'kind': 'question', 'message': 'Clarify the pending target.',
                 'authoring_scope': workflow_expected, 'objective_intent': expected_update},
-                branch='lead-response-v7:family:1', constraints=workflow_facts, group='question.workflow')
+                logical_root=1, constraints=workflow_facts, group='question.workflow')
             wrong_step = copy.deepcopy(clarify_packet)
             wrong_step['agent_action']['task_result']['response_details'][ 'document_change_request_update'][
                 'requested_workflow_step'] = 'draft_document_change_proposal'
@@ -3691,7 +3691,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         free_packet = json.loads(lead_fixture_response(SimpleNamespace(contract=free_bound), {
             'response_type': 'clarification_question', 'response_text': 'Retain the declared dependency subset.',
             'response_details': {'task_scope': lead_fixture_scope_record(free_record)}},
-            family=0, branch_key=free_seed.contract_id + ':family:1'))
+            family=0, logical_root=1))
         free_schema = native_schemas[id(free_bound)]
         free_native = (free_schema, AntigravityAdapter.native_output_schema(free_schema))
         for schema, lowering in zip(free_native, ('identity', 'integer_singleton_bounds')):
@@ -3754,7 +3754,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                             "question.workflow" if activity == "workflow" else "question." + intent)
                         fixture_call = SimpleNamespace(contract=profile_binding)
                         complete = json.loads(lead_fixture_response(
-                            fixture_call, base, family=0, branch_key=stem + ':family:1'))
+                            fixture_call, base, family=0, logical_root=1))
                         self.assertEqual(not bool(profile_binding.rule_graph.findings(
                             complete)), legal, (intent, activity, domains, roles))
                         if not legal: continue
@@ -3833,7 +3833,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                     invalid = json.loads(lead_fixture_response(SimpleNamespace(contract=invalid_binding), {**base,
                                         'response_type': 'specialist_consultation_proposal',
                                         'response_details': {'task_scope': invalid_scope, **extra}}, family=0,
-                                        branch_key=stem + ':family:' + str(5 if intent == 'authoring' else 6)))
+                                        logical_root=5 if intent == 'authoring' else 6))
                                     self.assertTrue(invalid_binding.rule_graph.findings(invalid))
                                     with self.assertRaises(ValueError):
                                         invalid_binding.decode_response(json.dumps(invalid))
@@ -3896,17 +3896,17 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                             packet = json.loads(lead_fixture_response(fixture_call,
                                 {**base, 'response_type': response_kind,
                                  'response_details': {'task_scope': case_native_scope, **extra}},
-                                family=0, branch_key=stem + ':family:' + str(family)))
+                                family=0, logical_root=family))
                             self.assertFalse(profile_binding.rule_graph.findings(packet))
                             decoded_profile = profile_binding.decode_response(json.dumps(packet))
                             self.assertEqual(json.loads(decoded_profile.answer_json),
                                 {'kind': semantic_kind, 'message': base['response_text'],
                                  'authoring_scope': case_expected_scope, **semantic_extra})
-                            require_group_case(profile_binding.factory, profile_binding.offers,
+                            require_group_case(profile_owner, call.contract.offers,
                                 {**base, 'response_type': response_kind,
                                  'response_details': {'task_scope': case_native_scope, **extra}},
                                 {'kind': semantic_kind, 'message': base['response_text'],
-                                 'authoring_scope': case_expected_scope, **semantic_extra}, profile_group, typed=family != 7)
+                                 'authoring_scope': case_expected_scope, **semantic_extra}, profile_group, typed=family != 7, logical_root=family)
                             if family in (5, 6):
                                 profile_assignments = packet["agent_action"]["task_result"][
                                     "response_details"]["specialist_consultation_proposal"][ "assignments"]
@@ -3947,14 +3947,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                     operation = {'change_type': kind, 'evidence_id': identity}
                                     if kind == 'rename_artifact':
                                         operation['proposed_destination_path'] = future_path
-                                    invalid = json.loads(lead_fixture_response(fixture_call, {**base,
+                                    receipt_bound = current_group(profile_owner, call.contract.offers, 'artifact.changes')
+                                    invalid = json.loads(lead_fixture_response(SimpleNamespace(contract=receipt_bound), {**base,
                                         'response_type': 'artifact_change_proposal', 'response_details': {
                                             'task_scope': case_native_scope, 'authoring_assessment': native_assessment,
                                             'artifact_change_proposal': {'artifact_changes': [operation]}}},
-                                        family=0, branch_key=stem + ':family:7'))
-                                    self.assertTrue(profile_binding.rule_graph.findings(invalid))
+                                        family=0, logical_root=7))
+                                    self.assertTrue(receipt_bound.rule_graph.findings(invalid))
                                     with self.assertRaises(ValueError):
-                                        profile_binding.decode_response(json.dumps(invalid))
+                                        receipt_bound.decode_response(json.dumps(invalid))
                         bad_task = copy.deepcopy(complete)
                         bad_task['agent_action']['task_result']['response_details'][
                             'task_scope']['task']['id'] = 'not-current-task'
@@ -4011,7 +4012,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             unit_question = json.loads(lead_fixture_response(unit_call, { 'response_type': 'clarification_question',
                 'response_text': 'Inspect the READ scope.',
                 'response_details': {'task_scope': unit_native_scope}}, family=0,
-                branch_key=unit_seed.contract_id + ':family:1'))
+                logical_root=1))
             self.assertFalse(unit_bound.rule_graph.findings(unit_question))
             unit_decoded = unit_bound.decode_response(json.dumps(unit_question))
             self.assertEqual(json.loads(unit_decoded.answer_json)['kind'], 'question')
@@ -4037,7 +4038,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             unit_answer = json.loads(lead_fixture_response(unit_call, { 'response_type': 'answer',
                 'response_text': 'The canonical READ supports inspection.',
                 'response_details': {'task_scope': unit_native_scope}}, family=0,
-                branch_key=unit_seed.contract_id + ':family:0'))
+                logical_root=0))
             self.assertFalse(unit_bound.rule_graph.findings(unit_answer))
             unit_decoded = unit_bound.decode_response(json.dumps(unit_answer))
             self.assertEqual(json.loads(unit_decoded.answer_json),
@@ -4048,7 +4049,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             observed_generation = require_group_case(unit_bound.factory, unit_offers,
                 {'response_type': 'answer', 'response_text': 'The canonical READ supports inspection.',
                  'response_details': {'task_scope': unit_native_scope}}, json.loads(unit_decoded.answer_json),
-                'answer.observed_facts')
+                'answer.observed_facts', logical_root=0)
             for schema in unit_native_schemas:
                 self.assertFalse(diagnose_json_text(json.dumps(unit_answer), schema))
             for authority in ('proposal_drafting_request', 'assignments',
@@ -4124,7 +4125,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             {"message": "Report this supplied fact only.", "authoring_scope": {"intent": "review_only",
                 "activity": "review", "target_paths": [], "domains": ["plot_structure"],
                 "task": task["task_id"] + "@1", "contributions": [{"domain": "plot_structure",
-                    "role": "draft_owner"}], "dependency_slots": []}}, "answer.observed_facts")
+                    "role": "draft_owner"}], "dependency_slots": []}}, "answer.observed_facts", logical_root=0)
 
         operation_record = copy.deepcopy(profile_record)
         operation_facts = replace(declared, scope=authoring_scope_from_dict(operation_record))
@@ -4153,8 +4154,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         operation_owner = replace(factory, constraints=operation_facts, rule_seed=operation_seed)
         legacy_operations = current_group(operation_owner, operation_offers, "artifact.changes")
         self.assertFalse(legacy_operations.rule_graph.findings(json.loads(lead_fixture_response(
-            SimpleNamespace(contract=legacy_operations), mixed_supplied, family=0))))
-        mixed_group = require_group_case(operation_owner, operation_offers, mixed_supplied, mixed_domain, "artifact.changes")
+            SimpleNamespace(contract=legacy_operations), mixed_supplied, family=0, logical_root=7))))
+        mixed_group = require_group_case(operation_owner, operation_offers, mixed_supplied, mixed_domain, "artifact.changes", logical_root=7)
         self.assertEqual(mixed_group.prepared_compilation.constraints.diagnose(json.dumps(mixed_domain)), ())
         preparation_record = {**profile_record, 'activity': 'draft', 'target_paths': [future_path], 'contributions': [
                                   {'domain': 'tone_execution', 'role': 'draft_owner'}]}
@@ -4327,7 +4328,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 'writing_task_scope': None, 'core_document_assessment': native_readiness}}, {
             'kind': 'answer', 'message': 'Report current missing readiness facts.',
             'authoring_scope': None, 'core_document_assessment': expected_readiness},
-            branch='lead-response-v7:family:9', constraints=readiness_facts, group='readiness.core_documents')
+            logical_root=9, constraints=readiness_facts, group='readiness.core_documents')
         readiness_details = readiness_packet['agent_action']['task_result']['response_details']
         assessment_path = ('agent_action', 'task_result', 'response_details', 'core_document_assessment')
         readiness_invalid = ((('source_basis_ref',), 'a-different-source-basis'),
@@ -4361,13 +4362,14 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         free_native_readiness['document_judgments'] = { row['document_path']: {**row, 'criteria_findings': {
                 criterion['criterion_id']: criterion for criterion in row['criteria_findings']}}
             for row in free_native_readiness['document_judgments']}
-        free_ready_packet = json.loads(lead_fixture_response(SimpleNamespace(contract=profile_binding), {
+        free_ready_bound = current_group(profile_owner, call.contract.offers, 'readiness.core_documents')
+        free_ready_packet = json.loads(lead_fixture_response(SimpleNamespace(contract=free_ready_bound), {
             'response_type': 'core_document_readiness_assessment',
             'response_text': 'Report current missing readiness facts.',
             'response_details': {'writing_task_scope': None, 'core_document_assessment': free_native_readiness}},
-            family=0, branch_key=stem + ':family:9'))
-        self.assertFalse(profile_binding.rule_graph.findings(free_ready_packet))
-        self.assertEqual(json.loads(profile_binding.decode_response(json.dumps(free_ready_packet)).answer_json), {
+            family=0, logical_root=9))
+        self.assertFalse(free_ready_bound.rule_graph.findings(free_ready_packet))
+        self.assertEqual(json.loads(free_ready_bound.decode_response(json.dumps(free_ready_packet)).answer_json), {
             'kind': 'answer', 'message': 'Report current missing readiness facts.',
             'authoring_scope': None, 'core_document_assessment': free_readiness})
         self._require_fixture_field_neighbors(profile_binding, free_ready_packet)
@@ -4435,7 +4437,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     'instruction': 'Assess this premise only.', 'mode': 'premise_analysis',
                     'input_ids': ['user_input']}], 'premise_decision': {
                     'question_id': 'fixture-question', 'slot_id': 'choice', 'question': 'Which route?',
-                    'dependent_domains': ['plot_structure']}}}, branch='lead-response-v8:family:0', group='premise.analysis')
+                    'dependent_domains': ['plot_structure']}}}, logical_root=0, group='premise.analysis')
         premise_summary = PremiseDecisionConstraints(question_id='fixture-question',
             reply_alternatives=(('reply-A', ('first', 'second')), ('reply-B', ()),
                                 ('reply-C', ('support',))), unavailable_reply_ids=('reply-B',))
@@ -4718,7 +4720,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             constraints=preliminary_facts)
         preliminary_bound = current_group(replace(factory, rule_seed=preliminary_seed,
             constraints=preliminary_facts), preliminary_offers, "answer.observed_facts")
-        preliminary_keys = set()
+        preliminary_roots = set()
         for candidate_member in preliminary_bound.semantic_index.contracts:
             if type(candidate_member.owner) is not LeadResultContractOwner:
                 continue
@@ -4726,10 +4728,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             details = fixture_schema_node(graph, graph['properties']['response_details'])
             details = fixture_schema_node(graph, details.get('anyOf', (details,))[0])
             if 'preliminary_review' in details['properties']:
-                preliminary_keys.add(
-                    preliminary_bound.factory.rule_seed.contract_id + ':family:' + str(candidate_member.owner.variant.logical_root))
-        self.assertEqual(len(preliminary_keys), 1)
-        preliminary_key, = preliminary_keys
+                preliminary_roots.add(
+                    candidate_member.owner.variant.logical_root)
+        self.assertEqual(len(preliminary_roots), 1)
+        preliminary_root, = preliminary_roots
         offered_targets = tuple(map(json.loads,
             dict(preliminary_bound.semantic_index.policy.choices)["preliminary_targets"]))
         native_target_ids = tuple(item["input_id"] for item in offered_targets)
@@ -4756,7 +4758,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 'response_text': 'This is a bounded preliminary finding.',
                 'response_details': {'task_scope': lead_fixture_scope_record(profile_record,
                     fixed_targets=True, fixed_dependencies=True), 'preliminary_review': record}},
-                family=0, branch_key=preliminary_key))
+                family=0, logical_root=preliminary_root))
         native_preliminary = preliminary_frame(intent)
         self.assertEqual(preliminary_bound.rule_graph.findings(native_preliminary), ())
         expected_preliminary = {
@@ -4818,7 +4820,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             constraints=staged_facts)
         staged_bound = current_group(replace(factory, rule_seed=staged_seed,
             constraints=staged_facts), call.contract.offers, "consultation.authoring.review")
-        stage_keys = set()
+        stage_roots = set()
         for candidate_member in staged_bound.semantic_index.contracts:
             if type(candidate_member.owner) is not LeadResultContractOwner:
                 continue
@@ -4836,10 +4838,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             plan_rule = fixture_schema_node(graph, plan_rule)
             work_rule = fixture_schema_node(graph, plan_rule['properties']['work_kind'])
             if 'deep_review' in work_rule['enum']:
-                stage_keys.add(
-                    staged_bound.factory.rule_seed.contract_id + ':family:' + str(candidate_member.owner.variant.logical_root))
-        self.assertEqual(len(stage_keys), 1)
-        stage_key, = stage_keys
+                stage_roots.add(
+                    candidate_member.owner.variant.logical_root)
+        self.assertEqual(len(stage_roots), 1)
+        stage_root, = stage_roots
         stage_plan = {
             'stage': 'specialist_work', 'work_kind': 'deep_review',
             'task_id': task['task_id'], 'task_revision': 1,
@@ -4880,7 +4882,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             'response_text': 'Review the motive before deciding whether to change the story.',
             'response_details': {'task_scope': lead_fixture_scope_record(staged_record,
                 fixed_targets=True, fixed_dependencies=True),
-                'specialist_consultation_proposal': allocation}}, family=0, branch_key=stage_key))
+                'specialist_consultation_proposal': allocation}}, family=0, logical_root=stage_root))
         self.assertEqual(staged_bound.rule_graph.findings(staged_packet), ())
         staged_decoded = staged_bound.decode_response(json.dumps(staged_packet))
         staged_value = json.loads(staged_decoded.answer_json)

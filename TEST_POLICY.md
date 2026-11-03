@@ -152,17 +152,17 @@ outside the canonical deterministic suite and ordinary CI.
 
 ### #838의 직접 1차 검토·단계 배정 회귀 소스 배정
 
-사용자의 필요시 테스트 소스 예산 확대 허용을 정확한 **147338→148651**
+사용자의 필요시 테스트 소스 예산 확대 허용을 정확한 **147338→148662**
 전환에 적용한다. 최신 main 통합을 포함한 실제 배정은 다음과 같다.
 
 | 소스 구분 | 청구 행 수 |
 | --- | ---: |
-| `tests/test*.py`의 비어 있지 않은 비주석 행 | 147512 |
-| 승인된 fixture·실제 검증 helper | 1139 |
-| 전체 상한 | 148651 |
+| `tests/test*.py`의 비어 있지 않은 비주석 행 | 147514 |
+| 승인된 fixture·실제 검증 helper | 1148 |
+| 전체 상한 | 148662 |
 
-여유는 추가하지 않는다. helper1139행은 기존1034행, 이번 전환 정책1행,
-실제 native 도구819행이 기존757행을 대체하는 순증62행과 공유 fixed-business fixture42행을 포함한다.
+여유는 추가하지 않는다. helper1148행은 기존1034행, 이번 전환 정책1행,
+실제 native 도구819행이 기존757행을 대체하는 순증62행과 공유 fixed-business fixture42행과 명시적 typed-root selector9행을 포함한다.
 배정148455 이후131행은 기존 W의 현재 SELECT→GEN 검증 정렬134행과
 기존 correction fixture의 두 SELECT 호출 정렬에서 줄어든3행이다.
 그 뒤 SOURCE-only fixture57행을 추가했다. 이는 현재 compiler의 typed business
@@ -173,6 +173,9 @@ SOURCE 조합을 공유 helper로 이동하며 raw34행을 줄이고 helper42행
 청구하여 순증8행을 더했다. 같은 owner 집합은 post-selection 회복 unit에도
 사용한다. 이 unit은 SELECT 완료를 주장하지 않고 기존 cap2·두 provider·
 실패/finalizer 검증을 보존한다.
+현재 GEN의 실제 owner.logical_root를 선택하는 정렬에서 raw2행·helper9행을
+추가했다. 기존 값·부정 입력·모든 같은-root partition과 미지정 default 경로는
+유지하며 opaque identity 문자열의 호환 해석을 추가하지 않는다.
 전체 family의 canonical census와 실제 각 선택 GEN의 strict·바인딩·바이트
 경계·부정 사례를 유지한다. 2527개 ID, ID별 subTest 상한,18000/3600초,
 worker·정리·권한 검증은 변경하지 않는다.
