@@ -53,9 +53,7 @@ from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
 
 
 class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
-    async def test_runtime_artifact_and_local_commit_events_are_complete_and_safe(
-        self,
-    ) -> None:
+    async def test_runtime_artifact_and_local_commit_events_are_complete_and_safe( self, ) -> None:
         from tests.test_lead_story_commit import LeadStoryCommitTests
 
         case = LeadStoryCommitTests("test_request_is_inspectable_and_reject_is_zero_git_mutation")
@@ -153,14 +151,10 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("provider_private", rendered)
             details = ("Original response:\n$.action.result.message: expected nonempty text",
                        "Repair response:\n$.action.result.kind: expected an allowed value")
-            notice = replace(events[0], kind=CollaborationEventKind.MESSAGE,
-                             sender=RUNTIME, recipient=USER,
-                             payload=CollaborationMessagePayload(
-                                 details[0], validation_details=details,
-                                 validation_invocation_id="invocation_1",
-                                 validation_call_id="call_1"))
-            for component in (
-                _collaboration_view.project_collaboration_event(notice, show_details=False),
+            notice = replace(events[0], kind=CollaborationEventKind.MESSAGE, sender=RUNTIME, recipient=USER,
+                             payload=CollaborationMessagePayload( details[0], validation_details=details,
+                                 validation_invocation_id="invocation_1", validation_call_id="call_1"))
+            for component in ( _collaboration_view.project_collaboration_event(notice, show_details=False),
                 _collaboration_view.project_lead_turn_result(replace(reviewed, validation_details=details), show_details=False),
             ):
                 text = render_component(component, _capability(CapabilityProfile.LINE, width=120)).text
@@ -287,8 +281,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
 
         from story_writing_agents.agent_context.accounting import (
             ProviderCallAccounting, ProviderCallState, ProviderUsageObservation, ProviderUsageScope,
-            account_provider_payload,
-        )
+            account_provider_payload, )
         _, metrics_payload = account_provider_payload({"type": "object"}, {})
         first_usage = ProviderUsage(25043, 149, 0)
         second_usage = ProviderUsage(53410, 298, 0)
@@ -297,10 +290,8 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             session_ref="footer-session", prefix_ref="footer-prefix-1", session_start=True)
         second_observation = ProviderUsageObservation(
             second_usage, ProviderUsageScope.SESSION_CUMULATIVE, "native-token-count",
-            session_ref="footer-session", prefix_ref="footer-prefix-2",
-            previous_prefix_ref="footer-prefix-1")
-        first_accounting = ProviderCallAccounting(
-            metrics_payload, state=ProviderCallState.SUBMITTED,
+            session_ref="footer-session", prefix_ref="footer-prefix-2", previous_prefix_ref="footer-prefix-1")
+        first_accounting = ProviderCallAccounting( metrics_payload, state=ProviderCallState.SUBMITTED,
             actual_transport_utf8_bytes=metrics_payload.payload_utf8_bytes,
             usage=first_usage, usage_observation=first_observation)
         second_accounting = replace(first_accounting, usage=second_usage,
@@ -331,6 +322,67 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
 
 
 
+        from story_writing_agents import conversations as c
+        # Issue #912: sess-2 exchanges 29/32/35/38/41; native prefix hashes use fixture aliases.
+        totals = ((32375, 174), (94930, 283), (163631, 353), (238684, 537), (318614, 1438))
+        five_calls = []
+        for ordinal, (input_tokens, output_tokens) in enumerate(totals, 1):
+            raw_usage = ProviderUsage(input_tokens, output_tokens, 0)
+            observation = ProviderUsageObservation(raw_usage,
+                ProviderUsageScope.UNKNOWN if ordinal < 3 else ProviderUsageScope.SESSION_CUMULATIVE,
+                "codex.turn.completed.usage" if ordinal < 3 else "codex.turn.completed+native.token_count.total_and_last",
+                session_ref=None if ordinal < 3 else "five-call-session",
+                prefix_ref=None if ordinal < 3 else f"five-prefix-{ordinal}",
+                previous_prefix_ref=None if ordinal < 3 else f"five-prefix-{ordinal - 1}")
+            measured = replace(first_accounting, usage=raw_usage, usage_observation=observation)
+            five_calls.append(replace(lead, event_id=f"usage_event_{ordinal}", payload=replace(lead.payload,
+                call_id=f"usage_call_{ordinal}", ordinal=ordinal, usage=raw_usage, accounting=measured,
+                call_kind=CollaborationProviderCallKind.INITIAL if ordinal == 1 else CollaborationProviderCallKind.CONTINUATION)))
+        five_calls = tuple(five_calls)
+        whole = response_usage(five_calls, **scope)
+        last = response_usage(five_calls, **scope, call_id="usage_call_5")
+        self.assertEqual(whole, ResponseUsage())
+        self.assertEqual(last, ResponseUsage(79930, 901))
+        self.assertEqual((whole.scope, whole.call_count, last.scope, last.call_count), ("invocation", 5, "physical_call", 1))
+        self.assertIn("Usage scope: physical call", response_footer("accepted", last))
+        self.assertIn("Usage scope: invocation (5 calls)", response_footer("question", whole))
+        missing = response_usage(five_calls, **scope, call_id="missing_call")
+        self.assertEqual((missing.scope, missing.call_count), ("physical_call", 1))
+        shared_text = "The same text has independent provider and host outcomes."
+        for acceptance in (task.LeadPublicResponseAcceptance.ACCEPTED, task.LeadPublicResponseAcceptance.REJECTED):
+            public = task.LeadPublicResponse(invocation_id=lead.payload.invocation_id, call_id="usage_call_5", ordinal=5,
+                call_kind=five_calls[-1].payload.call_kind.value, acceptance=acceptance, response_text=shared_text,
+                material_digest=exploration.material_sha256(shared_text))
+            ref = task.LeadMaterialRef(session_id=lead.session_id, conversation_id=lead.conversation_id, event_id="usage_public",
+                kind=task.LeadMaterialKind.PUBLIC_RESPONSE, material_digest=public.material_digest)
+            question = c.LeadTurnResult(lead.session_id, lead.conversation_id, lead.turn_id, lead.step_id,
+                c.LeadOutcomeKind.QUESTION, shared_text, None, None, None, c.CollaborationNextAction.REPLY_TO_LEAD,
+                evidence=c.CollaborationLeadEvidence(c.LeadOutcomeScope.WORKFLOW_META, c.LeadEvidenceStatus.NOT_APPLICABLE, ()),
+                public_responses=(c.LeadPublicResponseView(ref, public),), provider_invocation_id=lead.payload.invocation_id)
+            from tests.collaboration_contract_fixture import make_batch, store_batch
+            drafts = [replace(lead.to_draft(), event_id="usage_user", kind=CollaborationEventKind.MESSAGE,
+                sender=USER, recipient=LEAD, payload=CollaborationMessagePayload("Show token attribution metadata."))]
+            for call in five_calls:
+                draft = call.to_draft()
+                prepared = replace(call.payload, state=CollaborationProviderCallState.PREPARED, usage=None, accounting=None)
+                drafts.extend((replace(draft, event_id="prepared_" + call.event_id, payload=prepared), draft))
+            public_draft = replace(lead.to_draft(), event_id=ref.event_id,
+                kind=CollaborationEventKind.LEAD_PUBLIC_RESPONSE, sender=RUNTIME, recipient=USER,
+                payload=CollaborationLeadPublicResponsePayload(public))
+            judgment = c.CollaborationLeadJudgmentPayload(c.LeadOutcomeKind.QUESTION, shared_text, question.evidence,
+                provider_invocation_id=lead.payload.invocation_id)
+            drafts.extend((public_draft, replace(public_draft, event_id="usage_question", kind=CollaborationEventKind.MESSAGE,
+                sender=LEAD, payload=judgment)))
+            valid_history = store_batch((), make_batch((), "five_call_metadata", *drafts))
+            self.assertEqual(project_collaboration_history(valid_history).physical_calls_spent, 5)
+            rendered = render_component(_collaboration_view.project_lead_turn_result(question,
+                public_response_events=valid_history), _capability(CapabilityProfile.LINE, width=120)).text
+            self.assertIn("Outcome: " + acceptance.value, rendered)
+            self.assertIn("Outcome: question", rendered)
+            self.assertIn("Input tokens: 79,930 | Output tokens: 901", rendered)
+            self.assertIn("Input tokens: unavailable | Output tokens: unavailable", rendered)
+            self.assertIn("Usage scope: physical call", rendered)
+            self.assertIn("Usage scope: invocation (5 calls)", rendered)
 
-if __name__ == "__main__":
-    unittest.main()
+
+if __name__ == "__main__": unittest.main()

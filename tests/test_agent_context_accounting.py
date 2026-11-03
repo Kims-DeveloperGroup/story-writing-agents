@@ -263,52 +263,44 @@ class ProviderPayloadAccountingTests(unittest.TestCase):
             ContextComponentBytes(ContextComponentKind.ROLE_SYSTEM_PROMPT, 7), )
         payload = { "references": [ {
                     "reference": { "path": "manuscript/part-01/a.md", "line_range": {"start": 1, "end": 1}, },
-                    "content": '"한🙂"\n',
-                } ] }
-        _encoded, payload_accounting = account_provider_payload(
-            {"type": "object"},
-            payload,
-            component_paths={
-                ("references",): ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR,
-                ("references", 0, "content"): (
-                    ContextComponentKind.MANDATORY_REFERENCE_CONTENT
-                ),
-            },
-            mandatory_reference_paths=(("references", 0, "content"),),
-        )
-        call = ProviderCallAccounting(
-            payload_accounting,
-            binding,
-            ProviderCallState.SUBMITTED,
+                    "content": '"한🙂"\n', } ] }
+        _encoded, payload_accounting = account_provider_payload( {"type": "object"}, payload,
+            component_paths={ ("references",): ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR,
+                ("references", 0, "content"): ( ContextComponentKind.MANDATORY_REFERENCE_CONTENT ), },
+            mandatory_reference_paths=(("references", 0, "content"),), )
+        call = ProviderCallAccounting( payload_accounting, binding, ProviderCallState.SUBMITTED,
             actual_transport_utf8_bytes=payload_accounting.payload_utf8_bytes, )
         self.assertEqual(call.binding_instruction_utf8_bytes, 18)
-        self.assertEqual(
-            call.gross_model_input_utf8_bytes,
+        self.assertEqual( call.gross_model_input_utf8_bytes,
             18 + payload_accounting.serialized_input_utf8_bytes, )
-        self.assertEqual(
-            call.non_reference_model_input_utf8_bytes,
-            call.gross_model_input_utf8_bytes
+        self.assertEqual( call.non_reference_model_input_utf8_bytes, call.gross_model_input_utf8_bytes
             - len(payload["references"][0]["content"].encode("utf-8")), )
-        self.assertEqual(
-            call.submitted_model_input_utf8_bytes,
-            call.gross_model_input_utf8_bytes, )
-        self.assertIsNone(
-            ProviderCallAccounting(payload_accounting).submitted_model_input_utf8_bytes )
+        self.assertEqual( call.submitted_model_input_utf8_bytes, call.gross_model_input_utf8_bytes, )
+        self.assertIsNone( ProviderCallAccounting(payload_accounting).submitted_model_input_utf8_bytes )
 
         raw_first = ProviderUsage(25043, 149, 0)
         raw_second = ProviderUsage(53410, 298, 0)
         first = ProviderUsageObservation(
             raw_first, ProviderUsageScope.SESSION_CUMULATIVE, "native-token-count",
-            session_ref="fixture-session", prefix_ref="prefix-1", session_start=True,
-        )
+            session_ref="fixture-session", prefix_ref="prefix-1", session_start=True, )
         second = ProviderUsageObservation(
             raw_second, ProviderUsageScope.SESSION_CUMULATIVE, "native-token-count",
-            session_ref="fixture-session", prefix_ref="prefix-2",
-            previous_prefix_ref="prefix-1",
-        )
+            session_ref="fixture-session", prefix_ref="prefix-2", previous_prefix_ref="prefix-1", )
         self.assertEqual(normalized_provider_usage(first), raw_first)
         self.assertEqual(normalized_provider_usage(second, first), ProviderUsage(28367, 149, 0))
         self.assertEqual(second.raw, ProviderUsage(53410, 298, 0))
+        resumed = replace(first, session_start=False)
+        self.assertIsNone(normalized_provider_usage(resumed))
+        self.assertEqual(normalized_provider_usage(second, resumed), ProviderUsage(28367, 149, 0))
+        unavailable = replace(resumed, scope=ProviderUsageScope.UNKNOWN,
+            source="codex.turn.completed.usage:native_request_match_invalid")
+        self.assertEqual(unavailable.raw, raw_first)
+        self.assertIsNone(normalized_provider_usage(second, unavailable))
+        baseline = replace(second, previous_prefix_ref=None)
+        self.assertIsNone(normalized_provider_usage(baseline))
+        recovered = replace(second, raw=ProviderUsage(90000, 900, 0), prefix_ref="prefix-3", previous_prefix_ref="prefix-2")
+        self.assertEqual(normalized_provider_usage(recovered, baseline), ProviderUsage(36590, 602, 0))
+        self.assertIsNone(normalized_provider_usage(recovered, replace(baseline, session_ref="different-session")))
         normalized = (normalized_provider_usage(first), normalized_provider_usage(second, first))
         self.assertEqual(tuple(sum(getattr(value, name) for value in normalized)
                                for name in ("input_tokens", "output_tokens")), (53410, 298))
@@ -318,32 +310,25 @@ class ProviderPayloadAccountingTests(unittest.TestCase):
         self.assertEqual(normalized_provider_usage(zero), ProviderUsage(0, 0, 0))
         self.assertIsNone(normalized_provider_usage(replace(call_usage, scope=ProviderUsageScope.UNKNOWN)))
         self.assertIsNone(normalized_provider_usage(second))
-        for unproven in (
-            replace(first, session_start=False),
-            replace(second, unit="bytes"),
-            replace(second, source="another-source"),
-            replace(second, session_ref="another-session"),
+        for unproven in ( replace(first, session_start=False), replace(second, unit="bytes"),
+            replace(second, source="another-source"), replace(second, session_ref="another-session"),
             replace(second, previous_prefix_ref="unrelated-prefix"),
             replace(second, raw=ProviderUsage(25042, 298, 0)),
-            replace(second, raw=ProviderUsage(53410, 148, 0)),
-        ):
+            replace(second, raw=ProviderUsage(53410, 148, 0)), ):
             self.assertIsNone(normalized_provider_usage(unproven, first), unproven)
         self.assertIsNone(normalized_provider_usage(second, replace(first, unit="bytes")))
         self.assertIsNone(normalized_provider_usage(second, replace(first, scope=ProviderUsageScope.CALL)))
         partial = replace(second, raw=ProviderUsage(output_tokens=298))
         self.assertEqual(normalized_provider_usage(partial, first), ProviderUsage(output_tokens=149))
-        with self.assertRaises(ValueError):
-            replace(second, session_start=True)
-        with self.assertRaises(ValueError):
-            replace(second, prefix_ref=None)
+        with self.assertRaises(ValueError): replace(second, session_start=True)
+        with self.assertRaises(ValueError): replace(second, prefix_ref=None)
         measured = replace(call, usage=raw_second, usage_observation=second, elapsed_ns=11)
         serialized = provider_call_accounting_to_object(measured)
         self.assertEqual(serialized["usage_observation"], {
             "raw": {"input_tokens": 53410, "output_tokens": 298, "cached_input_tokens": 0},
             "scope": "session_cumulative", "source": "native-token-count", "unit": "tokens",
             "session_ref": "fixture-session", "prefix_ref": "prefix-2",
-            "previous_prefix_ref": "prefix-1", "session_start": False,
-        })
+            "previous_prefix_ref": "prefix-1", "session_start": False, })
         restored = provider_call_accounting_from_object(copy.deepcopy(serialized))
         self.assertEqual(restored.usage, raw_second)
         self.assertEqual(restored.usage_observation, second)
@@ -354,8 +339,7 @@ class ProviderPayloadAccountingTests(unittest.TestCase):
             provider_call_accounting_to_object(call)), call)
 
         from story_writing_agents.agent_context.group_observation import (
-            LeadGroupObservation, LeadGroupObservationKind, LeadGroupTrace,
-        )
+            LeadGroupObservation, LeadGroupObservationKind, LeadGroupTrace, )
         from story_writing_agents.agent_context.group_reporting import group_trace_report
         from story_writing_agents.lead_schema_groups import LeadGroupPhase, LeadGroupRequestBasis
         basis = LeadGroupRequestBasis("metrics-operation", "metrics-result", "metrics-scope")
@@ -367,15 +351,13 @@ class ProviderPayloadAccountingTests(unittest.TestCase):
             LeadGroupObservation(LeadGroupObservationKind.BOUND, basis, LeadGroupPhase.GENERATE, "second",
                                  delivery_snapshot=canonical_provider_json({"mode": "delta"})),
             LeadGroupObservation(LeadGroupObservationKind.TERMINAL, basis, LeadGroupPhase.DONE,
-                                 terminal_code="accepted"),
-        )
+                                 terminal_code="accepted"), )
         trace = LeadGroupTrace("metrics-invocation", observed, "accepted", elapsed_ns=37)
         submitted_first = replace(call, usage=raw_first, usage_observation=first, elapsed_ns=7)
         submitted_second = replace(call, usage=raw_second, usage_observation=second, elapsed_ns=11)
         facts = (("prepared", ProviderCallAccounting(payload_accounting)),
                  ("first", submitted_first), ("second", submitted_second))
-        report = group_trace_report(trace, facts,
-                                    unmeasured_prepared_call_ids=("prepared",))
+        report = group_trace_report(trace, facts, unmeasured_prepared_call_ids=("prepared",))
         self.assertEqual(report["submitted_calls"], 2)
         self.assertEqual(report["prepared_only_calls"], 1)
         self.assertEqual((report["input_tokens"], report["output_tokens"], report["cached_input_tokens"]),

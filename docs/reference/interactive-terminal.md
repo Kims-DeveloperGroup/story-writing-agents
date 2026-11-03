@@ -147,6 +147,11 @@ input/output tokens reported by the provider's response usage object. Counts
 include distinct submitted calls for that response's exact invocation, including
 corrective retries; specialist replies show their own invocation's usage.
 Additional per-call public responses show the individual call's usage.
+Each footer identifies its usage scope as `physical call` or
+`invocation (N calls)`. A provider response keeps that call's acceptance outcome;
+the host's final response keeps its own workflow outcome and invocation total.
+For example, a last call can show measured tokens and `accepted` while the final
+question shows `unavailable` because an earlier call cannot be attributed.
 Missing or ambiguous counters display `unavailable`, while measured zero remains
 `0`. Counts are never estimated from message text or payload bytes, and cached
 input is not added to the provider's reported input count. Older records without
@@ -161,6 +166,7 @@ Illustrative output and counts:
 │ 2. Inspect the scope, then choose Confirm.                           │
 ├─ Metadata ───────────────────────────────────────────────────────────┤
 │ Outcome: answer | Elapsed: 00:00:03                                  │
+│ Usage scope: invocation (1 call)                                     │
 │ Input tokens: 128 | Output tokens: 64                                │
 ╰──────────────────────────────────────────────────────────────────────╯
 ```
