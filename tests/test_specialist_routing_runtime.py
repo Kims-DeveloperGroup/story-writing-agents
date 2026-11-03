@@ -3,7 +3,7 @@ from tests.test_lead_orchestration import _live_material, _live_task
 from tests.provider_wire_fixture import selection_plan
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
 from tests.provider_wire_fixture import ( result as wire_result, lead_fixture_bound_scope, lead_fixture_assignments,
-    finite_fixture_selection, lead_fixture_result, lead_fixture_response,)
+    finite_fixture_selection, lead_fixture_result, fixture_schema_node, lead_fixture_response,)
 from tests.provider_wire_fixture import author_positive_fixture_review_bases
 from story_writing_agents.agent_context.accounting import ProviderCallKind
 from story_writing_agents.lead_provider_contracts import LeadResultContractOwner
@@ -136,10 +136,22 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
         branch_key = None
         if call.contract.schema_group_phase is not None:
             group_id = call.contract.group_workflow.active_selection.group_id
+            shape = ("preliminary_review" in body, type(proposal) is dict and "stage_plan" in proposal)
+            def offered_shape(member):
+                schema = member.rule_graph.schema_value()
+                def object_rule(node):
+                    node = fixture_schema_node(schema, node)
+                    return fixture_schema_node(schema, node["anyOf"][0]) if "anyOf" in node else node
+                root = object_rule(schema)
+                details = object_rule(root["properties"]["response_details"])
+                allocation = details.get("properties", {}).get("specialist_consultation_proposal")
+                return ("preliminary_review" in details.get("required", ()), allocation is not None
+                    and "stage_plan" in object_rule(allocation).get("required", ()))
             branch_key, = {member.owner.variant.branch_key.partition(':partition:')[0]
                 for member in call.contract.semantic_index.contracts
                 if type(member.owner) is LeadResultContractOwner and member.owner.variant.group_id == group_id
-                and member.rule_graph.literal_at(('response_type',)) == response_type}
+                and member.rule_graph.literal_at(('response_type',)) == response_type
+                and offered_shape(member) == shape}
         return lead_fixture_response(call, lead_fixture_result(body),
             family=0 if branch_key is not None else native_inputs['family'], branch_key=branch_key,
             response_type=response_type)

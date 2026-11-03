@@ -84,6 +84,11 @@ from .structured_output_validation import (
 PREPARATION_INPUT_IDS = ("recommendation_request", "recommendation_decision")
 
 
+def preparation_original_input_ids(input_ids: tuple[str, ...]) -> tuple[str, ...]:
+    """Keep original requirements while removing only reserved preparation provenance."""
+    return tuple(identity for identity in input_ids if identity not in PREPARATION_INPUT_IDS)
+
+
 class LeadContractError(ValueError):
     """A rejected Lead choice described only by closed, content-free rules."""
 
@@ -2002,9 +2007,9 @@ class LeadProviderConstraints:
             if type(self.required_input_ids) is not tuple or not set(self.required_input_ids).issubset(self.input_ids):
                 raise ValueError("invalid original required-input binding")
             return self.required_input_ids
-        return tuple(item for item in self.input_ids
-            if (not self.preparation_kind or item not in PREPARATION_INPUT_IDS)
-            and not (self.adoption_intent is AuthoringIntent.REVIEW_ONLY and item == "user_input"))
+        original_ids = preparation_original_input_ids(self.input_ids) if self.preparation_kind else self.input_ids
+        return tuple(item for item in original_ids
+                     if not (self.adoption_intent is AuthoringIntent.REVIEW_ONLY and item == "user_input"))
 
     def _allocation_input_ids(self) -> tuple[str, ...]:
         required = self.required_assignment_input_ids()
@@ -3401,7 +3406,7 @@ class LeadGroupCompilation:
         object.__setattr__(self, "_declaration", self._snapshot())
 
     def _snapshot(self) -> tuple:
-        functions = (LeadProviderConstraints._current_wire_roots, LeadProviderConstraints.current_wire_variants, _compile_lead_families,
+        functions = (preparation_original_input_ids, LeadProviderConstraints._current_wire_roots, LeadProviderConstraints.current_wire_variants, _compile_lead_families,
                      _current_lead_rule_schema, _lead_codec_dependencies,
                      schema_group_for, LeadSchemaGroup.accepts,
                      type(self).matches_current, type(self).catalog, type(self).compile)

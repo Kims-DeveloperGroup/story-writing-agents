@@ -128,7 +128,7 @@ from typing import Callable, Any, AsyncContextManager, AsyncIterator, Mapping, c
 
 from .lead_provider_contracts import (
     LeadExplorationConstraints,
-    LeadContractError, LeadProviderConstraints, PREPARATION_INPUT_IDS,
+    LeadContractError, LeadProviderConstraints, PREPARATION_INPUT_IDS, preparation_original_input_ids,
     alternatives, canonical_assignments, canonical_scope, nonempty_text_schema, string_array, visible_text,
 )
 from .agents import (
@@ -10660,7 +10660,7 @@ class StoryRuntime:
         )
         validate_stage_routing(next_intent.authoring_scope, tuple(item.agent_id for item in next_intent.assignments), next_intent.stage_plan,
                 source_input_ids=tuple(item.input_id for item in inputs),
-                required_condition_ids=tuple(item.input_id for item in inputs),
+                required_condition_ids=(() if next_intent.stage_plan is None else self._stage_required_condition_ids(tuple(inputs), proposal.basis.evidence)),
                 affected_paths=self._authoring_affected_paths(tuple(inputs), proposal.basis.evidence))
         known_ids = {item.input_id for item in inputs}
         intent_ids = {
@@ -16776,6 +16776,24 @@ class StoryRuntime:
                 whole, None if receipt is None else receipt.evidence_id))
         return tuple(result)
 
+    @staticmethod
+    def _stage_required_condition_ids(
+        inputs: tuple[CollaborationInputRevision, ...],
+        evidence: CollaborationLeadEvidence | None,
+    ) -> tuple[str, ...]:
+        """Separate READ evidence and exact preparation provenance from task conditions."""
+        read_ids = {receipt.evidence_id for receipt in (() if evidence is None else evidence.receipts)
+                    if receipt.acquisition is CollaborationEvidenceAcquisition.READ}
+        original_ids = tuple(item.input_id for item in inputs if item.input_id not in read_ids)
+        provenance = tuple(item for item in inputs if item.input_id in PREPARATION_INPUT_IDS)
+        if not provenance:
+            return original_ids
+        if (len(provenance) != len(PREPARATION_INPUT_IDS)
+                or {item.input_id for item in provenance} != set(PREPARATION_INPUT_IDS)
+                or any(item.kind is not CollaborationInputKind.CONVERSATION_EVENT for item in provenance)):
+            raise ValueError("stage preparation provenance requires the exact runtime event pair")
+        return preparation_original_input_ids(original_ids)
+
     def _build_lead_proposal(
         self,
         *,
@@ -16821,9 +16839,7 @@ class StoryRuntime:
         if intent.authoring_scope is not None:
             validate_stage_routing(intent.authoring_scope, tuple(item.agent_id for item in intent.assignments), intent.stage_plan,
                 source_input_ids=tuple(item.input_id for item in inputs),
-                required_condition_ids=tuple(item.input_id for item in inputs
-                    if item.input_id not in {receipt.evidence_id for receipt in evidence.receipts
-                                           if receipt.acquisition is CollaborationEvidenceAcquisition.READ}),
+                required_condition_ids=(() if intent.stage_plan is None else self._stage_required_condition_ids(tuple(inputs), evidence)),
                 affected_paths=self._authoring_affected_paths(inputs, evidence))
         assignments = intent.assignments
         specialist_ids = tuple(item.agent_id for item in assignments)
@@ -17083,9 +17099,7 @@ class StoryRuntime:
             if proposal.authoring_scope is not None:
                 validate_stage_routing(proposal.authoring_scope, specialist_ids, proposal.stage_plan,
                 source_input_ids=tuple(item.input_id for item in inputs),
-                required_condition_ids=tuple(item.input_id for item in inputs
-                    if item.input_id not in {receipt.evidence_id for receipt in (proposal.basis.evidence.receipts if proposal.basis.evidence is not None else ())
-                                           if receipt.acquisition is CollaborationEvidenceAcquisition.READ}),
+                required_condition_ids=(() if proposal.stage_plan is None else self._stage_required_condition_ids(tuple(inputs), proposal.basis.evidence)),
                                             affected_paths=self._authoring_affected_paths(inputs, proposal.basis.evidence))
             self._validate_review_material(
                 session_id,
