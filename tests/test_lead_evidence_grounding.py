@@ -667,6 +667,109 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
     async def test_whole_and_range_conflict_bind_proposal_and_detect_drift(
         self,
     ) -> None:
+        # Temporary Issue #838 bounded all-thread compiler sampling.
+        import sys
+        import threading
+        import time
+
+        stop_samples = threading.Event()
+        sample_started = time.monotonic()
+        sample_counts = {"nearest_runtime": {}, "inclusive_runtime": {}}
+        dropped_hits = {category: 0 for category in sample_counts}
+        sample_errors = []
+        samples = truncated_threads = truncated_stacks = 0
+        sample_elapsed = 0.0
+
+        def sample_runtime_stacks():
+            nonlocal samples, truncated_threads, truncated_stacks, sample_elapsed
+            frames = frame = code = None
+            try:
+                while (not stop_samples.is_set() and samples < 6000
+                       and time.monotonic() - sample_started < 300.0):
+                    try:
+                        frames = sys._current_frames()
+                        thread_ids = sorted(ident for ident in frames
+                                            if ident != threading.get_ident())
+                        truncated_threads += max(0, len(thread_ids) - 128)
+                        for ident in thread_ids[:128]:
+                            frame = frames[ident]
+                            nearest_found = False
+                            for _depth in range(64):
+                                if frame is None:
+                                    break
+                                code = frame.f_code
+                                filename = code.co_filename.replace("\\", "/")
+                                marker = "/src/story_writing_agents/"
+                                if marker in filename:
+                                    filename = "src/story_writing_agents/" + filename.split(marker, 1)[1]
+                                if filename.startswith("src/story_writing_agents/"):
+                                    key = (filename[:512], code.co_name[:160],
+                                           frame.f_lineno, code.co_firstlineno)
+                                    categories = ("inclusive_runtime",) if nearest_found else (
+                                        "nearest_runtime", "inclusive_runtime")
+                                    for category in categories:
+                                        counts = sample_counts[category]
+                                        if key in counts or len(counts) < 4096:
+                                            counts[key] = counts.get(key, 0) + 1
+                                        else:
+                                            dropped_hits[category] += 1
+                                    nearest_found = True
+                                frame = frame.f_back
+                            truncated_stacks += int(frame is not None)
+                        samples += 1
+                    finally:
+                        frames = frame = code = None
+                    remaining = 300.0 - (time.monotonic() - sample_started)
+                    if stop_samples.wait(min(0.05, max(0.0, remaining))):
+                        break
+            except Exception as error:
+                sample_errors.append("sampler:" + type(error).__name__[:80])
+            finally:
+                frames = frame = code = None
+                sample_elapsed = time.monotonic() - sample_started
+
+        sampler = threading.Thread(target=sample_runtime_stacks,
+                                   name="issue838-compile-sampler", daemon=True)
+
+        def finish_compile_samples():
+            stop_samples.set()
+            try:
+                if sampler.ident is not None:
+                    sampler.join(timeout=2.0)
+            except Exception as error:
+                sample_errors.append("cleanup:" + type(error).__name__[:80])
+            alive = sampler.is_alive()
+            if alive:
+                sample_errors.append("cleanup:thread_still_alive")
+            report = {
+                "samples": samples,
+                "elapsed_seconds": round(time.monotonic() - sample_started if alive else sample_elapsed, 3),
+                "interval_seconds": 0.05, "limit_seconds": 300.0,
+                "max_samples": 6000, "max_threads": 128, "max_frames_per_thread": 64,
+                "max_keys_per_category": 4096, "max_rows_per_category": 40,
+                "truncated_thread_samples": truncated_threads,
+                "truncated_stack_samples": truncated_stacks,
+                "unrecorded_frame_hits": dict(dropped_hits),
+                "cleanup": {"stop_requested": stop_samples.is_set(),
+                            "thread_started": sampler.ident is not None,
+                            "thread_alive": alive, "join_limit_seconds": 2.0},
+                "errors": sorted(sample_errors[:8]),
+            }
+            for category, counts in sample_counts.items():
+                report[category] = [] if alive else [
+                    {"filename": key[0], "function": key[1], "line": key[2],
+                     "function_first_line": key[3], "samples": count}
+                    for key, count in sorted(counts.items(), key=lambda row: (-row[1], row[0]))[:40]
+                ]
+            print("ISSUE838_COMPILE_SAMPLES " + json.dumps(
+                report, sort_keys=True, separators=(",", ":")), flush=True)
+
+        self.addCleanup(finish_compile_samples)
+        try:
+            sampler.start()
+        except Exception as error:
+            sample_errors.append("startup:" + type(error).__name__[:80])
+        # End temporary Issue #838 sampling prologue.
         conversation_id = self.conversation("Attached conflict")
         self.backend.enqueue(
             _referenced_outcome(
