@@ -1840,8 +1840,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         for supplied, valid in (({'left': 1, 'right': 1}, True), ({'left': True, 'right': 1}, False),
                 ({'left': 1, 'right': None}, False), ({'left': 1}, False),
                 ({'left': 1, 'right': 2}, False), ({'left': 1, 'right': 1, 'extra': 1}, False)):
-            self.assertEqual(not original_rules.findings(supplied), valid)
-            self.assertEqual(not compact_rules.findings(supplied), valid)
+            self.assertEqual(not original_rules.findings(supplied), valid); self.assertEqual(not compact_rules.findings(supplied), valid)
         self.assertEqual(original_rules.node_fingerprint(), compact_rules.node_fingerprint())
         require_schema_projection(graph, graph)
         require_schema_projection(compact, compact)
@@ -1854,13 +1853,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         inline_fingerprint = inline_rules.node_fingerprint()
         self.assertEqual(inline_fingerprint, overlay_rules.node_fingerprint())
         for value, valid in (('ab', True), ('abc', True), ('a', False), ('abcd', False), (None, False), (2, False)):
-            self.assertEqual(not inline_rules.findings(value), valid)
-            self.assertEqual(not overlay_rules.findings(value), valid)
+            self.assertEqual(not inline_rules.findings(value), valid); self.assertEqual(not overlay_rules.findings(value), valid)
         distinct = ({**inline, 'description': 'Different annotation.'},
                     {**inline, 'minLength': 3}, {**inline, 'enum': ['ab']}, {**inline, 'enum': ['ac']})
         identities = {SchemaRules.declare(rule).node_fingerprint() for rule in distinct}
-        self.assertEqual(len({inline_fingerprint, *identities}), 5)
-        self.assertTrue(SchemaRules.declare({**inline, 'minLength': 3}).findings('ab'))
+        self.assertEqual(len({inline_fingerprint, *identities}), 5); self.assertTrue(SchemaRules.declare({**inline, 'minLength': 3}).findings('ab'))
         twice = {**overlay, '$defs': {'text': dict(inline)}}; twice_rules = SchemaRules.declare(twice)
         self.assertNotEqual(inline_fingerprint, twice_rules.node_fingerprint())
         nested = copy.deepcopy(twice); nested['$defs']['text']['description'] = 'Changed inner annotation.'
@@ -1904,8 +1901,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertTrue(associated_rules.findings(wrong_owner))
         rooted = {'$ref': '#/$defs/root', '$defs': {'root': associated_components}}
         rooted_rules = SchemaRules.declare(hoist_schema_definitions(rooted))
-        self.assertFalse(rooted_rules.findings(valid_owners))
-        self.assertTrue(rooted_rules.findings({'integer_owner': {'value': 2}, 'text_owner': {'value': 'literal'}}))
+        self.assertFalse(rooted_rules.findings(valid_owners)); self.assertTrue(rooted_rules.findings({'integer_owner': {'value': 2}, 'text_owner': {'value': 'literal'}}))
         flattened = factor_rule_schema(associated)
         self.assertEqual(associated_rules.node_fingerprint(), SchemaRules.declare(flattened).node_fingerprint())
         require_schema_projection(associated, associated)
@@ -1963,8 +1959,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(set(family_by_id.values()), set(scope_profiles))
         schema_by_id = {fixture_schema_node(full_schema, schema['properties']['schema_id'])['enum'][0]: schema
                         for schema in result_schemas}
-        self.assertEqual(set(schema_by_id), set(family_by_id))
-        self.assertEqual(len(result_schemas), len(schema_by_id))
+        self.assertEqual(set(schema_by_id), set(family_by_id)); self.assertEqual(len(result_schemas), len(schema_by_id))
         def native_leaves(node):
             node = fixture_schema_node(full_schema, node)
             if 'anyOf' in node:
@@ -1977,8 +1972,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertEqual(set(schema['properties']), set(schema['required']))
             details = fixture_schema_node(full_schema, schema['properties']['response_details'])
             for branch in native_leaves(details):
-                self.assertEqual(branch['type'], 'object')
-                self.assertIn(scope_field, branch['required'])
+                self.assertEqual(branch['type'], 'object'); self.assertIn(scope_field, branch['required'])
                 scope_choices = tuple(native_leaves(branch['properties'][scope_field]))
                 self.assertTrue(scope_choices)
                 for scope_choice in scope_choices: self.assertEqual(scope_choice['type'], scope_type)
@@ -2028,16 +2022,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     self.assertIs(node["additionalProperties"], False)
                 if (owner is not None and path in assignment_paths and node.get("type") == "object"):
                     properties = node["properties"]
-                    self.assertIn("assignment_type", properties)
-                    self.assertIn("review_basis", properties)
+                    self.assertIn("assignment_type", properties); self.assertIn("review_basis", properties)
                     mode_rule = resolve_arm_field(properties["assignment_type"], refs)
                     self.assertEqual(mode_rule.get("type"), "string")
                     modes = mode_rule.get("enum")
-                    self.assertIs(type(modes), list)
-                    self.assertEqual(len(modes), 1)
+                    self.assertIs(type(modes), list); self.assertEqual(len(modes), 1)
                     basis_mode = modes[0]
-                    self.assertIs(type(basis_mode), str)
-                    self.assertIn(basis_mode, basis_types)
+                    self.assertIs(type(basis_mode), str); self.assertIn(basis_mode, basis_types)
                     basis_rule = resolve_arm_field(properties["review_basis"], refs)
                     self.assertEqual(basis_rule.get("type"), basis_types[basis_mode],
                                      ("assignment_basis_type", owner, path, basis_mode))
@@ -2087,8 +2078,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             family_bytes = ( len(json.dumps(plain(compiled_member.rule_graph.schema_value()), separators=(',',
                 ':'), ensure_ascii=False).encode('utf-8')) )
             self.assertLessEqual(family_bytes, 65536, (compiled_member.schema_id, family_bytes))
-        self.assertEqual(call.contract.semantic_index.policy.maximum_schema_bytes, 65536)
-        self.assertEqual(call.contract.action_index.policy.maximum_schema_bytes, 262144)
+        self.assertEqual(call.contract.semantic_index.policy.maximum_schema_bytes, 65536); self.assertEqual(call.contract.action_index.policy.maximum_schema_bytes, 262144)
         self.assertEqual(call.contract.rule_graph.maximum_bytes, 524288)
         for budget_index, index_cap in ( (call.contract.semantic_index, 524288), (call.contract.action_index, 524288)):
             self.assertEqual(budget_index.policy.maximum_index_schema_bytes, index_cap)
