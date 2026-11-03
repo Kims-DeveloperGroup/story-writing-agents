@@ -3320,7 +3320,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         self.assertEqual(len(members[group]), 1)
                         identities = set(members[group])
                     represented.extend(identities)
-                self.assertEqual(Counter(represented), Counter(members[group]))
+                self.assertEqual(Counter(represented), Counter(members[group]), f"{group}: advertised semantic members must survive selected GENERATE")
                 generations[group] = current
             current = generations[group]
             frame = lead_fixture_response(SimpleNamespace(contract=current), supplied, family=0)

@@ -273,7 +273,8 @@ def _stage_plan_wire_rule(rule, active, inputs, required, work):
         "focus_domains": refs(focus, len(focus)), "specialist_ids": refs(active, len(active)),
         "questions": {"type": "array", "items": question, "minItems": 1, "maxItems": 64},
         "required_condition_ids": refs(required, len(required)),
-        "agreed_direction": alternatives([nonempty_text_schema(), {"type": "null"}]),
+        "agreed_direction": alternatives([{**nonempty_text_schema(), "description": "Established direction for this task stage, grounded in the user's request or prior confirmation."},
+            {"type": "null", "description": "No direction is established; do not invent agreement."}]),
         "unresolved_questions": {"type": "array", "items": nonempty_text_schema(), "minItems": 0, "maxItems": 64},
         "expected_result": nonempty_text_schema()})
 
@@ -2049,34 +2050,8 @@ class LeadProviderConstraints:
             raise ValueError("Lead owner declaration differs from current stage choices")
         return LeadContractIndex.bind(stage_policy)
 
-    def current_wire_variants(
-        self, contract: LeadResultRuleSeed,
-        *,
-        read_ids: tuple[str, ...] = (),
-        writing_read_ids: tuple[str, ...] = (),
-        writing_read_facts: tuple[tuple[str, str, bool], ...] = (),
-        core_status_facts: tuple[ContextSourceStatusReceipt, ...] = (),
-        selected_group_id: str | None = None,
-        collect_schema_groups: bool = False,
-    ) -> tuple[LeadWireVariant, ...]:
-        if (type(collect_schema_groups) is not bool
-                or selected_group_id is not None and
-                (type(selected_group_id) is not str
-                 or selected_group_id not in tuple(group.group_id for group in LEAD_SCHEMA_GROUPS))
-                or collect_schema_groups and selected_group_id is not None):
-            raise ValueError("현재 의미 그룹의 카탈로그 또는 전체 생성 계약을 요청해야 합니다")
-        grouped = collect_schema_groups or selected_group_id is not None
-        function, code = _LEAD_OUTCOME_SCOPE_DECLARATION
-        if lead_outcome_scope_paths is not function or function.__code__ is not code:
-            raise ValueError("frozen Lead outcome scope rule changed")
-        if type(contract) is not LeadResultRuleSeed or self.allow_read_sources:
-            raise ValueError("current Lead wire compilation requires a qualified snapshot")
-        if (self.scope is not None
-                and self.scope.schema_version != AUTHORING_SCOPE_SCHEMA_VERSION):
-            raise ValueError("current Lead wire requires current scope version")
-        if (self.scope_rule is not None
-                and self.scope_rule.schema_version != AUTHORING_SCOPE_SCHEMA_VERSION):
-            raise ValueError("current Lead wire requires current scope rule version")
+    def _current_wire_roots(self, contract: LeadResultRuleSeed) -> tuple[list[dict[str, object]], str | None]:
+        """Declare ordered original and current-stage roots for every compiler path."""
         allocation_inputs = self._allocation_input_ids()
         projected = _current_lead_rule_schema(contract)
         roots = projected.get("anyOf", [projected])
@@ -2113,6 +2088,38 @@ class LeadProviderConstraints:
         container_description = (
             projected.get("description") if "anyOf" in projected else None
         )
+        return roots, container_description
+
+    def current_wire_variants(
+        self, contract: LeadResultRuleSeed,
+        *,
+        read_ids: tuple[str, ...] = (),
+        writing_read_ids: tuple[str, ...] = (),
+        writing_read_facts: tuple[tuple[str, str, bool], ...] = (),
+        core_status_facts: tuple[ContextSourceStatusReceipt, ...] = (),
+        selected_group_id: str | None = None,
+        collect_schema_groups: bool = False,
+    ) -> tuple[LeadWireVariant, ...]:
+        if (type(collect_schema_groups) is not bool
+                or selected_group_id is not None and
+                (type(selected_group_id) is not str
+                 or selected_group_id not in tuple(group.group_id for group in LEAD_SCHEMA_GROUPS))
+                or collect_schema_groups and selected_group_id is not None):
+            raise ValueError("현재 의미 그룹의 카탈로그 또는 전체 생성 계약을 요청해야 합니다")
+        grouped = collect_schema_groups or selected_group_id is not None
+        function, code = _LEAD_OUTCOME_SCOPE_DECLARATION
+        if lead_outcome_scope_paths is not function or function.__code__ is not code:
+            raise ValueError("frozen Lead outcome scope rule changed")
+        if type(contract) is not LeadResultRuleSeed or self.allow_read_sources:
+            raise ValueError("current Lead wire compilation requires a qualified snapshot")
+        if (self.scope is not None
+                and self.scope.schema_version != AUTHORING_SCOPE_SCHEMA_VERSION):
+            raise ValueError("current Lead wire requires current scope version")
+        if (self.scope_rule is not None
+                and self.scope_rule.schema_version != AUTHORING_SCOPE_SCHEMA_VERSION):
+            raise ValueError("current Lead wire requires current scope rule version")
+        allocation_inputs = self._allocation_input_ids()
+        roots, container_description = self._current_wire_roots(contract)
         def member_compilation_is_identity(schema: dict[str, object]) -> bool:
             if type(schema) is not dict:
                 return False
@@ -3387,13 +3394,14 @@ class LeadGroupCompilation:
         object.__setattr__(self, "_semantic_decoders", tuple(decoders))
         object.__setattr__(self, "group_ids", tuple(
             group.group_id for group in LEAD_SCHEMA_GROUPS if group.group_id in ids))
+        roots, container_description = self.constraints._current_wire_roots(self.rule_seed)
         object.__setattr__(self, "_root_source", json.dumps(
-            _current_lead_rule_schema(self.rule_seed), sort_keys=True, ensure_ascii=False,
-            allow_nan=False, separators=(",", ":")).encode("utf-8"))
+            {"roots": roots, "container_description": container_description},
+            ensure_ascii=False, sort_keys=True, allow_nan=False, separators=(",", ":")).encode("utf-8"))
         object.__setattr__(self, "_declaration", self._snapshot())
 
     def _snapshot(self) -> tuple:
-        functions = (LeadProviderConstraints.current_wire_variants, _compile_lead_families,
+        functions = (LeadProviderConstraints._current_wire_roots, LeadProviderConstraints.current_wire_variants, _compile_lead_families,
                      _current_lead_rule_schema, _lead_codec_dependencies,
                      schema_group_for, LeadSchemaGroup.accepts,
                      type(self).matches_current, type(self).catalog, type(self).compile)
@@ -3454,14 +3462,14 @@ class LeadGroupCompilation:
         self.require_provenance()
         if type(group_id) is not str or group_id not in self.group_ids:
             raise ValueError("현재 소유자가 제공하지 않은 그룹을 컴파일할 수 없습니다")
-        projected = json.loads(self._root_source)
-        roots = projected.get("anyOf", [projected])
+        root_declaration = json.loads(self._root_source)
+        roots = root_declaration["roots"]
         tasks = self.constraints.task_revisions or (() if self.constraints.scope is None else (
             (self.constraints.scope.task_id, self.constraints.scope.task_revision),))
         members = tuple(item for item in self.semantic_variants if item.group_id == group_id)
         return _compile_lead_families(
             self.rule_seed.contract_id, roots, members,
-            projected.get("description") if "anyOf" in projected else None,
+            root_declaration["container_description"],
             tasks, selected_group_id=group_id,
         )
 
