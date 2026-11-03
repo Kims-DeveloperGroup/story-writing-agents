@@ -379,8 +379,8 @@ drift, and unsupported native projection still fail before provider invocation.
 Only typed decoding and explicitly named, justified host checks may extend this
 boundary; representable field/value restrictions remain in the frozen graph.
 
-Authoring-capable Lead proposals and preparation recommendations require an
-`authoring_assessment` object. Its closed rule graph binds required fields,
+Lead proposals and preparation recommendations in the targeted authoring branches
+require a non-null `authoring_assessment` object. Its closed rule graph binds required fields,
 nonblank evidence and decision text, current source IDs, and status relations.
 A `sufficient` assessment has foundations, direction and covered decisions, no
 missing information, and creative-scope evidence or named allowed actions.
