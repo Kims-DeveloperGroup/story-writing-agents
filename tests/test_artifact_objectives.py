@@ -6,6 +6,7 @@ import hashlib
 import json
 import subprocess
 from dataclasses import asdict, replace
+from story_writing_agents import document_plan as documents
 from unittest import mock
 
 from story_writing_agents import StoryRuntime, Workspace
@@ -56,7 +57,8 @@ def rewrite_history(events, event_id, **changes):
 
 def _native_objective_response(call, *, response_type, message, scope, update, branch, selection_group=None):
     from tests.provider_wire_fixture import ( lead_fixture_bound_scope, lead_fixture_result, lead_fixture_response)
-    fields = {'task_scope': lead_fixture_bound_scope(call, scope, record=True),
+    fields = {**({"planning_target": None} if response_type == "clarification_question" else {}),
+              'task_scope': lead_fixture_bound_scope(call, scope, record=True),
               'response_type': response_type, 'response_text': message,'document_change_request_update': update}
     return lead_fixture_response(call, lead_fixture_result(fields), family=0,
         branch_key=branch if selection_group is None else branch + ":group:" + selection_group)
@@ -266,6 +268,36 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
             replace(continuation, request="Rewrite immutable origin")
         with self.assertRaises(ValueError):
             c.LeadObjectiveIntent(c.LeadObjectiveAction.CANCEL, objective_id=facts.objective_id, next_step=c.ArtifactObjectiveNextStep.CLARIFY)
+        plan = self.objective(conversation_id).document_plan
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.goal_objective_id, facts.objective_id)
+        self.assertEqual(plan.goal_facts_digest, documents.document_value_digest(asdict(facts)))
+        self.assertEqual(tuple(node.target_path for node in plan.nodes), facts.target_paths)
+        self.assertEqual(plan.remaining_target_paths, ())
+        writing = next(event.payload for event in self.history(conversation_id) if type(event.payload) is c.CollaborationProposal)
+        self.assertIsNotNone(writing.document_node)
+        self.assertEqual(writing.document_node.plan_ref, plan.ref)
+        self.assertEqual(writing.document_node.node_id, plan.nodes[0].node_id)
+        draft_dispatches = tuple(event.payload for event in self.history(conversation_id)
+            if type(event.payload) is c.CollaborationAssignmentDispatchPayload and event.payload.assignment.mode.value == "draft")
+        self.assertEqual(tuple(dispatch.assignment.specialist_id for dispatch in draft_dispatches), (PLOT_ARCHITECT,))
+        written_view = next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == plan.ref)
+        self.assertEqual(written_view.current_node_id, writing.document_node.node_id)
+        self.assertIsNot(written_view.nodes[0].state, c.DocumentNodeState.COMPLETE)
+        self.assertEqual(written_view.nodes[0].completion_event_ids, ())
+        event = next(event for event in self.history(conversation_id)
+                     if isinstance(event.payload, (c.ArtifactObjectivePayload, c.ArtifactObjectivePayloadV2))
+                     and event.payload.facts == facts and event.payload.document_plan == plan)
+        self.assertEqual(c.decode_collaboration_event(c.encode_collaboration_event(event)).payload.document_plan, plan)
+        arguments = dict(plan_id=plan.ref.plan_id, plan_revision=plan.ref.plan_revision,
+            goal_objective_id=plan.goal_objective_id, goal_facts_digest=plan.goal_facts_digest,
+            nodes=plan.nodes, remaining_target_paths=plan.remaining_target_paths,
+            planning_goal=plan.planning_goal, unresolved_target=plan.unresolved_target)
+        for changes in ({"goal_objective_id": "foreign_objective"},
+                        {"goal_facts_digest": documents.document_value_digest("foreign origin")},
+                        {"remaining_target_paths": ("manuscript/unrequested.md",)}):
+            foreign = documents.DocumentPlan.create(**{**arguments, **changes})
+            with self.assertRaises(ValueError): replace(event.payload, document_plan=foreign)
 
     async def test_v1_objective_wire_round_trips_without_changing_legacy_bytes(self):
         conversation_id, _ = await self.start()
@@ -425,6 +457,9 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         conversation_id, _ = await self.start()
         await self.prepare(conversation_id)
         before = self.history(conversation_id)
+        plans_before = self.projection(conversation_id).document_plans
+        self.assertTrue(plans_before)
+        self.assertEqual(plans_before[-1].plan, self.objective(conversation_id).document_plan)
         archive = archive_from_conversations(archive_conversation(session_id=self.session_id, conversation_id=conversation_id, events=before))
         wire = serialize_conversation_archive(archive)
         self.assertEqual(serialize_conversation_archive(deserialize_conversation_archive(wire)), wire)
@@ -439,6 +474,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.assertEqual(after, before)
         self.assertEqual(tuple(c.encode_collaboration_event(e) for e in after), tuple(c.encode_collaboration_event(e) for e in before))
         self.assertEqual(c.project_collaboration_history(after), self.projection(conversation_id))
+        self.assertEqual(c.project_collaboration_history(after).document_plans, plans_before)
 
     async def test_readable_and_session_context_include_objectives_without_new_records(self):
         from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter

@@ -87,7 +87,15 @@ _STAGE_EXPORTS = (
     "stage_required_specialists", "validate_stage_routing",
 )
 _REVIEW_FACADE_EXPORTS = (*_REVIEW_CONTRACT_EXPORTS, "build_final_review_evidence", *_STAGE_EXPORTS)
-_CONVERSATION_FACADE_EXPORTS = (*CONVERSATION_FACADE_EXPORTS, *_REVIEW_FACADE_EXPORTS)
+_DOCUMENT_PLAN_EXPORTS = (
+    "DocumentPlanningGoalRef", "DocumentPlanRef", "DocumentNodeSpec", "DocumentPlan",
+    "DocumentCandidateRef", "DocumentCandidateUseIntent", "DocumentNodeBinding",
+    "DocumentNodeView", "DocumentPlanView", "DocumentNodeState", "DocumentNodeNextAction",
+    "document_plan_to_dict", "document_plan_from_dict",
+    "document_node_binding_to_dict", "document_node_binding_from_dict",
+    "document_value_digest", "document_lineage_cost", "project_document_plan_views",
+)
+_CONVERSATION_FACADE_EXPORTS = (*CONVERSATION_FACADE_EXPORTS, *_REVIEW_FACADE_EXPORTS, *_DOCUMENT_PLAN_EXPORTS)
 _CATALOG_EXPORTS = {
     "CONVERSATION_METADATA_SCHEMA_VERSION",
     "CONVERSATION_SUBJECT_NORMALIZATION_VERSION",
@@ -908,7 +916,7 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
             "__init__.py": set(),
             "catalog.py": _CATALOG_EXPORTS,
             "events.py": _EVENT_EXPORTS | {"build_final_review_evidence"},
-            "context.py": _CONTEXT_EXPORTS,
+            "context.py": _CONTEXT_EXPORTS | {"document_lineage_cost", "project_document_plan_views"},
         }
         public_names = set(_CONVERSATION_FACADE_EXPORTS) | _OWNER_ONLY_EVENT_EXPORTS
 

@@ -7,6 +7,8 @@ import unittest
 from story_writing_agents import specialist_routing as routing
 from story_writing_agents import lead_premise_decisions as premise
 from story_writing_agents import core_document_readiness as readiness
+from story_writing_agents import document_plan as documents
+from story_writing_agents import editorial_scope as editorial
 from story_writing_agents import review_contracts as review
 from story_writing_agents import authoring_task_lifecycle as lifecycle
 
@@ -23,6 +25,34 @@ from tests import collaboration_contract_fixture as fixture
 
 
 class SpecialistRoutingTests(unittest.TestCase):
+    @staticmethod
+    def _document_plan_fixture():
+        paths = ("core_documents/global_outline.md", "core_documents/part_outlines.md",
+                 "core_documents/character_sheets.md", "core_documents/narrative_rules.md",
+                 "manuscript/part-03/chapter-03.md")
+        domains = (Domain.PLOT_STRUCTURE, Domain.PLOT_STRUCTURE, Domain.CHARACTER_WORLD,
+                   Domain.TONE_EXECUTION, Domain.TONE_EXECUTION)
+        predecessors = ((), (0,), (0, 1), (0, 1), (0, 1, 2, 3))
+        nodes = tuple(documents.DocumentNodeSpec(
+            node_id=f"node_{index}",
+            target_kind=readiness.AuthoringTarget.MANUSCRIPT if index == 4 else readiness.AuthoringTarget(path),
+            target_path=path,
+            coverage=editorial.EditorialScopeCoverage(editorial.EditorialScope(
+                editorial.EditorialScopeKind.KNOWN, (editorial.EditorialScopeTarget(path),))),
+            book_unit_ids=("chapter-03",),
+            predecessor_node_ids=tuple(f"node_{number}" for number in predecessors[index]),
+            scope_rule=routing.authoring_scope_rules(Activity.DRAFT, Intent.AUTHORING, (domain,),
+                (Contribution(domain, Role.DRAFT_OWNER),), target_paths=(path,)),
+            source_input_ids=("user_input",), required_condition_ids=("user_input",),
+            preservation_conditions=("Preserve Mina's promise to protect her brother — 약속.",),
+            expected_result=f"One exact candidate for {path}")
+            for index, (path, domain) in enumerate(zip(paths, domains)))
+        goal = {"request": "Write chapter 3 while preserving the promise.",
+                "target_paths": [paths[-1], "manuscript/part-04/chapter-04.md"]}
+        return documents.DocumentPlan.create(plan_id="plan_chapters", plan_revision=1,
+            goal_objective_id="objective_chapters", goal_facts_digest=documents.document_value_digest(goal),
+            nodes=nodes, remaining_target_paths=(goal["target_paths"][1],))
+
     def scope(self, **changes):
         values = dict(activity=Activity.DRAFT, target_paths=(), domains=(Domain.PLOT_STRUCTURE,), interpretation="Draft a synthetic causally ordered outline.", task_id="task_a", task_revision=1)
         values.update(changes)
@@ -109,6 +139,67 @@ class SpecialistRoutingTests(unittest.TestCase):
             self.assertIs(actual, expected, repr(path))
             for domains, declared in rules:
                 self.assertEqual(not declared.findings(path), expected in domains, repr(path))
+
+        plan = self._document_plan_fixture()
+        by_id = {node.node_id: node.target_path for node in plan.nodes}
+        expected = {
+            "core_documents/global_outline.md": (),
+            "core_documents/part_outlines.md": ("core_documents/global_outline.md",),
+            "core_documents/character_sheets.md": (
+                "core_documents/global_outline.md", "core_documents/part_outlines.md"),
+            "core_documents/narrative_rules.md": (
+                "core_documents/global_outline.md", "core_documents/part_outlines.md"),
+            "manuscript/part-03/chapter-03.md": (
+                "core_documents/global_outline.md", "core_documents/part_outlines.md",
+                "core_documents/character_sheets.md", "core_documents/narrative_rules.md"),
+        }
+        self.assertEqual({node.target_path: tuple(by_id[x] for x in node.predecessor_node_ids)
+                          for node in plan.nodes}, expected)
+        self.assertEqual(len(plan.nodes), 5)
+        self.assertEqual(plan.remaining_target_paths, ("manuscript/part-04/chapter-04.md",))
+        self.assertEqual([node.scope_rule.required_specialists for node in plan.nodes[:2]],
+                         [("plot_architect",), ("plot_architect",)])
+        self.assertNotIn("task_ref", {item.name for item in fields(plan.nodes[0])})
+        extra = replace(plan.nodes[-1], node_id="node_next", target_path=plan.remaining_target_paths[0],
+            coverage=editorial.EditorialScopeCoverage(editorial.EditorialScope(
+                editorial.EditorialScopeKind.KNOWN,
+                (editorial.EditorialScopeTarget(plan.remaining_target_paths[0]),))))
+        invalid_nodes = (plan.nodes[1:], (plan.nodes[0], plan.nodes[0]),
+            (replace(plan.nodes[0], predecessor_node_ids=(plan.nodes[-1].node_id,)), *plan.nodes[1:]),
+            (plan.nodes[0], replace(plan.nodes[1], predecessor_node_ids=()), *plan.nodes[2:]),
+            (*plan.nodes, extra), (*plan.nodes[:3], plan.nodes[-1], extra))
+        for nodes in invalid_nodes:
+            with self.assertRaises(ValueError):
+                documents.DocumentPlan.create(plan_id=plan.ref.plan_id, plan_revision=1,
+                    goal_objective_id=plan.goal_objective_id, goal_facts_digest=plan.goal_facts_digest,
+                    nodes=nodes, remaining_target_paths=plan.remaining_target_paths)
+        with self.assertRaises(ValueError):
+            replace(plan.nodes[0], target_path="manuscript")
+        with self.assertRaises(ValueError):
+            replace(plan.nodes[0], coverage=plan.nodes[1].coverage)
+        with self.assertRaises(ValueError):
+            replace(plan, remaining_target_paths=())
+        with self.assertRaises(ValueError):
+            documents.DocumentNodeView(node_id=plan.nodes[0].node_id, state=documents.DocumentNodeState.COMPLETE,
+                blocking_conditions=(), required_inputs=(), completion_event_ids=(),
+                provisional_input_confirmation_event_ids=("candidate_use_confirm",),
+                next_action=documents.DocumentNodeNextAction.COMPLETE)
+        literal_goal = "3장 초안을 작성하자."
+        goal_ref = documents.DocumentPlanningGoalRef(session_id="session", conversation_id="conversation",
+            user_event_id="user_goal", content_digest="sha256:" + hashlib.sha256(literal_goal.encode("utf-8")).hexdigest())
+        unresolved = documents.DocumentPlan.create(plan_id="unresolved_chapter", plan_revision=1,
+            goal_objective_id=None, goal_facts_digest=None, nodes=plan.nodes[:4],
+            planning_goal=goal_ref, unresolved_target=True)
+        self.assertEqual(unresolved.planning_goal, goal_ref)
+        self.assertTrue(unresolved.unresolved_target)
+        self.assertEqual(unresolved.remaining_target_paths, ())
+        self.assertIsNone(unresolved.goal_objective_id)
+        self.assertEqual(documents.document_plan_from_dict(documents.document_plan_to_dict(unresolved)), unresolved)
+        for changes in ({"unresolved_target": False}, {"planning_goal": None},
+                        {"goal_objective_id": "invented_objective"}):
+            arguments = dict(plan_id="unresolved_chapter", plan_revision=1, goal_objective_id=None,
+                goal_facts_digest=None, nodes=plan.nodes[:4], planning_goal=goal_ref, unresolved_target=True)
+            with self.assertRaises((TypeError, ValueError)): documents.DocumentPlan.create(**{**arguments, **changes})
 
     def test_mixed_paths_and_semantics_union_without_inventory_inference(self):
         mixed = self.mixed_scope()
@@ -381,6 +472,67 @@ class SpecialistRoutingTests(unittest.TestCase):
             excluded_input_ids=(), findings=(), conflicts=(), missing_information=(),
             further_review_required=False, next_action=review.PreliminaryNextAction.FINISH_DIRECT)
         self.assertTrue(complete.whole_target_coverage)
+
+        from story_writing_agents.lead_task_transitions import LeadTaskRef
+        plan = self._document_plan_fixture()
+        origin = LeadTaskRef(session_id="session", conversation_id="conversation", task_id="task_outline",
+            task_revision=1, scope_event_id="scope_1", scope_digest=documents.document_value_digest({"scope": 1}))
+        task = replace(origin, task_revision=2, scope_event_id="scope_2",
+                       scope_digest=documents.document_value_digest({"scope": 2}))
+        candidate = documents.DocumentCandidateRef(candidate_event_id="candidate_event",
+            candidate_id="outline_candidate", candidate_revision=1,
+            candidate_digest=documents.document_value_digest({"content": "Mina keeps her promise."}))
+        use = documents.DocumentCandidateUseIntent(plan_ref=plan.ref,
+            predecessor_node_id=plan.nodes[0].node_id, consumer_node_id=plan.nodes[1].node_id,
+            candidate=candidate, consumer_task_ref=task, permitted_scope=plan.nodes[0].coverage,
+            purpose="Use this outline solely to prepare the part outline.",
+            user_conditions_digest=documents.document_value_digest(plan.nodes[1].preservation_conditions))
+        binding = documents.DocumentNodeBinding(plan_ref=plan.ref, node_id=plan.nodes[1].node_id,
+            task_ref=task, budget_lineage_ref=origin, budget_origin_step_id="source_step", candidate_uses=(use,))
+        candidate_selection = documents.DocumentCandidateSelection(plan.nodes[0].node_id, candidate, plan.nodes[0].coverage, use.purpose)
+        node_selection = documents.DocumentNodeSelection(plan.ref, node_id=plan.nodes[1].node_id, candidate_uses=(candidate_selection,))
+        remaining_selection = documents.DocumentNodeSelection(plan.ref, target_path=plan.remaining_target_paths[0])
+        self.assertEqual(tuple(candidate_selection.__dataclass_fields__), ("predecessor_node_id", "candidate", "permitted_scope", "purpose"))
+        self.assertEqual(tuple(node_selection.__dataclass_fields__), ("plan_ref", "node_id", "target_path", "candidate_uses"))
+        with self.assertRaises(ValueError):
+            documents.DocumentNodeSelection(plan.ref)
+        with self.assertRaises(ValueError):
+            replace(node_selection, target_path=plan.remaining_target_paths[0])
+        goal_ref = documents.DocumentPlanningGoalRef(session_id="session", conversation_id="conversation",
+            user_event_id="user_goal", content_digest="sha256:" + hashlib.sha256("3장 초안을 작성하자.".encode("utf-8")).hexdigest())
+        for value, encode, decode in (
+            (plan, documents.document_plan_to_dict, documents.document_plan_from_dict),
+            (plan.ref, documents.document_plan_ref_to_dict, documents.document_plan_ref_from_dict),
+            (plan.nodes[0], documents.document_node_to_dict, documents.document_node_from_dict),
+            (use, documents.document_candidate_use_to_dict, documents.document_candidate_use_from_dict),
+            (goal_ref, documents.planning_goal_to_dict, documents.planning_goal_from_dict),
+            (binding, documents.document_node_binding_to_dict, documents.document_node_binding_from_dict),
+                (candidate_selection, documents.document_candidate_selection_to_dict, documents.document_candidate_selection_from_dict),
+                (node_selection, documents.document_node_selection_to_dict, documents.document_node_selection_from_dict),
+                (remaining_selection, documents.document_node_selection_to_dict, documents.document_node_selection_from_dict)):
+            encoded = encode(value)
+            self.assertEqual(decode(encoded), value)
+            self.assertEqual(encode(decode(encoded)), encoded)
+            with self.assertRaises((TypeError, ValueError)): decode({**encoded, "approved": True})
+        wire = documents.document_plan_to_dict(plan)
+        unsigned = json.loads(json.dumps(wire)); del unsigned["ref"]["plan_digest"]
+        expected_digest = "sha256:" + hashlib.sha256(json.dumps(unsigned, ensure_ascii=False, sort_keys=True,
+            allow_nan=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+        self.assertEqual(plan.ref.plan_digest, expected_digest)
+        for field in wire:
+            missing = dict(wire); del missing[field]
+            with self.assertRaises((TypeError, ValueError)): documents.document_plan_from_dict(missing)
+        for field, changed in (("goal_objective_id", "foreign_goal"), ("remaining_target_paths", [])):
+            with self.assertRaises(ValueError): documents.document_plan_from_dict({**wire, field: changed})
+        self.assertEqual(binding.budget_lineage_ref, origin)
+        self.assertEqual(binding.task_ref.task_revision, 2)
+        for changes in ({"plan_ref": replace(plan.ref, plan_revision=2)},
+                        {"node_id": plan.nodes[0].node_id}, {"task_ref": replace(task, task_revision=3)},
+                        {"budget_lineage_ref": replace(origin, session_id="other_session")},
+                        {"candidate_uses": (use, use)}):
+            with self.assertRaises(ValueError): replace(binding, **changes)
+        with self.assertRaises(ValueError):
+            replace(use, predecessor_node_id=use.consumer_node_id)
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
         from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
