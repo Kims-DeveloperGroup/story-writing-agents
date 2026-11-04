@@ -146,6 +146,30 @@ profiles, policy, input, and resource facts, then creates and consumes one
 process-local start capability. History decoding or projection never recreates
 a provider, filesystem lease, Git capability, credential, or other authority.
 
+### Preliminary and final review records
+
+A Lead preliminary review records its exact task and revision, target identities
+and digests, inspected and excluded sources, findings, conflicts, missing
+information, and proposed next action. Its `lead_preliminary_review` stage
+distinguishes an explanation of inspected material from specialist work and
+final candidate review. Ranged evidence supports only the disclosed range;
+unread material remains excluded. Reopening or transferring history preserves
+that attribution and coverage without granting fresh READ or execution authority.
+
+Specialist-stage plans retain the full affected-domain scope separately from
+the current participants. Related questions carry current-task source references
+and required conditions, together with the agreed direction, unresolved
+questions, and expected result. A focused deeper review can select one domain;
+ordinary drafting retains both writers and declared constraint assessors.
+
+Final review evidence belongs to the existing immutable reviewed proposal. It
+binds the candidate, correlated final reviewer replies, relevant source
+revisions and digests, user conditions, scope, and review criteria. Changed
+source material can invalidate reuse even when the candidate text is unchanged.
+Current READ applicability is checked separately. A preliminary record cannot
+replace final evidence, satisfy an authoring objective, or authorize Apply or
+Commit.
+
 ### Artifact-candidate review in history
 
 When a valid lead artifact intent is accepted, runtime atomically records the

@@ -763,4 +763,182 @@ __all__ = [
     "specialists_for_domains",
     "validate_specialist_assignment",
     "validate_specialist_routing",
+    "ReviewStage", "SpecialistWorkKind", "SpecialistWorkQuestion", "SpecialistStagePlan",
+    "stage_plan_to_dict", "stage_plan_from_dict", "stage_required_specialists",
+    "stage_participant_rosters", "stage_focus_domains", "stage_is_focused_review", "validate_stage_routing",
 ]
+
+
+class ReviewStage(StrEnum):
+    PROCEDURE_STATUS = "procedure_status"
+    LEAD_PRELIMINARY_REVIEW = "lead_preliminary_review"
+    SPECIALIST_WORK = "specialist_work"
+    FINAL_CANDIDATE_REVIEW = "final_candidate_review"
+
+
+class SpecialistWorkKind(StrEnum):
+    DRAFT = "draft"
+    DEEP_REVIEW = "deep_review"
+    CONSTRAINT_REVIEW = "constraint_review"
+
+
+@dataclass(frozen=True, slots=True)
+class SpecialistWorkQuestion:
+    question_id: str
+    task_id: str
+    task_revision: int
+    question: str
+    source_input_ids: tuple[str, ...]
+    required_condition_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if any(type(x) is not str or not x.strip() for x in (self.question_id, self.task_id, self.question)):
+            raise ValueError("work questions require exact task and question text")
+        if type(self.task_revision) is not int or self.task_revision < 1:
+            raise ValueError("work question requires exact task revision")
+        for values in (self.source_input_ids, self.required_condition_ids):
+            if type(values) is not tuple or not values or any(type(x) is not str or not x for x in values) or len(set(values)) != len(values):
+                raise ValueError("work question requires unique source and condition references")
+
+
+@dataclass(frozen=True, slots=True)
+class SpecialistStagePlan:
+    stage: ReviewStage
+    work_kind: SpecialistWorkKind
+    task_id: str
+    task_revision: int
+    focus_domains: tuple[ArtifactReviewDomain, ...]
+    specialist_ids: tuple[str, ...]
+    questions: tuple[SpecialistWorkQuestion, ...]
+    required_condition_ids: tuple[str, ...]
+    agreed_direction: str | None
+    unresolved_questions: tuple[str, ...]
+    expected_result: str
+
+    def __post_init__(self) -> None:
+        if type(self.stage) is not ReviewStage or type(self.work_kind) is not SpecialistWorkKind:
+            raise ValueError("stage work requires exact stage and work kind")
+        _domain_tuple(self.focus_domains)
+        if (type(self.task_id) is not str or not self.task_id or type(self.task_revision) is not int or self.task_revision < 1
+            or type(self.expected_result) is not str or not self.expected_result.strip()):
+            raise ValueError("stage work requires current task and expected result")
+        canonical = tuple(dict.fromkeys(_SPECIALIST_BY_DOMAIN.values()))
+        if (type(self.specialist_ids) is not tuple or len(set(self.specialist_ids)) != len(self.specialist_ids)
+            or self.specialist_ids != tuple(x for x in canonical if x in self.specialist_ids)):
+            raise ValueError("stage participants must be canonical and unique")
+        if type(self.questions) is not tuple or not self.questions or len(self.questions) > 64 or any(type(x) is not SpecialistWorkQuestion for x in self.questions):
+            raise ValueError("stage work requires bounded structured questions")
+        if len({x.question_id for x in self.questions}) != len(self.questions):
+            raise ValueError("work question IDs must be unique")
+        if any((x.task_id, x.task_revision) != (self.task_id, self.task_revision) for x in self.questions):
+            raise ValueError("foreign tasks cannot be bundled into current work")
+        if (type(self.required_condition_ids) is not tuple or not self.required_condition_ids
+            or any(type(x) is not str or not x for x in self.required_condition_ids)
+            or len(set(self.required_condition_ids)) != len(self.required_condition_ids)):
+            raise ValueError("stage work requires declared source conditions")
+        covered = {condition for question in self.questions for condition in question.required_condition_ids}
+        if covered != set(self.required_condition_ids):
+            raise ValueError("bundled questions must cover every declared required condition")
+        if self.agreed_direction is not None and (type(self.agreed_direction) is not str or not self.agreed_direction.strip()):
+            raise ValueError("agreed direction must be supplied explicitly or absent")
+        if type(self.unresolved_questions) is not tuple or any(type(x) is not str or not x.strip() for x in self.unresolved_questions):
+            raise ValueError("unresolved questions must be exact text")
+
+
+def stage_required_specialists(scope: AuthoringScope, plan: SpecialistStagePlan | None) -> tuple[str, ...]:
+    """Retain semantic influence; select only the permitted current-stage participants."""
+    if plan is None:
+        return required_authoring_specialists(scope)
+    if type(scope) is not AuthoringScope or type(plan) is not SpecialistStagePlan:
+        raise TypeError("stage routing requires exact immutable values")
+    if (plan.task_id, plan.task_revision) != (scope.task_id, scope.task_revision):
+        raise ValueError("stage questions must belong to the current authoring task")
+    rule = authoring_scope_rules(scope.activity, scope.intent, scope.domains, scope.contributions,
+        target_paths=scope.target_paths, dependency_slots=scope.dependency_slots, schema_version=scope.schema_version)
+    focus = stage_focus_domains(rule, plan.stage, plan.work_kind, plan.specialist_ids)
+    if plan.focus_domains != focus:
+        raise ValueError("stage focus must exactly disclose its actual current participants")
+    return plan.specialist_ids
+
+
+def validate_stage_routing(scope: AuthoringScope, specialist_ids: tuple[str, ...],
+                           plan: SpecialistStagePlan | None, *,
+                           source_input_ids: tuple[str, ...] = (),
+                           required_condition_ids: tuple[str, ...] = (), affected_paths: tuple[str, ...] = ()) -> None:
+    if not set(required_authoring_domains(scope, affected_paths=affected_paths)).issubset(required_authoring_domains(scope)):
+        raise ValueError("stage cannot omit affected semantic domains")
+    if plan is None:
+        validate_specialist_routing(scope, specialist_ids, affected_paths=affected_paths)
+        return
+    required = stage_required_specialists(scope, plan)
+    if specialist_ids != required:
+        raise ValueError("assignments must match the exact current-stage participants")
+    if not set(required_condition_ids).issubset(plan.required_condition_ids):
+        raise ValueError("stage work omitted a current required source condition")
+    if any(not set(x.required_condition_ids).issubset(x.source_input_ids) for x in plan.questions):
+        raise ValueError("each bundled condition requires its original captured source")
+    if source_input_ids and any(not set(x.source_input_ids).issubset(source_input_ids) for x in plan.questions):
+        raise ValueError("work question uses an unoffered or foreign source")
+
+
+def stage_plan_to_dict(plan: SpecialistStagePlan) -> dict[str, object]:
+    if type(plan) is not SpecialistStagePlan:
+        raise TypeError("expected exact stage plan")
+    return {"stage": plan.stage.value, "work_kind": plan.work_kind.value,
+        "task_id": plan.task_id, "task_revision": plan.task_revision,
+        "focus_domains": [x.value for x in plan.focus_domains], "specialist_ids": list(plan.specialist_ids),
+        "questions": [{"question_id": x.question_id, "task_id": x.task_id,
+            "task_revision": x.task_revision, "question": x.question,
+            "source_input_ids": list(x.source_input_ids), "required_condition_ids": list(x.required_condition_ids)} for x in plan.questions],
+        "required_condition_ids": list(plan.required_condition_ids), "agreed_direction": plan.agreed_direction,
+        "unresolved_questions": list(plan.unresolved_questions), "expected_result": plan.expected_result}
+
+
+def stage_plan_from_dict(value: object) -> SpecialistStagePlan:
+    keys = {"stage", "work_kind", "task_id", "task_revision", "focus_domains", "specialist_ids", "questions",
+        "required_condition_ids", "agreed_direction", "unresolved_questions", "expected_result"}
+    if type(value) is not dict or set(value) != keys:
+        raise ValueError("stage work requires its complete declared record")
+    for name in ("focus_domains", "specialist_ids", "questions", "required_condition_ids", "unresolved_questions"):
+        if type(value[name]) is not list:
+            raise ValueError("stage work requires exact list fields")
+    questions = []
+    for row in value["questions"]:
+        if type(row) is not dict or set(row) != {"question_id", "task_id", "task_revision", "question", "source_input_ids", "required_condition_ids"} or any(type(row[x]) is not list for x in ("source_input_ids", "required_condition_ids")):
+            raise ValueError("invalid structured work question")
+        questions.append(SpecialistWorkQuestion(row["question_id"], row["task_id"], row["task_revision"], row["question"], tuple(row["source_input_ids"]), tuple(row["required_condition_ids"])))
+    return SpecialistStagePlan(ReviewStage(value["stage"]), SpecialistWorkKind(value["work_kind"]),
+        value["task_id"], value["task_revision"], tuple(ArtifactReviewDomain(x) for x in value["focus_domains"]),
+        tuple(value["specialist_ids"]), tuple(questions), tuple(value["required_condition_ids"]),
+        value["agreed_direction"], tuple(value["unresolved_questions"]), value["expected_result"])
+
+
+def stage_participant_rosters(rule: AuthoringScopeRuleSet, stage: ReviewStage,
+                              work_kind: SpecialistWorkKind) -> tuple[tuple[str, ...], ...]:
+    """Finite owner declaration used by native, typed, live and replay consumers."""
+    if type(rule) is not AuthoringScopeRuleSet or type(stage) is not ReviewStage or type(work_kind) is not SpecialistWorkKind:
+        raise TypeError("stage participants require the immutable scope rule and exact stage")
+    if stage in {ReviewStage.PROCEDURE_STATUS, ReviewStage.LEAD_PRELIMINARY_REVIEW}:
+        return ((),)
+    if stage is ReviewStage.FINAL_CANDIDATE_REVIEW:
+        return (rule.required_specialists,) if rule.activity is AuthoringActivity.REVIEW else ()
+    if work_kind is SpecialistWorkKind.DRAFT:
+        return ((rule.required_specialists,) if rule.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
+                and rule.intent is not AuthoringIntent.REVIEW_ONLY else ())
+    if rule.activity is not AuthoringActivity.REVIEW:
+        return ()
+    from itertools import combinations
+    return tuple(choice for count in range(1, len(rule.required_specialists) + 1)
+                 for choice in combinations(rule.required_specialists, count))
+
+
+def stage_focus_domains(rule: AuthoringScopeRuleSet, stage: ReviewStage,
+                        work_kind: SpecialistWorkKind, specialists: tuple[str, ...]) -> tuple[ArtifactReviewDomain, ...]:
+    if specialists not in stage_participant_rosters(rule, stage, work_kind):
+        raise ValueError("unavailable participant set for the current stage")
+    return tuple(domain for domain in rule.required_domains if _SPECIALIST_BY_DOMAIN[domain] in specialists)
+
+
+def stage_is_focused_review(plan: SpecialistStagePlan | None) -> bool:
+    return (type(plan) is SpecialistStagePlan and plan.stage is ReviewStage.SPECIALIST_WORK
+            and plan.work_kind in {SpecialistWorkKind.DEEP_REVIEW, SpecialistWorkKind.CONSTRAINT_REVIEW})

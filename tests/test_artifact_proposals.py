@@ -15,6 +15,7 @@ from pathlib import Path
 
 import story_writing_agents
 from story_writing_agents import artifact_proposals
+from story_writing_agents import review_contracts as review
 from story_writing_agents.agents import (
     CHARACTER_CUSTODIAN,
     EXECUTION_SPECIALIST,
@@ -287,6 +288,7 @@ class ArtifactCandidateConstructionTests(unittest.TestCase):
                 self.assertIsNone(raised.exception.__cause__)
                 self.assertIsNone(raised.exception.__context__)
 
+
         stale = replace(evidence, source_digest=_digest(b"older bytes"))
         with self.assertRaises(ArtifactProposalError) as raised:
             build_artifact_review_candidate(candidate_id="candidate_stale",
@@ -406,6 +408,132 @@ class ArtifactCandidateCodecAndBoundaryTests(unittest.TestCase):
                     deserialize_artifact_review_candidate(payload)
                 self.assertIsNone(raised.exception.__cause__)
                 self.assertIsNone(raised.exception.__context__)
+
+        source_paths = (_OUTLINE, "core_documents/part_outlines.md", _CHARACTERS, _RULES)
+        # These snapshots test pure equality, not runtime-issued review or READ authority.
+        source_bytes = (_base[_OUTLINE], b"The three parts preserve the stated motive.\n",
+                        _projected[_CHARACTERS], b"Use limited third-person narration.\n")
+        sources = tuple(review.ReviewTarget(
+            f"source_{index}", review.ReviewTargetKind.WRITING_ARTIFACT, path, "revision-1",
+            "sha256:" + hashlib.sha256(content).hexdigest(),
+            "sha256:" + hashlib.sha256(content).hexdigest(),
+            "sha256:" + hashlib.sha256(content).hexdigest(), True)
+            for index, (path, content) in enumerate(zip(source_paths, source_bytes), 1))
+        conditions = hashlib.sha256(b"Preserve the motive; keep the secret unresolved.").hexdigest()
+        scope_digest = hashlib.sha256(b"manuscript:plot,character,execution").hexdigest()
+        criteria = hashlib.sha256(
+            b"Compare the candidate with all four current core documents.").hexdigest()
+        reviewers = (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST)
+        replies = ("plot_reply", "character_reply", "execution_reply")
+        evidence = review.FinalReviewEvidence(
+            candidate.candidate_id, candidate.candidate_revision, candidate.candidate_digest,
+            "review-task", 1, sources, conditions, scope_digest, criteria, reviewers, replies)
+        encoded_evidence = review.final_review_evidence_to_dict(evidence)
+        self.assertEqual(review.final_review_evidence_from_dict(encoded_evidence), evidence)
+        self.assertEqual(encoded_evidence["stage"], "final_candidate_review")
+        self.assertEqual(encoded_evidence["candidate_digest"], candidate.candidate_digest)
+        self.assertEqual(encoded_evidence["user_conditions_digest"], conditions)
+        self.assertEqual(encoded_evidence["scope_digest"], scope_digest)
+        self.assertEqual(encoded_evidence["criteria_digest"], criteria)
+        self.assertEqual(encoded_evidence["reviewer_ids"], list(reviewers))
+        self.assertEqual(encoded_evidence["reply_event_ids"], list(replies))
+        self.assertEqual(evidence.evidence_digest, hashlib.sha256(json.dumps(
+            encoded_evidence, ensure_ascii=False, sort_keys=True, allow_nan=False,
+            separators=(",", ":")).encode("utf-8")).hexdigest())
+        with self.assertRaises(FrozenInstanceError): evidence.candidate_revision = 2
+        unchanged = review.qualify_final_review(evidence, evidence, current_read_applicable=True)
+        self.assertTrue(unchanged.eligible)
+        self.assertEqual(unchanged.reasons, ())
+        self.assertEqual(unchanged.evidence_digest, evidence.evidence_digest)
+        unread_source = replace(sources[0], revision=None, content_digest=None, boundary_digest=None,
+            whole_source=False, boundary_kind="unread", availability=review.ReviewTargetAvailability.UNREAD,
+            source_status="present", source_manifest_digest="sha256:" + hashlib.sha256(b"known unread status").hexdigest())
+        with self.assertRaises(ValueError):
+            replace(evidence, sources=(unread_source, *sources[1:]))
+        fresh_aliases = replace(evidence, sources=tuple(
+            replace(source, input_id=f"fresh_read_{index}")
+            for index, source in enumerate(reversed(sources), 1)))
+        self.assertTrue(review.qualify_final_review(
+            evidence, fresh_aliases, current_read_applicable=True).eligible)
+        self.assertEqual(review.qualify_final_review(
+            evidence, fresh_aliases, current_read_applicable=False).reasons,
+            ("current_read_inapplicable",))
+        changed_digest = "sha256:" + hashlib.sha256(b"Changed source.\n").hexdigest()
+        selected_digest = "sha256:" + hashlib.sha256(
+            b"".join(source_bytes[0].splitlines(keepends=True)[1:3])).hexdigest()
+        changed_source = replace(sources[0], content_digest=changed_digest,
+                                 source_digest=changed_digest, boundary_digest=changed_digest)
+        selected_range = replace(sources[0], whole_source=False, boundary_kind="artifact_lines",
+            boundary_start=2, boundary_end=3, content_digest=selected_digest,
+            boundary_digest=selected_digest)
+        changed_conditions = hashlib.sha256(b"USER changes the protected direction.").hexdigest()
+        changed_scope = hashlib.sha256(b"A different target and scope.").hexdigest()
+        changed_criteria = hashlib.sha256(b"A different review criterion.").hexdigest()
+        drift_cases = (
+            ({"candidate_id": "other-candidate"}, "candidate_changed"),
+            ({"candidate_revision": candidate.candidate_revision + 1}, "candidate_changed"),
+            ({"candidate_digest": "sha256:" + "f" * 64}, "candidate_changed"),
+            ({"task_id": "other-task"}, "task_changed"),
+            ({"task_revision": 2}, "task_changed"),
+            ({"sources": (*sources[:2], replace(sources[2], revision="characters-2"),
+                          sources[3])}, "source_changed"),
+            ({"sources": (*sources[:3], replace(sources[3], revision="rules-2"))},
+             "source_changed"),
+            ({"sources": (replace(sources[0], target_id="manuscript/part-01/other.md"),
+                          *sources[1:])},
+             "source_changed"),
+            ({"sources": (changed_source, *sources[1:])}, "source_changed"),
+            ({"sources": (selected_range, *sources[1:])}, "source_changed"),
+            ({"user_conditions_digest": changed_conditions}, "user_conditions_changed"),
+            ({"scope_digest": changed_scope}, "scope_changed"),
+            ({"criteria_digest": changed_criteria}, "criteria_changed"),
+            ({"reviewer_ids": reviewers[:2], "reply_event_ids": replies[:2]}, "reviewer_changed"),
+            ({"reply_event_ids": ("foreign_reply", *replies[1:])}, "reviewer_changed"),
+        )
+        for changes, reason in drift_cases:
+            current = replace(evidence, **changes)
+            qualification = review.qualify_final_review(
+                evidence, current, current_read_applicable=True)
+            self.assertFalse(qualification.eligible, (changes, qualification))
+            self.assertEqual(qualification.reasons, (reason,))
+            if reason == "source_changed":
+                self.assertEqual(current.candidate_digest, evidence.candidate_digest)
+        stale_read = review.qualify_final_review(evidence, evidence, current_read_applicable=False)
+        self.assertFalse(stale_read.eligible)
+        self.assertEqual(stale_read.reasons, ("current_read_inapplicable",))
+        combined = review.qualify_final_review(evidence, replace(evidence,
+            candidate_revision=candidate.candidate_revision + 1, scope_digest=changed_scope),
+            current_read_applicable=False)
+        self.assertEqual(combined.reasons,
+                         ("candidate_changed", "scope_changed", "current_read_inapplicable"))
+        for changes in ({"stage": "lead_preliminary_review"}, {"task_revision": True},
+                        {"sources": (sources[0], sources[0])},
+                        {"reviewer_ids": reviewers, "reply_event_ids": replies[:1]}):
+            with self.assertRaises(ValueError): replace(evidence, **changes)
+        for field in encoded_evidence:
+            incomplete = dict(encoded_evidence)
+            incomplete.pop(field)
+            with self.assertRaises(ValueError):
+                review.final_review_evidence_from_dict(incomplete)
+        with self.assertRaises(ValueError):
+            review.final_review_evidence_from_dict(dict(encoded_evidence, apply_authority=True))
+        with self.assertRaises(TypeError):
+            review.qualify_final_review(evidence, evidence, current_read_applicable=1)
+        preliminary_target = review.ReviewTarget(
+            "candidate", review.ReviewTargetKind.CANDIDATE, candidate.candidate_id,
+            str(candidate.candidate_revision), candidate.candidate_digest,
+            candidate.candidate_digest, candidate.candidate_digest, True)
+        preliminary = review.LeadPreliminaryReview(
+            "review-task", 1, (preliminary_target,), ("candidate",), (),
+            (review.ReviewFinding("Only a first review was performed.", ("candidate",)),),
+            (), (), False, review.PreliminaryNextAction.FINISH_DIRECT)
+        with self.assertRaises(TypeError):
+            review.qualify_final_review(preliminary, evidence, current_read_applicable=True)
+        with self.assertRaises(TypeError): review.final_review_evidence_to_dict(preliminary)
+        with self.assertRaises(ValueError):
+            review.final_review_evidence_from_dict(review.preliminary_review_to_dict(preliminary))
+        encoded_evidence["sources"][0]["revision"] = "changed-export"
+        self.assertEqual(evidence.sources[0].revision, "revision-1")
 
     def test_public_surface_is_direct_only_exact_and_clean_importable(self) -> None:
         self.assertEqual(ARTIFACT_PROPOSAL_SCHEMA_VERSION, 1)

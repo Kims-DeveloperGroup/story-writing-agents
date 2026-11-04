@@ -16,7 +16,7 @@ from story_writing_agents import StoryRuntime
 from story_writing_agents import conversations as c
 from story_writing_agents import orchestrator as owner
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT, EXECUTION_SPECIALIST
-from story_writing_agents.specialist_routing import AuthoringActivity
+from story_writing_agents.specialist_routing import AuthoringActivity, SpecialistWorkKind
 from story_writing_agents.errors import BackendProtocolError
 from story_writing_agents.workspace.initialization import (
     SessionArtifactBinding,
@@ -140,7 +140,7 @@ class LeadRecommendationTests(RecommendationCase):
         for call in self.backend.calls[positive_call_start:]:
             self.assertNotIn('"response_correction":', json.dumps(self.backend.callback_payload(call)))
             self.assertNotIn("structured_response_repair", call.payload)
-        from tests.provider_wire_fixture import finite_fixture_selection
+        from tests.provider_wire_fixture import finite_fixture_selection, lead_fixture_response
         for aliases, omit_source in (((), False), (("recommendation_request",), False),
                                      (("recommendation_decision",), False),
                                      (("recommendation_request", "recommendation_decision"), True)):
@@ -154,6 +154,10 @@ class LeadRecommendationTests(RecommendationCase):
             request = offered.recommendation_request
             source_ids = [item.input_id for item in request.basis.inputs]
             self.assertTrue(source_ids)
+            staged = not aliases and not omit_source
+            if staged:
+                self.assertEqual(len(request.basis.inputs), 1)
+                self.assertIs(request.basis.inputs[0].kind, c.CollaborationInputKind.USER_INPUT)
             selected = ([] if omit_source else source_ids) + list(aliases)
             review_ids = () if omit_source else tuple(source_ids)
             raw_observations = []
@@ -164,7 +168,23 @@ class LeadRecommendationTests(RecommendationCase):
                 for row in proposal["assignments"].values():
                     row.update(input_anchor_id=selected[0], optional_inputs={alias: alias in selected for alias in choices["allocation_input_ids"]})
                     row["review_basis"]["candidate_input_ids"] = finite_fixture_selection(choices["review_candidate_ids"], review_ids)
-                if omit_source: proposal["required_input_recipients"] = {}
+                if omit_source:
+                    proposal["required_input_recipients"] = {}
+                if staged:
+                    proposal["stage_plan"] = {
+                        "stage": "specialist_work", "work_kind": "deep_review",
+                        "focus_domains": finite_fixture_selection(("plot_structure",), ("plot_structure",)),
+                        "specialist_ids": finite_fixture_selection(request.specialist_ids, request.specialist_ids),
+                        "questions": [{"question_id": "plot-review", "question": "Review the supplied candidate facts.",
+                            "source_input_ids": finite_fixture_selection(choices["allocation_input_ids"], source_ids),
+                            "required_condition_ids": finite_fixture_selection(source_ids, source_ids)}],
+                        "required_condition_ids": finite_fixture_selection(source_ids, source_ids),
+                        "agreed_direction": "Preserve the supplied candidate facts.", "unresolved_questions": [],
+                        "expected_result": "One bounded Plot review, without rewriting the candidate."}
+                    body = packet["task_result"]
+                    body.pop("schema_id")
+                    body["response_details"].pop("variant_id", None)
+                    packet = json.loads(lead_fixture_response(call, body, family=1))["agent_action"]
                 encoded = json.dumps({"agent_action": packet})
                 raw_observations.append((packet, choices, call.contract.outer_inner_schema_ids, lead.diagnose_json_text(encoded, call.schema)))
                 return encoded
@@ -203,6 +223,14 @@ class LeadRecommendationTests(RecommendationCase):
                 self.assertIs(prepared.next_action, c.CollaborationNextAction.SUBMIT_CONFIRMATION, prepared)
                 self.assertEqual(prepared.proposal.authoring_scope, request.authoring_scope)
                 self.assertEqual(prepared.proposal.purpose, request.purpose)
+                if staged:
+                    plan = prepared.proposal.stage_plan
+                    self.assertIs(plan.work_kind, SpecialistWorkKind.DEEP_REVIEW)
+                    self.assertEqual(plan.specialist_ids, (PLOT_ARCHITECT,))
+                    self.assertEqual(plan.required_condition_ids, tuple(source_ids))
+                    self.assertEqual(plan.questions[0].required_condition_ids, tuple(source_ids))
+                    self.assertTrue(set(plan.required_condition_ids).isdisjoint(
+                        ("recommendation_request", "recommendation_decision")))
                 for assignment in prepared.proposal.assignments:
                     self.assertEqual(set(assignment.input_ids), {*source_ids, "recommendation_request", "recommendation_decision"})
                     self.assertEqual(len(assignment.input_ids), len(source_ids) + 2)

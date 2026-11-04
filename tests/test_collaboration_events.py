@@ -207,9 +207,17 @@ def _exception_graph(exception: BaseException) -> tuple[BaseException, ...]:
 
 
 def _reviewed_artifact_proposal() -> ArtifactReviewedProposal:
+    from story_writing_agents.review_contracts import FinalReviewEvidence, ReviewTarget, ReviewTargetKind
     _base, candidate, _projected = _combined_candidate()
     mandatory = artifact_review_specialists(candidate.mandatory_review_domains)
     disclosed = artifact_review_specialists(candidate.disclosed_review_domains)
+    # Pure codec fixture; this record is not a Host-issued Apply capability.
+    final_evidence = FinalReviewEvidence(candidate.candidate_id, candidate.candidate_revision,
+        candidate.candidate_digest, "task_a", 1,
+        (ReviewTarget("candidate", ReviewTargetKind.CANDIDATE, candidate.candidate_id, str(candidate.candidate_revision),
+                      candidate.candidate_digest, candidate.candidate_digest, candidate.candidate_digest, True),),
+        DIGEST_A, DIGEST_A, DIGEST_A, disclosed,
+        tuple(f"artifact_reply_{ordinal}" for ordinal in range(1, len(disclosed) + 1)))
     return ArtifactReviewedProposal.create(
         proposal_id="reviewed_artifact",
         proposal_revision=1,
@@ -236,6 +244,7 @@ def _reviewed_artifact_proposal() -> ArtifactReviewedProposal:
         user_impact="The proposal remains review-only.",
         limitations="No Apply, artifact-write, or Git authority is granted.",
         grounding_evidence_ids=candidate.grounding_evidence_ids,
+        final_review_evidence=final_evidence,
     )
 
 
@@ -548,7 +557,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             (lead_evidence, ("scope", "status", "receipts")),
             (
                 lead_judgment,
-                ('kind', 'message', 'evidence', 'authoring_scope', 'trace', 'authoring_admission', 'core_document_readiness', 'provider_invocation_id'),
+                ('kind', 'message', 'evidence', 'authoring_scope', 'trace', 'authoring_admission', 'core_document_readiness', 'provider_invocation_id', 'preliminary_review'),
             ),
             (lead_failure, ("code", "invocation_id", "call_id")),
             (
@@ -612,7 +621,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "basis",
                     "proposal_digest",
                     "authoring_scope",
-                    'premise_decision',
+                    'premise_decision', "stage_plan",
                 ),
             ),
             (
@@ -675,7 +684,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             (
                 lead_intent,
                 ("relation", "purpose", "assignments", "authoring_scope", "shared_premises",
-                 'premise_decision', "authoring_admission", "core_document_readiness"),
+                 'premise_decision', "authoring_admission", "core_document_readiness", "stage_plan"),
             ),
             (
                 lead_outcome,
@@ -691,7 +700,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "recommended_action",
                     "authoring_scope",
                     "trace", "authoring_assessment", "authoring_admission",
-                    "core_document_assessment", "core_document_readiness",
+                    "core_document_assessment", "core_document_readiness", "preliminary_review",
                 ),
             ),
             (
@@ -1026,7 +1035,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "basis",
                 "proposal_digest",
                 "authoring_scope",
-                "premise_decision",
+                "premise_decision", "stage_plan",
             },
         )
         wire = encode_collaboration_proposal(proposal)
@@ -1626,7 +1635,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         expected_context_exports = COLLABORATION_CONTEXT_EXPORTS
         self.assertEqual(tuple(events_owner.__all__), expected_event_exports)
         self.assertEqual(tuple(context_owner.__all__), expected_context_exports)
-        self.assertEqual(len(conversations.__all__), 188)
+        self.assertEqual(len(conversations.__all__), 208)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -1757,7 +1766,7 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 188
+assert len(facade.__all__) == 208
 assert len(events.__all__) == 134
 assert "CollaborationLeadGroupTracePayload" in events.__all__
 assert "CollaborationLeadGroupTracePayload" not in facade.__all__

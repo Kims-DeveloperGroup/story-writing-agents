@@ -10,6 +10,16 @@ from .agent_context.group_observation import LeadGroupObservation, LeadGroupObse
 from .agent_context.group_reporting import group_trace_report
 from .conversations.events import CollaborationLeadGroupTracePayload
 from .conversations.context import project_lead_group_traces
+from .conversations import build_final_review_evidence
+from .review_contracts import FinalReviewQualification
+
+from .agent_context.actions import ContextCallReadFact, ContextSourceStatusReceipt
+from .review_contracts import (ReviewTarget, ReviewTargetKind, ReviewTargetAvailability, LeadPreliminaryReview,
+    scoped_preliminary_targets,
+    preliminary_review_from_dict, preliminary_scope_eligible, preliminary_review_to_dict,
+    review_digest, FinalReviewEvidence, qualify_final_review)
+from .specialist_routing import (SpecialistStagePlan, ReviewStage, SpecialistWorkKind,
+    stage_plan_from_dict, stage_plan_to_dict, stage_required_specialists, validate_stage_routing, stage_is_focused_review)
 
 from .core_document_readiness import (
     AuthoringTarget, CoreDocumentAssessment, CoreDocumentReadinessBasis, CoreDocumentReadinessNeeded,
@@ -118,7 +128,7 @@ from typing import Callable, Any, AsyncContextManager, AsyncIterator, Mapping, c
 
 from .lead_provider_contracts import (
     LeadExplorationConstraints,
-    LeadContractError, LeadProviderConstraints, PREPARATION_INPUT_IDS,
+    LeadContractError, LeadProviderConstraints, PREPARATION_INPUT_IDS, preparation_original_input_ids,
     alternatives, canonical_assignments, canonical_scope, nonempty_text_schema, string_array, visible_text,
 )
 from .agents import (
@@ -2437,6 +2447,68 @@ def _lead_is_source_owner_rejection(failure: BaseException) -> bool:
     return False
 
 
+def _provided_review_targets(inputs: tuple[CollaborationInputRevision, ...]) -> tuple[ReviewTarget, ...]:
+    targets = []
+    for item in inputs:
+        if item.state is not CollaborationInputState.PRESENT:
+            continue
+        if item.kind is CollaborationInputKind.USER_INPUT:
+            kind, target = ReviewTargetKind.USER_PROVIDED, item.locator
+        elif item.kind is CollaborationInputKind.ARTIFACT_CANDIDATE:
+            kind, target = ReviewTargetKind.CANDIDATE, item.locator
+        elif item.kind in {CollaborationInputKind.WRITING_ARTIFACT, CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT}:
+            kind, target = ReviewTargetKind.WRITING_ARTIFACT, item.locator
+            if item.locator.startswith("${"):
+                batch = parse_artifact_references(item.locator)
+                if len(batch.references) != 1 or batch.references[0].token != item.locator:
+                    raise ValueError("preliminary target requires exact captured artifact locator")
+                target = batch.references[0].path
+        else:
+            continue
+        whole = item.start_line is None
+        targets.append(ReviewTarget(
+            input_id=item.input_id, kind=kind, target_id=target,
+            revision=item.revision_digest, content_digest=item.revision_digest,
+            source_digest=item.revision_digest, boundary_digest=item.revision_digest,
+            whole_source=whole, boundary_kind="whole" if whole else "artifact_lines",
+            boundary_start=item.start_line, boundary_end=item.end_line))
+    return tuple(targets)
+
+
+def _read_review_targets(facts: tuple[ContextCallReadFact, ...]) -> tuple[ReviewTarget, ...]:
+    return tuple(ReviewTarget(
+        input_id=item.evidence_id,
+        kind=ReviewTargetKind.WRITING_ARTIFACT if item.source_kind is ContextSourceKind.WRITING_ARTIFACT else ReviewTargetKind.READ_SOURCE,
+        target_id=item.artifact_locator or item.source_id, revision=item.revision,
+        content_digest=item.boundary_digest, source_digest=item.source_digest,
+        boundary_digest=item.boundary_digest, whole_source=item.whole_source and item.boundary_kind == "whole",
+        boundary_kind=item.boundary_kind, boundary_start=item.boundary_start,
+        boundary_end=item.boundary_end, availability=ReviewTargetAvailability.COMPLETED_READ)
+        for item in facts)
+
+
+def _coverage_review_targets(
+    provided: tuple[ReviewTarget, ...], facts: tuple[ContextCallReadFact, ...],
+    statuses: tuple[ContextSourceStatusReceipt, ...],
+) -> tuple[ReviewTarget, ...]:
+    """Use existing authorized inputs/READs and status-only uncovered core paths."""
+    targets = {item.input_id: item for item in provided
+               if item.availability is not ReviewTargetAvailability.UNREAD}
+    targets.update((item.input_id, item) for item in _read_review_targets(facts))
+    whole_paths = {item.target_id for item in targets.values()
+                   if item.kind is ReviewTargetKind.WRITING_ARTIFACT and item.whole_source and item.boundary_kind == "whole"}
+    for item in statuses:
+        if item.locator not in whole_paths:
+            targets[item.evidence_id] = ReviewTarget(
+                input_id=item.evidence_id, kind=ReviewTargetKind.WRITING_ARTIFACT,
+                target_id=item.locator, revision=item.revision,
+                content_digest=None, source_digest=item.source_digest,
+                boundary_digest=None, whole_source=False, boundary_kind="unread",
+                availability=ReviewTargetAvailability.UNREAD,
+                source_status=item.status.value, source_manifest_digest=item.manifest_digest)
+    return tuple(targets.values())
+
+
 @dataclass(frozen=True, slots=True)
 class OrchestrationLeadCallFactory(BoundCallFactory):
     """Existing orchestration owns stage eligibility and genuine final-owner hooks."""
@@ -2542,7 +2614,9 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
             (self.reviewer_for_locator("${" + item.artifact_locator + "}"), item.evidence_id)
             for item in facts if item.source_kind is ContextSourceKind.WRITING_ARTIFACT)))
         current = replace(self.constraints, input_ids=inputs, source_ids=sources, reviewer_inputs=reviewers,
-                          allow_read_sources=False, required_input_ids=self.constraints.required_assignment_input_ids())
+                          allow_read_sources=False,
+            preliminary_targets=_coverage_review_targets(
+                self.constraints.preliminary_targets, facts, offers.core_status_facts), required_input_ids=self.constraints.required_assignment_input_ids())
         writing_reads = tuple(
             (item.evidence_id, item.artifact_locator, item.whole_source)
             for item in facts if item.source_kind is ContextSourceKind.WRITING_ARTIFACT
@@ -7041,6 +7115,11 @@ class StoryRuntime:
                                 )
                             except (ValueError, BackendProtocolError) as exc:
                                 raise ArtifactApplicationError(ArtifactApplicationErrorCode.CORRELATION_MISMATCH) from exc
+                            qualification = self.qualify_artifact_final_review(
+                                session_id=decision.session_id, reviewed_proposal=reviewed,
+                                consultation=consultation, events=persisted)
+                            if not qualification.eligible:
+                                raise ArtifactApplicationError(ArtifactApplicationErrorCode.CORRELATION_MISMATCH)
                             reviewed.__post_init__()
                             reviewed.candidate.__post_init__()
                             artifact_binding = self._session_artifact_binding(
@@ -8216,6 +8295,7 @@ class StoryRuntime:
                 self._collaboration_input_value(item, events, evidence=proposal.basis.evidence) for item in selected
             ],
             "authoring_scope": authoring_scope_to_dict(proposal.authoring_scope),
+            **({"stage_plan": stage_plan_to_dict(proposal.stage_plan)} if proposal.stage_plan is not None else {}),
             **({"shared_premises": shared_premises_to_dict(tuple(
                 premise for premise in proposal.basis.shared_premises
                 if proposal.authoring_scope.activity is AuthoringActivity.REVIEW or any(
@@ -8335,6 +8415,7 @@ class StoryRuntime:
         value = {
             "provider_constraints": constraints.prompt_facts(),
             "authoring_scope": authoring_scope_to_dict(proposal.authoring_scope),
+            **({"stage_plan": stage_plan_to_dict(proposal.stage_plan)} if proposal.stage_plan is not None else {}),
             **({"shared_premises": shared_premises_to_dict(proposal.basis.shared_premises)}
                if proposal.authoring_scope.schema_version == 3 else {}),
             "conversation_id": conversation_id,
@@ -10269,62 +10350,70 @@ class StoryRuntime:
                         grounding_evidence_ids=(
                             candidate.candidate.grounding_evidence_ids
                         ),
-                    )
-                    attached_core_paths = tuple(
-                        sorted(
-                            {
-                                fact.artifact_path
-                                for fact in (
-                                    candidate.candidate.relationship_validation.review_facts
-                                )
-                                if fact.reason is ArtifactReviewReason.ATTACHED_CORE_EVIDENCE
-                            },
-                            key=lambda path: path.encode("utf-8"),
+                     final_review_evidence=build_final_review_evidence(candidate.candidate, proposal, reviews))
+                    qualification = self.qualify_artifact_final_review(
+                        session_id=events[-1].session_id, reviewed_proposal=reviewed_proposal,
+                        consultation=proposal, events=events)
+                    if not qualification.eligible:
+                        reviewed_proposal = None
+                        state = ArtifactProposalState.STALE
+                        message = "The final review basis is stale; no application authority was prepared."
+                    else:
+                        attached_core_paths = tuple(
+                            sorted(
+                                {
+                                    fact.artifact_path
+                                    for fact in (
+                                        candidate.candidate.relationship_validation.review_facts
+                                    )
+                                    if fact.reason is ArtifactReviewReason.ATTACHED_CORE_EVIDENCE
+                                },
+                                key=lambda path: path.encode("utf-8"),
+                            )
                         )
-                    )
-                    application_request = build_artifact_application_request(
-                        application_id=self._deterministic_id(
-                            "aa", reviewed_proposal.proposal_id,
-                            reviewed_proposal.proposal_digest,
-                        ),
-                        candidate_id=candidate.candidate.candidate_id,
-                        candidate_revision=candidate.candidate.candidate_revision,
-                        candidate_digest=candidate.candidate.candidate_digest,
-                        change_set=candidate.candidate.change_set,
-                        relationship_validation=(
-                            candidate.candidate.relationship_validation
-                        ),
-                        attached_core_paths=attached_core_paths,
-                    )
-                    application_payload = ArtifactApplicationRequestPayload(
-                        confirmation_request_id=self._deterministic_id(
-                            "ar", reviewed_proposal.proposal_id,
-                            reviewed_proposal.proposal_digest,
-                        ),
-                        reviewed_proposal=reviewed_proposal,
-                        application_request=application_request,
-                        application_request_digest=(
-                            "sha256:"
-                            + hashlib.sha256(
-                                serialize_artifact_application_request(
-                                    application_request
-                                )
-                            ).hexdigest()
-                        ),
-                        base_tail_sequence=projection.last_sequence,
-                        choices=(
-                            ArtifactApplicationDecisionKind.APPLY,
-                            ArtifactApplicationDecisionKind.REJECT,
-                            ArtifactApplicationDecisionKind.REVISE,
-                        ),
-                        side_effects=(CollaborationSideEffect.ARTIFACT_MUTATION,),
-                        prohibited_side_effects=(
-                            CollaborationSideEffect.GIT_INDEX_MUTATION,
-                            CollaborationSideEffect.GIT_COMMIT,
-                            CollaborationSideEffect.GIT_REMOTE_MUTATION,
-                            CollaborationSideEffect.GIT_MERGE,
-                        ),
-                    )
+                        application_request = build_artifact_application_request(
+                            application_id=self._deterministic_id(
+                                "aa", reviewed_proposal.proposal_id,
+                                reviewed_proposal.proposal_digest,
+                            ),
+                            candidate_id=candidate.candidate.candidate_id,
+                            candidate_revision=candidate.candidate.candidate_revision,
+                            candidate_digest=candidate.candidate.candidate_digest,
+                            change_set=candidate.candidate.change_set,
+                            relationship_validation=(
+                                candidate.candidate.relationship_validation
+                            ),
+                            attached_core_paths=attached_core_paths,
+                        )
+                        application_payload = ArtifactApplicationRequestPayload(
+                            confirmation_request_id=self._deterministic_id(
+                                "ar", reviewed_proposal.proposal_id,
+                                reviewed_proposal.proposal_digest,
+                            ),
+                            reviewed_proposal=reviewed_proposal,
+                            application_request=application_request,
+                            application_request_digest=(
+                                "sha256:"
+                                + hashlib.sha256(
+                                    serialize_artifact_application_request(
+                                        application_request
+                                    )
+                                ).hexdigest()
+                            ),
+                            base_tail_sequence=projection.last_sequence,
+                            choices=(
+                                ArtifactApplicationDecisionKind.APPLY,
+                                ArtifactApplicationDecisionKind.REJECT,
+                                ArtifactApplicationDecisionKind.REVISE,
+                            ),
+                            side_effects=(CollaborationSideEffect.ARTIFACT_MUTATION,),
+                            prohibited_side_effects=(
+                                CollaborationSideEffect.GIT_INDEX_MUTATION,
+                                CollaborationSideEffect.GIT_COMMIT,
+                                CollaborationSideEffect.GIT_REMOTE_MUTATION,
+                                CollaborationSideEffect.GIT_MERGE,
+                            ),
+                        )
 
         final_drafts: list[CollaborationEventDraft] = [
             self._draft_with_id(
@@ -10567,8 +10656,10 @@ class StoryRuntime:
             tuple(inputs),
             events,
         )
-        validate_specialist_routing(next_intent.authoring_scope, tuple(item.agent_id for item in next_intent.assignments),
-                                    affected_paths=self._authoring_affected_paths(tuple(inputs), proposal.basis.evidence))
+        validate_stage_routing(next_intent.authoring_scope, tuple(item.agent_id for item in next_intent.assignments), next_intent.stage_plan,
+                source_input_ids=tuple(item.input_id for item in inputs),
+                required_condition_ids=(() if next_intent.stage_plan is None else self._stage_required_condition_ids(tuple(inputs), proposal.basis.evidence)),
+                affected_paths=self._authoring_affected_paths(tuple(inputs), proposal.basis.evidence))
         known_ids = {item.input_id for item in inputs}
         intent_ids = {
             input_id
@@ -10714,7 +10805,7 @@ class StoryRuntime:
                 shared_premises=proposal.basis.shared_premises,
                 editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
             ),
-        )
+         stage_plan=next_intent.stage_plan)
 
     @classmethod
     def _specialist_reply_digest(
@@ -11960,7 +12051,7 @@ class StoryRuntime:
                 premise_question_id=premise_question_id,
                 adoption_intent=adoption_capture.selection.intent if adoption_capture is not None else None,
                 adoption_targets=adoption_capture.selection.target_paths if adoption_capture is not None else (),
-            )
+             preliminary_targets=_provided_review_targets(inputs))
             if interaction_mode is LeadInteractionMode.EXPLORATION:
                 constraints = LeadExplorationConstraints(tuple(item.input_id for item in inputs))
             definition = self._build_guarded_contextual_definition(
@@ -12457,6 +12548,28 @@ class StoryRuntime:
                                 (*authoring_scope.target_paths, *objective_paths),
                             )))
                     resolved_scope = self._resolve_authoring_scope(authoring_scope, inputs, decoded_evidence, selected_prior)
+                    if decoded.preliminary_review is not None:
+                        current_targets = _provided_review_targets(inputs) + _read_review_targets(tuple(
+                            ContextCallReadFact.from_evidence(item) for item in authorization.completed_evidence))
+                        expected = {item.input_id: item for item in current_targets}
+                        input_by_id = {item.input_id: item for item in inputs}
+                        for reference in authorization.mandatory_references:
+                            captured = input_by_id[reference.reference_id]
+                            expected[reference.reference_id] = ReviewTarget(reference.reference_id,
+                                ReviewTargetKind.WRITING_ARTIFACT, expected[reference.reference_id].target_id,
+                                reference.revision, reference.content_digest, reference.revision,
+                                reference.content_digest, captured.start_line is None,
+                                "whole" if captured.start_line is None else "artifact_lines",
+                                captured.start_line, captured.end_line,
+                                availability=ReviewTargetAvailability.COMPLETED_READ)
+                        expected = {item.input_id: item for item in scoped_preliminary_targets(
+                            _coverage_review_targets(tuple(expected.values()), (), authorization.core_statuses),
+                            resolved_scope.target_paths)}
+                        for target in decoded.preliminary_review.targets:
+                            if expected.get(target.input_id) != target:
+                                raise _LeadOutcomeValidationError("preliminary target is not this invocation's captured material")
+                        if set(expected) != {item.input_id for item in decoded.preliminary_review.targets}:
+                            raise _LeadOutcomeValidationError("preliminary inspection must disclose all current targets")
                     if resolved_scope.activity is not AuthoringActivity.WORKFLOW:
                         ordinary_answer = (
                             decoded.kind is LeadOutcomeKind.ANSWER
@@ -12466,12 +12579,15 @@ class StoryRuntime:
                         writing_reads = (
                             decoded_evidence.factual_writing_read_facts() if ordinary_answer else ()
                         )
-                        scope_paths = lead_outcome_scope_paths(
+                        scope_paths = ((resolved_scope.target_paths if preliminary_scope_eligible(
+                            resolved_scope.activity.value, resolved_scope.target_paths,
+                            decoded.preliminary_review.targets) else None)
+                            if decoded.preliminary_review is not None else lead_outcome_scope_paths(
                             decoded.kind, resolved_scope.activity,
                             required_authoring_domains(resolved_scope), writing_reads,
                             target_paths=resolved_scope.target_paths,
                             ordinary_answer=ordinary_answer,
-                        )
+                        ))
                         if scope_paths is None:
                             raise validation_failure(
                                 _LeadOutcomeValidationError(
@@ -13370,7 +13486,7 @@ class StoryRuntime:
                         core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
                         authoring_admission=outcome.authoring_admission,
                         provider_invocation_id=None if provider is None else provider.invocation_id,
-                    ),
+                     preliminary_review=outcome.preliminary_review),
                 )
                 proposal_event = self._draft(
                     session_id=session_id,
@@ -13430,7 +13546,7 @@ class StoryRuntime:
                     trace=outcome.trace,
                     validation_details=provider.validation_details,
                     provider_invocation_id=None if provider is None else provider.invocation_id,
-                )
+                 preliminary_review=outcome.preliminary_review)
 
             refreshed = self.conversation_storage_services.event_store.read_context(
                 session_id,
@@ -13449,7 +13565,7 @@ class StoryRuntime:
                     authoring_admission=outcome.authoring_admission,
                     core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
                     provider_invocation_id=None if provider is None else provider.invocation_id,
-                ),
+                 preliminary_review=outcome.preliminary_review),
             )
             final_drafts = (
                 judgment,
@@ -13513,7 +13629,7 @@ class StoryRuntime:
                 trace=outcome.trace,
                 validation_details=provider.validation_details,
                 provider_invocation_id=None if provider is None else provider.invocation_id,
-            )
+             preliminary_review=outcome.preliminary_review)
         finally:
             primary = sys.exception()
             if provider is not None:
@@ -13674,7 +13790,7 @@ class StoryRuntime:
                 authoring_admission=outcome.authoring_admission,
 
                 provider_invocation_id=None if public_response_provider is None else public_response_provider.invocation_id,
-            ),
+             preliminary_review=outcome.preliminary_review),
         )
         candidate_payload = ArtifactReviewCandidatePayload(
             candidate=candidate,
@@ -14909,6 +15025,24 @@ class StoryRuntime:
                 object_pairs_hook=unique,
                 parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
             )
+            if type(value) is dict and "preliminary_review" in value:
+                if set(value) - {"kind"} != {"message", "authoring_scope", "preliminary_review"}:
+                    raise ValueError("preliminary answer has no action or proposal fields")
+                if value.get("kind", "answer") != "answer":
+                    raise ValueError("preliminary record requires an answer")
+                raw_scope = value["authoring_scope"]
+                task_id, revision = raw_scope["task"].rsplit("@", 1)
+                scope = authoring_scope_from_dict({
+                    "schema_version": 3 if "contributions" in raw_scope else 2 if "intent" in raw_scope else 1,
+                    **{key: item for key, item in raw_scope.items() if key != "task"},
+                    "task_id": task_id, "task_revision": int(revision), "interpretation": value["message"]})
+                record = preliminary_review_from_dict(value["preliminary_review"])
+                status = (LeadEvidenceStatus.CONFLICTING if record.conflicts else
+                          LeadEvidenceStatus.INCOMPLETE if record.excluded_input_ids or record.missing_information
+                          else LeadEvidenceStatus.VERIFIED)
+                return LeadProviderOutcome(LeadOutcomeKind.ANSWER, value["message"],
+                    LeadOutcomeScope.STORY_SPECIFIC, status, (), authoring_scope=scope,
+                    preliminary_review=record)
             assessment_present = type(value) is dict and "authoring_assessment" in value
             if type(value) is dict and "core_document_assessment" in value:
                 if (set(value) != {"kind", "message", "authoring_scope", "core_document_assessment"}
@@ -15084,7 +15218,7 @@ class StoryRuntime:
                     objective_intent,
                     authoring_scope=authoring_scope, authoring_assessment=assessment,
                 )
-            if type(proposal_value) is not dict or frozenset(proposal_value) not in {
+            if type(proposal_value) is not dict or (frozenset(proposal_value) - {"stage_plan"}) not in {
                 frozenset({"assignments", *({"shared_premises"} if authoring_scope.schema_version == 3 else set())}),
                 frozenset({"assignments", "objective_intent", *({"shared_premises"} if authoring_scope.schema_version == 3 else set())}),
             }:
@@ -15147,6 +15281,7 @@ class StoryRuntime:
             assignments=tuple(assignments),
             authoring_scope=authoring_scope,
                 shared_premises=StoryRuntime._decode_shared_premise_intents(proposal_value.get("shared_premises", [])),
+                stage_plan=(stage_plan_from_dict(proposal_value["stage_plan"]) if "stage_plan" in proposal_value else None),
             )
             return LeadProviderOutcome(
                 kind,
@@ -15489,6 +15624,7 @@ class StoryRuntime:
         if scope is None or scope.schema_version < 3:
             return message
         disclosure = {
+            **({"stage_plan": stage_plan_to_dict(proposal.stage_plan)} if proposal.stage_plan is not None else {}),
             "writing_task_scope": authoring_scope_to_dict(scope),
             "final_reviewers": list(required_authoring_specialists(scope)),
             "shared_premises": shared_premises_to_dict(proposal.basis.shared_premises),
@@ -16194,6 +16330,31 @@ class StoryRuntime:
                 'artifact authoring requires current-task drafts from every affected specialist',
             )
 
+    def qualify_artifact_final_review(self, *, session_id: str,
+            reviewed_proposal: ArtifactReviewedProposal, consultation: CollaborationProposal,
+            events: tuple[CollaborationEvent, ...]) -> FinalReviewQualification:
+        """Qualify existing final review for current reuse; this grants no Apply capability."""
+        if (type(reviewed_proposal) is not ArtifactReviewedProposal
+                or type(consultation) is not CollaborationProposal
+                or reviewed_proposal.session_id != session_id
+                or (consultation.proposal_id, consultation.proposal_revision, consultation.proposal_digest) !=
+                   (reviewed_proposal.consultation_proposal_id, reviewed_proposal.consultation_proposal_revision,
+                    reviewed_proposal.consultation_proposal_digest)):
+            raise ValueError("final review qualification requires its exact existing consultation")
+        try:
+            self._validate_exact_candidate_reviews(session_id, consultation, reviewed_proposal.candidate, events)
+            evidence_inputs = self._validate_current_lead_evidence(
+                session_id=session_id, events=events, proposal=consultation)
+            current_inputs = self._current_lead_inputs(session_id, events, consultation,
+                evidence_inputs=evidence_inputs)
+        except (ValueError, BackendProtocolError):
+            return FinalReviewQualification(False, ("current_read_inapplicable",),
+                                            reviewed_proposal.final_review_evidence.evidence_digest)
+        current = build_final_review_evidence(reviewed_proposal.candidate, consultation,
+                                             reviewed_proposal.reviews, current_inputs=current_inputs)
+        return qualify_final_review(reviewed_proposal.final_review_evidence, current,
+                                    current_read_applicable=True)
+
     def _validate_exact_candidate_reviews(
         self,
         session_id: str,
@@ -16614,6 +16775,24 @@ class StoryRuntime:
                 whole, None if receipt is None else receipt.evidence_id))
         return tuple(result)
 
+    @staticmethod
+    def _stage_required_condition_ids(
+        inputs: tuple[CollaborationInputRevision, ...],
+        evidence: CollaborationLeadEvidence | None,
+    ) -> tuple[str, ...]:
+        """Separate READ evidence and exact preparation provenance from task conditions."""
+        read_ids = {receipt.evidence_id for receipt in (() if evidence is None else evidence.receipts)
+                    if receipt.acquisition is CollaborationEvidenceAcquisition.READ}
+        original_ids = tuple(item.input_id for item in inputs if item.input_id not in read_ids)
+        provenance = tuple(item for item in inputs if item.input_id in PREPARATION_INPUT_IDS)
+        if not provenance:
+            return original_ids
+        if (len(provenance) != len(PREPARATION_INPUT_IDS)
+                or {item.input_id for item in provenance} != set(PREPARATION_INPUT_IDS)
+                or any(item.kind is not CollaborationInputKind.CONVERSATION_EVENT for item in provenance)):
+            raise ValueError("stage preparation provenance requires the exact runtime event pair")
+        return preparation_original_input_ids(original_ids)
+
     def _build_lead_proposal(
         self,
         *,
@@ -16657,8 +16836,10 @@ class StoryRuntime:
         if intent.authoring_scope is None and intent.premise_decision is None:
             raise BackendProtocolError("live proposal requires authoring scope or exact premise question")
         if intent.authoring_scope is not None:
-            validate_specialist_routing(intent.authoring_scope, tuple(item.agent_id for item in intent.assignments),
-                                        affected_paths=self._authoring_affected_paths(inputs, evidence))
+            validate_stage_routing(intent.authoring_scope, tuple(item.agent_id for item in intent.assignments), intent.stage_plan,
+                source_input_ids=tuple(item.input_id for item in inputs),
+                required_condition_ids=(() if intent.stage_plan is None else self._stage_required_condition_ids(tuple(inputs), evidence)),
+                affected_paths=self._authoring_affected_paths(inputs, evidence))
         assignments = intent.assignments
         specialist_ids = tuple(item.agent_id for item in assignments)
         canonical = tuple(
@@ -16684,6 +16865,8 @@ class StoryRuntime:
             for reviewer in (self._core_reviewer(item.locator),)
             if reviewer is not None
         }
+        if stage_is_focused_review(intent.stage_plan):
+            required_reviewers.intersection_update(specialist_ids)
         if not required_reviewers.issubset(specialist_ids):
             raise BackendProtocolError(
                 "lead proposal omits a mandatory closed-fact reviewer"
@@ -16692,8 +16875,9 @@ class StoryRuntime:
             item.agent_id: frozenset(item.input_ids) for item in assignments
         }
         if any(
+            (not stage_is_focused_review(intent.stage_plan) or reviewer in specialist_ids) and (
             reviewer not in assignment_inputs
-            or item.input_id not in assignment_inputs[reviewer]
+            or item.input_id not in assignment_inputs[reviewer])
             for item in inputs
             if item.kind in {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
                              CollaborationInputKind.WRITING_ARTIFACT}
@@ -16827,7 +17011,7 @@ class StoryRuntime:
             basis=basis,
             authoring_scope=intent.authoring_scope,
             premise_decision=spec,
-        )
+         stage_plan=intent.stage_plan)
         events = self._session_authoring_events(session_id)
         validate_authoring_capture_pin(proposal, events)
         if intent.authoring_scope is not None and intent.authoring_scope.schema_version == 3 and intent.authoring_scope.activity in {
@@ -16912,7 +17096,9 @@ class StoryRuntime:
                 if type(readiness) is CoreDocumentReadinessNeeded or readiness != proposal.basis.core_document_readiness:
                     raise ValueError(readiness.message if type(readiness) is CoreDocumentReadinessNeeded else "dispatch readiness basis missing or changed")
             if proposal.authoring_scope is not None:
-                validate_specialist_routing(proposal.authoring_scope, specialist_ids,
+                validate_stage_routing(proposal.authoring_scope, specialist_ids, proposal.stage_plan,
+                source_input_ids=tuple(item.input_id for item in inputs),
+                required_condition_ids=(() if proposal.stage_plan is None else self._stage_required_condition_ids(tuple(inputs), proposal.basis.evidence)),
                                             affected_paths=self._authoring_affected_paths(inputs, proposal.basis.evidence))
             self._validate_review_material(
                 session_id,
@@ -16921,7 +17107,7 @@ class StoryRuntime:
                 events,
                 artifact_binding=artifact_binding,
             )
-            self._validate_required_reviewers(inputs, proposal.assignments)
+            self._validate_required_reviewers(inputs, proposal.assignments, stage_plan=proposal.stage_plan)
             if projection.rounds_spent >= COLLABORATION_ROUND_LIMIT:
                 raise ValueError("proposal no longer fits the round budget")
             call_limits, synthesis_calls, required_calls = (
@@ -17031,6 +17217,7 @@ class StoryRuntime:
                 basis=basis,
                 authoring_scope=proposal.authoring_scope,
                 premise_decision=proposal.premise_decision,
+                stage_plan=proposal.stage_plan,
             )
             all_events = self._session_authoring_events(session_id)
             validate_authoring_capture_pin(current, all_events)
@@ -17044,6 +17231,7 @@ class StoryRuntime:
                         input_ids=item.input_ids, mode=item.mode, review_basis=item.review_basis,
                     ) for item in proposal.assignments),
                     shared_premises=self._captured_premise_intents(proposal.basis),
+                    stage_plan=proposal.stage_plan,
                 ), inputs)
                 if captured != proposal.basis.shared_premises:
                     raise BackendProtocolError("captured premise source ownership or revision changed")
@@ -17729,6 +17917,7 @@ class StoryRuntime:
         self,
         inputs: tuple[CollaborationInputRevision, ...],
         assignments: tuple[CollaborationAssignment, ...],
+        stage_plan: SpecialistStagePlan | None = None,
     ) -> None:
         specialist_ids = tuple(item.specialist_id for item in assignments)
         required_reviewers = {
@@ -17739,14 +17928,17 @@ class StoryRuntime:
             for reviewer in (self._core_reviewer(item.locator),)
             if reviewer is not None
         }
+        if stage_is_focused_review(stage_plan):
+            required_reviewers.intersection_update(specialist_ids)
         if not required_reviewers.issubset(specialist_ids):
             raise ValueError("proposal omits a mandatory closed-fact reviewer")
         assignment_inputs = {
             item.specialist_id: frozenset(item.input_ids) for item in assignments
         }
         if any(
+            (not stage_is_focused_review(stage_plan) or reviewer in specialist_ids) and (
             reviewer not in assignment_inputs
-            or item.input_id not in assignment_inputs[reviewer]
+            or item.input_id not in assignment_inputs[reviewer])
             for item in inputs
             if item.kind in {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
                              CollaborationInputKind.WRITING_ARTIFACT}
@@ -18021,6 +18213,11 @@ class StoryRuntime:
         operation_id = authorization.correlation.operation_id
         result_correlation_id = authorization.correlation.result_correlation_id
         manifest_digest = authorization.manifest_digest
+        if outcome.preliminary_review is not None and not authorization.completed_evidence and not authorization.mandatory_references:
+            evidence = CollaborationLeadEvidence(outcome.scope, outcome.evidence_status, ())
+            CollaborationLeadJudgmentPayload(outcome.kind, outcome.message, evidence, outcome.authoring_scope,
+                preliminary_review=outcome.preliminary_review)
+            return evidence
         inputs_by_id = {item.input_id: item for item in inputs}
         available: list[CollaborationEvidenceReceipt] = []
         for reference in authorization.mandatory_references:
@@ -18096,7 +18293,7 @@ class StoryRuntime:
                 result_correlation_id=result_correlation_id,
                 manifest_digest=manifest_digest,
             )
-            for item in authorization.used_evidence
+            for item in (authorization.completed_evidence if outcome.preliminary_review is not None else authorization.used_evidence)
         )
         action_receipts.sort(
             key=lambda item: (
@@ -18168,6 +18365,8 @@ class StoryRuntime:
                     '$.authoring_scope',
                     'story-specific Lead outcome has no runtime evidence',
                 )
+        if outcome.preliminary_review is not None:
+            status = outcome.evidence_status
         evidence = CollaborationLeadEvidence(
             scope=outcome.scope,
             status=status,
@@ -18175,7 +18374,7 @@ class StoryRuntime:
         )
         try:
             CollaborationLeadJudgmentPayload(outcome.kind, outcome.message, evidence, outcome.authoring_scope, core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
-                                                                                                               authoring_admission=outcome.authoring_admission)
+                                                                                                               authoring_admission=outcome.authoring_admission, preliminary_review=outcome.preliminary_review)
         except (TypeError, ValueError) as exc:
             raise carry_validation(
                 validation_failure(
@@ -18365,9 +18564,10 @@ class StoryRuntime:
         if intent.authoring_scope is not None:
             validation_call(
                 '$.proposal.assignments',
-                validate_specialist_routing,
+                validate_stage_routing,
                 intent.authoring_scope,
                 tuple(item.agent_id for item in intent.assignments),
+                intent.stage_plan,
                 affected_paths=cls._authoring_affected_paths(inputs, None),
             )
         specialist_ids = tuple(item.agent_id for item in intent.assignments)
@@ -18411,6 +18611,8 @@ class StoryRuntime:
                 continue
             reviewer = cls._core_reviewer(item.locator)
             if reviewer is not None and (
+                not stage_is_focused_review(intent.stage_plan) or reviewer in specialist_ids
+            ) and (
                 reviewer not in assignment_inputs
                 or item.input_id not in assignment_inputs[reviewer]
             ):

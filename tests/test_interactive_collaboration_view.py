@@ -318,6 +318,56 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
         stale_repair = replace(cumulative_repair, payload=replace(
             cumulative_repair.payload, accounting=wrong_prefix))
         self.assertEqual(response_usage((cumulative_lead, stale_repair), **scope), ResponseUsage())
+        from story_writing_agents.review_contracts import (LeadPreliminaryReview, PreliminaryNextAction,
+            ReviewFinding, ReviewTarget, ReviewTargetAvailability, ReviewTargetKind)
+        from story_writing_agents.specialist_routing import (AuthoringActivity, AuthoringScope,
+            ArtifactReviewDomain, AuthoringContribution, AuthoringContributionRole)
+        from story_writing_agents.conversations import CollaborationLeadJudgmentPayload, LeadOutcomeKind
+        from tests.collaboration_contract_fixture import make_lead_evidence
+        from story_writing_agents.writing_artifacts.directives import parse_artifact_references
+        evidence = make_lead_evidence()
+        receipt = replace(evidence.receipts[0], locator="${core_documents/global_outline.md}")
+        evidence = replace(evidence, receipts=(receipt,))
+        supplied = ReviewTarget(receipt.evidence_id, ReviewTargetKind.WRITING_ARTIFACT,
+            parse_artifact_references(receipt.locator).references[0].path,
+            receipt.revision_digest, receipt.content_digest, receipt.revision_digest, receipt.content_digest,
+            receipt.boundary_kind == "whole", receipt.boundary_kind, receipt.boundary_start, receipt.boundary_end,
+            availability=ReviewTargetAvailability.COMPLETED_READ)
+        unread = ReviewTarget("unread_rules", ReviewTargetKind.WRITING_ARTIFACT,
+            "core_documents/narrative_rules.md", None, None, None, None, False, "unread",
+            availability=ReviewTargetAvailability.UNREAD, source_status="present",
+            source_manifest_digest="sha256:" + "8" * 64)
+        finding = "A useful supplied-source finding remains bounded by the unread rules."
+        preliminary = LeadPreliminaryReview("view_task", 1, (supplied, unread), (supplied.input_id,),
+            (unread.input_id,), (ReviewFinding(finding, (supplied.input_id,)),), (),
+            ("Narrative rules were not inspected.",), True, PreliminaryNextAction.REQUEST_INFORMATION)
+        domains = tuple(ArtifactReviewDomain)
+        declared_scope = AuthoringScope(AuthoringActivity.REVIEW, (unread.target_id,), domains,
+            "Explain inspected evidence and disclose the uninspected review target.", "view_task", 1,
+            schema_version=3, contributions=tuple(AuthoringContribution(domain,
+                AuthoringContributionRole.CONSTRAINT_ASSESSOR) for domain in domains))
+        judgment = CollaborationLeadJudgmentPayload(LeadOutcomeKind.ANSWER, finding, evidence,
+            authoring_scope=declared_scope, preliminary_review=preliminary)
+        frame = replace(history[0], kind=CollaborationEventKind.MESSAGE, sender=LEAD, recipient=USER, payload=judgment)
+        preliminary_text = render_component(_collaboration_view.project_collaboration_event(event=frame),
+            _capability(CapabilityProfile.LINE, width=120)).text
+        self.assertIn(finding, preliminary_text)
+        self.assertIn(unread.target_id, preliminary_text)
+        self.assertIn("unread", preliminary_text)
+        self.assertIn("Narrative rules were not inspected.", preliminary_text)
+        self.assertIn("no final review, fulfillment, Apply or Commit authority", preliminary_text)
+        self.assertNotIn("None", preliminary_text)
+        self.assertNotIn("whole:None-None", preliminary_text)
+        self.assertFalse(preliminary.whole_target_coverage)
+        empty_preliminary = replace(preliminary, findings=())
+        empty_frame = replace(frame, payload=replace(judgment, message="Only inspection limits are reported.",
+            preliminary_review=empty_preliminary))
+        empty_text = render_component(_collaboration_view.project_collaboration_event(event=empty_frame),
+            _capability(CapabilityProfile.LINE, width=120)).text
+        self.assertIn(unread.target_id, empty_text)
+        self.assertIn("Narrative rules were not inspected.", empty_text)
+        self.assertIn("no final review, fulfillment, Apply or Commit authority", empty_text)
+        self.assertNotIn(finding, empty_text)
 
 
 

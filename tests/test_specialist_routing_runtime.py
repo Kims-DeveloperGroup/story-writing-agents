@@ -3,7 +3,7 @@ from tests.test_lead_orchestration import _live_material, _live_task
 from tests.provider_wire_fixture import selection_plan
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
 from tests.provider_wire_fixture import ( result as wire_result, lead_fixture_bound_scope, lead_fixture_assignments,
-    finite_fixture_selection, lead_fixture_result, lead_fixture_response,)
+    finite_fixture_selection, lead_fixture_result, fixture_schema_node, indexed_response, lead_fixture_response,)
 from tests.provider_wire_fixture import author_positive_fixture_review_bases
 from story_writing_agents.agent_context.accounting import ProviderCallKind
 from story_writing_agents.lead_provider_contracts import LeadResultContractOwner
@@ -34,7 +34,7 @@ from tests.test_lead_orchestration import (
     _workflow_material, _live_scope, _specialist_outcome, _synthesis_outcome, _visible_outcome, _exploration_outcome, _adoption_selection,
 )
 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id
-from tests.recommendation_fixture import DRAFT, action, recommendation, decision as recommendation_decision
+from tests.recommendation_fixture import DRAFT, action, recommendation, decision as recommendation_decision, task_assessment
 from story_writing_agents.conversations.events import shared_premises_to_dict
 from tests.test_artifact_proposal_orchestration import _artifact_outcome, _artifact_synthesis_outcome, _status_id
 
@@ -136,10 +136,22 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
         branch_key = None
         if call.contract.schema_group_phase is not None:
             group_id = call.contract.group_workflow.active_selection.group_id
+            shape = ("preliminary_review" in body, type(proposal) is dict and "stage_plan" in proposal)
+            def offered_shape(member):
+                schema = member.rule_graph.schema_value()
+                def object_rule(node):
+                    node = fixture_schema_node(schema, node)
+                    return fixture_schema_node(schema, node["anyOf"][0]) if "anyOf" in node else node
+                root = object_rule(schema)
+                details = object_rule(root["properties"]["response_details"])
+                allocation = details.get("properties", {}).get("specialist_consultation_proposal")
+                return ("preliminary_review" in details.get("required", ()), allocation is not None
+                    and "stage_plan" in object_rule(allocation).get("required", ()))
             branch_key, = {member.owner.variant.branch_key.partition(':partition:')[0]
                 for member in call.contract.semantic_index.contracts
                 if type(member.owner) is LeadResultContractOwner and member.owner.variant.group_id == group_id
-                and member.rule_graph.literal_at(('response_type',)) == response_type}
+                and member.rule_graph.literal_at(('response_type',)) == response_type
+                and offered_shape(member) == shape}
         return lead_fixture_response(call, lead_fixture_result(body),
             family=0 if branch_key is not None else native_inputs['family'], branch_key=branch_key,
             response_type=response_type)
@@ -193,7 +205,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         proposed = await self.proposal_for(conversation, **kwargs)
         self.assertIs(proposed.kind, c.LeadOutcomeKind.PROPOSAL, proposed)
         for assignment in proposed.proposal.assignments:
-            status = {SpecialistAssignmentMode.DRAFT: "drafted", SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT: "constraints_assessed"}[assignment.mode]
+            status = {SpecialistAssignmentMode.DRAFT: "drafted", SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT: "constraints_assessed",
+                      SpecialistAssignmentMode.REVIEW: "supports"}[assignment.mode]
             self.backend.enqueue_for(assignment.specialist_id, _specialist_outcome(status, "Summons leads choice; choice causes consequence."))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, synthesis or _synthesis_outcome(message="The draft material is available for integration; no artifact changed."))
         result = await self.runtime.decide_lead_step(_decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
@@ -646,6 +659,155 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.assertIsNone(controlled.artifact_application_request)
             self.assertIsNone(controlled.story_commit_request)
 
+        from story_writing_agents import specialist_routing as routing, review_contracts as review
+        from story_writing_agents.agent_context.manifest import ContextSourceKind
+        from story_writing_agents.agent_context.accounting import canonical_provider_json
+        from tests.provider_wire_fixture import fixture_schema_node
+        conversation = self.conversation("Focused motivation review and retained feedback")
+        def focused_plan(value, _material):
+            value["proposal"]["stage_plan"] = {
+                "stage": "specialist_work", "work_kind": "deep_review", "focus_domains": ["character_world"],
+                "specialist_ids": [CHARACTER_CUSTODIAN],
+                "questions": [{"question_id": "motive", "question": "Does the supplied decision follow the established promise?",
+                    "source_input_ids": ["user_input"], "required_condition_ids": ["user_input"]}],
+                "required_condition_ids": ["user_input"], "agreed_direction": "Preserve the promise and leave the secret unresolved.",
+                "unresolved_questions": ["Is the decision trigger established?"],
+                "expected_result": "A bounded Character judgment, not a replacement draft or final candidate approval."}
+        staged_response = scoped_proposal(CHARACTER_CUSTODIAN, activity="review",
+            intent="review_only", paths=(), domains=tuple(domain.value
+            for domain in ArtifactReviewDomain), mutate=focused_plan, native_inputs={
+                "source_choices": ("user_input",), "input_choices": ("user_input",),
+                "anchors": {CHARACTER_CUSTODIAN: "user_input"}, "recipients": {}, "family": 0})
+        stage_checks = []
+        def response(call, provider):
+            self.assertIsNone(call.contract.factory.constraints.scope)
+            packet = json.loads(staged_response(call, provider))["agent_action"]
+            details = packet["task_result"]["response_details"]
+            native_plan = details["specialist_consultation_proposal"]["stage_plan"]
+            choices = dict(call.contract.semantic_index.policy.choices)
+            native_plan["focus_domains"] = finite_fixture_selection(
+                native_plan["focus_domains"], native_plan["focus_domains"])
+            native_plan["specialist_ids"] = finite_fixture_selection(
+                native_plan["specialist_ids"], native_plan["specialist_ids"])
+            native_plan["required_condition_ids"] = finite_fixture_selection(
+                choices["required_input_ids"], native_plan["required_condition_ids"])
+            question = native_plan["questions"][0]
+            question["source_input_ids"] = finite_fixture_selection(
+                choices["allocation_input_ids"], question["source_input_ids"])
+            question["required_condition_ids"] = finite_fixture_selection(
+                choices["required_input_ids"], question["required_condition_ids"])
+            packet.pop("schema_id")
+            packet["task_result"].pop("schema_id")
+            details.pop("variant_id", None)
+            stage_members = {member.schema_id: member for member in call.contract.semantic_index.contracts
+                             if type(member.owner) is LeadResultContractOwner}
+            stage_candidates, stage_rejections = [], []
+            for candidate_outer, candidate_inner in call.contract.outer_inner_schema_ids:
+                if candidate_inner not in stage_members:
+                    continue
+                candidate_raw = indexed_response(packet, outer_schema_id=candidate_outer,
+                    inner_schema_id=candidate_inner, contract=call.contract)
+                candidate_findings = stage_members[candidate_inner].rule_graph.findings(
+                    json.loads(candidate_raw)["agent_action"]["task_result"])
+                if candidate_findings:
+                    stage_rejections.append((candidate_inner, candidate_findings))
+                else:
+                    stage_candidates.append(candidate_raw)
+            stage_checks.append((len(stage_candidates), tuple(stage_rejections),
+                call.contract.structural_findings(stage_candidates[0]) if len(stage_candidates) == 1 else None))
+            self.assertEqual(len(stage_candidates), 1)
+            return stage_candidates[0]
+        before = len(self.backend.calls)
+        self.backend.enqueue(response, control_plan=selection_plan("consultation.review_only"))
+        focused = await self.runtime.lead_turn(self.session_id, conversation,
+            "Perform a deep motivation review of this complete supplied scene, not a rewrite: "
+            "Mina promised to protect her brother and hides a letter. Preserve the promise and leave the secret unresolved.")
+        self.assertEqual([(count, findings) for count, _rejected, findings in stage_checks],
+                         [(1, ())], stage_checks)
+        self.assertIs(focused.kind, c.LeadOutcomeKind.PROPOSAL, focused.message)
+        self.assertIs(focused.proposal.authoring_scope.intent, AuthoringIntent.REVIEW_ONLY)
+        self.assertEqual(focused.proposal.participants, (CHARACTER_CUSTODIAN,))
+        self.assertEqual(routing.required_authoring_domains(focused.proposal.authoring_scope), tuple(ArtifactReviewDomain))
+        self.assertEqual(routing.required_authoring_specialists(focused.proposal.authoring_scope), ROSTER)
+        plan = focused.proposal.stage_plan
+        self.assertIs(plan.work_kind, routing.SpecialistWorkKind.DEEP_REVIEW)
+        self.assertEqual((plan.task_id, plan.task_revision),
+            (focused.proposal.authoring_scope.task_id, focused.proposal.authoring_scope.task_revision))
+        self.assertEqual(tuple(agent for agent, _ in self.backend.call_records[before:]), (LEAD_ORCHESTRATOR,) * 2)
+        feedback = "CHARACTER_REVIEW_838: The promise is established; the decision trigger is absent."
+        self.backend.enqueue_for(CHARACTER_CUSTODIAN, _specialist_outcome("supports", feedback))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome(message="A bounded Character review is available for explanation."))
+        confirmed_start = len(self.backend.call_records)
+        completed = await self.runtime.decide_lead_step(_decision(focused, c.CollaborationConfirmationDecision.CONFIRM))
+        self.assertIs(completed.turn.state, c.CollaborationStepState.COMPLETED)
+        self.assertIsNone(completed.turn.artifact_application_request)
+        self.assertIsNone(completed.turn.story_commit_request)
+        stage_inputs = [(agent, _workflow_material(call.payload))
+                        for agent, call in self.backend.call_records[confirmed_start:]]
+        self.assertEqual([agent for agent, _ in stage_inputs],
+                         [CHARACTER_CUSTODIAN, LEAD_ORCHESTRATOR])
+        self.assertEqual([material["stage_plan"] for _, material in stage_inputs],
+                         [routing.stage_plan_to_dict(plan)] * 2)
+        specialist_calls = [agent for agent, _ in self.backend.call_records[before:] if agent != LEAD_ORCHESTRATOR]
+        self.assertEqual(specialist_calls, [CHARACTER_CUSTODIAN])
+        original_history = self.history(conversation)
+        replies = [event for event in original_history if type(event.payload) is c.CollaborationSpecialistReplyPayload
+                   and event.payload.proposal_id == focused.proposal.proposal_id]
+        self.assertEqual(len(replies), 1)
+        self.assertEqual(replies[0].payload.message, feedback)
+        explained = "Character reported that the promise is established but the decision trigger is absent."
+        def explain_feedback(call, provider):
+            supplied = canonical_provider_json(provider.callback_payload(call)).decode("utf-8")
+            self.assertIn(feedback, supplied)
+            self.assertIn(replies[0].event_id, supplied)
+            facts = {item.evidence_id: item for item in
+                call.contract.offers.completed_read_facts + call.contract.offers.delivery_read_facts}
+            history_ids = tuple(identity for identity, item in facts.items()
+                                if item.source_kind is ContextSourceKind.CONVERSATION)
+            self.assertTrue(history_ids)
+            members = {}
+            for member in call.contract.semantic_index.contracts:
+                if type(member.owner) is not LeadResultContractOwner:
+                    continue
+                schema = member.rule_graph.schema_value()
+                details = fixture_schema_node(schema, schema["properties"]["response_details"])
+                details = fixture_schema_node(schema, details.get("anyOf", (details,))[0])
+                if "preliminary_review" in details["properties"]:
+                    record = fixture_schema_node(schema, details["properties"]["preliminary_review"])
+                    inspection = fixture_schema_node(schema, record["properties"]["inspection"])
+                    key = member.owner.variant.branch_key.partition(":partition:")[0]
+                    known_inspection = members.setdefault(key, inspection)
+                    self.assertEqual(set(known_inspection["properties"]), set(inspection["properties"]))
+            self.assertEqual(len(members), 1)
+            branch, = members
+            inspection = members[branch]
+            preliminary_choices = tuple(target["input_id"] for target in map(json.loads,
+                dict(call.contract.semantic_index.policy.choices)["preliminary_targets"])
+                if target["availability"] != review.ReviewTargetAvailability.UNREAD.value)
+            return lead_fixture_response(call, {"response_type": "answer", "response_text": explained,
+                "response_details": {"task_scope": lead_fixture_bound_scope(call,
+                    _live_scope(call, activity="review", domains=("character_world",)), record=True),
+                    "preliminary_review": {"stage": "lead_preliminary_review",
+                        "inspection": {identity: "inspected" if identity == "user_input" or identity in history_ids else "excluded"
+                                       for identity in inspection["properties"]},
+                        "findings": [{"message": explained,
+                    "evidence_input_ids": finite_fixture_selection(preliminary_choices, history_ids)}],
+                        "conflicts": [], "missing_information": [], "further_review_required": False, "next_action": "finish_direct"}}},
+                family=0, branch_key=branch)
+        before = len(self.backend.calls)
+        self.backend.enqueue(partial(_search_history, text="CHARACTER_REVIEW_838"), _read_history_hit, explain_feedback,
+            control_plan=selection_plan("answer.observed_facts", before_script_response=2))
+        explanation = await self.runtime.lead_turn(self.session_id, conversation,
+            "Explain that recorded Character feedback without asking a specialist to review it again.")
+        self.assertIs(explanation.kind, c.LeadOutcomeKind.ANSWER, explanation.message)
+        self.assertEqual(explanation.message, explained)
+        self.assertEqual(tuple(agent for agent, _ in self.backend.call_records[before:]), (LEAD_ORCHESTRATOR,) * 4)
+        self.assertEqual(self.history(conversation)[:len(original_history)], original_history)
+        self.assertEqual(explanation.preliminary_review.findings[0].message, explained)
+        self.assertTrue(any(target.kind is review.ReviewTargetKind.READ_SOURCE
+            and target.availability is review.ReviewTargetAvailability.COMPLETED_READ
+            for target in explanation.preliminary_review.targets))
+
     async def test_declared_substantive_direct_outcomes_fail_closed(self):
         for kind in ("answer", "recommendation", "critique"):
             with self.subTest(kind=kind):
@@ -663,6 +825,195 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.backend.enqueue(_visible_outcome("question", "Which existing task should this status request concern?"), control_plan=selection_plan('question.workflow'))
         question = await self.runtime.lead_turn(self.session_id, conversation, "Clarify which task is active.")
         self.assertIs(question.kind, c.LeadOutcomeKind.QUESTION)
+
+        from story_writing_agents import review_contracts as review
+        from story_writing_agents.agent_context.accounting import canonical_provider_json
+        from story_writing_agents.specialist_routing import required_authoring_domains, artifact_domain
+        from tests.provider_wire_fixture import (fixture_schema_node, offered_fixture_bindings,
+                                                indexed_response, finite_fixture_read_selection)
+        from tests.test_lead_orchestration import _live_scope
+        part_outline, rules = "core_documents/part_outlines.md", "core_documents/narrative_rules.md"
+        documents = {
+            OUTLINE: "Mina promises to protect her brother, then hides the letter. D2 reveals the secret. "
+                     "The complete outline requires finding, handing off, and delivering the letter.",
+            CHARACTER: "Mina keeps her promise to protect her brother. The character sheet keeps the secret until D3.",
+            part_outline: "Mina finds the letter and later delivers it; no handoff event is recorded.",
+            rules: "Use past tense. Preserve the stated promise and suspense constraints.",
+        }
+        cases = (
+            ("motive", "Explain Mina's existing choice from the recorded motive; do not rewrite it.",
+             (OUTLINE, CHARACTER), "Mina hides the letter to keep her promise to protect her brother.", False),
+            ("style", "Compare 'Mina opens the letter' with the explicit tense rule; do not edit the text.",
+             (rules,), "'opens' is present tense; the supplied rule requires past tense.", False),
+            ("omission", "Compare the part outline with the complete outline; identify an omitted event.",
+             (OUTLINE, part_outline), "The part outline omits the required handoff between finding and delivery.", False),
+            ("impact", "Identify the evidenced scope of moving the reveal from D2 to D3; do not change anything.",
+             (OUTLINE, CHARACTER), "The outline and character sheet need alignment. No manuscript was inspected, "
+             "so manuscript-wide effects remain unverified.", False),
+            ("conflict", "Explain the two secret-reveal dates; I have not chosen which document to change.",
+             (OUTLINE, CHARACTER), "The outline reveals the secret at D2; the character sheet keeps it until D3.", True),
+            ("alternatives", "Compare revealing at D2 and D3 against both suspense and the promise; choose neither.",
+             (OUTLINE, CHARACTER), "D2 reveals earlier and shortens suspense; D3 prolongs suspense. "
+             "Either direction must preserve Mina's promise; the user has not selected one.", True),
+            ("foundations", "Give a preliminary review of all four core documents; disclose everything not inspected.",
+             (OUTLINE, CHARACTER), "Only the global outline and character sheet were inspected. "
+             "The part outline and narrative rules remain uninspected; whole-foundation completion is not established.", True),
+        )
+        retained_reviews = []
+        for label, user_text, paths, finding, needs_decision in cases:
+            declared_paths = tuple(documents) if label == "foundations" else paths
+            marker = f"PRELIMINARY_READ_838_{label}"
+            for path in paths:
+                self.workspace.path(path).write_text(marker + "\n" + documents[path], encoding="utf-8")
+            conversation = self.conversation(f"Grounded preliminary {label}")
+            authored, read_ids = [], []
+            callback_checks = []
+            def search(call, _provider):
+                outer, inner = offered_fixture_bindings(call, action_type="search_context",
+                    response_type=None, family=1)
+                return indexed_response({"action_type": "search_context", "artifact_directory_prefix": "core_documents/",
+                    "queries": [{"search_text": marker, "source_types": {"story_document": True}}]},
+                    outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
+            def read_all(call, provider):
+                observation = provider.callback_payload(call)["context_observation"]
+                callback_checks.append((observation["observation_type"] == "context_search_results",
+                                        "read-kind", observation["observation_type"]))
+                self.assertEqual(observation["observation_type"], "context_search_results")
+                handles = tuple(row["read_handle"] for row in observation["search_results"])
+                callback_checks.append((len(handles) == len(paths), "handle-count", len(handles), len(paths)))
+                self.assertEqual(len(handles), len(paths))
+                provider.used_handles = handles
+                outer, inner = offered_fixture_bindings(call, action_type="read_context", response_type=None, family=0)
+                return indexed_response({"action_type": "read_context", "read_handles":
+                    finite_fixture_read_selection(call.contract.offers.issued_handle_aliases, handles)},
+                    outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
+            def preliminary(call, provider):
+                actual_input = canonical_provider_json(provider.callback_payload(call)).decode("utf-8")
+                for path in paths:
+                    callback_checks.append((documents[path] in actual_input, "source-present", path))
+                    self.assertIn(documents[path], actual_input)
+                facts = {item.evidence_id: item for item in
+                         call.contract.offers.completed_read_facts + call.contract.offers.delivery_read_facts}
+                by_path = {item.artifact_locator: item.evidence_id for item in facts.values()}
+                callback_checks.append((set(paths).issubset(by_path), "read-paths", tuple(sorted(by_path))))
+                self.assertTrue(set(paths).issubset(by_path))
+                read_ids[:] = [by_path[path] for path in paths]
+                candidates = {}
+                for member in call.contract.semantic_index.contracts:
+                    if type(member.owner) is not LeadResultContractOwner:
+                        continue
+                    schema = member.rule_graph.schema_value()
+                    details = fixture_schema_node(schema, schema["properties"]["response_details"])
+                    details = fixture_schema_node(schema, details.get("anyOf", (details,))[0])
+                    if "preliminary_review" in details["properties"]:
+                        record = fixture_schema_node(schema, details["properties"]["preliminary_review"])
+                        inspection = fixture_schema_node(schema, record["properties"]["inspection"])
+                        key = member.owner.variant.branch_key.partition(":partition:")[0]
+                        known_inspection = candidates.setdefault(key, inspection)
+                        callback_checks.append((set(known_inspection["properties"]) == set(inspection["properties"]),
+                                                "partition-fields", key, tuple(inspection["properties"])))
+                        self.assertEqual(set(known_inspection["properties"]), set(inspection["properties"]))
+                callback_checks.append((len(candidates) == 1, "branch-census", tuple(candidates)))
+                self.assertEqual(len(candidates), 1)
+                branch, = candidates
+                inspection = candidates[branch]
+                preliminary_targets = tuple(map(json.loads,
+                    dict(call.contract.semantic_index.policy.choices)["preliminary_targets"]))
+                preliminary_choices = tuple(target["input_id"] for target in preliminary_targets
+                    if target["availability"] != review.ReviewTargetAvailability.UNREAD.value)
+                excluded_scope = any(target["availability"] == review.ReviewTargetAvailability.UNREAD.value and
+                    target["target_id"] in declared_paths for target in preliminary_targets)
+                read_selection = finite_fixture_selection(preliminary_choices, read_ids)
+                native_review = {"stage": "lead_preliminary_review",
+                    "inspection": {identity: "inspected" if identity == "user_input" or identity in facts else "excluded"
+                                   for identity in inspection["properties"]},
+                    "findings": [{"message": finding, "evidence_input_ids": read_selection}],
+                    "conflicts": [{"message": finding, "evidence_input_ids": read_selection}] if label == "conflict" else [],
+                    "missing_information": (["Part outline and narrative rules were not inspected."] if label == "foundations"
+                        else ["The user has not selected which direction to adopt."] if needs_decision else []) + (["Only bounded READ ranges were inspected; whole-document coverage remains excluded."]
+                        if excluded_scope else []),
+                    "further_review_required": needs_decision,
+                    "next_action": "request_information" if needs_decision else "finish_direct"}
+                declared_domains = {artifact_domain(path) for path in declared_paths}
+                scope = lead_fixture_bound_scope(call, _live_scope(call, activity="review", domains=tuple(domain.value for domain in ArtifactReviewDomain if domain in declared_domains),
+                                                                                            paths=declared_paths), record=True)
+                raw = lead_fixture_response(call, {"response_type": "answer", "response_text": finding,
+                    "response_details": {"task_scope": scope, "preliminary_review": native_review}},
+                    family=0, branch_key=branch)
+                preliminary_findings = call.contract.structural_findings(raw)
+                callback_checks.append((not preliminary_findings, "native-findings", preliminary_findings))
+                self.assertEqual(preliminary_findings, ())
+                authored.append(native_review)
+                return raw
+            original_artifacts, before = self.artifact_bytes(), len(self.backend.calls)
+            self.backend.enqueue(search, read_all, preliminary,
+                control_plan=selection_plan("answer.observed_facts", before_script_response=2))
+            result = await self.runtime.lead_turn(self.session_id, conversation, user_text)
+            self.assertTrue(all(check[0] for check in callback_checks), callback_checks)
+            self.assertIs(result.kind, c.LeadOutcomeKind.ANSWER, result.message)
+            self.assertEqual(result.message, finding)
+            self.assertEqual(len(self.backend.calls) - before, 4)
+            self.assertEqual(tuple(agent for agent, _ in self.backend.call_records[before:]), (LEAD_ORCHESTRATOR,) * 4)
+            self.assertEqual(tuple(call.contract.schema_group_phase for call in self.backend.calls[before:]),
+                             (LeadGroupPhase.SELECT,) * 3 + (LeadGroupPhase.GENERATE,))
+            events = self.history(conversation)
+            judgment_event = next(event for event in reversed(events)
+                if type(event.payload) is c.CollaborationLeadJudgmentPayload
+                and event.payload.provider_invocation_id == result.provider_invocation_id)
+            scope = judgment_event.payload.authoring_scope
+            report = result.preliminary_review
+            self.assertIs(type(report), review.LeadPreliminaryReview)
+            self.assertEqual((report.task_id, report.task_revision),
+                             (scope.task_id, scope.task_revision))
+            self.assertEqual(set(scope.target_paths), set(declared_paths))
+            self.assertTrue(required_authoring_domains(scope))
+            self.assertTrue(set(read_ids).issubset(report.inspected_input_ids))
+            self.assertEqual(report.findings[0].message, finding)
+            self.assertEqual(report.next_action.value, authored[0]["next_action"])
+            targets = {item.target_id: item for item in report.targets
+                       if item.kind is review.ReviewTargetKind.WRITING_ARTIFACT}
+            self.assertTrue(set(paths).issubset(targets))
+            for path in paths:
+                self.assertEqual(targets[path].source_digest,
+                                 "sha256:" + hashlib.sha256(self.workspace.path(path).read_bytes()).hexdigest())
+            if label == "foundations":
+                self.assertEqual({targets[path].input_id for path in declared_paths}, set(report.excluded_input_ids))
+                for path in (part_outline, rules):
+                    self.assertIs(targets[path].availability, review.ReviewTargetAvailability.UNREAD)
+                    self.assertEqual(targets[path].source_status, "present")
+                    self.assertIsNone(targets[path].content_digest)
+                    self.assertIsNone(targets[path].boundary_digest)
+                    self.assertFalse(targets[path].whole_source)
+                self.assertFalse(report.whole_target_coverage)
+                self.assertEqual(set(read_ids), set(report.inspected_input_ids) - {"user_input"})
+            self.assertEqual(self.artifact_bytes(), original_artifacts)
+            self.assertIsNone(result.proposal)
+            self.assertIsNone(result.artifact_application_request)
+            self.assertIsNone(result.story_commit_request)
+            self.assertFalse(any(event.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for event in events))
+            self.assertEqual(judgment_event.payload.preliminary_review, report)
+            attested = next(target for target in report.targets if target.input_id == read_ids[0])
+            for field, value in (("revision", "tampered-receipt-revision"),
+                                 ("content_digest", "sha256:" + hashlib.sha256(b"tampered selected bytes").hexdigest())):
+                changed_target = replace(attested, **{field: value})
+                changed_report = replace(report, targets=tuple(changed_target if target.input_id == attested.input_id
+                    else target for target in report.targets))
+                with self.assertRaises(ValueError):
+                    replace(judgment_event.payload, preliminary_review=changed_report)
+                changed_wire = json.loads(c.encode_collaboration_event(judgment_event))
+                wire_target = next(target for target in changed_wire["payload"]["preliminary_review"]["targets"]
+                                   if target["input_id"] == attested.input_id)
+                wire_target[field] = value
+                with self.assertRaises(ValueError):
+                    c.decode_collaboration_event(canonical_provider_json(changed_wire))
+            retained_reviews.append((conversation, events, report))
+            restarted = StoryRuntime(self.control_workspace, backend=self.backend)
+            for previous_conversation, original_events, original_report in retained_reviews:
+                restored = restarted.conversation_storage_services.event_store.read(self.session_id, previous_conversation)
+                self.assertEqual(restored, original_events)
+                restored_judgment = next(event.payload for event in reversed(restored)
+                    if type(event.payload) is c.CollaborationLeadJudgmentPayload)
+                self.assertEqual(restored_judgment.preliminary_review, original_report)
 
     async def test_review_rejects_empty_reference_but_accepts_explicit_user_candidate(self):
         self.workspace.path(OUTLINE).write_bytes(b"")
@@ -1032,6 +1383,14 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(self.artifact_bytes(),before)
         self.assertIsNotNone(reviewed.turn.artifact_application_request)
         self.assertEqual(self.history(conversation)[:len(draft_prefix)],draft_prefix)
+        final_proposal = reviewed.turn.artifact_proposal.reviewed_proposal
+        self.assertEqual(final_proposal.final_review_evidence.reviewer_ids, ROSTER)
+        self.assertEqual(final_proposal.final_review_evidence.reply_event_ids,
+                         tuple(item.reply_event_id for item in final_proposal.reviews))
+        qualified = self.runtime.qualify_artifact_final_review(session_id=self.session_id,
+            reviewed_proposal=final_proposal, consultation=proposed.proposal, events=self.history(conversation))
+        self.assertTrue(qualified.eligible)
+        self.assertEqual(qualified.evidence_digest, final_proposal.final_review_evidence.evidence_digest)
         applied = await self.runtime.decide_artifact_application(_application_decision(reviewed.turn,c.ArtifactApplicationDecisionKind.APPLY))
         self.assertTrue(self.workspace.path(path).read_text().startswith("Summons leads"))
         self.assertIsNotNone(applied.commit_request)
@@ -1085,59 +1444,80 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         with self.assertRaisesRegex(ValueError, "latest"):
             await restarted.lead_turn(self.session_id, new_owner, "Do not reuse the old choice.", adoption=selection)
         self.assertEqual((self.history(conversation), len(self.backend.calls)), (owner_history, calls))
-        latest = next(e for e in reversed(self.history(source_conversation))
-                      if type(e.payload) is c.CollaborationLeadExplorationResultPayload)
-        fresh_path = "manuscript/part-01/changed-condition.md"
-        fresh_selection = _adoption_selection(source_conversation, latest, (fresh_path,))
+        fresh_path = "core_documents/narrative_rules.md"
+        rule_path = "core_documents/narrative_rules.md"
+        rule_locator = "${core_documents/narrative_rules.md}"
+        rule_bytes = self.workspace.path(rule_path).read_bytes()
+        rule_digest = "sha256:" + hashlib.sha256(rule_bytes).hexdigest()
+        late_roster = (EXECUTION_SPECIALIST,)
+        style_request = (
+            "Review the supplied current narrative rules as a STYLE-only candidate. "
+            "Do not invent or change plot, character, world facts, or any existing rule. "
+            "You may make bounded style-review judgments and prepare a separate exact "
+            "replacement containing the same text plus one trailing blank line. "
+            "Execution requires its own exact confirmation.\n" + rule_locator)
+        style_assessment = task_assessment(foundation_ids=("reference_1",),
+            actions=("bounded style-review judgments", "separate exact formatting-only candidate preparation"))
         condition_before = self.artifact_bytes()
+        late_synthesis_checks = []
         def changed_recommend(call, provider):
             material = _workflow_material(provider.callback_payload(call))
-            source_id = next(reply["reply_event_id"] for reply in material["replies"] if reply["mode"] == "draft")
-            return _synthesis_outcome(
-                recommendation_family=1, recommended_action=action(target_paths=(fresh_path,),
-                       source_ids=("user_input", "adopted_idea", source_id)))(call, provider)
-        (fresh,
-            fresh_draft,
-        ) = await self.finish_draft(
-            new_owner, text=_ADOPTION_DIRECTION, response=self._native_scoped(
-            *ROSTER,
-            paths=(fresh_path,),
-            domains=("plot_structure", "character_world", "tone_execution"),
-            candidate_ids=("adopted_idea",),
-            authoring_assessment=_fixture_assessment(foundation_ids=(
-                "adopted_idea",
-            )),
-        ), adoption=fresh_selection, synthesis=changed_recommend)
+            source_id = next(reply["reply_event_id"] for reply in material["replies"] if reply["mode"] == "review")
+            raw = _synthesis_outcome(
+                recommendation_family=2, recommended_action=action(target_paths=(fresh_path,),
+                       source_ids=("user_input", "reference_1", source_id)))(call, provider)
+            late_synthesis_checks.append(call.contract.structural_findings(raw))
+            return raw
+        late_calls = len(self.backend.calls)
+        try:
+            (fresh,
+                fresh_review,
+            ) = await self.finish_draft(
+                new_owner, text=style_request, response=self._native_scoped(
+                EXECUTION_SPECIALIST,
+                activity="review", paths=(fresh_path,),
+                domains=("tone_execution",),
+                candidate_ids=("reference_1",),
+                authoring_assessment=style_assessment,
+            ), selection_group="consultation.authoring.review", synthesis=changed_recommend)
+        finally:
+            self.assertEqual(late_synthesis_checks, [()])
         self.assertIsNotNone(fresh.proposal, fresh)
         self.assertNotEqual(fresh.proposal.authoring_scope.task_id, task_id)
         self.assertEqual((fresh.proposal.authoring_scope.task_revision, fresh.proposal.budget.rounds_spent,
                           fresh.proposal.budget.physical_calls_spent), (1, 0, 2))
-        changed_response = _artifact_outcome(operations=[{"kind": "create", "suggested_path": fresh_path,
-                           "new_text": "The changed tide preserves the current consequence.\n"}],
-                           evidence_status="incomplete", evidence_ids=lambda call, material, *, input_payload:
-                           [input_payload["core_document_statuses"][0]["evidence_id"]],
+        changed_response = _artifact_outcome(operations=[{"kind": "replace", "evidence_id": "reference_1",
+                "new_text": rule_bytes.decode("utf-8") + "\n"}],
+                           evidence_status="incomplete", evidence_ids=["reference_1"],
             objective_intent={"action": "start", "target_paths": {fresh_path: True},
                 "next_step": "prepare"},
             authoring_scope=lambda _: c.authoring_scope_to_dict(fresh.proposal.authoring_scope),
-            authoring_assessment=asdict(_fixture_assessment(foundation_ids=("adopted_idea",))),)
+            authoring_assessment=asdict(style_assessment),)
         def changed_integrate(call, provider):
             return changed_response(call, provider)
         self.backend.enqueue(changed_integrate)
-        prepared = await self.runtime.decide_lead_recommendation(recommendation_decision(fresh_draft.turn))
+        prepared = await self.runtime.decide_lead_recommendation(recommendation_decision(fresh_review.turn))
         self.assertIsNotNone(prepared.proposal, prepared)
-        self.assertEqual(prepared.proposal.participants, ROSTER)
-        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
-        self.backend.enqueue_for(CHARACTER_CUSTODIAN, _specialist_outcome())
+        self.assertEqual(prepared.proposal.participants, late_roster)
+        self.assertTrue(all("reference_1" in assignment.input_ids for assignment in fresh.proposal.assignments))
+        rule_input = next(item for item in prepared.proposal.basis.inputs if item.input_id == "reference_1")
+        rule_receipt = next(item for item in prepared.proposal.basis.evidence.receipts
+                            if item.evidence_id == "reference_1")
+        self.assertIs(rule_receipt.acquisition, c.CollaborationEvidenceAcquisition.ATTACHED_REFERENCE)
+        self.assertEqual((rule_input.locator, rule_receipt.locator), (rule_locator, rule_locator))
+        self.assertEqual(rule_receipt.revision_digest, rule_input.revision_digest)
+        self.assertEqual((rule_receipt.content_digest, rule_receipt.utf8_bytes, rule_receipt.boundary_kind),
+                         (rule_digest, len(rule_bytes), "whole"))
         self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _artifact_synthesis_outcome())
         current_review = await self.runtime.decide_lead_step(_decision(prepared,
                              c.CollaborationConfirmationDecision.CONFIRM))
         self.assertIs(current_review.turn.artifact_proposal.state, c.ArtifactProposalState.REVIEWED)
         current_frames = [_workflow_material(call.payload) for actor, call in self.backend.call_records
-                          if actor in ROSTER][-3:]
+                          if actor in ROSTER][-len(late_roster):]
         current_candidates = [next(item["artifact_candidate"] for item in frame["inputs"]
                               if "artifact_candidate" in item) for frame in current_frames]
-        self.assertEqual(current_candidates, [current_candidates[0]] * len(ROSTER))
+        self.assertEqual(current_candidates, [current_candidates[0]] * len(late_roster))
         self.assertNotEqual(current_candidates[0], review_candidates[0])
         await self.runtime.decide_artifact_application(_application_decision(current_review.turn,
                                                        c.ArtifactApplicationDecisionKind.REJECT))
@@ -1163,7 +1543,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                           len(old_task.submitted_call_ids)), (task_id, 1, "completed", 2, 11))
         self.assertEqual((new_task.ref.task_id, new_task.ref.task_revision, new_task.status, new_rounds,
                           len(new_task.submitted_call_ids)),
-                         (fresh.proposal.authoring_scope.task_id, 1, "active", 2, 11))
+                         (fresh.proposal.authoring_scope.task_id, 1, "active", 2, 7))
         self.assertEqual(self.artifact_bytes(), condition_before)
         coordinator=WorkspaceConversationStorageMutationCoordinator(self.control_workspace)
         with coordinator.borrow(timeout_seconds=2.0) as lease:
@@ -1177,6 +1557,29 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(compose_sqlite_conversation_storage(self.control_workspace).event_store.read(
                          self.session_id, source_conversation), self.history(source_conversation))
         self.assertEqual(tuple(c.encode_collaboration_event(e) for e in persisted),tuple(c.encode_collaboration_event(e) for e in history))
+        current_final = current_review.turn.artifact_proposal.reviewed_proposal
+        self.assertEqual(current_final.final_review_evidence.reviewer_ids, late_roster)
+        self.assertEqual(len(self.backend.calls) - late_calls, 7)
+        self.assertIn(rule_locator, {source.target_id for source in current_final.final_review_evidence.sources})
+        rule_source = next(source for source in current_final.final_review_evidence.sources
+                           if source.input_id == rule_input.input_id)
+        self.assertEqual((rule_source.target_id, rule_source.revision, rule_source.source_digest,
+                          rule_source.boundary_digest, rule_source.whole_source),
+                         (rule_locator, rule_input.revision_digest, rule_receipt.revision_digest,
+                          rule_receipt.content_digest, True))
+        current_history = self.history(new_owner)
+        qualified_current = self.runtime.qualify_artifact_final_review(session_id=self.session_id,
+            reviewed_proposal=current_final, consultation=prepared.proposal, events=current_history)
+        self.assertTrue(qualified_current.eligible)
+        calls_before_drift = len(self.backend.calls)
+        rule_file = self.workspace.path(rule_path)
+        rule_file.write_bytes(rule_file.read_bytes() + b"\nChanged criterion: use a different narrative distance.\n")
+        stale = self.runtime.qualify_artifact_final_review(session_id=self.session_id,
+            reviewed_proposal=current_final, consultation=prepared.proposal, events=current_history)
+        self.assertFalse(stale.eligible)
+        self.assertTrue(set(stale.reasons) & {"source_changed", "current_read_inapplicable"})
+        self.assertEqual(len(self.backend.calls), calls_before_drift)
+        self.assertEqual(self.history(new_owner), current_history)
 
     async def test_archived_task_is_context_without_routable_authority(self):
         archived = self.conversation()

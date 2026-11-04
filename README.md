@@ -44,7 +44,10 @@ session is `ready`.
 
 Python callers can call `lead_turn()` and `decide_lead_step()` without an agent
 selector. A lead turn can answer workflow/status questions or clarify a request directly.
-Substantive story work requires every affected specialist domain. The Lead can
+The Lead can explain current material and give a grounded preliminary review
+without automatically dispatching specialists. Such findings identify their
+inspected sources, coverage and limitations; they do not replace final review.
+Specialist drafting and final candidate review retain required domain coverage. The Lead can
 first recommend preparing a scoped consultation or artifact-review proposal.
 Confirming the resulting disclosed specialist proposal records authority,
 atomically records `running` plus every dispatch

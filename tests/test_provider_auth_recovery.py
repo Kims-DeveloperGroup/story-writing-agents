@@ -15,6 +15,7 @@ import unittest
 from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 from pathlib import Path
+from types import CoroutineType, GeneratorType
 from unittest import mock
 
 from story_writing_agents import AgentBackend, StoryRuntime
@@ -72,7 +73,7 @@ def auth_failure(provider="antigravity", *, safe=True, validator=lambda: True):
     return failure
 
 
-async def drive_recovery(operation, callback=lambda _key: True, *, progress_timeout=30):
+async def drive_recovery(operation, callback=lambda _key: True, *, progress_timeout=30, progress_state=None):
     """Drive the private async coordination seam with bounded synthetic authority."""
     recovery = ProviderAuthRecovery()
     keys = []
@@ -87,7 +88,39 @@ async def drive_recovery(operation, callback=lambda _key: True, *, progress_time
                                          timeout=progress_timeout)
             ready.cancel()
             await asyncio.gather(ready, return_exceptions=True)
-            if not done: raise AssertionError("recovery failed to make bounded progress")
+            if not done:
+                failure = AssertionError("recovery failed to make bounded progress")
+                try:
+                    state = {"auth_ready": recovery._ready.is_set(), "pending_auth": len(recovery._pending),
+                             "active_providers": recovery._active, "task_done": task.done()}
+                    failure.add_note(f"safe coordination state: {state!r}")
+                    if progress_state is not None:
+                        failure.add_note(f"safe fixture state: {progress_state()!r}")
+                    chain, link = [], task.get_coro()
+                    for _ in range(16):
+                        if type(link) is CoroutineType:
+                            label = "coroutine"
+                            code, frame, link = link.cr_code, link.cr_frame, link.cr_await
+                        elif type(link) is GeneratorType:
+                            label = "generator"
+                            code, frame, link = link.gi_code, link.gi_frame, link.gi_yieldfrom
+                        else:
+                            chain.append(("unknown-terminal",))
+                            break
+                        chain.append((label, code.co_qualname, frame.f_lineno if frame is not None else None))
+                    failure.add_note(f"safe await chain (max16 links): {chain!r}")
+                    stacks = []
+                    for frame in tuple(sys._current_frames().values())[:8]:
+                        stack = []
+                        for _ in range(16):
+                            if frame is None: break
+                            stack.append((frame.f_code.co_qualname, frame.f_lineno))
+                            frame = frame.f_back
+                        stacks.append(stack)
+                    failure.add_note(f"safe anonymous stacks (max8x16): {stacks!r}")
+                except Exception as error:
+                    failure.add_note(f"safe diagnostic exception: {type(error).__name__}")
+                raise failure
             if task.done(): break
             key = recovery.next_request()
             keys.append(key)
@@ -313,7 +346,16 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
                                                          before_script_response=before_script_response))
         with mock.patch.object(AgentContextService, "invoke", capture):
             outcome, keys = await drive_recovery(case.runtime.lead_turn(
-                case.session_id, conversation_id, "Explain bounded workflow."), progress_timeout=120)
+                case.session_id, conversation_id, "Explain bounded workflow."), progress_timeout=None,
+                progress_state=lambda: {
+                    "script_cursor": (case.backend._all_scripts[-1].script_responses_consumed
+                                      if case.backend._all_scripts else None),
+                    "pending_controls": (len(case.backend._all_scripts[-1].controls)
+                                         if case.backend._all_scripts else None),
+                    "remaining_responses": len(remaining),
+                    "phases": tuple(phase.value if isinstance(phase, LeadGroupPhase) else None
+                                    for phase in (getattr(getattr(call, "contract", None), "schema_group_phase", None)
+                                                  for call in case.backend.calls[start:]))})
         self.assertEqual(keys, [("antigravity", 0)])
         self.assertEqual(len(captured), 1)
         self.assertEqual(remaining, [])
@@ -857,7 +899,8 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
             assisted = []
             with self.assertRaises(ProviderAuthenticationRequiredError) as caught:
                 await drive_recovery(self.runtime.lead_turn(self.session_id, conversation,
-                    'Retain this timed-out request.'), lambda key: assisted.append(key) or True, progress_timeout=120)
+                    'Retain this timed-out request.'), lambda key: assisted.append(key) or True,
+                                     progress_timeout=120)
 
         self.assertIs(caught.exception, failure)
         self.assertEqual(assisted, [("antigravity", 0)])

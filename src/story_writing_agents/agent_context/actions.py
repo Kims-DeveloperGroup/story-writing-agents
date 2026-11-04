@@ -72,6 +72,9 @@ class ContextCallReadFact:
     boundary_digest: str
     whole_source: bool
     artifact_locator: str | None
+    boundary_kind: str = "whole"
+    boundary_start: int | None = None
+    boundary_end: int | None = None
 
     def __post_init__(self) -> None:
         if (any(type(value) is not str or not value for value in (
@@ -80,6 +83,10 @@ class ContextCallReadFact:
                 or (self.artifact_locator is not None and type(self.artifact_locator) is not str)
                 or (self.source_kind is not ContextSourceKind.WRITING_ARTIFACT and self.artifact_locator is not None)):
             raise ValueError("invalid content-free READ fact")
+        ContextSourceBoundary(
+            ContextSourceBoundaryKind(self.boundary_kind), self.boundary_start, self.boundary_end)
+        if self.whole_source and self.source_digest != self.boundary_digest:
+            raise ValueError("whole READ fact requires the full source digest")
 
     @classmethod
     def from_evidence(cls, evidence: ContextEvidenceReceipt) -> ContextCallReadFact:
@@ -89,13 +96,15 @@ class ContextCallReadFact:
             evidence.revision, evidence.source_digest, evidence.boundary_digest,
             evidence.source_digest == evidence.boundary_digest
             and evidence.source_utf8_bytes == evidence.boundary_utf8_bytes,
-            evidence.provenance.locator if evidence.source_kind is ContextSourceKind.WRITING_ARTIFACT else None)
+            evidence.provenance.locator if evidence.source_kind is ContextSourceKind.WRITING_ARTIFACT else None, boundary_kind=evidence.boundary.kind.value, boundary_start=evidence.boundary.start, boundary_end=evidence.boundary.end)
 
     def snapshot_value(self) -> dict[str, object]:
         return {"evidence_id": self.evidence_id, "source_id": self.source_id,
             "source_kind": self.source_kind.value, "revision": self.revision,
             "source_digest": self.source_digest, "boundary_digest": self.boundary_digest,
-            "whole_source": self.whole_source, "artifact_locator": self.artifact_locator}
+            "whole_source": self.whole_source, "artifact_locator": self.artifact_locator,
+            "boundary_kind": self.boundary_kind, "boundary_start": self.boundary_start,
+            "boundary_end": self.boundary_end}
 
 
 _BEGIN_UNTRUSTED_STORY_DATA = "<<<BEGIN_UNTRUSTED_STORY_DATA>>>"

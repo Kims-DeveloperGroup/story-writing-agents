@@ -108,6 +108,49 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic(dict(continuity_source, max_test_source_lines=limit),
                                              dict(native_source, max_test_source_lines=old))
+        preliminary_source = dict(continuity_source, max_test_source_lines=148667)
+        self.assertIsNone(suite_budget.check_monotonic(preliminary_source, continuity_source))
+        for old, limit in ((147337, 148667),
+                           (147339, 148667),
+                           (147338, 148666),
+                           (147338, 148668)):
+            with self.assertRaises(suite_budget.BudgetError):
+                suite_budget.check_monotonic(
+                    dict(preliminary_source, max_test_source_lines=limit),
+                    dict(continuity_source, max_test_source_lines=old))
+        recovery_source = dict(preliminary_source, max_test_source_lines=148715)
+        for prior_source in (continuity_source, preliminary_source):
+            self.assertIsNone(suite_budget.check_monotonic(recovery_source, prior_source))
+            for old, limit in ((prior_source["max_test_source_lines"] - 1, 148715),
+                               (prior_source["max_test_source_lines"] + 1, 148715),
+                               (prior_source["max_test_source_lines"], 148714),
+                               (prior_source["max_test_source_lines"], 148716)):
+                with self.assertRaises(suite_budget.BudgetError):
+                    suite_budget.check_monotonic(
+                        dict(recovery_source, max_test_source_lines=limit),
+                        dict(prior_source, max_test_source_lines=old))
+        diagnostic_source = dict(recovery_source, max_test_source_lines=148747)
+        for prior_source in (continuity_source, recovery_source):
+            self.assertIsNone(suite_budget.check_monotonic(diagnostic_source, prior_source))
+            for old, limit in ((prior_source["max_test_source_lines"] - 1, 148747),
+                               (prior_source["max_test_source_lines"] + 1, 148747),
+                               (prior_source["max_test_source_lines"], 148746),
+                               (prior_source["max_test_source_lines"], 148748)):
+                with self.assertRaises(suite_budget.BudgetError):
+                    suite_budget.check_monotonic(
+                        dict(diagnostic_source, max_test_source_lines=limit),
+                        dict(prior_source, max_test_source_lines=old))
+        await_source = dict(diagnostic_source, max_test_source_lines=148783)
+        for prior_source in (continuity_source, diagnostic_source):
+            self.assertIsNone(suite_budget.check_monotonic(await_source, prior_source))
+            for old, limit in ((prior_source["max_test_source_lines"] - 1, 148783),
+                               (prior_source["max_test_source_lines"] + 1, 148783),
+                               (prior_source["max_test_source_lines"], 148782),
+                               (prior_source["max_test_source_lines"], 148784)):
+                with self.assertRaises(suite_budget.BudgetError):
+                    suite_budget.check_monotonic(
+                        dict(await_source, max_test_source_lines=limit),
+                        dict(prior_source, max_test_source_lines=old))
         for old, limit in ((142603, 142887), (142605, 142887), (142604, 142886),
                            (142604, 142888), (142887, 142888)):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
@@ -169,7 +212,7 @@ class SuiteBudgetTests(unittest.TestCase):
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner._hosted_partition(canonical, isolated)
         self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
-        launch_digest = "sha256:1c8347ab95d8eb9a217a64542af45db5a82a278ce56c427fa5f6e8b0ce86a4f1"
+        launch_digest = "sha256:063fe2b7f1fdd8e58abd78e634dfb535db436ed1850270c2c02d4fc2c5c931f7"
         self.assertEqual(runner._manifest(runner._hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner._hosted_launch_order(ids[::-1]), runner._hosted_launch_order(ids))
         self.assertEqual(runner._hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
