@@ -2668,3 +2668,5 @@ ENUM_MEANINGS.update({
 _catalog("availability source_status source_manifest_digest", "Host-issued source availability/status facts. Unread metadata is not content, an inspected source, or final-review evidence.")
 
 DYNAMIC_CHOICE_FIELDS = DYNAMIC_CHOICE_FIELDS | frozenset({"source_input_ids", "required_condition_ids"})
+_catalog("planning_target", "Semantic document kind for a genuine formal-writing clarification only. Null for freeform, workflow, review and already-targeted work; not a path, task, readiness or write authority.")
+DYNAMIC_CHOICE_FIELDS = DYNAMIC_CHOICE_FIELDS | frozenset({"planning_target"})

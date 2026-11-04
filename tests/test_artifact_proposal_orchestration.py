@@ -371,6 +371,11 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertFalse(reviewed.artifact_write_occurred)
         self.assertFalse(reviewed.git_action_occurred)
         self.assertEqual(self.artifact_snapshot(), before)
+        from story_writing_agents.core_document_readiness import AuthoringTarget, require_readiness
+        current_readiness = self.runtime.inspect_core_document_readiness(self.session_id)
+        self.assertNotIn(_RULES, current_readiness.complete_documents)
+        self.assertIn(_RULES, require_readiness(AuthoringTarget.MANUSCRIPT, current_readiness).required_documents)
+        self.assertFalse(self.workspace.path(_RULES).exists())
         from tests.provider_wire_fixture import artifact_candidate as wire_candidate
         from tests.test_agent_context_accounting import _expanded_context_payload
         materials = [(agent_id, (self.backend.callback_payload(call))["task_input"])

@@ -439,5 +439,31 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
                 self.assertRegex(rendered, r"\[Response metadata\]\n +Outcome: accepted\n"
                     r" +Usage scope: physical call\n +Input tokens: 79,930 \| Output tokens: 901")
 
+        from story_writing_agents import document_plan as documents
+        from tests import test_specialist_routing as document_fixtures
+        plan = document_fixtures.SpecialistRoutingTests._document_plan_fixture()
+        rows = tuple(documents.DocumentNodeView(node.node_id,
+            documents.DocumentNodeState.COMPLETE if index == 0 else documents.DocumentNodeState.BLOCKED,
+            () if index == 0 else ("Author decision chapter3_ending: choose the chapter's closing action.",),
+            () if index == 0 else ("chapter3_ending",),
+            ("readiness_global",) if index == 0 else (), (),
+            documents.DocumentNodeNextAction.COMPLETE if index == 0 else documents.DocumentNodeNextAction.REQUEST_INFORMATION)
+            for index, node in enumerate(plan.nodes))
+        planning_view = documents.DocumentPlanView(plan, None, rows, 4, 0, 4, 8, 2,
+            goal_text="Write Chapter 3 and retain Chapter 4 as an unfinished original target.", pending=True)
+        planning_frame = _collaboration_view.project_lead_turn_result(replace(finalized, document_plan=planning_view))
+        planning_text = render_component(planning_frame, _capability(CapabilityProfile.LINE, width=120)).text
+        self.assertIn("Write Chapter 3", planning_text)
+        self.assertIn("Chapter 4 as an unfinished original target", planning_text)
+        self.assertIn("No node confirmed", planning_text)
+        self.assertIn("Proposed; exact Confirm required", planning_text)
+        self.assertIn("chapter3_ending", planning_text)
+        self.assertIn("core_documents/part_outlines.md: request_information", planning_text)
+        self.assertIn("plot_architect", planning_text)
+        self.assertIn("manuscript/part-04/chapter-04.md", planning_text)
+        self.assertIn("final review, Apply and Commit authority", planning_text)
+        self.assertNotIn("None", planning_text)
+        self.assertNotIn("whole:None-None", planning_text)
+
 
 if __name__ == "__main__": unittest.main()
