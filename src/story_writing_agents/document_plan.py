@@ -254,12 +254,15 @@ class DocumentNodeBinding:
     budget_lineage_ref: LeadTaskRef
     budget_origin_step_id: str
     candidate_uses: tuple[DocumentCandidateUseIntent, ...] = ()
+    prior_confirmation_event_id: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if (type(self.plan_ref) is not DocumentPlanRef or type(self.task_ref) is not LeadTaskRef
                 or type(self.budget_lineage_ref) is not LeadTaskRef):
             raise TypeError("document binding requires exact current task and budget lineage")
         _text(self.node_id); _text(self.budget_origin_step_id)
+        if self.prior_confirmation_event_id is not None:
+            _text(self.prior_confirmation_event_id)
         if self.task_ref.session_id != self.budget_lineage_ref.session_id:
             raise ValueError("document budget lineage cannot cross sessions")
         if (type(self.candidate_uses) is not tuple or len(self.candidate_uses) > MAX_DOCUMENT_PLAN_NODES
@@ -311,8 +314,18 @@ class DocumentPlanView:
     remaining_rounds: int
     goal_text: str | None = field(default=None, kw_only=True)
     pending: bool = field(default=False, kw_only=True)
+    current_confirmation_event_id: str | None = field(default=None, kw_only=True)
+    cursor_ambiguous: bool = field(default=False, kw_only=True)
 
     def __post_init__(self) -> None:
+        if type(self.cursor_ambiguous) is not bool:
+            raise TypeError("cursor ambiguity must be typed")
+        if (self.current_node_id is None) != (self.current_confirmation_event_id is None):
+            raise ValueError("current node requires its exact confirmed causal head")
+        if self.current_confirmation_event_id is not None:
+            _text(self.current_confirmation_event_id)
+        if self.cursor_ambiguous and (self.current_node_id is not None or self.remaining_physical_calls or self.remaining_rounds or self.pending):
+            raise ValueError("independent heads cannot disclose a current cursor or fresh allowance")
         if type(self.pending) is not bool:
             raise TypeError("document view proposal state must be typed")
         if self.goal_text is not None and (type(self.goal_text) is not str or not self.goal_text):
@@ -441,14 +454,17 @@ def document_node_binding_to_dict(v: DocumentNodeBinding) -> dict:
     return {"plan_ref": document_plan_ref_to_dict(v.plan_ref), "node_id": v.node_id,
         "task_ref": task_value_to_dict(v.task_ref), "budget_lineage_ref": task_value_to_dict(v.budget_lineage_ref),
         "budget_origin_step_id": v.budget_origin_step_id,
-        "candidate_uses": [document_candidate_use_to_dict(x) for x in v.candidate_uses]}
+        "candidate_uses": [document_candidate_use_to_dict(x) for x in v.candidate_uses],
+            **({"prior_confirmation_event_id": v.prior_confirmation_event_id} if v.prior_confirmation_event_id is not None else {})}
 
 
 def document_node_binding_from_dict(value: object) -> DocumentNodeBinding:
-    v = _object(value, ("plan_ref", "node_id", "task_ref", "budget_lineage_ref", "budget_origin_step_id", "candidate_uses"))
+    v = _object(value, ("plan_ref", "node_id", "task_ref", "budget_lineage_ref", "budget_origin_step_id", "candidate_uses",
+        *(("prior_confirmation_event_id",) if type(value) is dict and "prior_confirmation_event_id" in value else ())))
     return DocumentNodeBinding(document_plan_ref_from_dict(v["plan_ref"]), v["node_id"],
         task_value_from_dict(LeadTaskRef, v["task_ref"]), task_value_from_dict(LeadTaskRef, v["budget_lineage_ref"]),
-        v["budget_origin_step_id"], tuple(document_candidate_use_from_dict(x) for x in _tuple(v["candidate_uses"])))
+        v["budget_origin_step_id"], tuple(document_candidate_use_from_dict(x) for x in _tuple(v["candidate_uses"])),
+        prior_confirmation_event_id=v.get("prior_confirmation_event_id"))
 
 
 def document_candidate_selection_to_dict(v: DocumentCandidateSelection) -> dict:

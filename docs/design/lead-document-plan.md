@@ -16,6 +16,8 @@ A planning-only goal reference can retain an exact user message before a canonic
 
 The existing conversation event stores preserve the original goal, plan revisions and confirmed node bindings. Existing projections derive the cursor and completion from current evidence. There is no second scheduler, store or mutable completion ledger.
 
+A host-derived node binding can reference the exact preceding confirmation. Only the successor's actual Confirm supersedes that cursor. The history projection follows these links across conversations without ordering owners by their names or inventing a session clock. Independent confirmed branches remain visibly ambiguous instead of receiving an invented current task or fresh budget.
+
 The host builds the plan from actual scoped intent, sources and readiness. The provider selects the next work through the existing recommendation/proposal contracts. It does not author an arbitrary dependency graph. Schema, decoding and repair remain bound to their current contract owner.
 
 ## Execution and approval

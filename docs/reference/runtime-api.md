@@ -1074,6 +1074,8 @@ Both `lead_turn` facades accept optional keyword `document_selection: DocumentNo
 
 A formal authoring question can use the finite `planning_target` classification when the exact path is unknown. It identifies the requested document kind for planning; it does not establish a path, task, readiness or write authority. Untargeted draft, exploration and targetless review retain their own behavior.
 
+Selecting a replacement window uses an exact node proposal and its own Confirm. A preparation-only recommendation cannot carry that pending window; Lead can instead ask for missing input. Preparation recommendations remain available for nodes in the active window.
+
 For example, inspect the current plan, select its part-outline node, and pass that intent together with an actual new-task decision:
 
 ```python
@@ -1095,7 +1097,7 @@ The returned proposal still requires its exact structured Confirm. For provision
 
 `DocumentCandidateUseIntent` identifies an exact same-plan predecessor candidate and consumer task, permitted scope, purpose and user-condition digest. Its input use requires the matching proposal confirmation. Candidate substitution or changed direction, task or scope requires fresh qualification. Provisional input is separate from canonical document readiness, current candidate final review and exact Apply completion.
 
-`DocumentPlanView` shows node state and blockers, current cursor, inherited calls and rounds, remaining budget and cumulative plan calls. A node/window/revision does not replenish the task allowance. An unresolved original goal or an unplanned target remains unfinished even when all active prerequisites are complete.
+`DocumentPlanView` shows node state and blockers, current cursor, inherited calls and rounds, remaining budget and cumulative plan calls. Its read-only `current_confirmation_event_id` identifies the actual confirmed cursor; `cursor_ambiguous` discloses independent confirmed branches. The host-derived `DocumentNodeBinding.prior_confirmation_event_id` links an actual successor Confirm to its preceding cursor. A pending proposal cannot advance it. A node/window/revision does not replenish the task allowance, and ambiguous current authority cannot appear as a fresh allowance. When the cursor is ambiguous, spent counters aggregate the distinct confirmed head budget lineages, remaining current calls/rounds are zero, and the UI labels the current budget unavailable rather than showing a per-task allowance. An unresolved original goal or an unplanned target remains unfinished even when all active prerequisites are complete.
 
 ### Contextual authoring objectives
 

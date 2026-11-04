@@ -5731,6 +5731,28 @@ def project_document_plan_views(events: tuple[CollaborationEvent, ...],
     requests = {x.payload.application_request.application_id: x.payload for x in events
                 if type(x.payload) is ArtifactApplicationRequestPayload}
     by_id = {event.event_id: event for event in events}
+    source_records = {}
+    for event in events:
+        source_records.setdefault(event.event_id, []).append(event)
+    for event in events:
+        value = event.payload
+        binding = value.document_node if type(value) in {CollaborationProposal, CollaborationLeadJudgmentPayload,
+            LeadRecommendationRequestPayload, CollaborationProviderCallPayload, ArtifactObjectivePayload, ArtifactObjectivePayloadV2} else None
+        if binding is None or binding.prior_confirmation_event_id is None:
+            continue
+        captured = source_records.get(binding.prior_confirmation_event_id, ())
+        if not captured:
+            continue  # Foreign-source completeness belongs to session capture.
+        source = captured[0]
+        decision = source.payload
+        prior = proposals.get((decision.proposal_id, decision.proposal_revision, decision.proposal_digest)) if type(decision) is CollaborationConfirmationPayload else None
+        if (len(captured) != 1 or type(decision) is not CollaborationConfirmationPayload
+                or decision.decision is not CollaborationConfirmationDecision.CONFIRM
+                or source.session_id != event.session_id or binding.task_ref.session_id != event.session_id
+                or prior is None or prior.document_node is None
+                or prior.document_node.plan_ref.plan_id != binding.plan_ref.plan_id
+                or (source.conversation_id == event.conversation_id and source.sequence >= event.sequence)):
+            raise ValueError("document binding prior reference is not a causal exact same-plan/session Confirm")
     declarations = {}
     goal_texts = {}
     for event in events:
@@ -5764,6 +5786,65 @@ def project_document_plan_views(events: tuple[CollaborationEvent, ...],
                 approvals.append((event, proposal.document_node))
                 if proposal.document_plan is not None:
                     declarations[proposal.document_plan.ref] = proposal.document_plan
+    approval_by_id = {}
+    for event, node in approvals:
+        if event.event_id in approval_by_id or node.task_ref.session_id != event.session_id:
+            raise ValueError("document confirmation identity/session is contradictory")
+        approval_by_id[event.event_id] = (event, node)
+    parents = {identity: set() for identity in approval_by_id}
+    owners = {}
+    for identity, (event, node) in approval_by_id.items():
+        owners.setdefault((node.plan_ref.plan_id, event.conversation_id), []).append(event)
+        previous = node.prior_confirmation_event_id
+        if previous is None:
+            continue
+        source = by_id.get(previous)
+        if source is None:
+            # Owner-local replay retains foreign references. The complete
+            # session owner requires their actual captured source records.
+            continue
+        captured = approval_by_id.get(previous)
+        if (captured is None or previous == identity or source.session_id != event.session_id
+                or captured[1].plan_ref.plan_id != node.plan_ref.plan_id
+                or (source.conversation_id == event.conversation_id and source.sequence >= event.sequence)):
+            raise ValueError("document prior confirmation must be an earlier exact same-plan/session Confirm")
+        parents[identity].add(previous)
+    for records in owners.values():
+        ordered = sorted(records, key=lambda event: event.sequence)
+        for before, after in zip(ordered, ordered[1:]):
+            parents[after.event_id].add(before.event_id)
+    children = {identity: set() for identity in parents}
+    remaining = {identity: len(values) for identity, values in parents.items()}
+    for identity, values in parents.items():
+        for previous in values:
+            children[previous].add(identity)
+    ready = [identity for identity, count in remaining.items() if not count]
+    causal_order = []
+    while ready:
+        identity = ready.pop()
+        causal_order.append(identity)
+        for child in children[identity]:
+            remaining[child] -= 1
+            if not remaining[child]:
+                ready.append(child)
+    if len(causal_order) != len(parents):
+        raise ValueError("document confirmation references form a cycle")
+    def precedes(older, newer):
+        pending = list(parents[newer]); visited = set()
+        while pending:
+            identity = pending.pop()
+            if identity == older:
+                return True
+            if identity not in visited:
+                visited.add(identity); pending.extend(parents[identity])
+        return False
+    node_heads = {}
+    for identity in causal_order:
+        event, node = approval_by_id[identity]
+        key = (node.plan_ref.plan_id, node.node_id)
+        heads = node_heads.setdefault(key, set())
+        heads.difference_update(old for old in tuple(heads) if precedes(old, identity))
+        heads.add(identity)
     approved_refs = {node.plan_ref for _, node in approvals}
     plans = {}
     for plan in sorted(declarations.values(), key=lambda item: item.ref.plan_revision):
@@ -5779,19 +5860,20 @@ def project_document_plan_views(events: tuple[CollaborationEvent, ...],
         confirmed = {}
         completed = {}
         candidates = {}
-        active = [(event, node) for event, node in approvals if node.plan_ref == plan.ref]
-        for event, node in active:
-            prior = confirmed.get(node.node_id)
-            if prior is None or (prior[0].conversation_id == event.conversation_id and prior[0].sequence < event.sequence):
-                confirmed[node.node_id] = (event, node)
-        # Per-owner sequence is causal. Unrelated conversations never gain an
-        # invented global ordering from timestamps or snapshot enumeration.
-        cursors = {}
-        for event, node in active:
-            old = cursors.get(event.conversation_id)
-            if old is None or old[0].sequence < event.sequence:
-                cursors[event.conversation_id] = (event, node)
-        current_binding = next(iter(cursors.values()))[1] if len(cursors) == 1 else None
+        active_ids = {identity for identity, (_, node) in approval_by_id.items() if node.plan_ref.plan_id == plan.ref.plan_id}
+        heads = active_ids - {previous for identity in active_ids for previous in parents[identity]}
+        cursor_ambiguous = len(heads) > 1
+        current_id = next(iter(heads)) if len(heads) == 1 else None
+        current_binding = None if current_id is None else approval_by_id[current_id][1]
+        if current_binding is not None and current_binding.plan_ref != plan.ref:
+            raise ValueError("current document cursor cannot roll back the active plan window")
+        node_ambiguities = set()
+        for node in plan.nodes:
+            eligible = node_heads.get((plan.ref.plan_id, node.node_id), set())
+            if len(eligible) == 1:
+                confirmed[node.node_id] = approval_by_id[next(iter(eligible))]
+            elif eligible:
+                node_ambiguities.add(node.node_id)
         for event in events:
             value = event.payload
             if type(value) is ArtifactReviewCandidatePayload:
@@ -5807,8 +5889,8 @@ def project_document_plan_views(events: tuple[CollaborationEvent, ...],
                     reviewed = request.reviewed_proposal
                     proposal = proposals.get((reviewed.consultation_proposal_id, reviewed.consultation_proposal_revision, reviewed.consultation_proposal_digest))
                     node = None if proposal is None else proposal.document_node
-                    if node is not None and node.plan_ref == plan.ref:
-                        completed[node.node_id] = (event.event_id, node)
+                    if node is not None and node.plan_ref.plan_id == plan.ref.plan_id:
+                        completed.setdefault(node.node_id, []).append((event.event_id, node))
         creation = {event.step_id for event in events
                     if type(event.payload) in {CollaborationLeadJudgmentPayload, ArtifactObjectivePayload, ArtifactObjectivePayloadV2}
                     and event.payload.document_plan is not None and event.payload.document_plan.ref.plan_id == plan.ref.plan_id}
@@ -5858,22 +5940,37 @@ def project_document_plan_views(events: tuple[CollaborationEvent, ...],
                 node_actions[bound.node_id] = (DocumentNodeState.IN_PROGRESS, DocumentNodeNextAction.REVIEW_CANDIDATE)
             elif type(value) is CollaborationProposal and approved is None:
                 node_actions[bound.node_id] = (DocumentNodeState.READY, DocumentNodeNextAction.CONFIRM_NODE)
+        if cursor_ambiguous:
+            budgets = {(approval_by_id[identity][1].budget_lineage_ref,
+                        approval_by_id[identity][1].budget_origin_step_id): approval_by_id[identity][1] for identity in heads}
+            costs = tuple(document_lineage_cost(events, binding) for binding in budgets.values())
+            calls = sum(cost[0] for cost in costs); rounds = sum(cost[1] for cost in costs)
+            # Every lineage reports the same actual plan-wide submitted total.
+            total = costs[0][2] if costs else total
         rows = []
         for node in plan.nodes:
             approved = confirmed.get(node.node_id)
-            applied = completed.get(node.node_id)
-            done = applied is not None and approved is not None and applied[1].task_ref == approved[1].task_ref
+            applied = tuple(sorted(identity for identity, binding in completed.get(node.node_id, ())
+                if approved is not None and binding.task_ref == approved[1].task_ref))
+            done = bool(applied)
             state, next_action = ((DocumentNodeState.COMPLETE, DocumentNodeNextAction.COMPLETE) if done else
                 node_actions.get(node.node_id, (DocumentNodeState.IN_PROGRESS, DocumentNodeNextAction.PREPARE_NODE)
                     if approved is not None else (DocumentNodeState.BLOCKED, DocumentNodeNextAction.REQUEST_INFORMATION)))
+            if node.node_id in node_ambiguities:
+                state, next_action = DocumentNodeState.BLOCKED, DocumentNodeNextAction.REQUEST_INFORMATION
             rows.append(DocumentNodeView(node.node_id, state, () if state is not DocumentNodeState.BLOCKED else
-                ("Current source/readiness qualification required.",), (), (applied[0],) if done else (),
+                ("Current source/readiness qualification required.",), (), applied,
                 (approved[0].event_id,) if approved is not None and approved[1].candidate_uses else (),
                 next_action,
                 candidate_refs=tuple(dict.fromkeys(candidates.get(node.node_id, ())))))
+            if cursor_ambiguous and not done:
+                rows[-1] = replace(rows[-1], state=DocumentNodeState.BLOCKED,
+                    blocking_conditions=("Independent confirmed document heads require explicit reconciliation; current budget is unavailable.",),
+                    next_action=DocumentNodeNextAction.REQUEST_INFORMATION)
         views.append(DocumentPlanView(plan, None if current_binding is None else current_binding.node_id,
-            tuple(rows), calls, rounds, total, max(0, COLLABORATION_PHYSICAL_CALL_LIMIT - calls),
-            max(0, COLLABORATION_ROUND_LIMIT - rounds), goal_text=goal_texts.get(plan.ref.plan_id)))
+            tuple(rows), calls, rounds, total, 0 if cursor_ambiguous else max(0, COLLABORATION_PHYSICAL_CALL_LIMIT - calls),
+            0 if cursor_ambiguous else max(0, COLLABORATION_ROUND_LIMIT - rounds), goal_text=goal_texts.get(plan.ref.plan_id),
+            current_confirmation_event_id=current_id, cursor_ambiguous=cursor_ambiguous))
     return tuple(views)
 
 
