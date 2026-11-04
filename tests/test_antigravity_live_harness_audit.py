@@ -861,7 +861,7 @@ class LiveBudgetContinuationTests(unittest.TestCase):
         reply_ids = ["reply-plot", "reply-character", "reply-execution"]
         payload = {"request_correlation_token": "synthetic-synthesis-correlation", "task_input": {
             "workflow_type": "consultation_summary",
-            "provider_constraints": {"current_writing_task_scope": {"activity_type": "review_writing"}},
+            "writing_task_scope": {"activity_type": "review_writing"},
             "inputs": [{"input_source_id": "user_input", "input_source_type": "user_input"}, {"input_source_id": "reference_1", "input_source_type": "core_document"}],
             "replies": [{"reply_event_id": identity} for identity in reply_ids],
         }}

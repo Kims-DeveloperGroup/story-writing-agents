@@ -8,7 +8,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "markdown-it-py>=4.2,<5",
-    "jsonl-viewer @ git+https://github.com/Kims-DeveloperGroup/jsonl-viewer.git@91e2e21f301a0628fd7651d248a3556c6d3b7f95",
+    "jsonl-viewer @ git+https://github.com/Kims-DeveloperGroup/jsonl-viewer.git@a38a975eda4123df11c1fa4f796fd49ab88efcee",
 ]
 
 [project.optional-dependencies]
@@ -26,3 +26,13 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+
+[dependency-groups]
+
+test = ["setuptools>=84.2.1,<85"]
+
+
+[tool.uv]
+
+default-groups = ["test"]

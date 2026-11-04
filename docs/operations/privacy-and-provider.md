@@ -678,7 +678,7 @@ for the user-visible lifecycle and limits.
 
 ## Provider disclosure
 
-A built-in substantive call uses agent-provider-wire-v10. Codex and
+A built-in substantive call uses agent-provider-wire-v11. Codex and
 Antigravity share the same closed domain constraints and payload semantics: the
 only required root field is `agent_action`, which is one closed
 SEARCH, READ, or ANSWER object. ANSWER embeds its invocation-specific result

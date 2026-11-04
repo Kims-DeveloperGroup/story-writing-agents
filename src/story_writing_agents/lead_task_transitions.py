@@ -277,6 +277,7 @@ class LeadPublicResponse:
     material_digest: str
     repair_of_call_id: str | None = None
     validation_details: tuple[str, ...] = ()
+    response_kind: str | None = None
 
     def __post_init__(self) -> None:
         _identifier(self.invocation_id)
@@ -291,6 +292,11 @@ class LeadPublicResponse:
                 raise ValueError("public response cannot repair itself")
         if type(self.acceptance) is not LeadPublicResponseAcceptance:
             raise TypeError("public response requires an exact acceptance category")
+        if self.response_kind is not None and (type(self.response_kind) is not str or
+                self.response_kind not in {"answer", "question", "critique", "recommendation",
+                    "proposal", "exploration", "discussion", "synthesis", "artifact_review",
+                    "premise_analysis", "premise_decision"}):
+            raise ValueError("public response kind is invalid")
         _text(self.response_text)
         _digest(self.material_digest)
         if self.material_digest != task_material_sha256(self.response_text):
@@ -307,7 +313,9 @@ def task_value_to_dict(value: object) -> dict[str, Any]:
         raise TypeError("unsupported task control value")
     def encode(item: object) -> Any:
         if type(item) in _VALUE_TYPES:
-            return {member.name: encode(getattr(item, member.name)) for member in fields(item)}
+            return {member.name: encode(getattr(item, member.name)) for member in fields(item)
+                    if not (type(item) is LeadPublicResponse and
+                        member.name == "response_kind" and item.response_kind is None)}
         if isinstance(item, StrEnum):
             return item.value
         if isinstance(item, Mapping):
@@ -323,6 +331,10 @@ def task_value_from_dict(value_type: type, value: object) -> Any:
     if value_type not in _VALUE_TYPES or type(value) is not dict:
         raise ValueError("invalid task control object")
     expected = {member.name for member in fields(value_type)}
+    if value_type is LeadPublicResponse and "response_kind" in value and value["response_kind"] is None:
+        raise ValueError("unknown public response kind must be omitted")
+    if value_type is LeadPublicResponse and "response_kind" not in value:
+        expected.remove("response_kind")
     if (
         set(value) != expected | {'schema_version'}
         or type(value['schema_version']) is not int

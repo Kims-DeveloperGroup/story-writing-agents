@@ -360,7 +360,7 @@ def inject_budget_next_intent(stdout, payload, *, agent, returncode, physical_ca
     require(references, 'Budget synthesis has no genuine reference prelude basis')
     minimum = 2 * len(BUDGET_REVIEWERS) + 2
     require(minimum > 12 - physical_calls_spent, 'Requested continuation fits the remaining budget')
-    require(material['provider_constraints']['current_writing_task_scope']['activity_type'] == 'review_writing', 'Budget continuation requires the current review task')
+    require(material['writing_task_scope']['activity_type'] == 'review_writing', 'Budget continuation requires the current review task')
     intent = {'consultation_purpose': 'Reconsider the unresolved finding.', 'assignments': [
         {'agent_id': reviewer, 'task_instructions': 'Review the original inputs and all replies again.',
          'input_source_ids': [*input_ids, *reply_ids], 'assignment_type': 'review_content'}

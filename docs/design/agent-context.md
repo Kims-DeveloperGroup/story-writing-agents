@@ -23,7 +23,7 @@ cycle:
 | `agent_context.continuation` | Shared process-local Lead session transaction; defer coverage commitment until authoritative result publication. |
 | `agent_context.actions` | SEARCH/READ/ANSWER values, policies, correlations, opaque handles, evidence authorization, and provider observations. |
 | `agent_context.sources` | Bounded searchable source capture and drift checks; separate exact retained-session-history capture for Lead continuation. |
-| `agent_context.service` | Provider-neutral agent-provider-wire-v10 call loop, local reference loading, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
+| `agent_context.service` | Provider-neutral agent-provider-wire-v11 call loop, local reference loading, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
 
 The retained execution entry points are backend/provider component interfaces,
 plus the runtime's lead-turn and confirmed-consultation composition.
@@ -341,15 +341,21 @@ recaptures and revalidates that status. It proves empty content only. Nonempty
 targets need attached-reference or READ evidence; a metadata revision is kept
 distinct from the recaptured whole-file digest and selected-boundary digest.
 
-<!-- Historical audit-link alias only; the visible normative contract is v8. -->
+<!-- Historical audit-link alias only; the visible normative contract is v11. -->
 <a id="agent-provider-wire-v10"></a>
+<a id="agent-provider-wire-v11"></a>
 
 ## Descriptive agent provider wire
 
-Contextual and direct calls use `agent-provider-wire-v10`. The
+Contextual and direct calls use `agent-provider-wire-v11`. The
 [agent JSON field guide](../reference/provider-wire.md) specifies the request
 properties, named context records, action variants, result schemas, and field
 meanings. Built-in result objects include explicit `response_type` values.
+
+This contract supports current runtime data. Migration or compatibility for
+persisted data, policy defaults, or native sessions from earlier runtime versions
+is outside this change. Current-session history and exact source provenance remain
+part of the runtime contract.
 
 Contextual initial requests contain `request_correlation_token`,
 `response_contract`, `task_input`, and applicable `session_history`, `current_draft`,

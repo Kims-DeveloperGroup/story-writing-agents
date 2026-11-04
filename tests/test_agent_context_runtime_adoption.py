@@ -21,7 +21,7 @@ from story_writing_agents.agent_context.request_compaction import compact_contex
 
 
 class _CandidateWireInterpreter:
-    """Replay only named wire-v10 objects, checking every content identity."""
+    """Replay only named wire-v11 objects, checking every content identity."""
     def __init__(self):
         self.candidate = None
         self.records = {}
