@@ -8,6 +8,7 @@ import unittest
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest import mock
 
 from story_writing_agents.interactive_terminal import InteractiveInputLifecycle, InteractiveTerminal
@@ -17,6 +18,7 @@ from story_writing_agents.interactive_terminal._controls import (
 from story_writing_agents.interactive_terminal import _input_lifecycle as lifecycle
 from story_writing_agents.interactive_terminal import _driver as driver_module
 from story_writing_agents.interactive_terminal import _input_sources_linux as linux_sources
+from story_writing_agents.interactive_terminal import _input_sources_macos as macos_sources
 from story_writing_agents.interactive_terminal._input_sources import InputSourceLifecycle, InputSourceState
 from story_writing_agents.interactive_terminal._driver import (
     RawTerminalDriver,
@@ -50,6 +52,27 @@ def _input_sources(default="ja", driver=None):
         owner.start(None, None, live=True)
         driver._input_sources = owner
     return owner, adapter, baseline, english
+
+
+def _cached_macos_source(initial, mode=101):
+    native = SimpleNamespace(actual=initial, cached=initial, mode=mode, events=[], tis=mock.Mock(), cf=mock.Mock(), pointer=mock.Mock())
+    native.pointer.in_dll.side_effect = lambda _library, name: SimpleNamespace(value=mode if name == "kCFRunLoopDefaultMode" else 1)
+    with mock.patch.object(macos_sources.ctypes, "CDLL", side_effect=[native.tis, native.cf]), mock.patch.object(macos_sources.ctypes, "c_void_p", native.pointer):
+        native.adapter = macos_sources.MacOSInputSourceAdapter()
+    def refresh(mode, seconds, return_after):
+        native.events.append(("refresh", mode, seconds, return_after))
+        native.cached = native.actual
+        return 3
+    def current():
+        native.events.append(("getter", native.cached))
+        return native.cached
+    native.cf.CFRunLoopRunInMode.side_effect = refresh
+    native.tis.TISCopyCurrentKeyboardInputSource.side_effect = current
+    native.cf.CFRelease.side_effect = lambda source: native.events.append(("release", source))
+    native.adapter._state = lambda source: source
+    native.adapter.select_source = mock.Mock(side_effect=lambda source: setattr(native, "actual", source))
+    native.adapter.english_source = mock.Mock(return_value=InputSourceState(("ABC",), True))
+    return native
 
 
 class _ByteBackedInput:
@@ -451,6 +474,35 @@ class InputLatchAndDriverTests(unittest.TestCase):
     """Lock irreversible selection, exclusion, and pre-latch validation."""
 
     def test_latch_starts_resource_free_and_live_identity_is_permanent(self) -> None:
+        english, korean = InputSourceState(("ABC",), True), InputSourceState(("KO",), False)
+        for baseline, external in ((english, korean), (korean, english)):
+            native = _cached_macos_source(baseline)
+            sources = InputSourceLifecycle(lambda _input, _output: native.adapter)
+            sources.start(None, None, live=True)
+            native.actual = external
+            self.assertEqual(native.cached, baseline)
+            native.events.clear()
+            with sources.main_input():
+                sources.observe_buffer("/status")
+                self.assertEqual(native.actual, english)
+                if baseline.english:
+                    native.adapter.select_source.assert_called_once_with(english)
+                    native.actual = korean
+                    sources.observe_buffer("/status 한글")
+                    self.assertEqual(native.actual, korean)
+                else:
+                    native.adapter.select_source.assert_not_called()
+            self.assertEqual(native.actual, baseline)
+            expected = [mock.call(english), mock.call(english)] if baseline.english else [mock.call(korean)]
+            self.assertEqual(native.adapter.select_source.call_args_list, expected)
+            self.assertEqual(len(native.events) % 3, 0)
+            for index in range(0, len(native.events), 3):
+                refresh, getter, release = native.events[index:index + 3]
+                self.assertEqual(refresh, ("refresh", native.mode, 0.0, False))
+                self.assertEqual(getter[0], "getter")
+                self.assertEqual(release, ("release", getter[1]))
+            self.assertNotIn(mock.call(native.mode), native.cf.CFRelease.call_args_list)
+            sources.finish()
         latch = TerminalInputLatch()
         self.assertIs(latch.mode, TerminalInputMode.UNDECIDED)
         with self.assertRaisesRegex(RuntimeError, "not live-owned"):
@@ -727,6 +779,23 @@ class InputLatchAndDriverTests(unittest.TestCase):
             fallback.assert_not_called()
 
     def test_driver_construction_does_not_inspect_resources(self) -> None:
+        with self.assertRaises(OSError):
+            _cached_macos_source(InputSourceState(("ABC",), True), mode=None)
+        native = _cached_macos_source(InputSourceState(("KO",), False))
+        self.assertEqual(native.cf.CFRunLoopRunInMode.argtypes, [native.pointer, macos_sources.ctypes.c_double, macos_sources.ctypes.c_bool])
+        self.assertIs(native.cf.CFRunLoopRunInMode.restype, macos_sources.ctypes.c_int32)
+        native.pointer.in_dll.assert_any_call(native.cf, "kCFRunLoopDefaultMode")
+        native.cf.CFRunLoopRunInMode.side_effect = OSError("notification dispatch failed")
+        with self.assertRaises(OSError):
+            native.adapter.current_source()
+        native.tis.TISCopyCurrentKeyboardInputSource.assert_not_called()
+        native.cf.CFRelease.assert_not_called()
+        sources = InputSourceLifecycle(lambda _input, _output: native.adapter)
+        sources.start(None, None, live=True)
+        with sources.main_input():
+            sources.observe_buffer("/status")
+        sources.finish()
+        native.adapter.select_source.assert_not_called()
         engines = "hangul\nxkb:gb::eng\nxkb:us::eng"
         answers = {("engine",): "hangul", ("list-engine", "--name-only"): engines}
         with mock.patch.object(linux_sources, "_run_helper", side_effect=lambda _exe, *args: answers.get(args, "")) as helper:

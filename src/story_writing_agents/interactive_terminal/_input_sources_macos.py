@@ -28,6 +28,15 @@ class MacOSInputSourceAdapter:
         self._bind(self._tis, "TISGetInputSourceProperty", [pointer, pointer], pointer)
         self._bind(self._tis, "TISSelectInputSource", [pointer], ctypes.c_int32)
         self._bind(self._cf, "CFRelease", [pointer], None)
+        self._bind(
+            self._cf, "CFRunLoopRunInMode",
+            [pointer, ctypes.c_double, ctypes.c_bool], ctypes.c_int32,
+        )
+        self._default_run_loop_mode = pointer.in_dll(
+            self._cf, "kCFRunLoopDefaultMode",
+        ).value
+        if not self._default_run_loop_mode:
+            raise OSError("macOS default run-loop mode is unavailable")
         self._bind(self._cf, "CFArrayGetCount", [pointer], index)
         self._bind(self._cf, "CFArrayGetValueAtIndex", [pointer, index], pointer)
         self._bind(self._cf, "CFBooleanGetValue", [pointer], ctypes.c_bool)
@@ -103,6 +112,8 @@ class MacOSInputSourceAdapter:
         return InputSourceState((identifier,), english)
 
     def current_source(self) -> InputSourceState | None:
+        # Give queued native source notifications a nonblocking run-loop turn.
+        self._cf.CFRunLoopRunInMode(self._default_run_loop_mode, 0.0, False)
         source = self._tis.TISCopyCurrentKeyboardInputSource()
         if not source:
             return None
