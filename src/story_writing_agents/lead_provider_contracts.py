@@ -2326,7 +2326,9 @@ class LeadProviderConstraints:
                     formal = (rule is not None and rule.intent is AuthoringIntent.AUTHORING
                         and rule.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} and not targets)
                     root_schema["properties"]["planning_target"] = alternatives([
-                        {"type": "string", "enum": [target.value for target in AuthoringTarget]}, {"type": "null"}]) if formal else {"type": "null"}
+                        {"type": "string", "enum": [target.value for target in AuthoringTarget],
+                         "description": 'Semantic document kind for a genuine formal-writing clarification; this is not an artifact path, task, readiness finding, or execution authority.'},
+                        {"type": "null", "description": 'No formal document-target classification is supplied; freeform, workflow, review, and already-targeted work retain their existing scope.'}]) if formal else {"type": "null", "description": 'No formal document-target classification is supplied; freeform, workflow, review, and already-targeted work retain their existing scope.'}
 
                 if scope_kinds:
                     root_schema["properties"]["response_type"]["enum"] = list(eligible_kinds)
