@@ -1026,6 +1026,7 @@ def _payload_items(
         )
     if type(payload) is LeadRecommendationRequestPayload:
         return (
+            *_document_node_items(payload.document_node, preparation=True),
             *_authoring_scope_items(payload.authoring_scope),
             *_shared_premise_items(payload, session_id=session_id),
             Field("Preparation", payload.kind.value),
@@ -1468,19 +1469,7 @@ def _proposal_items(
     )
     budget = payload.budget
     return (
-        *(() if payload.document_node is None else (
-            Section("Confirmed input scope proposed for this node", (
-                Field("Plan", f"{payload.document_node.plan_ref.plan_id} @ {payload.document_node.plan_ref.plan_revision}"),
-                Field("Node", payload.document_node.node_id),
-                Field("Task", f"{payload.document_node.task_ref.task_id} @ {payload.document_node.task_ref.task_revision}"),
-                Field("Inherited budget source", payload.document_node.budget_origin_step_id),
-                Notice("Confirm applies only to this disclosed node and input use; it does not apply a document or authorize Commit."),
-                *((ListView("Provisional predecessor candidates", tuple(Record(use.predecessor_node_id,
-                    fields=(Field("Candidate", f"{use.candidate.candidate_id} @ {use.candidate.candidate_revision}"),
-                        Field("Digest", use.candidate.candidate_digest), Field("Purpose", use.purpose),
-                        Field("Allowed target", _joined(tuple(x.path for x in use.permitted_scope.scope.targets)))))
-                    for use in payload.document_node.candidate_uses)),) if payload.document_node.candidate_uses else ()),
-            )),)),
+        *_document_node_items(payload.document_node),
         *(() if payload.stage_plan is None else _stage_plan_items(payload.stage_plan)),
         *(() if payload.premise_decision is None else (
             Notice("One terminal candidate-free premise analysis round; no drafting or automatic continuation.", label="Provisional premise analysis"),
@@ -1920,6 +1909,25 @@ def _stage_plan_items(plan: SpecialistStagePlan) -> tuple:
             for item in plan.questions)))),)
 
 
+def _document_node_items(node, *, preparation=False) -> tuple:
+    if node is None:
+        return ()
+    return (Section("Document node and proposed input scope", (
+        Field("Plan", f"{node.plan_ref.plan_id} @ {node.plan_ref.plan_revision}"),
+        Field("Node", node.node_id),
+        Field("Task", f"{node.task_ref.task_id} @ {node.task_ref.task_revision}"),
+        Field("Prior confirmed cursor", node.prior_confirmation_event_id or "No earlier confirmation"),
+        Field("Inherited budget source", node.budget_origin_step_id),
+        Notice("Confirm authorizes preparation only; the specialist proposal still needs its own Confirm."
+               if preparation else "Confirm applies only to the disclosed node and input use; Apply and Commit remain separate."),
+        *((ListView("Provisional predecessor candidates", tuple(Record(use.predecessor_node_id, fields=(
+            Field("Candidate", f"{use.candidate.candidate_id} @ {use.candidate.candidate_revision}"),
+            Field("Digest", use.candidate.candidate_digest), Field("Purpose", use.purpose),
+            Field("Allowed target", _joined(tuple(item.path for item in use.permitted_scope.scope.targets)))))
+            for use in node.candidate_uses)),) if node.candidate_uses else ()),
+    )),)
+
+
 def _document_plan_items(view: DocumentPlanView) -> tuple:
     plan = view.plan
     by_id = {node.node_id: node for node in plan.nodes}
@@ -1937,7 +1945,8 @@ def _document_plan_items(view: DocumentPlanView) -> tuple:
         Field("Original goal", view.goal_text or plan.goal_objective_id or plan.planning_goal.user_event_id),
         Field("Plan", f"{plan.ref.plan_id} @ {plan.ref.plan_revision}"),
         Field("Window status", "Proposed; exact Confirm required" if view.pending else "Current recorded window"),
-        Field("Current node", view.current_node_id or "No node confirmed"),
+        Field("Current node", "Ambiguous: independent confirmed heads" if view.cursor_ambiguous else view.current_node_id or "No node confirmed"),
+        Field("Current confirmation", view.current_confirmation_event_id or "No current confirmed head"),
         Field("Completed documents", _joined(completed)),
         Field("Remaining documents", _joined((*remaining, *plan.remaining_target_paths))),
         Field("Unplanned targets", _joined(plan.remaining_target_paths)),
@@ -1948,8 +1957,9 @@ def _document_plan_items(view: DocumentPlanView) -> tuple:
         Field("Required input / decisions", _joined(required) if required else _joined(next_row.blocking_conditions)),
         Field("Responsible participants", _joined(tuple(f"{agent}: {mode.value}" for agent, mode in node.scope_rule.assignment_modes))),
         Field("Proposal / Apply / Commit", "A proposal needs its exact Confirm; completion needs matching evidence; Commit remains separate."),
-        Field("Task budget", f"{view.physical_calls_spent}/12 calls; {view.rounds_spent}/2 rounds; "
-              f"{view.cumulative_plan_physical_calls} cumulative plan calls"),
+        Field("Task budget", (f"Current task budget unavailable; {view.physical_calls_spent} calls and {view.rounds_spent} rounds across distinct confirmed head budgets; "
+              if view.cursor_ambiguous else f"{view.physical_calls_spent}/12 calls; {view.rounds_spent}/2 rounds; ")
+              + f"{view.cumulative_plan_physical_calls} cumulative plan calls"),
         ListView("Exact document nodes", tuple(Record(item.node_id, fields=(
             Field("Target", by_id[item.node_id].target_path), Field("State", item.state.value),
             Field("Current prerequisite revisions", _joined(tuple(

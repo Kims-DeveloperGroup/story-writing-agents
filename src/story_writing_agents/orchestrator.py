@@ -4489,11 +4489,19 @@ class StoryRuntime:
         previous: LeadRecommendationRequestPayload | None = None,
         preview_replies: tuple[CollaborationSpecialistReplyPayload, ...] = (),
         session_history: SessionHistorySnapshot | None = None,
+        document_selection: DocumentNodeSelection | None = None,
     ) -> CollaborationEventDraft:
         if type(artifact_binding) is not SessionArtifactBinding:
             raise TypeError(
                 "recommendation requires an exact session artifact binding"
             )
+        selected_node = None
+        if document_selection is not None:
+            selected_node, pending_window = self._bind_document_selection(source.session_id, document_selection,
+                source.payload.authoring_scope, projection, source)
+            if pending_window is not None:
+                raise _LeadOutcomeValidationError("For a replacement document window, propose the exact node for its own Confirm, or ask for missing inputs; a preparation-only recommendation cannot carry that window.")
+            source = replace(source, payload=replace(source.payload, document_node=selected_node))
         objective = next((item for item in projection.artifact_objectives
                           if item.facts.objective_id == action.objective_id), None)
         if action.objective_id is not None and (
@@ -4910,7 +4918,7 @@ class StoryRuntime:
             source_proposal_revision=None if source_proposal is None else source_proposal.proposal_revision,
             source_proposal_digest=None if source_proposal is None else source_proposal.proposal_digest,
             source_execution_attempt_id=source_attempt,
-            document_node=(source_proposal.document_node if source_proposal is not None and source_proposal.document_node is not None else self._automatic_document_node(source.session_id, scope, projection, session_history=session_history)), authoring_scope=scope,
+            document_node=(selected_node if selected_node is not None else source_proposal.document_node if source_proposal is not None and source_proposal.document_node is not None else self._automatic_document_node(source.session_id, scope, projection, session_history=session_history)), authoring_scope=scope,
         )
         return self._draft_with_id(
             event_id=request_event_id, session_id=source.session_id,
@@ -6111,6 +6119,12 @@ class StoryRuntime:
         snapshot = self._editorial_snapshot(session_id)
         return snapshot.document_plans()
 
+    def _document_prior_confirmation(self, session_id, plan_id):
+        views = tuple(view for view in self._document_plan_views(session_id) if view.plan.ref.plan_id == plan_id)
+        if len(views) != 1 or views[0].cursor_ambiguous:
+            raise ValueError("document work requires one reconciled current causal head")
+        return views[0].current_confirmation_event_id
+
     def _prepare_document_selection(self, session_id, selection):
         if type(selection) is not DocumentNodeSelection:
             raise TypeError("document selection must be an exact untrusted intent")
@@ -6118,6 +6132,8 @@ class StoryRuntime:
         matches = tuple(view for view in snapshot.document_plans() if view.plan.ref == selection.plan_ref)
         if len(matches) != 1:
             raise ValueError("document selection requires the current exact plan")
+        if matches[0].cursor_ambiguous:
+            raise ValueError("independent document confirmations require explicit reconciliation before new work")
         plan = matches[0].plan
         if selection.target_path is not None:
             if selection.target_path not in plan.remaining_target_paths and not plan.unresolved_target:
@@ -6210,13 +6226,19 @@ class StoryRuntime:
                     row = replace(row, state=DocumentNodeState.READY, blocking_conditions=(), required_inputs=(),
                                   next_action=(DocumentNodeNextAction.CONFIRM_NODE if row.next_action is DocumentNodeNextAction.CONFIRM_NODE
                                                else DocumentNodeNextAction.PREPARE_NODE))
-                if ((view.remaining_physical_calls == 0 or view.remaining_rounds == 0)
+                if (not view.cursor_ambiguous and (view.remaining_physical_calls == 0 or view.remaining_rounds == 0)
                         and row.state is not DocumentNodeState.COMPLETE
                         and row.next_action not in {DocumentNodeNextAction.APPLY_CANDIDATE, DocumentNodeNextAction.PREPARE_COMMIT}):
                     row = replace(row, state=DocumentNodeState.BLOCKED,
                         blocking_conditions=(*row.blocking_conditions, "Existing task budget is exhausted; no node reset is permitted."),
                         next_action=DocumentNodeNextAction.BUDGET_EXHAUSTED)
                 rows.append(row)
+            if view.cursor_ambiguous:
+                rows = [replace(row, state=DocumentNodeState.BLOCKED,
+                    blocking_conditions=tuple(dict.fromkeys((*row.blocking_conditions,
+                        "Independent confirmed document heads require explicit reconciliation; current budget is unavailable."))),
+                    next_action=DocumentNodeNextAction.REQUEST_INFORMATION)
+                    if row.state is not DocumentNodeState.COMPLETE else row for row in rows]
             result.append(replace(view, nodes=tuple(rows)))
         return tuple(result)
 
@@ -6263,7 +6285,8 @@ class StoryRuntime:
             node.preservation_conditions, task.scope_digest))
         uses = tuple(DocumentCandidateUseIntent(plan.ref, use.predecessor_node_id, node.node_id,
             use.candidate, task, use.permitted_scope, use.purpose, conditions) for use in selection.candidate_uses)
-        return DocumentNodeBinding(plan.ref, node.node_id, task, budget, step, uses), (plan if plan.ref != selection.plan_ref else None)
+        return DocumentNodeBinding(plan.ref, node.node_id, task, budget, step, uses,
+            prior_confirmation_event_id=self._document_prior_confirmation(session_id, plan.ref.plan_id)), (plan if plan.ref != selection.plan_ref else None)
 
     def _document_goal_facts(self, session_id, scope_event, target_paths, *, objective_id=None, preparation=None):
         if scope_event is None:
@@ -6286,7 +6309,12 @@ class StoryRuntime:
     def _validate_document_node(self, session_id: str, binding: DocumentNodeBinding, *, scope=None, proposed_plan=None) -> DocumentPlanView:
         if type(binding) is not DocumentNodeBinding:
             raise TypeError("document_node must be an exact untrusted node binding")
-        views = tuple(view for view in self._document_plan_views(session_id) if view.plan.ref == binding.plan_ref)
+        captured_views = self._document_plan_views(session_id)
+        causal = tuple(view for view in captured_views if view.plan.ref.plan_id == binding.plan_ref.plan_id)
+        if len(causal) != 1 or causal[0].cursor_ambiguous:
+            raise ValueError("document execution requires a reconciled exact causal head")
+        causal_view = causal[0]
+        views = tuple(view for view in captured_views if view.plan.ref == binding.plan_ref)
         if not views and proposed_plan is not None:
             current = tuple(view for view in self._document_plan_views(session_id)
                             if view.plan.ref.plan_id == proposed_plan.ref.plan_id)
@@ -6307,7 +6335,7 @@ class StoryRuntime:
                     planning_goal=expected.planning_goal, unresolved_target=False)
             if expected != proposed_plan or binding.plan_ref != proposed_plan.ref:
                 raise ValueError("proposed window differs from the host's exact dependency/goal projection")
-            views = (replace(current[0], plan=proposed_plan, current_node_id=None,
+            views = (replace(current[0], plan=proposed_plan, current_node_id=None, current_confirmation_event_id=None,
                 nodes=tuple(DocumentNodeView(node.node_id, DocumentNodeState.BLOCKED,
                     ("Pending exact node confirmation.",), (), (), (), DocumentNodeNextAction.CONFIRM_NODE)
                     for node in proposed_plan.nodes)),)
@@ -6317,6 +6345,15 @@ class StoryRuntime:
         node = next((node for node in view.plan.nodes if node.node_id == binding.node_id), None)
         events = self._session_authoring_events(session_id)
         by_id = {event.event_id: event for event in events}
+        if binding.prior_confirmation_event_id != causal_view.current_confirmation_event_id:
+            head = by_id.get(causal_view.current_confirmation_event_id)
+            value = None if head is None else head.payload
+            own = next((event.payload for event in events if type(event.payload) is CollaborationProposal
+                and type(value) is CollaborationConfirmationPayload
+                and (event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest) ==
+                    (value.proposal_id, value.proposal_revision, value.proposal_digest)), None)
+            if own is None or own.document_node != binding:
+                raise ValueError("document prior confirmation changed; prepare a fresh exact disclosure")
         if node is None or binding.task_ref.session_id != session_id:
             raise ValueError("document node belongs to another plan/session")
         source = by_id.get(binding.task_ref.scope_event_id)
@@ -6423,7 +6460,8 @@ class StoryRuntime:
         else:
             origin = next(event for event in history if event.event_id == task.scope_event_id)
             budget, step = task, origin.step_id
-        return DocumentNodeBinding(view.plan.ref, node.node_id, task, budget, step)
+        return DocumentNodeBinding(view.plan.ref, node.node_id, task, budget, step,
+            prior_confirmation_event_id=self._document_prior_confirmation(session_id, view.plan.ref.plan_id))
 
     def _document_candidate_inputs(self, session_id, binding, inputs):
         if binding is None or not binding.candidate_uses:
@@ -6461,8 +6499,10 @@ class StoryRuntime:
                     max(0, COLLABORATION_PHYSICAL_CALL_LIMIT - calls), max(0, COLLABORATION_ROUND_LIMIT - rounds),
                     goal_text=active.goal_text, pending=True)
                 return replace(result, document_plan=pending)
-        if proposal is not None and proposal.document_node is not None:
-            current = next((view for view in views if view.plan.ref == proposal.document_node.plan_ref), None)
+        binding = (proposal.document_node if proposal is not None else
+                   None if result.recommendation_request is None else result.recommendation_request.document_node)
+        if binding is not None:
+            current = next((view for view in views if view.plan.ref == binding.plan_ref), None)
         else:
             current = views[0] if len(views) == 1 else None
         return result if current is None else replace(result, document_plan=current)
@@ -12157,7 +12197,8 @@ class StoryRuntime:
             result = await self._run_lead_provider_guarded(artifact_binding=artifact_binding, **arguments)
             events = self.conversation_storage_services.event_store.read(arguments["session_id"], arguments["conversation_id"])
             projection = project_collaboration_history(events)
-            if projection.document_plans or (result.proposal is not None and result.proposal.document_node is not None):
+            if (projection.document_plans or (result.proposal is not None and result.proposal.document_node is not None)
+                    or (result.recommendation_request is not None and result.recommendation_request.document_node is not None)):
                 result = await run_blocking(self._attach_document_plan, result, events, projection)
             return replace(result, public_responses=tuple(view for view in projection.public_responses
                 if next(event for event in events if event.event_id == view.ref.event_id).turn_id == result.turn_id))
@@ -12797,6 +12838,8 @@ class StoryRuntime:
                             "physical_calls_spent": plan_view.physical_calls_spent,
                             "cumulative_plan_physical_calls": plan_view.cumulative_plan_physical_calls,
                             "authority": "Plan/input guidance only; each exact executed node requires its own disclosed Confirm, final review, Apply and Commit.",
+                            **({"replacement_window_guidance": "Propose the exact selected document node directly for its own Confirm, or ask for missing inputs. A preparation-only recommendation cannot carry a replacement window."}
+                               if document_selection is not None and document_selection.target_path is not None else {}),
                         }
                 if premise_capture is not None:
                     current_value["premise_selection"] = premise_value_to_dict(premise_capture)
@@ -13548,7 +13591,7 @@ class StoryRuntime:
                             ),
                         )
                         self._recommendation_request_draft(
-                            source=source, action=decoded.recommended_action, inputs=inputs,
+                            source=source, document_selection=document_selection, action=decoded.recommended_action, inputs=inputs,
                             evidence=decoded_evidence, events=recommendation_events,
                             projection=recommendation_projection,
                             artifact_binding=artifact_binding,
@@ -14322,7 +14365,7 @@ class StoryRuntime:
                 )
                 refreshed = project_collaboration_history(recommendation_events)
                 request_draft = self._recommendation_request_draft(
-                    source=judgment, action=outcome.recommended_action, inputs=inputs,
+                    source=judgment, document_selection=document_selection, action=outcome.recommended_action, inputs=inputs,
                     evidence=evidence, events=recommendation_events, projection=refreshed,
                     artifact_binding=artifact_binding,
                     tail_sequence=refreshed.last_sequence + len(final_drafts) + 1,
@@ -14331,6 +14374,10 @@ class StoryRuntime:
                             and host_binding_plan.transition == "supersede") else preparation.request_event.payload,
                     session_history=session_history,
                 )
+                if request_draft.payload.document_node is not None:
+                    judgment = replace(judgment, payload=replace(judgment.payload,
+                        document_node=request_draft.payload.document_node))
+                    final_drafts = tuple(judgment if item.event_id == judgment.event_id else item for item in final_drafts)
                 provider._public_accepted_call_id = provider.last_submitted_call_id
                 provider.publish_public_responses()
                 refreshed = services.event_store.read_context(session_id, conversation_id)
