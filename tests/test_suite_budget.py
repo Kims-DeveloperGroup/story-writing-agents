@@ -118,6 +118,17 @@ class SuiteBudgetTests(unittest.TestCase):
                 suite_budget.check_monotonic(
                     dict(preliminary_source, max_test_source_lines=limit),
                     dict(continuity_source, max_test_source_lines=old))
+        recovery_source = dict(preliminary_source, max_test_source_lines=148715)
+        for prior_source in (continuity_source, preliminary_source):
+            self.assertIsNone(suite_budget.check_monotonic(recovery_source, prior_source))
+            for old, limit in ((prior_source["max_test_source_lines"] - 1, 148715),
+                               (prior_source["max_test_source_lines"] + 1, 148715),
+                               (prior_source["max_test_source_lines"], 148714),
+                               (prior_source["max_test_source_lines"], 148716)):
+                with self.assertRaises(suite_budget.BudgetError):
+                    suite_budget.check_monotonic(
+                        dict(recovery_source, max_test_source_lines=limit),
+                        dict(prior_source, max_test_source_lines=old))
         for old, limit in ((142603, 142887), (142605, 142887), (142604, 142886),
                            (142604, 142888), (142887, 142888)):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
