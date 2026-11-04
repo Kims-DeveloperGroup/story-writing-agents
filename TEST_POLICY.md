@@ -259,6 +259,22 @@ thread ID·이름, 파일명, 본문, locals·인자·객체 repr은 기록하�
 보장하지 않는다. 진단 코드와 함께 측정한 결과를 일반 속도 개선으로
 주장하지 않는다.
 
+### #838 인증 복구 통합 fixture의 진행 대기
+
+`ContextRecoveryTests._bound_replay`의 기존120초는 각 인증 진행 대기
+구간에 적용되던 fixture 값이며 제품 SLA나 전체 테스트 시간 기준이 아니다.
+같은120초 설정의 이전 성공 실행은 전체236.132초였다. 운영 코드를 유지한
+[격리 진단41866198794](https://github.com/Kims-DeveloperGroup/story-writing-agents/actions/runs/41866198794)는
+이 값만900으로 바꿔185.214초에 모든 기존 assertion과 정리를 통과했다.
+이는 해당 경로의 정상 완료 증거이며 일반적인 속도 개선이나900초 기준을 뜻하지 않는다.
+
+통합 helper 한 곳은 `progress_timeout=None`으로 임의의 내부 진행창을 제거한다.
+인증 조정 단위 검사의 기본30초, 다른120초 호출, 모든 응답·phase plan·복구·예산
+assertion은 유지한다. 승인된 hosted affected job은 기존 외부 timeout의 최대3150초와
+공유 마감을, full은 기존3600초 공유 work cutoff와 supervisor·정리 제한을 강제한다.
+별도로 실행한 serial runner 자체에는 deadline이 없다. 기존18000/3600초·CI75분·
+최대4worker·GC·ID/subTest·소스 상한은 바꾸지 않는다.
+
 ### Canonical CI
 
 `pr-validation` runs the fast tier and all five full shards for any change under

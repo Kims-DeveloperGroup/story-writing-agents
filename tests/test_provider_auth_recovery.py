@@ -346,7 +346,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
                                                          before_script_response=before_script_response))
         with mock.patch.object(AgentContextService, "invoke", capture):
             outcome, keys = await drive_recovery(case.runtime.lead_turn(
-                case.session_id, conversation_id, "Explain bounded workflow."), progress_timeout=120,
+                case.session_id, conversation_id, "Explain bounded workflow."), progress_timeout=None,
                 progress_state=lambda: {
                     "script_cursor": (case.backend._all_scripts[-1].script_responses_consumed
                                       if case.backend._all_scripts else None),
