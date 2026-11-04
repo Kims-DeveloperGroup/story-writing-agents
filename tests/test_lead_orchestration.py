@@ -3918,10 +3918,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                 for agent, assignment in profile_assignments.items():
                                     mode = assignment["assignment_type"]
                                     if mode == "review_content" and review_basis_control is None:
-                                        review_basis_control = (copy.deepcopy(packet),
+                                        review_basis_control = (profile_binding, copy.deepcopy(packet),
                                             copy.deepcopy(assignment["review_basis"]))
                                     elif mode in ("draft_content", "assess_constraints"):
-                                        nonreview_basis_controls.setdefault( mode, (copy.deepcopy(packet), agent))
+                                        nonreview_basis_controls.setdefault( mode, (profile_binding, copy.deepcopy(packet), agent))
                             if (semantic_kind == 'proposal' and 'artifact_intent' in semantic_extra
                                     and semantic_extra['artifact_intent']['operations'][0]['kind'] == 'rename'):
                                 wrong_kind = copy.deepcopy(packet)
@@ -3968,21 +3968,21 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(len(accepted_profiles), 91)
         self.assertIsNotNone(review_basis_control)
         self.assertEqual(set(nonreview_basis_controls), {"draft_content", "assess_constraints"})
-        review_packet, current_review_basis = review_basis_control
+        review_bound, review_packet, current_review_basis = review_basis_control
         for mode in ("draft_content", "assess_constraints"):
-            positive, agent = nonreview_basis_controls[mode]
-            for control in (review_packet, positive):
-                self.assertFalse(profile_binding.rule_graph.findings(control))
-                self.assertTrue(profile_binding.decode_response( json.dumps(control)).belongs_to(profile_binding))
+            positive_bound, positive, agent = nonreview_basis_controls[mode]
+            for control_bound, control in ((review_bound, review_packet), (positive_bound, positive)):
+                self.assertFalse(control_bound.rule_graph.findings(control))
+                self.assertTrue(control_bound.decode_response( json.dumps(control)).belongs_to(control_bound))
             invalid_basis = copy.deepcopy(positive)
             assignment = invalid_basis["agent_action"]["task_result"]["response_details"][
                 "specialist_consultation_proposal"]["assignments"][agent]
             self.assertEqual(assignment["assignment_type"], mode)
             self.assertIsNone(assignment["review_basis"])
             assignment["review_basis"] = copy.deepcopy(current_review_basis)
-            self.assertTrue(profile_binding.rule_graph.findings(invalid_basis))
+            self.assertTrue(positive_bound.rule_graph.findings(invalid_basis))
             with self.assertRaises(orchestrator_module.LeadContractRejection) as rejected:
-                profile_binding.decode_response(json.dumps(invalid_basis))
+                positive_bound.decode_response(json.dumps(invalid_basis))
             self.assertIs(type(rejected.exception), orchestrator_module.LeadContractRejection)
             self.assertEqual(rejected.exception.code, "LEAD_SCHEMA_RULE_REJECTED")
             self.assertTrue(rejected.exception.requirements)
