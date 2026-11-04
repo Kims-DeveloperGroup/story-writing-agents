@@ -603,11 +603,12 @@ class SemanticInputRenderingTests(unittest.TestCase):
             _capability(CapabilityProfile.ANSI, width=20),
         )
         self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
-        self.assertIn(r"\x1b]0;owned\x07", plain.text)
-        self.assertIn(r"\u202e", plain.text)
-        self.assertIn(r"bad\x1b[31m", plain.text)
+        self.assertIn("界e\u0301[control]", plain.text)
+        self.assertNotIn(r"\u202e", plain.text)
+        self.assertIn("[error] bad text", plain.text)
         self.assertIn("text", plain.text)
-        self.assertIn(r"ask\x1b[2J>", plain.text)
+        self.assertIn("ask> ", plain.text)
+        self.assertNotIn(r"\x1b", plain.text)
         self.assertNotIn("\x07", plain.text)
         allowed = {"\x1b[0m", "\x1b[1m", "\x1b[31m", "\x1b[32m", "\x1b[36m"}
         sequences = re.findall(r"\x1b\[[0-9;]*[A-Za-z]", ansi.text)

@@ -142,6 +142,7 @@ from ._model import (
     ViewState,
     sanitize_terminal_text,
 )
+from ._metadata_text import format_metadata_text
 from ._render import (
     format_agent_reply_content,
     render_component,
@@ -593,7 +594,7 @@ def _interactive_error_notices(
         ),
     )
     if debug_log_path is not None:
-        notices += (Notice(sanitize_terminal_text(debug_log_path), label="debug log"),)
+        notices += (Notice(format_metadata_text(debug_log_path, inline=True), label="debug log"),)
     return notices
 
 
@@ -918,7 +919,7 @@ class InteractiveTerminal:
     def write_lobby_orientation(self, workspace: str) -> None:
         """Render the stable startup orientation for an unattached lobby."""
 
-        workspace_text = _inline_text(_required_text("workspace", workspace))
+        workspace_text = format_metadata_text(_required_text("workspace", workspace), inline=True)
         self._write_component(
             Panel(
                 "Story chat",
@@ -954,7 +955,7 @@ class InteractiveTerminal:
         focus; rendering performs no persistence or resource mutation.
         """
 
-        workspace_text = _inline_text(_required_text("workspace", workspace))
+        workspace_text = format_metadata_text(_required_text("workspace", workspace), inline=True)
         safe_session = _safe_identifier("session_id", session_id)
         if not isinstance(attachment, AttachmentKind):
             raise TypeError("attachment must be an AttachmentKind")
@@ -1028,8 +1029,8 @@ class InteractiveTerminal:
                 "conversation_handle",
                 conversation_handle,
             )
-            safe_subject = _inline_text(
-                _required_text("conversation_subject", conversation_subject)
+            safe_subject = format_metadata_text(
+                _required_text("conversation_subject", conversation_subject), inline=True,
             )
             fields = (
                 Field("Session", safe_session),
@@ -1058,8 +1059,8 @@ class InteractiveTerminal:
             "conversation_handle",
             conversation_handle,
         )
-        safe_subject = _inline_text(
-            _required_text("conversation_subject", conversation_subject)
+        safe_subject = format_metadata_text(
+            _required_text("conversation_subject", conversation_subject), inline=True,
         )
         if type(archived) is not bool:
             raise TypeError("archived must be a bool")
@@ -1105,13 +1106,13 @@ class InteractiveTerminal:
             "conversation_handle",
             conversation_handle,
         )
-        safe_subject = _inline_text(
+        safe_subject = format_metadata_text(
             _strict_required_text(
                 "conversation_subject",
                 conversation_subject,
-            )
+            ), inline=True,
         )
-        safe_match_kind = _inline_text(_strict_required_text("match_kind", match_kind))
+        safe_match_kind = format_metadata_text(_strict_required_text("match_kind", match_kind), inline=True)
         safe_snippet = _inline_text(_strict_required_text("snippet", snippet))
         if type(archived) is not bool:
             raise TypeError("archived must be a bool")
@@ -1136,8 +1137,8 @@ class InteractiveTerminal:
                 "citation_sequence",
                 citation_sequence,
             )
-            safe_citation_kind = _inline_text(
-                _strict_required_text("citation_kind", citation_kind)
+            safe_citation_kind = format_metadata_text(
+                _strict_required_text("citation_kind", citation_kind), inline=True,
             )
             citation = (
                 f"conversation {safe_handle}, turn {safe_turn_id}, "
@@ -1694,7 +1695,7 @@ class InteractiveMainInput:
             if debug_log_path is not None:
                 _validate_default_message("debug_log_path", debug_log_path)
                 notices += (
-                    Notice(sanitize_terminal_text(debug_log_path), label="debug log"),
+                    Notice(format_metadata_text(debug_log_path, inline=True), label="debug log"),
                 )
         else:
             raise TypeError("alert must be an InteractiveError or Notice")
@@ -3700,7 +3701,7 @@ def _prepare_error_message(
     source = default if custom is None or not custom or custom.isspace() else custom
     for secret in redactions:
         source = source.replace(secret, _REDACTION)
-    rendered = sanitize_terminal_text(source)
+    rendered = format_metadata_text(source)
     for secret in redactions:
         rendered = rendered.replace(secret, _REDACTION)
     rendered = _single_line(rendered)

@@ -128,6 +128,54 @@ class ReviewFinding:
 
 
 @dataclass(frozen=True, slots=True)
+class PreliminaryReviewSpec:
+    """Source-qualified preliminary meaning, without task lifecycle metadata."""
+    targets: tuple[ReviewTarget, ...]
+    inspected_input_ids: tuple[str, ...]
+    excluded_input_ids: tuple[str, ...]
+    findings: tuple[ReviewFinding, ...]
+    conflicts: tuple[ReviewFinding, ...]
+    missing_information: tuple[str, ...]
+    further_review_required: bool
+    next_action: PreliminaryNextAction
+    stage: str = "lead_preliminary_review"
+
+    def __post_init__(self) -> None:
+        _validate_preliminary_review(self)
+
+
+def _validate_preliminary_review(value) -> None:
+    if value.stage != "lead_preliminary_review":
+        raise ValueError("preliminary review cannot acquire another stage")
+    if type(value.targets) is not tuple or not value.targets or len(value.targets) > 256:
+        raise ValueError("preliminary review requires bounded exact targets")
+    if any(type(item) is not ReviewTarget for item in value.targets):
+        raise TypeError("preliminary targets must be exact qualified values")
+    target_ids = tuple(item.input_id for item in value.targets)
+    if len(set(target_ids)) != len(target_ids):
+        raise ValueError("preliminary target IDs must be unique")
+    inspected = _texts(value.inspected_input_ids, "inspected inputs")
+    excluded = _texts(value.excluded_input_ids, "excluded inputs")
+    if any(item.input_id in inspected and item.availability is ReviewTargetAvailability.UNREAD for item in value.targets):
+        raise ValueError("unread metadata cannot be claimed as inspected")
+    if set(inspected) & set(excluded) or set(inspected) | set(excluded) != set(target_ids):
+        raise ValueError("inspected and excluded scope must partition exact targets")
+    for rows in (value.findings, value.conflicts):
+        if type(rows) is not tuple or len(rows) > 256 or any(type(x) is not ReviewFinding for x in rows):
+            raise ValueError("preliminary findings require bounded exact records")
+        if any(not set(x.evidence_input_ids).issubset(inspected) for x in rows):
+            raise ValueError("findings may cite only genuinely inspected input IDs")
+    if any(len(row.evidence_input_ids) < 2 for row in value.conflicts):
+        raise ValueError("an explicit conflict requires both inspected sources")
+    _texts(value.missing_information, "missing information", unique=False)
+    if type(value.further_review_required) is not bool or type(value.next_action) is not PreliminaryNextAction:
+        raise ValueError("preliminary review requires exact follow-up declarations")
+    if excluded and not (value.missing_information or value.further_review_required):
+        raise ValueError("uninspected scope requires an explicit limitation")
+
+
+
+@dataclass(frozen=True, slots=True)
 class LeadPreliminaryReview:
     task_id: str
     task_revision: int
@@ -145,33 +193,7 @@ class LeadPreliminaryReview:
         _text(self.task_id, "preliminary task", maximum=4096)
         if type(self.task_revision) is not int or self.task_revision < 1:
             raise ValueError("preliminary review requires exact current task revision")
-        if self.stage != "lead_preliminary_review":
-            raise ValueError("preliminary review cannot acquire another stage")
-        if type(self.targets) is not tuple or not self.targets or len(self.targets) > 256:
-            raise ValueError("preliminary review requires bounded exact targets")
-        if any(type(item) is not ReviewTarget for item in self.targets):
-            raise TypeError("preliminary targets must be exact qualified values")
-        target_ids = tuple(item.input_id for item in self.targets)
-        if len(set(target_ids)) != len(target_ids):
-            raise ValueError("preliminary target IDs must be unique")
-        inspected = _texts(self.inspected_input_ids, "inspected inputs")
-        excluded = _texts(self.excluded_input_ids, "excluded inputs")
-        if any(item.input_id in inspected and item.availability is ReviewTargetAvailability.UNREAD for item in self.targets):
-            raise ValueError("unread metadata cannot be claimed as inspected")
-        if set(inspected) & set(excluded) or set(inspected) | set(excluded) != set(target_ids):
-            raise ValueError("inspected and excluded scope must partition exact targets")
-        for rows in (self.findings, self.conflicts):
-            if type(rows) is not tuple or len(rows) > 256 or any(type(x) is not ReviewFinding for x in rows):
-                raise ValueError("preliminary findings require bounded exact records")
-            if any(not set(x.evidence_input_ids).issubset(inspected) for x in rows):
-                raise ValueError("findings may cite only genuinely inspected input IDs")
-        if any(len(row.evidence_input_ids) < 2 for row in self.conflicts):
-            raise ValueError("an explicit conflict requires both inspected sources")
-        _texts(self.missing_information, "missing information", unique=False)
-        if type(self.further_review_required) is not bool or type(self.next_action) is not PreliminaryNextAction:
-            raise ValueError("preliminary review requires exact follow-up declarations")
-        if excluded and not (self.missing_information or self.further_review_required):
-            raise ValueError("uninspected scope requires an explicit limitation")
+        _validate_preliminary_review(self)
 
     @property
     def whole_target_coverage(self) -> bool:
@@ -349,8 +371,8 @@ def scoped_preliminary_targets(targets: tuple[ReviewTarget, ...], target_paths: 
     return tuple(item for item in targets if item.availability is not ReviewTargetAvailability.UNREAD or item.target_id in target_paths)
 
 
-def bind_preliminary_intent(value: object, targets: tuple[ReviewTarget, ...],
-                            task_id: str, task_revision: int, *, target_paths: tuple[str, ...]) -> LeadPreliminaryReview:
+def preliminary_intent_from_value(value: object, targets: tuple[ReviewTarget, ...],
+                                 *, target_paths: tuple[str, ...]) -> PreliminaryReviewSpec:
     if type(value) is not dict or set(value) != {"stage", "inspection", "findings",
             "conflicts", "missing_information", "further_review_required", "next_action"}:
         raise ValueError("preliminary review requires its complete current declared record")
@@ -373,8 +395,22 @@ def bind_preliminary_intent(value: object, targets: tuple[ReviewTarget, ...],
     if type(value["missing_information"]) is not list:
         raise ValueError("missing information requires an array")
     targets = scoped_preliminary_targets(targets, target_paths)
-    return LeadPreliminaryReview(task_id, task_revision, targets,
+    return PreliminaryReviewSpec(targets,
         tuple(t.input_id for t in targets if inspection[t.input_id] == "inspected"),
         tuple(t.input_id for t in targets if inspection[t.input_id] == "excluded"),
         findings("findings"), findings("conflicts"), tuple(value["missing_information"]),
         value["further_review_required"], PreliminaryNextAction(value["next_action"]), value["stage"])
+
+
+def bind_preliminary_review(spec: PreliminaryReviewSpec, task_id: str, revision: int) -> LeadPreliminaryReview:
+    if type(spec) is not PreliminaryReviewSpec:
+        raise TypeError("expected identity-free preliminary review")
+    return LeadPreliminaryReview(task_id, revision, spec.targets, spec.inspected_input_ids,
+        spec.excluded_input_ids, spec.findings, spec.conflicts, spec.missing_information,
+        spec.further_review_required, spec.next_action, spec.stage)
+
+
+def bind_preliminary_intent(value: object, targets: tuple[ReviewTarget, ...],
+                            task_id: str, task_revision: int, *, target_paths: tuple[str, ...]) -> LeadPreliminaryReview:
+    return bind_preliminary_review(preliminary_intent_from_value(value, targets,
+        target_paths=target_paths), task_id, task_revision)

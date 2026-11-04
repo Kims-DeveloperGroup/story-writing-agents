@@ -1302,7 +1302,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
 
 
 class CompactWireDecoderTests(unittest.TestCase):
-    """Verify the complete strict typed wire-v10 response contract in isolation."""
+    """Verify the complete strict typed wire-v11 response contract in isolation."""
 
     def setUp(self) -> None:
         manifest, _snapshots = _manifest_fixture(); self.correlation = _correlation(_binding(manifest), 1)
@@ -1574,7 +1574,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assertRaises(TypeError, generated.record_group_control, decoded)
         self.assertEqual(denied, [])
         body = {"response_type": "answer", "response_text": "Workflow only.", "response_details": {
-            "task_scope": lead_fixture_scope_record({"activity": "workflow", "intent": "authoring", "domains": [],
+            "task_scope": lead_fixture_scope_record({"interpretation": "Inspect the declared synthetic scope.", "activity": "workflow", "intent": "authoring", "domains": [],
                 "target_paths": [], "contributions": [], "dependency_slots": [], "task_id": "group-task",
                 "task_revision": 1}, fixed_targets=True, fixed_dependencies=True)}}
         answer_text = lead_fixture_response(SimpleNamespace(contract=generated), body, family=0)

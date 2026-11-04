@@ -37,8 +37,8 @@ _GENERIC_RAG_REPOSITORY = "https://github.com/Kims-DeveloperGroup/generic-rag.gi
 _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}")
 _OLD_JSONL_VIEWER_PIN = "997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea"
-_JSONL_VIEWER_PIN = "91e2e21f301a0628fd7651d248a3556c6d3b7f95"
-_JSONL_VIEWER_VERSION = "0.6.4"
+_JSONL_VIEWER_PIN = "717d17b0c180150e5137439ff72a48cef5f12397"
+_JSONL_VIEWER_VERSION = "0.6.5"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
 _JSONL_VIEWER_REQUIREMENT = (
     f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}")
@@ -338,8 +338,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 172)
-        self.assertEqual(len(edges), 774)
+        self.assertEqual(len(modules), 175)
+        self.assertEqual(len(edges), 783)
         self.assertIn(("story_writing_agents.agent_context.service", "story_writing_agents.provider_adapter"), edges)
         self.assertIn(("story_writing_agents.interactive_terminal._advisory_progress", "story_writing_agents.agent_context.service"), edges)
         self.assertIn(("story_writing_agents.interactive_terminal._core", "story_writing_agents.agent_context.service"), edges)
@@ -378,6 +378,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.agent_context.group_observation',
             },
             "story_writing_agents.conversations.context": {
+                "story_writing_agents.authoring_task_lifecycle",
                 "story_writing_agents.review_contracts",
                 "story_writing_agents.lead_task_transitions",
                 "story_writing_agents.lead_exploration",
@@ -889,7 +890,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertIn("story_writing_agents.review_contracts", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.review_contracts"}, set())
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.review_contracts"}, {
-            "story_writing_agents.conversations", "story_writing_agents.conversations.context",
+            "story_writing_agents.authoring_task_lifecycle", "story_writing_agents.conversations", "story_writing_agents.conversations.context",
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_terminal._collaboration_view",
             "story_writing_agents.lead_provider_contracts", "story_writing_agents.orchestrator"})
         self.assertIn("story_writing_agents.blocking_work", modules)

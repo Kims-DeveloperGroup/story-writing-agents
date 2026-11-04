@@ -1159,8 +1159,9 @@ class RenderingFoundationTests(unittest.TestCase):
             capability(CapabilityProfile.ANSI, width=40),
         )
         self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
-        self.assertIn("Unsafe\\x1b]0;owned\\x07", plain.text)
-        self.assertIn("bad\\x1b[31m text", plain.text)
+        self.assertIn("Unsafe", plain.text)
+        self.assertIn("bad text", plain.text)
+        self.assertNotIn("\\x", plain.text)
         self.assertNotIn("\x1b", plain.text)
         self.assertNotIn("\x07", plain.text)
         allowed = {
@@ -3372,16 +3373,17 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         expected_dependencies = {
             '__init__.py': {'._advisory_progress', '._core'},
             '_advisory_progress.py': {'..agent_context.actions', '..agent_context.progress', '..agent_context.service', '._progress_process'},
-            '_collaboration_view.py': {'..agents', '..conversations', '..core_document_readiness', '..editorial_state', '..lead_premise_decisions', '..lead_task_transitions', '..reply_trace', '..specialist_routing', '..writing_artifacts', '._model', '._response_usage', '..review_contracts'},
+            '_collaboration_view.py': {'._metadata_text', '..agents', '..conversations', '..core_document_readiness', '..editorial_state', '..lead_premise_decisions', '..lead_task_transitions', '..reply_trace', '..specialist_routing', '..writing_artifacts', '._model', '._response_usage', '..review_contracts'},
             '_external_view.py': set(), '_input_lifecycle.py': set(),
             '_input_sources.py': set(),
             '_input_sources_linux.py': {'._input_sources'},
             '_input_sources_macos.py': {'._input_sources'},
             '_live_composer.py': {'._model'},
             '_model.py': set(),
+            '_metadata_text.py': set(),
             '_progress_process.py': set(),
             '_controls.py': {'._model'},
-            '_render.py': {'._advisory_progress', '._box', '._markdown', '._model'},
+            '_render.py': {'._metadata_text', '._advisory_progress', '._box', '._markdown', '._model'},
             '_viewer_model.py': set(),
             '_pointer.py': set(),
             '_output_history.py': {'._box', '._controls', '._model', '._pointer', '._render', '._viewer_render'},
@@ -3390,7 +3392,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             '_transcript_view.py': {'..conversations', '._collaboration_view', '._external_view', '._model', '._render'},
             '_reference_activation.py': {'..writing_artifacts', '._model'},
             '_driver.py': {'._external_view', '._input_lifecycle', '._input_sources', '._input_sources_linux', '._input_sources_macos', '._live_composer', '._model', '._output_history', '._pointer', '._progress_process', '._reference_activation', '._render', '._viewer_model'},
-            '_core.py': {'..agent_context.progress', '..agent_context.service', '..agents', '..conversations', '..errors', '..interactive_commands', '._advisory_progress', '._collaboration_view', '._controls', '._driver', '._external_view', '._live_composer', '._model', '._reference_activation', '._render', '._transcript_view', '._viewer_controls', '._viewer_model', '._viewer_render'},
+            '_core.py': {'._metadata_text', '..agent_context.progress', '..agent_context.service', '..agents', '..conversations', '..errors', '..interactive_commands', '._advisory_progress', '._collaboration_view', '._controls', '._driver', '._external_view', '._live_composer', '._model', '._reference_activation', '._render', '._transcript_view', '._viewer_controls', '._viewer_model', '._viewer_render'},
             '_box.py': {'._model'},
             '_markdown.py': {'._model'},
             '_response_usage.py': {'..agent_context.accounting', '..conversations'},
@@ -3409,7 +3411,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 if isinstance(node, ast.ImportFrom) and node.level
             }
             # Keep the frozen subtest count; each new dependency set is still checked exactly.
-            if filename in {"_box.py", "_markdown.py", "_response_usage.py", "_transcript_view.py", "_pointer.py", "_output_history.py", "_input_sources.py", "_input_sources_linux.py", "_input_sources_macos.py", "_progress_process.py"}:
+            if filename in {"_metadata_text.py", "_box.py", "_markdown.py", "_response_usage.py", "_transcript_view.py", "_pointer.py", "_output_history.py", "_input_sources.py", "_input_sources_linux.py", "_input_sources_macos.py", "_progress_process.py"}:
                 self.assertEqual(dependencies, expected)
                 continue
             with self.subTest(filename=filename):
@@ -3426,6 +3428,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             "story_writing_agents.interactive_terminal._input_sources_macos",
             "story_writing_agents.interactive_terminal._box",
             "story_writing_agents.interactive_terminal._model",
+            "story_writing_agents.interactive_terminal._metadata_text",
             "story_writing_agents.interactive_terminal._controls",
             "story_writing_agents.interactive_terminal._render",
             "story_writing_agents.interactive_terminal._viewer_model",

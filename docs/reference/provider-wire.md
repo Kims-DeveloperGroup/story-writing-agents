@@ -1,6 +1,6 @@
 # Agent JSON contract and field guide
 
-Story sends agents the `agent-provider-wire-v10` contract. It uses named
+Story sends agents the `agent-provider-wire-v11` contract. It uses named
 objects, descriptive property names, and full-word enum values. The contract
 applies to contextual collaboration and direct conversation, retrieval, and
 consensus provider calls. Only this contract is accepted; no migration or
@@ -173,7 +173,7 @@ from `payload`. It is not the name of a contract or an example response. The
 runtime builds it in this order:
 
 1. Select the semantic result contract for the current workflow and role. Restrict
-   it to the current assignment, offered task/revision pairs, inputs, paths, and
+   it to the current assignment, identity-free scope, inputs, paths, and
    permitted follow-up choices.
 2. For a contextual call, place that result schema under
    `agent_action.task_result` in the `submit_result` branch. Add `search_context`
@@ -572,20 +572,24 @@ its existing typed decoder runs.
 | --- | --- |
 | Activity | `activity` |
 | Writing intent | `intent` |
+| Operative writing brief | `interpretation` |
 | Specialist domains | `domains` |
 | Target artifact paths | `paths` |
 | Specialist contribution bindings | `roles` |
 | Premise dependency slots | `slots` |
-| Current task reference | `task` |
-| Task identity | `task.id` |
-| Task revision | `task.revision` |
 | Each slot's identity | `id` within the slot |
 | Each slot's dependent domains | `domains` within the slot |
 
-For example, an offered task reference is written as `task: {id, revision}` in
-the native scope. Select the exact pair offered by the current call. Every field
+The required `interpretation` is the operative brief. `response_text` presents
+the answer; changing that presentation alone does not change the writing brief.
+`task_input.current_writing_scope` supplies the selected identity-free brief,
+or null when there is no current writing task.
+
+Task identity and task revision are internal runtime bindings. The provider
+returns scope content and does not receive a task reference or select a pair.
+Every field
 remains explicit; allowed maps or arrays, nulls, empty values, counts, domain and
-role keys, source relationships, target paths, and task values come from that
+role keys, source relationships, target paths come from that
 bound contract. This vocabulary applies only within the current native scope.
 Provider input, public Python/domain records, and persistence keep their own
 field names. Verbose or mixed native scope keys reject under the compact contract.
@@ -609,13 +613,17 @@ current contract permits them. `required_input_source_ids` describes required
 coverage; it is separate from the list of available inputs. A SEARCH hit or an
 earlier draft's event ID does not itself become an assignment input.
 
-Each successful premise-analysis alternative must cite at least one offered input in `basis_input_ids`. An insufficient-evidence result may contain no alternatives. The fresh-work admission records the exact offered task/revision pairs in `offered_authoring_tasks`; `selected_authoring_task` separately pins an explicit same-turn USER premise capture when present. A proposal must belong to the recorded offer and match that explicit selection. `prior_authoring_source_ref` remains historical source and cost attribution, without selecting a future task.
+Each successful premise-analysis alternative must cite at least one offered input in `basis_input_ids`. An insufficient-evidence result may contain no alternatives.
+Fresh-work admission and explicit premise selections retain their exact task
+bindings internally. Agent views contain scope, material and limits without
+the internal task offer or selection. Prior source-cost receipts retain
+historical provenance and cannot select or authorize future work.
 
 ### Explicit exploration result contract
 
 The host selects `lead-exploration-response-v1` only for the current user's
 explicit exploration mode. A provider cannot select that mode through prose or
-a normal Lead response. The outer `agent-provider-wire-v10` envelope remains
+a normal Lead response. The outer `agent-provider-wire-v11` envelope remains
 the same; an exploration result uses the following closed shape:
 
 ```json

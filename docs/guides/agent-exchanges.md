@@ -331,7 +331,7 @@ resolve within that same request; earlier exchanges are not needed. Sharing appl
 when recursive property count and bytes both decrease. Payload, schema and complete
 request counts are measured separately, including objects inside arrays. Historical
 records remain readable without migration. See [request
-sharing](../design/agent-context.md#agent-provider-wire-v10).
+sharing](../design/agent-context.md#agent-provider-wire-v11).
 
 A completed result that structured or semantic validation rejects therefore
 normally appears as adjacent request, response, and `rejected` outcome records.

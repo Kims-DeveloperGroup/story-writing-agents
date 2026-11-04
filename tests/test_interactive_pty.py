@@ -279,10 +279,8 @@ def nested_mapping_with(value, key):
 
 
 def lead_scope(value, activity="workflow", domains=()):
-    material = nested_mapping_with(value, "authoring_tasks")
-    task = material["authoring_tasks"][-1]
-    return {"activity":activity, "target_paths":[], "domains":list(domains),
-            "task":f'{task["task_id"]}@{task["task_revision"]}'}
+    return {"interpretation":"Inspect the supplied writing request.",
+            "activity":activity, "target_paths":[], "domains":list(domains)}
 
 
 def lead_consultation_answer(value, _agent_id):
@@ -347,10 +345,10 @@ def lead_recommendation_answer(value):
                     if item["artifact_path"] == "core_documents/global_outline.md")
     requested_scope = request["authoring_scope"]
     scope = {
+        "interpretation": requested_scope["interpretation"],
         "activity": requested_scope["activity"],
         "target_paths": requested_scope["target_paths"],
         "domains": requested_scope["domains"],
-        "task": f'{requested_scope["task_id"]}@{requested_scope["task_revision"]}',
     }
     return {"kind": "proposal", "message": "B642 exact candidate awaits separate specialist review.",
         "authoring_scope": scope,
