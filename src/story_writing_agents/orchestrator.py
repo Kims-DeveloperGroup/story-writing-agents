@@ -14237,7 +14237,7 @@ class StoryRuntime:
                         planning_target=outcome.planning_target, core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
                         authoring_admission=outcome.authoring_admission,
                         provider_invocation_id=None if provider is None else provider.invocation_id,
-                     preliminary_review=outcome.preliminary_review, document_node=outcome.document_node, document_plan=self._planning_goal_plan(session_id, conversation_id, turn_id, outcome, inputs, events, outcome.planning_target)),
+                     preliminary_review=outcome.preliminary_review, document_node=outcome.document_node, document_plan=self._planning_goal_plan(session_id, conversation_id, turn_id, outcome, inputs, objective_events, outcome.planning_target)),
                 )
                 refreshed = self.conversation_storage_services.event_store.read_context(
                     session_id,
@@ -14355,7 +14355,7 @@ class StoryRuntime:
                     planning_target=outcome.planning_target, authoring_admission=outcome.authoring_admission,
                     core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
                     provider_invocation_id=None if provider is None else provider.invocation_id,
-                 preliminary_review=outcome.preliminary_review, document_node=document_node, document_plan=self._planning_goal_plan(session_id, conversation_id, turn_id, outcome, inputs, events, outcome.planning_target)),
+                 preliminary_review=outcome.preliminary_review, document_node=document_node, document_plan=self._planning_goal_plan(session_id, conversation_id, turn_id, outcome, inputs, objective_events, outcome.planning_target)),
             )
             final_drafts = (
                 judgment,
