@@ -15,6 +15,7 @@ import unittest
 from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 from pathlib import Path
+from types import CoroutineType, GeneratorType
 from unittest import mock
 
 from story_writing_agents import AgentBackend, StoryRuntime
@@ -95,6 +96,28 @@ async def drive_recovery(operation, callback=lambda _key: True, *, progress_time
                     failure.add_note(f"safe coordination state: {state!r}")
                     if progress_state is not None:
                         failure.add_note(f"safe fixture state: {progress_state()!r}")
+                    chain, link = [], task.get_coro()
+                    for _ in range(16):
+                        if type(link) is CoroutineType:
+                            label = "coroutine"
+                            code, frame, link = link.cr_code, link.cr_frame, link.cr_await
+                        elif type(link) is GeneratorType:
+                            label = "generator"
+                            code, frame, link = link.gi_code, link.gi_frame, link.gi_yieldfrom
+                        else:
+                            chain.append(("unknown-terminal",))
+                            break
+                        chain.append((label, code.co_qualname, frame.f_lineno if frame is not None else None))
+                    failure.add_note(f"safe await chain (max16 links): {chain!r}")
+                    stacks = []
+                    for frame in tuple(sys._current_frames().values())[:8]:
+                        stack = []
+                        for _ in range(16):
+                            if frame is None: break
+                            stack.append((frame.f_code.co_qualname, frame.f_lineno))
+                            frame = frame.f_back
+                        stacks.append(stack)
+                    failure.add_note(f"safe anonymous stacks (max8x16): {stacks!r}")
                 except Exception as error:
                     failure.add_note(f"safe diagnostic exception: {type(error).__name__}")
                 raise failure
