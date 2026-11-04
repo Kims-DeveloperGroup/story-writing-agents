@@ -3376,7 +3376,6 @@ class LeadGroupCompilation:
     core_status_facts: tuple[ContextSourceStatusReceipt, ...] = ()
     read_facts: tuple[ContextCallReadFact, ...] = field(default=(), kw_only=True)
     semantic_variants: tuple[LeadWireVariant, ...] = field(init=False, repr=False, compare=False)
-    _semantic_decoders: tuple[TypedDecoder, ...] = field(init=False, repr=False, compare=False)
     group_ids: tuple[str, ...] = field(init=False)
     _root_source: bytes = field(init=False, repr=False)
     _declaration: tuple = field(init=False, repr=False, compare=False)
@@ -3411,20 +3410,6 @@ class LeadGroupCompilation:
             raise ValueError("ordinary Lead의 모든 의미 변형을 분류해야 합니다")
         ids = {item.group_id for item in variants}
         object.__setattr__(self, "semantic_variants", variants)
-        shared_dependencies = _lead_codec_dependencies()
-        # Prepare the full codec declaration once. Stable implementation internals
-        # are not re-attested while checking current response/offer data below.
-        decoders = []
-        if variants:
-            variant = variants[0]
-            def decode(value: ValidatedValue, *, source=variant.decode) -> dict[str, object]:
-                return source(value.as_object())
-            decoders.append(TypedDecoder(
-                "lead.prepared_semantic_codec", "894-v1:prepared-owner-source", decode,
-                (variant.decode, *shared_dependencies,
-                 *(item.decode for item in variants[1:])),
-            ))
-        object.__setattr__(self, "_semantic_decoders", tuple(decoders))
         object.__setattr__(self, "group_ids", tuple(
             group.group_id for group in LEAD_SCHEMA_GROUPS if group.group_id in ids))
         roots, container_description = self.constraints._current_wire_roots(self.rule_seed)
@@ -3441,7 +3426,6 @@ class LeadGroupCompilation:
                 tuple((id(item), item.branch_key, item.group_id, item.logical_root,
                        id(item.rules), item.rules.canonical_bytes, item.rules.maximum_bytes, id(item.decode))
                       for item in self.semantic_variants),
-                tuple((id(item), item.binding_fingerprint) for item in self._semantic_decoders),
                 json.dumps(tuple((group.card(), group.membership_identity()) for group in LEAD_SCHEMA_GROUPS),
                            ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
