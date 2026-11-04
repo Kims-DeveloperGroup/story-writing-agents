@@ -134,7 +134,9 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         await self._assert_default_budget_refusal(path, text, brief, source_inputs)
         source_positive_call_start = len(self.backend.calls)
         original_result = lead._live_result
-        with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(call, {**value, "message": brief} if value.get("kind") == "proposal" else value)):
+        with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(call,
+                {**value, "message": brief, "authoring_scope": {**value["authoring_scope"],
+                    "interpretation": brief}} if value.get("kind") == "proposal" else value)):
             conversation_id, _ = await self._source_setup_start(
                 conversation_id, message=text, target_path=None, specialist_ids=ROSTER,
                 authoring_paths=(path,), native_inputs=source_inputs, response_text=brief)
@@ -146,7 +148,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.backend.enqueue(recommendation(message=brief,
             recommended_action=action(source_ids=(source.event_id,),
                 target_paths=(path,), instruction="Preserve the exact approved draft.", specialist_ids=ROSTER),
-            authoring_scope=lambda call: lead._live_material(call)["authoring_tasks"][0]["current_scope"],
+            authoring_scope=lambda call: lead._live_material(call)["current_scope"],
             authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded artifact review judgments", "separate exact proposal preparation"))), control_plan=selection_plan('prepare.artifact'))
         offered = await self.runtime.lead_turn(self.session_id, conversation_id,
             ("Approve the previous draft and prepare it as a new document." + f" Target: {path}. {brief}"

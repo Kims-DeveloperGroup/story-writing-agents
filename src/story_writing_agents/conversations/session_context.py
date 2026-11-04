@@ -7,6 +7,8 @@ session-wide event sequence.
 """
 
 from __future__ import annotations
+from ..agent_task_projection import project_agent_task_metadata, project_legacy_task_disclosure
+
 
 from ..core_document_readiness import assessment_to_dict as readiness_assessment_to_dict
 
@@ -464,14 +466,18 @@ def _provider_record(
     for item in record.fields:
         if item.key.value in included_fields:
             continue
-        value: dict[str, object] = {"key": item.key.value, "text": item.text}
+        text = item.text
+        if (record.sender.kind.value != "user"
+                and getattr(record.payload, "authoring_scope", None) is not None):
+            text = project_legacy_task_disclosure(text)
+        value: dict[str, object] = {"key": item.key.value, "text": text}
         if item.assignment_ordinal is not None:
             value["assignment_ordinal"] = item.assignment_ordinal
         if item.input_ordinal is not None:
             value["input_ordinal"] = item.input_ordinal
         fields.append(value)
     details = {
-        key: value for key, value in _visible_details(record.payload).items()
+        key: value for key, value in project_agent_task_metadata(_visible_details(record.payload), "details").items()
         if key not in included_details
         and value is not None and value != () and value != [] and value != {}
     }

@@ -142,7 +142,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         await self.runtime.decide_lead_step(lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(self.backend.call_records[-1][1].expected_thread_id, "thread-lead-1")
         followups = (
-            "Proceed in the order you recommended.",
+            'Proceed in the order you recommended. Literal JSON: {"task_id":"user-text","task_revision":17}',
             "Recall your last recommendation.",
             "Summarize our current discussion.", )
         expected_scope = self.runtime._agent_context_service.scope(
@@ -189,8 +189,8 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
                         if type(event.payload) is CollaborationLeadJudgmentPayload)
         host_fact = next(record for record in _records(self.backend.callback_payload(calls[5])["session_history"])
                          if record["event_id"] == judgment.event_id)
-        self.assertEqual(host_fact["details"]["authoring_scope"]["task_id"],
-                         judgment.payload.authoring_scope.task_id)
+        self.assertFalse({"task_id", "task_revision"} & host_fact["details"]["authoring_scope"].keys())
+        self.assertTrue(judgment.payload.authoring_scope.task_id)
 
         snapshot = self.snapshot()
         records = tuple(record for conversation in snapshot.conversations for record in conversation.records)
@@ -207,8 +207,8 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
                                   native_agent_id=LEAD_ORCHESTRATOR)
         self.assertNotIn(plan, _fields(delta))
         synthesis_fact = next(record for record in _records(delta) if record["event_id"] == source.event_id)
-        self.assertEqual(synthesis_fact["details"]["authoring_scope"]["task_id"],
-                         source.payload.authoring_scope.task_id)
+        self.assertFalse({"task_id", "task_revision"} & synthesis_fact["details"]["authoring_scope"].keys())
+        self.assertTrue(source.payload.authoring_scope.task_id)
         changed_text = plan + "\nA runtime notice was appended."
         changed = replace(mirror, payload=replace(mirror.payload, content=changed_text),
                           fields=tuple(replace(field, text=changed_text) for field in mirror.fields))

@@ -513,24 +513,14 @@ def _live_material(call):
 
 
 def _live_task(call, task_index=-1):
-    if isinstance(call, BoundContextProviderCallRequest):
-        task_id, task_revision = call.contract.semantic_index.policy.task_revisions[task_index]
-        return {"task_id": task_id, "task_revision": task_revision}
-    return _live_material(call)["authoring_tasks"][task_index]
+    task_id, task_revision = call.contract.semantic_index.policy.task_revisions[task_index]
+    return {"task_id": task_id, "task_revision": task_revision}
 
 
 def _live_scope(call, *, activity='workflow', domains=(), paths=(), task_index=-1, contributions=None):
-    """Declare synthetic test semantics using one exact runtime-offered task pair."""
-    if isinstance(call, BoundContextProviderCallRequest):
-        task = _live_task(call, task_index)
-    else:
-        material = _live_material(call)
-        if "authoring_tasks" not in material:
-            return dict(material["answer_contract"]["authoring_scope"])
-        task = material["authoring_tasks"][task_index]
+    """Declare synthetic work semantics; the runtime supplies lifecycle identity."""
     affected = set(domains) | {domain.value for path in paths if (domain := artifact_domain(path)) is not None}
-    return {"activity": activity, "intent": "authoring", "target_paths": list(paths), "domains": list(domains), "task_id": task["task_id"], "task_revision": task["task_revision"],
-        "contributions": (copy.deepcopy(contributions) if contributions is not None else [
+    return {"interpretation": "Inspect the supplied current work.", "activity": activity, "intent": "authoring", "target_paths": list(paths), "domains": list(domains), "contributions": (copy.deepcopy(contributions) if contributions is not None else [
                 {"domain": domain.value, "role": "draft_owner"}
                 for domain in ArtifactReviewDomain if domain.value in affected
             ]), "dependency_slots": [], }
@@ -601,7 +591,6 @@ def _live_result(call, value):
     scope = _live_scope(call, activity="review" if proposal is not None or artifact is not None else "workflow", domains=domains or (["plot_structure"] if proposal is not None else []), paths=paths)
     if execution is not None:
         scope = copy.deepcopy(execution["request"]["authoring_scope"])
-        if execution["decision"]["decision"]["kind"] == "revise": scope["task_revision"] += 1
         if value.get("scope") == "workflow_meta":
             value["scope"] = "story_specific"
             value["evidence_status"] = "empty"
@@ -628,10 +617,9 @@ def _live_result(call, value):
 
 
 def _compact_scope(value):
-    compact = {key: value[key] for key in ('activity', 'target_paths', 'domains')}
+    compact = {key: value[key] for key in ('activity', 'target_paths', 'domains', 'interpretation')}
     for key in ("intent", "contributions", "dependency_slots"):
         if key in value: compact[key] = value[key]
-    compact["task"] = f"{value['task_id']}@{value['task_revision']}"
     return compact
 
 
@@ -729,14 +717,12 @@ def _visible_outcome(kind: str, message: str = "Visible lead response.", *, reco
     ) -> str:
         if (getattr(call, 'contract', None) is not None
                 and kind in ('answer', 'question', 'critique') and recommended_action is None):
-            task = _live_task(call)
             native = {'response_type': {'answer': 'answer', 'question': 'clarification_question',
                                       'critique': 'critique'}[kind], 'response_text': message,
-                      'task_scope': lead_fixture_scope({
+                      'task_scope': lead_fixture_scope({"interpretation": "Inspect the declared synthetic scope.",
                           'writing_intent': 'authoring', 'activity_type': 'workflow_guidance',
                           'target_artifact_paths': [], 'specialist_domains': [],
-                          'contributions': [], 'dependency_slots': [], 'task_reference': {
-                              'task_id': task['task_id'], 'task_revision': task['task_revision']}})}
+                          'contributions': [], 'dependency_slots': []})}
             if grouped:
                 from tests.test_agent_context_execution import _group_result
                 return _group_result(call, lead_fixture_result(native))
@@ -786,13 +772,11 @@ def _current_proposal_outcome(assignments, *, domains, relation='new_step',
         from tests.provider_wire_fixture import (
             lead_fixture_assignments, lead_fixture_response, lead_fixture_assessment,
             author_positive_fixture_review_bases)
-        task = _live_task(call)
-        native_scope = lead_fixture_bound_scope(call, {'writing_intent': 'authoring',
+        native_scope = lead_fixture_bound_scope(call, {"interpretation": "Inspect the declared synthetic scope.", 'writing_intent': 'authoring',
             'activity_type': {'review': 'review_writing', 'draft': 'draft_writing'}[activity],
             'target_artifact_paths': list(paths), 'specialist_domains': list(domains),
             'contributions': [{'domain': domain, 'role': 'draft_owner'} for domain in domains],
-            'dependency_slots': [], 'task_reference': {
-                'task_id': task['task_id'], 'task_revision': task['task_revision']}})
+            'dependency_slots': []})
         choices = dict(call.contract.semantic_index.policy.choices)
         rows = [{'agent_id': row['agent_id'], 'task_instructions': row['instruction'],
                  'assignment_type': {'review': 'review_content', 'draft': 'draft_content',
@@ -1403,7 +1387,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
             if artifact: self.assertEqual(values['activity'], {'review_writing'})
             details = packet['agent_action']['task_result']['response_details']
             for field, key, value in (('task_scope', 'activity', 'draft_writing' if artifact else 'workflow_guidance'),
-                    ('task_scope', 'task', {'id': prior_scope.task_id, 'revision': prior_scope.task_revision}),
+                    ('task_scope', 'intent', 'review_only'),
                     ('proposal_drafting_request', 'action_type', 'draft_specialist_consultation_proposal' if artifact else 'draft_document_change_proposal')):
                 if field not in details: continue
                 changed = copy.deepcopy(packet)
@@ -1773,8 +1757,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.assertEqual(notice["code"], "LEAD_CONTRACT_REJECTED")
                 self.assertEqual(notice["state"], result.state)
                 self.assertEqual(notice["language"], "KO")
-                self.assertEqual(tuple((row["task_id"], row["task_revision"]) for row in notice["task_revisions"]),
-                    self.backend.calls[-1].contract.semantic_index.policy.task_revisions)
+                self.assertNotIn("task_revisions", notice)
                 self.assertNotIn("PRIVATE", result.message)
                 history = self.history(conversation_id)
                 self.assertFalse(any(type(event.payload) is CollaborationProposal for event in history))
@@ -2297,7 +2280,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         encoded = '\n'.join(item.rules.canonical_bytes.decode('utf-8') for item in frozen_variants)
         # PRE clauses carry [G] aliases; the actual GEN owns the shared glossary.
         self.assertIn("concrete deliverable and success criteria", json.dumps(full_schema, ensure_ascii=False))
-        for metadata in ("correlation", "schema_version", "evidence_status", "evidence_ids", "interpretation", "review_basis", "additional_review_domains"):
+        for metadata in ("correlation", "schema_version", "evidence_status", "evidence_ids", "review_basis", "additional_review_domains"):
             if metadata == 'review_basis':
                 self.assertIn(f'"{metadata}"', encoded)
             else:
@@ -2316,15 +2299,14 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         selected = call.contract.rule_graph.provider_projection(plain(call.schema))
         self.assertEqual(selected.findings(physical), ())
         self.assertEqual(set(physical), {'agent_action'})
-        result = physical['agent_action']['task_result']; task = _live_material(call)['authoring_tasks'][0]
-        expected_scope = {'intent': 'authoring', 'activity': 'workflow_guidance', 'paths': [], 'domains': {},
-            'roles': [], 'slots': [], 'task': {'id': task['task_id'], 'revision': task['task_revision']}}
+        result = physical['agent_action']['task_result']
+        expected_scope = {"interpretation": "Inspect the declared synthetic scope.", 'intent': 'authoring', 'activity': 'workflow_guidance', 'paths': [], 'domains': {},
+            'roles': [], 'slots': []}
         self.assertEqual(result['response_details'], {'task_scope': expected_scope})
         self.assertEqual(result['response_type'], 'answer')
         self.assertEqual(result['response_text'], 'Independent workflow response.')
         for path in ((), ('agent_action', ), ('agent_action', 'task_result'), ('agent_action', 'task_result',
-            'response_details'), ('agent_action', 'task_result', 'response_details', 'task_scope'),
-            ('agent_action', 'task_result', 'response_details', 'task_scope', 'task')):
+            'response_details'), ('agent_action', 'task_result', 'response_details', 'task_scope')):
             value = physical
             for key in path: value = value[key]
             for key in value:
@@ -2415,8 +2397,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertEqual(correction['current_offer_digest'], binding.offers.offer_digest)
             self.assertEqual(correction['logical_origin_call_id'], binding.logical_origin_call_id)
             self.assertEqual(correction['phase'], binding.phase)
-            self.assertEqual(correction['task_revisions'],
-                             [list(pair) for pair in binding.action_index.policy.task_revisions])
+            self.assertNotIn("task_revisions", correction)
             self.assertEqual(correction['offered_schema_ids'], list(binding.action_index.expected_schema_ids))
             self.assertEqual(correction['selected_schema_id'], outer_id)
             requirements = correction['requirements']
@@ -2449,7 +2430,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self._require_fixture_text_boundaries(bound, physical, authorization=front_authorization)
         scope_names = ( {'activity': 'activity_type', 'intent': 'writing_intent',
             'domains': 'specialist_domains', 'paths': 'target_artifact_paths',
-            'roles': 'contributions', 'slots': 'dependency_slots', 'task': 'task_reference'} )
+            'roles': 'contributions', 'slots': 'dependency_slots'} )
         for current_name, old_name in scope_names.items():
             for replace_current in (True, False):
                 old_native = copy.deepcopy(physical)
@@ -2463,11 +2444,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     scope_extended = bound.decode_response(json.dumps(old_native))
                     self.assertTrue(scope_extended.belongs_to(bound))
                     self.assertEqual(scope_extended.domain_value(), physical_decoded.domain_value())
-        for current_name, old_name in (('id', 'task_id'), ('revision', 'task_revision')):
-            old_native = copy.deepcopy(physical)
-            scoped_task = old_native['agent_action']['task_result']['response_details']['task_scope']['task']
-            scoped_task[old_name] = scoped_task.pop(current_name)
-            with self.assertRaises(ValueError): bound.decode_response(json.dumps(old_native))
         for field, value in (('specialist_domains', {'tone_execution': True}),
                              ('target_artifact_paths', ['manuscript/part-01/neighbor.md'])):
             bad = copy.deepcopy(physical); details = bad['agent_action']['task_result']['response_details']
@@ -2475,9 +2451,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertTrue(bound.rule_graph.findings(bad), field)
         # Current workflow scope is empty; the requested future work has its own target owner.
         future_path = 'manuscript/part-02/future.md'; future_message = 'Clarify the next prospective document request.'
-        workflow_scope = { 'writing_intent': 'authoring', 'activity_type': 'workflow_guidance',
-            'target_artifact_paths': [], 'specialist_domains': [], 'task_reference': {'task_id': task['task_id'],
-            'task_revision': 1}, 'contributions': [], 'dependency_slots': [], }
+        workflow_scope = {"interpretation": "Inspect the declared synthetic scope.",  'writing_intent': 'authoring', 'activity_type': 'workflow_guidance',
+            'target_artifact_paths': [], 'specialist_domains': [], 'contributions': [], 'dependency_slots': [], }
         question_bound = current_group(bound.factory, bound.offers, "question.workflow")
         question_call = SimpleNamespace(contract=question_bound)
         prospective = lead_fixture_response(question_call, {
@@ -2487,8 +2462,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     'requested_workflow_step': 'ask_clarification'}}}, family=0,
             logical_root=1)
         self.assertEqual(json.loads(question_bound.decode_response(prospective).answer_json), { 'kind': 'question',
-            'message': future_message, 'authoring_scope': {'intent': 'authoring', 'activity': 'workflow',
-            'target_paths': [], 'domains': [], 'task': task['task_id'] + '@1', 'contributions': [],
+            'message': future_message, 'authoring_scope': {"interpretation": "Inspect the declared synthetic scope.", 'intent': 'authoring', 'activity': 'workflow',
+            'target_paths': [], 'domains': [], 'contributions': [],
             'dependency_slots': []}, 'objective_intent': {'action': 'start', 'target_paths': [future_path],
             'next_step': 'clarify'}})
         self._require_fixture_field_neighbors(question_bound, json.loads(prospective))
@@ -2513,9 +2488,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 "consultation.review_only" if intent == "review_only" else
                 "consultation.authoring.review" if activity == "review_writing" else "consultation.authoring.content")
             proposal_call = SimpleNamespace(contract=proposal_bound)
-            writing_scope = {'writing_intent': intent, 'activity_type': activity, 'target_artifact_paths': [],
+            writing_scope = {"interpretation": "Inspect the declared synthetic scope.", 'writing_intent': intent, 'activity_type': activity, 'target_artifact_paths': [],
                 'specialist_domains': ['plot_structure'],
-                'task_reference': {'task_id': task['task_id'], 'task_revision': 1},
                 'contributions': [{'domain': 'plot_structure', 'role': role}], 'dependency_slots': [], }
             if activity == 'draft_writing': writing_scope['target_artifact_paths'] = [docs[0]]
             assigned = lead_fixture_assignments(
@@ -2602,10 +2576,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 decoded = proposal_bound.decode_response(encoded)
             finally: sys.setprofile(profile_before)
             self.assertEqual(hook_calls, hook_expected)
-            expected_scope = {'intent': intent, 'activity': 'draft' if activity == 'draft_writing' else 'review',
+            expected_scope = {"interpretation": "Inspect the declared synthetic scope.", 'intent': intent, 'activity': 'draft' if activity == 'draft_writing' else 'review',
                 'target_paths': [docs[0]] if activity == 'draft_writing' else [],
-                'domains': ['plot_structure'], 'task': task['task_id'] + '@1',
-                'contributions': [{'domain': 'plot_structure', 'role': role}], 'dependency_slots': [], }
+                'domains': ['plot_structure'], 'contributions': [{'domain': 'plot_structure', 'role': role}], 'dependency_slots': [], }
             expected = {'kind': 'proposal', 'message': 'Prepare explicit selected work.',
                 'authoring_scope': expected_scope,'proposal': {'assignments': [{'agent_id': PLOT_ARCHITECT,
                     'instruction': 'Review supplied material.',
@@ -2618,16 +2591,12 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertEqual(json.loads(decoded.answer_json), expected)
             for path, replacement in ((('specialist_consultation_proposal', 'required_input_recipients',
                 'user_input'), CHARACTER_CUSTODIAN), (('specialist_consultation_proposal', 'assignments',
-                PLOT_ARCHITECT, 'input_anchor_id'), 'unoffered_source'), (('task_scope', 'task', 'revision'),
-                True), (('task_scope', 'task', 'revision'), 1.0000000000000001), (('task_scope', 'task',
-                'revision'), 2)):
+                PLOT_ARCHITECT, 'input_anchor_id'), 'unoffered_source')):
                 bad = copy.deepcopy(native); node = bad['agent_action']['task_result']['response_details']
                 for part in path[:-1]: node = node[part]
                 node[path[-1]] = replacement
                 # Preserve the fractional token: ordinary Python float rounds this decimal to one.
                 raw = json.dumps(bad)
-                if path[-1] == 'revision' and type(replacement) is float:
-                    raw = raw.replace('"revision": 1.0', '"revision": 1.0000000000000001')
                 with self.assertRaises(ValueError): proposal_bound.decode_response(raw)
             if intent == 'review_only':
                 for wrong_activity in ('workflow_guidance', 'draft_writing', 'revise_writing'):
@@ -2644,9 +2613,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         # These are actual CURRENT work owners, not prospective request targets or future rosters.
         literal_operations = [{'change_type': 'create_artifact',
             'proposed_artifact_path': future_path,'new_content_text': 'Literal supplied candidate.\n'}]
-        artifact_scope = {'writing_intent': 'authoring', 'activity_type': 'review_writing',
+        artifact_scope = {"interpretation": "Inspect the declared synthetic scope.", 'writing_intent': 'authoring', 'activity_type': 'review_writing',
             'target_artifact_paths': [], 'specialist_domains': ['tone_execution'],
-            'task_reference': {'task_id': task['task_id'], 'task_revision': 1},
             'contributions': [{'domain': 'tone_execution', 'role': 'constraint_assessor'}], 'dependency_slots': []}
         artifact_value = {'response_type': 'artifact_change_proposal',
             'response_text': 'Preserve the literal candidate before separate review.',
@@ -2658,8 +2626,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self._require_fixture_field_neighbors(artifact_bound, artifact_native)
         self.assertEqual(json.loads(artifact_bound.decode_response(json.dumps(artifact_native)).answer_json), {
                 'kind': 'proposal', 'message': 'Preserve the literal candidate before separate review.',
-                'authoring_scope': {'intent': 'authoring', 'activity': 'review',
-                    'target_paths': [], 'domains': ['tone_execution'],'task': task['task_id'] + '@1', 'contributions': [
+                'authoring_scope': {"interpretation": "Inspect the declared synthetic scope.", 'intent': 'authoring', 'activity': 'review',
+                    'target_paths': [], 'domains': ['tone_execution'],'contributions': [
                         {'domain': 'tone_execution', 'role': 'constraint_assessor'}],
                     'dependency_slots': []}, 'authoring_assessment': pending_assessment,
                 'artifact_intent': {'operations': [{'kind': 'create',
@@ -3206,18 +3174,12 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertTrue(any("status" in branch["description"].lower() for branch in answers))
         expanded = orchestrator_module._lead_front_result_contract(orchestrator_module.LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=replace(facts, task_revisions=(("task", 1), ("task", 2)))).schema_value()
         assert_schema_descriptions(self, expanded)
-        def pair_description(schema, node):
-            description = node.get("description")
-            key = "Field task_reference: " if description is None else description + ": "
-            return (schema["description"].split(key, 1)[1].split(" Field ", 1)[0].split(" [G", 1)[0]
-                    if description is None or description.startswith("[G") else description)
-        pairs = expanded['anyOf'][0]['properties']['writing_task_scope'][ 'properties']['task_reference']['anyOf']
-        self.assertEqual([pair["properties"]["task_revision"]["enum"] for pair in pairs], [[1], [2]])
-        self.assertIn("revision 1", pair_description(expanded, pairs[0])); self.assertIn("revision 2", pair_description(expanded, pairs[1]))
-        collapsed_pair = contract['anyOf'][0]['properties']['writing_task_scope'][ 'properties']['task_reference']
-        self.assertNotIn("anyOf", collapsed_pair); self.assertIn("revision 1", pair_description(contract, collapsed_pair))
-        value = {"kind": "proposal", "message": "Review.", "authoring_scope": {"contributions": [{'domain': 'plot_structure', 'role': 'draft_owner'}], "dependency_slots": [],
-            "activity": "review", "intent": "authoring", "domains": ["plot_structure"], "target_paths": [], "task": "task@1"},
+        identity_free = json.dumps((contract, expanded))
+        self.assertNotIn("task_reference", identity_free)
+        self.assertNotIn("task_id", identity_free)
+        self.assertNotIn("task_revision", identity_free)
+        value = {"kind": "proposal", "message": "Review.", "authoring_scope": {"interpretation": "Inspect the declared synthetic scope.", "contributions": [{'domain': 'plot_structure', 'role': 'draft_owner'}], "dependency_slots": [],
+            "activity": "review", "intent": "authoring", "domains": ["plot_structure"], "target_paths": []},
             "proposal": {"shared_premises": [], "assignments": [{"agent_id": PLOT_ARCHITECT, "mode": "review", "instruction": "Review sources.", "input_ids": ["user_input", "outline"]}]}}
         from tests.test_specialist_routing_runtime import _fixture_assessment
         assessment = asdict(_fixture_assessment(foundation_ids=("user_input",), user_id="user_input"))
@@ -3238,9 +3200,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         bad["proposal"]["assignments"][0]["input_ids"].append("historical_synthesis")
         self.assertEqual(facts.diagnose(json.dumps(bad)), (Rule.INPUT_NOT_OFFERED,))
         read_facts = replace(facts, allow_read_sources=True, input_ids=("user_input",), reviewer_inputs=())
-        legacy = {"kind": "proposal", "message": "Prepare the approved draft.", "authoring_scope": {"contributions": [{'domain': 'plot_structure', 'role': 'draft_owner'}, {'domain': 'character_world', 'role': 'draft_owner'}, {'domain': 'tone_execution', 'role': 'draft_owner'}], "dependency_slots": [],
+        legacy = {"kind": "proposal", "message": "Prepare the approved draft.", "authoring_scope": {"interpretation": "Inspect the declared synthetic scope.", "contributions": [{'domain': 'plot_structure', 'role': 'draft_owner'}, {'domain': 'character_world', 'role': 'draft_owner'}, {'domain': 'tone_execution', 'role': 'draft_owner'}], "dependency_slots": [],
             "activity": "draft", "intent": "authoring", "domains": ["plot_structure", "character_world", "tone_execution"],
-            "target_paths": [], "task": "task@1"}, "proposal": {"shared_premises": [], "assignments": [
+            "target_paths": []}, "proposal": {"shared_premises": [], "assignments": [
                 {"agent_id": agent, "mode": "draft", "instruction": "Use the approved draft.", "input_ids": ["user_input", "historical_synthesis"]}
                 for agent in (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST)]}}
         read_contract = orchestrator_module._lead_front_result_contract(orchestrator_module.LeadProposalRelation.NEW_STEP, read_facts.input_ids, constraints=read_facts).schema_value()
@@ -3452,9 +3414,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         profile_scope = authoring_scope_from_dict(profile_record)
         profile_facts = replace(declared, scope=profile_scope, source_ids=('user_input',),
                                 objective_ids=('fixture-objective',))
-        expected_profile_scope = {'intent': 'authoring', 'activity': 'review', 'target_paths': [],
-            'domains': ['tone_execution'], 'task': task['task_id'] + '@1',
-            'contributions': [{'domain': 'tone_execution', 'role': 'constraint_assessor'}], 'dependency_slots': []}
+        expected_profile_scope = {"interpretation": "Inspect the declared synthetic scope.", 'intent': 'authoring', 'activity': 'review', 'target_paths': [],
+            'domains': ['tone_execution'], 'contributions': [{'domain': 'tone_execution', 'role': 'constraint_assessor'}], 'dependency_slots': []}
         fixed_empty = lead_fixture_scope_record(profile_record, fixed_targets=True, fixed_dependencies=True)
         self.assertEqual(fixed_empty['paths'], {})
         self.assertEqual(fixed_empty['slots'], {})
@@ -3576,14 +3537,14 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                          workflow_record, fixed_targets=True, fixed_dependencies=True),
                      'document_change_request_update': {'update_type': 'cancel_request', 'document_change_request_id':
                                                        'fixture-objective'}}},
-                {'kind': kind, 'message': 'Cancel this request only.', 'authoring_scope': {
+                {'kind': kind, 'message': 'Cancel this request only.', 'authoring_scope': {"interpretation": "Inspect the declared synthetic scope.",
                     'intent': 'authoring', 'activity': 'workflow', 'target_paths': [],
-                    'domains': [], 'task': task['task_id'] + '@1', 'contributions': [], 'dependency_slots': []},
+                    'domains': [], 'contributions': [], 'dependency_slots': []},
                  'objective_intent': {'action': 'cancel', 'objective_id': 'fixture-objective'}},
                 logical_root=0 if kind == 'answer' else 2, constraints=workflow_facts,
                 group={'answer': 'answer.workflow', 'critique': 'critique.workflow'}[kind])
-        workflow_expected = { 'intent': 'authoring', 'activity': 'workflow', 'target_paths': [],
-            'domains': [], 'task': task['task_id'] + '@1', 'contributions': [], 'dependency_slots': []}
+        workflow_expected = {"interpretation": "Inspect the declared synthetic scope.",  'intent': 'authoring', 'activity': 'workflow', 'target_paths': [],
+            'domains': [], 'contributions': [], 'dependency_slots': []}
         objective_updates = (({'update_type': 'start_request', 'target_artifact_paths': [future_path],
             'requested_workflow_step': 'ask_clarification'}, {'action': 'start', 'target_paths': [future_path],
             'next_step': 'clarify'}), ({'update_type': 'continue_request',
@@ -3764,9 +3725,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                             complete)), legal, (intent, activity, domains, roles))
                         if not legal: continue
                         accepted_profiles.add((intent, activity, domains, roles))
-                        expected_scope = {'intent': intent, 'activity': activity, 'target_paths': [],
-                            'domains': list(domains), 'task': task['task_id'] + '@1',
-                            'contributions': duties, 'dependency_slots': []}
+                        expected_scope = {"interpretation": "Inspect the declared synthetic scope.", 'intent': intent, 'activity': activity, 'target_paths': [],
+                            'domains': list(domains), 'contributions': duties, 'dependency_slots': []}
                         decoded_profile = profile_binding.decode_response(json.dumps(complete))
                         self.assertEqual(json.loads(decoded_profile.answer_json),
                             {'kind': 'question', 'message': base['response_text'], 'authoring_scope': expected_scope})
@@ -3962,8 +3922,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                     with self.assertRaises(ValueError):
                                         receipt_bound.decode_response(json.dumps(invalid))
                         bad_task = copy.deepcopy(complete)
-                        bad_task['agent_action']['task_result']['response_details'][
-                            'task_scope']['task']['id'] = 'not-current-task'
+                        bad_task['agent_action']['task_result']['response_details']['task_scope']['interpretation'] = ''
                         self.assertTrue(complete_bound.rule_graph.findings(bad_task))
         self.assertEqual(len(accepted_profiles), 91)
         self.assertIsNotNone(review_basis_control)
@@ -4047,10 +4006,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertFalse(unit_bound.rule_graph.findings(unit_answer))
             unit_decoded = unit_bound.decode_response(json.dumps(unit_answer))
             self.assertEqual(json.loads(unit_decoded.answer_json),
-                {'message': 'The canonical READ supports inspection.', 'authoring_scope': {
+                {'message': 'The canonical READ supports inspection.', 'authoring_scope': {"interpretation": "Inspect the declared synthetic scope.",
                     'intent': 'authoring', 'activity': 'review', 'target_paths': [],
-                    'domains': ['plot_structure'], 'task': task['task_id'] + '@1',
-                    'contributions': [{'domain': 'plot_structure', 'role': 'draft_owner'}], 'dependency_slots': []}})
+                    'domains': ['plot_structure'], 'contributions': [{'domain': 'plot_structure', 'role': 'draft_owner'}], 'dependency_slots': []}})
             observed_generation = require_group_case(unit_bound.factory, unit_offers,
                 {'response_type': 'answer', 'response_text': 'The canonical READ supports inspection.',
                  'response_details': {'task_scope': unit_native_scope}}, json.loads(unit_decoded.answer_json),
@@ -4118,9 +4076,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         require_group_case(replace(factory, constraints=review_facts, rule_seed=review_seed), unit_offers,
             {"response_type": "answer", "response_text": "Report this supplied fact only.", "response_details": {
                 "task_scope": lead_fixture_scope_record(review_record, fixed_targets=True, fixed_dependencies=True)}},
-            {"message": "Report this supplied fact only.", "authoring_scope": {"intent": "review_only",
+            {"message": "Report this supplied fact only.", "authoring_scope": {"interpretation": "Inspect the declared synthetic scope.", "intent": "review_only",
                 "activity": "review", "target_paths": [], "domains": ["plot_structure"],
-                "task": task["task_id"] + "@1", "contributions": [{"domain": "plot_structure",
+                "contributions": [{"domain": "plot_structure",
                     "role": "draft_owner"}], "dependency_slots": []}}, "answer.observed_facts", logical_root=0)
 
         operation_record = copy.deepcopy(profile_record)
@@ -4981,8 +4939,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         question_text = "Which ending should the outline use before I prepare its draft?"
         def current_pending_scope(call):
             scope = {**case.scope(call, intent=intent, activity='draft'), 'domains': ['plot_structure']}
-            self.assertEqual((scope['task_id'], scope['task_revision']),
-                             (initial_scope.task_id, initial_scope.task_revision))
+            self.assertFalse({'task_id', 'task_revision'} & scope.keys())
+            self.assertIn((initial_scope.task_id, initial_scope.task_revision),
+                          call.contract.semantic_index.policy.task_revisions)
             self.assertEqual(scope['target_paths'], [OUTLINE])
             return scope
         def invalid_pending_proposal(call, _provider):
@@ -5060,7 +5019,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             guidance = _workflow_material(provider.callback_payload(call))['response_correction']['bound_contract']
             self.assertEqual((guidance['current_physical_call_id'], guidance['current_offer_digest'], guidance['selected_schema_id']),
                              (failed.call_id, failed.contract.offers.offer_digest, packet['agent_action']['schema_id']))
-            self.assertEqual(guidance['task_revisions'], [list(pair) for pair in failed.contract.action_index.policy.task_revisions])
+            self.assertNotIn("task_revisions", guidance)
             self.assertEqual(call.contract.action_index.policy.task_revisions, failed.contract.action_index.policy.task_revisions)
             self.assertEqual((call.contract.phase, call.contract.logical_origin_call_id), ('repair', failed.call_id))
             self.assertNotEqual(call.call_id, failed.call_id)
@@ -5237,15 +5196,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertIsNone(overrides["lead_orchestrator"]["language"])
         notice_tasks = []
         def record_notice_tasks(call):
-            tasks = _live_material(call)["authoring_tasks"]
-            self.assertEqual([task["task_revision"] for task in tasks], [1] * len(tasks))
-            notice_tasks[:] = [{"task_id": task["task_id"], "task_revision": 1} for task in tasks]
+            self.assertNotIn("authoring_tasks", _live_material(call))
+
+
         def require_terminal_notice(result, *, paths=None):
             notice = json.loads(result.message)
             self.assertEqual(notice["code"], "LEAD_CONTRACT_REJECTED")
             self.assertEqual(notice["state"], None)
             self.assertEqual(notice["language"], "KO")
-            self.assertEqual(notice["task_revisions"], notice_tasks)
+            self.assertNotIn("task_revisions", notice)
             if paths is not None: self.assertEqual(notice["paths"], paths)
 
         def current_result(value, response_type, family_number):
@@ -5418,12 +5377,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         def duplicate_control(label):
             def respond(call, provider):
                 from tests.provider_wire_fixture import lead_fixture_response, lead_fixture_assessment
-                task = _live_material(call)['authoring_tasks'][0]
-                scope = lead_fixture_bound_scope(call, { 'writing_intent': 'authoring',
+                scope = lead_fixture_bound_scope(call, {"interpretation": "Inspect the declared synthetic scope.",  'writing_intent': 'authoring',
                     'activity_type': 'review_writing', 'target_artifact_paths': [],
                     'specialist_domains': ['plot_structure'], 'contributions': [{'domain': 'plot_structure',
-                    'role': 'constraint_assessor'}], 'dependency_slots': [],
-                    'task_reference': { 'task_id': task['task_id'], 'task_revision': task['task_revision']}})
+                    'role': 'constraint_assessor'}], 'dependency_slots': []})
                 leaf = {'task_instructions': 'Review input.', 'assignment_type': 'review_content',
                         'input_anchor_id': 'user_input', 'optional_inputs': {'user_input': True}}
                 leaf['review_basis'] = copy.deepcopy(control_basis)
@@ -5466,13 +5423,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             def respond(call, provider):
                 from tests.provider_wire_fixture import (
                     lead_fixture_response, lead_fixture_assessment, finite_fixture_selection)
-                task = _live_material(call)['authoring_tasks'][0]
                 domains = ('plot_structure', 'character_world') if label == 'missing-reviewer' else ('plot_structure',)
-                scope = lead_fixture_bound_scope(call, { 'writing_intent': 'authoring',
+                scope = lead_fixture_bound_scope(call, {"interpretation": "Inspect the declared synthetic scope.",  'writing_intent': 'authoring',
                     'activity_type': 'review_writing', 'target_artifact_paths': [],
                     'specialist_domains': list(domains), 'contributions': [ {'domain': domain,
-                    'role': 'constraint_assessor'} for domain in domains], 'dependency_slots': [],
-                    'task_reference': { 'task_id': task['task_id'], 'task_revision': task['task_revision']}})
+                    'role': 'constraint_assessor'} for domain in domains], 'dependency_slots': []})
                 offered = dict(call.contract.semantic_index.policy.choices)
                 wire_assignments, recipients = {}, {}
                 for row in assignments:
@@ -5836,7 +5791,6 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                     self.session_id, conversation_id).available_tasks if item.ref.task_id == scope.task_id)
                 checked = set()
                 def invalid(call, _provider):
-                    task = _live_material(call)['authoring_tasks'][-1]
                     baseline = {'response_type': 'clarification_question' if kind == 'question' else 'answer',
                         'response_text': 'The revised direction is safe without another consultation.',
                         'response_details': {'used_evidence_ids': {}}}
@@ -5847,10 +5801,9 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                     body = packet['agent_action']['task_result']
                     body['response_type'] = {'answer': 'answer', 'question': 'clarification_question',
                         'critique': 'critique', 'recommendation': 'proposal_drafting_recommendation'}[kind]
-                    body['response_details']['task_scope'] = lead_fixture_scope({ 'writing_intent': 'authoring',
+                    body['response_details']['task_scope'] = lead_fixture_scope({"interpretation": "Inspect the declared synthetic scope.",  'writing_intent': 'authoring',
                         'activity_type': 'workflow_guidance', 'target_artifact_paths': [],
-                        'specialist_domains': [], 'contributions': [], 'dependency_slots': [],
-                        'task_reference': { 'task_id': task['task_id'], 'task_revision': task['task_revision']}})
+                        'specialist_domains': [], 'contributions': [], 'dependency_slots': []})
                     if kind == 'recommendation':
                         requested = action(kind='prepare_consultation', source_ids=('user_input',))
                         drafting = wire_result({'kind': 'recommendation',
@@ -5896,10 +5849,8 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                 else:
                     self.assertIs(revised.turn.state, CollaborationStepState.SUPERSEDED,)
                     notice = json.loads(revised.turn.message)
-                    self.assertEqual((notice['code'], notice['language'], notice['state'], notice['task_revisions']),
-                        ('LEAD_CONTRACT_REJECTED', 'KO', 'superseded',
-                         [{'task_id': proposed.proposal.authoring_scope.task_id,
-                           'task_revision': proposed.proposal.authoring_scope.task_revision + 1}]))
+                    self.assertEqual((notice['code'], notice['language'], notice['state']), ('LEAD_CONTRACT_REJECTED', 'KO', 'superseded'))
+                    self.assertNotIn("task_revisions", notice)
                     self.assertTrue(notice['paths'])
                     self.assertTrue(all(path.startswith('$.agent_action.task_result') for path in notice['paths']))
                     self.assertEqual(len(_submitted_calls(self.history(conversation_id))) - before, 2)
@@ -5978,6 +5929,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             self.assertEqual(issues, (f"$.action.result{path}: {requirement}",))
             self.assertNotIn("PRIVATE", repr(issues))
         scope = _compact_scope(_live_scope(self.backend.calls[0]))
+        host_task = _live_task(self.backend.calls[0])
+        scope["task"] = f"{host_task['task_id']}@{host_task['task_revision']}"
         base = {"message": "Visible.", "authoring_scope": scope}
         identifier = "expected identifier matching [A-Za-z0-9][A-Za-z0-9_-]{0,63}"
         artifact_path = ("expected one of core_documents/global_outline.md, core_documents/part_outlines.md, "
@@ -6001,7 +5954,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST))))):
             rejected({**base, "kind": "recommendation", "recommended_action": {**action, field: value}},
                      ".recommended_action." + field, requirement)
-        story = {**base, 'kind': 'proposal', 'authoring_scope': {**scope, 'activity': 'draft',
+        story = {**base, 'kind': 'proposal', 'authoring_scope': {"interpretation": "Inspect the declared synthetic scope.", **scope, 'activity': 'draft',
             'domains': ['plot_structure'], 'contributions': [{'domain': 'plot_structure',
             'role': 'draft_owner'}], 'target_paths': ['core_documents/global_outline.md']}}
         assignment = {'agent_id': PLOT_ARCHITECT, 'mode': 'draft', 'instruction': 'Draft.', 'input_ids': ['user_input']}
@@ -6980,7 +6933,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     result = await runtime.lead_turn(self.session_id, conversation, "Retain the original request.")
                     self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
                     self.assertEqual(json.loads(result.message), {
-                    "code": "provider_failed", "language": None, "task_revisions": [],"state": "rejected", "paths": []})
+                    "code": "provider_failed", "language": None, "state": "rejected", "paths": []})
 
                     # Non-protocol unexpected errors must NOT leak raw exception text into result.message
                     unredacted_backend = _LeadBackend(test_case=self)

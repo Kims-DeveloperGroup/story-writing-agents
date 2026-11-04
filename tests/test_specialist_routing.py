@@ -8,6 +8,7 @@ from story_writing_agents import specialist_routing as routing
 from story_writing_agents import lead_premise_decisions as premise
 from story_writing_agents import core_document_readiness as readiness
 from story_writing_agents import review_contracts as review
+from story_writing_agents import authoring_task_lifecycle as lifecycle
 
 from story_writing_agents import conversations as c
 from story_writing_agents.specialist_routing import (
@@ -212,6 +213,20 @@ class SpecialistRoutingTests(unittest.TestCase):
 
     def test_scope_is_strict_versioned_immutable_and_content_safe(self):
         scope = self.scope()
+        spec = routing.scope_spec_from_scope(scope)
+        self.assertFalse({'task_id', 'task_revision'} & {item.name for item in fields(spec)})
+        self.assertEqual(routing.bind_authoring_scope(spec, scope.task_id, scope.task_revision), scope)
+        context = lifecycle.TaskBindingContext(scope, 'new-task')
+        self.assertEqual(lifecycle.resolve_task_binding(spec, context).bind(spec), scope)
+        targeted = replace(spec, target_paths=('core_documents/global_outline.md',))
+        refined = lifecycle.resolve_task_binding(targeted, context).bind(targeted)
+        self.assertEqual((refined.task_id, refined.task_revision, refined.target_paths),
+                         (scope.task_id, scope.task_revision, targeted.target_paths))
+        revised = lifecycle.resolve_task_binding(targeted, replace(context, pinned=True)).bind(targeted)
+        self.assertEqual((revised.task_id, revised.task_revision), (scope.task_id, scope.task_revision + 1))
+        fresh = lifecycle.resolve_task_binding(spec, replace(context, explicit_new=True)).bind(spec)
+        self.assertEqual((fresh.task_id, fresh.task_revision), ('new-task', 1))
+        with self.assertRaises(FrozenInstanceError): spec.target_paths = targeted.target_paths
         with self.assertRaises(FrozenInstanceError): scope.task_revision = 2
         self.assertNotIn(scope.interpretation, repr(scope))
         bad = ({"schema_version": True}, {"schema_version": 3}, {"task_revision": True},

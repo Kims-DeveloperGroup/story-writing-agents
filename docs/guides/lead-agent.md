@@ -665,10 +665,13 @@ every affected canonical path, including empty or missing targets:
 | `core_documents/narrative_rules.md` | `execution_specialist` |
 | Eligible `manuscript/**/*.md` reference paths | `execution_specialist` |
 
-The lead discloses its interpretation of free text in the current `AuthoringScope` schema 3:
-`activity` (`workflow`, `draft`, `revise`, or `review`), `target_paths`, canonical
-`domains`, `interpretation`, and the exact runtime-offered `task_id`/`task_revision`
-pair. Runtime unions those facts with relevant references, current evidence,
+The Lead declares an identity-free writing scope: activity, intent, targets,
+semantic domains, contribution duties, dependencies, and its interpretation.
+The runtime selects and binds task identity and revision from current
+workflow state and explicit user controls before publishing the result.
+The scope `interpretation` states the operative brief separately from the
+answer's `response_text`; presentation changes do not create new revisions.
+Runtime unions those facts with relevant references, current evidence,
 and the explicitly selected active task. Unrelated inventory/history does not
 add domains; status never grants reads. Runtime does not infer story meaning
 from prose or promise perfect semantic routing. It rejects proposals with unknown or duplicate specialists,
@@ -695,12 +698,16 @@ candidate, the Lead must disclose that interpretation.
 Continuation assignments keep the original required input set after READ adds
 evidence. Review candidates remain separately frozen within that set.
 
-Active same-session tasks come from validated conversation catalog/events. The
-Lead explicitly selects a runtime-offered task/revision to continue it across
-conversations; its domains, targets, drafting obligations, and current revision
-cannot silently shrink. An unrelated request uses a fresh task. Archived
-history remains readable context, without routing authority; an applied task
-revision is no longer offered. No separate task database is introduced.
+Active same-session tasks come from validated conversation catalog/events.
+The runtime owns task selection and revision changes across conversations;
+agents receive the selected brief and duties without task identifiers or
+task-selection aliases. Clarification may complete a provisional target under
+the same task and revision. Material changes to a confirmed capture need a
+successor revision and fresh confirmation. Normal stage progression does not
+advance a revision by itself. Published recommendations remain immutable, and
+confirmed preparation stays within its exact capability. Archived history is
+context without current routing authority. Existing stores retain task identity;
+no separate task database is introduced.
 
 A `completed` consultation records that round, not completion of the authoring
 objective. Draft synthesis returns material; ask the Lead in a subsequent
@@ -859,7 +866,12 @@ artifact mutation. Unknown prepared outcomes keep recovery priority.
 These guards establish provenance, workflow, and accounting. Alternative quality and semantic
 fidelity of drafts still require genuine author-intent and reader/editor evaluation in #806.
 
-A retained selection belongs to its report. A later independent report still allows Reject or Defer; those controls do not revoke the earlier capture. When fresh work offers several completed-task successors, the provider may choose any exact offered pair. An explicit premise selection instead pins its one disclosed pair. The durable offer limits task admission, while earlier source and cost receipts retain their separate provenance.
+A retained selection belongs to its report. A later independent report still allows Reject or Defer; those controls do not revoke the earlier capture.
+When several active tasks are ambiguous, the runtime resolves user selection
+through task controls rather than offering task identifiers to a provider.
+Explicit premise selections pin the internal binding. Durable admission and
+source-cost receipts retain their separate provenance without exposing task
+identity in agent context.
 
 ## How a lead judgment is grounded
 
@@ -1344,7 +1356,7 @@ cannot cover.
 ## What providers receive
 
 The runtime binds the selected agent and drives one bounded contextual invocation.
-Codex and Antigravity receive the same `agent-provider-wire-v10` payload and
+Codex and Antigravity receive the same `agent-provider-wire-v11` payload and
 response-schema semantics through their native transports. See the
 [agent JSON field guide](../reference/provider-wire.md) for the complete contract,
 field meanings, schema construction, and illustrative responses.
@@ -1365,8 +1377,10 @@ Every built-in result has an explicit `response_type`. The Lead contract,
 `lead-response-v7`, distinguishes answers, clarification questions, critiques,
 proposal-drafting recommendations, specialist-consultation proposals, and artifact
 change proposals. Scoped Lead results include `response_text` and
-`response_details.task_scope`; the scope selects an exact offered `task: {id, revision}`
-pair. Other response families retain their exact offered field names and
+`response_details.task_scope`; the model declares scope content without task
+identity. The runtime binds the result and every stage question or preliminary
+record to the same internal task after validating the proposed content.
+Other response families retain their exact offered field names and
 nullability. For example, an unconstrained front readiness branch requires
 `response_details.writing_task_scope` to be `null`. Missing a branch-required
 scope receives the bounded structured-result repair and then the runtime's visible

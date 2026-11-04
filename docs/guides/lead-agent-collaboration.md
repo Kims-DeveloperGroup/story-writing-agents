@@ -38,8 +38,9 @@ The fixed specialist roster is:
 | Tone & Execution Specialist | Narrative rules, prose, POV, tone, formatting, and manuscript execution | `narrative_rules.md`, manuscripts |
 
 Routing covers semantic domains and affected canonical paths, even when a
-target is empty or missing. The Lead discloses its interpretation and explicitly
-selects the current task/revision when continuing work across conversations.
+target is empty or missing. The Lead discloses its interpretation; the runtime selects and manages the current
+task and revision across conversations. Agents receive the brief and stage
+duties without task IDs, task revisions, or task selectors.
 That task retains its affected scope and drafting obligations. Unrelated
 inventory/history does not add work, and status facts do not grant reads.
 Archived conversations remain readable context without active task authority.
@@ -400,7 +401,7 @@ exact delivery, capacity, and recovery limits.
 ### Provider-shaped examples
 
 See the [agent JSON field guide](../reference/provider-wire.md) for current payloads,
-schema variants, and examples. Both providers use `agent-provider-wire-v10`.
+schema variants, and examples. Both providers use `agent-provider-wire-v11`.
 
 Context actions use `agent_action.action_type`: `search_context`, `read_context`,
 or `submit_result`. Results live in `task_result` and every built-in result has

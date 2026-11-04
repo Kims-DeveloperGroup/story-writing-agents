@@ -122,22 +122,24 @@ _LEAD_CONSTRAINTS = LeadProviderConstraints(scope=_LEAD_SCOPE, task_revisions=((
 
 
 def _validate_lead_result(answer: str, _authorization: object) -> None:
+    from story_writing_agents.authoring_task_lifecycle import TaskBindingPlan, bind_task_outcome
     rules = _LEAD_CONSTRAINTS.diagnose(answer)
     if rules: raise LeadContractError(rules)
-    StoryRuntime._decode_lead_outcome(answer)
+    StoryRuntime._decode_lead_outcome(json.dumps(bind_task_outcome(json.loads(answer),
+        TaskBindingPlan(_LEAD_SCOPE.task_id, _LEAD_SCOPE.task_revision, 'reserved'))))
 
 
 _LEAD_CALL_FACTORY = OrchestrationLeadCallFactory(_LEAD_CONSTRAINTS, _lead_front_result_contract(
     LeadProposalRelation.NEW_STEP, (), constraints=_LEAD_CONSTRAINTS), ContextInvocationKind.LEAD.
     value, 'KO', _validate_lead_result, StoryRuntime._core_reviewer)
-_LEAD_ANSWER_SCOPE = {'activity': 'workflow', 'intent': 'authoring', 'domains': [], 'target_paths':
-    [], 'contributions': [], 'dependency_slots': [], 'task': 'context-task@1'}
+_LEAD_ANSWER_SCOPE = {"interpretation": "Inspect the declared synthetic scope.", 'activity': 'workflow', 'intent': 'authoring', 'domains': [], 'target_paths':
+    [], 'contributions': [], 'dependency_slots': []}
 
 
 def _lead_answer_frame(call: BoundContextProviderCallRequest, message: str, *, grouped=False, revision=1) -> str:
-    scope = lead_fixture_bound_scope(call, {'activity_type': 'workflow_guidance', 'writing_intent':
+    scope = lead_fixture_bound_scope(call, {"interpretation": "Inspect the declared synthetic scope.", 'activity_type': 'workflow_guidance', 'writing_intent':
         'authoring', 'specialist_domains': [], 'target_artifact_paths': [], 'contributions': [],
-        'dependency_slots': [], 'task_reference': {'task_id': 'context-task', 'task_revision': revision}})
+        'dependency_slots': []})
     value = lead_fixture_result({'response_type': 'answer', 'response_text': message, 'task_scope': scope})
     if grouped:
         return _group_result(call, value)
@@ -555,7 +557,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
         fingerprint = service_module._execution_policy_fingerprint
         policy, actions, sources = DEFAULT_CONTEXT_PLANNING_POLICY, CONTEXT_ACTION_POLICY, CONTEXT_SOURCE_POLICY
         baseline = fingerprint(policy, actions, sources)
-        self.assertEqual(service_module._CONTEXT_WIRE_VERSION, "agent-provider-wire-v10")
+        self.assertEqual(service_module._CONTEXT_WIRE_VERSION, "agent-provider-wire-v11")
         with mock.patch.object(service_module, "_CONTEXT_WIRE_VERSION", "agent-context-wire-v7"):
             self.assertEqual(fingerprint(policy, actions, sources),
                              "sha256:d8cfd92e6949dbb817dfb7253cff1865642493d46078fa1e042a64ef81740a18")
@@ -771,10 +773,12 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         revised_scope = replace(_LEAD_SCOPE, task_revision=2)
         revised_constraints = replace(_LEAD_CONSTRAINTS, scope=revised_scope, task_revisions=(("context-task", 2),))
         def validate_revision(answer, _authorization):
+            from story_writing_agents.authoring_task_lifecycle import TaskBindingPlan, bind_task_outcome
             findings = revised_constraints.diagnose(answer)
             if findings:
                 raise LeadContractError(findings)
-            StoryRuntime._decode_lead_outcome(answer)
+            StoryRuntime._decode_lead_outcome(json.dumps(bind_task_outcome(json.loads(answer),
+                TaskBindingPlan(revised_scope.task_id, revised_scope.task_revision, 'reserved'))))
         revised_factory = replace(_LEAD_CALL_FACTORY, constraints=revised_constraints,
             rule_seed=_lead_front_result_contract(
                 LeadProposalRelation.NEW_STEP, revised_constraints.input_ids,

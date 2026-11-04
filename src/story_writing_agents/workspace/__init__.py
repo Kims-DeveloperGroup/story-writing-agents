@@ -1,5 +1,7 @@
 """Stable import boundary for workspace persistence."""
 
+from .schema import project_default_agent_policy
+
 from ..conversation_storage.filesystem import (
     FilesystemConversationCatalog as FilesystemConversationCatalog,
 )
@@ -21,3 +23,5 @@ __all__ = [
     "initialize_workspace",
     "FilesystemConversationCatalog",
 ]
+
+__all__ = (*__all__, "project_default_agent_policy")

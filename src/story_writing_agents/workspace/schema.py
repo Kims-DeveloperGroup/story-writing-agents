@@ -219,13 +219,13 @@ Important choices belong to the user. A minor delegated choice requires the runt
 report-bound user allowlist and an eligible recommended option; a general confirmation or
 provider suggestion does not grant delegation. Rejecting or deferring a choice does not
 establish a premise. After selection, disclose the exact chosen text, source, affected domains,
-task revision, and costs in a fresh authoring proposal. Every dependent writer receives the
+work scope, and costs in a fresh authoring proposal. Every dependent writer receives the
 same captured premise. Keep the completed analysis and fresh authoring budgets distinct,
 and show their actual combined submitted calls without resetting earlier spend.
 
 If a dependent draft conflicts with the captured premise, report the typed conflict and hold
 that draft. A specialist cannot declare that the user changed direction. A user direction
-change needs a fresh disclosed task revision and its own confirmation, drafting, and review;
+change needs a fresh disclosed work scope and its own confirmation, drafting, and review;
 earlier candidates, reviews, and approvals do not approve the changed premise.
 """,
     PLOT_ARCHITECT: """\
@@ -444,11 +444,11 @@ Use each host-captured shared premise exactly as supplied, including its qualifi
 source identity and revision. Dependent draft owners must use every required
 selected source. Do not change a captured choice, infer an undeclared dependency,
 or treat capture as proof that a source is true. Changed duties or premises need
-a newly confirmed task revision. Another specialist's private reply is not an
+a newly confirmed work scope. Another specialist's private reply is not an
 available source.
 
 When writing_task_scope is supplied, use its interpretation as the shared editorial
-brief for the exact current task/revision, with task_instructions and selected sources.
+brief for the exact current work scope, with task_instructions and selected sources.
 Preserve its protected elements and change boundaries when producing the assigned
 deliverable. Separate source facts, interpretations, provisional creative ideas,
 and unknowns in visible findings; never present a proposed idea as a source fact.
@@ -708,6 +708,23 @@ def decode_initialization_journal(payload: bytes) -> WorkspaceInitializationJour
     if encode_initialization_journal(journal) != payload:
         raise WorkspaceFormatError("workspace initialization journal is not canonical")
     return journal
+
+
+def project_default_agent_policy(path: str, content: bytes) -> bytes:
+    """Render recognized published defaults with current policy; preserve customized bytes."""
+    from ._policy_baselines import (LEGACY_V2_POLICY_FILES, OBJECTIVE_V2_POLICY_FILES,
+        MAIN_V2_POLICY_FILES, PRE_GUIDANCE_V2_POLICY_FILES, PRE_EDITORIAL_V2_POLICY_FILES,
+        PRE_MIXED_ROLE_V2_POLICY_FILES, PRE_RUNTIME_TASK_IDENTITY_V2_POLICY_FILES)
+    defaults = {AGENT_SPECS[agent_id].system_prompt_file: DEFAULT_AGENT_PROMPTS[agent_id]
+        for agent_id in ROSTER} | dict(DEFAULT_SHARED_AGENT_POLICIES)
+    if path not in defaults:
+        return content
+    published = (LEGACY_V2_POLICY_FILES, OBJECTIVE_V2_POLICY_FILES, MAIN_V2_POLICY_FILES,
+        PRE_GUIDANCE_V2_POLICY_FILES, PRE_EDITORIAL_V2_POLICY_FILES, PRE_MIXED_ROLE_V2_POLICY_FILES,
+        PRE_RUNTIME_TASK_IDENTITY_V2_POLICY_FILES)
+    if any(dict(version).get(path) == content for version in published):
+        return defaults[path].encode("utf-8")
+    return content
 
 
 def canonical_initializer_scaffold() -> tuple[WorkspaceScaffoldEntry, ...]:
