@@ -94,6 +94,10 @@ _DOCUMENT_PLAN_EXPORTS = (
     "document_plan_to_dict", "document_plan_from_dict",
     "document_node_binding_to_dict", "document_node_binding_from_dict",
     "document_value_digest", "document_lineage_cost", "project_document_plan_views",
+    "DocumentNodeSelection", "DocumentCandidateSelection",
+    "document_node_selection_to_dict", "document_node_selection_from_dict",
+    "document_candidate_selection_to_dict", "document_candidate_selection_from_dict",
+    "planning_goal_to_dict", "planning_goal_from_dict",
 )
 _CONVERSATION_FACADE_EXPORTS = (*CONVERSATION_FACADE_EXPORTS, *_REVIEW_FACADE_EXPORTS, *_DOCUMENT_PLAN_EXPORTS)
 _CATALOG_EXPORTS = {
