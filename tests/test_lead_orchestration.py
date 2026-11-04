@@ -2235,7 +2235,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 require_current_native(current)
                 generations[group] = current
             return generations[group]
-        def require_group_case(owner, offers, supplied, expected, group, *, logical_root, typed=True):
+        def require_group_case(owner, offers, supplied, expected, group, *, logical_root, typed=True, with_frame=False):
             current = current_group(owner, offers, group)
             frame = lead_fixture_response(SimpleNamespace(contract=current), supplied, family=0, logical_root=logical_root)
             self.assertFalse(current.rule_graph.findings(json.loads(frame)), (group, expected))
@@ -2249,7 +2249,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.assertIs(current.group_workflow.complete(
                     current.generation_binding(), decoded_group.selected_result).phase, LeadGroupPhase.DONE)
                 typed_groups.add(group)
-            return current
+            return (current, frame) if with_frame else current
         call, selector_call = self.backend.calls[-1], self.backend.calls[-2]
         self.assertEqual(tuple(item.contract.schema_group_phase for item in (selector_call, call)),
                          (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
@@ -4149,9 +4149,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             "artifact_intent": {"operations": domain_changes}, "authoring_assessment": pending_assessment}
         operation_owner = replace(factory, constraints=operation_facts, rule_seed=operation_seed)
         legacy_operations = current_group(operation_owner, operation_offers, "artifact.changes")
-        self.assertFalse(legacy_operations.rule_graph.findings(json.loads(lead_fixture_response(
-            SimpleNamespace(contract=legacy_operations), mixed_supplied, family=0, logical_root=7))))
-        mixed_group = require_group_case(operation_owner, operation_offers, mixed_supplied, mixed_domain, "artifact.changes", logical_root=7)
+        operation_root, = {member.owner.variant.logical_root for member in legacy_operations.semantic_index.contracts if type(member.owner) is LeadResultContractOwner}
+        mixed_group, legacy_base = require_group_case(operation_owner, operation_offers, mixed_supplied, mixed_domain, "artifact.changes", logical_root=operation_root, with_frame=True)
+        self.assertFalse(legacy_operations.rule_graph.findings(json.loads(legacy_base)))
         self.assertEqual(mixed_group.prepared_compilation.constraints.diagnose(json.dumps(mixed_domain)), ())
         preparation_record = {**profile_record, 'activity': 'draft', 'target_paths': [future_path], 'contributions': [
                                   {'domain': 'tone_execution', 'role': 'draft_owner'}]}
@@ -4815,7 +4815,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',),
             constraints=staged_facts)
         staged_bound = current_group(replace(factory, rule_seed=staged_seed,
-            constraints=staged_facts), call.contract.offers, "consultation.authoring.review")
+            constraints=staged_facts), call.contract.offers, "consultation.review_only")
         stage_roots = set()
         for candidate_member in staged_bound.semantic_index.contracts:
             if type(candidate_member.owner) is not LeadResultContractOwner:
