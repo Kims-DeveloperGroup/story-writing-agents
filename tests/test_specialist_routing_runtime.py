@@ -89,6 +89,8 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
                      else 'Assess the supplied candidate.',
                      'input_ids': list(dict.fromkeys(['user_input', *ids])), 'mode': mode}
                     for agent in agents]} if kind == 'proposal' else None}
+        if kind == "question":
+            value["planning_target"] = None
         if authoring_assessment is not None:
             value["authoring_assessment"] = admission.assessment_to_dict(authoring_assessment)
         statuses = provider.callback_payload(call).get("core_document_statuses", [])
@@ -325,7 +327,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             return lead_fixture_response(call, {
                 "response_type": "clarification_question",
                 "response_text": "Please provide the matching prior response so I can inspect it before offering fresh work.",
-                "response_details": {"task_scope": lead_fixture_bound_scope(call, scope, record=True)},
+                "response_details": {'planning_target': None, "task_scope": lead_fixture_bound_scope(call, scope, record=True)},
             }, family=0, branch_key=call.contract.factory.rule_seed.contract_id + ":family:1")
 
         self.backend.enqueue(

@@ -5,13 +5,16 @@ from ..authoring_task_lifecycle import task_identity_for_origin
 from .events import authoring_scope_is_view, confirmation_task_bindings
 
 
+from ..document_plan import (DocumentPlan, DocumentNodeBinding, DocumentPlanView,
+    DocumentNodeView, DocumentNodeState, DocumentNodeNextAction, DocumentCandidateRef)
+
 from .events import CollaborationLeadGroupTracePayload
 from ..agent_context.group_observation import LeadGroupTrace
 from .events import build_final_review_evidence
 
 from ..review_contracts import LeadPreliminaryReview
 
-from ..core_document_readiness import CORE_DOCUMENTS, CoreDocumentReadinessBasis
+from ..core_document_readiness import CORE_DOCUMENTS, CoreDocumentReadinessBasis, AuthoringTarget
 from ..authoring_admission import AdmissionSource, AdmissionSourceKind, AuthoringAdmissionBasis
 
 from ..lead_task_transitions import (
@@ -84,7 +87,7 @@ from .events import (
     LeadRecommendationStartedPayload,
     LeadRecommendationState,
     COLLABORATION_EVENT_SCHEMA_VERSION,
-    COLLABORATION_PHYSICAL_CALL_LIMIT,
+    COLLABORATION_PHYSICAL_CALL_LIMIT, COLLABORATION_ROUND_LIMIT,
     CollaborationActor,
     CollaborationActorKind,
     CollaborationAppendError,
@@ -511,6 +514,8 @@ class ArtifactObjective:
     draft_sources: tuple[ArtifactDraftSource, ...]
     candidate_binding: ArtifactObjectiveCandidateBinding | None = None
     satisfied_by_event_id: str | None = None
+    document_plan: DocumentPlan | None = field(default=None, kw_only=True)
+    document_node: DocumentNodeBinding | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if type(self.facts) not in {ArtifactObjectiveFacts, ArtifactObjectiveFactsV2}:
@@ -613,6 +618,7 @@ class CollaborationHistoryProjection:
     execution_result: CollaborationExecutionResult | None
     next_safe_action: CollaborationNextAction
     rounds_spent: int = 0
+    document_plans: tuple[DocumentPlanView, ...] = field(default=(), kw_only=True)
     physical_calls_spent: int = 0
     current_artifact_candidate: ArtifactReviewCandidatePayload | None = None
     current_artifact_state: ArtifactProposalState | None = None
@@ -1034,6 +1040,8 @@ class LeadTurnResult:
     provider_invocation_id: str | None = field(default=None, kw_only=True)
 
     preliminary_review: LeadPreliminaryReview | None = field(default=None, kw_only=True)
+    document_plan: DocumentPlanView | None = field(default=None, kw_only=True)
+    planning_target: AuthoringTarget | None = field(default=None, kw_only=True)
     def __post_init__(self) -> None:
         if self.preliminary_review is not None and (type(self.preliminary_review) is not LeadPreliminaryReview
                 or self.kind is not LeadOutcomeKind.ANSWER or self.proposal is not None):
@@ -2008,7 +2016,11 @@ def project_collaboration_history(
             if prior_intent is not None and prior_intent is not scope.intent:
                 raise ValueError("collaboration history changed an existing task intent")
             task_intents[scope.task_id] = scope.intent
-    return _project_validated_collaboration_history(events)
+    projection = _project_validated_collaboration_history(events)
+    if any(type(event.payload) in {CollaborationLeadJudgmentPayload, ArtifactObjectivePayload,
+            ArtifactObjectivePayloadV2, CollaborationProposal} and event.payload.document_plan is not None for event in events):
+        return replace(projection, document_plans=project_document_plan_views(events, projection.artifact_objectives))
+    return projection
 
 
 def project_collaboration_readable_history(
@@ -4270,9 +4282,42 @@ def _project_task_context(
                             == (planning.target_task_id, planning.target_task_revision)
                             and len(new_candidates) == 1
                         )
-                if (scope.schema_version != 3 or scope.intent is not AuthoringIntent.AUTHORING
+                control = prior.get(planning.origin_event_id)
+                selection = (control.payload.document_selection if control is not None
+                    and type(control.payload) is CollaborationLeadTaskDecisionPayload else None)
+                selected_node = payload.document_node
+                selected_review = bool(scope.schema_version == 3 and scope.activity is AuthoringActivity.REVIEW
+                    and planning.origin_kind == "task_decision"
+                    and planning.action in {LeadTaskAction.NEW_TASK, LeadTaskAction.RESUME}
+                    and selection is not None and selected_node is not None
+                    and (scope.task_id, scope.task_revision) == (planning.target_task_id, planning.target_task_revision)
+                    and (selection.plan_ref == selected_node.plan_ref or (payload.document_plan is not None
+                        and selection.plan_ref.plan_id == selected_node.plan_ref.plan_id))
+                    and ((selection.node_id is not None and selection.node_id == selected_node.node_id)
+                         or (selection.target_path is not None and scope.target_paths == (selection.target_path,)))
+                    and len(scope.target_paths) == 1)
+                if selected_review and scope.intent is AuthoringIntent.AUTHORING:
+                    message = prior.get(planning.origin_message_event_id)
+                    # Existing admission validation qualifies actual USER bytes. A real
+                    # co-batched exact candidate distinguishes this USER-candidate path.
+                    selected_review = bool(message is not None
+                        and type(message.payload) is CollaborationMessagePayload
+                        and message.sender.kind is CollaborationActorKind.USER
+                        and (message.turn_id, message.step_id) == (control.turn_id, control.step_id)
+                        and payload.basis.authoring_admission is not None
+                        and any(type(item.payload) is ArtifactReviewCandidatePayload
+                            and item.batch_id == event.batch_id
+                            and (item.payload.consultation_proposal_id, item.payload.consultation_proposal_revision,
+                                 item.payload.consultation_proposal_digest) ==
+                                (payload.proposal_id, payload.proposal_revision, payload.proposal_digest)
+                            and {path for op in item.payload.candidate.change_set.operations for path in
+                                ((op.source_path, op.destination_path) if type(op) is ArtifactRenameOperation else (op.path,))} == set(scope.target_paths)
+                            for item in events))
+                elif selected_review:
+                    selected_review = scope.intent is AuthoringIntent.REVIEW_ONLY
+                if (not selected_review and (scope.schema_version != 3 or scope.intent is not AuthoringIntent.AUTHORING
                         or (scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
-                            and not (source_review_revision or source_artifact_revision) and not prepared_final_review)):
+                            and not (source_review_revision or source_artifact_revision) and not prepared_final_review))):
                     raise ValueError("task transition requires fresh authoring scope and owner drafts")
                 required = tuple(f"selected_material_{index}" for index in
                                  range(1, len(planning.material_capture_event_ids) + 1))
@@ -4770,6 +4815,17 @@ def _project_validated_collaboration_history(
             proposal = proposals.get(event.step_id)
 
             if type(payload) is CollaborationProposal:
+                if payload.document_node is not None:
+                    causal = tuple(item for item in events if item.sequence <= event.sequence)
+                    inherited_calls, inherited_rounds, _ = document_lineage_cost(
+                        causal, payload.document_node, current_step_id=event.step_id)
+                    if payload.document_node.budget_lineage_ref.conversation_id != event.conversation_id:
+                        # The session owner requalifies foreign source records before dispatch.
+                        # This owner-local reducer retains the exact disclosed source counters.
+                        inherited_calls = max(inherited_calls, payload.budget.physical_calls_spent)
+                        inherited_rounds = max(inherited_rounds, payload.budget.rounds_spent)
+                    spent_calls[event.step_id] = inherited_calls
+                    running_attempts[event.step_id] = inherited_rounds
                 validate_authoring_capture_pin(payload, tuple(prior for prior in events if prior.sequence < event.sequence))
 
                 scope = payload.authoring_scope
@@ -5722,6 +5778,209 @@ def _project_validated_collaboration_history(
     ), _source_history=_control_history or events)
 
 
+def document_lineage_cost(events: tuple[CollaborationEvent, ...], binding: DocumentNodeBinding,
+                          *, current_step_id: str | None = None) -> tuple[int, int, int]:
+    """Count existing submitted records, never replenish a plan/node allowance."""
+    steps = {binding.budget_origin_step_id}
+    plan_steps = set(steps)
+    by_id = {event.event_id: event for event in events}
+    for event in events:
+        value = event.payload
+        if type(value) is CollaborationProviderCallPayload and value.document_goal is not None and value.document_goal.plan_id == binding.plan_ref.plan_id:
+            plan_steps.add(event.step_id)
+            if value.document_budget_task_id == binding.budget_lineage_ref.task_id:
+                steps.add(event.step_id)
+        if ((type(value) is CollaborationLeadJudgmentPayload and value.document_plan is not None)
+                or (type(value) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2} and value.document_plan is not None)):
+            if value.document_plan.ref.plan_id == binding.plan_ref.plan_id:
+                plan_steps.add(event.step_id)
+        if type(value) is CollaborationLeadTaskTransitionPayload and value.receipt.planning_step_id is not None:
+            origin = by_id.get(value.receipt.origin_event_id)
+            selection = (origin.payload.document_selection if origin is not None
+                and type(origin.payload) is CollaborationLeadTaskDecisionPayload else None)
+            if selection is not None and selection.plan_ref.plan_id == binding.plan_ref.plan_id:
+                plan_steps.add(value.receipt.planning_step_id)
+                if value.receipt.target_task_id == binding.budget_lineage_ref.task_id:
+                    steps.add(value.receipt.planning_step_id)
+        if (type(value) in {CollaborationProposal, CollaborationLeadJudgmentPayload}
+                and value.authoring_scope is not None
+                and value.authoring_scope.task_id == binding.budget_lineage_ref.task_id):
+            steps.add(event.step_id); plan_steps.add(event.step_id)
+        node = value.document_node if type(value) in {CollaborationProposal, LeadRecommendationRequestPayload, CollaborationProviderCallPayload, CollaborationLeadJudgmentPayload} else None
+        if node is not None:
+            if node.plan_ref.plan_id == binding.plan_ref.plan_id:
+                plan_steps.add(event.step_id)
+            if (node.budget_lineage_ref == binding.budget_lineage_ref
+                    and node.budget_origin_step_id == binding.budget_origin_step_id):
+                steps.add(event.step_id)
+    if current_step_id is not None:
+        steps.add(current_step_id); plan_steps.add(current_step_id)
+    calls = {(event.conversation_id, event.payload.invocation_id, event.payload.call_id) for event in events
+        if event.step_id in steps and type(event.payload) is CollaborationProviderCallPayload
+        and event.payload.state is CollaborationProviderCallState.SUBMITTED}
+    total = {(event.conversation_id, event.payload.invocation_id, event.payload.call_id) for event in events
+        if event.step_id in plan_steps and type(event.payload) is CollaborationProviderCallPayload
+        and event.payload.state is CollaborationProviderCallState.SUBMITTED}
+    rounds = {(event.conversation_id, event.payload.execution_attempt_id) for event in events if event.step_id in steps
+        and type(event.payload) is CollaborationStepStatePayload
+        and event.payload.state is CollaborationStepState.RUNNING}
+    return len(calls), len(rounds), len(total)
+
+
+def project_document_plan_views(events: tuple[CollaborationEvent, ...],
+                                objectives: tuple[ArtifactObjective, ...]) -> tuple[DocumentPlanView, ...]:
+    """Replay exact goal/cursor/Apply facts; mutable readiness stays with runtime."""
+    proposals = {(x.payload.proposal_id, x.payload.proposal_revision, x.payload.proposal_digest): x.payload
+                 for x in events if type(x.payload) is CollaborationProposal}
+    requests = {x.payload.application_request.application_id: x.payload for x in events
+                if type(x.payload) is ArtifactApplicationRequestPayload}
+    by_id = {event.event_id: event for event in events}
+    declarations = {}
+    goal_texts = {}
+    for event in events:
+        value = event.payload
+        plan = value.document_plan if type(value) in {CollaborationLeadJudgmentPayload, ArtifactObjectivePayload, ArtifactObjectivePayloadV2} else None
+        if plan is None:
+            continue
+        declarations[plan.ref] = plan
+        if plan.planning_goal is not None:
+            goal = plan.planning_goal
+            origin = by_id.get(goal.user_event_id)
+            if origin is None and goal.conversation_id != event.conversation_id:
+                # A transcript retains the exact foreign reference. Its session
+                # snapshot, not an owner-local replay, qualifies foreign bytes.
+                continue
+            if (origin is None or (origin.session_id, origin.conversation_id) != (goal.session_id, goal.conversation_id)
+                    or (origin.conversation_id == event.conversation_id and origin.sequence >= event.sequence)
+                    or origin.sender.kind is not CollaborationActorKind.USER
+                    or type(origin.payload) is not CollaborationMessagePayload
+                    or goal.content_digest != "sha256:" + hashlib.sha256(origin.payload.content.encode("utf-8")).hexdigest()):
+                raise ValueError("literal planning goal differs from its exact USER source")
+            goal_texts[plan.ref.plan_id] = origin.payload.content
+        elif type(value) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}:
+            goal_texts[plan.ref.plan_id] = value.facts.request
+    approvals = []
+    for event in events:
+        if type(event.payload) is CollaborationConfirmationPayload and event.payload.decision is CollaborationConfirmationDecision.CONFIRM:
+            value = event.payload
+            proposal = proposals.get((value.proposal_id, value.proposal_revision, value.proposal_digest))
+            if proposal is not None and proposal.document_node is not None:
+                approvals.append((event, proposal.document_node))
+                if proposal.document_plan is not None:
+                    declarations[proposal.document_plan.ref] = proposal.document_plan
+    approved_refs = {node.plan_ref for _, node in approvals}
+    plans = {}
+    for plan in sorted(declarations.values(), key=lambda item: item.ref.plan_revision):
+        old = plans.get(plan.ref.plan_id)
+        # The first goal declaration is observable without execution authority.
+        # A replacement window becomes active only through its exact Confirm.
+        if old is None or plan.ref in approved_refs:
+            if old is not None and old.ref.plan_revision == plan.ref.plan_revision and old.ref != plan.ref:
+                raise ValueError("document plan revision has conflicting exact contents")
+            plans[plan.ref.plan_id] = plan
+    views = []
+    for plan in plans.values():
+        confirmed = {}
+        completed = {}
+        candidates = {}
+        active = [(event, node) for event, node in approvals if node.plan_ref == plan.ref]
+        for event, node in active:
+            prior = confirmed.get(node.node_id)
+            if prior is None or (prior[0].conversation_id == event.conversation_id and prior[0].sequence < event.sequence):
+                confirmed[node.node_id] = (event, node)
+        # Per-owner sequence is causal. Unrelated conversations never gain an
+        # invented global ordering from timestamps or snapshot enumeration.
+        cursors = {}
+        for event, node in active:
+            old = cursors.get(event.conversation_id)
+            if old is None or old[0].sequence < event.sequence:
+                cursors[event.conversation_id] = (event, node)
+        current_binding = next(iter(cursors.values()))[1] if len(cursors) == 1 else None
+        for event in events:
+            value = event.payload
+            if type(value) is ArtifactReviewCandidatePayload:
+                producer = proposals.get((value.consultation_proposal_id, value.consultation_proposal_revision, value.consultation_proposal_digest))
+                source = None if producer is None else producer.document_node
+                if source is not None and source.plan_ref.plan_id == plan.ref.plan_id:
+                    candidate = value.candidate
+                    candidates.setdefault(source.node_id, []).append(DocumentCandidateRef(event.event_id,
+                        candidate.candidate_id, candidate.candidate_revision, candidate.candidate_digest))
+            if type(value) is ArtifactApplicationResultPayload and value.outcome in {ArtifactApplicationOutcomeKind.APPLIED, ArtifactApplicationOutcomeKind.UNCHANGED}:
+                request = requests.get(value.application_id)
+                if request is not None and request.reviewed_proposal.proposal_digest == value.reviewed_proposal_digest:
+                    reviewed = request.reviewed_proposal
+                    proposal = proposals.get((reviewed.consultation_proposal_id, reviewed.consultation_proposal_revision, reviewed.consultation_proposal_digest))
+                    node = None if proposal is None else proposal.document_node
+                    if node is not None and node.plan_ref == plan.ref:
+                        completed[node.node_id] = (event.event_id, node)
+        creation = {event.step_id for event in events
+                    if type(event.payload) in {CollaborationLeadJudgmentPayload, ArtifactObjectivePayload, ArtifactObjectivePayloadV2}
+                    and event.payload.document_plan is not None and event.payload.document_plan.ref.plan_id == plan.ref.plan_id}
+        goal_tasks = {event.payload.authoring_scope.task_id for event in events if event.step_id in creation
+                      and type(event.payload) is CollaborationLeadJudgmentPayload and event.payload.authoring_scope is not None}
+        funded = {event.step_id for event in events if type(event.payload) is CollaborationProviderCallPayload
+                  and event.payload.document_goal is not None and event.payload.document_goal.plan_id == plan.ref.plan_id}
+        own = creation | {event.step_id for event in events if type(event.payload) is CollaborationProviderCallPayload
+                  and event.payload.document_goal is not None and event.payload.document_goal.plan_id == plan.ref.plan_id
+                  and event.payload.document_budget_task_id in goal_tasks}
+        if current_binding is not None:
+            calls, rounds, total = document_lineage_cost(events, current_binding)
+        else:
+            calls = len({(event.conversation_id, event.payload.invocation_id, event.payload.call_id) for event in events
+                if event.step_id in own and type(event.payload) is CollaborationProviderCallPayload
+                and event.payload.state is CollaborationProviderCallState.SUBMITTED})
+            rounds = len({(event.conversation_id, event.payload.execution_attempt_id) for event in events if event.step_id in own
+                and type(event.payload) is CollaborationStepStatePayload and event.payload.state is CollaborationStepState.RUNNING})
+            total = len({(event.conversation_id, event.payload.invocation_id, event.payload.call_id) for event in events
+                if event.step_id in creation | funded and type(event.payload) is CollaborationProviderCallPayload
+                and event.payload.state is CollaborationProviderCallState.SUBMITTED})
+        node_actions = {}
+        terminal_applications = {event.payload.application_id for event in events
+                                 if type(event.payload) is ArtifactApplicationResultPayload}
+        for event in events:
+            value = event.payload
+            owner = value if type(value) is CollaborationProposal else None
+            if type(value) in {ArtifactReviewSynthesisPayload, CollaborationLeadSynthesisPayload}:
+                owner = proposals.get((value.consultation_proposal_id, value.consultation_proposal_revision,
+                    value.consultation_proposal_digest)) if type(value) is ArtifactReviewSynthesisPayload else proposals.get(
+                    (value.proposal_id, value.proposal_revision, value.proposal_digest))
+            if type(value) is ArtifactApplicationRequestPayload:
+                reviewed = value.reviewed_proposal
+                owner = proposals.get((reviewed.consultation_proposal_id, reviewed.consultation_proposal_revision,
+                                       reviewed.consultation_proposal_digest))
+            bound = None if owner is None else owner.document_node
+            if bound is None or bound.plan_ref != plan.ref:
+                continue
+            approved = confirmed.get(bound.node_id)
+            if approved is not None and bound.task_ref != approved[1].task_ref:
+                continue
+            if type(value) is ArtifactReviewSynthesisPayload and value.decision in {ArtifactReviewDecision.REVISE, ArtifactReviewDecision.REJECT}:
+                node_actions[bound.node_id] = (DocumentNodeState.FOLLOWUP_REQUIRED, DocumentNodeNextAction.RETURN_TO_WRITER)
+            elif type(value) is ArtifactApplicationRequestPayload and value.application_request.application_id not in terminal_applications:
+                node_actions[bound.node_id] = (DocumentNodeState.IN_PROGRESS, DocumentNodeNextAction.APPLY_CANDIDATE)
+            elif type(value) is CollaborationLeadSynthesisPayload:
+                node_actions[bound.node_id] = (DocumentNodeState.IN_PROGRESS, DocumentNodeNextAction.REVIEW_CANDIDATE)
+            elif type(value) is CollaborationProposal and approved is None:
+                node_actions[bound.node_id] = (DocumentNodeState.READY, DocumentNodeNextAction.CONFIRM_NODE)
+        rows = []
+        for node in plan.nodes:
+            approved = confirmed.get(node.node_id)
+            applied = completed.get(node.node_id)
+            done = applied is not None and approved is not None and applied[1].task_ref == approved[1].task_ref
+            state, next_action = ((DocumentNodeState.COMPLETE, DocumentNodeNextAction.COMPLETE) if done else
+                node_actions.get(node.node_id, (DocumentNodeState.IN_PROGRESS, DocumentNodeNextAction.PREPARE_NODE)
+                    if approved is not None else (DocumentNodeState.BLOCKED, DocumentNodeNextAction.REQUEST_INFORMATION)))
+            rows.append(DocumentNodeView(node.node_id, state, () if state is not DocumentNodeState.BLOCKED else
+                ("Current source/readiness qualification required.",), (), (applied[0],) if done else (),
+                (approved[0].event_id,) if approved is not None and approved[1].candidate_uses else (),
+                next_action,
+                candidate_refs=tuple(dict.fromkeys(candidates.get(node.node_id, ())))))
+        views.append(DocumentPlanView(plan, None if current_binding is None else current_binding.node_id,
+            tuple(rows), calls, rounds, total, max(0, COLLABORATION_PHYSICAL_CALL_LIMIT - calls),
+            max(0, COLLABORATION_ROUND_LIMIT - rounds), goal_text=goal_texts.get(plan.ref.plan_id)))
+    return tuple(views)
+
+
 def _project_artifact_objective_history(
     events: tuple[CollaborationEventV2, ...],
 ) -> tuple[tuple[ArtifactObjective, ...], tuple[ArtifactDraftSource, ...]]:
@@ -5761,6 +6020,20 @@ def _project_artifact_objective_history(
                     or type(judgment.payload) is not CollaborationLeadJudgmentPayload
                 ):
                     raise ValueError("objective must co-batch its accepted owner Lead result")
+                if payload.document_node is not None:
+                    node = payload.document_node
+                    scope = judgment.payload.authoring_scope
+                    if (judgment.payload.document_node != node or scope is None
+                            or (node.task_ref.task_id, node.task_ref.task_revision) != (scope.task_id, scope.task_revision)
+                            or len(scope.target_paths) != 1 or not set(scope.target_paths).issubset(facts.target_paths)):
+                        raise ValueError("node objective must bind its exact actual disclosed task and artifact")
+                    roots = tuple(value.document_plan for prior in events if prior.sequence <= event.sequence
+                        for value in (prior.payload,) if type(value) in {CollaborationLeadJudgmentPayload,
+                            ArtifactObjectivePayload, ArtifactObjectivePayloadV2, CollaborationProposal}
+                        and value.document_plan is not None and value.document_plan.ref == node.plan_ref)
+                    if roots and not any(item.node_id == node.node_id and item.target_path == scope.target_paths[0]
+                                         for root in roots for item in root.nodes):
+                        raise ValueError("node objective differs from its exact root document node")
                 if payload.action is LeadObjectiveAction.START:
                     if type(facts) is ArtifactObjectiveFactsV2:
                         origin = _recommendation_origin(events, judgment.turn_id, judgment.step_id)
@@ -5769,7 +6042,11 @@ def _project_artifact_objective_history(
                             or origin[0].event_id != facts.origin_recommendation_request_event_id
                             or origin[1].event_id != facts.origin_recommendation_decision_event_id
                             or origin[1].payload.decision.kind is not CollaborationConfirmationDecision.CONFIRM
-                            or origin[0].payload.kind is not LeadRecommendationActionKind.PREPARE_ARTIFACT
+                        or (origin[0].payload.kind is not LeadRecommendationActionKind.PREPARE_ARTIFACT
+                            and not (origin[0].payload.kind is LeadRecommendationActionKind.PREPARE_CONSULTATION
+                                and payload.document_plan is not None and judgment.payload.authoring_scope is not None
+                                and judgment.payload.authoring_scope.intent is AuthoringIntent.AUTHORING
+                                and judgment.payload.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}))
                             or origin[0].payload.objective_id is not None
                             or facts.request != origin[0].payload.instruction
                             or facts.target_paths != origin[0].payload.target_paths
@@ -5849,6 +6126,7 @@ def _project_artifact_objective_history(
                     state=(ArtifactObjectiveState.CANCELLED if payload.action is LeadObjectiveAction.CANCEL else ArtifactObjectiveState.OPEN),
                     next_step=payload.next_step, draft_sources=payload.draft_sources,
                     candidate_binding=payload.candidate_binding,
+                document_plan=payload.document_plan, document_node=payload.document_node,
                 )
             elif type(payload) is ArtifactProposalStatePayload and payload.state in {
                 ArtifactProposalState.SUPERSEDED, ArtifactProposalState.STALE,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..document_plan import DocumentPlanView, DocumentNodeState
+
 from ..review_contracts import LeadPreliminaryReview
 from ..specialist_routing import SpecialistStagePlan
 from dataclasses import replace
@@ -680,6 +682,8 @@ def project_lead_turn_result(
     )
     if result.preliminary_review is not None:
         items.extend(_preliminary_review_items(result.preliminary_review))
+    if result.document_plan is not None:
+        items.extend(_document_plan_items(result.document_plan))
     if result.discussion is not None:
         items.append(Notice("Read-only discussion; writing task and pending controls stay separately bound."))
         if result.discussion.associated_task_ref is not None:
@@ -1621,6 +1625,19 @@ def _proposal_items(
     )
     budget = payload.budget
     return (
+        *(() if payload.document_node is None else (
+            Section("Confirmed input scope proposed for this node", (
+                Field("Plan", f"{payload.document_node.plan_ref.plan_id} @ {payload.document_node.plan_ref.plan_revision}"),
+                Field("Node", payload.document_node.node_id),
+                Field("Task", f"{payload.document_node.task_ref.task_id} @ {payload.document_node.task_ref.task_revision}"),
+                Field("Inherited budget source", payload.document_node.budget_origin_step_id),
+                Notice("Confirm applies only to this disclosed node and input use; it does not apply a document or authorize Commit."),
+                *((ListView("Provisional predecessor candidates", tuple(Record(use.predecessor_node_id,
+                    fields=(Field("Candidate", f"{use.candidate.candidate_id} @ {use.candidate.candidate_revision}"),
+                        Field("Digest", use.candidate.candidate_digest), Field("Purpose", use.purpose),
+                        Field("Allowed target", _joined(tuple(x.path for x in use.permitted_scope.scope.targets)))))
+                    for use in payload.document_node.candidate_uses)),) if payload.document_node.candidate_uses else ()),
+            )),)),
         *(() if payload.stage_plan is None else _stage_plan_items(payload.stage_plan)),
         *(() if payload.premise_decision is None else (
             Notice("One terminal candidate-free premise analysis round; no drafting or automatic continuation.", label="Provisional premise analysis"),
@@ -2111,3 +2128,45 @@ def _stage_plan_items(plan: SpecialistStagePlan) -> tuple:
                     Field("Original sources", _joined(item.source_input_ids)),
                     Field("Required conditions", _joined(item.required_condition_ids))), content=item.question)
             for item in plan.questions)))),)
+
+
+def _document_plan_items(view: DocumentPlanView) -> tuple:
+    plan = view.plan
+    by_id = {node.node_id: node for node in plan.nodes}
+    completed = tuple(by_id[row.node_id].target_path for row in view.nodes if row.state is DocumentNodeState.COMPLETE)
+    remaining = tuple(by_id[row.node_id].target_path for row in view.nodes if row.state is not DocumentNodeState.COMPLETE)
+    next_row = next((row for row in view.nodes if row.state is DocumentNodeState.READY),
+                    next((row for row in view.nodes if row.node_id == view.current_node_id
+                          and row.state is not DocumentNodeState.COMPLETE),
+                         next((row for row in view.nodes if row.state is not DocumentNodeState.COMPLETE), view.nodes[0])))
+    node = by_id[next_row.node_id]
+    required = tuple(dict.fromkeys(text for row in view.nodes for text in row.required_inputs))
+    blockers = tuple(dict.fromkeys(text for row in view.nodes for text in row.blocking_conditions))
+    return (Section("Document work plan", (
+        Notice("Planning and provisional input are separate from final review, Apply and Commit authority."),
+        Field("Original goal", view.goal_text or plan.goal_objective_id or plan.planning_goal.user_event_id),
+        Field("Plan", f"{plan.ref.plan_id} @ {plan.ref.plan_revision}"),
+        Field("Window status", "Proposed; exact Confirm required" if view.pending else "Current recorded window"),
+        Field("Current node", view.current_node_id or "No node confirmed"),
+        Field("Completed documents", _joined(completed)),
+        Field("Remaining documents", _joined((*remaining, *plan.remaining_target_paths))),
+        Field("Unplanned targets", _joined(plan.remaining_target_paths)),
+        Field("Target decision", "Exact manuscript target still required; original goal is incomplete."
+              if plan.unresolved_target else "Exact active targets retained"),
+        Field("Blocking conditions", _joined(blockers)),
+        Field("Next recommended work", f"{node.target_path}: {next_row.next_action.value}"),
+        Field("Required input / decisions", _joined(required) if required else _joined(next_row.blocking_conditions)),
+        Field("Responsible participants", _joined(tuple(f"{agent}: {mode.value}" for agent, mode in node.scope_rule.assignment_modes))),
+        Field("Proposal / Apply / Commit", "A proposal needs its exact Confirm; completion needs matching evidence; Commit remains separate."),
+        Field("Task budget", f"{view.physical_calls_spent}/12 calls; {view.rounds_spent}/2 rounds; "
+              f"{view.cumulative_plan_physical_calls} cumulative plan calls"),
+        ListView("Exact document nodes", tuple(Record(item.node_id, fields=(
+            Field("Target", by_id[item.node_id].target_path), Field("State", item.state.value),
+            Field("Current prerequisite revisions", _joined(tuple(
+                f"{source.document_path} | {source.revision_digest} | READ {source.acquisition_identity}"
+                for source in item.prerequisite_sources))),
+            Field("Predecessors", _joined(by_id[item.node_id].predecessor_node_ids)),
+            Field("Completion evidence", _joined(item.completion_event_ids)),
+            Field("Provisional input confirmations", _joined(item.provisional_input_confirmation_event_ids))))
+            for item in view.nodes)),
+    )),)
