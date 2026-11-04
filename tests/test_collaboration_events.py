@@ -621,7 +621,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "basis",
                     "proposal_digest",
                     "authoring_scope",
-                    'premise_decision', "stage_plan", "document_node",
+                    'premise_decision', "stage_plan", "document_node", "document_plan",
                 ),
             ),
             (
@@ -1035,7 +1035,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "basis",
                 "proposal_digest",
                 "authoring_scope",
-                "premise_decision", "stage_plan", "document_node",
+                "premise_decision", "stage_plan", "document_node", "document_plan",
             },
         )
         wire = encode_collaboration_proposal(proposal)
@@ -1635,7 +1635,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         expected_context_exports = COLLABORATION_CONTEXT_EXPORTS
         self.assertEqual(tuple(events_owner.__all__), expected_event_exports)
         self.assertEqual(tuple(context_owner.__all__), expected_context_exports)
-        self.assertEqual(len(conversations.__all__), 226)
+        self.assertEqual(len(conversations.__all__), 234)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -1766,7 +1766,7 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 226
+assert len(facade.__all__) == 234
 assert len(events.__all__) == 134
 assert "CollaborationLeadGroupTracePayload" in events.__all__
 assert "CollaborationLeadGroupTracePayload" not in facade.__all__
