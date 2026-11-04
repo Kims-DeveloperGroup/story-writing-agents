@@ -12,6 +12,8 @@ The user can choose another permitted direction. Editorial preferences remain ad
 
 A pure document-plan value describes exact artifact nodes and prerequisites from the existing whole-book readiness policy. An active window has at most five nodes: the relevant four core files and one exact manuscript path. Every other original target remains explicitly unplanned in `remaining_target_paths`. Completing a window does not complete those other targets.
 
+A planning-only goal reference can retain an exact user message before a canonical manuscript path exists. It marks the target unresolved and cannot satisfy artifact completion. Once an exact target is qualified and disclosed, the plan revision binds the ordinary artifact objective. The existing nonempty-path objective validation remains in force.
+
 The existing conversation event stores preserve the original goal, plan revisions and confirmed node bindings. Existing projections derive the cursor and completion from current evidence. There is no second scheduler, store or mutable completion ledger.
 
 The host builds the plan from actual scoped intent, sources and readiness. The provider selects the next work through the existing recommendation/proposal contracts. It does not author an arbitrary dependency graph. Schema, decoding and repair remain bound to their current contract owner.

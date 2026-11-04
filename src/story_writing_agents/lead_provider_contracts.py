@@ -6,6 +6,8 @@ freshness, completed READ receipts, confirmation, candidate construction and sta
 
 from __future__ import annotations
 
+from .core_document_readiness import AuthoringTarget
+
 from .specialist_routing import (ReviewStage, SpecialistWorkKind, SpecialistStagePlan,
     stage_plan_from_dict, stage_plan_to_dict, validate_stage_routing, stage_required_specialists,
     stage_participant_rosters, stage_focus_domains, stage_is_focused_review)
@@ -1973,7 +1975,16 @@ class LeadProviderConstraints:
     readiness_source_basis_ref: str | None = None
 
     preliminary_targets: tuple[ReviewTarget, ...] = field(default=(), kw_only=True)
+    document_node_digest: str | None = field(default=None, kw_only=True)
+    document_target_paths: tuple[str, ...] | None = field(default=None, kw_only=True)
     def __post_init__(self) -> None:
+        if self.document_target_paths is not None and (type(self.document_target_paths) is not tuple
+                or len(self.document_target_paths) != 1 or any(type(path) is not str or not path for path in self.document_target_paths)
+                or self.scope is not None and self.scope.target_paths != self.document_target_paths):
+            raise ValueError("document execution selects one exact current-task target")
+        if self.document_node_digest is not None and (type(self.document_node_digest) is not str
+                or not self.document_node_digest.startswith("sha256:") or len(self.document_node_digest) != 71):
+            raise ValueError("document node requires a frozen context digest")
         if (type(self.preliminary_targets) is not tuple
                 or any(type(item) is not ReviewTarget for item in self.preliminary_targets)
                 or len({item.input_id for item in self.preliminary_targets}) != len(self.preliminary_targets)
@@ -2027,6 +2038,8 @@ class LeadProviderConstraints:
 
     def choice_snapshot(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
         return (
+            *(((("document_node", (self.document_node_digest,)),)) if self.document_node_digest is not None else ()),
+            *(((("document_target_paths", self.document_target_paths),)) if self.document_target_paths is not None else ()),
             ("preliminary_targets", tuple(json.dumps(review_target_to_dict(item), ensure_ascii=False, sort_keys=True, separators=(",", ":")) for item in self.preliminary_targets)),
             ("input_ids", self.input_ids),
             ("allocation_input_ids", self._allocation_input_ids()),
@@ -2245,7 +2258,7 @@ class LeadProviderConstraints:
                         scope_kinds = ()
                         break
                     scope_kinds += ((native_kind, LeadOutcomeKind(domain_kind)),)
-            targets = (self.scope.target_paths if self.scope is not None else self.adoption_targets if self.adoption_intent is not None else None)
+            targets = (self.document_target_paths if self.document_target_paths is not None else self.scope.target_paths if self.scope is not None else self.adoption_targets if self.adoption_intent is not None else None)
             if scoped:
                 rules = ((authoring_scope_rules(self.scope.activity, self.scope.intent, self.scope.domains, self.scope.contributions,
                            target_paths=self.scope.target_paths, dependency_slots=self.scope.dependency_slots,
@@ -2333,6 +2346,12 @@ class LeadProviderConstraints:
                 if target_required and targets == ():
                     continue
                 root_schema = deepcopy(root)
+                if "planning_target" in root_schema.get("properties", {}):
+                    formal = (rule is not None and rule.intent is AuthoringIntent.AUTHORING
+                        and rule.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} and not targets)
+                    root_schema["properties"]["planning_target"] = alternatives([
+                        {"type": "string", "enum": [target.value for target in AuthoringTarget]}, {"type": "null"}]) if formal else {"type": "null"}
+
                 if scope_kinds:
                     root_schema["properties"]["response_type"]["enum"] = list(eligible_kinds)
                 if scoped:

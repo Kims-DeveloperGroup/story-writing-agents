@@ -525,6 +525,7 @@ await StoryRuntime.lead_turn(
     interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION,
     adoption: ExplorationAdoptionSelection | None = None,
     premise_selection: PremiseDecisionSelection | None = None,
+    document_selection: DocumentNodeSelection | None = None,
 ) -> LeadTurnResult
 
 await StoryRuntime.propose_specialist_advisory(
@@ -619,7 +620,7 @@ Provider 호출 지연의 합과 첫 BOUND부터 terminal 게시 직전까지의
 
 ### Explicit task choices and retained messages
 
-`StoryRuntime.decide_lead_task(decision, *, action_progress_sink=None)` and the session facade return `LeadTaskDecisionResult`. Call synchronous `runtime.inspect_lead_collaboration(session_id, conversation_id)` first and choose a returned task or material reference from `available_tasks` or `selectable_materials`. The session facade takes only `conversation_id`. The decision factories generate a request ID; reuse the same decision for a retry.
+`StoryRuntime.decide_lead_task(decision, *, action_progress_sink=None, document_selection=None)` and the session facade return `LeadTaskDecisionResult`. Call synchronous `runtime.inspect_lead_collaboration(session_id, conversation_id)` first and choose a returned task or material reference from `available_tasks` or `selectable_materials`. The session facade takes only `conversation_id`. The decision factories generate a request ID; reuse the same decision for a retry.
 
 ```python
 from story_writing_agents.lead_task_transitions import LeadTaskAction, LeadTaskDecision
@@ -767,6 +768,8 @@ LeadTurnResult(
     premise_report: PremiseDecisionReport | None = None,
     premise_report_ref: PremiseReportRef | None = None,
     preliminary_review: LeadPreliminaryReview | None = None,
+    document_plan: DocumentPlanView | None = None,
+    planning_target: AuthoringTarget | None = None,
 )
 ```
 
@@ -1060,6 +1063,39 @@ nonempty codec acceptance is provided.
 
 See [editorial decisions](../guides/lead-agent.md#editorial-decisions) and the
 [history contract](collaboration-history.md#editorial-memory).
+
+### Document plans and node bindings
+
+`LeadTurnResult.document_plan` exposes the current optional `DocumentPlanView`; conversation history exposes its derived `document_plans`. The synchronous `StoryRuntime.inspect_document_plans(session_id)` and bound `RuntimeSession.inspect_document_plans()` inspect persisted session plans without making a provider call. `SessionHistorySnapshot.document_plans()` aggregates existing conversation records. These are read-only projections of existing events and current evidence. They do not grant execution, Apply or Commit authority.
+
+The pure values live in `story_writing_agents.document_plan`. A `DocumentPlan` binds the original goal to at most five exact-path nodes and preserves other original targets in `remaining_target_paths`. `DocumentPlanningGoalRef` can retain the exact session, conversation, user event and content digest before a canonical manuscript target is known. Such a plan marks `unresolved_target` and cannot complete the original artifact goal. It later binds an ordinary exact `ArtifactObjective` through a current plan revision.
+
+Both `lead_turn` facades accept optional keyword `document_selection: DocumentNodeSelection | None`. This untrusted intent selects an existing plan node or an exact remaining original target. Its `DocumentCandidateSelection` values identify proposed predecessor inputs, scope and purpose. Neither intent value carries a task, budget or confirmation. The host derives `DocumentNodeBinding` after the actual task and scope exist, includes it in proposal disclosure and digest, and requires ordinary exact Confirm. Binding values remain read-only results and internal metadata. Existing NEW_TASK/RESUME controls retain task authority; selection cannot refresh the budget. Pass `document_selection` in that same `decide_lead_task` call when starting or resuming a selected node: the decision already invokes Lead preparation. A later separate selection would arrive after that preparation. The shell `/task` picker forwards the same typed intent.
+
+A formal authoring question can use the finite `planning_target` classification when the exact path is unknown. It identifies the requested document kind for planning; it does not establish a path, task, readiness or write authority. Untargeted draft, exploration and targetless review retain their own behavior.
+
+For example, inspect the current plan, select its part-outline node, and pass that intent together with an actual new-task decision:
+
+```python
+from story_writing_agents.document_plan import DocumentNodeSelection
+from story_writing_agents.lead_task_transitions import LeadTaskAction, LeadTaskDecision
+
+view = session.inspect_document_plans()[0]
+part = next(node for node in view.plan.nodes
+            if node.target_path == "core_documents/part_outlines.md")
+selection = DocumentNodeSelection(view.plan.ref, node_id=part.node_id)
+decision = LeadTaskDecision.for_conversation(
+    session.session_id, conversation_id, LeadTaskAction.NEW_TASK,
+    text="Review the incomplete later part outline and list the missing ending decision.",
+)
+result = await session.decide_lead_task(decision, document_selection=selection)
+```
+
+The returned proposal still requires its exact structured Confirm. For provisional predecessor inputs, choose only an actual `candidate_refs` entry from the predecessor's inspected `DocumentNodeView`. `DocumentCandidateSelection.permitted_scope` describes that source candidate's coverage; it does not grant the consumer permission to write the predecessor artifact.
+
+`DocumentCandidateUseIntent` identifies an exact same-plan predecessor candidate and consumer task, permitted scope, purpose and user-condition digest. Its input use requires the matching proposal confirmation. Candidate substitution or changed direction, task or scope requires fresh qualification. Provisional input is separate from canonical document readiness, current candidate final review and exact Apply completion.
+
+`DocumentPlanView` shows node state and blockers, current cursor, inherited calls and rounds, remaining budget and cumulative plan calls. A node/window/revision does not replenish the task allowance. An unresolved original goal or an unplanned target remains unfinished even when all active prerequisites are complete.
 
 ### Contextual authoring objectives
 
@@ -1659,6 +1695,7 @@ await RuntimeSession.lead_turn(
     interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION,
     adoption: ExplorationAdoptionSelection | None = None,
     premise_selection: PremiseDecisionSelection | None = None,
+    document_selection: DocumentNodeSelection | None = None,
 ) -> LeadTurnResult
 await RuntimeSession.propose_specialist_advisory(
     conversation_id: str,

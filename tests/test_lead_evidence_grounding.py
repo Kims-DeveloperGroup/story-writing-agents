@@ -403,7 +403,7 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
         if factual:
             from tests.provider_wire_fixture import (
                 lead_fixture_bound_scope, lead_fixture_response, lead_fixture_assessment)
-            details = {"task_scope": lead_fixture_bound_scope(
+            details = {'planning_target': None, "task_scope": lead_fixture_bound_scope(
                 call, value["authoring_scope"], record=True)}
             if "authoring_assessment" in value:
                 choices = dict(call.contract.semantic_index.policy.choices)
@@ -709,8 +709,10 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
 
         self.assertEqual(collaboration_proposal_digest(result.proposal), result.proposal.proposal_digest,)
         self.workspace.path("manuscript/part-01/opening.md").write_text("Opening changed.\n", encoding="utf-8",)
+        submitted_before_drift = len(self.backend.calls)
         with self.assertRaises(BackendProtocolError):
             await self.runtime.decide_lead_step(_decision(result, self._confirm_decision()))
+        self.assertEqual(len(self.backend.calls), submitted_before_drift)
         path = self.workspace.path("manuscript/part-01/exploration.md")
         path.write_text("current-exploration-evidence\nSecond line.\n", encoding="utf-8")
         observed = []
@@ -1145,7 +1147,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             question = json.loads(lead_fixture_response(baseline, {
                 'response_type': 'clarification_question',
                 'response_text': 'Clarify the concrete review source.',
-                'response_details': {'task_scope': scope}},
+                'response_details': {'planning_target': None, 'task_scope': scope}},
                 family=0, branch_key=stem + ':family:1'))
             self.assertFalse(baseline.contract.rule_graph.findings(question))
             self.assertTrue(baseline.contract.decode_response(

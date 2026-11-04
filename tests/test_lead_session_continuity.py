@@ -132,6 +132,9 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
                 'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '
                 'requires separate exact confirmation.'
             ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
+        self.assertIsNone(proposed.document_plan)
+        self.assertIsNone(proposed.proposal.document_node)
+        self.assertEqual(self.runtime.inspect_document_plans(self.session_id), ())
         prior = self.snapshot()
         refusal = await self.runtime.record_editorial_decision(self.session_id, first, editorial_request("pending_memory"))
         self.assertIs(refusal.status, editorial.EditorialRecordStatus.PENDING_CONTROL_REQUIRED)
@@ -154,7 +157,8 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             call_start = len(self.backend.calls)
             threads_before = dict(self.backend.context_threads)
             taints_before = tuple(self.backend.tainted_thread_ids)
-            await self.say(second, text, f"Follow-up answer {index}.")
+            followup = await self.say(second, text, f"Follow-up answer {index}.")
+            self.assertIsNone(followup.document_plan)
             current = self.backend.calls[call_start:]
             self.assertEqual(len(current), 2)
             self.assertEqual(tuple(call.scope for call in current), (expected_scope,) * 2)
@@ -272,7 +276,9 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
                 terminal_batches.append((batch, receipt))
             return receipt
         with mock.patch.object(type(terminal_store), "append_batch", new=observe_terminal_batch):
-            await self.say(second, "Recall all retained planning.", runtime=restarted)
+            recap = await self.say(second, "Recall all retained planning.", runtime=restarted)
+            self.assertIsNone(recap.document_plan)
+            self.assertEqual(restarted.inspect_document_plans(self.session_id), ())
 
         reports_after_restart = restarted.lead_group_reports(self.session_id, second)
         self.assertTrue(reports_before_restart)

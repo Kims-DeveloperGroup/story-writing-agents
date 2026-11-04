@@ -110,6 +110,32 @@ project root `--cd .`; Antigravity uses the exact CWD as its project root. See t
 Neither provider gains direct manuscript access; story evidence remains
 runtime-mediated.
 
+## Follow a document plan
+
+A blocked writing request keeps its original goal. Lead describes the first eligible document task, the missing input or decision, and the work still needed to reach that goal.
+
+For example, suppose you ask, “Write chapter 3,” while the later part outline lacks an ending decision. The guidance should explain:
+
+> Your chapter 3 request remains the goal. The later part outline is incomplete, and the supplied material does not yet choose how the final conflict ends. Resolve that decision first; then Plot can prepare the remaining outline work. Chapter drafting follows the required document readiness checks.
+
+The plan view identifies the plan revision, current node, task ID and task revision. It shows completed and remaining documents, hard blockers, the next eligible action, needed sources or decisions, the responsible participant, and proposal/Apply/Commit state. Valid earlier decisions remain inputs; unrelated discussion does not replace the goal.
+
+If the manuscript path has not been selected yet, the plan retains the actual user message and marks that target unresolved. It creates no placeholder artifact. Completing the core documents does not complete the unresolved writing request. Exact target selection later establishes the ordinary artifact objective and its own current confirmation.
+
+Global outline and part outline are separate Plot nodes. A writer cannot receive a predecessor output that has not been produced. Independent analysis and reviews of the same exact candidate retain their parallel paths. Lead can return an obviously incomplete candidate to its writer, and the revised candidate still needs its required specialist final review.
+
+Use the existing `/task` flow to select a plan node and any exact predecessor candidate. The resulting task proposal discloses the consumer, input scope and purpose for its own structured Confirm. Selection does not create a future task ID or a new budget.
+
+A plan window covers at most five exact artifacts: the relevant core documents and one manuscript file. Additional requested files stay visible as remaining targets. Completing the active window does not mark those files complete.
+
+An unapplied revision candidate can be supplemental input only for the disclosed same-plan consumer and permitted scope, confirmed through the ordinary exact proposal control. It does not replace canonical completion or grant Apply/Commit authority. In initial setup, an absent or incomplete global outline still blocks part-outline drafting. Changing the candidate, direction, task or scope requires fresh qualification and the appropriate confirmation.
+
+Moving between nodes, revisions or windows retains the applicable call and round budget. Lead discloses unfinished work when the budget is exhausted. A separately authorized new task has its own disclosed authority while the original goal and cumulative progress remain visible. Restart and conversation switching restore the current plan rather than borrowing old review or Apply authority.
+
+Editorial preferences remain advice with their effects and costs. If you choose another permitted direction, Lead updates the affected work instead of enforcing its preferred style.
+
+See the [document plan design](../design/lead-document-plan.md) for the contract boundaries. Actual provider quality comparisons and user reviews remain deferred to Backlog #806.
+
 ## The normal request flow
 
 ```text

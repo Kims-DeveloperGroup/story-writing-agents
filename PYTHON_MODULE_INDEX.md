@@ -70,11 +70,11 @@ errors/configuration. These are stable inputs to orchestration and adapters; the
 depend on terminal presentation or concrete persistence.
 
 - `agents`, `models`, `errors`, `config`, `prompts`, `directives`, `artifact_proposals`
-- `specialist_routing`, `review_contracts`, `authoring_admission`, `core_document_readiness`, `reply_trace`, `run_inputs`
+- `specialist_routing`, `review_contracts`, `document_plan`, `authoring_admission`, `core_document_readiness`, `reply_trace`, `run_inputs`
 
 Primary access is the root facade. `specialist_routing` owns pure shared `AuthoringIntent`, independent of activity; conversation codecs preserve its immutable task lineage. `config` owns configuration loading. Scope-v3 contribution/dependency declarations and consistent per-specialist roles remain pure routing contracts; historical scope constructors retain default version 2. Historical drafting-input eligibility is pure routing policy; current execution proof remains host-owned. `core_document_readiness` owns pure whole-book criteria, document dependencies and current-source projection; adapters qualify actual USER/READ origins and retain causal captures in existing event stores. Completion grants no execution or write authority. Scope duties and exact legal rosters share immutable pure declarations; admission, readiness, exploration and premise owners declare their intrinsic result rules and current finite coverage codecs.
 `prompts` owns captured policy bytes, stable fingerprints and runtime authority invariants; stages remain invocation data without provider execution.
-`models` carries optional diagnostics and keyword-only `AgentRequest.expected_reviewed_proposal` and `review_only` hints, without next-action authority. Frozen scope rules own stage-specific participants without losing semantic domains. `review_contracts` owns immutable preliminary coverage and final-basis comparison; orchestration/conversation owners retain actual USER/READ freshness, reuse and Apply authority.
+`models` carries optional diagnostics and keyword-only `AgentRequest.expected_reviewed_proposal` and `review_only` hints, without next-action authority. Frozen scope rules own stage-specific participants without losing semantic domains. `review_contracts` owns immutable preliminary coverage and final-basis comparison; orchestration/conversation owners retain actual USER/READ freshness, reuse and Apply authority. `document_plan` owns bounded immutable document windows, untrusted node/candidate selections, host-derived binding values and closed codecs; existing conversation/session owners replay goals, Confirm/Apply evidence and cumulative costs, while orchestration owns live readiness and authority.
 
 ### Runtime orchestration and providers
 

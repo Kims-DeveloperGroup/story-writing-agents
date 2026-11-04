@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from ..document_plan import (DocumentPlan, DocumentPlanRef, DocumentNodeBinding, document_value_digest,
+    document_plan_to_dict, document_plan_from_dict,
+    document_node_binding_to_dict, document_node_binding_from_dict, DocumentNodeSelection,
+    document_node_selection_to_dict, document_node_selection_from_dict,
+    document_plan_ref_to_dict, document_plan_ref_from_dict)
+from ..core_document_readiness import AuthoringTarget
+
 from ..agent_context.group_observation import LeadGroupTrace
 from ..agent_context.accounting import (ProviderCallAccounting, provider_call_accounting_from_object, provider_call_accounting_to_object)
 from ..review_contracts import (
@@ -26,7 +33,7 @@ from ..authoring_admission import (
 )
 
 from ..lead_task_transitions import (
-    LeadTaskDecision, LeadTaskTransitionReceipt, LeadMaterialCapture,
+    LeadTaskAction, LeadTaskDecision, LeadTaskTransitionReceipt, LeadMaterialCapture,
     LeadDiscussionReport, LeadPublicResponse, task_value_to_dict,
     task_value_from_dict,
 )
@@ -557,6 +564,13 @@ class CollaborationLeadEvidence:
         return tuple(facts)
 
 
+def _validate_planning_target(target, kind, scope) -> None:
+    if target is not None and (type(target) is not AuthoringTarget or kind is not LeadOutcomeKind.QUESTION
+            or scope is None or scope.intent is not AuthoringIntent.AUTHORING or scope.target_paths
+            or scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}):
+        raise ValueError("planning target is classification of an untargeted formal-writing question only")
+
+
 @dataclass(frozen=True, slots=True)
 class CollaborationLeadJudgmentPayload:
     """Visible lead judgment bound to its exact runtime evidence."""
@@ -573,7 +587,21 @@ class CollaborationLeadJudgmentPayload:
     provider_invocation_id: str | None = field(default=None, kw_only=True)
 
     preliminary_review: LeadPreliminaryReview | None = field(default=None, kw_only=True)
+    document_plan: DocumentPlan | None = field(default=None, kw_only=True)
+    document_node: DocumentNodeBinding | None = field(default=None, kw_only=True)
+    planning_target: AuthoringTarget | None = field(default=None, kw_only=True)
     def __post_init__(self) -> None:
+        _validate_planning_target(self.planning_target, self.kind, self.authoring_scope)
+        if self.document_node is not None and (type(self.document_node) is not DocumentNodeBinding
+                or (self.authoring_scope is not None and
+                    (self.document_node.task_ref.task_id, self.document_node.task_ref.task_revision) !=
+                    (self.authoring_scope.task_id, self.authoring_scope.task_revision))):
+            raise ValueError("document metadata must retain its exact actual task/revision")
+        if self.document_plan is not None and type(self.document_plan) is not DocumentPlan:
+            raise TypeError("planning judgment requires the exact host plan value")
+        if (self.document_plan is not None and self.document_plan.goal_objective_id is None
+                and self.planning_target is not AuthoringTarget.MANUSCRIPT):
+            raise ValueError("unresolved goal requires genuine formal manuscript clarification")
         if self.preliminary_review is not None:
             record = self.preliminary_review
             if (type(record) is not LeadPreliminaryReview or self.kind is not LeadOutcomeKind.ANSWER
@@ -1222,6 +1250,16 @@ class ArtifactObjectiveCandidateBinding:
         _validate_digest(self.candidate_digest, label="objective candidate digest")
 
 
+def _validate_document_plan_goal(plan: DocumentPlan | None, facts: object) -> None:
+    if plan is None:
+        return
+    if (type(plan) is not DocumentPlan or type(facts) not in {ArtifactObjectiveFacts, ArtifactObjectiveFactsV2}
+            or plan.goal_objective_id != facts.objective_id
+            or plan.goal_facts_digest != document_value_digest(asdict(facts))
+            or set(plan.remaining_target_paths) != set(facts.target_paths) - {x.target_path for x in plan.nodes}):
+        raise ValueError("document plan differs from its exact immutable original goal")
+
+
 @dataclass(frozen=True, slots=True)
 class ArtifactObjectivePayload:
     """Version-one objective transition co-batched with its accepted Lead result."""
@@ -1233,8 +1271,14 @@ class ArtifactObjectivePayload:
     next_step: ArtifactObjectiveNextStep | None
     draft_sources: tuple[ArtifactDraftSource, ...]
     candidate_binding: ArtifactObjectiveCandidateBinding | None = None
+    document_plan: DocumentPlan | None = field(default=None, kw_only=True)
+    document_node: DocumentNodeBinding | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
+        _validate_document_plan_goal(self.document_plan, self.facts)
+        if self.document_node is not None and (type(self.document_node) is not DocumentNodeBinding
+                or (self.document_plan is not None and self.document_node.plan_ref != self.document_plan.ref)):
+            raise ValueError("node objective must carry its exact host-derived plan binding")
         if type(self.facts) is not ArtifactObjectiveFacts:
             raise TypeError("objective origin facts must be canonical")
         _require_enum(self.action, LeadObjectiveAction, "objective action")
@@ -1269,8 +1313,14 @@ class ArtifactObjectivePayloadV2:
     next_step: ArtifactObjectiveNextStep | None
     draft_sources: tuple[ArtifactDraftSource, ...]
     candidate_binding: ArtifactObjectiveCandidateBinding | None = None
+    document_plan: DocumentPlan | None = field(default=None, kw_only=True)
+    document_node: DocumentNodeBinding | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
+        _validate_document_plan_goal(self.document_plan, self.facts)
+        if self.document_node is not None and (type(self.document_node) is not DocumentNodeBinding
+                or (self.document_plan is not None and self.document_node.plan_ref != self.document_plan.ref)):
+            raise ValueError("node objective must carry its exact host-derived plan binding")
         if type(self.facts) is not ArtifactObjectiveFactsV2:
             raise TypeError("version-two objective facts must be canonical")
         _require_enum(self.action, LeadObjectiveAction, "objective action")
@@ -1550,7 +1600,15 @@ class LeadProviderOutcome:
     core_document_readiness: CoreDocumentReadinessBasis | None = field(default=None, kw_only=True)
 
     preliminary_review: LeadPreliminaryReview | None = field(default=None, kw_only=True)
+    document_node: DocumentNodeBinding | None = field(default=None, kw_only=True)
+    planning_target: AuthoringTarget | None = field(default=None, kw_only=True)
     def __post_init__(self) -> None:
+        _validate_planning_target(self.planning_target, self.kind, self.authoring_scope)
+        if self.document_node is not None and (type(self.document_node) is not DocumentNodeBinding
+                or (self.authoring_scope is not None and
+                    (self.document_node.task_ref.task_id, self.document_node.task_ref.task_revision) !=
+                    (self.authoring_scope.task_id, self.authoring_scope.task_revision))):
+            raise ValueError("document metadata must retain its exact actual task/revision")
         if self.preliminary_review is not None:
             record = self.preliminary_review
             if (type(record) is not LeadPreliminaryReview or self.kind is not LeadOutcomeKind.ANSWER
@@ -2076,6 +2134,7 @@ class LeadRecommendationRequestPayload:
     source_execution_attempt_id: str | None = None
     authoring_scope: AuthoringScope | None = field(default=None, kw_only=True)
     action_digest: str = field(init=False)
+    document_node: DocumentNodeBinding | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         for value in (self.request_event_id, self.request_id, self.action_id, self.source_recommendation_event_id):
@@ -2155,6 +2214,11 @@ class LeadRecommendationRequestPayload:
         value.update(_authoring_scope_fields(self.authoring_scope))
         value["basis"] = _basis_value(self.basis)
         value["draft_sources"] = [asdict(item) for item in self.draft_sources]
+        value.pop("document_node", None)
+        if self.document_node is not None:
+            if type(self.document_node) is not DocumentNodeBinding:
+                raise TypeError("recommendation requires an exact document node binding")
+            value["document_node"] = document_node_binding_to_dict(self.document_node)
         object.__setattr__(self, "action_digest", "sha256:" + hashlib.sha256(
             json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest())
@@ -2349,7 +2413,17 @@ class CollaborationProposal:
     premise_decision: PremiseDecisionSpec | None = field(default=None, kw_only=True)
 
     stage_plan: SpecialistStagePlan | None = field(default=None, kw_only=True)
+    document_node: DocumentNodeBinding | None = field(default=None, kw_only=True)
+    document_plan: DocumentPlan | None = field(default=None, kw_only=True)
     def __post_init__(self) -> None:
+        if self.document_plan is not None and (type(self.document_plan) is not DocumentPlan
+                or self.document_node is None or self.document_node.plan_ref != self.document_plan.ref):
+            raise ValueError("proposed document window must bind this exact disclosed node")
+        if self.document_node is not None:
+            if (type(self.document_node) is not DocumentNodeBinding or self.authoring_scope is None
+                    or (self.document_node.task_ref.task_id, self.document_node.task_ref.task_revision) !=
+                       (self.authoring_scope.task_id, self.authoring_scope.task_revision)):
+                raise ValueError("document proposal must bind its exact current node task")
         _validate_identifier(self.step_id, label="collaboration step ID")
         _validate_identifier(self.proposal_id, label="collaboration proposal ID")
         _validate_positive_integer(self.proposal_revision, label="proposal revision")
@@ -2482,6 +2556,8 @@ class CollaborationProposal:
         authoring_scope: AuthoringScope | None = None,
         premise_decision: PremiseDecisionSpec | None = None,
         stage_plan: SpecialistStagePlan | None = None,
+        document_node: DocumentNodeBinding | None = None,
+        document_plan: DocumentPlan | None = None,
     ) -> CollaborationProposal:
         """Create a proposal with its canonical digest."""
 
@@ -2503,6 +2579,10 @@ class CollaborationProposal:
             fields["premise_decision"] = premise_value_to_dict(premise_decision)
         if stage_plan is not None:
             fields["stage_plan"] = stage_plan_to_dict(stage_plan)
+        if document_node is not None:
+            fields["document_node"] = document_node_binding_to_dict(document_node)
+        if document_plan is not None:
+            fields["document_plan"] = document_plan_to_dict(document_plan)
         digest = _digest_value(fields)
         return cls(
             step_id=step_id,
@@ -2519,6 +2599,8 @@ class CollaborationProposal:
             authoring_scope=authoring_scope,
             premise_decision=premise_decision,
             stage_plan=stage_plan,
+            document_node=document_node,
+            document_plan=document_plan,
         )
 
 
@@ -4024,11 +4106,22 @@ class CollaborationProviderCallPayload:
     call_kind: CollaborationProviderCallKind
     state: CollaborationProviderCallState
     validation_details: tuple[str, ...] = ()
+    document_node: DocumentNodeBinding | None = field(default=None, kw_only=True)
+    document_goal: DocumentPlanRef | None = field(default=None, kw_only=True)
+    document_budget_task_id: str | None = field(default=None, kw_only=True)
 
     usage: ProviderUsage | None = field(default=None, kw_only=True)
     accounting: ProviderCallAccounting | None = field(default=None, kw_only=True, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if self.document_goal is not None and type(self.document_goal) is not DocumentPlanRef:
+            raise TypeError("document call funding requires an exact source plan reference")
+        if self.document_budget_task_id is not None:
+            _validate_identifier(self.document_budget_task_id, label="document budget task")
+            if self.document_goal is None:
+                raise ValueError("document budget task cannot lose its source goal")
+        if self.document_node is not None and type(self.document_node) is not DocumentNodeBinding:
+            raise TypeError("document call requires an exact immutable node binding")
         if type(self.invocation_id) is not str or type(self.call_id) is not str:
             raise TypeError("provider invocation and call IDs must be exact text")
         _validate_identifier(self.invocation_id, label="provider invocation ID")
@@ -4079,8 +4172,12 @@ class CollaborationProviderCallPayload:
 @dataclass(frozen=True, slots=True)
 class CollaborationLeadTaskDecisionPayload:
     decision: LeadTaskDecision
+    document_selection: DocumentNodeSelection | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
+        if self.document_selection is not None and (type(self.document_selection) is not DocumentNodeSelection
+                or self.decision.action not in {LeadTaskAction.NEW_TASK, LeadTaskAction.RESUME}):
+            raise ValueError("document selection is an intent for an actual new/resumed task only")
         if type(self.decision) is not LeadTaskDecision:
             raise TypeError("lead_task_decision requires an exact LeadTaskDecision")
 
@@ -5164,6 +5261,8 @@ def _proposal_value(
         "user_impact": proposal.user_impact,
         **_authoring_scope_fields(proposal.authoring_scope),
         **({"stage_plan": stage_plan_to_dict(proposal.stage_plan)} if proposal.stage_plan is not None else {}),
+        **({"document_node": document_node_binding_to_dict(proposal.document_node)} if proposal.document_node is not None else {}),
+        **({"document_plan": document_plan_to_dict(proposal.document_plan)} if proposal.document_plan is not None else {}),
     }
     if include_digest:
         value["proposal_digest"] = proposal.proposal_digest
@@ -5251,7 +5350,8 @@ def _artifact_reviewed_proposal_value(
 
 def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
     if type(payload) is CollaborationLeadTaskDecisionPayload:
-        return {"payload_type": "lead_task_decision", "decision": task_value_to_dict(payload.decision)}
+        return {"payload_type": "lead_task_decision", "decision": task_value_to_dict(payload.decision),
+            **({"document_selection": document_node_selection_to_dict(payload.document_selection)} if payload.document_selection is not None else {})}
     if type(payload) is CollaborationLeadTaskTransitionPayload:
         return {"payload_type": "lead_task_transition", "receipt": task_value_to_dict(payload.receipt)}
     if type(payload) is CollaborationLeadMaterialCapturePayload:
@@ -5268,9 +5368,15 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
     if type(payload) is CollaborationPremiseFreshWorkAdmissionPayload:
         return {"payload_type": "premise_fresh_work_admission", "admission": premise_value_to_dict(payload.admission)}
     if type(payload) is ArtifactObjectivePayload:
-        return {"payload_type": "artifact_objective_v1", **asdict(payload)}
+        value = asdict(payload); value.pop("document_plan"); value.pop("document_node")
+        return {"payload_type": "artifact_objective_v1", **value,
+            **({"document_plan": document_plan_to_dict(payload.document_plan)} if payload.document_plan is not None else {}),
+                **({"document_node": document_node_binding_to_dict(payload.document_node)} if payload.document_node is not None else {})}
     if type(payload) is ArtifactObjectivePayloadV2:
-        return {"payload_type": "artifact_objective_v2", **asdict(payload)}
+        value = asdict(payload); value.pop("document_plan"); value.pop("document_node")
+        return {"payload_type": "artifact_objective_v2", **value,
+            **({"document_plan": document_plan_to_dict(payload.document_plan)} if payload.document_plan is not None else {}),
+                **({"document_node": document_node_binding_to_dict(payload.document_node)} if payload.document_node is not None else {})}
     recommendation_types = {
         LeadRecommendationRequestPayload: "lead_recommendation_request_v1",
         LeadRecommendationDecisionPayload: "lead_recommendation_decision_v1",
@@ -5280,6 +5386,9 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
     if type(payload) in recommendation_types:
         value = asdict(payload)
         if type(payload) is LeadRecommendationRequestPayload:
+            value.pop("document_node", None)
+            if payload.document_node is not None:
+                value["document_node"] = document_node_binding_to_dict(payload.document_node)
             value.pop("authoring_scope", None)
             value.update(_authoring_scope_fields(payload.authoring_scope))
             value["basis"] = _basis_value(payload.basis)
@@ -5320,6 +5429,9 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
             "message": payload.message,
             "payload_type": "lead_judgment",
             **({"preliminary_review": preliminary_review_to_dict(payload.preliminary_review)} if payload.preliminary_review is not None else {}),
+            **({"document_plan": document_plan_to_dict(payload.document_plan)} if payload.document_plan is not None else {}),
+            **({"document_node": document_node_binding_to_dict(payload.document_node)} if payload.document_node is not None else {}),
+            **({"planning_target": payload.planning_target.value} if payload.planning_target is not None else {}),
             **_authoring_scope_fields(payload.authoring_scope),
             **_reply_trace_fields(payload.trace),
         }
@@ -5411,6 +5523,9 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         }
     if type(payload) is CollaborationProviderCallPayload:
         value = {
+            **({"document_goal": document_plan_ref_to_dict(payload.document_goal),
+                "document_budget_task_id": payload.document_budget_task_id} if payload.document_goal is not None else {}),
+            **({"document_node": document_node_binding_to_dict(payload.document_node)} if payload.document_node is not None else {}),
             **({"usage": asdict(payload.usage)} if payload.usage is not None else {}),
             **({"accounting": provider_call_accounting_to_object(payload.accounting)} if payload.accounting is not None else {}),
             "call_id": payload.call_id,
@@ -6019,7 +6134,7 @@ def _decode_proposal(value: object) -> CollaborationProposal:
             "step_kind",
             "user_impact",
         },
-        {"authoring_scope", "premise_decision", "stage_plan"},
+        {"authoring_scope", "premise_decision", "stage_plan", "document_node", "document_plan"},
         label="collaboration proposal",
     )
     return CollaborationProposal(
@@ -6049,7 +6164,9 @@ def _decode_proposal(value: object) -> CollaborationProposal:
         basis=_decode_basis(item["basis"]),
         proposal_digest=_string(item["proposal_digest"], label="proposal digest"),
         authoring_scope=_decode_optional_authoring_scope(item),
-     stage_plan=(stage_plan_from_dict(item["stage_plan"]) if "stage_plan" in item else None))
+     stage_plan=(stage_plan_from_dict(item["stage_plan"]) if "stage_plan" in item else None),
+        document_node=(document_node_binding_from_dict(item["document_node"]) if "document_node" in item else None),
+        document_plan=(document_plan_from_dict(item["document_plan"]) if "document_plan" in item else None))
 
 
 def _decode_assignment_outcome(value: object) -> CollaborationAssignmentOutcome:
@@ -6297,9 +6414,10 @@ def _decode_payload(value: object) -> CollaborationPayload:
         raise ValueError("collaboration payload must be an object")
     payload_type = value.get("payload_type")
     if payload_type == "lead_task_decision":
-        if set(value) != {"payload_type", "decision"}:
+        if set(value) - {"document_selection"} != {"payload_type", "decision"}:
             raise ValueError("invalid lead_task_decision payload fields")
-        return CollaborationLeadTaskDecisionPayload(decision=task_value_from_dict(LeadTaskDecision, value["decision"]))
+        return CollaborationLeadTaskDecisionPayload(decision=task_value_from_dict(LeadTaskDecision, value["decision"]),
+            document_selection=(document_node_selection_from_dict(value["document_selection"]) if "document_selection" in value else None))
     if payload_type == "lead_task_transition":
         if set(value) != {"payload_type", "receipt"}:
             raise ValueError("invalid lead_task_transition payload fields")
@@ -6326,10 +6444,10 @@ def _decode_payload(value: object) -> CollaborationPayload:
         item = _object(value, {"payload_type", "admission"}, label="premise admission")
         return CollaborationPremiseFreshWorkAdmissionPayload(premise_admission_from_dict(item["admission"]))
     if payload_type in {"artifact_objective_v1", "artifact_objective_v2"}:
-        item = _object(value, {
+        item = _object_with_optional_extensions(value, {
             "payload_type", "facts", "action", "previous_objective_event_id",
             "lead_result_event_id", "next_step", "draft_sources", "candidate_binding",
-        }, label="artifact objective payload")
+        }, {"document_plan", "document_node"}, label="artifact objective payload")
         version_two = payload_type == "artifact_objective_v2"
         origin_fields = (
             {"origin_recommendation_request_event_id", "origin_recommendation_decision_event_id"}
@@ -6364,13 +6482,16 @@ def _decode_payload(value: object) -> CollaborationPayload:
             )),
             draft_sources=_decode_objective_sources(item["draft_sources"]),
             candidate_binding=binding,
+            document_plan=(document_plan_from_dict(item["document_plan"]) if "document_plan" in item else None),
+            document_node=(document_node_binding_from_dict(item["document_node"]) if "document_node" in item else None),
         )
     if payload_type == "lead_recommendation_request_v1":
-        item = _object_with_extension(value, {
-            "payload_type", *(set(LeadRecommendationRequestPayload.__dataclass_fields__) - {"authoring_scope"}),
-        }, {"authoring_scope"}, label="recommendation request")
+        item = _object_with_optional_extensions(value, {
+            "payload_type", *(set(LeadRecommendationRequestPayload.__dataclass_fields__) - {"authoring_scope", "document_node"}),
+        }, {"authoring_scope", "document_node"}, label="recommendation request")
         fields = {key: item[key] for key in LeadRecommendationRequestPayload.__dataclass_fields__
-                  if key not in {"action_digest", "authoring_scope"}}
+                  if key not in {"action_digest", "authoring_scope", "document_node"}}
+        fields["document_node"] = document_node_binding_from_dict(item["document_node"]) if "document_node" in item else None
         fields["authoring_scope"] = (authoring_scope_from_dict(item["authoring_scope"])
                                      if "authoring_scope" in item else None)
         fields["kind"] = _enum(LeadRecommendationActionKind, fields["kind"], label="recommended action")
@@ -6444,7 +6565,7 @@ def _decode_payload(value: object) -> CollaborationPayload:
         item = _object_with_optional_extensions(
             base,
             {"evidence", "kind", "message", "payload_type"},
-            {"authoring_scope", "trace", "preliminary_review"},
+            {"authoring_scope", "trace", "preliminary_review", "document_plan", "document_node", "planning_target"},
             label="lead judgment payload",
         )
         return CollaborationLeadJudgmentPayload(
@@ -6456,7 +6577,10 @@ def _decode_payload(value: object) -> CollaborationPayload:
             authoring_scope=_decode_optional_authoring_scope(item),
             trace=_decode_optional_reply_trace(item),
             preliminary_review=(preliminary_review_from_dict(item["preliminary_review"])
-                                if "preliminary_review" in item else None))
+                                if "preliminary_review" in item else None),
+            document_plan=(document_plan_from_dict(item["document_plan"]) if "document_plan" in item else None),
+            planning_target=(AuthoringTarget(item["planning_target"]) if "planning_target" in item else None),
+            document_node=(document_node_binding_from_dict(item["document_node"]) if "document_node" in item else None))
     if payload_type == "assignment_dispatch":
         item = _object(
             value,
@@ -6770,10 +6894,15 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 "state",
             } | ({"validation_details"} if "validation_details" in value else set())
             | ({"usage"} if "usage" in value else set())
-            | ({"accounting"} if "accounting" in value else set()),
+            | ({"accounting"} if "accounting" in value else set())
+            | ({"document_node"} if "document_node" in value else set())
+            | ({"document_goal", "document_budget_task_id"} if "document_goal" in value else set()),
             label="provider-call payload",
         )
         return CollaborationProviderCallPayload(
+            document_goal=(document_plan_ref_from_dict(item["document_goal"]) if "document_goal" in item else None),
+            document_budget_task_id=(item["document_budget_task_id"] if "document_goal" in item else None),
+            document_node=(document_node_binding_from_dict(item["document_node"]) if "document_node" in item else None),
             usage=_decode_provider_usage(item["usage"]) if "usage" in item else None,
             accounting=provider_call_accounting_from_object(item["accounting"]) if "accounting" in item else None,
             invocation_id=_string(
