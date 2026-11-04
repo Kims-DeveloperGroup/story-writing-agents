@@ -971,7 +971,9 @@ def _lead_front_result_contract(
     for variant in variants:
         if variant.get("properties", {}).get("kind", {}).get("enum") == ["question"]:
             variant["properties"]["planning_target"] = alternatives([
-                {"type": "string", "enum": [target.value for target in AuthoringTarget]}, {"type": "null"}])
+                {"type": "string", "enum": [target.value for target in AuthoringTarget],
+                         "description": 'Semantic document kind for a genuine formal-writing clarification; this is not an artifact path, task, readiness finding, or execution authority.'},
+                        {"type": "null", "description": 'No formal document-target classification is supplied; freeform, workflow, review, and already-targeted work retain their existing scope.'}])
             variant["required"] = [*variant["required"], "planning_target"]
     qualified_variants = []
     for variant in variants:
