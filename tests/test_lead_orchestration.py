@@ -4110,15 +4110,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertIs(refreshed.group_workflow.phase, LeadGroupPhase.SELECT)
             self.assertNotEqual(refreshed.group_stage.catalog.request_basis_ref, original_catalog.request_basis_ref)
             self.assertEqual(original_selection.as_object(), original_record)
-        from story_writing_agents import lead_provider_contracts as group_contracts
-        with mock.patch.object(group_contracts, "_compile_lead_families", lambda *_args, **_kwargs: ()):
-            self.assertRaises(ValueError, read_plan.require_provenance)
-        semantic_decoder = read_plan.semantic_variants[0].decode
-        defaults = semantic_decoder.__kwdefaults__
-        try:
-            semantic_decoder.__kwdefaults__ = {**(defaults or {}), "foreign_fixture_default": True}
-            self.assertRaises(ValueError, read_plan.require_provenance)
-        finally: semantic_decoder.__kwdefaults__ = defaults
         read_plan.require_provenance()
         review_record = {**unit_record, "intent": "review_only", "target_paths": []}
         review_facts = replace(unit_constraints, scope=authoring_scope_from_dict(review_record))

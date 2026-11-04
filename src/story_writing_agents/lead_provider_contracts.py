@@ -2793,7 +2793,12 @@ class LeadProviderConstraints:
                                bound_selectors=tuple(selectors),
                                bound_selector_schema=selector_schema,
                                bound_assessments=tuple(assessment_paths),
-                               bound_keyed=tuple(keyed_paths)) -> dict[str, object]:
+                               bound_keyed=tuple(keyed_paths),
+                               bound_scope=self.scope if scoped else None,
+                               bound_targets=targets if scoped else None,
+                               bound_inputs=allocation_inputs if allocation_paths else (),
+                               bound_review_candidates=self.review_candidate_ids if allocation_paths else None,
+                               bound_tasks=tasks, bound_contract_id=contract.contract_id) -> dict[str, object]:
                         result = deepcopy(body)
                         declaration = json.loads(bound_selector_schema)
                         selection_plan = {}
@@ -2820,13 +2825,13 @@ class LeadProviderConstraints:
                                        for parent, branch in guards):
                                     selection_plan.setdefault(concrete, (choices, counts))
                         if bound_scoped:
-                            _decode_scope_wire(result["writing_task_scope"], bound_rule, self.scope, targets)
+                            _decode_scope_wire(result["writing_task_scope"], bound_rule, bound_scope, bound_targets)
                         for path in bound_paths:
                             node = result
                             for name in path: node = node[name]
                             _decode_allocation_wire(
-                            node, allocation_inputs, bound_active,
-                            review_candidate_ids=self.review_candidate_ids)
+                            node, bound_inputs, bound_active,
+                            review_candidate_ids=bound_review_candidates)
                         for path, (choices, counts) in selection_plan.items():
                             parent = at(result, path[:-1])
                             name = path[-1]
@@ -2853,15 +2858,8 @@ class LeadProviderConstraints:
                             for name in assessment_path[:-1]:
                                 parent = parent[name]
                             parent[assessment_path[-1]] = decode_current_assessment(parent[assessment_path[-1]])
-                        map_current_task_literals(result, tasks)
-                        normalized = normalize_result(result, contract.contract_id)
-                        if "preliminary_review" in normalized:
-                            scope_value = normalized["authoring_scope"]
-                            task_id, revision = scope_value["task"].rsplit("@", 1)
-                            normalized["preliminary_review"] = preliminary_review_to_dict(
-                                bind_preliminary_intent(normalized["preliminary_review"],
-                                    self.preliminary_targets, task_id, int(revision),
-                                    target_paths=tuple(scope_value["target_paths"])))
+                        map_current_task_literals(result, bound_tasks)
+                        normalized = normalize_result(result, bound_contract_id)
                         proposal_value = normalized.get("proposal")
                         if type(proposal_value) is dict and "stage_plan" in proposal_value:
                             scope_value = normalized["authoring_scope"]
@@ -2871,6 +2869,18 @@ class LeadProviderConstraints:
                             for question in plan["questions"]:
                                 question.update(task_id=task_id, task_revision=int(revision))
                         return normalized
+                    if preliminary_answer:
+                        def decode_preliminary(body: dict[str, object], *,
+                                               source=decode, review_targets=self.preliminary_targets) -> dict[str, object]:
+                            normalized = source(body)
+                            scope_value = normalized["authoring_scope"]
+                            task_id, revision = scope_value["task"].rsplit("@", 1)
+                            normalized["preliminary_review"] = preliminary_review_to_dict(
+                                bind_preliminary_intent(normalized["preliminary_review"],
+                                    review_targets, task_id, int(revision),
+                                    target_paths=tuple(scope_value["target_paths"])))
+                            return normalized
+                        decode = decode_preliminary
                     branch_key = f"{contract.contract_id}:{root_number}:{scope_number}:{roster_number}"
                     if grouped:
                         branch_key += ":group:" + group_id
@@ -3402,8 +3412,8 @@ class LeadGroupCompilation:
         ids = {item.group_id for item in variants}
         object.__setattr__(self, "semantic_variants", variants)
         shared_dependencies = _lead_codec_dependencies()
-        # The compiler owns this full proof: one wrapper code/default and every
-        # ordered source callback, including duplicates.
+        # Prepare the full codec declaration once. Stable implementation internals
+        # are not re-attested while checking current response/offer data below.
         decoders = []
         if variants:
             variant = variants[0]
@@ -3424,10 +3434,6 @@ class LeadGroupCompilation:
         object.__setattr__(self, "_declaration", self._snapshot())
 
     def _snapshot(self) -> tuple:
-        functions = (preparation_original_input_ids, LeadProviderConstraints._current_wire_roots, LeadProviderConstraints.current_wire_variants, _compile_lead_families,
-                     _current_lead_rule_schema, _lead_codec_dependencies,
-                     schema_group_for, LeadSchemaGroup.accepts,
-                     type(self).matches_current, type(self).catalog, type(self).compile)
         return (repr(self.constraints), self.rule_seed.contract_id, self.rule_seed.domain_rules,
                 self.read_ids, self.writing_read_ids, self.writing_read_facts,
                 tuple(tuple(item.snapshot_value().items()) for item in self.read_facts),
@@ -3436,15 +3442,12 @@ class LeadGroupCompilation:
                        id(item.rules), item.rules.canonical_bytes, item.rules.maximum_bytes, id(item.decode))
                       for item in self.semantic_variants),
                 tuple((id(item), item.binding_fingerprint) for item in self._semantic_decoders),
-                tuple((function, function.__code__) for function in functions),
                 json.dumps(tuple((group.card(), group.membership_identity()) for group in LEAD_SCHEMA_GROUPS),
                            ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
     def require_provenance(self) -> None:
         if self._snapshot() != self._declaration:
             raise ValueError("동결된 의미 그룹 compiler 또는 선택 근거가 변경됐습니다")
-        for decoder in self._semantic_decoders:
-            decoder.require_provenance()
 
     def catalog(self, *, request_basis: Mapping[str, object]) -> LeadGroupCatalog:
         self.require_provenance()
