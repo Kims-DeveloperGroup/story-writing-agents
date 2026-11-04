@@ -1255,7 +1255,8 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
                 result = literal_ids.setdefault(signature, len(literal_ids))
                 full_keys[identity] = result
                 return result
-            signature = ("scalar", key(value))
+            # A separate string tag preserves literal equality without JSON encoding.
+            signature = ("string", value) if type(value) is str else ("scalar", key(value))
             return literal_ids.setdefault(signature, len(literal_ids))
 
         groups: dict[int, list[object]] = {}
