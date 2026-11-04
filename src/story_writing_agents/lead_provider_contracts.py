@@ -1027,7 +1027,8 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
         # Bare aliases resolve to their concrete target, avoiding a self-alias after merging.
         while set(node) == {"$ref"}:
             node = source_definitions[node["$ref"][len("#/$defs/"):]]
-        definitions.setdefault(aliases[name], rename(node, aliases))
+        if aliases[name] not in definitions:
+            definitions[aliases[name]] = rename(node, aliases)
     root = rename(root, aliases)
     counts: dict[str, int] = {}
     nodes: dict[str, object] = {}
