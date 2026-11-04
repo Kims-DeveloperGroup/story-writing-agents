@@ -1104,19 +1104,24 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
         elif times > 1:
             shared[identity] = f"n{len(shared)}"
 
-    def render(node: object, *, own: str | None = None) -> object:
+    def render(node: object, reference_counts: dict[str, int], *, own: str | None = None) -> object:
         if type(node) is not dict:
             return node
         identity = source_key(node)
         if identity in shared and identity != own:
-            return {"$ref": "#/$defs/" + shared[identity]}
+            name = shared[identity]
+            reference_counts[name] += 1
+            return {"$ref": "#/$defs/" + name}
         result = dict(node)
+        if "$ref" in result:
+            reference_counts[result["$ref"][len("#/$defs/"):]] += 1
+            return result
         if type(result.get("properties")) is dict:
-            result["properties"] = {name: render(child) for name, child in result["properties"].items()}
+            result["properties"] = {name: render(child, reference_counts) for name, child in result["properties"].items()}
         if type(result.get("anyOf")) is list:
-            result["anyOf"] = [render(child) for child in result["anyOf"]]
+            result["anyOf"] = [render(child, reference_counts) for child in result["anyOf"]]
         if "items" in result:
-            result["items"] = render(result["items"])
+            result["items"] = render(result["items"], reference_counts)
         return result
 
     def symbol_aliases(reference_counts: Mapping[str, int]) -> dict[str, str]:
@@ -1136,39 +1141,41 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
             for number, name in enumerate(sorted(reference_counts, key=lambda name: (-reference_counts[name], name)))
         }
 
-    def compact_symbols(graph: dict[str, object]) -> tuple[dict[str, object], dict[str, str]]:
+    def compact_symbols(graph: dict[str, object], reference_counts: dict[str, int] | None = None) -> tuple[dict[str, object], dict[str, str]]:
         """Use the same local-symbol layout for every cost trial and final graph."""
         if not graph.get("$defs"):
             return graph, {}
-        reference_counts = dict.fromkeys(graph["$defs"], 0)
+        if reference_counts is None:
+            reference_counts = dict.fromkeys(graph["$defs"], 0)
 
-        def count_references(node: object) -> None:
-            if type(node) is not dict:
-                return
-            if "$ref" in node:
-                reference_counts[node["$ref"][len("#/$defs/"):]] += 1
-                return
-            for child in children(node):
-                count_references(child)
+            def count_references(node: object) -> None:
+                if type(node) is not dict:
+                    return
+                if "$ref" in node:
+                    reference_counts[node["$ref"][len("#/$defs/"):]] += 1
+                    return
+                for child in children(node):
+                    count_references(child)
 
-        count_references(graph)
-        for node in graph["$defs"].values():
-            count_references(node)
+            count_references(graph)
+            for node in graph["$defs"].values():
+                count_references(node)
         aliases = symbol_aliases(reference_counts)
         compact = rename(graph, aliases)
         compact["$defs"] = {aliases[name]: rename(node, aliases) for name, node in graph["$defs"].items()}
         return compact, aliases
 
     def assemble() -> tuple[dict[str, object], dict[str, str]]:
-        result = render(root, own=source_key(root))
+        reference_counts = dict.fromkeys((*definitions, *shared.values()), 0)
+        result = render(root, reference_counts, own=source_key(root))
         assert type(result) is dict
-        declarations = {name: render(node, own=source_key(node)) for name, node in definitions.items()}
+        declarations = {name: render(node, reference_counts, own=source_key(node)) for name, node in definitions.items()}
         for identity, name in shared.items():
             if name not in declarations:
-                declarations[name] = render(nodes[identity], own=identity)
+                declarations[name] = render(nodes[identity], reference_counts, own=identity)
         if declarations:
             result["$defs"] = declarations
-        return compact_symbols(result)
+        return compact_symbols(result, reference_counts)
 
     quoted_sizes: dict[str, int] = {}
     fixed_sizes: dict[int, int] = {}
