@@ -3758,7 +3758,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         profile_binding, profile_projections, prepared_profile_projections = profile_context(
                             "question.workflow" if activity == "workflow" else "question." + intent)
                         fixture_call = SimpleNamespace(contract=profile_binding)
-                        complete = json.loads(lead_fixture_response(
+                        complete_bound, complete = profile_binding, json.loads(lead_fixture_response(
                             fixture_call, base, family=0, logical_root=1))
                         self.assertEqual(not bool(profile_binding.rule_graph.findings(
                             complete)), legal, (intent, activity, domains, roles))
@@ -3964,7 +3964,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         bad_task = copy.deepcopy(complete)
                         bad_task['agent_action']['task_result']['response_details'][
                             'task_scope']['task']['id'] = 'not-current-task'
-                        self.assertTrue(profile_binding.rule_graph.findings(bad_task))
+                        self.assertTrue(complete_bound.rule_graph.findings(bad_task))
         self.assertEqual(len(accepted_profiles), 91)
         self.assertIsNotNone(review_basis_control)
         self.assertEqual(set(nonreview_basis_controls), {"draft_content", "assess_constraints"})
@@ -4368,13 +4368,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(json.loads(free_ready_bound.decode_response(json.dumps(free_ready_packet)).answer_json), {
             'kind': 'answer', 'message': 'Report current missing readiness facts.',
             'authoring_scope': None, 'core_document_assessment': free_readiness})
-        self._require_fixture_field_neighbors(profile_binding, free_ready_packet)
+        self._require_fixture_field_neighbors(free_ready_bound, free_ready_packet)
         for relative_path, replacement in readiness_invalid:
             bad = copy.deepcopy(free_ready_packet)
             node = bad['agent_action']['task_result']['response_details']['core_document_assessment']
             for part in relative_path[:-1]: node = node[part]
             node[relative_path[-1]] = replacement
-            self.assertTrue(profile_binding.rule_graph.findings(bad), relative_path)
+            self.assertTrue(free_ready_bound.rule_graph.findings(bad), relative_path)
         discussion_seed = _lead_discussion_result_contract(
             LeadDiscussionConstraints('test-discussion-control', task['task_id'], 1))
         for kind, response_type in (('answer', 'answer'), ('question', 'clarification_question')):
