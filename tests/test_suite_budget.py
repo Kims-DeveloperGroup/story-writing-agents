@@ -129,6 +129,17 @@ class SuiteBudgetTests(unittest.TestCase):
                     suite_budget.check_monotonic(
                         dict(recovery_source, max_test_source_lines=limit),
                         dict(prior_source, max_test_source_lines=old))
+        diagnostic_source = dict(recovery_source, max_test_source_lines=148747)
+        for prior_source in (continuity_source, recovery_source):
+            self.assertIsNone(suite_budget.check_monotonic(diagnostic_source, prior_source))
+            for old, limit in ((prior_source["max_test_source_lines"] - 1, 148747),
+                               (prior_source["max_test_source_lines"] + 1, 148747),
+                               (prior_source["max_test_source_lines"], 148746),
+                               (prior_source["max_test_source_lines"], 148748)):
+                with self.assertRaises(suite_budget.BudgetError):
+                    suite_budget.check_monotonic(
+                        dict(diagnostic_source, max_test_source_lines=limit),
+                        dict(prior_source, max_test_source_lines=old))
         for old, limit in ((142603, 142887), (142605, 142887), (142604, 142886),
                            (142604, 142888), (142887, 142888)):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
@@ -190,7 +201,7 @@ class SuiteBudgetTests(unittest.TestCase):
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner._hosted_partition(canonical, isolated)
         self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
-        launch_digest = "sha256:4cf0ddb5751d0a6f92d6a0d7a482364d04be1ace91ad10d79f9aaf1cdcde70c3"
+        launch_digest = "sha256:063fe2b7f1fdd8e58abd78e634dfb535db436ed1850270c2c02d4fc2c5c931f7"
         self.assertEqual(runner._manifest(runner._hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner._hosted_launch_order(ids[::-1]), runner._hosted_launch_order(ids))
         self.assertEqual(runner._hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))

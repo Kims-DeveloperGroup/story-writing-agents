@@ -72,7 +72,7 @@ def auth_failure(provider="antigravity", *, safe=True, validator=lambda: True):
     return failure
 
 
-async def drive_recovery(operation, callback=lambda _key: True, *, progress_timeout=30):
+async def drive_recovery(operation, callback=lambda _key: True, *, progress_timeout=30, progress_state=None):
     """Drive the private async coordination seam with bounded synthetic authority."""
     recovery = ProviderAuthRecovery()
     keys = []
@@ -87,7 +87,17 @@ async def drive_recovery(operation, callback=lambda _key: True, *, progress_time
                                          timeout=progress_timeout)
             ready.cancel()
             await asyncio.gather(ready, return_exceptions=True)
-            if not done: raise AssertionError("recovery failed to make bounded progress")
+            if not done:
+                failure = AssertionError("recovery failed to make bounded progress")
+                try:
+                    state = {"auth_ready": recovery._ready.is_set(), "pending_auth": len(recovery._pending),
+                             "active_providers": recovery._active, "task_done": task.done()}
+                    failure.add_note(f"safe coordination state: {state!r}")
+                    if progress_state is not None:
+                        failure.add_note(f"safe fixture state: {progress_state()!r}")
+                except Exception as error:
+                    failure.add_note(f"safe diagnostic exception: {type(error).__name__}")
+                raise failure
             if task.done(): break
             key = recovery.next_request()
             keys.append(key)
@@ -313,7 +323,16 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
                                                          before_script_response=before_script_response))
         with mock.patch.object(AgentContextService, "invoke", capture):
             outcome, keys = await drive_recovery(case.runtime.lead_turn(
-                case.session_id, conversation_id, "Explain bounded workflow."), progress_timeout=120)
+                case.session_id, conversation_id, "Explain bounded workflow."), progress_timeout=120,
+                progress_state=lambda: {
+                    "script_cursor": (case.backend._all_scripts[-1].script_responses_consumed
+                                      if case.backend._all_scripts else None),
+                    "pending_controls": (len(case.backend._all_scripts[-1].controls)
+                                         if case.backend._all_scripts else None),
+                    "remaining_responses": len(remaining),
+                    "phases": tuple(phase.value if isinstance(phase, LeadGroupPhase) else None
+                                    for phase in (getattr(getattr(call, "contract", None), "schema_group_phase", None)
+                                                  for call in case.backend.calls[start:]))})
         self.assertEqual(keys, [("antigravity", 0)])
         self.assertEqual(len(captured), 1)
         self.assertEqual(remaining, [])
