@@ -152,6 +152,9 @@ class LeadRecommendationTests(RecommendationCase):
                 ("Recommend Plot review of this complete supplied candidate: " + DRAFT + "\nYou may make bounded Plot review judgments and prepare a separate Plot review proposal; preserve the supplied candidate facts."))
             self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
             request = offered.recommendation_request
+            self.assertIsNone(request.document_node)
+            self.assertEqual(request.authoring_scope.target_paths, ())
+            self.assertEqual(request.authoring_scope.activity.value, "review")
             source_ids = [item.input_id for item in request.basis.inputs]
             self.assertTrue(source_ids)
             staged = not aliases and not omit_source
@@ -216,6 +219,7 @@ class LeadRecommendationTests(RecommendationCase):
                 else: self.assertEqual(issues, (), (aliases, issues))
             self.assertEqual(len(self.backend.calls) - calls, 2 if omit_source else 1, prepared)
             self.assert_no_downstream(cid)
+            self.assertEqual(self.projection(cid).artifact_objectives, ())
             if omit_source:
                 self.assertIsNone(prepared.proposal)
                 self.assertTrue(prepared.validation_details)

@@ -7,7 +7,7 @@ import hashlib
 from tests.test_collaboration_events import editorial, editorial_request
 import asyncio
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime, orchestrator as orchestration, editorial_scope as scopes
@@ -168,6 +168,16 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(len(self.backend.calls), calls + 1)
         self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, prepared)
         self.assertEqual(prepared.proposal.participants, ROSTER)
+        binding = prepared.proposal.document_node
+        self.assertIsNotNone(binding)
+        self.assertIsNotNone(prepared.document_plan)
+        self.assertEqual(prepared.document_plan.plan.ref, binding.plan_ref)
+        self.assertEqual(binding.task_ref.task_id, prepared.proposal.authoring_scope.task_id)
+        self.assertEqual(binding.task_ref.task_revision, prepared.proposal.authoring_scope.task_revision)
+        self.assertEqual(binding.budget_lineage_ref.task_id, scope.task_id)
+        self.assertEqual(binding.budget_origin_step_id, next(event.step_id for event in self.history(conversation_id) if event.event_id == source.event_id))
+        requested_node = next(node for node in prepared.document_plan.plan.nodes if node.node_id == binding.node_id)
+        self.assertEqual(requested_node.target_path, path)
         self.assertEqual(prepared.proposal.basis.editorial_refs, request.basis.editorial_refs)
         from tests.collaboration_contract_fixture import replace_proposal
         self.assertNotEqual(prepared.proposal.proposal_digest, replace_proposal(prepared.proposal,
@@ -203,6 +213,16 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(self.snapshots(), pristine)
         self.assertFalse(self.workspace.path(path).exists())
         self.assertIsNone(reviewed.story_commit_request)
+        pending_plan = next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == binding.plan_ref)
+        pending_node = next(node for node in pending_plan.nodes if node.node_id == binding.node_id)
+        self.assertIsNot(pending_node.state, c.DocumentNodeState.COMPLETE)
+        self.assertEqual(pending_node.completion_event_ids, ())
+        self.assertIs(pending_node.next_action, c.DocumentNodeNextAction.APPLY_CANDIDATE)
+        self.assertIsNotNone(reviewed.document_plan)
+        self.assertEqual(reviewed.document_plan.plan.ref, binding.plan_ref)
+        self.assertEqual(pending_plan.physical_calls_spent, len(self.backend.calls) - source_positive_call_start)
+        self.assertEqual(pending_plan.remaining_physical_calls, 0)
+        self.assertEqual(pending_plan.rounds_spent, 2)
         for call in self.backend.calls:
             self.assertNotIn("response_correction", lead._workflow_material(self.backend.callback_payload(call)))
             self.assertNotIn("structured_response_repair", call.payload)
@@ -225,6 +245,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             await self.runtime.decide_artifact_application(wrong)
         self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.OPEN)
         self.assertEqual(self.snapshots(), before)
+        self.assertEqual(next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == binding.plan_ref), pending_plan)
         applied = await self.apply(reviewed)
         self.assertIs(applied.outcome.outcome, c.ArtifactApplicationOutcomeKind.APPLIED)
         objective = self.objective(conversation_id)
@@ -232,6 +253,13 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         satisfied = next(e for e in self.history(conversation_id) if e.event_id == objective.satisfied_by_event_id)
         self.assertIsInstance(satisfied.payload, c.ArtifactApplicationResultPayload)
         self.assertEqual(satisfied.payload.application_id, applied.request.application_request.application_id)
+        completed_plan = next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == binding.plan_ref)
+        completed_node = next(node for node in completed_plan.nodes if node.node_id == binding.node_id)
+        self.assertIs(completed_node.state, c.DocumentNodeState.COMPLETE)
+        self.assertEqual(completed_node.completion_event_ids, (satisfied.event_id,))
+        self.assertIs(completed_node.next_action, c.DocumentNodeNextAction.COMPLETE)
+        self.assertEqual((completed_plan.physical_calls_spent, completed_plan.rounds_spent),
+                         (pending_plan.physical_calls_spent, pending_plan.rounds_spent))
         self.assertEqual(self.workspace.path(path).read_bytes(), text.encode())
         self.assertEqual(self.snapshots()[1:], pristine[1:])
         self.assertIsNotNone(applied.commit_request)
@@ -292,3 +320,375 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(current.applied_facts, facts)
         self.assertFalse(
             any(item.record_ref == direction.record_ref for item in current.application_attempts))
+        from story_writing_agents import RuntimeSession
+        from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
+        calls_before_inspection = len(self.backend.calls)
+        session_plans = self.runtime.inspect_document_plans(self.session_id)
+        other_conversation = self.conversation("Unrelated provider-free plan inspection")
+        storage = self.runtime.conversation_storage_services
+        snapshot = SessionHistorySourceAdapter(storage.catalog, storage.event_store, self.session_id).capture()
+        self.assertEqual(next(row for row in snapshot.conversations if row.metadata.conversation_id == other_conversation).document_plans(), ())
+        durable_plan = next(view for view in snapshot.document_plans() if view.plan.ref == binding.plan_ref)
+        self.assertEqual(durable_plan.plan, completed_plan.plan)
+        self.assertEqual((durable_plan.current_node_id, durable_plan.physical_calls_spent, durable_plan.rounds_spent, durable_plan.cumulative_plan_physical_calls),
+                         (completed_plan.current_node_id, completed_plan.physical_calls_spent, completed_plan.rounds_spent, completed_plan.cumulative_plan_physical_calls))
+        self.assertEqual(next(node for node in durable_plan.nodes if node.node_id == binding.node_id), completed_node)
+        restarted = StoryRuntime(self.control_workspace, self.backend)
+        self.assertEqual(restarted.inspect_document_plans(self.session_id), session_plans)
+        self.assertEqual(RuntimeSession(restarted, self.session_id).inspect_document_plans(), session_plans)
+        self.assertEqual(len(self.backend.calls), calls_before_inspection)
+        self.runtime = restarted
+        from story_writing_agents.core_document_readiness import AuthoringTarget
+        planning_conversation = self.conversation("Chapter three goal before an exact manuscript target")
+        literal_goal = "3장 초안을 작성하자. 결말의 선택은 아직 미정이다."
+        def planning_question(call, _provider):
+            return lead._provider_envelope(call, {
+                "kind": "question", "message": "Next Plot step: resolve the ending decision, then update the global outline before the part outline.",
+                "authoring_scope": lead._live_scope(call, activity="draft", domains=("plot_structure",), paths=()),
+                "planning_target": AuthoringTarget.MANUSCRIPT.value})
+        self.backend.enqueue(planning_question, control_plan=selection_plan("question.authoring"))
+        planning_calls = len(self.backend.calls)
+        initial_plan_turn = await self.runtime.lead_turn(self.session_id, planning_conversation, literal_goal)
+        self.assertIs(initial_plan_turn.kind, c.LeadOutcomeKind.QUESTION)
+        self.assertIsNone(initial_plan_turn.proposal)
+        self.assertIsNone(initial_plan_turn.artifact_proposal)
+        self.assertEqual(len(self.backend.calls) - planning_calls, 2)
+        self.assertIsNotNone(initial_plan_turn.document_plan)
+        goal_plan = initial_plan_turn.document_plan.plan
+        self.assertTrue(goal_plan.unresolved_target)
+        self.assertIsNone(goal_plan.goal_objective_id)
+        self.assertIsNone(goal_plan.goal_facts_digest)
+        self.assertEqual(goal_plan.remaining_target_paths, ())
+        self.assertEqual(tuple(node.target_path for node in goal_plan.nodes), (
+            "core_documents/global_outline.md", "core_documents/part_outlines.md",
+            "core_documents/character_sheets.md", "core_documents/narrative_rules.md"))
+        goal_event = next(event for event in self.history(planning_conversation) if event.event_id == goal_plan.planning_goal.user_event_id)
+        self.assertEqual(goal_event.payload.content, literal_goal)
+        self.assertEqual(goal_plan.planning_goal.content_digest, "sha256:" + hashlib.sha256(literal_goal.encode("utf-8")).hexdigest())
+        self.assertEqual(initial_plan_turn.document_plan.goal_text, literal_goal)
+        bootstrap_facts = tuple(event for event in self.history(planning_conversation)
+            if type(event.payload) is c.CollaborationProviderCallPayload and event.step_id == initial_plan_turn.step_id
+            and event.payload.state is c.CollaborationProviderCallState.SUBMITTED)
+        self.assertEqual(len(bootstrap_facts), 2)
+        for event in bootstrap_facts:
+            self.assertIsNone(event.payload.document_node)
+            self.assertEqual(event.payload.document_goal, goal_plan.planning_goal)
+            self.assertEqual(c.decode_collaboration_event(c.encode_collaboration_event(event)).payload, event.payload)
+        self.assertEqual((initial_plan_turn.document_plan.physical_calls_spent, initial_plan_turn.document_plan.rounds_spent), (2, 0))
+        self.assertEqual(initial_plan_turn.document_plan.remaining_physical_calls, 10)
+        self.assertTrue({node.target_path for node in goal_plan.nodes}.issubset(self.runtime.inspect_core_document_readiness(self.session_id).complete_documents))
+        self.assertEqual(self.projection(planning_conversation).artifact_objectives, ())
+        self.assertIn("ending decision", initial_plan_turn.message)
+        global_node = next(node for node in goal_plan.nodes if node.target_kind is AuthoringTarget.GLOBAL_OUTLINE)
+        part_node = next(node for node in goal_plan.nodes if node.target_kind is AuthoringTarget.PART_OUTLINES)
+        self.assertEqual(part_node.predecessor_node_ids, (global_node.node_id,))
+        self.assertEqual(global_node.scope_rule.domains, (lead.ArtifactReviewDomain.PLOT_STRUCTURE,))
+        from story_writing_agents import core_document_readiness as readiness
+        ending_decision_id = "chapter3_ending"
+        ending_decision_text = "Which closing action ends Chapter 3 (the return unit), while retaining the established whole-book outcome?"
+        partial_part_text = "Departure and crossing are outlined. The return unit / Chapter 3 lacks its closing action.\n"
+        self.workspace.path(AuthoringTarget.PART_OUTLINES.value).write_text(partial_part_text, encoding="utf-8")
+        def incomplete_parts(assessment):
+            decision = readiness.AuthorDecision(ending_decision_id, ending_decision_text, "missing", ("return",), ("user_input",), "The USER explicitly leaves this chapter-ending decision unresolved.")
+            rows = tuple(replace(row,
+                criteria_findings=tuple(replace(finding, criterion_judgment="criteria_missing", depends_on_author_decision_ids=(ending_decision_id,), explanation="The late chapter progression needs the unresolved closing action.")
+                    if finding.criterion_id == "late_progression" else finding for finding in row.criteria_findings),
+                remaining_author_decision_ids=(ending_decision_id,), missing_information=(ending_decision_text,),
+                rationale="The actual current part outline omits its late closing action.")
+                if row.document_path == AuthoringTarget.PART_OUTLINES.value else row for row in assessment.document_judgments)
+            return replace(assessment, book_basis=replace(assessment.book_basis, author_decisions=(*assessment.book_basis.author_decisions, decision)), document_judgments=rows)
+        def current_readiness(call, provider):
+            return lead._whole_book_assessment(call, "Global outline remains established; the part outline needs its Chapter 3 ending decision.",
+                offered_inputs=provider.callback_payload(call)["task_input"]["available_input_sources"], logical_transform=incomplete_parts)
+        self.backend.enqueue(current_readiness, control_plan=selection_plan("readiness.core_documents"))
+        readiness_call_start, readiness_read_start = len(self.backend.calls), len(self.backend.reference_calls)
+        readiness_turn = await self.runtime.lead_turn(self.session_id, planning_conversation,
+            lead._READINESS_USER + " Chapter 3 is the return unit. I have not supplied or delegated this decision: " + ending_decision_text
+            + " Assess current documents: " + " ".join("${" + node.target_path + "}" for node in goal_plan.nodes))
+        self.assertIs(readiness_turn.kind, c.LeadOutcomeKind.ANSWER)
+        self.assertIsNone(readiness_turn.proposal)
+        self.assertEqual((len(self.backend.calls) - readiness_call_start, len(self.backend.reference_calls) - readiness_read_start), (2, 1))
+        qualified_readiness = self.runtime.inspect_core_document_readiness(self.session_id)
+        self.assertIn(AuthoringTarget.GLOBAL_OUTLINE.value, qualified_readiness.complete_documents)
+        self.assertNotIn(AuthoringTarget.PART_OUTLINES.value, qualified_readiness.complete_documents)
+        self.assertTrue(any(ending_decision_text in reason for reason in dict(qualified_readiness.remaining)[AuthoringTarget.PART_OUTLINES.value]))
+        part_judgment = next(row for row in qualified_readiness.basis.assessment.document_judgments if row.document_path == part_node.target_path)
+        self.assertEqual(part_judgment.remaining_author_decision_ids, (ending_decision_id,))
+        self.assertEqual(next(finding for finding in part_judgment.criteria_findings if finding.criterion_id == "late_progression").depends_on_author_decision_ids, (ending_decision_id,))
+        self.assertIn(partial_part_text, tuple(item["content"] for item in self.backend.reference_contexts[-1]))
+        current_goal_view = next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == goal_plan.ref)
+        self.assertEqual(current_goal_view.plan.planning_goal, goal_plan.planning_goal)
+        self.assertEqual(current_goal_view.goal_text, literal_goal)
+        self.assertIsNone(current_goal_view.current_node_id)
+        next_plot = next(row for row in current_goal_view.nodes if row.state is not c.DocumentNodeState.COMPLETE)
+        self.assertEqual(next_plot.node_id, part_node.node_id)
+        self.assertIs(next_plot.state, c.DocumentNodeState.BLOCKED)
+        self.assertIs(next_plot.next_action, c.DocumentNodeNextAction.REQUEST_INFORMATION)
+        self.assertIn(ending_decision_id, next_plot.required_inputs)
+        self.assertTrue(any(ending_decision_text in reason for reason in next_plot.blocking_conditions))
+        self.assertEqual(part_node.scope_rule.domains, (lead.ArtifactReviewDomain.PLOT_STRUCTURE,))
+        self.assertTrue(part_node.source_input_ids)
+        self.assertTrue(part_node.preservation_conditions)
+        self.assertTrue(part_node.expected_result)
+        from story_writing_agents import document_plan as documents
+        from story_writing_agents import lead_task_transitions as task_controls
+        initial_judgment = next(event.payload for event in self.history(planning_conversation)
+            if type(event.payload) is c.CollaborationLeadJudgmentPayload and event.turn_id == initial_plan_turn.turn_id)
+        goal_task = next(task for task in self.runtime.inspect_lead_collaboration(self.session_id, planning_conversation).available_tasks
+            if task.ref.task_id == initial_judgment.authoring_scope.task_id)
+        self.assertEqual(len(goal_task.submitted_call_ids), 4)
+        old_global_bytes = self.workspace.path(global_node.target_path).read_bytes()
+        updated_global = "[PROVISIONAL839] Preserve the established whole-book outcome. Update the return-unit approach; Chapter 3's closing action remains undecided."
+        self.backend.enqueue(artifact._artifact_outcome(
+            operations=lambda _call, material, _input: [{"kind": "replace", "evidence_id": material["qualified_read_ids"][global_node.target_path], "new_text": updated_global}],
+            authoring_scope=lambda call: lead._live_scope(call, activity="review", domains=("plot_structure",), paths=(global_node.target_path,),
+                contributions=[{"domain": "plot_structure", "role": "constraint_assessor"}]),
+            authoring_assessment=asdict(task_assessment(foundation_ids=("user_input",), actions=("Review only the exact USER-supplied global-outline replacement; do not Apply or resolve the chapter ending.",))),
+            read_queries=((global_node.target_path, old_global_bytes.decode("utf-8").splitlines()[0]),), read_prefix="core_documents/"),
+            control_plan=selection_plan("artifact.changes", before_script_response=2))
+        producer_start = len(self.backend.calls)
+        producer_control = await self.runtime.decide_lead_task(task_controls.LeadTaskDecision.from_task(goal_task.ref, task_controls.LeadTaskAction.NEW_TASK,
+            text="Review this exact provisional global-outline replacement as a separate document task: " + json.dumps(updated_global)
+                + " Source: ${" + global_node.target_path + "}. Keep Chapter 3's closing decision unresolved; do not Apply."),
+            document_selection=documents.DocumentNodeSelection(goal_plan.ref, node_id=global_node.node_id))
+        producer = producer_control.turn
+        self.assertIsNotNone(producer)
+        self.assertIs(producer.kind, c.LeadOutcomeKind.PROPOSAL)
+        self.assertEqual(len(self.backend.calls) - producer_start, 4)
+        self.assertEqual(producer.proposal.document_node.plan_ref, goal_plan.ref)
+        self.assertEqual(producer.proposal.document_node.node_id, global_node.node_id)
+        self.assertEqual(self.workspace.path(global_node.target_path).read_bytes(), old_global_bytes)
+        self.assertIsNotNone(producer.artifact_proposal)
+        provisional = producer.artifact_proposal.candidate.candidate
+        candidate_event = next(event for event in self.history(planning_conversation)
+            if type(event.payload) is c.ArtifactReviewCandidatePayload and event.payload.candidate == provisional)
+        expected_candidate_ref = documents.DocumentCandidateRef(candidate_event.event_id, provisional.candidate_id, provisional.candidate_revision, provisional.candidate_digest)
+        exposed = next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == goal_plan.ref)
+        candidate_refs = next(row for row in exposed.nodes if row.node_id == global_node.node_id).candidate_refs
+        self.assertEqual(candidate_refs, (expected_candidate_ref,))
+        candidate_ref = candidate_refs[0]
+        global_task = next(task for task in self.runtime.inspect_lead_collaboration(self.session_id, planning_conversation).available_tasks
+            if task.ref.task_id == producer.proposal.authoring_scope.task_id)
+        self.assertEqual(global_task.ref, producer.proposal.document_node.task_ref)
+        self.assertEqual(len(global_task.submitted_call_ids), 4)
+        self.assertEqual(next(task for task in self.runtime.inspect_lead_collaboration(self.session_id, planning_conversation).available_tasks if task.ref.task_id == goal_task.ref.task_id).submitted_call_ids, goal_task.submitted_call_ids)
+        consumer_purpose = "Review the provisional global-outline input for the part-outline task; preserve the unresolved Chapter 3 closing decision."
+        candidate_use = documents.DocumentCandidateSelection(global_node.node_id, candidate_ref, global_node.coverage, consumer_purpose)
+        consumer_selection = documents.DocumentNodeSelection(goal_plan.ref, node_id=part_node.node_id, candidate_uses=(candidate_use,))
+        def review_provisional(call, provider, *, draft=False, purpose=consumer_purpose):
+            sources = provider.callback_payload(call)["task_input"]["available_input_sources"]
+            selected_source = next(item for item in sources if item["source_locator"] == "artifact-candidate/" + candidate_ref.candidate_id)
+            alias = selected_source["input_source_id"]
+            scope = lead._live_scope(call, activity="draft" if draft else "review", domains=("plot_structure",), paths=(part_node.target_path,),
+                contributions=[{"domain": "plot_structure", "role": "draft_owner" if draft else "constraint_assessor"}])
+            scope["intent"] = "authoring" if draft else "review_only"
+            assignment = {"agent_id": PLOT_ARCHITECT, "instruction": purpose, "mode": "draft" if draft else "review",
+                          "input_ids": list(dict(call.contract.semantic_index.policy.choices)["input_ids"])}
+            if not draft:
+                assignment["review_basis"] = {"candidate_input_ids": [alias], "criteria": "Assess only this exact provisional input; preserve the established outcome and the unresolved chapter ending."}
+            value = {"kind": "proposal", "message": purpose, "authoring_scope": scope,
+                     "proposal": {"relation": "new_step", "purpose": purpose, "assignments": [assignment]}}
+            if draft:
+                value["authoring_assessment"] = asdict(task_assessment(foundation_ids=("user_input", alias), actions=(purpose,)))
+            return lead._provider_envelope(call, value)
+        self.backend.enqueue(review_provisional, control_plan=selection_plan("consultation.review_only"))
+        consumer_start = len(self.backend.call_records)
+        consumer_control = await self.runtime.decide_lead_task(task_controls.LeadTaskDecision.from_task(global_task.ref, task_controls.LeadTaskAction.NEW_TASK,
+            text=consumer_purpose + " Use candidate " + candidate_ref.candidate_id + " only within the disclosed predecessor scope; this is not approval to draft, Apply or Commit."),
+            document_selection=consumer_selection)
+        consumer = consumer_control.turn
+        self.assertIsNotNone(consumer)
+        self.assertIs(consumer.kind, c.LeadOutcomeKind.PROPOSAL)
+        self.assertEqual(tuple(agent for agent, _call in self.backend.call_records[consumer_start:]), (lead.LEAD_ORCHESTRATOR, lead.LEAD_ORCHESTRATOR))
+        self.assertEqual(consumer.proposal.participants, (PLOT_ARCHITECT,))
+        self.assertEqual(consumer.proposal.document_node.plan_ref, goal_plan.ref)
+        self.assertEqual(consumer.proposal.document_node.node_id, part_node.node_id)
+        use = consumer.proposal.document_node.candidate_uses[0]
+        self.assertEqual((use.candidate, use.predecessor_node_id, use.consumer_node_id, use.purpose, use.permitted_scope),
+                         (candidate_ref, global_node.node_id, part_node.node_id, consumer_purpose, global_node.coverage))
+        self.assertEqual(use.consumer_task_ref, consumer.proposal.document_node.task_ref)
+        self.assertNotIn(updated_global, consumer.proposal.assignments[0].instruction)
+        selected_input = next(item for item in consumer.proposal.basis.inputs if item.kind is c.CollaborationInputKind.ARTIFACT_CANDIDATE)
+        self.assertEqual(selected_input.revision_digest, candidate_ref.candidate_digest)
+        self.assertIsNone(next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == goal_plan.ref).current_node_id)
+        self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome("supports", "The provisional outline can guide part planning; the closing decision is still required before formal drafting."))
+        self.backend.enqueue_for(lead.LEAD_ORCHESTRATOR, lead._synthesis_outcome(message="Retain the original Chapter 3 goal and ask for its closing decision; no writing or publication is approved."))
+        dispatch_start = len(self.backend.call_records)
+        consumed = (await self.runtime.decide_lead_step(lead._decision(consumer, c.CollaborationConfirmationDecision.CONFIRM))).turn
+        self.assertIs(consumed.state, c.CollaborationStepState.COMPLETED)
+        actual_consumers = self.backend.call_records[dispatch_start:]
+        self.assertEqual(tuple(agent for agent, _call in actual_consumers), (PLOT_ARCHITECT, lead.LEAD_ORCHESTRATOR))
+        from story_writing_agents.artifact_proposals import serialize_artifact_review_candidate
+        from tests.provider_wire_fixture import artifact_candidate as wire_candidate
+        expected_candidate = wire_candidate(json.loads(serialize_artifact_review_candidate(provisional)))
+        for _agent, call in actual_consumers:
+            material = self.backend.callback_payload(call)["task_input"]
+            exact_source = next(item for item in material["inputs"] if item["input_source_id"] == selected_input.input_id)
+            self.assertEqual(exact_source["artifact_candidate"], expected_candidate)
+            actual_text = exact_source["artifact_candidate"]["artifact_change_set"]["artifact_changes"][0]["content_text"]
+            self.assertEqual(actual_text.encode("utf-8"), updated_global.encode("utf-8"))
+            self.assertNotEqual(actual_text.encode("utf-8"), old_global_bytes)
+        self.assertIsNone(consumed.artifact_application_request)
+        self.assertIsNone(consumed.story_commit_request)
+        self.assertEqual(self.workspace.path(global_node.target_path).read_bytes(), old_global_bytes)
+        self.assertEqual(self.workspace.path(part_node.target_path).read_text(encoding="utf-8"), partial_part_text)
+        after_consumer = next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == goal_plan.ref)
+        self.assertEqual(after_consumer.current_node_id, part_node.node_id)
+        self.assertTrue(after_consumer.plan.unresolved_target)
+        self.assertEqual(after_consumer.goal_text, literal_goal)
+        self.assertIsNot(next(row for row in after_consumer.nodes if row.node_id == part_node.node_id).state, c.DocumentNodeState.COMPLETE)
+        self.assertEqual(after_consumer.cumulative_plan_physical_calls, len(self.backend.calls) - planning_calls)
+        self.assertEqual((after_consumer.physical_calls_spent, after_consumer.rounds_spent, after_consumer.remaining_physical_calls), (4, 1, 8))
+        self.assertNotIn(part_node.target_path, self.runtime.inspect_core_document_readiness(self.session_id).complete_documents)
+        for earlier in (goal_task, global_task):
+            retained = next(task for task in self.runtime.inspect_lead_collaboration(self.session_id, planning_conversation).available_tasks if task.ref.task_id == earlier.ref.task_id)
+            self.assertEqual(retained.submitted_call_ids, earlier.submitted_call_ids)
+        inspection_calls = len(self.backend.calls)
+        restarted = StoryRuntime(self.control_workspace, self.backend)
+        restored_goal = next(view for view in RuntimeSession(restarted, self.session_id).inspect_document_plans() if view.plan.ref == goal_plan.ref)
+        self.assertEqual(restored_goal, after_consumer)
+        self.assertEqual(len(self.backend.calls), inspection_calls)
+        self.runtime = restarted
+        chosen_ending = "Nora hands her brother the sealed letter as Chapter 3's closing action."
+        def resolved_parts(assessment):
+            partial = incomplete_parts(assessment)
+            book = replace(partial.book_basis, author_decisions=tuple(replace(choice,
+                author_decision_coverage="supplied", explanation="The current USER explicitly chooses: " + chosen_ending)
+                if choice.author_decision_id == ending_decision_id else choice for choice in partial.book_basis.author_decisions))
+            rows = tuple(replace(row, remaining_author_decision_ids=(), missing_information=("The current part-outline file still needs the explicitly chosen closing action.",))
+                if row.document_path == part_node.target_path else row for row in partial.document_judgments)
+            return replace(partial, book_basis=book, document_judgments=rows)
+        def qualify_chosen_ending(call, provider):
+            return lead._whole_book_assessment(call, "The USER has resolved the chapter-ending decision; the existing Part file still needs its separate writing task.",
+                offered_inputs=provider.callback_payload(call)["task_input"]["available_input_sources"], logical_transform=resolved_parts)
+        self.backend.enqueue(qualify_chosen_ending, control_plan=selection_plan("readiness.core_documents"))
+        decision_call_start = len(self.backend.calls)
+        resolved_turn = await self.runtime.lead_turn(self.session_id, planning_conversation,
+            lead._READINESS_USER + " Chapter 3 is the return unit. I now explicitly choose this ending action: " + chosen_ending
+            + " Reassess the current documents; do not claim the old Part file already contains this action. "
+            + " ".join("${" + node.target_path + "}" for node in goal_plan.nodes))
+        self.assertIs(resolved_turn.kind, c.LeadOutcomeKind.ANSWER)
+        self.assertEqual(len(self.backend.calls) - decision_call_start, 2)
+        qualified = self.runtime.inspect_core_document_readiness(self.session_id)
+        decision = next(choice for choice in qualified.basis.assessment.book_basis.author_decisions if choice.author_decision_id == ending_decision_id)
+        self.assertEqual(decision.author_decision_coverage, "supplied")
+        self.assertIn(chosen_ending, decision.explanation)
+        self.assertNotIn(part_node.target_path, qualified.complete_documents)
+        ready_to_write = next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == goal_plan.ref)
+        self.assertNotIn(ending_decision_id, next(row for row in ready_to_write.nodes if row.node_id == part_node.node_id).required_inputs)
+        reviewed_task = next(task for task in self.runtime.inspect_lead_collaboration(self.session_id, planning_conversation).available_tasks
+            if task.ref.task_id == consumer.proposal.authoring_scope.task_id)
+        self.assertEqual(len(reviewed_task.submitted_call_ids), 6)
+        draft_purpose = "Draft only the separate Part outline using the provisional Global input and the current USER's chosen Chapter 3 closing action."
+        draft_selection = documents.DocumentNodeSelection(goal_plan.ref, node_id=part_node.node_id,
+            candidate_uses=(documents.DocumentCandidateSelection(global_node.node_id, candidate_ref, global_node.coverage, draft_purpose),))
+        def recommend_part_draft(call, provider):
+            sources = provider.callback_payload(call)["task_input"]["available_input_sources"]
+            alias = next(item["input_source_id"] for item in sources if item["source_locator"] == "artifact-candidate/" + candidate_ref.candidate_id)
+            scope = lead._live_scope(call, activity="draft", domains=("plot_structure",), paths=(part_node.target_path,),
+                contributions=[{"domain": "plot_structure", "role": "draft_owner"}])
+            return recommendation(message=draft_purpose,
+                recommended_action=action(kind="prepare_consultation", source_ids=("user_input", alias), purpose=draft_purpose,
+                    instruction=draft_purpose + " " + chosen_ending, specialist_ids=(PLOT_ARCHITECT,)),
+                authoring_scope=scope, authoring_assessment=task_assessment(foundation_ids=("user_input", alias), actions=(draft_purpose,)))(call, provider)
+        self.backend.enqueue(recommend_part_draft, control_plan=selection_plan("prepare.consultation.authoring"))
+        draft_start = len(self.backend.call_records)
+        draft_conversation = self.conversation("Continue the same document plan in another conversation")
+        drafted_control = await self.runtime.decide_lead_task(task_controls.LeadTaskDecision(
+            session_id=self.session_id, conversation_id=draft_conversation, action=task_controls.LeadTaskAction.NEW_TASK, task_ref=reviewed_task.ref,
+            text=draft_purpose + " " + chosen_ending + " Preserve all other established facts; do not write the manuscript or Apply any file."),
+            document_selection=draft_selection)
+        draft_recommendation_turn = drafted_control.turn
+        self.assertIsNotNone(draft_recommendation_turn)
+        self.assertIs(draft_recommendation_turn.kind, c.LeadOutcomeKind.RECOMMENDATION)
+        self.assertEqual(tuple(agent for agent, _call in self.backend.call_records[draft_start:]), (lead.LEAD_ORCHESTRATOR, lead.LEAD_ORCHESTRATOR))
+        draft_request = draft_recommendation_turn.recommendation_request
+        self.assertIs(draft_request.kind, c.LeadRecommendationActionKind.PREPARE_CONSULTATION)
+        self.assertEqual(draft_request.target_paths, ())
+        self.assertEqual(draft_request.authoring_scope.target_paths, (part_node.target_path,))
+        self.assertEqual(draft_request.document_node.node_id, part_node.node_id)
+        from tests.recommendation_fixture import decision as recommendation_decision
+        self.backend.enqueue(lambda call, provider: review_provisional(call, provider, draft=True, purpose=draft_purpose))
+        preparation_start = len(self.backend.calls)
+        prepared_draft = await self.runtime.decide_lead_recommendation(recommendation_decision(draft_recommendation_turn))
+        self.assertEqual(len(self.backend.calls) - preparation_start, 1)
+        draft_offer = prepared_draft.turn
+        self.assertIsNotNone(draft_offer)
+        self.assertIs(draft_offer.kind, c.LeadOutcomeKind.PROPOSAL)
+        self.assertEqual(draft_offer.proposal.participants, (PLOT_ARCHITECT,))
+        self.assertEqual(tuple(row.mode.value for row in draft_offer.proposal.assignments), ("draft",))
+        self.assertEqual(draft_offer.proposal.authoring_scope.target_paths, (part_node.target_path,))
+        fresh_use = draft_offer.proposal.document_node.candidate_uses[0]
+        self.assertEqual(fresh_use.candidate, candidate_ref)
+        self.assertNotEqual(fresh_use.consumer_task_ref, use.consumer_task_ref)
+        self.assertNotEqual(fresh_use.user_conditions_digest, use.user_conditions_digest)
+        self.assertNotIn(updated_global, draft_offer.proposal.assignments[0].instruction)
+        part_draft = chr(10).join(("Return unit / Chapter 3:", "- Nora approaches her brother with the sealed letter.", "- Nora hands him the letter, closing the established return unit.")) + chr(10)
+        self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome("drafted", part_draft))
+        self.backend.enqueue_for(lead.LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=part_draft))
+        writing_start = len(self.backend.call_records)
+        written = (await self.runtime.decide_lead_step(lead._decision(draft_offer, c.CollaborationConfirmationDecision.CONFIRM))).turn
+        self.assertIs(written.state, c.CollaborationStepState.COMPLETED)
+        writers = self.backend.call_records[writing_start:]
+        self.assertEqual(tuple(agent for agent, _call in writers), (PLOT_ARCHITECT, lead.LEAD_ORCHESTRATOR))
+        writer_material = self.backend.callback_payload(writers[0][1])["task_input"]
+        self.assertEqual(lead.scenario_input(writer_material)["assignment"]["mode"], "draft")
+        writer_source = next(item for item in writer_material["inputs"] if item["input_source_type"] == "artifact_candidate")
+        self.assertEqual(writer_source["artifact_candidate"], expected_candidate)
+        self.assertEqual(self.projection(draft_conversation).offered_draft_sources[-1].content_digest, objectives.digest(part_draft))
+        self.assertIsNone(written.artifact_application_request)
+        self.assertEqual(self.workspace.path(part_node.target_path).read_text(encoding="utf-8"), partial_part_text)
+        after_writing = next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == goal_plan.ref)
+        self.assertEqual(after_writing.current_node_id, part_node.node_id)
+        self.assertTrue(after_writing.plan.unresolved_target)
+        self.assertEqual(after_writing.goal_text, literal_goal)
+        self.assertEqual(after_writing.cumulative_plan_physical_calls, len(self.backend.calls) - planning_calls)
+        self.assertEqual((after_writing.physical_calls_spent, after_writing.rounds_spent), (5, 1))
+        node_objective = next(objective for objective in self.projection(draft_conversation).artifact_objectives
+            if objective.document_node is not None and objective.document_node.task_ref.task_id == draft_offer.proposal.authoring_scope.task_id)
+        self.assertIs(type(node_objective.facts), c.ArtifactObjectiveFactsV2)
+        self.assertIsNone(node_objective.document_plan)
+        self.assertEqual(node_objective.document_node.plan_ref, goal_plan.ref)
+        self.assertEqual(node_objective.document_node.node_id, part_node.node_id)
+        self.assertEqual(node_objective.facts.target_paths, (part_node.target_path,))
+        self.assertEqual(node_objective.facts.request, draft_request.instruction)
+        self.assertEqual(node_objective.facts.origin_recommendation_request_event_id, draft_request.request_event_id)
+        exact_preparation_confirmation = self.payload_events(draft_conversation, c.LeadRecommendationDecisionPayload)[-1]
+        self.assertEqual(node_objective.facts.origin_recommendation_decision_event_id, exact_preparation_confirmation.event_id)
+        self.assertIs(node_objective.state, c.ArtifactObjectiveState.OPEN)
+        node_objective_event = next(event for event in self.history(draft_conversation)
+            if type(event.payload) is c.ArtifactObjectivePayloadV2 and event.payload.facts == node_objective.facts)
+        self.assertEqual(c.decode_collaboration_event(c.encode_collaboration_event(node_objective_event)).payload.document_node, node_objective_event.payload.document_node)
+        with self.assertRaises(ValueError):
+            replace(node_objective_event.payload, document_plan=goal_plan)
+        wrong_node_id = next(node.node_id for node in goal_plan.nodes if node.target_kind is AuthoringTarget.CHARACTER_SHEETS)
+        wrong_node = replace(node_objective_event.payload.document_node, node_id=wrong_node_id,
+            candidate_uses=tuple(replace(item, consumer_node_id=wrong_node_id) for item in node_objective_event.payload.document_node.candidate_uses))
+        for bad_node in (None, wrong_node):
+            with self.assertRaises(ValueError):
+                c.project_collaboration_history(objectives.rewrite_history(self.history(draft_conversation), node_objective_event.event_id,
+                    replace(node_objective_event.payload, document_node=bad_node)))
+        self.assertIsNot(next(row for row in after_writing.nodes if row.node_id == part_node.node_id).state, c.DocumentNodeState.COMPLETE)
+        retained_review_task = next(task for task in self.runtime.inspect_lead_collaboration(self.session_id, planning_conversation).available_tasks if task.ref.task_id == reviewed_task.ref.task_id)
+        self.assertEqual(retained_review_task.submitted_call_ids, reviewed_task.submitted_call_ids)
+        current_storage = self.runtime.conversation_storage_services
+        session_events = SessionHistorySourceAdapter(current_storage.catalog, current_storage.event_store, self.session_id).capture().events()
+        selected_tasks = tuple(event.payload for event in session_events
+            if type(event.payload) is c.CollaborationLeadTaskDecisionPayload and event.payload.document_selection is not None
+            and event.payload.document_selection.plan_ref == goal_plan.ref)
+        self.assertEqual(tuple(item.decision.action for item in selected_tasks), (task_controls.LeadTaskAction.NEW_TASK,) * 3)
+        self.assertEqual(tuple(item.document_selection.node_id for item in selected_tasks), (global_node.node_id, part_node.node_id, part_node.node_id))
+        self.assertEqual(tuple(item.decision.conversation_id for item in selected_tasks), (planning_conversation, planning_conversation, draft_conversation))
+        current_draft_task = next(task for task in self.runtime.inspect_lead_collaboration(self.session_id, draft_conversation).available_tasks
+            if task.ref.task_id == draft_offer.proposal.authoring_scope.task_id)
+        bad_source = replace(candidate_ref, candidate_digest="sha256:" + "f" * 64)
+        bad_selection = replace(draft_selection, candidate_uses=(replace(draft_selection.candidate_uses[0], candidate=bad_source),))
+        calls_before_bad_source = len(self.backend.calls)
+        with self.assertRaises(ValueError):
+            await self.runtime.decide_lead_task(task_controls.LeadTaskDecision.from_task(current_draft_task.ref, task_controls.LeadTaskAction.NEW_TASK,
+                text=draft_purpose + " " + chosen_ending), document_selection=bad_selection)
+        self.assertEqual(len(self.backend.calls), calls_before_bad_source)
+        after_bad_source = next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == goal_plan.ref)
+        self.assertEqual(after_bad_source.cumulative_plan_physical_calls, after_writing.cumulative_plan_physical_calls)
+        self.assertEqual(after_bad_source.current_node_id, part_node.node_id)
+        self.assertEqual(after_bad_source.plan.planning_goal, goal_plan.planning_goal)

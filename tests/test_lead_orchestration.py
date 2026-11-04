@@ -569,6 +569,8 @@ def _live_result(call, value):
             authoring_scope = _live_scope(call, activity="workflow")
         compact = {"message": value["message"], "authoring_scope": _compact_scope(authoring_scope),}
         if value["kind"] != "answer": compact["kind"] = value["kind"]
+        if value["kind"] == "question":
+            compact["planning_target"] = value.get("planning_target")
         return compact
     domains = []
     paths = []
@@ -613,6 +615,8 @@ def _live_result(call, value):
             compact_artifact["objective_intent"] = _compact_objective(objective)
         compact["artifact_intent"] = compact_artifact
     elif type(objective) is dict: compact["objective_intent"] = _compact_objective(objective)
+    if value["kind"] == "question":
+        compact["planning_target"] = value.get("planning_target")
     return compact
 
 
@@ -723,6 +727,8 @@ def _visible_outcome(kind: str, message: str = "Visible lead response.", *, reco
                           'writing_intent': 'authoring', 'activity_type': 'workflow_guidance',
                           'target_artifact_paths': [], 'specialist_domains': [],
                           'contributions': [], 'dependency_slots': []})}
+            if kind == "question":
+                native["planning_target"] = None
             if grouped:
                 from tests.test_agent_context_execution import _group_result
                 return _group_result(call, lead_fixture_result(native))
@@ -2047,6 +2053,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 'consultation.authoring.content', 'consultation.authoring.review', 'artifact.changes')
             consultation_groups = ('consultation.authoring.content', 'consultation.authoring.review', 'consultation.review_only')
             null_slots = {"response_details." + key: owners for key, owners in (
+            ("planning_target", ("question.workflow", "question.authoring", "question.review_only")),
                 ("writing_task_scope", ('premise.analysis', 'readiness.core_documents')),
                 ("authoring_assessment", ()),
                 ("authoring_assessment.direction", authoring_groups),
@@ -2457,11 +2464,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         question_call = SimpleNamespace(contract=question_bound)
         prospective = lead_fixture_response(question_call, {
             'response_type': 'clarification_question', 'response_text': future_message,
-            'response_details': { 'task_scope': lead_fixture_scope(workflow_scope), 'document_change_request_update': {
+            'response_details': { 'planning_target': None, 'task_scope': lead_fixture_scope(workflow_scope), 'document_change_request_update': {
                     'update_type': 'start_request', 'target_artifact_paths': [future_path],
                     'requested_workflow_step': 'ask_clarification'}}}, family=0,
             logical_root=1)
-        self.assertEqual(json.loads(question_bound.decode_response(prospective).answer_json), { 'kind': 'question',
+        self.assertEqual(json.loads(question_bound.decode_response(prospective).answer_json), { 'planning_target': None, 'kind': 'question',
             'message': future_message, 'authoring_scope': {"interpretation": "Inspect the declared synthetic scope.", 'intent': 'authoring', 'activity': 'workflow',
             'target_paths': [], 'domains': [], 'contributions': [],
             'dependency_slots': []}, 'objective_intent': {'action': 'start', 'target_paths': [future_path],
@@ -3556,9 +3563,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         for native_update, expected_update in objective_updates:
             clarify_owner, clarify_packet = require_final_case( objective_seed,
                 {'response_type': 'clarification_question', 'response_text': 'Clarify the pending target.',
-                'response_details': { 'task_scope': lead_fixture_scope_record( workflow_record,
+                'response_details': { 'planning_target': None, 'task_scope': lead_fixture_scope_record( workflow_record,
                 fixed_targets=True, fixed_dependencies=True), 'document_change_request_update': native_update}},
-                {'kind': 'question', 'message': 'Clarify the pending target.',
+                {'planning_target': None, 'kind': 'question', 'message': 'Clarify the pending target.',
                 'authoring_scope': workflow_expected, 'objective_intent': expected_update},
                 logical_root=1, constraints=workflow_facts, group='question.workflow')
             wrong_step = copy.deepcopy(clarify_packet)
@@ -3659,7 +3666,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             constraints=declared), call.contract.offers, "question.authoring")
         free_packet = json.loads(lead_fixture_response(SimpleNamespace(contract=free_bound), {
             'response_type': 'clarification_question', 'response_text': 'Retain the declared dependency subset.',
-            'response_details': {'task_scope': lead_fixture_scope_record(free_record)}},
+            'response_details': {'planning_target': None, 'task_scope': lead_fixture_scope_record(free_record)}},
             family=0, logical_root=1))
         free_schema = native_schemas[id(free_bound)]
         free_native = (free_schema, AntigravityAdapter.native_output_schema(free_schema))
@@ -3718,7 +3725,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         native_scope = lead_fixture_scope_record(supplied_scope)
                         base = {'response_type': 'clarification_question',
                                 'response_text': 'Current free-scope profile.',
-                                'response_details': {'task_scope': native_scope}}
+                                'response_details': {'planning_target': None, 'task_scope': native_scope}}
                         profile_binding, profile_projections, prepared_profile_projections = profile_context(
                             "question.workflow" if activity == "workflow" else "question." + intent)
                         fixture_call = SimpleNamespace(contract=profile_binding)
@@ -3732,7 +3739,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                             'domains': list(domains), 'contributions': duties, 'dependency_slots': []}
                         decoded_profile = profile_binding.decode_response(json.dumps(complete))
                         self.assertEqual(json.loads(decoded_profile.answer_json),
-                            {'kind': 'question', 'message': base['response_text'], 'authoring_scope': expected_scope})
+                            {'planning_target': None, 'kind': 'question', 'message': base['response_text'], 'authoring_scope': expected_scope})
                         self._require_fixture_field_neighbors(profile_binding, complete,
                             prepared_projections=prepared_profile_projections)
                         required_agents = tuple(agent for domain, agent in profile_roster.items() if domain in domains)
@@ -3978,7 +3985,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             unit_native_scope = lead_fixture_scope_record(unit_record, fixed_targets=True, fixed_dependencies=True)
             unit_question = json.loads(lead_fixture_response(unit_call, { 'response_type': 'clarification_question',
                 'response_text': 'Inspect the READ scope.',
-                'response_details': {'task_scope': unit_native_scope}}, family=0,
+                'response_details': {'planning_target': None, 'task_scope': unit_native_scope}}, family=0,
                 logical_root=1))
             self.assertFalse(unit_bound.rule_graph.findings(unit_question))
             unit_decoded = unit_bound.decode_response(json.dumps(unit_question))
@@ -4126,8 +4133,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             'contributions': [{'domain': 'tone_execution', 'role': 'draft_owner'}]}
         prepared_question_bound, _ = require_final_case(preparation_seed,
             {'response_type': 'clarification_question', 'response_text': 'Clarify this scope.',
-             'response_details': {'task_scope': preparation_native}},
-            {'kind': 'question', 'message': 'Clarify this scope.', 'authoring_scope': expected_preparation_scope},
+             'response_details': {'planning_target': None, 'task_scope': preparation_native}},
+            {'planning_target': None, 'kind': 'question', 'message': 'Clarify this scope.', 'authoring_scope': expected_preparation_scope},
             branch='lead-response-v7:family:0', constraints=preparation_facts)
         self.assertEqual({item.owner.variant.branch_key for item in prepared_question_bound.semantic_index.contracts},
                          {'lead-response-v7:family:0', 'lead-response-v7:family:1'})

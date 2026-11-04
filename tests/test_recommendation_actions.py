@@ -330,7 +330,7 @@ class RecommendationActionContractTests(RecommendationCase):
         # Decisions/revision and running/terminal states have their own readable fields.
         self.backend.enqueue(lambda call, _: lead.lead_fixture_response(call, {
             'response_type': 'clarification_question', 'response_text': 'How do the four roles cooperate?',
-            'response_details': {'used_evidence_ids': {}}}, family=0))
+            'response_details': {'planning_target': None, 'used_evidence_ids': {}}}, family=0))
         revised = await self.runtime.decide_lead_recommendation(decision(turn, c.CollaborationConfirmationDecision.REVISE))
         self.assertIsNone(revised.proposal)
         self.assertIsNone(revised.artifact_proposal)
