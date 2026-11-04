@@ -516,6 +516,8 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         dispatch_start = len(self.backend.call_records)
         consumed = (await self.runtime.decide_lead_step(lead._decision(consumer, c.CollaborationConfirmationDecision.CONFIRM))).turn
         self.assertIs(consumed.state, c.CollaborationStepState.COMPLETED)
+        review_confirmation = next(event for event in self.payload_events(planning_conversation, c.CollaborationConfirmationPayload)
+            if event.payload.proposal_id == consumer.proposal.proposal_id)
         actual_consumers = self.backend.call_records[dispatch_start:]
         self.assertEqual(tuple(agent for agent, _call in actual_consumers), (PLOT_ARCHITECT, lead.LEAD_ORCHESTRATOR))
         from story_writing_agents.artifact_proposals import serialize_artifact_review_candidate
@@ -534,6 +536,10 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(self.workspace.path(part_node.target_path).read_text(encoding="utf-8"), partial_part_text)
         after_consumer = next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == goal_plan.ref)
         self.assertEqual(after_consumer.current_node_id, part_node.node_id)
+        self.assertEqual(after_consumer.current_confirmation_event_id, review_confirmation.event_id)
+        self.assertFalse(after_consumer.cursor_ambiguous)
+        self.assertEqual(next(row for row in after_consumer.nodes if row.node_id == part_node.node_id).provisional_input_confirmation_event_ids,
+                         (review_confirmation.event_id,))
         self.assertTrue(after_consumer.plan.unresolved_target)
         self.assertEqual(after_consumer.goal_text, literal_goal)
         self.assertIsNot(next(row for row in after_consumer.nodes if row.node_id == part_node.node_id).state, c.DocumentNodeState.COMPLETE)
@@ -579,6 +585,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         reviewed_task = next(task for task in self.runtime.inspect_lead_collaboration(self.session_id, planning_conversation).available_tasks
             if task.ref.task_id == consumer.proposal.authoring_scope.task_id)
         self.assertEqual(len(reviewed_task.submitted_call_ids), 6)
+        self.assertEqual((ready_to_write.physical_calls_spent, ready_to_write.rounds_spent, ready_to_write.remaining_physical_calls), (6, 1, 6))
         draft_purpose = "Draft only the separate Part outline using the provisional Global input and the current USER's chosen Chapter 3 closing action."
         draft_selection = documents.DocumentNodeSelection(goal_plan.ref, node_id=part_node.node_id,
             candidate_uses=(documents.DocumentCandidateSelection(global_node.node_id, candidate_ref, global_node.coverage, draft_purpose),))
@@ -594,8 +601,8 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.backend.enqueue(recommend_part_draft, control_plan=selection_plan("prepare.consultation.authoring"))
         draft_start = len(self.backend.call_records)
         draft_conversation = self.conversation("Continue the same document plan in another conversation")
-        drafted_control = await self.runtime.decide_lead_task(task_controls.LeadTaskDecision(
-            session_id=self.session_id, conversation_id=draft_conversation, action=task_controls.LeadTaskAction.NEW_TASK, task_ref=reviewed_task.ref,
+        drafted_control = await self.runtime.decide_lead_task(task_controls.LeadTaskDecision.for_conversation(
+            self.session_id, draft_conversation, task_controls.LeadTaskAction.NEW_TASK,
             text=draft_purpose + " " + chosen_ending + " Preserve all other established facts; do not write the manuscript or Apply any file."),
             document_selection=draft_selection)
         draft_recommendation_turn = drafted_control.turn
@@ -623,6 +630,15 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertNotEqual(fresh_use.consumer_task_ref, use.consumer_task_ref)
         self.assertNotEqual(fresh_use.user_conditions_digest, use.user_conditions_digest)
         self.assertNotIn(updated_global, draft_offer.proposal.assignments[0].instruction)
+        self.assertEqual(draft_offer.proposal.document_node.prior_confirmation_event_id, review_confirmation.event_id)
+        pending_draft = next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == goal_plan.ref)
+        self.assertEqual((pending_draft.current_node_id, pending_draft.current_confirmation_event_id),
+                         (part_node.node_id, review_confirmation.event_id))
+        self.assertFalse(pending_draft.cursor_ambiguous)
+        self.assertEqual((pending_draft.physical_calls_spent, pending_draft.rounds_spent, pending_draft.remaining_physical_calls), (6, 1, 6))
+        self.assertEqual(next(row for row in pending_draft.nodes if row.node_id == part_node.node_id).provisional_input_confirmation_event_ids,
+                         (review_confirmation.event_id,))
+        self.assertEqual(pending_draft.cumulative_plan_physical_calls, len(self.backend.calls) - planning_calls)
         part_draft = chr(10).join(("Return unit / Chapter 3:", "- Nora approaches her brother with the sealed letter.", "- Nora hands him the letter, closing the established return unit.")) + chr(10)
         self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome("drafted", part_draft))
         self.backend.enqueue_for(lead.LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=part_draft))
@@ -640,6 +656,12 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(self.workspace.path(part_node.target_path).read_text(encoding="utf-8"), partial_part_text)
         after_writing = next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == goal_plan.ref)
         self.assertEqual(after_writing.current_node_id, part_node.node_id)
+        draft_confirmation = next(event for event in self.payload_events(draft_conversation, c.CollaborationConfirmationPayload)
+            if event.payload.proposal_id == draft_offer.proposal.proposal_id)
+        self.assertEqual(after_writing.current_confirmation_event_id, draft_confirmation.event_id)
+        self.assertFalse(after_writing.cursor_ambiguous)
+        self.assertEqual(next(row for row in after_writing.nodes if row.node_id == part_node.node_id).provisional_input_confirmation_event_ids,
+                         (draft_confirmation.event_id,))
         self.assertTrue(after_writing.plan.unresolved_target)
         self.assertEqual(after_writing.goal_text, literal_goal)
         self.assertEqual(after_writing.cumulative_plan_physical_calls, len(self.backend.calls) - planning_calls)
@@ -672,7 +694,21 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         retained_review_task = next(task for task in self.runtime.inspect_lead_collaboration(self.session_id, planning_conversation).available_tasks if task.ref.task_id == reviewed_task.ref.task_id)
         self.assertEqual(retained_review_task.submitted_call_ids, reviewed_task.submitted_call_ids)
         current_storage = self.runtime.conversation_storage_services
-        session_events = SessionHistorySourceAdapter(current_storage.catalog, current_storage.event_store, self.session_id).capture().events()
+        document_snapshot = SessionHistorySourceAdapter(current_storage.catalog, current_storage.event_store, self.session_id).capture()
+        session_events = document_snapshot.events()
+        before_snapshot_projection_calls = len(self.backend.calls)
+        captured_plan = next(view for view in document_snapshot.document_plans() if view.plan.ref == goal_plan.ref)
+        self.assertEqual((captured_plan.current_node_id, captured_plan.current_confirmation_event_id),
+                         (part_node.node_id, draft_confirmation.event_id))
+        self.assertEqual((captured_plan.physical_calls_spent, captured_plan.rounds_spent, captured_plan.cumulative_plan_physical_calls),
+                         (after_writing.physical_calls_spent, after_writing.rounds_spent, after_writing.cumulative_plan_physical_calls))
+        # Fault-inject captured-session completeness only; owner records remain intact.
+        with mock.patch.object(type(document_snapshot), "events",
+                return_value=tuple(event for event in session_events if event.event_id != review_confirmation.event_id)):
+            with self.assertRaisesRegex(ValueError,
+                    "^document prior Confirm is missing or ambiguous in captured session history$"):
+                document_snapshot.document_plans()
+        self.assertEqual(len(self.backend.calls), before_snapshot_projection_calls)
         selected_tasks = tuple(event.payload for event in session_events
             if type(event.payload) is c.CollaborationLeadTaskDecisionPayload and event.payload.document_selection is not None
             and event.payload.document_selection.plan_ref == goal_plan.ref)
@@ -692,3 +728,8 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(after_bad_source.cumulative_plan_physical_calls, after_writing.cumulative_plan_physical_calls)
         self.assertEqual(after_bad_source.current_node_id, part_node.node_id)
         self.assertEqual(after_bad_source.plan.planning_goal, goal_plan.planning_goal)
+        before_restart_calls = len(self.backend.calls)
+        restored_runtime = StoryRuntime(self.control_workspace, self.backend)
+        restored_cursor = next(view for view in RuntimeSession(restored_runtime, self.session_id).inspect_document_plans() if view.plan.ref == goal_plan.ref)
+        self.assertEqual(restored_cursor, after_bad_source)
+        self.assertEqual(len(self.backend.calls), before_restart_calls)

@@ -133,6 +133,8 @@ An unapplied revision candidate can be supplemental input only for the disclosed
 
 Moving between nodes, revisions or windows retains the applicable call and round budget. Lead discloses unfinished work when the budget is exhausted. A separately authorized new task has its own disclosed authority while the original goal and cumulative progress remain visible. Restart and conversation switching restore the current plan rather than borrowing old review or Apply authority.
 
+A proposal in another conversation becomes the current document task only after its own Confirm. If independent confirmed branches make the current task ambiguous, the view reports that ambiguity and marks the current task budget unavailable. It keeps the actual spending visible.
+
 Editorial preferences remain advice with their effects and costs. If you choose another permitted direction, Lead updates the affected work instead of enforcing its preferred style.
 
 See the [document plan design](../design/lead-document-plan.md) for the contract boundaries. Actual provider quality comparisons and user reviews remain deferred to Backlog #806.
