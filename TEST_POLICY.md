@@ -150,6 +150,131 @@ compilation, or an offline harness pass does not establish native acceptance. Pr
 failed calls and incomplete outcomes as verification gaps. Keep credential-bearing checks
 outside the canonical deterministic suite and ordinary CI.
 
+### #838의 직접 1차 검토·단계 배정 회귀 소스 배정
+
+사용자의 필요시 테스트 소스 예산 확대 허용을 정확한 **147338→148667**
+전환에 적용한다. 최신 main 통합을 포함한 실제 배정은 다음과 같다.
+
+| 소스 구분 | 청구 행 수 |
+| --- | ---: |
+| `tests/test*.py`의 비어 있지 않은 비주석 행 | 147519 |
+| 승인된 fixture·실제 검증 helper | 1148 |
+| 전체 상한 | 148667 |
+
+여유는 추가하지 않는다. helper1148행은 기존1034행, 이번 전환 정책1행,
+실제 native 도구819행이 기존757행을 대체하는 순증62행과 공유 fixed-business fixture42행과 명시적 typed-root selector9행을 포함한다.
+배정148455 이후131행은 기존 W의 현재 SELECT→GEN 검증 정렬134행과
+기존 correction fixture의 두 SELECT 호출 정렬에서 줄어든3행이다.
+그 뒤 SOURCE-only fixture57행을 추가했다. 이는 현재 compiler의 typed business
+owner만 선언하는 test-owned BoundCallFactory 조합이며, 원래 decoder·검증·task·
+한도와 기본6회 source/6+7회 예산 거절을 유지한다. SELECT 완료나 별도
+권한을 꾸미지 않고, 기존 후속 작업 입력 fixture의 실제5회 기록을 보존한다.
+SOURCE 조합을 공유 helper로 이동하며 raw34행을 줄이고 helper42행을
+청구하여 순증8행을 더했다. 같은 owner 집합은 post-selection 회복 unit에도
+사용한다. 이 unit은 SELECT 완료를 주장하지 않고 기존 cap2·두 provider·
+실패/finalizer 검증을 보존한다.
+현재 GEN의 실제 owner.logical_root를 선택하는 정렬에서 raw2행·helper9행을
+추가했다. 기존 값·부정 입력·모든 같은-root partition과 미지정 default 경로는
+유지하며 opaque identity 문자열의 호환 해석을 추가하지 않는다.
+전체 family의 canonical census와 실제 각 선택 GEN의 strict·바인딩·바이트
+경계·부정 사례를 유지한다. 2527개 ID, ID별 subTest 상한,18000/3600초,
+worker·정리·권한 검증은 변경하지 않는다.
+
+재생의 정확한 owner 순서·동일한 compilation·Two Phase 보존 검사와
+업무 owner census 및 기존 단일 국면 fixture 정렬에 정확히 5행을 더했다.
+
+이 소스 배정은 새 provider 실행이나 큐 예외를 부여하지 않는다. #838의 필요한
+실제 호출·테스트에 대한 별도 사용자 허가와 source-bound admission을 따른다.
+원래40/40·격리4건과 닫힌 #894/#896/#898 허가는 보존한다. 같은 운영 소스의
+기존 실제 검증을 재사용할 때는 코드·설정·도구·환경의 동일성을 명시한다.
+실제 품질·사용자 비교 평가 #806은 사후평가 Backlog로 유지한다.
+
+#### 최신 main 합류 후 시간 복구 소스 정산
+
+기존 사용자의 필요시 테스트 예산 확대 허용을 #914 합류 후 확인한 정확한
+**147338→148715** 및 **148667→148715** 소스 전환에 적용한다.
+위148667 배정은 시간 복구 전 기록이며 당시 상한은148715였다.
+현재 상한은 아래 실패 위치 진단 배정의148783이다.
+#914의 기존 테스트67행을 합치고, 이번에 불필요해진 구현 변조 기대32행을
+제거하면 기존 청구분보다35행 많다. 시나리오를 삭제하거나 형식만 압축해
+이 합류 비용을 숨기지 않는다.
+
+| 소스 구분 | 청구 행 수 |
+| --- | ---: |
+| `tests/test*.py`의 비어 있지 않은 비주석 행 | 147565 |
+| 기존 승인 helper1148행과 새 전환 정책2행 | 1150 |
+| 앞선 합류 정산 상한 | 148715 |
+
+새 경계 회귀11행도 기존 정규 ID에 청구했다. 기존148667보다 정확히48행
+증가하며 추가 여유는 없다. 이전147338→148667 전환과 다른 승인 이력은
+보존한다. 두 새 전환은 전체 ID/subTest mapping과18000/3600초가 동일할
+때만 허용하며 각 base와 ceiling의 인접값은 거절한다. 런타임·스키마·
+Whole Front 사례·worker·정리·권한 조건은 변경하지 않는다.
+
+#### 인증 복구 진단과 긴 작업의 시작 순서
+
+기존 사용자의 필요시 테스트 소스 예산 확대 허용을 정확한
+**147338→148747** 및 **148715→148747** 전환에 적용한다.
+인증 복구의 원래 실패·120초 대기·phase plan·호출 수·assertion을 유지하며,
+실패할 때만 준비 상태와 script cursor·남은 control·단계의 안전한 진단을
+note로 남긴다. 추출 오류는 타입명만 기록하고 원래 실패를 보존한다.
+요청·응답 본문, 식별자, 설정은 진단에 포함하지 않는다.
+
+| 소스 구분 | 청구 행 수 |
+| --- | ---: |
+| 앞선 테스트 소스147565 + 진단19 + 기존 ID의 경계 회귀11 | 147595 |
+| 앞선 helper1150 + 정확한 소스 전환 정책2 | 1152 |
+| 앞선 인증 진단 상한 | 148747 |
+
+앞선148715보다 정확히32행 많고 여유는0이다. 기존 전환 이력을 유지하며
+두 새 전환만 허용하고 기준·상한의 인접값±1은 거절한다. 정규 ID2527개,
+기존 subTest 한도·검사 내용·18000/3600초·최대4worker는 유지한다.
+
+609.725초로 관측된 기존 근거 조회 작업은 `_HOSTED_LAUNCH_IDS`에서 W와 D
+바로 뒤로 옮긴다. 기존147개/17클래스의 멤버·가중치·shard 배정은 같고,
+full3에서 먼저 시작하며 다른4개 shard의 순서는 같다. 순서 이동과 기존
+독립 launch-digest 기대값 변경은 소스 증감0이다. 시작 시점을 바꾸는
+조정이며 작업량 감소나 실행 중 동적 정렬로 보고하지 않는다.
+
+#### 실패한 준비 작업의 위치 진단
+
+기존 필요시 예산 확대 승인을 정확한 **147338→148783** 및
+**148747→148783** 전환에 적용한다. 앞선 전환 이력은 보존한다.
+실패 시 coroutine/generator 대기 연결을 최대16개, 익명 Python stack을
+최대8개×16frame까지 살펴 함수 qualname·행 번호와 고정 label만 남긴다.
+thread ID·이름, 파일명, 본문, locals·인자·객체 repr은 기록하지 않는다.
+새 thread·timer·profiler·signal·전역 cache를 만들지 않고, 추출 오류가
+원래 bounded-progress 실패를 가리지 않도록 기존 fallback을 유지한다.
+
+| 소스 구분 | 청구 행 수 |
+| --- | ---: |
+| 앞선147595 + 위치 진단23 + 기존 ID의 경계 회귀11 | 147629 |
+| 앞선 helper1152 + 정확한 소스 전환 정책2 | 1154 |
+| 현재 전체 상한 | 148783 |
+
+앞선148747보다 정확히36행 많고 여유는0이다. 기준/상한±1은 거절한다.
+대기120초, phase plan·호출 수·assertion, 정규 ID2527개·기존 subTest 한도,
+18000/3600초·최대4worker·실행 모드·기본GC는 유지한다. snapshot은
+해당 시점의 위치 단서이며 모든 worker나 전체 지연의 시간 기여도를
+보장하지 않는다. 진단 코드와 함께 측정한 결과를 일반 속도 개선으로
+주장하지 않는다.
+
+### #838 인증 복구 통합 fixture의 진행 대기
+
+`ContextRecoveryTests._bound_replay`의 기존120초는 각 인증 진행 대기
+구간에 적용되던 fixture 값이며 제품 SLA나 전체 테스트 시간 기준이 아니다.
+같은120초 설정의 이전 성공 실행은 전체236.132초였다. 운영 코드를 유지한
+[격리 진단41866198794](https://github.com/Kims-DeveloperGroup/story-writing-agents/actions/runs/41866198794)는
+이 값만900으로 바꿔185.214초에 모든 기존 assertion과 정리를 통과했다.
+이는 해당 경로의 정상 완료 증거이며 일반적인 속도 개선이나900초 기준을 뜻하지 않는다.
+
+통합 helper 한 곳은 `progress_timeout=None`으로 임의의 내부 진행창을 제거한다.
+인증 조정 단위 검사의 기본30초, 다른120초 호출, 모든 응답·phase plan·복구·예산
+assertion은 유지한다. 승인된 hosted affected job은 기존 외부 timeout의 최대3150초와
+공유 마감을, full은 기존3600초 공유 work cutoff와 supervisor·정리 제한을 강제한다.
+별도로 실행한 serial runner 자체에는 deadline이 없다. 기존18000/3600초·CI75분·
+최대4worker·GC·ID/subTest·소스 상한은 바꾸지 않는다.
+
 ### Canonical CI
 
 `pr-validation` runs the fast tier and all five full shards for any change under
@@ -166,6 +291,10 @@ The timing-weight manifest balances shards; it is not evidence of actual run
 time. The budget gate uses the wall time in the current Python 3.11 runner
 reports. Report the observed full and shard times and any platform limitation
 when recalibrating weights.
+
+All hosted test jobs use the exact patch in `RUNTIME_TEST_PYTHON_VERSION` for
+`setup-python` and `uv sync`; rolling runner images must not split a campaign
+between Python patches. Reconciliation still requires matching environments.
 
 ### Actions의 지정 영향 검증
 
@@ -378,7 +507,14 @@ shards on one immutable source and locked four-core ARM64 environment.
 Record each shard's test wall time, native job duration, outcome and completion;
 report the complete five-shard sum and workflow elapsed time. Reconcile exact
 coverage, source bindings and the accepted 18,000/3,600-second ceilings. Partial
-or timed-out reports remain nonpassing evidence. An affected-test preflight may
+or timed-out reports remain nonpassing evidence.
+
+The expanded #838 direct-advice method completed in 1613.82 and 1619.65 seconds.
+Give it the first regular-shard-1 method slot, retaining the isolated Whole Front
+as the global first entry. This priority-only adjustment preserves the audited
+147-method membership, other shards' order, four-worker cap and all deadlines.
+
+An affected-test preflight may
 run separately; verify its exact implementation/tree equivalence before delivery,
 then obtain all five canonical reports for the current delivery source. Record
 each report's native run and attempt. Isolated attempts retain successful

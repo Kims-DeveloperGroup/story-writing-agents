@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from ..agent_context.group_observation import LeadGroupTrace
 from ..agent_context.accounting import (ProviderCallAccounting, provider_call_accounting_from_object, provider_call_accounting_to_object)
+from ..review_contracts import (
+    LeadPreliminaryReview, FinalReviewEvidence, ReviewTarget, ReviewTargetKind, ReviewTargetAvailability,
+    preliminary_review_to_dict, preliminary_review_from_dict, preliminary_scope_eligible,
+    final_review_evidence_to_dict, final_review_evidence_from_dict, review_digest,
+)
+from ..specialist_routing import (SpecialistStagePlan, ReviewStage, SpecialistWorkKind,
+    stage_plan_to_dict, stage_plan_from_dict, validate_stage_routing)
 
 from ..core_document_readiness import (
     CoreDocumentAssessment, CoreDocumentReadinessBasis, targets_for_paths, validate_authoring_target_basis, assessment_from_dict as core_assessment_from_dict,
@@ -565,7 +572,17 @@ class CollaborationLeadJudgmentPayload:
 
     provider_invocation_id: str | None = field(default=None, kw_only=True)
 
+    preliminary_review: LeadPreliminaryReview | None = field(default=None, kw_only=True)
     def __post_init__(self) -> None:
+        if self.preliminary_review is not None:
+            record = self.preliminary_review
+            if (type(record) is not LeadPreliminaryReview or self.kind is not LeadOutcomeKind.ANSWER
+                    or self.authoring_scope is None
+                    or (record.task_id, record.task_revision) !=
+                       (self.authoring_scope.task_id, self.authoring_scope.task_revision)
+                    or not preliminary_scope_eligible(self.authoring_scope.activity.value,
+                                                     self.authoring_scope.target_paths, record.targets)):
+                raise ValueError("preliminary review must bind its current read-only scope and targets")
         _validate_response_invocation(self.provider_invocation_id)
         if self.core_document_readiness is not None:
             if (type(self.core_document_readiness) is not CoreDocumentReadinessBasis
@@ -579,7 +596,7 @@ class CollaborationLeadJudgmentPayload:
         if type(self.evidence) is not CollaborationLeadEvidence:
             raise TypeError("lead judgment evidence must be CollaborationLeadEvidence")
         _validate_lead_evidence_matrix(
-            self.kind, self.evidence, authoring_scope=self.authoring_scope,
+            self.kind, self.evidence, authoring_scope=self.authoring_scope, preliminary_review=self.preliminary_review,
         )
         _validate_authoring_evidence_scope(self.authoring_scope, self.evidence.scope)
         if self.trace is not None and type(self.trace) is not ReplyTrace:
@@ -663,7 +680,49 @@ def _validate_lead_evidence_matrix(
     kind: LeadOutcomeKind,
     evidence: CollaborationLeadEvidence, *,
     authoring_scope: AuthoringScope | None = None,
+    preliminary_review: LeadPreliminaryReview | None = None,
 ) -> None:
+    if preliminary_review is not None:
+        if (type(preliminary_review) is not LeadPreliminaryReview
+                or kind is not LeadOutcomeKind.ANSWER or authoring_scope is None
+                or not preliminary_scope_eligible(authoring_scope.activity.value,
+                    authoring_scope.target_paths, preliminary_review.targets)
+                or evidence.scope is not LeadOutcomeScope.STORY_SPECIFIC
+                or evidence.status not in {LeadEvidenceStatus.VERIFIED, LeadEvidenceStatus.INCOMPLETE,
+                                           LeadEvidenceStatus.CONFLICTING}):
+            raise ValueError("invalid bounded preliminary judgment")
+        receipts = {item.evidence_id: item for item in evidence.receipts if item.acquisition in {
+            CollaborationEvidenceAcquisition.READ, CollaborationEvidenceAcquisition.ATTACHED_REFERENCE}}
+        writing_kinds = {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
+                         CollaborationInputKind.WRITING_ARTIFACT}
+        for target in preliminary_review.targets:
+            if (target.input_id not in preliminary_review.inspected_input_ids
+                    or target.kind not in {ReviewTargetKind.WRITING_ARTIFACT, ReviewTargetKind.READ_SOURCE}):
+                continue
+            receipt = receipts.get(target.input_id)
+            if receipt is None:
+                raise ValueError("preliminary READ target lacks actual current receipt")
+            writing = receipt.source_kind in writing_kinds
+            target_id = receipt.locator if writing else receipt.source_id
+            if receipt.acquisition is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE:
+                references = parse_artifact_references(receipt.locator).references
+                if len(references) != 1 or references[0].token != receipt.locator:
+                    raise ValueError("preliminary attached reference must be exact")
+                target_id = references[0].path
+            if (target.kind is not (ReviewTargetKind.WRITING_ARTIFACT if writing else ReviewTargetKind.READ_SOURCE)
+                    or target.availability is not ReviewTargetAvailability.COMPLETED_READ
+                    or target.target_id != target_id
+                    or target.revision != receipt.revision_digest
+                    or target.content_digest != receipt.content_digest
+                    or target.boundary_digest != receipt.content_digest
+                    or (target.boundary_kind, target.boundary_start, target.boundary_end)
+                        != (receipt.boundary_kind, receipt.boundary_start, receipt.boundary_end)
+                    or (target.whole_source and (receipt.boundary_kind != "whole"
+                        or target.source_digest != receipt.content_digest))
+                    or (receipt.acquisition is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE
+                        and target.source_digest != receipt.revision_digest)):
+                raise ValueError("preliminary READ target differs from its durable receipt")
+        return
     receipts = evidence.receipts
     if evidence.scope is LeadOutcomeScope.PREMISE_ANALYSIS:
         if kind is not LeadOutcomeKind.PROPOSAL:
@@ -1417,6 +1476,7 @@ class LeadProposalIntent:
     authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
     core_document_readiness: CoreDocumentReadinessBasis | None = field(default=None, kw_only=True)
 
+    stage_plan: SpecialistStagePlan | None = field(default=None, kw_only=True)
     def __post_init__(self) -> None:
         validation_call(
             '$.relation',
@@ -1458,6 +1518,7 @@ class LeadProposalIntent:
             tuple((item.agent_id for item in self.assignments)),
             tuple((item.mode for item in self.assignments)),
             self.premise_decision,
+            stage_plan=self.stage_plan,
         )
         _validate_exact_tuple(self.shared_premises, LeadSharedPremiseIntent, label="shared premise intents")
         if self.authoring_scope is None or self.authoring_scope.schema_version < 3:
@@ -1488,7 +1549,17 @@ class LeadProviderOutcome:
     core_document_assessment: CoreDocumentAssessment | None = field(default=None, kw_only=True)
     core_document_readiness: CoreDocumentReadinessBasis | None = field(default=None, kw_only=True)
 
+    preliminary_review: LeadPreliminaryReview | None = field(default=None, kw_only=True)
     def __post_init__(self) -> None:
+        if self.preliminary_review is not None:
+            record = self.preliminary_review
+            if (type(record) is not LeadPreliminaryReview or self.kind is not LeadOutcomeKind.ANSWER
+                    or self.authoring_scope is None
+                    or (record.task_id, record.task_revision) !=
+                       (self.authoring_scope.task_id, self.authoring_scope.task_revision)
+                    or not preliminary_scope_eligible(self.authoring_scope.activity.value,
+                                                     self.authoring_scope.target_paths, record.targets)):
+                raise ValueError("preliminary review must bind its current read-only scope and targets")
         if self.core_document_assessment is not None or (self.core_document_readiness is not None and self.kind is LeadOutcomeKind.ANSWER):
             if (self.kind is not LeadOutcomeKind.ANSWER or self.authoring_scope is not None
                     or self.authoring_assessment is not None or self.authoring_admission is not None
@@ -2277,6 +2348,7 @@ class CollaborationProposal:
     authoring_scope: AuthoringScope | None = None
     premise_decision: PremiseDecisionSpec | None = field(default=None, kw_only=True)
 
+    stage_plan: SpecialistStagePlan | None = field(default=None, kw_only=True)
     def __post_init__(self) -> None:
         _validate_identifier(self.step_id, label="collaboration step ID")
         _validate_identifier(self.proposal_id, label="collaboration proposal ID")
@@ -2310,7 +2382,7 @@ class CollaborationProposal:
             specialists,
             tuple(item.mode for item in self.assignments),
             None if self.premise_decision is None else self.premise_decision.intent,
-        )
+         stage_plan=self.stage_plan)
         if self.premise_decision is not None:
             if self.step_kind is not CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION:
                 raise ValueError("premise analysis requires a lead-specialist consultation")
@@ -2409,6 +2481,7 @@ class CollaborationProposal:
         basis: CollaborationProposalBasis,
         authoring_scope: AuthoringScope | None = None,
         premise_decision: PremiseDecisionSpec | None = None,
+        stage_plan: SpecialistStagePlan | None = None,
     ) -> CollaborationProposal:
         """Create a proposal with its canonical digest."""
 
@@ -2428,6 +2501,8 @@ class CollaborationProposal:
             fields["authoring_scope"] = authoring_scope_to_dict(authoring_scope)
         if premise_decision is not None:
             fields["premise_decision"] = premise_value_to_dict(premise_decision)
+        if stage_plan is not None:
+            fields["stage_plan"] = stage_plan_to_dict(stage_plan)
         digest = _digest_value(fields)
         return cls(
             step_id=step_id,
@@ -2443,6 +2518,7 @@ class CollaborationProposal:
             proposal_digest=digest,
             authoring_scope=authoring_scope,
             premise_decision=premise_decision,
+            stage_plan=stage_plan,
         )
 
 
@@ -3040,7 +3116,15 @@ class ArtifactReviewedProposal:
     apply_authority_granted: bool = False
     git_action_occurred: bool = False
 
+    final_review_evidence: FinalReviewEvidence = field(kw_only=True)
     def __post_init__(self) -> None:
+        if (type(self.final_review_evidence) is not FinalReviewEvidence
+                or (self.final_review_evidence.candidate_id, self.final_review_evidence.candidate_revision,
+                    self.final_review_evidence.candidate_digest) !=
+                   (self.candidate.candidate_id, self.candidate.candidate_revision, self.candidate.candidate_digest)
+                or self.final_review_evidence.reviewer_ids != self.disclosed_specialist_ids
+                or self.final_review_evidence.reply_event_ids != tuple(item.reply_event_id for item in self.reviews)):
+            raise ValueError("final review evidence must bind the exact candidate and correlated reviewers")
         if (
             type(self.schema_version) is not int
             or self.schema_version != ARTIFACT_REVIEW_SCHEMA_VERSION
@@ -3168,10 +3252,12 @@ class ArtifactReviewedProposal:
         user_impact: str,
         limitations: str,
         grounding_evidence_ids: tuple[str, ...],
+        final_review_evidence: FinalReviewEvidence,
     ) -> ArtifactReviewedProposal:
         """Build one reviewed proposal and derive its complete digest."""
 
         fields: dict[str, object] = {
+            "final_review_evidence": final_review_evidence_to_dict(final_review_evidence),
             "apply_authority_granted": False,
             "artifact_write_occurred": False,
             "base_tail_sequence": base_tail_sequence,
@@ -3225,7 +3311,7 @@ class ArtifactReviewedProposal:
             user_impact=user_impact,
             limitations=limitations,
             grounding_evidence_ids=grounding_evidence_ids,
-        )
+         final_review_evidence=final_review_evidence)
 
 
 @dataclass(frozen=True, slots=True)
@@ -5029,6 +5115,7 @@ def _authoring_scope_fields(scope: AuthoringScope | None) -> dict[str, object]:
 
 def _lead_proposal_intent_value(intent: LeadProposalIntent) -> dict[str, object]:
     return {
+        **({"stage_plan": stage_plan_to_dict(intent.stage_plan)} if intent.stage_plan is not None else {}),
         **({'shared_premises': [{'slot_id': item.slot_id, 'selected_premise': item.selected_premise, 'basis_input_ids': list(item.basis_input_ids)} for item in intent.shared_premises]} if intent.authoring_scope is not None and intent.authoring_scope.schema_version == 3 else {}),
         **({"premise_decision": premise_value_to_dict(intent.premise_decision)} if intent.premise_decision is not None else {}),
         "assignments": [
@@ -5076,6 +5163,7 @@ def _proposal_value(
         "step_kind": proposal.step_kind.value,
         "user_impact": proposal.user_impact,
         **_authoring_scope_fields(proposal.authoring_scope),
+        **({"stage_plan": stage_plan_to_dict(proposal.stage_plan)} if proposal.stage_plan is not None else {}),
     }
     if include_digest:
         value["proposal_digest"] = proposal.proposal_digest
@@ -5128,6 +5216,7 @@ def _artifact_reviewed_proposal_value(
     include_digest: bool,
 ) -> dict[str, object]:
     value: dict[str, object] = {
+        "final_review_evidence": final_review_evidence_to_dict(proposal.final_review_evidence),
         "apply_authority_granted": proposal.apply_authority_granted,
         "artifact_write_occurred": proposal.artifact_write_occurred,
         "base_tail_sequence": proposal.base_tail_sequence,
@@ -5230,6 +5319,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
             "kind": payload.kind.value,
             "message": payload.message,
             "payload_type": "lead_judgment",
+            **({"preliminary_review": preliminary_review_to_dict(payload.preliminary_review)} if payload.preliminary_review is not None else {}),
             **_authoring_scope_fields(payload.authoring_scope),
             **_reply_trace_fields(payload.trace),
         }
@@ -5748,7 +5838,7 @@ def _decode_lead_proposal_intent(value: object) -> LeadProposalIntent:
     item = _object_with_optional_extensions(
         value,
         {"assignments", "purpose", "relation"} | ({"shared_premises"} if type(value) is dict and type(value.get("authoring_scope")) is dict and value["authoring_scope"].get("schema_version") == 3 else set()),
-        {"authoring_scope", "premise_decision"},
+        {"authoring_scope", "premise_decision", "stage_plan"},
         label="lead proposal intent",
     )
     assignments = []
@@ -5788,7 +5878,7 @@ def _decode_lead_proposal_intent(value: object) -> LeadProposalIntent:
         purpose=_string(item["purpose"], label="lead proposal purpose"),
         assignments=tuple(assignments),
         authoring_scope=_decode_optional_authoring_scope(item),
-    )
+     stage_plan=(stage_plan_from_dict(item["stage_plan"]) if "stage_plan" in item else None))
 
 
 def _decode_basis(value: object) -> CollaborationProposalBasis:
@@ -5929,7 +6019,7 @@ def _decode_proposal(value: object) -> CollaborationProposal:
             "step_kind",
             "user_impact",
         },
-        {"authoring_scope", "premise_decision"},
+        {"authoring_scope", "premise_decision", "stage_plan"},
         label="collaboration proposal",
     )
     return CollaborationProposal(
@@ -5959,7 +6049,7 @@ def _decode_proposal(value: object) -> CollaborationProposal:
         basis=_decode_basis(item["basis"]),
         proposal_digest=_string(item["proposal_digest"], label="proposal digest"),
         authoring_scope=_decode_optional_authoring_scope(item),
-    )
+     stage_plan=(stage_plan_from_dict(item["stage_plan"]) if "stage_plan" in item else None))
 
 
 def _decode_assignment_outcome(value: object) -> CollaborationAssignmentOutcome:
@@ -6095,7 +6185,7 @@ def _decode_artifact_reviewed_proposal(value: object) -> ArtifactReviewedProposa
             "rationale",
             "reviewed_tail_sequence",
             "reviews",
-            "schema_version",
+            "schema_version", "final_review_evidence",
             "session_id",
             "step_id",
             "synthesis_event_id",
@@ -6184,7 +6274,7 @@ def _decode_artifact_reviewed_proposal(value: object) -> ArtifactReviewedProposa
         git_action_occurred=_boolean(
             item["git_action_occurred"], label="Git action fact"
         ),
-    )
+     final_review_evidence=final_review_evidence_from_dict(item["final_review_evidence"]))
 
 
 def _decode_objective_sources(value: object) -> tuple[ArtifactDraftSource, ...]:
@@ -6354,7 +6444,7 @@ def _decode_payload(value: object) -> CollaborationPayload:
         item = _object_with_optional_extensions(
             base,
             {"evidence", "kind", "message", "payload_type"},
-            {"authoring_scope", "trace"},
+            {"authoring_scope", "trace", "preliminary_review"},
             label="lead judgment payload",
         )
         return CollaborationLeadJudgmentPayload(
@@ -6365,7 +6455,8 @@ def _decode_payload(value: object) -> CollaborationPayload:
             evidence=_decode_lead_evidence(item["evidence"]),
             authoring_scope=_decode_optional_authoring_scope(item),
             trace=_decode_optional_reply_trace(item),
-        )
+            preliminary_review=(preliminary_review_from_dict(item["preliminary_review"])
+                                if "preliminary_review" in item else None))
     if payload_type == "assignment_dispatch":
         item = _object(
             value,
@@ -7468,6 +7559,7 @@ def _validate_scoped_assignments(
     modes: tuple[SpecialistAssignmentMode | None, ...],
     premise_decision: PremiseQuestionIntent | None = None,
     *,
+    stage_plan: SpecialistStagePlan | None = None,
     _scope_rules=authoring_scope_rules,
     _rosters=legal_specialist_rosters,
 ) -> None:
@@ -7485,7 +7577,10 @@ def _validate_scoped_assignments(
                 'explicit assignment modes require an authoring scope',
             )
         return
-    validate_specialist_routing(scope, specialist_ids)
+    validate_stage_routing(scope, specialist_ids, stage_plan)
+    if stage_plan is not None:
+        if stage_plan.stage not in {ReviewStage.SPECIALIST_WORK, ReviewStage.FINAL_CANDIDATE_REVIEW}:
+            raise ValueError("a nonexecution review stage cannot dispatch assignments")
     if scope.activity is AuthoringActivity.WORKFLOW:
         raise validation_failure(
             ValueError('workflow scope cannot dispatch story specialists'),
@@ -7514,7 +7609,7 @@ def _validate_scoped_assignments(
             target_paths=scope.target_paths, dependency_slots=scope.dependency_slots,
             schema_version=scope.schema_version,
         )
-        if specialist_ids not in _rosters(declared):
+        if stage_plan is None and specialist_ids not in _rosters(declared):
             raise ValueError('scope3 assignments must match the complete declared specialist union')
     if any(
         mode is not (assignment_mode_for_specialist(scope, specialist_id) if scope.schema_version == 3 else expected_mode)
@@ -7990,3 +8085,48 @@ __all__ = [
     'CollaborationLeadDiscussionPayload',
     'CollaborationLeadPublicResponsePayload',
 ]
+
+
+def build_final_review_evidence(candidate: ArtifactReviewCandidate, consultation: CollaborationProposal,
+                                reviews: tuple[ArtifactReviewReply, ...], *,
+                                current_inputs: tuple[CollaborationInputRevision, ...] | None = None) -> FinalReviewEvidence:
+    """Project a final basis; callers must independently qualify current READ and authority."""
+    if type(candidate) is not ArtifactReviewCandidate or type(consultation) is not CollaborationProposal:
+        raise TypeError("final evidence requires the exact candidate and consultation")
+    scope = consultation.authoring_scope
+    if scope is None or scope.activity is not AuthoringActivity.REVIEW:
+        raise ValueError("final evidence requires the distinct exact-candidate REVIEW contract")
+    inputs = consultation.basis.inputs if current_inputs is None else current_inputs
+    receipts = {} if consultation.basis.evidence is None else {
+        item.evidence_id: item for item in consultation.basis.evidence.receipts}
+    sources = []
+    for item in inputs:
+        receipt = receipts.get(item.input_id)
+        kind = (ReviewTargetKind.USER_PROVIDED if item.kind is CollaborationInputKind.USER_INPUT
+                else ReviewTargetKind.CANDIDATE if item.kind is CollaborationInputKind.ARTIFACT_CANDIDATE
+                else ReviewTargetKind.WRITING_ARTIFACT if item.kind in {CollaborationInputKind.WRITING_ARTIFACT,
+                    CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT}
+                else ReviewTargetKind.READ_SOURCE)
+        boundary = item.revision_digest if receipt is None else receipt.content_digest
+        source = item.revision_digest if receipt is None else receipt.revision_digest
+        whole = item.state is CollaborationInputState.PRESENT and item.start_line is None and (receipt is None or receipt.boundary_kind == "whole")
+        # Whole coverage is a captured fact, never inferred merely from an input alias.
+        if whole and receipt is not None and source != boundary:
+            whole = False
+        sources.append(ReviewTarget(item.input_id, kind, item.locator, item.revision_digest,
+            item.revision_digest, source, boundary, whole,
+            "absent" if item.state is CollaborationInputState.ABSENT else "whole" if receipt is None else receipt.boundary_kind,
+            item.start_line if receipt is None else receipt.boundary_start,
+            item.end_line if receipt is None else receipt.boundary_end))
+    users = tuple((item.kind.value, item.target_id, item.revision, item.content_digest)
+                  for item in sources if item.kind is ReviewTargetKind.USER_PROVIDED)
+    criteria = tuple((item.specialist_id, item.mode.value,
+        None if item.review_basis is None else item.review_basis.criteria,
+        tuple(next((source.target_id, source.revision, source.content_digest) for source in sources
+                   if source.input_id == identity) for identity in
+              (() if item.review_basis is None else item.review_basis.candidate_input_ids)))
+        for item in consultation.assignments)
+    return FinalReviewEvidence(candidate.candidate_id, candidate.candidate_revision, candidate.candidate_digest,
+        scope.task_id, scope.task_revision, tuple(sources), review_digest(users),
+        review_digest(authoring_scope_to_dict(scope)), review_digest(criteria),
+        tuple(item.specialist_id for item in reviews), tuple(item.reply_event_id for item in reviews))

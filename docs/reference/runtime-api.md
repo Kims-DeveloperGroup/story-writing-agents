@@ -766,6 +766,7 @@ LeadTurnResult(
     exploration: LeadExplorationReport | None = None,
     premise_report: PremiseDecisionReport | None = None,
     premise_report_ref: PremiseReportRef | None = None,
+    preliminary_review: LeadPreliminaryReview | None = None,
 )
 ```
 
@@ -859,6 +860,58 @@ Schemas validate shape and allowed values. Runtime checks separately enforce
 identity, evidence, routing, confirmation, and write authority. Invalid structured
 results follow bounded repair and the visible no-action fallback. No alternate
 wire naming or migration is supported.
+
+### Preliminary and final review values
+
+`LeadTurnResult.preliminary_review` exposes the optional immutable record of a
+bounded Lead inspection. The same record belongs to the durable Lead judgment;
+it is not a specialist proposal or confirmation request.
+`LeadPreliminaryReview` carries
+`stage="lead_preliminary_review"`, `task_id`, `task_revision`, exact `targets`,
+`inspected_input_ids`, `excluded_input_ids`, `findings`, `conflicts`,
+`missing_information`, `further_review_required`, and `next_action`.
+Inspected and excluded IDs partition the targets. Findings cite inspected
+inputs; an explicit conflict cites at least two. Unread scope remains excluded,
+and a partial range cannot establish whole-target coverage.
+
+Each immutable `ReviewTarget` identifies its supplied text, candidate, writing
+artifact, or READ source with `input_id`, `kind`, `target_id`, `revision`,
+`content_digest`, `source_digest`, `boundary_digest`, and whole-source or exact
+range coverage. These values describe evidence; constructing a value in Python
+does not grant a READ receipt or other host authority. The runtime checks the
+record against the current task and actual qualified inputs.
+
+The keyword-only `availability` distinguishes `supplied`, `completed_read`,
+and `unread` targets. An unread target has no invented content or boundary
+digest: it must remain excluded and cannot support findings or final-review
+evidence. A ranged READ retains the unread remainder; status metadata never
+substitutes for inspecting the source.
+These targets cover the declared review scope; unrelated inventory adds no
+review obligation. Whole-target coverage never means whole-book completion.
+`source_status` and `source_manifest_digest` preserve known unread-status
+provenance, while unknown revisions and digests remain unavailable. Those
+status fields do not establish content evidence.
+
+`SpecialistStagePlan` separates the full semantic `AuthoringScope` from the
+participants needed for the current stage. It discloses the work kind, focused
+domains, specialist IDs, related questions and their source/condition IDs,
+agreed direction, unresolved questions, and expected result. A focused deeper
+review can use a subset of affected domains. Ordinary drafting retains every
+required writer and declared constraint assessor; final candidate review
+retains all required domains.
+
+`FinalReviewEvidence` binds the exact candidate ID, revision and digest, current
+task, relevant source vector, user-condition digest, scope digest, criteria
+digest, and correlated reviewer/reply-event IDs. Runtime constructs this
+evidence from completed specialist review for the existing reviewed proposal.
+`FinalReviewQualification` reports eligibility, mismatch reasons, and the
+evidence digest. Reuse requires an unchanged review basis and separately
+applicable current READ evidence. A fresh READ alias for the same physical
+source does not itself mean that the source changed.
+
+Neither a preliminary review nor a qualification value grants specialist,
+Apply, Commit, or authoring-objective completion authority. The exact existing
+structured controls and successful correlated effects remain required.
 
 ### `LeadRecommendationDecision`
 

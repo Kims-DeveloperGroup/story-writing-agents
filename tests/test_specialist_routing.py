@@ -7,6 +7,7 @@ import unittest
 from story_writing_agents import specialist_routing as routing
 from story_writing_agents import lead_premise_decisions as premise
 from story_writing_agents import core_document_readiness as readiness
+from story_writing_agents import review_contracts as review
 
 from story_writing_agents import conversations as c
 from story_writing_agents.specialist_routing import (
@@ -139,6 +140,76 @@ class SpecialistRoutingTests(unittest.TestCase):
             routing.assignment_rule(rule, 'execution_specialist')
         self.assertTrue(all(item.schema_version == 3 for item in routing.finite_authoring_scope_rules()))
 
+        questions = (
+            routing.SpecialistWorkQuestion(
+                "motive", mixed.task_id, 1, "Why does Mara protect the letter?",
+                ("outline", "characters"), ("characters",)),
+            routing.SpecialistWorkQuestion(
+                "betrayal", mixed.task_id, 1, "Does the betrayal preserve her motive?",
+                ("scene",), ("scene",)),
+        )
+        plan = routing.SpecialistStagePlan(
+            routing.ReviewStage.SPECIALIST_WORK, routing.SpecialistWorkKind.DEEP_REVIEW,
+            mixed.task_id, 1, (Domain.CHARACTER_WORLD,), ("character_custodian",),
+            questions, ("characters", "scene"), "Keep the secret unresolved.",
+            ("Whether the betrayal follows from her motive",), "A bounded motivation review.")
+        sources = ("outline", "characters", "scene")
+        review_scope = replace(mixed, activity=Activity.REVIEW)
+        routing.validate_stage_routing(
+            review_scope, ("character_custodian",), plan, source_input_ids=sources,
+            required_condition_ids=("characters", "scene"))
+        self.assertEqual(required_authoring_domains(mixed), tuple(Domain))
+        self.assertEqual(required_authoring_specialists(mixed),
+                         ("plot_architect", "character_custodian", "execution_specialist"))
+        self.assertEqual(routing.stage_required_specialists(review_scope, plan),
+                         ("character_custodian",))
+        encoded = routing.stage_plan_to_dict(plan)
+        self.assertEqual(encoded["specialist_ids"], ["character_custodian"])
+        self.assertEqual(encoded["required_condition_ids"], ["characters", "scene"])
+        self.assertEqual(encoded["agreed_direction"], "Keep the secret unresolved.")
+        self.assertEqual(routing.stage_plan_from_dict(encoded), plan)
+        with self.assertRaises(FrozenInstanceError): plan.specialist_ids = ()
+        for field in encoded:
+            incomplete = dict(encoded)
+            incomplete.pop(field)
+            with self.assertRaises(ValueError): routing.stage_plan_from_dict(incomplete)
+        with self.assertRaises(ValueError):
+            routing.stage_plan_from_dict(dict(encoded, apply_authority=True))
+        with self.assertRaises(ValueError):
+            routing.stage_plan_from_dict(dict(encoded, stage="workflow"))
+        for changes in ({"questions": questions[:1]},
+                        {"questions": (replace(questions[0], task_id="foreign"), questions[1])}):
+            with self.assertRaises(ValueError): replace(plan, **changes)
+        with self.assertRaises(ValueError):
+            routing.stage_required_specialists(replace(review_scope, task_revision=2), plan)
+        with self.assertRaises(ValueError):
+            routing.stage_required_specialists(self.scope(activity=Activity.REVIEW), plan)
+        with self.assertRaises(ValueError):
+            routing.validate_stage_routing(review_scope, ("character_custodian",), plan,
+                source_input_ids=("outline", "characters"))
+        with self.assertRaises(ValueError):
+            routing.validate_stage_routing(review_scope, ("character_custodian",), plan,
+                source_input_ids=sources, required_condition_ids=("unapproved_condition",))
+        roster = ("plot_architect", "character_custodian", "execution_specialist")
+        final = replace(plan, stage=routing.ReviewStage.FINAL_CANDIDATE_REVIEW,
+                        focus_domains=tuple(Domain), specialist_ids=roster)
+        self.assertEqual(routing.stage_required_specialists(review_scope, final), roster)
+        with self.assertRaises(ValueError):
+            routing.stage_required_specialists(
+                review_scope, replace(final, specialist_ids=("character_custodian",)))
+        draft = replace(final, stage=routing.ReviewStage.SPECIALIST_WORK,
+                        work_kind=routing.SpecialistWorkKind.DRAFT)
+        self.assertEqual(routing.stage_required_specialists(mixed, draft), roster)
+        for focus, participants in (((Domain.TONE_EXECUTION,), ("execution_specialist",)),
+                                    ((Domain.CHARACTER_WORLD,), ("character_custodian",))):
+            with self.assertRaises(ValueError):
+                routing.stage_required_specialists(
+                    mixed, replace(draft, focus_domains=focus, specialist_ids=participants))
+        for stage in (routing.ReviewStage.PROCEDURE_STATUS,
+                      routing.ReviewStage.LEAD_PRELIMINARY_REVIEW):
+            self.assertEqual(routing.stage_required_specialists(
+                mixed, replace(plan, stage=stage, focus_domains=(), specialist_ids=())), ())
+
     def test_scope_is_strict_versioned_immutable_and_content_safe(self):
         scope = self.scope()
         with self.assertRaises(FrozenInstanceError): scope.task_revision = 2
@@ -194,6 +265,101 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertEqual(premise.premise_spec_from_dict(encoded), spec)
         with self.assertRaises(ValueError):
             premise.premise_spec_from_dict({**encoded, "candidate_input_ids": ["user_input"]})
+
+        # Pure records are not READ proofs or host-granted final-review authority.
+        whole_digest = "sha256:" + hashlib.sha256(b"Mara protects the letter.\n").hexdigest()
+        range_digest = "sha256:" + hashlib.sha256(b"protects the letter").hexdigest()
+        user = review.ReviewTarget(
+            "user_input", review.ReviewTargetKind.USER_PROVIDED, "turn/user", "1",
+            whole_digest, whole_digest, whole_digest, True)
+        artifact = replace(user, input_id="reference_1",
+            kind=review.ReviewTargetKind.WRITING_ARTIFACT,
+            target_id="core_documents/character_sheets.md", revision="characters-1")
+        ranged = replace(user, input_id="read_1", kind=review.ReviewTargetKind.READ_SOURCE,
+            target_id="manuscript/part-01/scene.md", content_digest=range_digest,
+            boundary_digest=range_digest, whole_source=False, boundary_kind="artifact_lines",
+            boundary_start=2, boundary_end=3)
+        candidate = replace(user, input_id="candidate_1", kind=review.ReviewTargetKind.CANDIDATE,
+                            target_id="candidate-1", revision="3")
+        excluded = replace(artifact, input_id="unread_1",
+            target_id="core_documents/part_outlines.md", revision=None, content_digest=None,
+            source_digest=None, boundary_digest=None, whole_source=False, boundary_kind="unread",
+            availability=review.ReviewTargetAvailability.UNREAD, source_status="present",
+            source_manifest_digest="sha256:" + hashlib.sha256(b"known core status").hexdigest())
+        expected_user = {"input_id": "user_input", "kind": "user_provided",
+            "target_id": "turn/user", "revision": "1", "content_digest": whole_digest,
+            "source_digest": whole_digest, "boundary_digest": whole_digest,
+            "whole_source": True, "boundary_kind": "whole",
+            "boundary_start": None, "boundary_end": None, "availability": "supplied",
+            "source_status": None, "source_manifest_digest": None}
+        self.assertEqual(review.review_target_to_dict(user), expected_user)
+        self.assertEqual(review.review_target_from_dict(review.review_target_to_dict(excluded)), excluded)
+        self.assertIsNone(excluded.content_digest)
+        self.assertFalse(excluded.whole_source)
+        for changes in ({"content_digest": whole_digest}, {"whole_source": True},
+                        {"source_status": None}, {"source_manifest_digest": None},
+                        {"availability": review.ReviewTargetAvailability.SUPPLIED}):
+            with self.assertRaises((TypeError, ValueError)):
+                replace(excluded, **changes)
+        for field in expected_user:
+            incomplete = dict(expected_user)
+            incomplete.pop(field)
+            with self.assertRaises(ValueError): review.review_target_from_dict(incomplete)
+        with self.assertRaises(ValueError):
+            review.review_target_from_dict(dict(expected_user, apply_authority=True))
+        for target in (user, artifact, ranged, candidate):
+            self.assertEqual(review.review_target_from_dict(
+                review.review_target_to_dict(target)), target)
+        report = review.LeadPreliminaryReview(
+            "review-task", 2, (user, artifact, ranged, candidate, excluded),
+            ("user_input", "reference_1", "read_1", "candidate_1"), ("unread_1",),
+            (review.ReviewFinding("The inspected scene preserves her motive.", ("read_1",)),),
+            (review.ReviewFinding("The supplied directions disagree.",
+                                  ("user_input", "reference_1")),),
+            ("The part outline was not inspected.",), True,
+            review.PreliminaryNextAction.REQUEST_INFORMATION)
+        self.assertFalse(report.whole_target_coverage)
+        self.assertEqual(report.stage, "lead_preliminary_review")
+        self.assertEqual(report.inspected_input_ids,
+                         ("user_input", "reference_1", "read_1", "candidate_1"))
+        self.assertEqual(report.excluded_input_ids, ("unread_1",))
+        wire = review.preliminary_review_to_dict(report)
+        self.assertEqual(review.preliminary_review_from_dict(wire), report)
+        with self.assertRaises(ValueError):
+            replace(report, inspected_input_ids=tuple(item.input_id for item in report.targets), excluded_input_ids=())
+        self.assertEqual(wire["targets"][0], expected_user)
+        self.assertEqual(wire["next_action"], "request_information")
+        self.assertEqual(wire["conflicts"], [{"message": "The supplied directions disagree.",
+            "evidence_input_ids": ["user_input", "reference_1"]}])
+        self.assertTrue({"apply_authority", "commit_authority", "final_review_evidence",
+                         "objective_satisfied"}.isdisjoint(wire))
+        for field in wire:
+            incomplete = dict(wire)
+            incomplete.pop(field)
+            with self.assertRaises(ValueError): review.preliminary_review_from_dict(incomplete)
+        with self.assertRaises(ValueError):
+            review.preliminary_review_from_dict(dict(wire, apply_authority=True))
+        wire["targets"][0]["revision"] = "changed-export"
+        self.assertEqual(report.targets[0].revision, "1")
+        with self.assertRaises(FrozenInstanceError): report.task_revision = 3
+        for changes in ({"task_revision": True}, {"task_revision": 0},
+                        {"stage": "final_candidate_review"}, {"targets": ()},
+                        {"targets": (user, user)}, {"inspected_input_ids": ("foreign",)},
+                        {"excluded_input_ids": ("unread_1", "read_1")},
+                        {"findings": (review.ReviewFinding("Unread claim.", ("unread_1",)),)},
+                        {"conflicts": (review.ReviewFinding("Only one source.", ("read_1",)),)},
+                        {"missing_information": (), "further_review_required": False},
+                        {"next_action": "finish_direct"}):
+            with self.assertRaises((TypeError, ValueError)): replace(report, **changes)
+        for changes in ({"whole_source": 1}, {"boundary_start": 1},
+                        {"boundary_digest": range_digest}, {"kind": "user_provided"}):
+            with self.assertRaises(ValueError): replace(user, **changes)
+        with self.assertRaises(ValueError): replace(ranged, boundary_start=True)
+        complete = replace(report, targets=(user, artifact, candidate),
+            inspected_input_ids=("user_input", "reference_1", "candidate_1"),
+            excluded_input_ids=(), findings=(), conflicts=(), missing_information=(),
+            further_review_required=False, next_action=review.PreliminaryNextAction.FINISH_DIRECT)
+        self.assertTrue(complete.whole_target_coverage)
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
         from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment

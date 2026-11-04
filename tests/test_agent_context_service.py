@@ -666,7 +666,30 @@ class StructuredOutputValidationTests(unittest.TestCase):
             right: str
         field_value = FieldCapture("left-value", "right-value")
         def field_decode(value, captured=field_value): return value
-        field_decoder = TypedDecoder("fixture.field.layout", "1", field_decode)
+        mutable_default = {"items": [1]}
+        def shared_hook(value, state=mutable_default):
+            return value
+        def forwarded_hook(value, callback=shared_hook):
+            return callback(value)
+        def checked_hook(value, context, callback=shared_hook):
+            return None
+        shared_decoder = TypedDecoder("fixture.operation.shared", "1", forwarded_hook,
+                                      dependencies=(shared_hook,))
+        shared_check = diagnostics.NamedHostCheck("fixture.operation.check", "1", "selected",
+            diagnostics.HostCheckContext, b'{"requirements":[]}', checked_hook, dependencies=(shared_hook,))
+        for owner in (shared_decoder, shared_check):
+            self.assertIsNone(owner.require_provenance())
+        mutable_default["items"][0] = 2
+        for owner in (shared_decoder, shared_check):
+            with self.assertRaisesRegex(ValueError, "^frozen (typed decoder|named owner) hook provenance changed$"):
+                owner.require_provenance()
+        mutable_default["items"][0] = 1
+        for owner in (shared_decoder, shared_check):
+            self.assertIsNone(owner.require_provenance())
+        def field_wrapper(value, callback=field_decode):
+            return callback(value)
+        field_decoder = TypedDecoder("fixture.field.layout", "1", field_wrapper,
+                                     dependencies=(field_decode,))
         self.assertIsNone(field_decoder.require_provenance())
         try:
             object.__setattr__(field_value, "right", "changed-value")

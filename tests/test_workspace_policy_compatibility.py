@@ -27,7 +27,7 @@ from tests.git_contract_fixture import DisposableGitTestCase
 
 _FIXTURES = Path(__file__).parent / "fixtures/workspace_policy_baselines"
 _PUBLISHED_COMMIT = "68a07827924598571ff8e3f6e4a602ad1a52b771"
-_CURRENT_MANIFEST = "66ce41a636321186fcc0a8660af55b42a176424bb5c8884c4b62480786fd6586"
+_CURRENT_MANIFEST = 'b56581ca4d5cad5325af11462008ee07d0cd008c1fc99dc7371d1724db4d73ea'
 _PRE_GUIDANCE = _FIXTURES / "pre_guidance_97879d4"
 _PRE_EDITORIAL = _FIXTURES / "integrated_794_09db65c"
 _PRE_MIXED = _FIXTURES / "integrated_796_76a80f7"

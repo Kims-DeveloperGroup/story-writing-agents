@@ -3372,7 +3372,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         expected_dependencies = {
             '__init__.py': {'._advisory_progress', '._core'},
             '_advisory_progress.py': {'..agent_context.actions', '..agent_context.progress', '..agent_context.service', '._progress_process'},
-            '_collaboration_view.py': {'..agents', '..conversations', '..core_document_readiness', '..editorial_state', '..lead_premise_decisions', '..lead_task_transitions', '..reply_trace', '..specialist_routing', '..writing_artifacts', '._model', '._response_usage'},
+            '_collaboration_view.py': {'..agents', '..conversations', '..core_document_readiness', '..editorial_state', '..lead_premise_decisions', '..lead_task_transitions', '..reply_trace', '..specialist_routing', '..writing_artifacts', '._model', '._response_usage', '..review_contracts'},
             '_external_view.py': set(), '_input_lifecycle.py': set(),
             '_input_sources.py': set(),
             '_input_sources_linux.py': {'._input_sources'},

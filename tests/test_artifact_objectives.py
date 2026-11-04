@@ -14,7 +14,7 @@ from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.workspace.initialization import provision_session_resources
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from tests import test_lead_orchestration as lead
-from tests.provider_wire_fixture import selection_plan
+from tests.provider_wire_fixture import FixedBusinessFactory as _SourceOnlyFactory, selection_plan
 from tests import test_artifact_proposal_orchestration as artifact
 from tests import test_lead_artifact_application as application
 from tests import test_lead_story_commit as commit
@@ -22,6 +22,19 @@ from tests.helpers import pristine_initialized_workspace
 
 OUTLINE = "core_documents/global_outline.md"
 DRAFT = "1. A lantern vanishes.\n2. 민 finds its keeper.\n3. The lantern returns.\n[A641 synthetic]\n"
+
+
+def _assert_source_only_call(case, call, group):
+    from story_writing_agents.agent_context.accounting import canonical_provider_json
+    from tests.test_provider_schema_spec import check_schema
+    case.assertIs(type(call.contract.factory), _SourceOnlyFactory)
+    case.assertTrue(call.contract.factory.original.schema_group_protocol)
+    case.assertEqual(call.contract.factory.business_group, group)
+    case.assertEqual({owner.variant.group_id for owner in call.contract.semantic_index.owners}, {group})
+    case.assertIsNone(call.contract.schema_group_phase)
+    encoded = canonical_provider_json(call.schema)
+    case.assertLessEqual(len(encoded), 524288)
+    case.assertEqual(check_schema(json.loads(encoded)), ())
 
 
 def digest(text: str | bytes) -> str:
@@ -330,7 +343,9 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
                 source_front_flags.append(values["schema_group_protocol"])
                 if values["schema_group_protocol"]:
                     self.assertIn(len(source_front_flags), (1, 2, 4))
-                    values = {**values, "schema_group_protocol": False}
+                    original = factory(**values)
+                    group = 'consultation.authoring.content' if len(source_front_flags) == 1 else 'prepare.artifact'
+                    return _SourceOnlyFactory(original, group)
                 else:
                     self.assertIn(len(source_front_flags), (3, 5))
             return factory(**values)
@@ -361,6 +376,8 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.assertEqual(self.backend.enqueue, enqueue)
         self.assertEqual(source_front_flags, [True, True, False, True, False])
         self.assertEqual(source_enqueues, [0, 1, 2, 3, 4])
+        for index, group in ((0, 'consultation.authoring.content'), (3, 'prepare.artifact'), (5, 'prepare.artifact')):
+            _assert_source_only_call(self, self.backend.calls[source_call_start + index], group)
         self.assertEqual(tuple(self.backend.calls[source_call_start + index].contract.schema_group_phase
                                for index in (0, 3, 4, 5, 6)), (None,) * 5)
         objective_id = self.objective(conversation_id).facts.objective_id

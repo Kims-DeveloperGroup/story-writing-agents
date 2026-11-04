@@ -4,6 +4,52 @@ from __future__ import annotations
 import copy
 from collections.abc import Mapping
 import json
+from dataclasses import dataclass, field, replace
+from story_writing_agents.agent_context.service import BoundCallFactory
+from story_writing_agents.lead_provider_contracts import LeadResultContractOwner
+from story_writing_agents.lead_schema_groups import LeadGroupRequestBasis, SchemaGroupControlOwner
+
+
+@dataclass(frozen=True)
+class FixedBusinessFactory(BoundCallFactory):
+    """Fixed current business-owner unit fixture; no SELECT state is claimed."""
+    original: BoundCallFactory
+    business_group: str
+    _identity: tuple = field(init=False, repr=False, compare=False)
+    def __post_init__(self):
+        if (not isinstance(self.original, BoundCallFactory) or self.original.schema_group_protocol is not True
+                or self.business_group not in ('answer.workflow', 'consultation.authoring.content', 'prepare.artifact')):
+            raise ValueError('fixed-business unit fixture requires the current declared business group')
+        self.original.require_declaration()
+        object.__setattr__(self, '_identity', (self.original, self.business_group))
+    @property
+    def contract_id(self):
+        return self.original.contract_id
+    @property
+    def constraints(self):
+        return self.original.constraints
+    @property
+    def rule_seed(self):
+        return self.original.rule_seed
+    def require_declaration(self):
+        if self.original is not self._identity[0] or self.business_group != self._identity[1]:
+            raise ValueError('fixed-business unit fixture declaration changed')
+        self.original.require_declaration()
+    def declare_result_owners(self, offers):
+        self.require_declaration()
+        stage = self.original.declare_schema_groups(offers,
+            LeadGroupRequestBasis('fixed-business-unit', 'fixed-business-result', 'fixed-business-scope'))
+        if stage is None:
+            raise ValueError('fixed-business unit fixture requires the current frozen group compiler')
+        policy = stage.result_policy(self.business_group)
+        owners = tuple(owner for owner in policy.owner_declarations if type(owner) is LeadResultContractOwner)
+        if (not owners or any(owner.variant.group_id != self.business_group for owner in owners)
+                or any(type(owner) not in (LeadResultContractOwner, SchemaGroupControlOwner)
+                       for owner in policy.owner_declarations)):
+            raise ValueError('fixed-business unit fixture must retain exactly the original business owners')
+        return replace(policy, owner_declarations=owners)
+
+
 
 _FIELDS = {'message': 'response_text', 'authoring_scope': 'writing_task_scope',
     'activity': 'activity_type', 'intent': 'writing_intent', 'domains': 'specialist_domains',
@@ -436,8 +482,12 @@ def fixture_variant_value(schema, value):
 
 
 def offered_fixture_bindings(
-    request, *, action_type, response_type, family, branch_key=None, value=None):
+    request, *, action_type, response_type, family, branch_key=None,
+    logical_root=None, value=None):
     """Look up an explicit original family, then route its unchanged finite fixture selectors."""
+    if logical_root is not None and (action_type != 'submit_result' or branch_key is not None
+            or type(logical_root) is not int or logical_root < 0):
+        raise ValueError('Choose one explicit issued logical root for a business result')
     if action_type != 'submit_result' and response_type is not None:
         raise ValueError('Context-action fixtures have no semantic result family')
     bound = request.contract
@@ -456,14 +506,18 @@ def offered_fixture_bindings(
             declared = fixture_schema_node(graph, root['properties']['response_type'])
             response_types = tuple(declared['enum'])
         if response_type in response_types:
+            if logical_root is not None and (inner is None or type(results[inner].owner) is not LeadResultContractOwner
+                    or results[inner].owner.variant.logical_root != logical_root):
+                continue
             key = member.schema_id if inner is None else results[inner].owner.variant.branch_key
-            original = key.partition(':partition:')[0]
+            original = key.partition(':partition:')[0] if logical_root is None else logical_root
             if branch_key is not None and (inner is None or branch_key not in (key, original)):
                 continue
             offered.setdefault(original, []).append((member.schema_id, inner))
-    if type(family) is not int or not 0 <= family < len(offered):
+    position = family if logical_root is None else 0
+    if type(family) is not int or not 0 <= position < len(offered):
         raise ValueError('The explicitly intended fixture family was not offered')
-    choices = list(offered.values())[family]
+    choices = list(offered.values())[position]
     if len(choices) > 1 and value is not None:
         for pair in choices:
             if _fixture_partition_matches(results[pair[1]].rule_graph.schema_value(), value):
@@ -681,12 +735,13 @@ def lead_fixture_assignments(rows, *, input_choices, review_choices, anchors, re
     return {'assignments': assignments, 'required_input_recipients': copy.deepcopy(recipients)}
 
 
-def lead_fixture_response(request, value, *, family, branch_key=None, response_type=None):
+def lead_fixture_response(request, value, *, family, branch_key=None, response_type=None,
+                          logical_root=None):
     """Pair caller-authored current wire values with one explicitly intended issued family."""
     outer, inner = offered_fixture_bindings(
         request, action_type='submit_result',
         response_type=value['response_type'] if response_type is None else response_type,
-        family=family, branch_key=branch_key, value=value)
+        family=family, branch_key=branch_key, logical_root=logical_root, value=value)
     return indexed_response({'action_type': 'submit_result', 'task_result': value},
                             outer_schema_id=outer, inner_schema_id=inner, contract=request.contract)
 

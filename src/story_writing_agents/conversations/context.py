@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from .events import CollaborationLeadGroupTracePayload
 from ..agent_context.group_observation import LeadGroupTrace
+from .events import build_final_review_evidence
+
+from ..review_contracts import LeadPreliminaryReview
 
 from ..core_document_readiness import CORE_DOCUMENTS, CoreDocumentReadinessBasis
 from ..authoring_admission import AdmissionSource, AdmissionSourceKind, AuthoringAdmissionBasis
@@ -1027,7 +1030,11 @@ class LeadTurnResult:
 
     provider_invocation_id: str | None = field(default=None, kw_only=True)
 
+    preliminary_review: LeadPreliminaryReview | None = field(default=None, kw_only=True)
     def __post_init__(self) -> None:
+        if self.preliminary_review is not None and (type(self.preliminary_review) is not LeadPreliminaryReview
+                or self.kind is not LeadOutcomeKind.ANSWER or self.proposal is not None):
+            raise ValueError("preliminary result grants no proposal or execution authority")
         if self.provider_invocation_id is not None:
             if type(self.provider_invocation_id) is not str:
                 raise TypeError("response provider invocation ID must be exact text")
@@ -2644,6 +2651,13 @@ def _project_artifact_review_history(
                 != synthesis.reply_event_ids
             ):
                 raise ValueError("reviewed artifact proposal is not fully derived")
+            consultation = next((item.payload for item in all_events.values()
+                if type(item.payload) is CollaborationProposal
+                and (item.payload.proposal_id, item.payload.proposal_revision, item.payload.proposal_digest) ==
+                    (payload.consultation_proposal_id, payload.consultation_proposal_revision, payload.consultation_proposal_digest)), None)
+            if (consultation is None or payload.final_review_evidence !=
+                    build_final_review_evidence(payload.candidate, consultation, payload.reviews)):
+                raise ValueError("final review evidence is not the exact durable candidate/consultation projection")
             reviewed[event.step_id] = payload
 
         if failure_events and reviewed_events:

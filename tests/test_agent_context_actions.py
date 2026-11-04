@@ -332,8 +332,9 @@ class ActionSurfaceAndPolicyTests(unittest.TestCase):
         )
         self.assertIn("answer", inspect.signature(ContextAnswerAction).parameters)
         self.assertEqual(tuple(field.name for field in fields(actions_module.ContextCallReadFact)),
-                         ('evidence_id', 'source_id', 'source_kind', 'revision', 'source_digest',
-                          'boundary_digest', 'whole_source', 'artifact_locator'))
+                         ('evidence_id', 'source_id', 'source_kind', 'revision',
+                          'source_digest', 'boundary_digest', 'whole_source', 'artifact_locator',
+                          'boundary_kind', 'boundary_start', 'boundary_end'))
         self.assertEqual(len(fields(ContextEvidenceReceipt)), 13)
         self.assertEqual(len(fields(ContextAnswerAuthorization)), 11)
 

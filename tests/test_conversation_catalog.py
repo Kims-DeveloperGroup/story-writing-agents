@@ -76,7 +76,18 @@ _V1_CONVERSATION_FACADE_EXPORTS = (
     "select_bounded_conversation_context",
     "validate_conversation_context_window",
 )
-_CONVERSATION_FACADE_EXPORTS = CONVERSATION_FACADE_EXPORTS
+_REVIEW_CONTRACT_EXPORTS = (
+    "ReviewTargetKind", "ReviewTargetAvailability", "PreliminaryNextAction", "ReviewTarget",
+    "ReviewFinding", "LeadPreliminaryReview", "FinalReviewEvidence", "FinalReviewQualification",
+    "qualify_final_review", "preliminary_review_to_dict", "preliminary_review_from_dict",
+    "final_review_evidence_to_dict", "final_review_evidence_from_dict",
+)
+_STAGE_EXPORTS = (
+    "ReviewStage", "SpecialistWorkKind", "SpecialistWorkQuestion", "SpecialistStagePlan",
+    "stage_required_specialists", "validate_stage_routing",
+)
+_REVIEW_FACADE_EXPORTS = (*_REVIEW_CONTRACT_EXPORTS, "build_final_review_evidence", *_STAGE_EXPORTS)
+_CONVERSATION_FACADE_EXPORTS = (*CONVERSATION_FACADE_EXPORTS, *_REVIEW_FACADE_EXPORTS)
 _CATALOG_EXPORTS = {
     "CONVERSATION_METADATA_SCHEMA_VERSION",
     "CONVERSATION_SUBJECT_NORMALIZATION_VERSION",
@@ -821,6 +832,13 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
             _CONVERSATION_FACADE_EXPORTS,
         )
         self.assertNotIn("__getattr__", vars(conversations_module))
+        from story_writing_agents import review_contracts, specialist_routing
+        new_exports = {name: getattr(review_contracts, name) for name in _REVIEW_CONTRACT_EXPORTS}
+        new_exports.update({name: getattr(specialist_routing, name) for name in _STAGE_EXPORTS})
+        new_exports["build_final_review_evidence"] = conversation_events_module.build_final_review_evidence
+        self.assertEqual({name: getattr(conversations_module, name) for name in _REVIEW_FACADE_EXPORTS}, new_exports)
+        self.assertTrue(set(_REVIEW_FACADE_EXPORTS).isdisjoint(story_writing_agents.__all__))
+        self.assertTrue(set(_REVIEW_FACADE_EXPORTS).isdisjoint(vars(story_writing_agents)))
 
         owner_exports = (
             (conversation_catalog_module, _CATALOG_EXPORTS),
@@ -889,7 +907,7 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
         expected_by_file = {
             "__init__.py": set(),
             "catalog.py": _CATALOG_EXPORTS,
-            "events.py": _EVENT_EXPORTS,
+            "events.py": _EVENT_EXPORTS | {"build_final_review_evidence"},
             "context.py": _CONTEXT_EXPORTS,
         }
         public_names = set(_CONVERSATION_FACADE_EXPORTS) | _OWNER_ONLY_EVENT_EXPORTS

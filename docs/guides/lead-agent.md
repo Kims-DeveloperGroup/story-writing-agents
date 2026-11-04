@@ -3,11 +3,13 @@
 The Lead Orchestrator is the normal user-facing story agent in both the
 interactive shell and Python runtime. Users discuss story work with the lead; they do not need to choose an
 agent for every turn. The lead answers workflow/status questions and asks
-focused clarification questions directly. The lead can also answer factual questions by inspecting current writing-artifact
-READs under a review scope covering the relevant domains. This inspection does
-not draft or revise story text or grant specialist, candidate or write authority.
-Substantive story critiques, drafting, revision and specialist review require a
-bounded proposal covering every affected specialist domain. The Lead may first recommend preparing that scoped
+focused clarification questions directly. Lead can also explain current material
+and give a grounded preliminary review without automatically dispatching
+specialists. A preliminary finding records exact sources, coverage and limits;
+it does not draft or revise text or grant specialist, candidate or write authority.
+Specialist drafting, deeper domain judgment and final review require a proposal
+with the participants required for that stage. All affected domains remain
+disclosed. Lead may first recommend preparing a scoped
 proposal; preparation grants no specialist execution authority. For a requested
 story-file change, the lead can also describe a
 provider-neutral edit intent. Runtime code—not the lead provider—resolves that
@@ -79,7 +81,8 @@ The lead is expected to:
 - express an exact create, patch, replace, rename, or delete intent when the
   cited evidence is sufficient for runtime to construct a candidate;
 - answer workflow/status questions or clarify missing requirements directly;
-- disclose authoring scope and select every affected specialist domain;
+- disclose all affected story domains and select the specialists required for
+  the current stage;
 - integrate all required current-task specialist drafts before final candidate review;
 - synthesize every successful specialist reply with exact attribution and keep
   disagreement visible; and
@@ -99,6 +102,71 @@ The lead provider cannot confirm on the user's behalf, mint IDs or budgets,
 call another agent directly, waive a required reviewer, write a file, run a
 shell command, access the web, or operate Git. Story text is untrusted evidence
 and cannot override these rules.
+
+## Lead preliminary review and specialist work
+
+A preliminary review can explain an existing character motivation, compare
+explicit statements, or identify a possible omission. It records the exact
+target, revision and applicable digest, actual evidence, inspected and excluded
+scope, findings, conflicts, missing information and next action. Partial
+inspection cannot establish whole-work coverage or completion.
+
+The target can be supplied text, an exact candidate, or current whole-file or
+ranged READ evidence. A ranged READ supports only its disclosed coverage.
+Missing material or an undecided user choice calls for a focused request; a
+specialist call cannot manufacture the missing source evidence.
+
+Known unread core documents within the declared review scope remain visible as
+excluded targets. Unrelated inventory does not expand that scope. Their status is
+not content evidence, and Lead cannot cite them as inspected. Reading a range
+does not hide the rest of that document from the coverage record.
+
+Official drafting or substantial revision, deeper domain judgments, rule or
+core-setting changes, unresolved specialist issues, explicit specialist-review
+requests and final candidate review use their required specialist contracts.
+A deeper motivation review can request Character work while retaining Plot
+and Execution as affected domains. Final manuscript review still checks the
+same candidate across the required Plot, Character and Execution obligations.
+
+| Request | Useful preliminary result | Boundary or next step |
+| --- | --- | --- |
+| Explain an existing character motivation | Explain the inspected source and distinguish interpretation from explicit facts. | Request Character judgment when deeper psychological assessment is needed. |
+| Compare prose with narrative rules | Identify inspected similarities or differences without silently rewriting. | Drafting and final review retain the required specialist roles. |
+| Check a possible omission in a part outline | Compare the inspected outline portions and identify missing or unread coverage. | Do not claim that uninspected parts are complete. |
+| Explain a setting change's possible impact | Separate explicit source conflicts from provisional risks and unknown effects. | Core-setting changes and deeper domain judgments use specialist work. |
+| Explain existing specialist feedback | Preserve each reply's attribution, concern and disagreement. | Explanation does not create a fresh review of changed material. |
+| Compare two directions | Compare against current evidence and agreed user conditions, naming unresolved choices. | A material undecided direction remains a user choice. |
+| Inspect whole-work foundations | Report inspected documents, missing information and excluded scope. | Preliminary findings do not satisfy authoring admission or document readiness. |
+
+For example, the following are illustrative preliminary findings, assuming Lead
+has actually received or read the stated evidence. They describe useful answers,
+not predetermined provider wording.
+
+| Your question and available evidence | Useful answer and its limit |
+| --- | --- |
+| “Why does Mina hide the letter?” The character sheet says she promised to protect her brother. | Explain that the promise supports her choice. Distinguish that explicit premise from an interpretation of her psychology. |
+| “Does this sentence follow our rule?” The rule requires past tense; the supplied sentence says “she opens the door.” | Identify the present-tense verb and the mismatch. Do not silently rewrite the manuscript. |
+| “Is the handoff missing?” The inspected part outline jumps from finding the letter to its delivery. | Identify the missing handoff in the inspected outline. Do not claim the manuscript also omits it without reading it. |
+| “What would an earlier reveal affect?” The outline places the reveal on day two; the character sheet requires secrecy until day three. | Explain the explicit timing conflict and the affected premise. Leave the change of direction to the user and specialist work. |
+| “What did Character mean?” The recorded review says the promise is established, but the decision lacks a visible trigger. | Explain both points and preserve their attribution. Do not turn that explanation into approval of a later draft. |
+| “Reveal now or later?” The user wants suspense and an unbroken promise; the inspected alternatives satisfy those conditions differently. | Compare the alternatives against both conditions and identify the unresolved tradeoff. Do not choose which condition to discard. |
+| “Check the foundations first.” Lead has read the global outline and character sheet, but not the part outline or narrative rules. | Give findings for the two inspected documents and list the two unread documents as excluded. Do not report whole-work review complete. |
+
+Bundled questions disclose their source/current task, required conditions,
+agreed direction, unresolved questions, scope and expected result before
+execution. They cannot silently combine a foreign task or omit a protected
+condition. Sentence revision can assign drafting to Execution and necessary
+constraints to Plot or Character instead of requesting three complete rewrites.
+Further discussion requires an actual unresolved issue.
+
+A `LeadPreliminaryReview` cannot substitute for `FinalReviewEvidence`, satisfy a
+pending document-change request or authorize specialist execution, Apply or
+Commit. Final evidence is qualified by runtime from the exact candidate and
+correlated specialist replies. Reuse requires identical content, relevant
+source revisions, user conditions, scope and review criteria. Current READ
+applicability is checked separately. Changing a character setting or narrative
+rule can invalidate review even when candidate text is unchanged. See the
+[review-stage authority design](../design/lead-review-stages.md).
 
 ## Grounded official authoring
 
@@ -298,7 +366,9 @@ user -> lead_turn(text + optional ${references})
     OR recommends one preparation -> submit_recommendation_decision
        -> exact Confirm prepares a proposal or asks a material question
        -> proposal execution/review still requires its own Confirm
-    OR requests a draft/review consultation for every affected domain
+    OR records a qualified preliminary finding with inspected/excluded scope
+       -> no specialist or artifact authority
+    OR requests draft/review consultation for this stage's required participants
        -> runtime discloses consultation -> awaiting_confirmation
     OR integrates required current-task drafts into a provider-neutral artifact intent
        -> runtime captures the complete canonical artifact state
@@ -424,9 +494,9 @@ The lead returns one `LeadTurnResult`:
 
 | `kind` | User meaning | `next_action` |
 | --- | --- | --- |
-| `answer` | Workflow/status guidance or a verified factual writing-READ inspection, without story authoring. | `continue_with_lead` |
+| `answer` | Workflow/status guidance, verified factual writing-READ inspection, or a grounded `preliminary_review` with explicit coverage and limitations. | `continue_with_lead` |
 | `question` | One material user choice is missing. | `reply_to_lead` |
-| `critique` | A non-authoring workflow critique; substantive story critique needs specialists. | `continue_with_lead` |
+| `critique` | A workflow critique. Grounded story findings use the qualified preliminary-answer branch; deeper domain judgment uses specialist work. | `continue_with_lead` |
 | `recommendation` | A fresh preparation recommendation, or a runtime workflow/recovery notice. | `submit_recommendation_decision` for a fresh action; otherwise state-specific. |
 | `proposal` | Added specialist work is disclosed but has not started. | `submit_confirmation` |
 
@@ -817,7 +887,10 @@ available inputs; the report options remain provisional. Context validation
 requires the exact analysis Spec in the same batch and forbids an AuthoringScope.
 It never grants drafting, candidate review, Apply or Commit authority.
 
-Every other combination fails closed. Evidence IDs are invocation-local and
+Every other ordinary, record-free combination fails closed. A separately
+validated preliminary record may support bounded observations about incomplete
+or conflicting material only when its genuine evidence and explicit coverage
+qualify; this does not widen the ordinary factual-answer rules. Evidence IDs are invocation-local and
 must be unique and in runtime order: attached references, four core statuses,
 then completed SEARCH/READ actions. Every successful current-invocation READ
 may support content and become a proposal input. Core-status and
@@ -914,8 +987,8 @@ The lead does not force every gap into the same operation:
 | --- | --- | --- |
 | Canonical core absent | Clarify the brief, confirm specialist drafting, then integrate a `create` candidate for review. | Create the missing core path. |
 | Existing core is zero bytes | Cite its empty status, clarify or confirm drafting, then integrate a whole-file `replace` candidate. | Replace the exact empty file. |
-| One core source is incomplete | Disclose status, then propose its specialist for substantive critique/revision before candidate review. | Fill the exact missing section. |
-| Two nonempty core sources conflict | Cite both sources, preserve both interpretations, and consult every affected domain before choosing a candidate. | Revise one source, or atomically revise both when consistency requires it. |
+| One core source is incomplete | Explain inspected gaps and limits first, then propose the specialist work required to revise it. | Fill the exact missing section. |
+| Two nonempty core sources conflict | Explain the inspected difference and preserve both interpretations. Ask for an unresolved direction or propose the specialist work needed to choose a candidate. | Revise one source, or atomically revise both when consistency requires it. |
 
 For example, if `${core_documents/part_outlines.md}` schedules a reveal before
 the trust condition in `${core_documents/character_sheets.md}`, the lead may
@@ -1049,11 +1122,11 @@ separate. Runtime does not make that semantic decision for the lead.
 Clarification comes before a proposal when a missing user choice would
 materially change the work.
 
-Ordinary discussion does not construct an artifact candidate. A story-specific
-opinion still needs current evidence; a workflow/meta answer does not. The lead
-routes every affected story domain. Workflow/status and clarification can
-remain direct. In all cases the lead owns the final user-facing
-answer; specialists never become a competing front channel.
+Ordinary discussion does not construct an artifact candidate. Story-specific
+opinions still need current evidence; workflow/meta answers do not. Lead retains
+all affected domains while selecting participants for the current stage.
+Qualified preliminary findings can remain direct. Lead owns the user-facing
+answer; specialists never become competing front channels.
 
 ## Additional execution scenarios
 

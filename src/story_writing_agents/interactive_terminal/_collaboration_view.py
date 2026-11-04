@@ -1,6 +1,9 @@
 """Project validated collaboration events into safe semantic terminal views."""
 
 from __future__ import annotations
+
+from ..review_contracts import LeadPreliminaryReview
+from ..specialist_routing import SpecialistStagePlan
 from dataclasses import replace
 from ..agents import AGENT_SPECS, LEAD_ORCHESTRATOR, PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST
 
@@ -523,6 +526,8 @@ def project_lead_turn_result(
         for detail in result.validation_details
         for line in detail.split("\n")
     )
+    if result.preliminary_review is not None:
+        items.extend(_preliminary_review_items(result.preliminary_review))
     if result.discussion is not None:
         items.append(Notice("Read-only discussion; writing task and pending controls stay separately bound."))
         if result.discussion.associated_task_ref is not None:
@@ -1055,6 +1060,7 @@ def _payload_items(
         )
     if type(payload) is CollaborationLeadJudgmentPayload:
         return (
+            *(() if payload.preliminary_review is None else _preliminary_review_items(payload.preliminary_review)),
             *((Section("Captured whole-book judgment", project_core_document_readiness(
                 project_readiness(payload.core_document_readiness, payload.core_document_readiness.sources)).items),)
               if payload.core_document_readiness is not None else ()),
@@ -1457,6 +1463,7 @@ def _proposal_items(
     )
     budget = payload.budget
     return (
+        *(() if payload.stage_plan is None else _stage_plan_items(payload.stage_plan)),
         *(() if payload.premise_decision is None else (
             Notice("One terminal candidate-free premise analysis round; no drafting or automatic continuation.", label="Provisional premise analysis"),
             Field("Question identity", payload.premise_decision.question_id),
@@ -1854,3 +1861,42 @@ __all__ = (
     "project_story_commit_decision_result",
     "validate_collaboration_event_order",
 )
+
+
+def _preliminary_review_items(record: LeadPreliminaryReview) -> tuple:
+    return (Notice("Lead preliminary review: no final review, fulfillment, Apply or Commit authority."),
+        Field("Review stage", record.stage), Field("Task", f"{record.task_id} @ {record.task_revision}"),
+        ListView("Inspected / excluded targets", tuple(Record(item.input_id, fields=(
+            Field("Target", item.target_id), Field("Revision", item.revision or "unavailable"),
+            Field("Digest", item.content_digest or "not read"),
+            Field("Availability", item.availability.value),
+            Field("Source status", item.source_status or "not applicable"), Field("Coverage",
+                "whole" if item.whole_source else "unread scope" if item.boundary_kind == "unread" else f"{item.boundary_kind}:{item.boundary_start}-{item.boundary_end}"),
+            Field("Inspection", "inspected" if item.input_id in record.inspected_input_ids else "excluded")))
+            for item in record.targets)),
+        *((ListView("Preliminary findings", tuple(Record(str(index), fields=(
+            Field("Sources", _joined(item.evidence_input_ids)),), content=item.message)
+            for index, item in enumerate(record.findings, 1))),) if record.findings else ()),
+        *((ListView("Conflicts requiring a decision", tuple(Record(str(index), fields=(
+            Field("Sources", _joined(item.evidence_input_ids)),), content=item.message)
+            for index, item in enumerate(record.conflicts, 1))),) if record.conflicts else ()),
+        Field("Missing information", _joined(record.missing_information)),
+        Field("Further review required", str(record.further_review_required)),
+        Field("Next action", record.next_action.value))
+
+
+def _stage_plan_items(plan: SpecialistStagePlan) -> tuple:
+    return (Section("Disclosed specialist work", (
+        Field("Stage", plan.stage.value), Field("Work", plan.work_kind.value),
+        Field("Current task", f"{plan.task_id} @ {plan.task_revision}"),
+        Field("Requested specialists", _joined(plan.specialist_ids)),
+        Field("Focus domains", _joined(tuple(item.value for item in plan.focus_domains))),
+        Field("Required conditions", _joined(plan.required_condition_ids)),
+        Field("Agreed direction", plan.agreed_direction or "Undecided"),
+        Field("Unresolved questions", _joined(plan.unresolved_questions)),
+        Field("Expected result", plan.expected_result),
+        ListView("Bundled questions and provenance", tuple(Record(item.question_id,
+            fields=(Field("Current task", f"{item.task_id} @ {item.task_revision}"),
+                    Field("Original sources", _joined(item.source_input_ids)),
+                    Field("Required conditions", _joined(item.required_condition_ids))), content=item.question)
+            for item in plan.questions)))),)

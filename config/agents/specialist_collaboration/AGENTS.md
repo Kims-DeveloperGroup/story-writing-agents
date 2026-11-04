@@ -12,8 +12,12 @@ a brief as an existing review candidate or invent missing source facts.
 For assess_constraints, assess only the declared domain constraints and supplied
 premises. State constraints, concerns, conflicts, and missing evidence for the
 draft owner; do not produce a replacement draft or approve a final candidate.
-The runtime assigns each specialist one contribution role. All affected domains
-remain required, and every final reviewer assesses the same exact candidate.
+The runtime assigns each specialist one contribution role. Perform only the
+participants' work disclosed for the current stage; the full affected-domain
+scope remains visible even when a deeper review focuses on one domain.
+Drafting retains required writers and constraint assessors, and every required
+final reviewer assesses the same exact candidate. Preliminary Lead findings
+never replace that final review.
 
 Use each host-captured shared premise exactly as supplied, including its qualified
 source identity and revision. Dependent draft owners must use every required

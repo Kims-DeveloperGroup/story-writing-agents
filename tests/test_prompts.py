@@ -103,13 +103,19 @@ class PromptAssemblerTests(unittest.TestCase):
     def test_lead_prompt_is_front_channel_router_watcher_critic_and_non_authority(self):
         prompt = self.assembler.build_definition(session_id="lead-policy", agent_id=LEAD_ORCHESTRATOR).system_prompt_file.read_text()
         normalized = " ".join(prompt.split())
-        required = ('sole ordinary user-facing coordinator', 'answer workflow and factual status questions directly', 'complete specialist union', 'Do not omit a required specialist to fit a budget', 'current invocation schema', 'integrate required current-task drafts', 'fresh complete user-supplied candidate', 'Preserve exact offered task/revision, source, evidence, and candidate identities', 'Status is not a READ receipt', 'Nonempty artifact changes require current attached reference or completed authorized READ evidence', 'Empty-file status proves only the exact empty target', 'Confirm authorizes only the exact disclosed step', 'Proposal preparation, specialist execution, candidate review, Apply, and Commit have separate authority boundaries', 'Confirmed preparation returns its exact proposal or asks a material clarification', 'does not repeat confirmation or silently downgrade to advice', 'Prose approval and retained decisions grant no current execution or write authority', 'Only its exact successful Apply (applied or unchanged) satisfies it', 'explicit cancellation closes it without writing', 'Lead does not vote', "never use a majority to erase a specialist's concern", 'Continuation must cover all original inputs and reply-event inputs', 'Never request a continuation the current schema does not offer')
+        required = ('sole ordinary user-facing coordinator', 'answer workflow and factual status questions directly', 'Retain the semantic influence-domain union', 'Do not omit a required specialist to fit a budget', 'current invocation schema', 'integrate required current-task drafts', 'fresh complete user-supplied candidate', 'Preserve exact offered task/revision, source, evidence, and candidate identities', 'Status is not a READ receipt', 'Nonempty artifact changes require current attached reference or completed authorized READ evidence', 'Empty-file status proves only the exact empty target', 'Confirm authorizes only the exact disclosed step', 'Proposal preparation, specialist execution, candidate review, Apply, and Commit have separate authority boundaries', 'Confirmed preparation returns its exact proposal or asks a material clarification', 'does not repeat confirmation or silently downgrade to advice', 'Prose approval and retained decisions grant no current execution or write authority', 'Only its exact successful Apply (applied or unchanged) satisfies it', 'explicit cancellation closes it without writing', 'Lead does not vote', "never use a majority to erase a specialist's concern", 'Continuation must cover all original inputs and reply-event inputs', 'Never request a continuation the current schema does not offer')
         for phrase in required:
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, normalized)
         self.assertTrue(all(phrase in normalized for phrase in (
             "intended reader effect", "protected elements", "observable success criteria",
             "Reuse answers already present", "provisional ideas", "missing explanation alone")))
+        self.assertTrue(all(phrase in normalized for phrase in (
+            "procedure/status, Lead preliminary review, specialist work, and final candidate review",
+            "inspected and excluded coverage", "without automatically calling every domain",
+            "Missing evidence calls for the missing material or decision",
+            "A preliminary record never substitutes for final review",
+            "current source basis and separate Apply/Commit decisions")))
         self.assertNotIn("objective_intent", normalized)
         self.assertNotIn("recommended_action", normalized)
 
@@ -121,7 +127,7 @@ class PromptAssemblerTests(unittest.TestCase):
                 self.assertTrue(all(phrase in normalized for phrase in (
                     "character self-contradiction", "limited point of view", "intentionally unresolved elements",
                     "never present a proposed idea as a source fact")))
-                for phrase in ("assess_constraints", "host-captured shared premise", "every final reviewer", "exact assignment", "contract_guidance", "response_type specialist_assignment_result", "assignment_status", "draft_completed", "supports_proposal", "concerns_found", "conflicts_found", "insufficient_evidence", "neither review support", "permission to Apply or Commit"):
+                for phrase in ("assess_constraints", "host-captured shared premise", "Every affected specialist reviews the exact final candidate", "exact assignment", "contract_guidance", "response_type specialist_assignment_result", "assignment_status", "draft_completed", "supports_proposal", "concerns_found", "conflicts_found", "insufficient_evidence", "neither review support", "permission to Apply or Commit"):
                     self.assertIn(phrase, normalized)
 
     def test_lead_overlay_supersedes_retained_policy_and_preserves_specialist_bytes(self):
