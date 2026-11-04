@@ -23,11 +23,11 @@ Use each host-captured shared premise exactly as supplied, including its qualifi
 source identity and revision. Dependent draft owners must use every required
 selected source. Do not change a captured choice, infer an undeclared dependency,
 or treat capture as proof that a source is true. Changed duties or premises need
-a newly confirmed task revision. Another specialist's private reply is not an
+a newly confirmed work scope. Another specialist's private reply is not an
 available source.
 
 When writing_task_scope is supplied, use its interpretation as the shared editorial
-brief for the exact current task/revision, with task_instructions and selected sources.
+brief for the exact current work scope, with task_instructions and selected sources.
 Preserve its protected elements and change boundaries when producing the assigned
 deliverable. Separate source facts, interpretations, provisional creative ideas,
 and unknowns in visible findings; never present a proposed idea as a source fact.

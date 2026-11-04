@@ -467,6 +467,70 @@ class AuthoringScope:
 
 
 @dataclass(frozen=True, slots=True)
+class AuthoringScopeSpec:
+    """Provider-declared meaning of work, without lifecycle identity."""
+
+    activity: AuthoringActivity
+    target_paths: tuple[str, ...]
+    domains: tuple[ArtifactReviewDomain, ...]
+    interpretation: str = field(repr=False)
+    schema_version: int = 3
+    intent: AuthoringIntent = AuthoringIntent.AUTHORING
+    contributions: tuple[AuthoringContribution, ...] = ()
+    dependency_slots: tuple[AuthoringDependencySlot, ...] = ()
+
+    def __post_init__(self) -> None:
+        _text(self.interpretation, label="authoring interpretation")
+        if type(self.schema_version) is not int or self.schema_version not in {1, 2, 3}:
+            raise ValueError("unsupported scope specification version")
+        if self.intent is AuthoringIntent.REVIEW_ONLY and self.activity is not AuthoringActivity.REVIEW:
+            raise ValueError("review-only scope requires review activity")
+        if type(self.activity) is not AuthoringActivity or type(self.intent) is not AuthoringIntent:
+            raise TypeError("scope specification requires exact activity and intent")
+        _domain_tuple(self.domains)
+        domains = set(self.domains) | _path_domains(self.target_paths)
+        if self.activity is AuthoringActivity.WORKFLOW:
+            if domains:
+                raise ValueError("workflow scope cannot carry story domains or targets")
+        elif not domains:
+            raise ValueError("story scope requires semantic domains or targets")
+        if self.schema_version == 3:
+            authoring_scope_rules(self.activity, self.intent, self.domains,
+                self.contributions, target_paths=self.target_paths,
+                dependency_slots=self.dependency_slots, schema_version=self.schema_version)
+        elif self.schema_version not in {1, 2} or self.contributions or self.dependency_slots:
+            raise ValueError("unsupported scope specification version")
+
+
+def scope_spec_from_dict(value: dict[str, object], *, interpretation: str) -> AuthoringScopeSpec:
+    version = value.get("schema_version", 3 if "contributions" in value else 2 if "intent" in value else 1)
+    return AuthoringScopeSpec(AuthoringActivity(value["activity"]), tuple(value["target_paths"]),
+        tuple(ArtifactReviewDomain(x) for x in value["domains"]), value.get("interpretation", interpretation), version,
+        AuthoringIntent(value.get("intent", "authoring")),
+        tuple(AuthoringContribution(ArtifactReviewDomain(x["domain"]), AuthoringContributionRole(x["role"]))
+            for x in value.get("contributions", ())),
+        tuple(AuthoringDependencySlot(x["slot_id"], tuple(ArtifactReviewDomain(d)
+            for d in x["dependent_domains"])) for x in value.get("dependency_slots", ())))
+
+
+def scope_spec_from_scope(scope: AuthoringScope) -> AuthoringScopeSpec:
+    if type(scope) is not AuthoringScope:
+        raise TypeError("expected a bound authoring scope")
+    return AuthoringScopeSpec(scope.activity, scope.target_paths, scope.domains,
+        scope.interpretation, scope.schema_version, scope.intent,
+        scope.contributions, scope.dependency_slots)
+
+
+def bind_authoring_scope(spec: AuthoringScopeSpec, task_id: str, revision: int) -> AuthoringScope:
+    if type(spec) is not AuthoringScopeSpec:
+        raise TypeError("expected an identity-free authoring scope")
+    return AuthoringScope(spec.activity, spec.target_paths, spec.domains,
+        spec.interpretation, task_id, revision, spec.schema_version,
+        intent=spec.intent, contributions=spec.contributions,
+        dependency_slots=spec.dependency_slots)
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewBasis:
     """Concrete draft/candidate input aliases plus disclosed review criteria.
 
@@ -511,7 +575,7 @@ def required_authoring_domains(
     cannot remove the domains already stated by the scope.
     """
 
-    if type(scope) is not AuthoringScope:
+    if type(scope) not in {AuthoringScope, AuthoringScopeSpec}:
         raise validation_failure(
             TypeError('authoring scope must be an AuthoringScope'),
             '$',
@@ -845,13 +909,101 @@ class SpecialistStagePlan:
             raise ValueError("unresolved questions must be exact text")
 
 
+@dataclass(frozen=True, slots=True)
+class SpecialistWorkQuestionSpec:
+    question_id: str
+    question: str
+    source_input_ids: tuple[str, ...]
+    required_condition_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        for value in (self.question_id, self.question):
+            _text(value, label="stage question")
+        for values in (self.source_input_ids, self.required_condition_ids):
+            if (type(values) is not tuple or not values or len(set(values)) != len(values)
+                    or any(type(value) is not str or not value for value in values)):
+                raise ValueError("work question requires unique source and condition references")
+
+
+@dataclass(frozen=True, slots=True)
+class SpecialistStagePlanSpec:
+    stage: ReviewStage
+    work_kind: SpecialistWorkKind
+    focus_domains: tuple[ArtifactReviewDomain, ...]
+    specialist_ids: tuple[str, ...]
+    questions: tuple[SpecialistWorkQuestionSpec, ...]
+    required_condition_ids: tuple[str, ...]
+    agreed_direction: str | None
+    unresolved_questions: tuple[str, ...]
+    expected_result: str
+
+    def __post_init__(self) -> None:
+        if type(self.stage) is not ReviewStage or type(self.work_kind) is not SpecialistWorkKind:
+            raise ValueError("stage work requires exact stage and work kind")
+        _domain_tuple(self.focus_domains)
+        _text(self.expected_result, label="stage result")
+        canonical = tuple(dict.fromkeys(_SPECIALIST_BY_DOMAIN.values()))
+        if (type(self.specialist_ids) is not tuple
+                or len(set(self.specialist_ids)) != len(self.specialist_ids)
+                or self.specialist_ids != tuple(x for x in canonical if x in self.specialist_ids)):
+            raise ValueError("stage participants must be canonical and unique")
+        if (type(self.questions) is not tuple or not self.questions or len(self.questions) > 64
+                or any(type(x) is not SpecialistWorkQuestionSpec for x in self.questions)
+                or len({x.question_id for x in self.questions}) != len(self.questions)):
+            raise ValueError("stage work requires bounded unique questions")
+        if (type(self.required_condition_ids) is not tuple or not self.required_condition_ids
+                or len(set(self.required_condition_ids)) != len(self.required_condition_ids)
+                or any(type(x) is not str or not x for x in self.required_condition_ids)):
+            raise ValueError("stage work requires declared source conditions")
+        if {c for q in self.questions for c in q.required_condition_ids} != set(self.required_condition_ids):
+            raise ValueError("bundled questions must cover every declared required condition")
+        if self.agreed_direction is not None:
+            _text(self.agreed_direction, label="agreed direction")
+        if type(self.unresolved_questions) is not tuple:
+            raise TypeError("unresolved questions must be an exact tuple")
+        for question in self.unresolved_questions:
+            _text(question, label="unresolved question")
+
+
+def stage_plan_spec_from_dict(value: object) -> SpecialistStagePlanSpec:
+    fields = {"stage", "work_kind", "focus_domains", "specialist_ids", "questions",
+        "required_condition_ids", "agreed_direction", "unresolved_questions", "expected_result"}
+    if type(value) is not dict or set(value) != fields:
+        raise ValueError("stage specification requires its complete identity-free record")
+    if any(type(value[name]) is not list for name in
+           ("focus_domains", "specialist_ids", "questions", "required_condition_ids", "unresolved_questions")):
+        raise ValueError("stage specification requires exact list fields")
+    questions = []
+    for row in value["questions"]:
+        if (type(row) is not dict or set(row) != {"question_id", "question", "source_input_ids", "required_condition_ids"}
+                or type(row["source_input_ids"]) is not list or type(row["required_condition_ids"]) is not list):
+            raise ValueError("stage question requires an identity-free source record")
+        questions.append(SpecialistWorkQuestionSpec(row["question_id"], row["question"],
+            tuple(row["source_input_ids"]), tuple(row["required_condition_ids"])))
+    return SpecialistStagePlanSpec(ReviewStage(value["stage"]), SpecialistWorkKind(value["work_kind"]),
+        tuple(ArtifactReviewDomain(x) for x in value["focus_domains"]), tuple(value["specialist_ids"]),
+        tuple(questions), tuple(value["required_condition_ids"]), value["agreed_direction"],
+        tuple(value["unresolved_questions"]), value["expected_result"])
+
+
+def bind_stage_plan(spec: SpecialistStagePlanSpec, task_id: str, revision: int) -> SpecialistStagePlan:
+    if type(spec) is not SpecialistStagePlanSpec:
+        raise TypeError("expected an identity-free stage plan")
+    return SpecialistStagePlan(spec.stage, spec.work_kind, task_id, revision,
+        spec.focus_domains, spec.specialist_ids,
+        tuple(SpecialistWorkQuestion(q.question_id, task_id, revision, q.question,
+            q.source_input_ids, q.required_condition_ids) for q in spec.questions),
+        spec.required_condition_ids, spec.agreed_direction, spec.unresolved_questions, spec.expected_result)
+
+
 def stage_required_specialists(scope: AuthoringScope, plan: SpecialistStagePlan | None) -> tuple[str, ...]:
     """Retain semantic influence; select only the permitted current-stage participants."""
     if plan is None:
         return required_authoring_specialists(scope)
-    if type(scope) is not AuthoringScope or type(plan) is not SpecialistStagePlan:
+    if type(scope) not in {AuthoringScope, AuthoringScopeSpec} or type(plan) not in {SpecialistStagePlan, SpecialistStagePlanSpec}:
         raise TypeError("stage routing requires exact immutable values")
-    if (plan.task_id, plan.task_revision) != (scope.task_id, scope.task_revision):
+    if (type(plan) is SpecialistStagePlan and type(scope) is AuthoringScope
+            and (plan.task_id, plan.task_revision) != (scope.task_id, scope.task_revision)):
         raise ValueError("stage questions must belong to the current authoring task")
     rule = authoring_scope_rules(scope.activity, scope.intent, scope.domains, scope.contributions,
         target_paths=scope.target_paths, dependency_slots=scope.dependency_slots, schema_version=scope.schema_version)
@@ -940,5 +1092,10 @@ def stage_focus_domains(rule: AuthoringScopeRuleSet, stage: ReviewStage,
 
 
 def stage_is_focused_review(plan: SpecialistStagePlan | None) -> bool:
-    return (type(plan) is SpecialistStagePlan and plan.stage is ReviewStage.SPECIALIST_WORK
+    return (type(plan) in {SpecialistStagePlan, SpecialistStagePlanSpec} and plan.stage is ReviewStage.SPECIALIST_WORK
             and plan.work_kind in {SpecialistWorkKind.DEEP_REVIEW, SpecialistWorkKind.CONSTRAINT_REVIEW})
+
+
+__all__ = (*__all__, "AuthoringScopeSpec", "scope_spec_from_dict", "scope_spec_from_scope",
+    "bind_authoring_scope", "SpecialistWorkQuestionSpec", "SpecialistStagePlanSpec",
+    "stage_plan_spec_from_dict", "bind_stage_plan")

@@ -473,8 +473,6 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
             scope = authoring_scope(call) if callable(authoring_scope) else copy.deepcopy(authoring_scope)
         elif execution is not None:
             scope = copy.deepcopy(execution["request"]["authoring_scope"])
-            if execution["decision"]["decision"]["kind"] == "revise":
-                scope["task_revision"] += 1
         else:
             domains = {"plot_architect": "plot_structure", "character_custodian": "character_world",
                        "execution_specialist": "tone_execution"}

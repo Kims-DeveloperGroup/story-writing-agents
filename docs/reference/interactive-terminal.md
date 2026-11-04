@@ -142,16 +142,23 @@ presentation remain literal. HTML, images, unsupported syntax, and parser
 failures remain readable as sanitized text. Source text stored in conversation
 history is unchanged.
 
-Response metadata includes outcome, measured elapsed time when available, and
-input/output tokens reported by the provider's response usage object. Counts
-include distinct submitted calls for that response's exact invocation, including
-corrective retries; specialist replies show their own invocation's usage.
-Additional per-call public responses show the individual call's usage.
-Each footer identifies its usage scope as `physical call` or
-`invocation (N calls)`. A provider response keeps that call's acceptance outcome;
-the host's final response keeps its own workflow outcome and invocation total.
-For example, a last call can show measured tokens and `accepted` while the final
-question shows `unavailable` because an earlier call cannot be attributed.
+Lead response footers show the response kind, such as `answer`, `question`, or
+`recommendation`, separately from the public response's validation disposition.
+`accepted`, `rejected`, and `unestablished` describe validation, not the response's
+Outcome. A captured public response shows the usage of its exact physical call.
+The separate turn summary reports the distinct submitted calls in the invocation,
+including corrective retries, their total usage, and the measured overall elapsed
+time. Specialist replies retain their own invocation's usage. Each usage record
+identifies its scope as `physical call` or `invocation (N calls)`.
+
+When runtime qualification changes the result, the original Lead response remains
+attributable to its provider call and the runtime explanation appears as a separate
+Runtime notice. That notice does not carry provider-generation usage. The effective
+workflow result still controls which next actions are available. Saved history,
+conversation restoration, and transcripts preserve the same source distinction.
+Older public responses whose kind was not recorded show an unavailable Outcome;
+validation acceptance and the runtime's effective result do not establish that kind.
+
 Missing or ambiguous counters display `unavailable`, while measured zero remains
 `0`. Counts are never estimated from message text or payload bytes, and cached
 input is not added to the provider's reported input count. Older records without
@@ -166,10 +173,24 @@ Illustrative output and counts:
 │ 2. Inspect the scope, then choose Confirm.                           │
 ├─ Metadata ───────────────────────────────────────────────────────────┤
 │ Outcome: answer | Elapsed: 00:00:03                                  │
-│ Usage scope: invocation (1 call)                                     │
+│ Usage scope: physical call                                           │
 │ Input tokens: 128 | Output tokens: 64                                │
 ╰──────────────────────────────────────────────────────────────────────╯
 ```
+
+Metadata and labeled diagnostics render line separators as real line breaks and
+tabs as four spaces. Labels keep a single line by replacing line breaks with
+spaces. Complete ANSI and terminal-control sequences are removed without being
+executed. Other nonprinting controls, including malformed terminal sequences,
+appear as `[control]`; invalid Unicode appears as `�`. A malformed sequence is
+discarded through the next line boundary so later metadata remains readable.
+Response diagnostics use a labeled multiline block rather than displaying
+numeric escapes such as `\x0a` between fields.
+
+Literal backslash escape text is not decoded. Message bodies, code/JSON and raw
+inspection views, editable-source previews, and literal transcript or
+selected-material content keep their existing presentation. Stored records and
+provider token counters are unchanged.
 
 ## Confirmation decisions
 

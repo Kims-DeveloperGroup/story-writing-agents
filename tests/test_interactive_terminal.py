@@ -1366,7 +1366,7 @@ class PromptAndRenderingTests(unittest.TestCase):
 
         terminal, callbacks = make_terminal()
         terminal.write_lobby_orientation("safe\npath\x1b")
-        self.assertIn("Workspace: safe\\x0apath\\x1b\n", callbacks.records[0])
+        self.assertIn("Workspace: safe path[control]\n", callbacks.records[0])
         self.assertEqual(len(callbacks.records), 1)
 
     def test_session_orientation_covers_attachments_agents_and_pluralization(
@@ -1488,12 +1488,13 @@ class PromptAndRenderingTests(unittest.TestCase):
         terminal.write_conversation_scope(
             session_id="SESSION",
             conversation_handle="c_0123456789",
-            conversation_subject="Unsafe\nsubject\x1b and more words",
+            conversation_subject="Unsafe\nsubject\x1b[31m and more words",
             agent_id=LEAD_ORCHESTRATOR,
         )
         rendered = callbacks.records[0]
         self.assertIn("Subject:", rendered)
-        self.assertIn("Unsafe\\x0asubject\\x1b", rendered)
+        self.assertIn("Unsafe subject and more words", rendered)
+        self.assertNotIn("\\x", rendered)
         self.assertTrue(rendered.startswith("--- Conversation scope"))
         self.assertTrue(rendered.endswith("\n"))
         rendered.encode("utf-8", errors="strict")
@@ -1524,7 +1525,7 @@ class PromptAndRenderingTests(unittest.TestCase):
                 "[conversation c_fedcba9876]\n"
                 "  Status: archived\n"
                 "  Focus: not focused\n"
-                "  Subject: Old\\x0asubject\\x1b\n",
+                "  Subject: Old subject[control]\n",
             ],
         )
 
@@ -1584,7 +1585,7 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertLess(second.index("unsafe"), second.index("Metadata"))
         self.assertIn("Status: active", first); self.assertIn("Match: subject", first)
         self.assertIn("Subject: Opening scene", first); self.assertIn("Status: archived", second)
-        self.assertIn("Subject: Old\\x0asubject", second); self.assertIn("unsafe\\x1b\\x0atext", second)
+        self.assertIn("Subject: Old subject", second); self.assertIn("unsafe\\x1b\\x0atext", second)
         self.assertIn("Citation: conversation c_fedcba9876, turn turn_7, sequence 9, kind reply", second)
         self.assertNotIn("\x1b", first + second)
         self.assertTrue(all(len(row) <= 120 for row in (first + second).splitlines()))
@@ -1791,7 +1792,7 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertTrue(all(len(line) <= 44 for line in wrapped.splitlines()))
 
         original = AGENT_SPECS[LEAD_ORCHESTRATOR]
-        unsafe = replace(original, display_name="Unsafe\x1bLead")
+        unsafe = replace(original, display_name="Unsafe\x1b[31mLead")
         terminal, callbacks = make_terminal(width=1000)
         with mock.patch.dict(
             AGENT_SPECS,
@@ -1799,7 +1800,7 @@ class PromptAndRenderingTests(unittest.TestCase):
         ):
             terminal.write_agent_roster()
         self.assertIn(
-            "[agent] Unsafe\\x1bLead\n    ID: lead_orchestrator",
+            "[agent] UnsafeLead\n    ID: lead_orchestrator",
             callbacks.records[0],
         )
         self.assertNotIn("\x1b", callbacks.records[0])
@@ -2309,9 +2310,9 @@ class HelpAndErrorTests(unittest.TestCase):
                 InteractiveErrorCode.INTERNAL_ERROR,
                 summary=(
                     f"raw={multiline_secret} escaped={escaped_secret} "
-                    "long=token-long short=token"
+                    "long=token-long short=token formatted=to\x1b[31mken"
                 ),
-                hint="escaped-control=\\x1b[31mTOKEN",
+                hint="escaped-control=\\x1b[31mTOKEN clean=\x1b[31mvisible\x1b[0m control=\x00",
             ),
             secrets=(
                 multiline_secret,
@@ -2325,8 +2326,8 @@ class HelpAndErrorTests(unittest.TestCase):
             [
                 f"--- Interactive error [error] {'-' * 970}\n"
                 "  [error internal_error] raw=<redacted> escaped=<redacted> "
-                "long=<redacted> short=<redacted>\n"
-                "  [hint] escaped-control=<redacted>\n"
+                "long=<redacted> short=<redacted> formatted=<redacted>\n"
+                "  [hint] escaped-control=<redacted> clean=visible control=[control]\n"
                 f"{'-' * 1000}\n"
             ],
         )
@@ -2427,6 +2428,7 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertIn("[debug log]", callbacks.records[2])
         self.assertTrue(all(record.count("\n") == 1 for record in callbacks.records))
         self.assertNotIn("\x1b", "".join(callbacks.records))
+        self.assertNotIn("\\x", "".join(callbacks.records))
         self.assertNotIn("Interactive error", "".join(callbacks.records))
 
 

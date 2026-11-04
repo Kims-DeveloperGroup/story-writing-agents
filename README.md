@@ -131,6 +131,15 @@ then returns to the unchanged prompt or pending decision. See
 [message frames and metadata](docs/reference/interactive-terminal.md#message-frames-markdown-and-response-metadata)
 for the layout, color fallback, and usage-attribution rules.
 
+The runtime owns task IDs and revisions. Agents describe writing scope and
+stage duties without receiving or selecting lifecycle identifiers. Completing
+an undecided provisional target keeps the current task; a changed confirmed
+capture requires a runtime-assigned successor and fresh confirmation. Internal
+history and typed task controls retain exact identity and source provenance.
+This change targets current runtime data. Migration or compatibility for data,
+workspace policy defaults, and native sessions from earlier runtime versions is
+outside its scope.
+
 ## Install
 
 Choose one Python environment. Do not create a standard-library virtual

@@ -12,7 +12,7 @@ from story_writing_agents import lead_exploration as exploration, lead_premise_d
 from story_writing_agents.interactive_terminal._response_usage import ResponseUsage, response_footer, response_usage
 from story_writing_agents.interactive_terminal import InteractiveTerminal, project_conversation_messages
 from story_writing_agents.interactive_terminal import _collaboration_view
-from story_writing_agents.interactive_terminal._model import CapabilityProfile
+from story_writing_agents.interactive_terminal._model import CapabilityProfile, Message, Record, SemanticRole
 from story_writing_agents.interactive_terminal._render import (
     render_component,
     strip_decorative_sgr,
@@ -55,6 +55,7 @@ from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
 class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_artifact_and_local_commit_events_are_complete_and_safe( self, ) -> None:
         from tests.test_lead_story_commit import LeadStoryCommitTests
+        from tests.collaboration_contract_fixture import make_batch, store_batch
 
         case = LeadStoryCommitTests("test_request_is_inspectable_and_reject_is_zero_git_mutation")
         case.setUp()
@@ -101,6 +102,29 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(origin, tuple(event for event, _ in projected))
             self.assertEqual(project_conversation_messages((origin,), history_events=final_history), ())
             self.assertIn("Input tokens: 0 | Output tokens: 2", next(message.metadata for event, message in projected if event == finalization_notice))
+            fallback_trace = ReplyTrace("lead_orchestrator", "none", recovered_fields=("structured_reply",),
+                origin=ReplyTraceOrigin.RUNTIME_FALLBACK)
+            fallback_history = ()
+            for batch_id in dict.fromkeys(event.batch_id for event in final_history):
+                drafts = tuple(replace(event.to_draft(), payload=replace(event.payload, trace=fallback_trace)) if event == origin else
+                    replace(event.to_draft(), payload=replace(event.payload, trace=None)) if event == finalization_notice else event.to_draft()
+                    for event in final_history if event.batch_id == batch_id)
+                fallback_history = store_batch(fallback_history, make_batch(fallback_history, batch_id, *drafts))
+            self.assertEqual(tuple(event.event_id for event in fallback_history), tuple(event.event_id for event in final_history))
+            fallback_origin = next(event for event in fallback_history if event.event_id == origin.event_id)
+            self.assertNotEqual(fallback_origin.batch_digest, origin.batch_digest)
+            self.assertEqual(next(event.payload.synthesis_result_event_id for event in fallback_history
+                if event.event_id == result_event.event_id), fallback_origin.event_id)
+            fallback_notice = next(event for event in fallback_history if event.event_id == finalization_notice.event_id)
+            for component in (_collaboration_view.project_lead_turn_result(replace(finalized, trace=None),
+                    public_response_events=fallback_history),
+                    _collaboration_view.project_collaboration_event(fallback_notice, history_events=fallback_history)):
+                frame = next(item for item in component.items if type(item) is Message and item.content == finalized.message)
+                self.assertEqual((frame.sender, frame.metadata), ("Runtime", None))
+            fallback_messages = tuple(message for _, message in project_conversation_messages(fallback_history)
+                if message.content == finalized.message)
+            self.assertEqual(len(fallback_messages), 1)
+            self.assertEqual((fallback_messages[0].sender, fallback_messages[0].metadata), ("Runtime", None))
             long_prose, budget_notice = "L" * 32_768, "The provider round ended. The requested second specialist round exceeds the remaining call budget."
             for invocation_id in (origin.payload.provider_invocation_id, None):
                 overflow = tuple(replace(event, payload=replace(event.payload, message=long_prose, provider_invocation_id=invocation_id)) if event == origin else replace(event, payload=replace(event.payload, content=budget_notice, provider_invocation_id=invocation_id)) if event == finalization_notice else event for event in final_history)
@@ -165,6 +189,23 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(any(label in line and issue not in line for line in text.splitlines()))
 
             capability = _capability(CapabilityProfile.LINE, width=120)
+            generic_draft = replace(notice.to_draft(), event_id="generic_fallback", sender=LEAD,
+                payload=CollaborationMessagePayload("Generic fallback literal.",
+                    ReplyTrace("lead_orchestrator", "none", recovered_fields=("structured_reply",), origin=ReplyTraceOrigin.RUNTIME_FALLBACK),
+                    validation_details=("PRIVATE schema diagnostics.",)))
+            generic_user = replace(generic_draft, event_id="generic_user", sender=USER, recipient=LEAD,
+                payload=CollaborationMessagePayload("Show the runtime fallback."))
+            generic_history = store_batch((), make_batch((), "generic_fallback_batch", generic_user, generic_draft))
+            generic = generic_history[-1]
+            generic_view = _collaboration_view.project_collaboration_event(generic, history_events=generic_history)
+            generic_text = render_component(generic_view, capability).text
+            self.assertIn("Generic fallback literal.", generic_text); self.assertIn("PRIVATE schema diagnostics.", generic_text)
+            generic_frame = next(item for item in generic_view.items if type(item) is Message)
+            self.assertEqual((generic_frame.sender, generic_frame.content, generic_frame.metadata), ("Runtime", "Generic fallback literal.", None))
+            generic_messages = project_conversation_messages((generic,), history_events=generic_history)
+            self.assertEqual(len(generic_messages), 1)
+            self.assertEqual((generic_messages[0][1].sender, generic_messages[0][1].content, generic_messages[0][1].metadata),
+                ("Runtime", "Generic fallback literal.", None))
             lead_rendered = render_component(_collaboration_view.project_lead_turn_result(reviewed), capability).text
             application_rendered = render_component(_collaboration_view.project_artifact_application_decision_result(applied), capability).text
             commit_rendered = render_component(_collaboration_view.project_story_commit_decision_result(committed), capability).text
@@ -283,8 +324,8 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             ProviderCallAccounting, ProviderCallState, ProviderUsageObservation, ProviderUsageScope,
             account_provider_payload, )
         _, metrics_payload = account_provider_payload({"type": "object"}, {})
-        first_usage = ProviderUsage(25043, 149, 0)
-        second_usage = ProviderUsage(53410, 298, 0)
+        first_usage = ProviderUsage(32858, 200, 0)
+        second_usage = ProviderUsage(89057, 1676, 0)
         first_observation = ProviderUsageObservation(
             first_usage, ProviderUsageScope.SESSION_CUMULATIVE, "native-token-count",
             session_ref="footer-session", prefix_ref="footer-prefix-1", session_start=True)
@@ -295,17 +336,17 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             actual_transport_utf8_bytes=metrics_payload.payload_utf8_bytes,
             usage=first_usage, usage_observation=first_observation)
         second_accounting = replace(first_accounting, usage=second_usage,
-                                    usage_observation=second_observation)
+                                    usage_observation=second_observation, elapsed_ns=48_310_978_750)
         cumulative_lead = replace(lead, payload=replace(
             lead.payload, usage=first_usage, accounting=first_accounting))
         cumulative_repair = replace(repair, payload=replace(
             repair.payload, usage=second_usage, accounting=second_accounting))
         self.assertEqual(response_usage((cumulative_lead, cumulative_repair), **scope),
-                         ResponseUsage(53410, 298))
+                         ResponseUsage(89057, 1676))
         self.assertEqual(response_usage((cumulative_lead, cumulative_repair, cumulative_lead), **scope),
-                         ResponseUsage(53410, 298))
+                         ResponseUsage(89057, 1676))
         self.assertEqual(response_usage((cumulative_lead, cumulative_repair), **scope,
-                                        call_id="repair_lead"), ResponseUsage(28367, 149))
+                                        call_id="repair_lead"), ResponseUsage(56199, 1476))
         self.assertEqual(response_usage((cumulative_repair,), **scope, call_id="repair_lead"),
                          ResponseUsage())
         unclassified = replace(second_accounting, usage_observation=replace(
@@ -398,41 +439,84 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Usage scope: invocation (5 calls)", response_footer("question", whole))
         missing = response_usage(five_calls, **scope, call_id="missing_call")
         self.assertEqual((missing.scope, missing.call_count), ("physical_call", 1))
-        shared_text = "The same text has independent provider and host outcomes."
-        for acceptance in (task.LeadPublicResponseAcceptance.ACCEPTED, task.LeadPublicResponseAcceptance.REJECTED):
-            public = task.LeadPublicResponse(invocation_id=lead.payload.invocation_id, call_id="usage_call_5", ordinal=5,
-                call_kind=five_calls[-1].payload.call_kind.value, acceptance=acceptance, response_text=shared_text,
-                material_digest=exploration.material_sha256(shared_text))
-            ref = task.LeadMaterialRef(session_id=lead.session_id, conversation_id=lead.conversation_id, event_id="usage_public",
-                kind=task.LeadMaterialKind.PUBLIC_RESPONSE, material_digest=public.material_digest)
+        shared_text, host_text = "Literal recommendation.\r\n  Exact body.", "Before drafting: choose the actual target."
+        known_calls = (replace(cumulative_lead, event_id="recorded_call_1"),
+            replace(cumulative_repair, event_id="recorded_call_2"))
+        cases = ((task.LeadPublicResponseAcceptance.ACCEPTED, "question", False, five_calls),
+            (task.LeadPublicResponseAcceptance.ACCEPTED, "recommendation", True, known_calls),
+            (task.LeadPublicResponseAcceptance.ACCEPTED, None, True, known_calls),
+            (task.LeadPublicResponseAcceptance.REJECTED, "recommendation", True, five_calls))
+        for acceptance, response_kind, runtime, call_facts in cases:
+            last_call = call_facts[-1].payload
+            public = task.LeadPublicResponse(invocation_id=lead.payload.invocation_id,
+                call_id=last_call.call_id, ordinal=last_call.ordinal, call_kind=last_call.call_kind.value,
+                acceptance=acceptance, response_text=shared_text,
+                material_digest=exploration.material_sha256(shared_text), response_kind=response_kind)
+            ref = task.LeadMaterialRef(session_id=lead.session_id, conversation_id=lead.conversation_id,
+                event_id="usage_public", kind=task.LeadMaterialKind.PUBLIC_RESPONSE, material_digest=public.material_digest)
+            trace = ReplyTrace("lead_orchestrator", "none", ("current_input",), ("structured_reply",),
+                ReplyTraceOrigin.RUNTIME_FALLBACK) if runtime and response_kind else None
             question = c.LeadTurnResult(lead.session_id, lead.conversation_id, lead.turn_id, lead.step_id,
-                c.LeadOutcomeKind.QUESTION, shared_text, None, None, None, c.CollaborationNextAction.REPLY_TO_LEAD,
+                c.LeadOutcomeKind.QUESTION, host_text if runtime else shared_text, None, None, None,
+                c.CollaborationNextAction.REPLY_TO_LEAD,
                 evidence=c.CollaborationLeadEvidence(c.LeadOutcomeScope.WORKFLOW_META, c.LeadEvidenceStatus.NOT_APPLICABLE, ()),
-                public_responses=(c.LeadPublicResponseView(ref, public),), provider_invocation_id=lead.payload.invocation_id)
-            from tests.collaboration_contract_fixture import make_batch, store_batch
-            drafts = [replace(lead.to_draft(), event_id="usage_user", kind=CollaborationEventKind.MESSAGE,
-                sender=USER, recipient=LEAD, payload=CollaborationMessagePayload("Show token attribution metadata."))]
-            for call in five_calls:
+                trace=trace, public_responses=(c.LeadPublicResponseView(ref, public),), provider_invocation_id=lead.payload.invocation_id)
+            drafts = [replace(lead.to_draft(), event_id="usage_user", kind=CollaborationEventKind.MESSAGE, sender=USER, recipient=LEAD,
+                payload=CollaborationMessagePayload("Show exact call usage."))]
+            for call in call_facts:
                 draft = call.to_draft()
                 prepared = replace(call.payload, state=CollaborationProviderCallState.PREPARED, usage=None, accounting=None)
                 drafts.extend((replace(draft, event_id="prepared_" + call.event_id, payload=prepared), draft))
-            public_draft = replace(lead.to_draft(), event_id=ref.event_id,
-                kind=CollaborationEventKind.LEAD_PUBLIC_RESPONSE, sender=RUNTIME, recipient=USER,
-                payload=CollaborationLeadPublicResponsePayload(public))
-            judgment = c.CollaborationLeadJudgmentPayload(c.LeadOutcomeKind.QUESTION, shared_text, question.evidence,
-                provider_invocation_id=lead.payload.invocation_id)
+            public_draft = replace(lead.to_draft(), event_id=ref.event_id, kind=CollaborationEventKind.LEAD_PUBLIC_RESPONSE,
+                sender=RUNTIME, recipient=USER, payload=CollaborationLeadPublicResponsePayload(public))
+            judgment = c.CollaborationLeadJudgmentPayload(c.LeadOutcomeKind.QUESTION, question.message,
+                question.evidence, trace=trace, provider_invocation_id=lead.payload.invocation_id)
             drafts.extend((public_draft, replace(public_draft, event_id="usage_question", kind=CollaborationEventKind.MESSAGE,
                 sender=LEAD, payload=judgment)))
-            valid_history = store_batch((), make_batch((), "five_call_metadata", *drafts))
-            self.assertEqual(project_collaboration_history(valid_history).physical_calls_spent, 5)
-            rendered = render_component(_collaboration_view.project_lead_turn_result(question,
-                public_response_events=valid_history), _capability(CapabilityProfile.LINE, width=120)).text
-            self.assertIn("Outcome: " + acceptance.value, rendered)
-            self.assertIn("Outcome: question", rendered)
-            self.assertIn("Input tokens: 79,930 | Output tokens: 901", rendered)
-            self.assertIn("Input tokens: unavailable | Output tokens: unavailable", rendered)
-            self.assertIn("Usage scope: physical call", rendered)
-            self.assertIn("Usage scope: invocation (5 calls)", rendered)
+            valid_history = store_batch((), make_batch((), "response_metadata", *drafts))
+            projection = project_collaboration_history(valid_history)
+            self.assertEqual(projection.physical_calls_spent, len(call_facts))
+            self.assertIsNone(projection.current_recommendation_request)
+            view = _collaboration_view.project_lead_turn_result(question, public_response_events=valid_history, elapsed="00:02:33")
+            rendered = render_component(view, _capability(CapabilityProfile.LINE, width=120)).text
+            frames = tuple(item for item in view.items if type(item) is Message)
+            response = next(item for item in frames if item.content == shared_text)
+            self.assertEqual((response.sender, response.role), ("Lead", SemanticRole.AGENT))
+            self.assertIn("Outcome: " + (response_kind or "unavailable"), response.metadata)
+            self.assertNotIn("Outcome: accepted", rendered); self.assertNotIn("Outcome: rejected", rendered)
+            self.assertEqual(rendered.count("Literal recommendation."), 1)
+            turn = next(item for item in view.items if type(item) is Record and item.identity == "Turn usage")
+            self.assertIn("Elapsed: 00:02:33", turn.content); self.assertNotIn("Outcome:", turn.content)
+            self.assertIn(f"Usage scope: invocation ({len(call_facts)} calls)", turn.content)
+            self.assertIn("Input tokens: " + ("89,057 | Output tokens: 1,676" if len(call_facts) == 2 else
+                "unavailable | Output tokens: unavailable"), turn.content)
+            self.assertIn("Input tokens: " + ("56,199 | Output tokens: 1,476" if len(call_facts) == 2 else
+                "79,930 | Output tokens: 901"), response.metadata)
+            self.assertIn("Usage scope: physical call", response.metadata)
+            if len(call_facts) == 2:
+                self.assertIn("Elapsed: 00:00:48", response.metadata)
+            if runtime:
+                notice = next(item for item in frames if item.content == host_text)
+                self.assertEqual((notice.sender, notice.role, notice.metadata), ("Runtime", SemanticRole.INFO, None))
+            restored = project_conversation_messages(valid_history)
+            relevant = tuple(message for _, message in restored if message.content in (shared_text, host_text))
+            expected = ("Lead", "Runtime") if runtime and acceptance is task.LeadPublicResponseAcceptance.ACCEPTED else ("Runtime",) if runtime else ("Lead",)
+            self.assertEqual(tuple(message.sender for message in relevant), expected)
+            for message in relevant:
+                self.assertEqual(message.content, host_text if message.sender == "Runtime" else shared_text)
+                if message.sender == "Runtime":
+                    self.assertIsNone(message.metadata)
+                else:
+                    self.assertIn("Outcome: " + (response_kind or "unavailable"), message.metadata)
+            history_view = _collaboration_view.project_collaboration_event(valid_history[-1], history_events=valid_history)
+            history_frames = tuple(item for item in history_view.items if type(item) is Message)
+            final_frame = next(item for item in history_frames if item.content == question.message)
+            self.assertEqual(final_frame.sender, "Runtime" if runtime else "Lead")
+            if runtime:
+                self.assertIsNone(final_frame.metadata)
+            public_view = _collaboration_view.project_collaboration_event(valid_history[-2], history_events=valid_history)
+            public_frame = next(item for item in public_view.items if type(item) is Message and item.content == shared_text)
+            self.assertIn("Outcome: " + (response_kind or "unavailable"), public_frame.metadata)
 
 
 if __name__ == "__main__": unittest.main()

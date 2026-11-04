@@ -1214,6 +1214,42 @@ class CollaborationWireContractTests(unittest.TestCase):
                 self.assertEqual(_canonical_json(json.loads(wire)), wire)
         self.assertEqual(collaboration_proposal_digest(proposal), proposal.proposal_digest)
         self.assertEqual(collaboration_batch_digest(batch), batch.batch_digest)
+        from story_writing_agents import lead_task_transitions as task
+        from story_writing_agents.provider_wire import recover_lead_public_response, recover_lead_public_response_kind
+        literal = "Literal 한🙂\r\n  retained response."
+        public = task.LeadPublicResponse(invocation_id="inv_public", call_id="call_public", ordinal=1,
+            call_kind="initial", acceptance=task.LeadPublicResponseAcceptance.ACCEPTED,
+            response_text=literal, material_digest=task.task_material_sha256(literal))
+        legacy = task.task_value_to_dict(public)
+        self.assertNotIn("response_kind", legacy)
+        self.assertEqual(task.task_value_from_dict(task.LeadPublicResponse, legacy), public)
+        with self.assertRaises(ValueError):
+            task.task_value_from_dict(task.LeadPublicResponse, {**legacy, "response_kind": None})
+        from story_writing_agents.conversations import CollaborationLeadPublicResponsePayload
+        event = replace(history[0], kind=CollaborationEventKind.LEAD_PUBLIC_RESPONSE, sender=RUNTIME,
+            recipient=USER, payload=CollaborationLeadPublicResponsePayload(public))
+        legacy_wire = encode_collaboration_event(event)
+        self.assertEqual(encode_collaboration_event(decode_collaboration_event(legacy_wire)), legacy_wire)
+        known = replace(public, response_kind="recommendation")
+        known_event = replace(event, payload=CollaborationLeadPublicResponsePayload(known))
+        self.assertEqual(decode_collaboration_event(encode_collaboration_event(known_event)), known_event)
+        self.assertEqual((known.response_text, known.material_digest), (public.response_text, public.material_digest))
+        self.assertIsNone(decode_collaboration_event(legacy_wire).payload.response.response_kind)
+        for invalid in ("accepted", "proposal_drafting_recommendation", "", True, 42):
+            with self.assertRaises(ValueError):
+                replace(public, response_kind=invalid)
+        for native, kind in (("answer", "answer"), ("clarification_question", "question"),
+                ("proposal_drafting_recommendation", "recommendation"), ("specialist_consultation_proposal", "proposal")):
+            raw = json.dumps({"agent_action": {"task_result": {"response_type": native, "response_text": literal}}})
+            self.assertEqual(recover_lead_public_response_kind(raw, "lead-response-v8", maximum_utf8_bytes=32768), kind)
+            self.assertEqual(recover_lead_public_response(raw, "lead-response-v8", maximum_utf8_bytes=32768), literal)
+        for raw in ('{"response_type":"answer","response_type":"critique","response_text":"x"}',
+                '{"response_type":"unknown","response_text":"x"}',
+                '{"response_type":"answer","response_text":"x","value":NaN}',
+                '{"response_type":"answer","response_text":"x","task_result":{"response_text":"y"}}'):
+            self.assertIsNone(recover_lead_public_response_kind(raw, "lead-response-v8", maximum_utf8_bytes=32768))
+        self.assertIsNone(recover_lead_public_response_kind(
+            '{"response_type":"answer","response_text":"xx"}', "lead-response-v8", maximum_utf8_bytes=1))
 
         from story_writing_agents.agent_context.group_observation import LeadGroupTrace
         from story_writing_agents.conversations.events import CollaborationLeadGroupTracePayload

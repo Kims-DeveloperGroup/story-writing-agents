@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .authoring_task_lifecycle import (TaskBindingContext, TaskBindingPlan,
+    resolve_task_binding, bind_task_outcome, task_identity_for_origin)
+from .specialist_routing import scope_spec_from_dict
+from .provider_wire import project_agent_task_metadata
 from .blocking_work import run_blocking
 
 import time
@@ -11,6 +15,7 @@ from .agent_context.group_reporting import group_trace_report
 from .conversations.events import CollaborationLeadGroupTracePayload
 from .conversations.context import project_lead_group_traces
 from .conversations import build_final_review_evidence
+from .conversations.events import authoring_scope_is_view, confirmation_task_bindings
 from .review_contracts import FinalReviewQualification
 
 from .agent_context.actions import ContextCallReadFact, ContextSourceStatusReceipt
@@ -60,7 +65,8 @@ from .lead_provider_contracts import (
     LeadDecodedResult,
     empty_core_status_evidence,
 )
-from .provider_wire import normalize_result, recover_lead_public_response, hoist_schema_definitions
+from .provider_wire import (normalize_result, recover_lead_public_response,
+    recover_lead_public_response_kind, hoist_schema_definitions)
 
 from .lead_premise_decisions import (
     PremiseQuestionIntent, PremiseDecisionSpec, PremiseDecisionSelection,
@@ -841,7 +847,7 @@ def _lead_revision_result_contract(
             "anyOf": [*variants, discussion.schema_value()],
             "description": (
                 "Discuss the revision or propose fresh authoring under "
-                "the exact offered task pair."
+                "the host-bound work scope."
             ),
         }),
     )
@@ -993,12 +999,12 @@ def _lead_front_result_contract(
         + schema.get("description", "")
     ).rstrip()
     concise_descriptions = {
-        'Classify the current work and include every affected specialist domain and canonical workspace-relative target. Preserve the bound scope and task/revision when supplied.':
-            'Declare affected specialists and canonical targets; preserve task/revision.',
+        'Classify the current work and include every affected specialist domain and canonical workspace-relative target. Preserve the bound scope and work scope when supplied.':
+            'Declare affected specialists and canonical targets; preserve work scope.',
         'Disclose review_only only for an explicit request to evaluate the supplied original without authoring or artifact authority. Activity review alone does not imply this intent. Preserve bound intent; requested revisions need fresh authoring work.':
             'review_only evaluates an explicitly supplied original; activity review is not intent. Preserve bound intent. Revisions need fresh authoring authority.',
-        "Nonempty UTF-8 task instructions specifying this specialist's concrete deliverable and success criteria against the shared writing-task brief. Preserve its protected elements, change boundaries, and exact offered task/source identities.":
-            'State the concrete deliverable and success criteria; preserve protected elements, change boundaries, and exact task/source IDs.',
+        "Nonempty UTF-8 task instructions specifying this specialist's concrete deliverable and success criteria against the shared writing-task brief. Preserve its protected elements, change boundaries, and exact offered source identities.":
+            'State the concrete deliverable and success criteria; preserve protected elements, change boundaries, and exact source IDs.',
         "Preparation recommendation sources are not assignment inputs unless confirmed preparation has materialized and offered them here. Preserve all required inputs and each reviewer's own source.":
             'Use every required/reviewer input. Recommendation sources become inputs only when preparation offers them.',
         ' USER instruction input is host-wired separately from the exact adopted_idea supplied candidate; preserve every other declared source role.':
@@ -1108,10 +1114,10 @@ def _lead_front_result_contract(
                                                                                                                                        'proposed '
                                                                                                                                        'workspace-relative '
                                                                                                                                        'path.',
-     'Declare affected specialists and canonical targets; preserve task/revision.': 'Declare affected '
+     'Declare affected specialists and canonical targets; preserve work scope.': 'Declare affected '
                                                                                     'specialists/canonical '
                                                                                     'targets; preserve '
-                                                                                    'task/revision.',
+                                                                                    'work scope.',
      'Delete the document identified by completed READ evidence when its removal is intended; this proposes deletion without executing it.': 'Propose '
                                                                                                                                              'intended '
                                                                                                                                              'document '
@@ -1352,7 +1358,7 @@ def _lead_front_result_contract(
                                                                                                                                            'is '
                                                                                                                                            'not '
                                                                                                                                            'Apply.',
-     'State the concrete deliverable and success criteria; preserve protected elements, change boundaries, and exact task/source IDs.': 'Concrete '
+     'State the concrete deliverable and success criteria; preserve protected elements, change boundaries, and exact source IDs.': 'Concrete '
                                                                                                                                         'deliverable '
                                                                                                                                         'and '
                                                                                                                                         'success '
@@ -1420,7 +1426,7 @@ def _lead_front_result_contract(
         (" or completed authorized READ IDs" if facts.allow_read_sources else "") +
         ". Use the exact approved historical draft to prepare its document, preserving task/provenance; selection is not an assignment input or write authority. "
         "Specialist instruction rule (specialist_consultation_proposal.assignments[*].task_instructions): "
-        "state the concrete deliverable and success criteria; preserve protected elements, change boundaries, exact task/source IDs. "
+        "state the concrete deliverable and success criteria; preserve protected elements, change boundaries, exact source IDs. "
         "Writing intent rule (writing_task_scope.writing_intent): review_only evaluates the explicit supplied original; "
         "review activity is not intent. Keep bound intent; revisions need fresh authoring authority."
     )
@@ -1741,7 +1747,7 @@ class _AccountingContextProvider:
             getattr(delegate, "reference_operation_id"),
         )
         self._public_response_contract_id: str | None = None
-        self._public_observations: dict[str, tuple[str, int, CollaborationProviderCallKind]] = {}
+        self._public_observations: dict[str, tuple[str, int, CollaborationProviderCallKind, str | None]] = {}
         self._public_accepted_call_id: str | None = None
         self._public_responses_published = False
         self._group_observations: list[LeadGroupObservation] = []
@@ -1872,7 +1878,10 @@ class _AccountingContextProvider:
                 maximum_utf8_bytes=COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
             )
             if public_text is not None and request.call_id in self._submitted_call_ids:
-                self._public_observations[request.call_id] = (public_text, ordinal, kind)
+                self._public_observations[request.call_id] = (public_text, ordinal, kind,
+                    recover_lead_public_response_kind(result.response_text,
+                        self._public_response_contract_id,
+                        maximum_utf8_bytes=COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES))
         return result
 
     def record_validation_details(
@@ -1971,7 +1980,7 @@ class _AccountingContextProvider:
             accepted = call_id == self._public_accepted_call_id
             observation = self._public_observations.get(call_id)
             if observation is not None:
-                text, ordinal, kind = observation
+                text, ordinal, kind, response_kind = observation
                 if ordinal != call.ordinal or kind is not call.call_kind:
                     raise BackendProtocolError("public response changed its actual call identity")
                 acceptance = (
@@ -1984,6 +1993,7 @@ class _AccountingContextProvider:
                     call_kind=kind.value, acceptance=acceptance, response_text=text,
                     material_digest=task_material_sha256(text),
                     repair_of_call_id=previous_rejected, validation_details=details,
+                    response_kind=response_kind,
                 )
                 drafts.append(self._runtime._draft(
                     session_id=self._session_id, conversation_id=self._conversation_id,
@@ -2421,10 +2431,7 @@ def _lead_terminal_notice(language: str | None, tasks: tuple[tuple[str, int], ..
         ):
             continue
         paths.extend(line.split(": ", 1)[0] for line in lines if line.startswith("$"))
-    return json.dumps({"code": code, "language": language, "task_revisions": [
-        {"task_id": task_id, "task_revision": revision}
-        for task_id, revision in tasks
-    ],
+    return json.dumps({"code": code, "language": language,
                        "state": state, "paths": tuple(dict.fromkeys(paths))},
                       ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
@@ -2506,6 +2513,23 @@ def _coverage_review_targets(
                 boundary_digest=None, whole_source=False, boundary_kind="unread",
                 availability=ReviewTargetAvailability.UNREAD,
                 source_status=item.status.value, source_manifest_digest=item.manifest_digest)
+    return tuple(targets.values())
+
+
+def _authorized_preliminary_targets(inputs, authorization) -> tuple[ReviewTarget, ...]:
+    targets = {item.input_id: item for item in _coverage_review_targets(
+        _provided_review_targets(inputs), tuple(ContextCallReadFact.from_evidence(item)
+            for item in authorization.completed_evidence), authorization.core_statuses)}
+    by_id = {item.input_id: item for item in inputs}
+    for reference in authorization.mandatory_references:
+        if reference.reference_id not in targets:
+            continue
+        captured = by_id[reference.reference_id]
+        targets[reference.reference_id] = ReviewTarget(reference.reference_id,
+            ReviewTargetKind.WRITING_ARTIFACT, targets[reference.reference_id].target_id,
+            reference.revision, reference.content_digest, reference.revision, reference.content_digest,
+            captured.start_line is None, "whole" if captured.start_line is None else "artifact_lines",
+            captured.start_line, captured.end_line, availability=ReviewTargetAvailability.COMPLETED_READ)
     return tuple(targets.values())
 
 
@@ -4657,9 +4681,17 @@ class StoryRuntime:
         )
         prior_scope = self._authoring_tasks(prior_events).get(scope.task_id)
         fresh_pair = (
-            scope.task_id == source.step_id and scope.task_revision == 1
+            scope.task_id == task_identity_for_origin(source.step_id)
+            and scope.task_revision == 1
             if prior_scope is None
-            else scope.task_revision == prior_scope.task_revision + 1
+            else (
+                scope.task_revision == prior_scope.task_revision + 1
+                or (
+                    (scope.task_id, scope.task_revision)
+                    == (prior_scope.task_id, prior_scope.task_revision)
+                    and not confirmed_authoring_proposals(prior_scope, prior_events)
+                )
+            )
         )
         fresh_consultation = (
             scope.schema_version == 3
@@ -4905,9 +4937,12 @@ class StoryRuntime:
             CollaborationLeadOutcomeFailureCode.CANCELLED,
             CollaborationLeadOutcomeFailureCode.INTERRUPTED,
         }
+        superseded_scope = (type(lead_result.payload) is CollaborationLeadJudgmentPayload
+            and lead_result.payload.kind is LeadOutcomeKind.RECOMMENDATION
+            and decision.kind is CollaborationConfirmationDecision.CONFIRM)
         state = (LeadRecommendationState.INTERRUPTED if interrupted else
                  LeadRecommendationState.FAILED if failed else
-                 LeadRecommendationState.SUPERSEDED if decision.kind is CollaborationConfirmationDecision.REVISE
+                 LeadRecommendationState.SUPERSEDED if decision.kind is CollaborationConfirmationDecision.REVISE or superseded_scope
                  else LeadRecommendationState.COMPLETED)
         return self._draft(
             session_id=lead_result.session_id, conversation_id=lead_result.conversation_id,
@@ -9061,6 +9096,13 @@ class StoryRuntime:
                     rules = constraints.diagnose(answer)
                     if rules:
                         raise LeadContractError(rules)
+                if constraints is not None and constraints.scope is not None:
+                    value = json.loads(answer)
+                    if type(value.get("authoring_scope")) is dict:
+                        scope = constraints.scope
+                        value = bind_task_outcome(value, TaskBindingPlan(scope.task_id,
+                            scope.task_revision, "locked"))
+                        answer = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
                 decoded = decoder(answer, artifact_binding)
 
             lead_factory = None
@@ -11911,7 +11953,10 @@ class StoryRuntime:
                         continue
                     offered_tasks[(item.task_id, item.task_revision + 1)] = item
                 if not successor_only:
-                    offered_tasks[(step_id, 1)] = None
+                    offered_tasks[(task_identity_for_origin(step_id), 1)] = None
+                    for active_scope in available_tasks.values():
+                        offered_tasks.setdefault((active_scope.task_id, active_scope.task_revision + 1), active_scope)
+
                 elif not offered_tasks:
                     return self._structured_fallback_lead_result(
                         session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
@@ -11930,6 +11975,8 @@ class StoryRuntime:
                 decision = cast(LeadRecommendationDecisionPayload, preparation.decision_event.payload).decision
                 revision = request_scope.task_revision + int(decision.kind is CollaborationConfirmationDecision.REVISE)
                 offered_tasks = {(request_scope.task_id, revision): current_scope}
+                if decision.kind is CollaborationConfirmationDecision.CONFIRM:
+                    offered_tasks[(request_scope.task_id, request_scope.task_revision + 1)] = current_scope
             if interaction_mode is LeadInteractionMode.EXPLORATION:
                 offered_tasks = {}
             elif adoption_capture is not None:
@@ -12137,6 +12184,32 @@ class StoryRuntime:
                 reference_operation_id, reservations = self._reference_reservations(
                     reference_operation
                 )
+                binding_prior = None
+                if preparation_request is not None:
+                    binding_prior = preparation_request.authoring_scope
+                elif previous_scope is not None:
+                    binding_prior = previous_scope
+                elif task_receipt is not None and task_receipt.source_task_ref is not None:
+                    binding_prior = available_tasks.get(task_receipt.source_task_ref.task_id)
+                elif adoption_capture is None and premise_capture is None:
+                    local_ids = {event.payload.authoring_scope.task_id
+                        for event in task_events if event.conversation_id == conversation_id
+                        and getattr(event.payload, "authoring_scope", None) is not None
+                        and event.payload.authoring_scope.task_id in available_tasks}
+                    local_scopes = [available_tasks[identity] for identity in local_ids
+                        if available_tasks[identity].activity is not AuthoringActivity.WORKFLOW]
+                    if len(local_scopes) > 1:
+                        self._fail_reference_operation(reference_operation,
+                            BackendProtocolError("explicit host task selection required"))
+                        return self._structured_fallback_lead_result(
+                            session_id=session_id, conversation_id=conversation_id,
+                            turn_id=turn_id, step_id=step_id,
+                            message="Select the writing work to continue through the task controls.",
+                            provider_invocation_id=provider.invocation_id)
+                    binding_prior = next(iter(local_scopes), None)
+                binding_reserved = (next(iter(offered_tasks)) if len(offered_tasks) == 1 else None)
+                binding_pinned = (binding_prior is not None and bool(
+                    confirmed_authoring_proposals(binding_prior, task_events)))
                 current_value: dict[str, object] = {
                     "conversation_id": conversation_id,
                     "provider_constraints": constraints.prompt_facts(),
@@ -12156,14 +12229,8 @@ class StoryRuntime:
         for draft in objective_projection.offered_draft_sources
         for event in objective_events if event.event_id == draft.event_id
     ],
-    "authoring_tasks": [
-                        {"task_id": key[0], "task_revision": key[1],
-                         **({"current_scope": authoring_scope_to_dict(item)}
-                            if item is not None else {}),
-                         **({"purpose": "Fresh task revision: propose and confirm new current-revision work; earlier drafts do not prove this revision."}
-                            if item is not None and key[1] == item.task_revision + 1 else {})}
-                        for key, item in offered_tasks.items()
-                    ],
+    "current_writing_scope": (None if binding_prior is None else
+        project_agent_task_metadata(authoring_scope_to_dict(binding_prior), "authoring_scope")),
                     "workflow": "lead_front_channel",
                     **({"existing_task_call_limit": ordinary_front_cap,
                         "existing_task_call_limit_reason": (
@@ -12289,6 +12356,8 @@ class StoryRuntime:
                 prepare_selected = False
                 read_ids: tuple[str, ...] = ()
                 read_reviewers: tuple[tuple[str, str], ...] = ()
+                host_binding_plan = None
+
 
                 def diagnose(answer: str) -> tuple[DomainValidationRule, ...]:
                     if discussion_constraints is not None:
@@ -12383,6 +12452,67 @@ class StoryRuntime:
                                 'lead result violates its offered constraints'),
                             LeadContractError(rules),
                         )
+                    nonlocal host_binding_plan
+                    proposed_value = json.loads(answer)
+                    raw_spec = proposed_value.get("authoring_scope")
+                    if type(raw_spec) is dict:
+                        spec = scope_spec_from_dict(raw_spec, interpretation=proposed_value["message"])
+                        workflow_cancellation = (spec.activity is AuthoringActivity.WORKFLOW
+                            and type(proposed_value.get("objective_intent")) is dict
+                            and proposed_value["objective_intent"].get("action") == LeadObjectiveAction.CANCEL.value)
+                        authority_free = (proposed_value.get("kind", "answer") in {"answer", "question", "critique"}
+                            and not any(proposed_value.get(name) for name in
+                                ("proposal", "recommended_action", "artifact_intent"))
+                            and (not proposed_value.get("objective_intent") or workflow_cancellation)
+                            and (spec.activity is AuthoringActivity.WORKFLOW
+                                or binding_pinned or "preliminary_review" in proposed_value))
+                        prior_key = proposed_key = None
+                        confirmed = () if binding_prior is None else confirmed_authoring_proposals(
+                            binding_prior, task_events)
+                        if (confirmed and spec.schema_version == 3 and not authority_free
+                                and spec.intent is binding_prior.intent):
+                            captured = confirmed[-1]
+                            comparison_scope = replace(binding_prior, activity=spec.activity,
+                                target_paths=spec.target_paths, domains=spec.domains,
+                                interpretation=spec.interpretation, contributions=spec.contributions,
+                                dependency_slots=spec.dependency_slots)
+                            old_material_ids = tuple(dict.fromkeys(alias for assignment in captured.assignments
+                                for alias in assignment.input_ids))
+                            materialized = captured.basis.inputs
+                            proposed_material_ids = old_material_ids
+                            prior_key = authoring_capture_identity(captured.authoring_scope, captured.basis,
+                                material_inputs=captured.basis.inputs, material_input_ids=old_material_ids)
+                            selected_premises = captured.basis.shared_premises
+                            if type(proposed_value.get("proposal")) is dict:
+                                # Normalize against the existing capture solely for comparison;
+                                # no new identity or authority is assigned here.
+                                comparison_value = bind_task_outcome(proposed_value,
+                                    TaskBindingPlan(binding_prior.task_id, binding_prior.task_revision, "comparison"))
+                                comparison_outcome = self._decode_lead_outcome(json.dumps(comparison_value),
+                                    expected_relation=expected_relation)
+                                comparison_evidence = self._durable_lead_evidence(comparison_outcome, authorization, inputs)
+                                materialized = self._materialize_lead_evidence_inputs(inputs, comparison_evidence)
+                                proposed_material_ids = tuple(dict.fromkeys(alias
+                                    for assignment in comparison_outcome.proposal.assignments
+                                    for alias in assignment.input_ids))
+                                selected_premises = self._capture_shared_premises(session_id,
+                                    comparison_outcome.proposal, materialized)
+                            refs = self._editorial_refs_for_scope(session_id, comparison_scope, session_history)
+                            context_digest = None if not refs else session_history.editorial_state().context_digest(refs)
+                            proposed_key = authoring_capture_identity(comparison_scope, captured.basis,
+                                shared_premises=selected_premises, editorial_refs=refs,
+                                editorial_context_digest=context_digest, material_inputs=materialized,
+                                material_input_ids=proposed_material_ids)
+                        context = TaskBindingContext(binding_prior, task_identity_for_origin(step_id), pinned=binding_pinned,
+                            locked=(preparation is not None and preparation.decision_event.payload.decision.kind
+                                is CollaborationConfirmationDecision.CONFIRM), reserved_pair=binding_reserved,
+                            prior_material_key=prior_key, proposed_material_key=proposed_key, authority_free=authority_free)
+                        host_binding_plan = resolve_task_binding(spec, context)
+                        offered_tasks.setdefault((host_binding_plan.task_id,
+                            host_binding_plan.task_revision), binding_prior)
+                        proposed_value = bind_task_outcome(proposed_value, host_binding_plan,
+                            preliminary_targets=_authorized_preliminary_targets(inputs, authorization))
+                        answer = json.dumps(proposed_value, ensure_ascii=False, separators=(",", ":"))
                     decoded = self._decode_lead_outcome(
                         answer,
                         expected_relation=expected_relation,
@@ -12403,8 +12533,24 @@ class StoryRuntime:
                             raise _LeadOutcomeValidationError("premise analysis omits an affected source owner")
                         return
                     if preparation is not None:
-                        decoded = self._bind_recommendation_preparation(decoded, preparation)
-                        self._validate_recommendation_preparation(decoded, preparation)
+                        if host_binding_plan is not None and host_binding_plan.transition == "supersede":
+                            request = preparation.request_event.payload
+                            kind = request.kind
+                            scope = decoded.authoring_scope
+                            action = LeadRecommendedAction(kind, request.purpose,
+                                spec.interpretation, request.expected_result,
+                                tuple(item.input_id for item in inputs
+                                    if item.input_id not in PREPARATION_INPUT_IDS),
+                                target_paths=scope.target_paths if kind is LeadRecommendationActionKind.PREPARE_ARTIFACT else (),
+                                specialist_ids=required_authoring_specialists(scope)
+                                    if kind is LeadRecommendationActionKind.PREPARE_CONSULTATION else ())
+                            decoded = replace(decoded, kind=LeadOutcomeKind.RECOMMENDATION,
+                                message="The proposed work changes the confirmed preparation. Review this new preparation: " + spec.interpretation,
+                                proposal=None, artifact_intent=None, objective_intent=None,
+                                recommended_action=action)
+                        else:
+                            decoded = self._bind_recommendation_preparation(decoded, preparation)
+                            self._validate_recommendation_preparation(decoded, preparation)
                     if prepare_selected and (
                         decoded.objective_intent is None
                         or decoded.objective_intent.next_step is not ArtifactObjectiveNextStep.PREPARE
@@ -12525,7 +12671,17 @@ class StoryRuntime:
                             '$.authoring_scope',
                             'selected authoring task changed while the Lead was interpreting the request',
                         )
-                    if selected_prior is not None and (
+                    provisional_brief_refinement = (
+                        selected_prior is not None
+                        and authoring_scope.schema_version >= 3
+                        and authoring_scope.task_revision == selected_prior.task_revision
+                        and not binding_pinned
+                        and host_binding_plan is not None
+                        and host_binding_plan.transition == "refine"
+                        and type(raw_spec) is dict
+                        and "interpretation" in raw_spec
+                    )
+                    if selected_prior is not None and not provisional_brief_refinement and (
                         authoring_scope.schema_version < 3
                         or authoring_scope.task_revision == selected_prior.task_revision
                     ):
@@ -12547,24 +12703,14 @@ class StoryRuntime:
                             authoring_scope = replace(authoring_scope, target_paths=tuple(dict.fromkeys(
                                 (*authoring_scope.target_paths, *objective_paths),
                             )))
-                    resolved_scope = self._resolve_authoring_scope(authoring_scope, inputs, decoded_evidence, selected_prior)
+                    resolved_scope = self._resolve_authoring_scope(authoring_scope, inputs, decoded_evidence, selected_prior,
+                        allow_provisional=not binding_pinned,
+                        allow_view=(host_binding_plan is not None and authority_free))
                     if decoded.preliminary_review is not None:
-                        current_targets = _provided_review_targets(inputs) + _read_review_targets(tuple(
-                            ContextCallReadFact.from_evidence(item) for item in authorization.completed_evidence))
+                        current_targets = _authorized_preliminary_targets(inputs, authorization)
                         expected = {item.input_id: item for item in current_targets}
-                        input_by_id = {item.input_id: item for item in inputs}
-                        for reference in authorization.mandatory_references:
-                            captured = input_by_id[reference.reference_id]
-                            expected[reference.reference_id] = ReviewTarget(reference.reference_id,
-                                ReviewTargetKind.WRITING_ARTIFACT, expected[reference.reference_id].target_id,
-                                reference.revision, reference.content_digest, reference.revision,
-                                reference.content_digest, captured.start_line is None,
-                                "whole" if captured.start_line is None else "artifact_lines",
-                                captured.start_line, captured.end_line,
-                                availability=ReviewTargetAvailability.COMPLETED_READ)
                         expected = {item.input_id: item for item in scoped_preliminary_targets(
-                            _coverage_review_targets(tuple(expected.values()), (), authorization.core_statuses),
-                            resolved_scope.target_paths)}
+                            tuple(expected.values()), resolved_scope.target_paths)}
                         for target in decoded.preliminary_review.targets:
                             if expected.get(target.input_id) != target:
                                 raise _LeadOutcomeValidationError("preliminary target is not this invocation's captured material")
@@ -12699,7 +12845,9 @@ class StoryRuntime:
                         if type(qualified) is AuthoringAdmissionNeeded:
                             decoded = replace(decoded, kind=LeadOutcomeKind.QUESTION,
                                 message=qualified.message, proposal=None, artifact_intent=None,
-                                objective_intent=None, recommended_action=None)
+                                objective_intent=None, recommended_action=None,
+                                trace=ReplyTrace(role=LEAD_ORCHESTRATOR, action="none", context_sources=(),
+                                    recovered_fields=("runtime_notice",), origin=ReplyTraceOrigin.RUNTIME_FALLBACK))
                         else:
                             needs_readiness_preparation = decoded.artifact_intent is not None or (decoded.recommended_action is not None and
                                 (decoded.recommended_action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT or decoded.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}))
@@ -12708,7 +12856,9 @@ class StoryRuntime:
                                          if needs_readiness_preparation or drafting else None)
                             if type(readiness) is CoreDocumentReadinessNeeded:
                                 decoded = replace(decoded, kind=LeadOutcomeKind.QUESTION, message=readiness.message,
-                                    proposal=None, artifact_intent=None, objective_intent=None, recommended_action=None)
+                                    proposal=None, artifact_intent=None, objective_intent=None, recommended_action=None,
+                                    trace=ReplyTrace(role=LEAD_ORCHESTRATOR, action="none", context_sources=(),
+                                        recovered_fields=("runtime_notice",), origin=ReplyTraceOrigin.RUNTIME_FALLBACK))
                                 return
                             decoded = replace(decoded, core_document_readiness=readiness, authoring_admission=qualified,
                                 proposal=(replace(decoded.proposal, authoring_admission=qualified,
@@ -12801,7 +12951,8 @@ class StoryRuntime:
                     self._validate_objective_routing(
                         decoded, objective_projection, objective_events, current_task_events,
                     )
-                    if preparation is not None:
+                    if preparation is not None and not (host_binding_plan is not None
+                            and host_binding_plan.transition == "supersede"):
                         self._validate_recommendation_preparation(decoded, preparation)
                     self._validate_objective_selection(
                         decoded, objective_projection, decoded_artifact_candidate,
@@ -13146,11 +13297,11 @@ class StoryRuntime:
                             action=outcome.kind.value,
                             request=contextual_request,
                             result=result,
-                            origin=(
-                                ReplyTraceOrigin.RECOVERED
-                                if corrective_rejection_code is not None
-                                else ReplyTraceOrigin.PROVIDER
-                            ),
+                            origin=(ReplyTraceOrigin.RUNTIME_FALLBACK
+                                if outcome.trace is not None and
+                                    outcome.trace.origin is ReplyTraceOrigin.RUNTIME_FALLBACK
+                                else ReplyTraceOrigin.RECOVERED if corrective_rejection_code is not None
+                                else ReplyTraceOrigin.PROVIDER),
                         ),
                     )
                 self._finish_reference_operation(reference_operation)
@@ -13586,7 +13737,8 @@ class StoryRuntime:
                     artifact_binding=artifact_binding,
                     tail_sequence=refreshed.last_sequence + len(final_drafts) + 1,
                     step_id=self._new_id("s") if refreshed.current_proposal is not None else None,
-                    previous=None if preparation is None else preparation.request_event.payload,
+                    previous=None if preparation is None or (host_binding_plan is not None
+                            and host_binding_plan.transition == "supersede") else preparation.request_event.payload,
                     session_history=session_history,
                 )
                 provider._public_accepted_call_id = provider.last_submitted_call_id
@@ -14115,6 +14267,8 @@ class StoryRuntime:
         selected = [] if previous is None else [
             item.event_id for item in previous.draft_sources
         ]
+        if intent.action is LeadObjectiveAction.CANCEL:
+            return tuple(selected)
         scope = outcome.authoring_scope
         if scope is None:
             return tuple(selected)
@@ -15035,7 +15189,7 @@ class StoryRuntime:
                 scope = authoring_scope_from_dict({
                     "schema_version": 3 if "contributions" in raw_scope else 2 if "intent" in raw_scope else 1,
                     **{key: item for key, item in raw_scope.items() if key != "task"},
-                    "task_id": task_id, "task_revision": int(revision), "interpretation": value["message"]})
+                    "task_id": task_id, "task_revision": int(revision), "interpretation": raw_scope.get("interpretation", value["message"])})
                 record = preliminary_review_from_dict(value["preliminary_review"])
                 status = (LeadEvidenceStatus.CONFLICTING if record.conflicts else
                           LeadEvidenceStatus.INCOMPLETE if record.excluded_input_ids or record.missing_information
@@ -15119,7 +15273,7 @@ class StoryRuntime:
                     **{key: item for key, item in raw_scope.items() if key != 'task'},
                     'task_id': task_id,
                     'task_revision': validation_call('$.authoring_scope.task', int, raw_revision),
-                    'interpretation': message,
+                    'interpretation': raw_scope.get('interpretation', message),
                 },
             )
             if assessment_present and (
@@ -15634,7 +15788,7 @@ class StoryRuntime:
             "reserved_preparation_and_final_review_calls": StoryRuntime._future_authoring_floor(scope, proposal.basis.inputs),
         }
         return message + "\n\nProposed responsibilities, immutable premises and bounded cost: " + json.dumps(
-            disclosure, ensure_ascii=False, sort_keys=True,
+            project_agent_task_metadata(disclosure), ensure_ascii=False, sort_keys=True,
         )
 
     @staticmethod
@@ -15715,10 +15869,12 @@ class StoryRuntime:
         scope: AuthoringScope,
         inputs: tuple[CollaborationInputRevision, ...],
         evidence: CollaborationLeadEvidence | None,
-        previous: AuthoringScope | None = None,
+        previous: AuthoringScope | None = None, *, allow_provisional: bool = False, allow_view: bool = False,
     ) -> AuthoringScope:
         if scope.schema_version == 3:
             scope = replace(scope, domains=required_authoring_domains(scope))
+        if allow_view:
+            return scope
         if previous is not None and scope.intent is not previous.intent:
             raise validation_failure(
                 _LeadOutcomeValidationError('existing task intent cannot change'),
@@ -15729,8 +15885,10 @@ class StoryRuntime:
             if scope.task_revision not in {previous.task_revision, previous.task_revision + 1}:
                 raise BackendProtocolError("authoring task revision must remain current or advance exactly once")
             if scope.task_revision == previous.task_revision:
-                if scope != previous:
-                    raise BackendProtocolError("changed brief, roles or sources require a fresh task revision")
+                if scope != previous and not allow_provisional:
+                    comparable = replace(scope, activity=previous.activity, interpretation=previous.interpretation)
+                    if comparable != previous:
+                        raise BackendProtocolError("changed brief, roles or sources require a fresh task revision")
         if scope.activity is AuthoringActivity.WORKFLOW:
             if previous is not None and previous.activity is not AuthoringActivity.WORKFLOW:
                 raise validation_failure(
@@ -15798,8 +15956,14 @@ class StoryRuntime:
         events: tuple[CollaborationEvent, ...],
     ) -> dict[str, AuthoringScope]:
         tasks: dict[str, AuthoringScope] = {}
+        confirmations = confirmation_task_bindings(events)
+        pinned = set()
         for event in events:
+            if event.event_id in confirmations:
+                pinned.add(confirmations[event.event_id])
             payload = event.payload
+            if authoring_scope_is_view(payload, pinned):
+                continue
             if type(payload) in {CollaborationProposal, CollaborationLeadJudgmentPayload,
                                  LeadRecommendationRequestPayload} and (
                 payload.authoring_scope is not None
