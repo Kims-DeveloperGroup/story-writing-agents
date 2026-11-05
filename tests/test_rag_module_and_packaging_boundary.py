@@ -1652,7 +1652,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     "viewer",
                 ]
                 requirements = story_distribution.metadata.get_all("Requires-Dist")
-                assert len(requirements) == 2
+                assert len(requirements) == 3
+                assert "markdown-it-py<5,>=4.2" in requirements
                 viewer_requirements = [
                     requirement
                     for requirement in requirements
@@ -1824,6 +1825,11 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 "install",
                 "--no-build-isolation",
                 old_requirement,
+                next(
+                    requirement
+                    for requirement in tomllib.loads((story_project / "pyproject.toml").read_text())["project"]["dependencies"]
+                    if requirement.startswith("markdown-it-py")
+                ),
             ]
             seeded = subprocess.run(
                 seed_command,

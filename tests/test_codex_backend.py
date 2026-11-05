@@ -1985,10 +1985,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     def invocations(self) -> list[dict[str, object]]:
         if not self.log_path.exists():
             return []
-        return [
-            json.loads(line)
-            for line in self.log_path.read_text(encoding="utf-8").splitlines()
-        ]
+        with self.log_path.open(encoding="utf-8") as invocation_log:
+            return [
+                json.loads(line)
+                for line in invocation_log
+            ]
 
     def provider_invocations(self) -> list[dict[str, object]]:
         return [item for item in self.invocations() if "payload" in item]
