@@ -63,7 +63,7 @@ def _document_plan_native_response(call, value):
 
 def _document_global_candidate_script(target_path, old_global_bytes, updated_global):
     return artifact._artifact_outcome(
-        operations=lambda _call, material, _input: [{"kind": "replace", "evidence_id": material["qualified_read_ids"][target_path], "new_text": updated_global}],
+        operations=lambda _call, material, input_payload: [{"kind": "replace", "evidence_id": material["qualified_read_ids"][target_path], "new_text": updated_global}],
         authoring_scope=lambda call: lead._live_scope(call, activity="review", domains=("plot_structure",), paths=(target_path,),
             contributions=[{"domain": "plot_structure", "role": "constraint_assessor"}]),
         authoring_assessment=asdict(task_assessment(foundation_ids=("user_input",), actions=('Review only the exact USER-supplied global-outline replacement; do not Apply or resolve the chapter ending.',))),
