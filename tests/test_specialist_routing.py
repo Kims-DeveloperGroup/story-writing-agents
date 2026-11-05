@@ -1,5 +1,5 @@
 """Pure routing, versioned wire compatibility, and draft/review acceptance."""
-from dataclasses import FrozenInstanceError, fields, replace
+from dataclasses import FrozenInstanceError, asdict, fields, replace
 import json
 import hashlib
 from pathlib import Path
@@ -671,8 +671,41 @@ class SpecialistRoutingTests(unittest.TestCase):
             "document_selection": documents.document_node_selection_to_dict(node_selection),
             "plan_candidate_material": [{"candidate": json.loads(artifacts.serialize_artifact_review_candidate(exact_candidate))}],
             "document_work_plan": {"plan": documents.document_plan_to_dict(plan)}}}
-        guided_document = add_contract_guidance(document_input, {})
-        self.assertEqual({key: value for key, value in guided_document.items() if key != "contract_guidance"}, document_input)
+        from story_writing_agents import StoryRuntime
+        # Constructed context metadata tests lossless presentation, not objective authority.
+        document_input["task_input"]["artifact_objectives"] = {"conversation_id": task.conversation_id,
+            "objectives": [{"facts": {"target_paths": [node.target_path for node in plan.nodes],
+                "request": "Preserve the original requested draft and every exact target."}, "state": "open",
+                "document_node": documents.document_node_binding_to_dict(binding), "document_plan": asdict(plan)}]}
+        canonical = lambda value: json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        original_input = canonical(document_input["task_input"])
+        compacted = StoryRuntime._compact_document_plan_input(document_input["task_input"])
+        self.assertEqual(canonical(document_input["task_input"]), original_input)
+        shared_plan = compacted["document_work_plan"]["plan"]
+        self.assertIs(shared_plan, document_input["task_input"]["document_work_plan"]["plan"])
+        compacted_row = compacted["artifact_objectives"]["objectives"][0]
+        self.assertNotIn("document_plan", compacted_row)
+        self.assertEqual(compacted_row["document_plan_ref"], documents.document_plan_ref_to_dict(plan.ref))
+        expanded = json.loads(canonical(compacted))
+        expanded_row = expanded["artifact_objectives"]["objectives"][0]
+        expanded_row.pop("document_plan_ref")
+        expanded_row["document_plan"] = expanded["document_work_plan"]["plan"]
+        self.assertEqual(canonical(expanded), original_input)
+        expected_saving = len(canonical({"document_plan": asdict(plan)})) - len(canonical({"document_plan_ref": documents.document_plan_ref_to_dict(plan.ref)}))
+        self.assertGreater(expected_saving, 0)
+        self.assertEqual(len(original_input) - len(canonical(compacted)), expected_saving)
+        mismatched_ref = json.loads(original_input)
+        mismatched_ref["artifact_objectives"]["objectives"][0]["document_plan"]["ref"]["plan_revision"] += 1
+        mismatched_content = json.loads(original_input)
+        mismatched_content["artifact_objectives"]["objectives"][0]["document_plan"]["nodes"][0]["expected_result"] += " Distinct declared result."
+        synthesis_input = json.loads(original_input)
+        synthesis_input.pop("document_work_plan")
+        for unchanged_input in (mismatched_ref, mismatched_content, synthesis_input):
+            before_compaction = canonical(unchanged_input)
+            self.assertIs(StoryRuntime._compact_document_plan_input(unchanged_input), unchanged_input)
+            self.assertEqual(canonical(unchanged_input), before_compaction)
+        guided_document = add_contract_guidance({"task_input": compacted}, {})
+        self.assertEqual({key: value for key, value in guided_document.items() if key != "contract_guidance"}, {"task_input": compacted})
         self.assertTrue(guided_document["contract_guidance"]["input_fields"])
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):

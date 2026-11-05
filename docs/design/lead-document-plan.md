@@ -22,6 +22,8 @@ The host builds the plan from actual scoped intent, sources and readiness. The p
 
 Task identity follows the runtime-owned binding introduced by #923. Document bindings are created after the host assigns the task scope. Their task references remain available to the API and user interface; the existing agent-context projection removes this lifecycle metadata from provider input. Candidate and source revisions remain evidence.
 
+Provider input keeps one complete plan in `document_work_plan.plan`. An objective row uses `document_plan_ref` only when its reference and complete canonical JSON match that shared plan. Other facts, bindings and source data remain in the row. Host views and stored records retain the complete values; inputs without the shared plan keep their existing representation. This reuses identical data within the existing context budget.
+
 ## Execution and approval
 
 Global outline and part outline are separate Plot tasks. A dependent writer cannot run against a future output. Independent analysis and review of the same exact immutable candidate retain their existing parallel paths.
