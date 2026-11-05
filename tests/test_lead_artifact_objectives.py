@@ -393,8 +393,8 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertIs(invalid.status, editorial.EditorialRecordStatus.INVALID_PROVENANCE)
         self.assertEqual(self.snapshots()[1:], pristine[1:])
         self.assertEqual({type(e.payload) for e in self.history(conversation_id)
-                          if e.kind is c.CollaborationEventKind.ARTIFACT_OBJECTIVE}, {c.ArtifactObjectivePayloadV2})
-        self.assertEqual(self.projection(conversation_id).artifact_objectives, (objective,))
+                          if e.kind is c.CollaborationEventKind.ARTIFACT_OBJECTIVE}, {c.ArtifactObjectivePayload, c.ArtifactObjectivePayloadV2})
+        self.assertEqual(self.projection(conversation_id).artifact_objectives, (*source_objectives, objective))
         self.assertEqual(objective.facts.origin_recommendation_request_event_id, request.request_event_id)
         self.assertEqual(objective.facts.origin_recommendation_decision_event_id,
                          self.payload_events(conversation_id, c.LeadRecommendationDecisionPayload)[0].event_id)
@@ -402,7 +402,8 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         unchanged_payload = replace(satisfied.payload, outcome=c.ArtifactApplicationOutcomeKind.UNCHANGED,
                                     result=replace(satisfied.payload.result, state=ArtifactApplicationState.UNCHANGED))
         unchanged_history = objectives.rewrite_history(self.history(conversation_id), satisfied.event_id, payload=unchanged_payload)
-        self.assertIs(c.project_collaboration_history(unchanged_history).artifact_objectives[0].state, c.ArtifactObjectiveState.SATISFIED)
+        self.assertIs(next(item for item in c.project_collaboration_history(unchanged_history).artifact_objectives
+            if item.facts.objective_id == objective.facts.objective_id).state, c.ArtifactObjectiveState.SATISFIED)
         other_case = objectives.ObjectiveCase()
         other_case.setUp()
         # Adopt synchronous cleanup from this setup-only async fixture.
