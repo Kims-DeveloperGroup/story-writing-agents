@@ -2418,6 +2418,53 @@ ENUM_MEANINGS.update({
 })
 
 
+def recover_lead_public_response_kind(
+    response_text: str, contract_id: str, *, maximum_utf8_bytes: int,
+) -> str | None:
+    """Observe a finite native response type without accepting its action or text."""
+    if recover_lead_public_response(response_text, contract_id,
+            maximum_utf8_bytes=maximum_utf8_bytes) is None:
+        return None
+    source = response_text.strip()
+    lines = source.splitlines(keepends=True)
+    if lines and lines[0].lstrip().startswith(("```", "~~~")):
+        source = "".join(lines[1:-1])
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate response field")
+            result[key] = value
+        return result
+
+    def reject_constant(value):
+        raise ValueError("non-JSON response constant")
+
+    try:
+        value = json.loads(source, object_pairs_hook=unique, parse_constant=reject_constant)
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        return None
+    candidates = []
+    for path in (("agent_action", "task_result"), ("task_result",), ("agent_action",), ()):
+        item = value
+        for key in path:
+            item = item.get(key) if type(item) is dict else None
+        if type(item) is dict and "response_text" in item:
+            candidates.append(item)
+    if len(candidates) != 1:
+        return None
+    native = candidates[0].get("response_type")
+    if type(native) is not str:
+        return None
+    return {**{wire: kind for kind, wire in LEAD_RESPONSES.items()},
+        "specialist_consultation_proposal": "proposal", "artifact_change_proposal": "proposal",
+        "core_document_readiness_assessment": "answer", "lead_exploration": "exploration",
+        "consultation_summary": "synthesis", "artifact_review_summary": "artifact_review",
+        "premise_analysis_result": "premise_analysis", "premise_decision_summary": "premise_decision",
+    }.get(native)
+
+
 def recover_lead_public_response(
     response_text: str, contract_id: str, *, maximum_utf8_bytes: int,
 ) -> str | None:

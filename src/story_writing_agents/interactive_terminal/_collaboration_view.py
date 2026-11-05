@@ -93,8 +93,137 @@ from ._model import (
     SpeakerAccent,
     ViewState,
 )
-from ._response_usage import ResponseUsage, response_footer, response_usage
+from ._response_usage import ResponseUsage, response_footer, response_usage, turn_usage_summary
 from ._metadata_text import format_metadata_text
+
+
+def _accepted_public_event(value: LeadTurnResult | CollaborationEvent,
+                           events: tuple[CollaborationEvent, ...]) -> CollaborationEvent | None:
+    owner = value.payload if type(value) is CollaborationEvent else value
+    invocation = getattr(owner, "provider_invocation_id", None)
+    if invocation is None:
+        return None
+    header = (value.session_id, value.conversation_id, value.turn_id, value.step_id)
+    matches = tuple(event for event in events
+        if type(event.payload) is CollaborationLeadPublicResponsePayload
+        and event.payload.response.acceptance.value == "accepted"
+        and event.payload.response.invocation_id == invocation
+        and (event.session_id, event.conversation_id, event.turn_id, event.step_id) == header
+        and (type(value) is not CollaborationEvent or event.sequence < value.sequence))
+    return matches[0] if len(matches) == 1 else None
+
+
+def _runtime_notice(value: LeadTurnResult | CollaborationEvent,
+                    events: tuple[CollaborationEvent, ...]) -> bool:
+    owner = value.payload if type(value) is CollaborationEvent else value
+    if type(value) is CollaborationEvent and (type(owner) not in {
+            CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload, CollaborationMessagePayload}
+            or value.sender.agent_id != LEAD_ORCHESTRATOR or value.recipient.kind.value != "user"):
+        return False
+    trace = getattr(owner, "trace", None)
+    if trace is not None and trace.origin.value == "runtime_fallback":
+        return True
+    if type(value) is CollaborationEvent:
+        if type(owner) is CollaborationMessagePayload:
+            source = _conversation_finalized_source(value, events, {event.event_id: event for event in events})
+            return source is not None and _runtime_notice(source, events)
+        if type(owner) is not CollaborationLeadJudgmentPayload:
+            return False
+    else:
+        source = _live_response_source(value, events)
+        if source is not None and _runtime_notice(source, events):
+            return True
+    source = _accepted_public_event(value, events)
+    return source is not None and source.payload.response.response_text != owner.message
+
+
+def _front_response_metadata(value: LeadTurnResult | CollaborationEvent,
+                             events: tuple[CollaborationEvent, ...]) -> str:
+    source = _accepted_public_event(value, events)
+    if source is not None:
+        response = source.payload.response
+        return response_footer(response.response_kind or "unavailable", _public_usage(events, response))
+    owner = value.payload if type(value) is CollaborationEvent else value
+    calls = tuple(event for event in events
+        if type(event.payload) is CollaborationProviderCallPayload
+        and event.payload.state is CollaborationProviderCallState.SUBMITTED
+        and event.payload.invocation_id == getattr(owner, "provider_invocation_id", None)
+        and event.payload.role == LEAD_ORCHESTRATOR
+        and (event.session_id, event.conversation_id, event.turn_id, event.step_id) ==
+            (value.session_id, value.conversation_id, value.turn_id, value.step_id)
+        and (type(value) is not CollaborationEvent or event.sequence < value.sequence))
+    usage = ResponseUsage(scope="physical_call")
+    if len(calls) == 1:
+        call = calls[0]
+        usage = response_usage(events, session_id=call.session_id,
+            conversation_id=call.conversation_id, turn_id=call.turn_id, step_id=call.step_id,
+            invocation_id=call.payload.invocation_id, role=LEAD_ORCHESTRATOR,
+            invocation_kinds=frozenset({call.payload.invocation_kind}), call_id=call.payload.call_id)
+    return response_footer(owner.kind.value, usage)
+
+
+def _live_response_source(result: LeadTurnResult,
+                          events: tuple[CollaborationEvent, ...]) -> CollaborationEvent | None:
+    """Resolve non-front response ownership through typed identities and finalization receipts."""
+    header = (result.session_id, result.conversation_id, result.turn_id, result.step_id)
+    sources = {}
+    by_id = {event.event_id: event for event in events}
+    for event in events:
+        if (event.session_id, event.conversation_id, event.turn_id, event.step_id) != header:
+            continue
+        payload = event.payload
+        if type(payload) in {CollaborationLeadSynthesisPayload, ArtifactReviewSynthesisPayload,
+                            CollaborationLeadDiscussionPayload}:
+            if (result.provider_invocation_id is not None and
+                    payload.provider_invocation_id == result.provider_invocation_id):
+                sources[event.event_id] = event
+        elif type(payload) is CollaborationLeadExplorationResultPayload:
+            calls = tuple(fact for fact in events
+                if type(fact.payload) is CollaborationProviderCallPayload
+                and fact.payload.state is CollaborationProviderCallState.SUBMITTED
+                and fact.payload.call_id == payload.report.provider_call_id
+                and fact.payload.invocation_id == result.provider_invocation_id
+                and fact.payload.invocation_kind is CollaborationInvocationKind.LEAD_EXPLORATION
+                and fact.payload.role == LEAD_ORCHESTRATOR
+                and (fact.session_id, fact.conversation_id, fact.turn_id, fact.step_id) == header)
+            if len(calls) == 1:
+                sources[event.event_id] = event
+        elif (type(payload) is CollaborationMessagePayload and
+                payload.provider_invocation_id == result.provider_invocation_id and
+                payload.content == result.message):
+            if (event.sender.agent_id == LEAD_ORCHESTRATOR and event.recipient.kind.value == "user"
+                    and payload.trace is not None and payload.trace.origin.value == "runtime_fallback"):
+                sources[event.event_id] = event
+            elif result.provider_invocation_id is not None:
+                source = _conversation_finalized_source(event, events, by_id)
+                if (source is not None and
+                        source.payload.provider_invocation_id == result.provider_invocation_id):
+                    sources[source.event_id] = source
+    for source in tuple(sources.values()):
+        payload = source.payload
+        if type(payload) is ArtifactReviewSynthesisPayload and any(
+                type(candidate.payload) is CollaborationLeadSynthesisPayload and
+                _conversation_synthesis_identity(candidate) == (
+                    source.session_id, source.conversation_id, source.step_id,
+                    payload.consultation_proposal_id, payload.consultation_proposal_revision,
+                    payload.consultation_proposal_digest, payload.execution_attempt_id,
+                    payload.reply_event_ids) for candidate in sources.values()):
+            sources.pop(source.event_id)
+    return next(iter(sources.values())) if len(sources) == 1 else None
+
+
+def _live_response_metadata(result: LeadTurnResult,
+                            events: tuple[CollaborationEvent, ...]) -> str | None:
+    if _accepted_public_event(result, events) is None:
+        source = _live_response_source(result, events)
+        if source is not None:
+            payload = source.payload
+            content = (payload.content if type(payload) is CollaborationMessagePayload
+                else payload.report.response_text if type(payload) is CollaborationLeadDiscussionPayload
+                else payload.report.message if type(payload) is CollaborationLeadExplorationResultPayload
+                else payload.message)
+            return _event_response_items((_message("Lead", content),), source, events)[0].metadata
+    return _front_response_metadata(result, events)
 
 
 def project_conversation_messages(
@@ -212,7 +341,8 @@ def _conversation_message(
     agent_id = event.sender.agent_id
     role = SemanticRole.AGENT
     if type(payload) is CollaborationMessagePayload:
-        if payload.validation_details or event.sender.kind.value not in {"user", "lead", "specialist"}:
+        if ((payload.validation_details and not _runtime_notice(event, events))
+                or event.sender.kind.value not in {"user", "lead", "specialist"}):
             return None
         if event.sender.kind.value != "user" and event.recipient.kind.value != "user":
             return None
@@ -221,8 +351,28 @@ def _conversation_message(
             sender, role = "User", SemanticRole.DEFAULT
         else:
             sender = "Lead" if agent_id == LEAD_ORCHESTRATOR else AGENT_SPECS[agent_id].display_name
+            if _runtime_notice(event, events):
+                sender, role = "Runtime", SemanticRole.INFO
+    elif type(payload) is CollaborationLeadPublicResponsePayload:
+        if payload.response.acceptance.value != "accepted":
+            return None
+        judgments = tuple(fact for fact in events
+            if type(fact.payload) is CollaborationLeadJudgmentPayload
+            and fact.sequence > event.sequence
+            and fact.payload.provider_invocation_id == payload.response.invocation_id
+            and (fact.session_id, fact.conversation_id, fact.turn_id, fact.step_id) ==
+                (event.session_id, event.conversation_id, event.turn_id, event.step_id))
+        if len(judgments) != 1 or _accepted_public_event(judgments[0], events) != event:
+            return None
+        judgment = judgments[0].payload
+        runtime = (judgment.trace is not None and judgment.trace.origin.value == "runtime_fallback")
+        if not runtime and payload.response.response_text == judgment.message:
+            return None
+        content, sender = payload.response.response_text, "Lead"
     elif type(payload) in {CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload, ArtifactReviewSynthesisPayload}:
         content, sender = payload.message, "Lead"
+        if _runtime_notice(event, events):
+            sender, role = "Runtime", SemanticRole.INFO
     elif type(payload) is CollaborationLeadDiscussionPayload:
         content, sender = payload.report.response_text, "Lead"
     elif type(payload) is CollaborationLeadExplorationResultPayload:
@@ -518,8 +668,9 @@ def project_lead_turn_result(
         if result.next_action is CollaborationNextAction.RETRY_LEAD_TURN
         else SemanticRole.AGENT
     )
+    runtime = _runtime_notice(result, public_response_events)
     items: list[Section | Field | Notice | Message | Record | ListView] = [
-        _message("Lead (provisional)" if result.exploration is not None else "Lead", result.message, role=role),
+        *(() if runtime else (_message("Lead (provisional)" if result.exploration is not None else "Lead", result.message, role=role),)),
         *(_reply_trace_items(result.trace) if show_details else ()),
     ]
     items.extend(
@@ -536,9 +687,12 @@ def project_lead_turn_result(
             items.append(Field("Associated task", f"{ref.task_id} @ {ref.task_revision}"))
     latest = result.public_responses[-1] if result.public_responses else None
     for public in result.public_responses:
-        shown_above = (public is latest and public.response.acceptance.value == "accepted"
+        shown_above = (not runtime and public is latest and public.response.acceptance.value == "accepted"
                        and public.response.response_text == result.message)
         items.extend(_public_response_items(public.response, show_text=not shown_above, usage=_public_usage(public_response_events, public.response), show_details=show_details))
+    if runtime:
+        items.append(_message("Runtime", result.message,
+            role=SemanticRole.ERROR if role is SemanticRole.ERROR else SemanticRole.INFO))
     if result.exploration is not None:
         items.extend(_exploration_items(result.exploration))
     if result.premise_report is not None:
@@ -582,8 +736,11 @@ def project_lead_turn_result(
     if result.recommendation_request is not None:
         items.extend(_payload_items(result.recommendation_request, {}, {}, {}, session_id=result.session_id))
     items.extend(_public_response_omission_items(result, public_response_events))
+    if result.provider_invocation_id is not None or elapsed is not None:
+        items.append(Record("Turn usage", content=format_metadata_text(
+            turn_usage_summary(_live_usage(result, public_response_events), elapsed=elapsed))))
     return Panel("Lead", _response_items(tuple(items), result.message,
-                 response_footer(result.kind.value, _live_usage(result, public_response_events), elapsed=elapsed),
+                 None if runtime else _live_response_metadata(result, public_response_events),
                  SpeakerAccent.CYAN), state=_event_state(result))
 
 
@@ -651,7 +808,7 @@ def _public_response_items(
 ) -> tuple[Field | Message | Notice | Record, ...]:
     items = [Field("Public response disposition", response.acceptance.value),
              Field("Provider call", f"{response.call_kind} #{response.ordinal} ({response.call_id})"),
-             (_message("Literal final response_text", response.response_text, metadata=response_footer(response.acceptance.value, usage or ResponseUsage(scope="physical_call", call_count=1))) if show_text else
+             (_message("Lead", response.response_text, role=SemanticRole.AGENT, metadata=response_footer(response.response_kind or "unavailable", usage or ResponseUsage(scope="physical_call", call_count=1))) if show_text else
               Notice("This call's accepted text is shown in the Lead response above."))]
     if response.repair_of_call_id is not None:
         items.append(Field("Repairs call", response.repair_of_call_id))
@@ -660,7 +817,7 @@ def _public_response_items(
                             label="Call validation", role=SemanticRole.ERROR))
     items.append(Notice("Selectable literal input; no draft, verified evidence or write authority."))
     if usage is not None and not show_text:
-        items.append(Record("Response metadata", content=format_metadata_text(response_footer(response.acceptance.value, usage))))
+        items.append(Record("Response metadata", content=format_metadata_text(response_footer(response.response_kind or "unavailable", usage))))
     return tuple(items)
 
 
@@ -1690,6 +1847,20 @@ def _finalized_synthesis_source(
 
 
 def _live_usage(result: LeadTurnResult, events: tuple[CollaborationEvent, ...]) -> ResponseUsage:
+    source = _live_response_source(result, events)
+    if source is not None:
+        kind = (CollaborationInvocationKind.LEAD_DISCUSSION
+            if type(source.payload) is CollaborationLeadDiscussionPayload
+            else CollaborationInvocationKind.LEAD_EXPLORATION
+            if type(source.payload) is CollaborationLeadExplorationResultPayload
+            else CollaborationInvocationKind.LEAD_SYNTHESIS)
+        kinds = (frozenset({CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_DISCUSSION})
+            if type(source.payload) is CollaborationMessagePayload else frozenset({kind}))
+        return response_usage(tuple(event for event in events if event.sequence <= source.sequence),
+            session_id=source.session_id, conversation_id=source.conversation_id,
+            turn_id=source.turn_id, step_id=source.step_id,
+            invocation_id=result.provider_invocation_id, role=LEAD_ORCHESTRATOR,
+            invocation_kinds=kinds)
     if result.kind.value == "discussion":
         kinds = frozenset({CollaborationInvocationKind.LEAD_DISCUSSION})
     elif result.kind.value == "exploration":
@@ -1738,6 +1909,45 @@ def _public_usage(events: tuple[CollaborationEvent, ...], response: LeadPublicRe
 def _event_response_items(items: tuple, event: CollaborationEvent, events: tuple[CollaborationEvent, ...]) -> tuple:
     events = tuple(fact for fact in events if fact.sequence <= event.sequence)
     payload = event.payload
+    if _runtime_notice(event, events):
+        body = payload.content if type(payload) is CollaborationMessagePayload else payload.message
+        def runtime_items(values):
+            projected = []
+            for item in values:
+                if type(item) is Message and item.content == body:
+                    item = replace(item, sender="Runtime",
+                        role=SemanticRole.ERROR if item.role is SemanticRole.ERROR else SemanticRole.INFO,
+                        metadata=None)
+                elif type(item) is Field and item.label == "Outcome":
+                    item = replace(item, label="Workflow outcome")
+                elif type(item) is Section:
+                    item = replace(item, items=runtime_items(item.items))
+                projected.append(item)
+            return tuple(projected)
+        projected = runtime_items(items)
+        source = (_conversation_finalized_source(event, events, {fact.event_id: fact for fact in events})
+            if type(payload) is CollaborationMessagePayload else None) or event
+        invocation = source.payload.provider_invocation_id
+        if invocation is not None:
+            kinds = (frozenset({CollaborationInvocationKind.LEAD_SYNTHESIS})
+                if type(source.payload) is CollaborationLeadSynthesisPayload else
+                frozenset({CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_DISCUSSION}))
+            usage = response_usage(tuple(fact for fact in events if fact.sequence <= source.sequence),
+                session_id=source.session_id, conversation_id=source.conversation_id,
+                turn_id=source.turn_id, step_id=source.step_id,
+                invocation_id=invocation, role=LEAD_ORCHESTRATOR, invocation_kinds=kinds)
+            projected += (Record("Turn usage", content=format_metadata_text(turn_usage_summary(usage))),)
+        return projected
+    if type(payload) is CollaborationLeadJudgmentPayload:
+        projected = _response_items(items, payload.message, _front_response_metadata(event, events), accent=SpeakerAccent.CYAN)
+        if payload.provider_invocation_id is not None:
+            usage = response_usage(events, session_id=event.session_id,
+                conversation_id=event.conversation_id, turn_id=event.turn_id, step_id=event.step_id,
+                invocation_id=payload.provider_invocation_id, role=LEAD_ORCHESTRATOR,
+                invocation_kinds=frozenset({CollaborationInvocationKind.LEAD}))
+            projected += (Record("Turn usage", content=format_metadata_text(turn_usage_summary(usage))),)
+        return projected
+
     role = event.sender.agent_id
     accent = _speaker_accent(role)
     content = ""
@@ -1770,7 +1980,7 @@ def _event_response_items(items: tuple, event: CollaborationEvent, events: tuple
         invocation_id = next(iter(set(matched))) if len(set(matched)) == 1 else None
     elif type(payload) is CollaborationLeadPublicResponsePayload:
         response = payload.response
-        content, outcome, role = response.response_text, response.acceptance.value, LEAD_ORCHESTRATOR
+        content, outcome, role = response.response_text, response.response_kind or "unavailable", LEAD_ORCHESTRATOR
         invocation_id, call_id = response.invocation_id, response.call_id
         kinds = frozenset({CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_DISCUSSION})
     elif type(payload) is CollaborationMessagePayload and (role == LEAD_ORCHESTRATOR or invocation_id is not None):
