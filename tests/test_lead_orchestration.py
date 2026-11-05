@@ -4691,6 +4691,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         preliminary_root, = preliminary_roots
         offered_targets = tuple(map(json.loads,
             dict(preliminary_bound.semantic_index.policy.choices)["preliminary_targets"]))
+        effective_targets = tuple(review.review_target_from_dict(item) for item in offered_targets)
         native_target_ids = tuple(item["input_id"] for item in offered_targets)
         unread_ids = {item["input_id"] for item in offered_targets
                       if item["availability"] == review.ReviewTargetAvailability.UNREAD.value}
@@ -4737,7 +4738,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         typed_preliminary = review.preliminary_review_from_dict(
             expected_bound_preliminary['preliminary_review'])
         self.assertEqual(review.bind_preliminary_intent(json.loads(decoded_preliminary.answer_json)['preliminary_review'],
-            provided, profile_scope.task_id, profile_scope.task_revision, target_paths=profile_scope.target_paths), typed_preliminary)
+            effective_targets, profile_scope.task_id, profile_scope.task_revision, target_paths=profile_scope.target_paths), typed_preliminary)
         self.assertFalse(typed_preliminary.whole_target_coverage)
         self.assertEqual(typed_preliminary.task_id, profile_scope.task_id)
         # Ordinary undeclared record properties may be omitted; an offered-ID map may not.
