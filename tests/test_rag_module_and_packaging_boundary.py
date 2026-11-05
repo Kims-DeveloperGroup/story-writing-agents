@@ -67,21 +67,32 @@ def _viewer_host_source(size, source_line=""):
                 jsonl_viewer.view_jsonl = owned; transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)"""
 
 def _locked_runtime_wheels(directory: Path) -> Path:
-    from importlib.metadata import distribution
-    from setuptools.command.bdist_wheel import WheelFile
-    directory.mkdir()
-    packages = tomllib.loads((_REPOSITORY_ROOT / "uv.lock").read_text())["package"]
-    for name in ("markdown-it-py", "mdurl"):
-        installed = distribution(name)
-        assert installed.version == next(item["version"] for item in packages if item["name"] == name)
-        metadata = installed.read_text("WHEEL") or ""
-        assert "Root-Is-Purelib: true" in metadata and "Tag: py3-none-any" in metadata
-        info = next(path.parent for path in installed.files or () if path.name == "METADATA")
-        with WheelFile(directory / f"{info.name.removesuffix('.dist-info')}-py3-none-any.whl", "w") as archive:
-            for path in installed.files or ():
-                if ".." in path.parts or path.suffix == ".pyc" or path.name in {"RECORD", "RECORD.jws", "RECORD.p7s", "INSTALLER", "REQUESTED", "direct_url.json"}:
-                    continue
-                archive.write(installed.locate_file(path), str(path))
+    script = textwrap.dedent("""
+        import sys, tomllib
+        from pathlib import Path
+        directory = Path(sys.argv[1])
+        from importlib.metadata import distribution
+        from setuptools.command.bdist_wheel import WheelFile
+        directory.mkdir()
+        packages = tomllib.loads(Path(sys.argv[2]).read_text())["package"]
+        for name in ("markdown-it-py", "mdurl"):
+            installed = distribution(name)
+            assert installed.version == next(item["version"] for item in packages if item["name"] == name)
+            metadata = installed.read_text("WHEEL") or ""
+            assert "Root-Is-Purelib: true" in metadata and "Tag: py3-none-any" in metadata
+            info = next(path.parent for path in installed.files or () if path.name == "METADATA")
+            with WheelFile(directory / f"{info.name.removesuffix('.dist-info')}-py3-none-any.whl", "w") as archive:
+                for path in installed.files or ():
+                    if ".." in path.parts or path.suffix == ".pyc" or path.name in {"RECORD", "RECORD.jws", "RECORD.p7s", "INSTALLER", "REQUESTED", "direct_url.json"}:
+                        continue
+                    archive.write(installed.locate_file(path), str(path))
+    """)
+    completed = subprocess.run(
+        [sys.executable, "-W", "error", "-c", script, str(directory), str(_REPOSITORY_ROOT / "uv.lock")],
+        text=True, capture_output=True, check=False,
+    )
+    if completed.returncode:
+        raise AssertionError(completed.stderr)
     return directory
 
 def _extract_wheels(target: Path, wheels) -> None:

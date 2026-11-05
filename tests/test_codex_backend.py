@@ -3720,6 +3720,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             script = ExplicitPhaseScript(("{}", preliminary) if repair else (preliminary,), selection_plan("answer.observed_facts"))
             physical_calls, specs, callback_errors = [], [], []
             callback_views, threads, validated, publications = CallbackContextViews(), {}, [], []
+            publication_error = RuntimeError("Synthetic post-validation ledger failure")
+            caught_publication = None
             callback_provider = SimpleNamespace(callback_payload=callback_views.for_request)
             original_task = accounting_module._AccountingContextProvider.record_validated_task
             original_commit = ContextLedger.commit_attempt
@@ -3735,7 +3737,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             def commit(ledger, key, *, expected_generation, authorization):
                 if failure == "publication" and validated:
                     publications.append(authorization.terminal_call_id)
-                    raise RuntimeError("Synthetic post-validation ledger failure")
+                    raise publication_error
                 return original_commit(ledger, key, expected_generation=expected_generation, authorization=authorization)
             original_invoke = backend_module._BoundContextProvider.invoke_context
             async def observed_invoke(provider, call):
@@ -3771,19 +3773,32 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(proposed.proposal.assignments[0].review_basis.candidate_input_ids, ("user_input",))
                     script.require_fixture_valid()
                     script = pending
-                result = await runtime.lead_turn("preliminary_capture", conversation,
-                    "Explain the supplied motive: Mina hides a letter to protect her brother. Do not write or dispatch.")
+                try:
+                    result = await runtime.lead_turn("preliminary_capture", conversation,
+                        "Explain the supplied motive: Mina hides a letter to protect her brother. Do not write or dispatch.")
+                except RuntimeError as error:
+                    if failure != "publication" or error is not publication_error:
+                        raise
+                    caught_publication = error
             script.require_fixture_valid()
             self.assertIsNone(callback_views.fixture_error_code)
             selection = AgentExchangeSelection("preliminary_capture", AgentExchangeScopeKind.CONVERSATION, conversation, LEAD_ORCHESTRATOR)
             raw = WorkspaceAgentExchangeStore(self.workspace).snapshot(selection).jsonl_bytes
             records = [json.loads(line) for line in io.BytesIO(raw)]
             outcomes = [json.loads(row["content"]) for row in records if row["request_type"] == "outcome"]
+            if failure is not None:
+                controls = [{"code": "accepted", "outcome": "accepted", "host_diagnostics": {"call_id": call.call_id}}
+                            for call in physical_calls if call.call_id != validated[-1][0]]
+                self.assertEqual(len(controls), 1)
+                self.assertTrue(all(set(item["host_diagnostics"]) == {"call_id"} for item in outcomes))
             if failure == "publication":
+                self.assertIs(caught_publication, publication_error)
                 self.assertEqual(len(validated), 1)
                 self.assertEqual(publications, [validated[0][0]])
-                self.assertEqual(outcomes, [{"outcome": "post_response_runtime_failure", "code": "context_runtime_failed",
-                                            "host_diagnostics": {"call_id": validated[0][0]}}])
+                failed = [item for item in outcomes if item["host_diagnostics"]["call_id"] == validated[0][0]]
+                self.assertEqual(failed, [{"outcome": "post_response_runtime_failure", "code": "context_runtime_failed",
+                                          "host_diagnostics": {"call_id": validated[0][0]}}])
+                self.assertEqual(outcomes, controls + failed)
                 return
             report = result.preliminary_review
             failure_details = [
@@ -3810,8 +3825,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(native["raw_payload"].encode(), canonical_provider_json(call.payload))
                 self.assertNotIn(report.task_id, json.dumps((native["payload"], native["schema"])))
             if failure == "diagnostic":
-                self.assertEqual(outcomes, [{"code": "accepted", "outcome": "accepted",
+                answered = [item for item in outcomes if item["host_diagnostics"]["call_id"] == submitted.call_id]
+                self.assertEqual(answered, [{"code": "accepted", "outcome": "accepted",
                                             "host_diagnostics": {"call_id": submitted.call_id}}])
+                self.assertEqual(outcomes, controls + answered)
                 return
             diagnosed = [json.loads(row["content"]) for row in records if row["request_type"] == "outcome"
                          and "task_id" in json.loads(row["content"]).get("host_diagnostics", {})]
