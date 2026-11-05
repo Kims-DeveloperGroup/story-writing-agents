@@ -124,6 +124,7 @@ class DocumentPlan:
     goal_objective_id: str | None
     goal_facts_digest: str | None
     nodes: tuple[DocumentNodeSpec, ...]
+    # Original goal targets outside this immutable window, regardless of completion.
     remaining_target_paths: tuple[str, ...]
     planning_goal: DocumentPlanningGoalRef | None = None
     unresolved_target: bool = False
@@ -316,8 +317,12 @@ class DocumentPlanView:
     pending: bool = field(default=False, kw_only=True)
     current_confirmation_event_id: str | None = field(default=None, kw_only=True)
     cursor_ambiguous: bool = field(default=False, kw_only=True)
+    completed_target_paths: tuple[str, ...] = field(default=(), kw_only=True)
 
     def __post_init__(self) -> None:
+        _texts(self.completed_target_paths)
+        if any(not targets_for_paths((path,)) for path in self.completed_target_paths):
+            raise ValueError("completed targets must be actual canonical document paths")
         if type(self.cursor_ambiguous) is not bool:
             raise TypeError("cursor ambiguity must be typed")
         if (self.current_node_id is None) != (self.current_confirmation_event_id is None):
@@ -332,6 +337,8 @@ class DocumentPlanView:
             raise TypeError("goal text must be its actual nonempty source text")
         if type(self.plan) is not DocumentPlan or type(self.nodes) is not tuple:
             raise TypeError("document view requires exact plan and node views")
+        if not set(self.completed_target_paths).issubset((*self.plan.remaining_target_paths, *(node.target_path for node in self.plan.nodes))):
+            raise ValueError("completed targets must belong to the retained plan goal")
         if (any(type(x) is not DocumentNodeView for x in self.nodes)
                 or tuple(x.node_id for x in self.nodes) != tuple(x.node_id for x in self.plan.nodes)
                 or self.current_node_id is not None and self.current_node_id not in {x.node_id for x in self.nodes}):

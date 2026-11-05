@@ -6260,7 +6260,10 @@ class StoryRuntime:
                         "Independent confirmed document heads require explicit reconciliation; current budget is unavailable."))),
                     next_action=DocumentNodeNextAction.REQUEST_INFORMATION)
                     if row.state is not DocumentNodeState.COMPLETE else row for row in rows]
-            result.append(replace(view, nodes=tuple(rows)))
+            active = {node.target_path: row for node, row in zip(view.plan.nodes, rows)}
+            completed = tuple(path for path in view.completed_target_paths
+                if path not in active or active[path].state is DocumentNodeState.COMPLETE)
+            result.append(replace(view, nodes=tuple(rows), completed_target_paths=completed))
         return tuple(result)
 
     def _bind_document_selection(self, session_id, selection, scope, projection, scope_event):
@@ -6286,8 +6289,8 @@ class StoryRuntime:
         if task is None:
             if scope_event is None or scope_event.payload.authoring_scope != scope:
                 raise ValueError("a document binding needs its actual accepted scope event")
-            task = LeadTaskRef(session_id, scope_event.conversation_id, scope.task_id, scope.task_revision,
-                scope_event.event_id, "sha256:" + hashlib.sha256(json.dumps(asdict(scope), sort_keys=True,
+            task = LeadTaskRef(session_id=session_id, conversation_id=scope_event.conversation_id, task_id=scope.task_id, task_revision=scope.task_revision,
+                scope_event_id=scope_event.event_id, scope_digest="sha256:" + hashlib.sha256(json.dumps(asdict(scope), sort_keys=True,
                     separators=(",", ":"), ensure_ascii=False).encode()).hexdigest())
         events = self._session_authoring_events(session_id)
         prior = tuple(event.payload.document_node for event in events
@@ -6518,14 +6521,26 @@ class StoryRuntime:
                     DocumentNodeNextAction.CONFIRM_NODE) for node in proposal.document_plan.nodes)
                 pending = DocumentPlanView(proposal.document_plan, None, rows, calls, rounds, total,
                     max(0, COLLABORATION_PHYSICAL_CALL_LIMIT - calls), max(0, COLLABORATION_ROUND_LIMIT - rounds),
-                    goal_text=active.goal_text, pending=True)
+                    goal_text=active.goal_text, pending=True,
+                    completed_target_paths=tuple(path for path in active.completed_target_paths
+                        if path in proposal.document_plan.remaining_target_paths))
                 return replace(result, document_plan=pending)
         binding = (proposal.document_node if proposal is not None else
                    None if result.recommendation_request is None else result.recommendation_request.document_node)
         if binding is not None:
             current = next((view for view in views if view.plan.ref == binding.plan_ref), None)
         else:
-            current = views[0] if len(views) == 1 else None
+            owner_events = (self.conversation_storage_services.event_store.read(result.session_id, result.conversation_id)
+                if events is None else events)
+            declared_refs = {event.payload.document_plan.ref for event in owner_events
+                if (event.session_id, event.conversation_id, event.turn_id, event.step_id) ==
+                   (result.session_id, result.conversation_id, result.turn_id, result.step_id)
+                and type(event.payload) in {CollaborationLeadJudgmentPayload, ArtifactObjectivePayload, ArtifactObjectivePayloadV2}
+                and event.payload.document_plan is not None}
+            if declared_refs:
+                current = next((view for view in views if view.plan.ref in declared_refs), None) if len(declared_refs) == 1 else None
+            else:
+                current = views[0] if len(views) == 1 else None
         return result if current is None else replace(result, document_plan=current)
 
     async def lead_turn(self, session_id: str, conversation_id: str, text: str,
@@ -12872,6 +12887,9 @@ class StoryRuntime:
                         current_value["document_work_plan"] = {
                             "plan": document_plan_to_dict(plan_view.plan), "original_goal": plan_view.goal_text,
                             "current_confirmed_node_id": plan_view.current_node_id,
+                            "completed_target_paths": list(plan_view.completed_target_paths),
+                            "unfinished_inactive_targets": [path for path in plan_view.plan.remaining_target_paths
+                                if path not in plan_view.completed_target_paths],
                             "physical_calls_spent": plan_view.physical_calls_spent,
                             "cumulative_plan_physical_calls": plan_view.cumulative_plan_physical_calls,
                             "authority": "Plan/input guidance only; each exact executed node requires its own disclosed Confirm, final review, Apply and Commit.",
@@ -14195,7 +14213,8 @@ class StoryRuntime:
                     and document_selection is None and document_node is None):
                 objective_intent = outcome.objective_intent
                 if objective_intent is not None:
-                    objective_intent = replace(objective_intent, next_step=ArtifactObjectiveNextStep.CLARIFY)
+                    objective_intent = replace(objective_intent, next_step=ArtifactObjectiveNextStep.CLARIFY,
+                        **({"target_paths": outcome.authoring_scope.target_paths} if objective_intent.action is LeadObjectiveAction.START else {}))
                 outcome = replace(outcome, kind=LeadOutcomeKind.QUESTION, proposal=None, artifact_intent=None,
                     objective_intent=objective_intent, message=(
                         "All requested targets are retained in the document goal. Select one exact document node "
@@ -14357,6 +14376,7 @@ class StoryRuntime:
                         *self._objective_drafts(
                             outcome, objective_projection, objective_events, message_event,
                             plan_override=(proposal.document_plan if outcome.kind is LeadOutcomeKind.PROPOSAL else None), preparation=preparation,
+                            session_events=session_history.events(),
                         ),
                         *((self._recommendation_closure_draft(message_event, request_event=preparation.request_event,
                            decision_event=preparation.decision_event, start_event=preparation.start_event),)
@@ -14403,7 +14423,8 @@ class StoryRuntime:
             final_drafts = (
                 judgment,
                 *self._objective_drafts(outcome, objective_projection, objective_events, judgment,
-                                       plan_override=(proposal.document_plan if outcome.kind is LeadOutcomeKind.PROPOSAL else None), preparation=preparation),
+                                       plan_override=(proposal.document_plan if outcome.kind is LeadOutcomeKind.PROPOSAL else None), preparation=preparation,
+                                       session_events=session_history.events()),
                 *((self._recommendation_closure_draft(judgment, request_event=preparation.request_event,
                            decision_event=preparation.decision_event, start_event=preparation.start_event),)
                   if preparation is not None else ()),
@@ -14666,6 +14687,7 @@ class StoryRuntime:
                     outcome, objective_projection, objective_events, judgment,
                     plan_override=(proposal.document_plan if outcome.kind is LeadOutcomeKind.PROPOSAL else None), candidate_event=candidate_event,
                     preparation=preparation,
+                    session_events=None if session_history is None else session_history.events(),
                 ),
                 self._draft(
                     session_id=session_id,
@@ -15044,9 +15066,19 @@ class StoryRuntime:
         candidate_event: CollaborationEventDraft | None = None,
         preparation: _RecommendationCapability | None = None,
         plan_override: DocumentPlan | None = None,
+        session_events: tuple[CollaborationEvent, ...] | None = None,
     ) -> tuple[CollaborationEventDraft, ...]:
-        if plan_override is not None and plan_override.goal_objective_id is not None and not any(
-                item.facts.objective_id == plan_override.goal_objective_id for item in projection.artifact_objectives):
+        goal_exists = False
+        if plan_override is not None and plan_override.goal_objective_id is not None:
+            goals = tuple(event.payload.facts for event in (events if session_events is None else session_events)
+                if type(event.payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}
+                and event.payload.facts.objective_id == plan_override.goal_objective_id)
+            if goals:
+                if (any(facts != goals[0] for facts in goals)
+                        or document_value_digest(asdict(goals[0])) != plan_override.goal_facts_digest):
+                    raise ValueError("document plan differs from its existing exact session goal")
+                goal_exists = True
+        if plan_override is not None and plan_override.goal_objective_id is not None and not goal_exists:
             facts = self._document_goal_facts(judgment.session_id, judgment, outcome.authoring_scope.target_paths,
                 objective_id=plan_override.goal_objective_id, preparation=preparation)
             if document_value_digest(asdict(facts)) != plan_override.goal_facts_digest:
@@ -17752,8 +17784,8 @@ class StoryRuntime:
                 facts = self._document_goal_facts(session_id, scope_event, scope.target_paths, preparation=preparation)
                 proposed_plan = self._build_document_plan(facts, scope, inputs, intent.core_document_readiness)
                 selected = next(node for node in proposed_plan.nodes if node.target_path == scope.target_paths[0])
-                task = LeadTaskRef(session_id, scope_event.conversation_id, scope.task_id, scope.task_revision,
-                    scope_event.event_id, "sha256:" + hashlib.sha256(json.dumps(asdict(scope), sort_keys=True,
+                task = LeadTaskRef(session_id=session_id, conversation_id=scope_event.conversation_id, task_id=scope.task_id, task_revision=scope.task_revision,
+                    scope_event_id=scope_event.event_id, scope_digest="sha256:" + hashlib.sha256(json.dumps(asdict(scope), sort_keys=True,
                         separators=(",", ":"), ensure_ascii=False).encode()).hexdigest())
                 document_node = DocumentNodeBinding(proposed_plan.ref, selected.node_id, task, task, step_id)
         if document_node is not None:

@@ -2141,7 +2141,9 @@ def _document_node_items(node, *, preparation=False) -> tuple:
 def _document_plan_items(view: DocumentPlanView) -> tuple:
     plan = view.plan
     by_id = {node.node_id: node for node in plan.nodes}
-    completed = tuple(by_id[row.node_id].target_path for row in view.nodes if row.state is DocumentNodeState.COMPLETE)
+    completed = tuple(dict.fromkeys((*view.completed_target_paths,
+        *(by_id[row.node_id].target_path for row in view.nodes if row.state is DocumentNodeState.COMPLETE))))
+    inactive_unfinished = tuple(path for path in plan.remaining_target_paths if path not in view.completed_target_paths)
     remaining = tuple(by_id[row.node_id].target_path for row in view.nodes if row.state is not DocumentNodeState.COMPLETE)
     next_row = next((row for row in view.nodes if row.state is DocumentNodeState.READY),
                     next((row for row in view.nodes if row.node_id == view.current_node_id
@@ -2158,8 +2160,8 @@ def _document_plan_items(view: DocumentPlanView) -> tuple:
         Field("Current node", "Ambiguous: independent confirmed heads" if view.cursor_ambiguous else view.current_node_id or "No node confirmed"),
         Field("Current confirmation", view.current_confirmation_event_id or "No current confirmed head"),
         Field("Completed documents", _joined(completed)),
-        Field("Remaining documents", _joined((*remaining, *plan.remaining_target_paths))),
-        Field("Unplanned targets", _joined(plan.remaining_target_paths)),
+        Field("Remaining documents", _joined((*remaining, *inactive_unfinished))),
+        Field("Unplanned targets", _joined(inactive_unfinished)),
         Field("Target decision", "Exact manuscript target still required; original goal is incomplete."
               if plan.unresolved_target else "Exact active targets retained"),
         Field("Blocking conditions", _joined(blockers)),

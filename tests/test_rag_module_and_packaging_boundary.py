@@ -396,13 +396,14 @@ class RagModuleBoundaryTests(unittest.TestCase):
         modules = _module_inventory()
         edges = _internal_edges(modules)
         self.assertEqual(len(modules), 176)
-        self.assertEqual(len(edges), 787)
+        self.assertEqual(len(edges), 793)
         self.assertIn(("story_writing_agents.agent_context.service", "story_writing_agents.provider_adapter"), edges)
         self.assertIn(("story_writing_agents.interactive_terminal._advisory_progress", "story_writing_agents.agent_context.service"), edges)
         self.assertIn(("story_writing_agents.interactive_terminal._core", "story_writing_agents.agent_context.service"), edges)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
+                "story_writing_agents.document_plan",
                 "story_writing_agents.editorial_scope",
                 "story_writing_agents.editorial_state",
                 "story_writing_agents.conversations.catalog",
@@ -416,6 +417,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.errors",
             },
             "story_writing_agents.conversations.events": {
+                "story_writing_agents.document_plan",
                 "story_writing_agents.review_contracts",
                 "story_writing_agents.agent_context",
                 "story_writing_agents.lead_task_transitions",
@@ -435,6 +437,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.agent_context.group_observation',
             },
             "story_writing_agents.conversations.context": {
+                "story_writing_agents.document_plan",
                 "story_writing_agents.authoring_task_lifecycle",
                 "story_writing_agents.review_contracts",
                 "story_writing_agents.lead_task_transitions",
@@ -950,6 +953,14 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.authoring_task_lifecycle", "story_writing_agents.conversations", "story_writing_agents.conversations.context",
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_terminal._collaboration_view",
             "story_writing_agents.lead_provider_contracts", "story_writing_agents.orchestrator"})
+        self.assertIn("story_writing_agents.document_plan", modules)
+        self.assertEqual({target for source, target in edges if source == "story_writing_agents.document_plan"}, {
+            "story_writing_agents.core_document_readiness", "story_writing_agents.editorial_scope",
+            "story_writing_agents.lead_task_transitions", "story_writing_agents.specialist_routing"})
+        self.assertEqual({source for source, target in edges if target == "story_writing_agents.document_plan"}, {
+            "story_writing_agents.conversations", "story_writing_agents.conversations.context",
+            "story_writing_agents.conversations.events", "story_writing_agents.interactive_controller._lead_policy",
+            "story_writing_agents.interactive_terminal._collaboration_view", "story_writing_agents.orchestrator"})
         self.assertIn("story_writing_agents.blocking_work", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.blocking_work"}, set())
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.blocking_work"},

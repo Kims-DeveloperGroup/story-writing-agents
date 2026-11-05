@@ -733,3 +733,37 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         restored_cursor = next(view for view in RuntimeSession(restored_runtime, self.session_id).inspect_document_plans() if view.plan.ref == goal_plan.ref)
         self.assertEqual(restored_cursor, after_bad_source)
         self.assertEqual(len(self.backend.calls), before_restart_calls)
+
+        multi_conversation = self.conversation("Retain every requested document target")
+        full_targets = (global_node.target_path, part_node.target_path)
+        multi_request = ("Draft both the Global outline and Part outline as separate sequential Plot work. "
+            + chosen_ending + " Preserve Nora's promise to return the sealed letter, all supplied facts and separate confirmation. "
+            + "Use these current documents: " + " ".join("${" + path + "}" for path in full_targets))
+        before_multi = tuple(self.workspace.path(path).read_bytes() for path in full_targets)
+        def partial_start(call, _provider):
+            input_ids = tuple(dict(call.contract.semantic_index.policy.choices)["input_ids"])
+            return lead._provider_envelope(call, {"kind": "proposal", "message": multi_request,
+                "authoring_scope": lead._live_scope(call, activity="draft", domains=("plot_structure",), paths=full_targets,
+                    contributions=[{"domain": "plot_structure", "role": "draft_owner"}]),
+                "authoring_assessment": asdict(task_assessment(foundation_ids=input_ids, actions=("Draft both requested documents in separate sequential Plot work.",))),
+                "objective_intent": {"action": "start", "target_paths": [global_node.target_path], "next_step": "consult"},
+                "proposal": {"purpose": "Disclose both requested targets before selecting one document node.",
+                    "assignments": [{"agent_id": PLOT_ARCHITECT, "mode": "draft", "instruction": multi_request, "input_ids": list(input_ids)}]}})
+        self.backend.enqueue(partial_start, control_plan=selection_plan("consultation.authoring.content"))
+        multi_start = len(self.backend.call_records)
+        clarified = await self.runtime.lead_turn(self.session_id, multi_conversation, multi_request)
+        self.assertEqual(tuple(agent for agent, _call in self.backend.call_records[multi_start:]), (lead.LEAD_ORCHESTRATOR, lead.LEAD_ORCHESTRATOR))
+        self.assertIs(clarified.kind, c.LeadOutcomeKind.QUESTION)
+        self.assertIsNone(clarified.proposal)
+        self.assertIsNone(clarified.artifact_application_request)
+        self.assertIsNone(clarified.story_commit_request)
+        self.assertEqual(self.payload_events(multi_conversation, c.CollaborationAssignmentDispatchPayload), ())
+        retained_goal = self.objective(multi_conversation)
+        self.assertEqual(retained_goal.facts.target_paths, full_targets)
+        self.assertEqual(retained_goal.facts.request, multi_request)
+        self.assertIs(retained_goal.next_step, c.ArtifactObjectiveNextStep.CLARIFY)
+        original_multi_user = next(event for event in self.history(multi_conversation)
+            if event.sender.kind is c.CollaborationActorKind.USER and type(event.payload) is c.CollaborationMessagePayload and event.payload.content == multi_request)
+        self.assertEqual(retained_goal.facts.origin_user_event_id, original_multi_user.event_id)
+        self.assertEqual(retained_goal.facts.origin_conversation_id, multi_conversation)
+        self.assertEqual(tuple(self.workspace.path(path).read_bytes() for path in full_targets), before_multi)
