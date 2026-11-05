@@ -837,7 +837,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         from story_writing_agents.orchestrator import _target_authoring_scope_prior
         from story_writing_agents.lead_task_transitions import LeadTaskAction, LeadTaskTransitionReceipt
         # Pure scope-law fixtures: receipt verification remains the caller's responsibility.
-        artifact_scope, readonly_scope = (c.authoring_scope_from_dict(value["authoring_scope"]) for value in (artifact_value, review_value))
+        artifact_scope, readonly_scope = (self.scope(activity=Activity.REVIEW, intent=intent) for intent in (Intent.AUTHORING, Intent.REVIEW_ONLY))
         for source_scope, next_scope in ((artifact_scope, readonly_scope), (readonly_scope, artifact_scope)):
             fresh_scope = replace(next_scope, task_id="fresh_scope_task", task_revision=1)
             source_ref = replace(task, task_id=source_scope.task_id, task_revision=source_scope.task_revision,
