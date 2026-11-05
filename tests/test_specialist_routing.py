@@ -566,7 +566,7 @@ class SpecialistRoutingTests(unittest.TestCase):
             node_binding = documents.DocumentNodeBinding(current.ref, node.node_id, task_ref, task_ref, fixture.STEP_ID,
                 prior_confirmation_event_id=prior)
             template = fixture.make_proposal(proposal_id="window_proposal_" + str(revision),
-                assignments=(fixture.make_assignment(specialist_id=EXECUTION_SPECIALIST),))
+                inputs=(fixture.make_input(),), assignments=(fixture.make_assignment(specialist_id=EXECUTION_SPECIALIST),))
             proposal = fixture.replace_proposal(template, basis=replace(template.basis, schema_version=2),
                 authoring_scope=scope, document_node=node_binding, document_plan=current)
             record("proposal_" + str(revision), c.CollaborationEventKind.MESSAGE, proposal)
@@ -576,11 +576,11 @@ class SpecialistRoutingTests(unittest.TestCase):
                     c.CollaborationConfirmationDecision.CONFIRM), sender=fixture.USER, recipient=fixture.RUNTIME)
             return current, proposal, confirmation
         first, first_proposal, first_confirmation = window(1, chapter3, None)
-        baseline = {node.target_path: b"Qualified complete core baseline.\n" for node in first.nodes[:-1]}
+        baseline = {node.target_path: b"Core baseline for constructed projection.\n" for node in first.nodes[:-1]}
         content = "Chapter 3 ends with the promised return.\n"
         exact_candidate = artifacts.build_artifact_review_candidate(candidate_id="chapter3_candidate", candidate_revision=1,
             intent=artifacts.ArtifactProposalIntent((artifacts.ArtifactCreateIntent(chapter3, content),)),
-            evidence=(), grounding_evidence_ids=("input_outline",), base_state=baseline, attached_core_paths=tuple(baseline))
+            evidence=(), grounding_evidence_ids=("input_outline",), base_state=baseline, attached_core_paths=())
         reviewers = artifacts.artifact_review_specialists(exact_candidate.disclosed_review_domains)
         final_evidence = review.FinalReviewEvidence(exact_candidate.candidate_id, exact_candidate.candidate_revision,
             exact_candidate.candidate_digest, first_proposal.authoring_scope.task_id, first_proposal.authoring_scope.task_revision,
@@ -595,14 +595,15 @@ class SpecialistRoutingTests(unittest.TestCase):
             consultation_proposal_digest=first_proposal.proposal_digest,
             mandatory_specialist_ids=artifacts.artifact_review_specialists(exact_candidate.mandatory_review_domains),
             disclosed_specialist_ids=reviewers, reviews=tuple(c.ArtifactReviewReply(specialist_id=value,
-                assessment=c.CollaborationSpecialistAssessment.SUPPORTS) for value in reviewers),
+                assignment_id=next(row.assignment_id for row in first_proposal.assignments if row.specialist_id == value),
+                reply_event_id="reply_" + value, assessment=c.CollaborationSpecialistAssessment.SUPPORTS) for value in reviewers),
             unresolved_input_ids=(), rationale="Exact candidate reviewed.", user_impact="Separate local Apply only.",
             limitations="Constructed projection fixture.", grounding_evidence_ids=exact_candidate.grounding_evidence_ids,
             final_review_evidence=final_evidence)
         application = applications.build_artifact_application_request(application_id="apply_chapter3",
             candidate_id=exact_candidate.candidate_id, candidate_revision=exact_candidate.candidate_revision,
             candidate_digest=exact_candidate.candidate_digest, change_set=exact_candidate.change_set,
-            relationship_validation=exact_candidate.relationship_validation, attached_core_paths=tuple(baseline))
+            relationship_validation=exact_candidate.relationship_validation, attached_core_paths=())
         request_digest = "sha256:" + hashlib.sha256(applications.serialize_artifact_application_request(application)).hexdigest()
         request = c.ArtifactApplicationRequestPayload("apply_request", reviewed, application, request_digest, 2,
             (c.ArtifactApplicationDecisionKind.APPLY, c.ArtifactApplicationDecisionKind.REJECT,
