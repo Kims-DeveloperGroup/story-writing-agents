@@ -772,12 +772,12 @@ class SpecialistRoutingTests(unittest.TestCase):
         read_fact = replace(delivered, evidence_id="read_global")
         limit_names = ("nonterminal_actions", "search_actions", "read_actions", "queries_per_search",
             "cumulative_queries", "handles_per_read", "cumulative_handles", "query_characters")
-        selected_offers = replace(offers, call_id="selected-document-search", allowed_actions=("search", "read", "answer"),
+        selected_offers = replace(offers, call_id="selected-document-search", allowed_actions=("search", "answer"),
             action_limits=tuple(zip(limit_names, (3, 2, 2, 4, 8, 8, 16, 200), strict=True)),
             search_source_kinds=(ContextSourceKind.WRITING_ARTIFACT,), delivery_read_facts=(delivered,), remaining_provider_calls=4)
         search_bound = selected_factory.for_offer(selected_offers)
         read_offers = replace(selected_offers, call_id="selected-document-read", action_index=2,
-            issued_handle_aliases=("h1",), remaining_provider_calls=3)
+            issued_handle_aliases=("h1",), remaining_provider_calls=3, allowed_actions=("search", "read", "answer"))
         read_bound = selected_factory.for_offer(read_offers)
         result_offers = replace(read_offers, call_id="selected-document-result", action_index=3,
             completed_read_facts=(read_fact,), remaining_provider_calls=2)
