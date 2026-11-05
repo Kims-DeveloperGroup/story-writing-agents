@@ -13,6 +13,7 @@ from unittest import mock
 from story_writing_agents import StoryRuntime, orchestrator as orchestration, editorial_scope as scopes
 from story_writing_agents import conversations as c
 from story_writing_agents.agents import PLOT_ARCHITECT
+from story_writing_agents.core_document_readiness import AuthoringTarget
 from story_writing_agents.writing_artifacts import ArtifactApplicationError, ArtifactApplicationErrorCode
 from tests import test_artifact_objectives as objectives
 from tests import test_artifact_proposal_orchestration as artifact
@@ -21,6 +22,37 @@ from tests import test_lead_artifact_application as application
 from tests import test_lead_story_commit as commit
 from tests.recommendation_fixture import RecommendationCase, action, recommendation, task_assessment
 from tests.test_specialist_routing_runtime import ROSTER
+
+
+def _document_plan_native_response(call, value):
+    """Encode only the explicitly authored current document-plan positive cases."""
+    from tests.provider_wire_fixture import (result, lead_fixture_bound_scope, lead_fixture_assessment,
+        author_positive_fixture_review_bases, lead_fixture_assignments, lead_fixture_result, lead_fixture_response)
+    logical = lead._live_result(call, value)
+    native = result(logical, "lead-response-v9")
+    native.pop("writing_task_scope")
+    native["task_scope"] = lead_fixture_bound_scope(call, logical["authoring_scope"], record=True)
+    choices = dict(call.contract.semantic_index.policy.choices)
+    if isinstance(native.get("authoring_assessment"), dict):
+        native["authoring_assessment"] = lead_fixture_assessment(native["authoring_assessment"], source_choices=choices["input_ids"])
+    proposal = native.get("specialist_consultation_proposal")
+    if isinstance(proposal, dict):
+        proposal.setdefault("shared_premises", [])
+        rows = author_positive_fixture_review_bases(proposal["assignments"], candidate_choices=choices["review_candidate_ids"])
+        anchors = {row["agent_id"]: row["input_source_ids"][0] for row in rows}
+        recipients = {} if logical["authoring_scope"]["intent"] == "review_only" else {
+            source: next(row["agent_id"] for row in rows if source in row["input_source_ids"])
+            for source in choices["required_input_ids"] if any(source in row["input_source_ids"] for row in rows)}
+        proposal.update(lead_fixture_assignments(rows, input_choices=choices["allocation_input_ids"],
+            review_choices=choices["review_candidate_ids"], anchors=anchors, recipients=recipients))
+    return lead_fixture_response(call, lead_fixture_result(native), family=0)
+
+
+def _planning_question_response(call, _provider):
+    return _document_plan_native_response(call, {
+        "kind": "question", "message": "Next Plot step: resolve the ending decision, then update the global outline before the part outline.",
+        "authoring_scope": lead._live_scope(call, activity="draft", domains=("plot_structure",), paths=()),
+        "planning_target": AuthoringTarget.MANUSCRIPT.value})
 
 
 class LeadArtifactObjectiveTests(RecommendationCase):
@@ -451,18 +483,12 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(RuntimeSession(restarted, self.session_id).inspect_document_plans(), session_plans)
         self.assertEqual(len(self.backend.calls), calls_before_inspection)
         self.runtime = restarted
-        from story_writing_agents.core_document_readiness import AuthoringTarget
         planning_conversation = self.conversation("Chapter three goal before an exact manuscript target")
         literal_goal = "3장 초안을 작성하자. 결말의 선택은 아직 미정이다."
-        def planning_question(call, _provider):
-            return lead._provider_envelope(call, {
-                "kind": "question", "message": "Next Plot step: resolve the ending decision, then update the global outline before the part outline.",
-                "authoring_scope": lead._live_scope(call, activity="draft", domains=("plot_structure",), paths=()),
-                "planning_target": AuthoringTarget.MANUSCRIPT.value})
-        self.backend.enqueue(planning_question, control_plan=selection_plan("question.authoring"))
+        self.backend.enqueue(_planning_question_response, control_plan=selection_plan("question.authoring"))
         planning_calls = len(self.backend.calls)
         initial_plan_turn = await self.runtime.lead_turn(self.session_id, planning_conversation, literal_goal)
-        self.assertIs(initial_plan_turn.kind, c.LeadOutcomeKind.QUESTION)
+        self.assertIs(initial_plan_turn.kind, c.LeadOutcomeKind.QUESTION, initial_plan_turn)
         self.assertIsNone(initial_plan_turn.proposal)
         self.assertIsNone(initial_plan_turn.artifact_proposal)
         self.assertEqual(len(self.backend.calls) - planning_calls, 2)
@@ -603,7 +629,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
                      "proposal": {"relation": "new_step", "purpose": purpose, "assignments": [assignment]}}
             if draft:
                 value["authoring_assessment"] = asdict(task_assessment(foundation_ids=("user_input", alias), actions=(purpose,)))
-            return lead._provider_envelope(call, value)
+            return _document_plan_native_response(call, value)
         self.backend.enqueue(review_provisional, control_plan=selection_plan("consultation.review_only"))
         consumer_start = len(self.backend.call_records)
         consumer_control = await self.runtime.decide_lead_task(task_controls.LeadTaskDecision.from_task(global_task.ref, task_controls.LeadTaskAction.NEW_TASK,
@@ -717,7 +743,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertIs(global_recommendation.kind, c.LeadOutcomeKind.RECOMMENDATION)
         self.assertEqual(global_recommendation.recommendation_request.document_node.plan_ref, goal_plan.ref)
         def prepare_global_draft(call, _provider):
-            return lead._provider_envelope(call, {"kind": "proposal", "message": global_draft_purpose,
+            return _document_plan_native_response(call, {"kind": "proposal", "message": global_draft_purpose,
                 "authoring_scope": lead._live_scope(call, activity="draft", domains=("plot_structure",), paths=(global_node.target_path,), contributions=[{"domain": "plot_structure", "role": "draft_owner"}]),
                 "authoring_assessment": asdict(task_assessment(foundation_ids=("user_input",), actions=(global_draft_purpose,))),
                 "proposal": {"relation": "new_step", "purpose": global_draft_purpose, "assignments": [{"agent_id": PLOT_ARCHITECT,
@@ -914,7 +940,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         before_multi = tuple(self.workspace.path(path).read_bytes() for path in full_targets)
         def partial_start(call, _provider):
             input_ids = tuple(dict(call.contract.semantic_index.policy.choices)["input_ids"])
-            return lead._provider_envelope(call, {"kind": "proposal", "message": multi_request,
+            return _document_plan_native_response(call, {"kind": "proposal", "message": multi_request,
                 "authoring_scope": lead._live_scope(call, activity="draft", domains=("plot_structure",), paths=full_targets,
                     contributions=[{"domain": "plot_structure", "role": "draft_owner"}]),
                 "authoring_assessment": asdict(task_assessment(foundation_ids=input_ids, actions=("Draft both requested documents in separate sequential Plot work.",))),
