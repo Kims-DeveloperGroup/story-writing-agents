@@ -547,6 +547,7 @@ class SpecialistRoutingTests(unittest.TestCase):
             history.append(row)
             return row
         chapter3, chapter4 = plan.nodes[-1].target_path, plan.remaining_target_paths[0]
+        content = "The promised return closes this chapter.\n"
         def window(revision, path, prior):
             node = replace(plan.nodes[-1], node_id="node_chapter3" if path == chapter3 else "node_chapter4",
                 book_unit_ids=("chapter-03",) if path == chapter3 else ("chapter-04",),
@@ -565,9 +566,16 @@ class SpecialistRoutingTests(unittest.TestCase):
                 scope_digest=documents.document_value_digest(c.authoring_scope_to_dict(scope)))
             node_binding = documents.DocumentNodeBinding(current.ref, node.node_id, task_ref, task_ref, fixture.STEP_ID,
                 prior_confirmation_event_id=prior)
+            finished_input = fixture.make_input("user_input", kind=c.CollaborationInputKind.USER_INPUT, locator="USER supplied " + path,
+                revision_digest="sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest(), start_line=None, end_line=None)
             template = fixture.make_proposal(proposal_id="window_proposal_" + str(revision),
-                inputs=(fixture.make_input(),), assignments=(fixture.make_assignment(specialist_id=EXECUTION_SPECIALIST),))
+                inputs=(finished_input, fixture.make_input()),
+                assignments=(fixture.make_assignment(specialist_id=EXECUTION_SPECIALIST, input_ids=("user_input", "input_outline")),))
+            scoped_assignments = tuple(replace(item, mode=Mode.REVIEW,
+                review_basis=ReviewBasis(candidate_input_ids=("user_input",), criteria="Review only the supplied finished manuscript for " + path + "."))
+                for item in template.assignments)
             proposal = fixture.replace_proposal(template, basis=replace(template.basis, schema_version=2),
+                assignments=scoped_assignments,
                 authoring_scope=scope, document_node=node_binding, document_plan=current)
             record("proposal_" + str(revision), c.CollaborationEventKind.MESSAGE, proposal)
             confirmation = record("confirm_" + str(revision), c.CollaborationEventKind.CONFIRMATION,
@@ -577,10 +585,9 @@ class SpecialistRoutingTests(unittest.TestCase):
             return current, proposal, confirmation
         first, first_proposal, first_confirmation = window(1, chapter3, None)
         baseline = {node.target_path: b"Core baseline for constructed projection.\n" for node in first.nodes[:-1]}
-        content = "Chapter 3 ends with the promised return.\n"
         exact_candidate = artifacts.build_artifact_review_candidate(candidate_id="chapter3_candidate", candidate_revision=1,
             intent=artifacts.ArtifactProposalIntent((artifacts.ArtifactCreateIntent(chapter3, content),)),
-            evidence=(), grounding_evidence_ids=("input_outline",), base_state=baseline, attached_core_paths=())
+            evidence=(), grounding_evidence_ids=("user_input", "input_outline"), base_state=baseline, attached_core_paths=())
         reviewers = artifacts.artifact_review_specialists(exact_candidate.disclosed_review_domains)
         final_evidence = review.FinalReviewEvidence(exact_candidate.candidate_id, exact_candidate.candidate_revision,
             exact_candidate.candidate_digest, first_proposal.authoring_scope.task_id, first_proposal.authoring_scope.task_revision,
