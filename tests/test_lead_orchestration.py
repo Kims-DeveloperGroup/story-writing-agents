@@ -306,6 +306,8 @@ class _LeadContextProvider:
     async def invocation(self, scope: object, policy_fingerprint: str, *,
         continuation_identity: object | None=None, execution_workspace: object | None=None):
         self.backend.execution_workspaces.append(execution_workspace)
+        if hasattr(self, "_live_material"):
+            del self._live_material
         self._active = (scope, policy_fingerprint)
         self._continuation_identity = continuation_identity
         try:
@@ -370,7 +372,7 @@ class _LeadContextProvider:
         try:
             self._live_material = _workflow_material(self.callback_payload(request))
         except LookupError:
-            if hasattr(self, "_live_material"):
+            if "task_input" in self.callback_payload(request) and hasattr(self, "_live_material"):
                 del self._live_material
         if hasattr(self, "_live_material"):
             _LIVE_CONTEXT[request.payload["request_correlation_token"]] = self._live_material

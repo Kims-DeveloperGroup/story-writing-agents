@@ -152,7 +152,7 @@ def _artifact_outcome(
             return indexed_response({'action_type': 'read_context', 'read_handles': finite_fixture_read_selection(
                     call.contract.offers.issued_handle_aliases, selected_handles)},
                 outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
-        material = _workflow_material(input_payload)
+        material = _live_material(call)
         if read_queries:
             reads = ([row for entry in input_payload['context_observations']
                       if entry['observation']['observation_type'] == 'context_read_results'

@@ -787,26 +787,74 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertEqual(check_schema(result_bound.schema_value()), ())
         replacement_text = "USER supplied Global revision; preserve the promised ending.\n"
         producer = document_fixture._document_global_candidate_script(global_path, old_global, replacement_text)
-        fixture_provider = SimpleNamespace(responses=[producer], used_handles=(), backend=SimpleNamespace(artifact_read_links={}),
-            callback_payload=lambda request: request.payload)
+        fixture_backend = document_fixture.lead._LeadBackend(test_case=self, vendor="codex")
+        fixture_backend.enqueue(producer)
+        fixture_provider = document_fixture.lead._LeadContextProvider(fixture_backend, document_fixture.lead.LEAD_ORCHESTRATOR,
+            "selected-v9-fixture", fixture_backend.scripts.pop(0), None)
         payload = {"task_input": {"workflow": "lead_front_channel", "input_aliases": [
             {"input_id": "reference_1", "kind": "core_document"}]},
             "core_document_statuses": [{"artifact_path": global_path, "document_status": "incomplete", "evidence_id": "reference_1"}]}
         def fixture_request(bound, value):
             return BoundContextProviderCallRequest(contract=bound, policy_fingerprint="sha256:" + "0" * 64,
-                call_kind=ProviderCallKind.COLLABORATION_INITIAL, payload=value)
+                call_kind=ProviderCallKind.COLLABORATION_INITIAL if bound.offers.action_index == 1 else ProviderCallKind.COLLABORATION_CONTINUATION,
+                payload=value)
         native_frames = []
-        for bound, observation in ((search_bound, None),
-                (read_bound, {"search_results": [{"read_handle": "h1", "provenance": {"source_locator": global_path}}]}),
-                (result_bound, {"read_results": [{"read_handle": "h1", "evidence_id": "read_global",
-                    "source": {"source_type": "story_document"}, "provenance": {
-                        "authority_type": "writing_artifact_repository", "source_locator": global_path}}]})):
-            current_payload = {**payload, **({} if observation is None else {"context_observation": observation})}
-            current_call = fixture_request(bound, current_payload)
-            frame = fixture_provider.responses.pop(0)(current_call, fixture_provider)
-            self.assertEqual(bound.rule_graph.findings(json.loads(frame)), ())
-            self.assertTrue(bound.decode_response(frame).belongs_to(bound))
-            native_frames.append(frame)
+        import asyncio
+        from story_writing_agents.agent_context import service as context_service
+        from story_writing_agents.agent_context.manifest import ContextManifest
+        from story_writing_agents.provider_wire import project_context_payload
+        binding = context_service.ContextInvocationBinding(offers.scope, "selected-v9-operation", "selected-v9-result",
+                                                          ContextManifest(offers.scope, ()))
+        async def check_current_v9_frames():
+            initial_material = None
+            tokens = []
+            async with fixture_provider.invocation(offers.scope, "sha256:" + "0" * 64):
+                for bound, observation in ((search_bound, None), (read_bound, {"search_results": [{"read_handle": "h1", "provenance": {"source_locator": global_path}}]}),
+                    (result_bound, {"read_results": [{"read_handle": "h1", "evidence_id": "read_global", "source": {"source_type": "story_document"},
+                        "provenance": {"authority_type": "writing_artifact_repository", "source_locator": global_path}}]})):
+                    query_state = SimpleNamespace(allowed_search_source_kinds=bound.offers.search_source_kinds,
+                        action_limits=lambda: [value for _name, value in bound.offers.action_limits])
+                    if observation is None:
+                        compact_payload = {"c": context_service._correlation_token(context_service._action_correlation(binding, 1)),
+                            "q": context_service._action_query(("lead", selected_factory), query_state, bound.offers.allowed_actions),
+                            "i": payload["task_input"], "core_document_statuses": payload["core_document_statuses"]}
+                    else:
+                        compact_payload, _ = context_service._continuation_payload(binding, query_state,
+                            phase_contract=("lead", selected_factory), action_index=bound.offers.action_index,
+                            allowed_actions=bound.offers.allowed_actions, observation=json.dumps(observation))
+                        self.assertEqual(set(compact_payload), {"c", "q", "o"})
+                    current_payload, _, _ = project_context_payload(compact_payload, {})
+                    if observation is not None:
+                        self.assertNotIn("task_input", current_payload)
+                    current_call = fixture_request(bound, current_payload)
+                    physical = await fixture_provider.invoke_context(current_call)
+                    if observation is not None:
+                        self.assertEqual(canonical(fixture_provider.callback_payload(current_call)["context_observation"]), canonical(observation))
+                    frame = physical.response_text
+                    self.assertEqual(bound.rule_graph.findings(json.loads(frame)), ())
+                    self.assertTrue(bound.decode_response(frame).belongs_to(bound))
+                    physical.finalizer.accepted()
+                    token = current_payload["request_correlation_token"]
+                    tokens.append(token)
+                    material = document_fixture.lead._LIVE_CONTEXT[token]
+                    if initial_material is None:
+                        initial_material = material
+                    self.assertIs(material, initial_material)
+                    native_frames.append(frame)
+            self.assertEqual(len(set(tokens)), 3)
+            fresh_binding = replace(binding, operation_id="fresh-v9-operation")
+            missing_input, _ = context_service._continuation_payload(fresh_binding, query_state,
+                phase_contract=("lead", selected_factory), action_index=result_bound.offers.action_index,
+                allowed_actions=result_bound.offers.allowed_actions, observation=json.dumps(observation))
+            missing_payload, _, _ = project_context_payload(missing_input, {})
+            missing_call = fixture_request(result_bound, missing_payload)
+            async with fixture_provider.invocation(offers.scope, "sha256:" + "0" * 64):
+                self.assertFalse(hasattr(fixture_provider, "_live_material"))
+                self.assertNotIn(missing_payload["request_correlation_token"], document_fixture.lead._LIVE_CONTEXT)
+                with self.assertRaises(KeyError):
+                    document_fixture.lead._live_material(missing_call)
+            return current_payload, current_call
+        current_payload, current_call = asyncio.run(check_current_v9_frames())
         self.assertEqual(fixture_provider.responses, [])
         self.assertEqual(tuple(json.loads(frame)["agent_action"]["action_type"] for frame in native_frames),
             ("search_context", "read_context", "submit_result"))
