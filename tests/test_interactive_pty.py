@@ -1692,7 +1692,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
         active = captured[:footer + len("? help · q close")].rsplit("\x1b[1;1H\x1b[2K", 1)[1]
         self.assertIn('"content": "개요 ⟦개요⟧ 0"', active)
         self.assertIn("Search: '개요'", active)
-        for draft, prompt in ((b"/JKdraft", "Query: 개요JKdraft│"), (b"g999", "Go to source line: 999│")):
+        for draft, prompt in ((b"/JKdraft", "Query: 개요JKdraft│"), (b"g999", "Source line: 999│")):
             mark = process.output_mark()
             process.send_bytes(draft)
             process.wait_for_text(prompt, after=mark)
