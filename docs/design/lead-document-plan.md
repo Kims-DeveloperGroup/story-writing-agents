@@ -1,6 +1,6 @@
 # Lead document plan
 
-This design is accepted for [Issue #839](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/839#implementation-plan). Implementation and verification are pending in the draft PR. It builds on the current source, readiness and staged-review contracts from #836, #837, #838 and #848.
+A document plan retains the original writing goal while the runtime qualifies each document task and requests its confirmation. The scope is defined in [Issue #839](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/839#implementation-plan), using the source, readiness and staged-review contracts from #836, #837, #838 and #848.
 
 ## User example
 
