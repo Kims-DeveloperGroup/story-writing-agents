@@ -709,7 +709,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertEqual({key: value for key, value in guided_document.items() if key != "contract_guidance"}, wire_document)
         self.assertTrue(guided_document["contract_guidance"]["input_fields"])
         from types import SimpleNamespace
-        from story_writing_agents.agent_context.service import ContextCallOffers
+        from story_writing_agents.agent_context.service import ContextCallOffers, BoundContextProviderCallRequest
         from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
         from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
         from story_writing_agents.lead_schema_groups import LeadGroupRequestBasis
@@ -745,6 +745,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertEqual((question_value["kind"], question_value["planning_target"]), ("question", "manuscript"))
         self.assertEqual(question_value["authoring_scope"]["target_paths"], [])
         from story_writing_agents.agent_context.actions import ContextCallReadFact
+        from story_writing_agents.agent_context.accounting import ProviderCallKind
         from story_writing_agents.agent_context.manifest import ContextSourceKind
         from story_writing_agents.lead_provider_contracts import LeadDiscussionConstraints
         from story_writing_agents.orchestrator import _lead_revision_result_contract
@@ -791,6 +792,9 @@ class SpecialistRoutingTests(unittest.TestCase):
         payload = {"task_input": {"workflow": "lead_front_channel", "input_aliases": [
             {"input_id": "reference_1", "kind": "core_document"}]},
             "core_document_statuses": [{"artifact_path": global_path, "document_status": "incomplete", "evidence_id": "reference_1"}]}
+        def fixture_request(bound, value):
+            return BoundContextProviderCallRequest(contract=bound, policy_fingerprint="sha256:" + "0" * 64,
+                call_kind=ProviderCallKind.COLLABORATION_INITIAL, payload=value)
         native_frames = []
         for bound, observation in ((search_bound, None),
                 (read_bound, {"search_results": [{"read_handle": "h1", "provenance": {"source_locator": global_path}}]}),
@@ -798,7 +802,7 @@ class SpecialistRoutingTests(unittest.TestCase):
                     "source": {"source_type": "story_document"}, "provenance": {
                         "authority_type": "writing_artifact_repository", "source_locator": global_path}}]})):
             current_payload = {**payload, **({} if observation is None else {"context_observation": observation})}
-            current_call = SimpleNamespace(contract=bound, payload=current_payload)
+            current_call = fixture_request(bound, current_payload)
             frame = fixture_provider.responses.pop(0)(current_call, fixture_provider)
             self.assertEqual(bound.rule_graph.findings(json.loads(frame)), ())
             self.assertTrue(bound.decode_response(frame).belongs_to(bound))
@@ -811,7 +815,7 @@ class SpecialistRoutingTests(unittest.TestCase):
             ("proposal", "authoring", "review"))
         self.assertEqual(artifact_value["artifact_intent"]["operations"][0]["new_text"], replacement_text)
         ordinary_bound = ordinary_factory.for_offer(result_offers)
-        ordinary_call = SimpleNamespace(contract=ordinary_bound, payload=current_payload)
+        ordinary_call = fixture_request(ordinary_bound, current_payload)
         with self.assertRaisesRegex(ValueError, "explicitly intended fixture family"):
             producer(ordinary_call, fixture_provider)
         review_scope = document_fixture.lead._live_scope(current_call, activity="review", domains=("plot_structure",),
