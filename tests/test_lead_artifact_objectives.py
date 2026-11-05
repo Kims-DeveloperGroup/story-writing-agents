@@ -133,11 +133,9 @@ class LeadArtifactObjectiveTests(RecommendationCase):
                     'recipients': {'user_input': PLOT_ARCHITECT}, 'family': 0}
         await self._assert_default_budget_refusal(path, text, brief, source_inputs)
         source_positive_call_start = len(self.backend.calls)
-        original_result = lead._live_result
-        with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(call, {**value, "message": brief} if value.get("kind") == "proposal" else value)):
-            conversation_id, _ = await self._source_setup_start(
-                conversation_id, message=text, target_path=None, specialist_ids=ROSTER,
-                authoring_paths=(path,), native_inputs=source_inputs, response_text=brief)
+        conversation_id, _ = await self._source_setup_start(
+            conversation_id, message=text, target_path=None, specialist_ids=ROSTER,
+            authoring_paths=(path,), native_inputs=source_inputs, response_text=brief)
         source = self.projection(conversation_id).offered_draft_sources[-1]
         scope = next(e.payload.authoring_scope for e in self.history(conversation_id) if e.event_id == source.event_id)
         self.assertEqual(scope.target_paths, (path,))
@@ -146,7 +144,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.backend.enqueue(recommendation(message=brief,
             recommended_action=action(source_ids=(source.event_id,),
                 target_paths=(path,), instruction="Preserve the exact approved draft.", specialist_ids=ROSTER),
-            authoring_scope=lambda call: lead._live_material(call)["authoring_tasks"][0]["current_scope"],
+            authoring_scope=lambda call: lead._live_material(call)["current_scope"],
             authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded artifact review judgments", "separate exact proposal preparation"))), control_plan=selection_plan('prepare.artifact'))
         offered = await self.runtime.lead_turn(self.session_id, conversation_id,
             ("Approve the previous draft and prepare it as a new document." + f" Target: {path}. {brief}"
@@ -177,7 +175,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             editorial_refs=(), editorial_context_digest=None)).proposal_digest)
         self.assertNotIn(memory.record.event_id, {item.input_id for item in prepared.proposal.basis.inputs})
         self.assertEqual(prepared.proposal.authoring_scope, replace(request.authoring_scope, activity=lead.AuthoringActivity.REVIEW))
-        self.assertEqual(request.authoring_scope.interpretation, brief)
+        self.assertEqual(request.authoring_scope.interpretation, 'Draft from the current synthetic brief.')
         historical = next(item for item in prepared.proposal.basis.inputs if item.input_id == source.event_id)
         self.assertIs(historical.kind, c.CollaborationInputKind.CONVERSATION_EVENT)
         self.assertEqual(historical.revision_digest, source.content_digest)
@@ -215,7 +213,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             phase = [item for item in materials if ("assignment" in item or "replies" in item) and (item.get("assignment", {}).get("mode") == "review" or "artifact_candidate" in item) == is_review]
             self.assertEqual(len(phase), len(ROSTER) + 1)
             self.assertTrue(all(item["editorial_state"]["selected_refs"] == [editorial.editorial_ref_to_dict(memory.record_ref)] for item in phase))
-            self.assertTrue(all(item["authoring_scope"] == c.authoring_scope_to_dict(expected_scope) for item in phase))
+            self.assertTrue(all(item["authoring_scope"] == {key: value for key, value in c.authoring_scope_to_dict(expected_scope).items() if key not in {'task_id', 'task_revision'}} for item in phase))
             self.assertTrue(all(item["inputs"] == phase[0]["inputs"] for item in phase))
         self.assertEqual(next(item for item in phase[0]["inputs"] if item["input_id"] == source.event_id)["revision_digest"], source.content_digest)
         dispatches = self.payload_events(conversation_id, c.CollaborationAssignmentDispatchPayload)

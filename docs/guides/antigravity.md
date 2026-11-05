@@ -439,7 +439,7 @@ fixed start-failure diagnostic. Such a call has no submitted transport count.
 
 ### Sanitized provider call and JSON result
 
-Antigravity and Codex receive the same `agent-provider-wire-v10` request and response
+Antigravity and Codex receive the same `agent-provider-wire-v11` request and response
 semantics. The native invocation passes the response schema through `--json-schema`.
 The [agent JSON field guide](../reference/provider-wire.md) documents complete shapes
 and illustrative responses, including the `agent_action` root, `response_type`,

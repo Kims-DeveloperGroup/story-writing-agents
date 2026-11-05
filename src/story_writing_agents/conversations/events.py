@@ -4456,19 +4456,43 @@ def shared_premises_to_dict(premises: tuple[CollaborationSharedPremise, ...]) ->
                          for source in item.sources]} for item in premises]
 
 
-def authoring_capture_identity(scope: AuthoringScope, basis: CollaborationProposalBasis) -> str:
-    """Canonical immutable task capture; stage and lookup aliases are not identities."""
+def authoring_capture_identity(scope: AuthoringScope, basis: CollaborationProposalBasis, *,
+        shared_premises: tuple[CollaborationSharedPremise, ...] | None = None,
+        editorial_refs: tuple[EditorialRecordRef, ...] | None = None,
+        editorial_context_digest: str | None = None,
+        material_inputs: tuple[CollaborationInputRevision, ...] | None = None,
+        material_input_ids: tuple[str, ...] = ()) -> str:
+    """Canonical capture, also usable for host comparison before identity resolution."""
     if scope.schema_version != 3 or basis.schema_version != 2:
-        raise ValueError("captured authoring identity requires scope3 and basis2")
+        raise ValueError("captured authoring identity requires scope3 basis2")
     scoped = authoring_scope_to_dict(scope)
     scoped.pop("activity")
+    selected = basis.shared_premises if shared_premises is None else shared_premises
+    refs = basis.editorial_refs if editorial_refs is None else editorial_refs
+    digest = basis.editorial_context_digest if editorial_refs is None else editorial_context_digest
     premises = [{"slot_id": item.slot_id, "selected_premise": item.selected_premise,
-                 "sources": sorted((premise_source_identity(source) for source in item.sources),
-                                   key=lambda value: json.dumps(value, ensure_ascii=False))}
-                for item in basis.shared_premises]
-    return json.dumps({"scope": scoped, "premises": sorted(premises, key=lambda item: item["slot_id"]), **({"editorial_refs": [editorial_ref_to_dict(ref) for ref in basis.editorial_refs],
-            "editorial_context_digest": basis.editorial_context_digest} if basis.editorial_refs else {})},
-                      ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        "sources": sorted((premise_source_identity(source) for source in item.sources),
+                          key=lambda value: json.dumps(value, ensure_ascii=False))} for item in selected]
+    material = []
+    if material_inputs is not None:
+        selected_ids = set(material_input_ids)
+        for item in material_inputs:
+            if (item.input_id not in selected_ids or item.kind is CollaborationInputKind.USER_INPUT
+                    or item.input_id in {"recommendation_request", "recommendation_decision"}):
+                continue
+            locator = item.locator
+            if locator.startswith("${") and locator.endswith("}"):
+                locator = locator[2:-1]
+            kind = "writing_artifact" if item.kind in {CollaborationInputKind.CORE_DOCUMENT,
+                CollaborationInputKind.MANUSCRIPT, CollaborationInputKind.WRITING_ARTIFACT} else item.kind.value
+            material.append((kind, locator, item.state.value, item.revision_digest,
+                item.start_line, item.end_line))
+    return json.dumps({"scope": scoped, "premises": sorted(premises, key=lambda item: item["slot_id"]),
+        **({"editorial_refs": [editorial_ref_to_dict(ref) for ref in refs],
+            "editorial_context_digest": digest} if refs else {}),
+        **({"material_sources": sorted(set(material), key=lambda item: json.dumps(item))}
+            if material_inputs is not None else {})},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 def authoring_source_facts(
@@ -4665,6 +4689,36 @@ def validate_authoring_capture_pin(
             continue
         if prior_scope.schema_version != 3 or authoring_capture_identity(prior_scope, prior.basis) != current:
             raise ValueError("confirmed task revision cannot change its authoring capture")
+
+
+def confirmation_task_bindings(events: tuple[CollaborationEvent, ...]) -> dict[str, tuple[str, int]]:
+    """Resolve confirmation events without applying future confirmations to earlier records."""
+    scopes = {(event.conversation_id, event.payload.proposal_id, event.payload.proposal_revision,
+        event.payload.proposal_digest): event.payload.authoring_scope for event in events
+        if type(event.payload) is CollaborationProposal and event.payload.authoring_scope is not None}
+    result = {}
+    for event in events:
+        if (type(event.payload) is CollaborationConfirmationPayload
+                and event.payload.decision is CollaborationConfirmationDecision.CONFIRM):
+            scope = scopes.get((event.conversation_id, event.payload.proposal_id,
+                event.payload.proposal_revision, event.payload.proposal_digest))
+            if scope is not None:
+                result[event.event_id] = (scope.task_id, scope.task_revision)
+    return result
+
+
+def confirmed_task_pairs(events: tuple[CollaborationEvent, ...]) -> frozenset[tuple[str, int]]:
+    return frozenset(confirmation_task_bindings(events).values())
+
+
+def authoring_scope_is_view(payload: object, pinned: frozenset[tuple[str, int]]) -> bool:
+    if type(payload) is not CollaborationLeadJudgmentPayload or payload.authoring_scope is None:
+        return False
+    if payload.preliminary_review is not None:
+        return True
+    scope = payload.authoring_scope
+    return (payload.kind in {LeadOutcomeKind.ANSWER, LeadOutcomeKind.QUESTION, LeadOutcomeKind.CRITIQUE}
+        and (scope.task_id, scope.task_revision) in pinned)
 
 
 def confirmed_authoring_proposals(

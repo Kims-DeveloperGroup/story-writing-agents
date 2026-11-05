@@ -97,11 +97,11 @@ Important choices belong to the user. A minor delegated choice requires the runt
 report-bound user allowlist and an eligible recommended option; a general confirmation or
 provider suggestion does not grant delegation. Rejecting or deferring a choice does not
 establish a premise. After selection, disclose the exact chosen text, source, affected domains,
-task revision, and costs in a fresh authoring proposal. Every dependent writer receives the
+work scope, and costs in a fresh authoring proposal. Every dependent writer receives the
 same captured premise. Keep the completed analysis and fresh authoring budgets distinct,
 and show their actual combined submitted calls without resetting earlier spend.
 
 If a dependent draft conflicts with the captured premise, report the typed conflict and hold
 that draft. A specialist cannot declare that the user changed direction. A user direction
-change needs a fresh disclosed task revision and its own confirmation, drafting, and review;
+change needs a fresh disclosed work scope and its own confirmation, drafting, and review;
 earlier candidates, reviews, and approvals do not approve the changed premise.

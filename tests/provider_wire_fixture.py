@@ -1,4 +1,4 @@
-"""Independent wire-v10 writers for existing typed-domain provider scenarios."""
+"""Independent wire-v11 writers for existing typed-domain provider scenarios."""
 from __future__ import annotations
 
 import copy
@@ -98,6 +98,8 @@ def result(value, contract_id, *, native_types=None):
             return item
         output = {}
         for key, child in item.items():
+            if shape in {"authoring_scope", "stage_plan", "questions", "preliminary_review"} and key in {"task", "task_reference", "task_id", "task_revision"}:
+                continue
             name = _FIELDS.get(key, key)
             if native_types is not None and key != name and name in item:
                 output[key] = copy.deepcopy(child)
@@ -107,10 +109,6 @@ def result(value, contract_id, *, native_types=None):
                     name = "response_type"
                     if isinstance(child, str):
                         child = native_types.get(child, child)
-            if key == "task" and shape == "authoring_scope" and isinstance(child, str):
-                task_id, revision = child.rsplit("@", 1)
-                output["task_reference"] = {"task_id": task_id, "task_revision": int(revision)}
-                continue
             if key == "kind" and shape == "operations":
                 name, child = "change_type", _CHANGE.get(child, child)
             elif key == "kind" and shape == "recommended_action":
@@ -144,7 +142,7 @@ def contract_id(payload):
 def scenario_input(value):
     """View runtime fields as domain scenario names; string content stays literal."""
     reverse = {new: old for old, new in _FIELDS.items()}
-    reverse.update({"workflow_type": "workflow", "user_request_text": "command", "available_writing_tasks": "authoring_tasks", "available_input_sources": "input_aliases", "document_change_requests": "artifact_objectives", "confirmed_proposal_drafting_context": "structured_recommendation_execution", "input_source_id": "input_id", "confirmed_proposal_drafting_constraints": "preparation", "current_writing_task_scope": "current_scope", "input_source_type": "kind", "decision_type": "kind"})
+    reverse.update({"workflow_type": "workflow", "user_request_text": "command", "available_writing_tasks": "authoring_tasks", "available_input_sources": "input_aliases", "document_change_requests": "artifact_objectives", "confirmed_proposal_drafting_context": "structured_recommendation_execution", "input_source_id": "input_id", "confirmed_proposal_drafting_constraints": "preparation", "current_writing_task_scope": "current_scope", "current_writing_scope": "current_scope", "input_source_type": "kind", "decision_type": "kind"})
     def visit(item, shape=""):
         if isinstance(item, list):
             return [visit(child, shape) for child in item]
@@ -268,7 +266,7 @@ def direct_response(text, payload):
 
 def assert_guidance(test, payload, schema):
     """Check independently observable guidance, not the runtime's catalog helper."""
-    test.assertEqual(payload["protocol_version"], "agent-provider-wire-v10")
+    test.assertEqual(payload["protocol_version"], "agent-provider-wire-v11")
     guide = payload["contract_guidance"]
     test.assertEqual(set(guide), {"input_fields", "response_rules"})
     for name in payload:
@@ -571,15 +569,11 @@ def lead_fixture_scope_record(record, *, fixed_targets=False, fixed_dependencies
              'target_paths': 'target_artifact_paths', 'domains': 'specialist_domains',
              'contributions': 'contributions', 'dependency_slots': 'dependency_slots'}
     native = {names.get(name, name): copy.deepcopy(value) for name, value in record.items()
-              if name not in ('interpretation', 'schema_version', 'task_id', 'task_revision')}
+              if name not in ('schema_version', 'task_id', 'task_revision')}
     if 'activity_type' in native:
         native['activity_type'] = {'workflow': 'workflow_guidance', 'draft': 'draft_writing',
             'review': 'review_writing', 'revise': 'revise_writing'}.get(
                 native['activity_type'], native['activity_type'])
-    task = {name: copy.deepcopy(record[name]) for name in ('task_id', 'task_revision')
-            if name in record}
-    if task:
-        native['task_reference'] = task
     return lead_fixture_scope(native, fixed_targets=fixed_targets, fixed_dependencies=fixed_dependencies)
 
 
@@ -588,6 +582,8 @@ def lead_fixture_scope(scope, *, fixed_targets=False, fixed_dependencies=False):
     if type(scope) is not dict:
         return copy.deepcopy(scope)
     scope = copy.deepcopy(scope)
+    for name in ('task', 'task_reference', 'task_id', 'task_revision'):
+        scope.pop(name, None)
     workflow = scope.get('activity_type', scope.get('activity')) == 'workflow_guidance'
     domains = scope.get('specialist_domains')
     if type(domains) in (list, tuple):
@@ -618,16 +614,10 @@ def lead_fixture_scope(scope, *, fixed_targets=False, fixed_dependencies=False):
                 item['dependent_domains'] = dict.fromkeys(selected, True)
     names = {'activity_type': 'activity', 'writing_intent': 'intent',
              'specialist_domains': 'domains', 'target_artifact_paths': 'paths',
-             'contributions': 'roles', 'dependency_slots': 'slots', 'task_reference': 'task'}
+             'contributions': 'roles', 'dependency_slots': 'slots'}
     # A deliberate mixed old/new input remains mixed and invalid; collisions are never discarded.
     compact = {name if names.get(name, name) in scope and names.get(name, name) != name else
                names.get(name, name): value for name, value in scope.items()}
-    if type(compact.get('task')) is dict:
-        task_names = {'task_id': 'id', 'task_revision': 'revision'}
-        task = compact['task']
-        compact['task'] = {name if task_names.get(name, name) in task and
-                           task_names.get(name, name) != name else task_names.get(name, name): value
-                           for name, value in task.items()}
     if 'slots' in compact and not workflow:
         def slot(value):
             if type(value) is not dict:
@@ -658,6 +648,10 @@ def lead_fixture_result(value):
     value = copy.deepcopy(value)
     if type(value) is not dict:
         return value
+    for name in ('task_scope', 'writing_task_scope'):
+        if type(value.get(name)) is dict:
+            for field in ('task', 'task_reference', 'task_id', 'task_revision'):
+                value[name].pop(field, None)
     if 'response_details' in value:
         raise ValueError('Supply either grouped or ungrouped fixture fields explicitly')
     common = {'schema_id', 'response_type', 'response_text'}
