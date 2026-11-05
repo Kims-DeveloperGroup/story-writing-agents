@@ -1407,7 +1407,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIsNone(proposed.proposal.stage_plan)
         phase_history = self.history(conversation)
         phase_synthesis = next(event.payload for event in phase_history
-                               if event.event_id == final_proposal.final_review_evidence.synthesis_event_id)
+                               if event.event_id == final_proposal.synthesis_event_id)
         self.assertEqual({type(event.payload) for event in phase_history
                           if getattr(event.payload, "provider_invocation_id", None) == phase_synthesis.provider_invocation_id},
                          {c.CollaborationLeadSynthesisPayload, c.ArtifactReviewSynthesisPayload})

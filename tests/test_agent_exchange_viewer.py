@@ -133,10 +133,19 @@ def _assert_typed_history_phase(case, history, invocation_id, role, phase, scope
     from story_writing_agents import conversations as c
     from story_writing_agents.interactive_controller._exchange_projection import project_agent_exchanges
 
+    accepted = [event.payload.response for event in history
+                if type(event.payload) is c.CollaborationLeadPublicResponsePayload
+                and event.payload.response.invocation_id == invocation_id
+                and event.payload.response.acceptance.value == "accepted" and event.sender.agent_id == role]
+    case.assertLessEqual(len(accepted), 1)
+    if phase == "procedure_status":
+        case.assertEqual(len(accepted), 1)
+    accepted_call_id = accepted[0].call_id if accepted else None
     submitted = [event for event in history
                  if type(event.payload) is c.CollaborationProviderCallPayload
                  and event.payload.state is c.CollaborationProviderCallState.SUBMITTED
-                 and event.payload.invocation_id == invocation_id and event.payload.role == role]
+                 and event.payload.invocation_id == invocation_id and event.payload.role == role
+                 and (accepted_call_id is None or event.payload.call_id == accepted_call_id)]
     case.assertEqual(len(submitted), 1)
     event = submitted[0]
     requests = [request for agent, request in case.backend.call_records
@@ -156,6 +165,8 @@ def _assert_typed_history_phase(case, history, invocation_id, role, phase, scope
         )
         return b"".join(json.dumps({
             "timestamp": "2026-08-30T00:00:00Z", "request_type": kind,
+            "session_id": selection.session_id, "scope_kind": selection.scope_kind.value,
+            "scope_id": selection.scope_id, "agent_id": selection.agent_id,
             "provider": "codex", "exchange_id": "consumer-fixture", "content": json.dumps(content),
         }).encode() + b"\n" for kind, content in contents)
 
