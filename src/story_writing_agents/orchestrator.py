@@ -8403,6 +8403,8 @@ class StoryRuntime:
             invocation_kind=invocation_kind,
             context_invocation_kind=context_kind,
             result_contract=_specialist_result_contract(assignment, premise_dependencies=dependencies),
+            diagnostic_task=(None if proposal.authoring_scope is None else
+                             (proposal.authoring_scope.task_id, proposal.authoring_scope.task_revision)),
             physical_call_limit=assignment.max_physical_calls,
             round_number=assignment.round,
             decoder=decode,
@@ -8872,6 +8874,7 @@ class StoryRuntime:
         fallback_answer: str,
         action_progress_sink: ContextActionProgressSink | None,
         constraints: LeadProviderConstraints | None = None,
+        diagnostic_task: tuple[str, int] | None = None,
         editorial_refs: tuple[EditorialRecordRef, ...] = (),
         editorial_context_digest: str | None = None,
         evidence: CollaborationLeadEvidence | None = None,
@@ -9122,8 +9125,16 @@ class StoryRuntime:
                 decoded = decoder(answer, artifact_binding)
 
             def record_validated_answer(call_id: str) -> None:
-                if decoded is not None and constraints is not None and constraints.scope is not None:
-                    provider.record_validated_task(call_id, constraints.scope.task_id, constraints.scope.task_revision)
+                if decoded is None:
+                    return
+                task = diagnostic_task
+                if constraints is not None and constraints.scope is not None:
+                    scoped_task = constraints.scope.task_id, constraints.scope.task_revision
+                    if task is not None and task != scoped_task:
+                        return
+                    task = scoped_task
+                if task is not None:
+                    provider.record_validated_task(call_id, task[0], task[1])
 
             lead_factory = None
             if agent_id == LEAD_ORCHESTRATOR:

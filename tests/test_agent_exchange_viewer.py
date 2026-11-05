@@ -868,7 +868,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
                     "scope_id": conversation.conversation_id,
                     "scope_subject": "Archived subject",
                     "agent_id": ROSTER[0],
-                    "typed_history": (),}
+                    "typed_history": (), "history_notice": None,}
             ],
         )
         self.assertIs(type(prepared[0]["source"]), bytes)
@@ -876,6 +876,43 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
         self.assertIs(controller._focused_conversation, original_focus)
         self.assertIs(controller._context, original_context)
         self.assertEqual(callbacks.records, [])
+
+        import jsonl_viewer
+        from jsonl_viewer.inspection import MISSING
+        captured = []
+        private = "PRIVATE_HISTORY /tmp/private TOKEN=secret"
+        abort = controller_core_module._ControllerAbort(controller_core_module.InteractiveError(
+            controller_core_module.InteractiveErrorCode.CLEANUP_FAILED))
+
+        def display(source, spec, host=None, *, terminal=None, transient_only=False):
+            captured.append((source, spec))
+
+        for failure in (RuntimeError(private), abort):
+            with (mock.patch.object(type(controller._conversation_storage_services.event_store), "read", side_effect=failure),
+                  mock.patch.object(terminal_module.InteractivePickerInput, "read_picker", autospec=True,
+                                    side_effect=(self._commit(f"conversation:{conversation.conversation_id}"), self._commit(ROSTER[0]))),
+                  mock.patch.object(jsonl_viewer, "view_jsonl", new=display),
+                  mock.patch.object(terminal_module.InteractiveExternalViewer, "open_owned", autospec=True,
+                                    side_effect=lambda _viewer, operation: operation(_transport())) as opened):
+                if failure is abort:
+                    with self.assertRaises(controller_core_module._ControllerAbort) as held:
+                        controller._view_attached_agent_exchanges()
+                    self.assertIs(held.exception, abort)
+                    opened.assert_not_called()
+                else:
+                    controller._view_attached_agent_exchanges()
+                    opened.assert_called_once()
+        self.assertEqual(len(captured), 1)
+        source, spec = captured[0]
+        self.assertEqual(source, expected_source)
+        self.assertIsNotNone(spec.inspection)
+        self.assertEqual(len(spec.inspection.groups), 1)
+        self.assertTrue(all(dict(group.values)["phase"] is MISSING for group in spec.inspection.groups))
+        self.assertFalse(any(annotation.label in ("Typed review event", "Initial review overview (host-derived preview)", "Review targets (host-derived preview)") for group in spec.inspection.groups for annotation in group.annotations))
+        self.assertEqual(next(item.value for item in spec.context if item.label == "History"),
+                         "Conversation history is unavailable. Captured exchanges remain available; history-derived phase and review evidence could not be loaded.")
+        self.assertNotIn(private, repr(spec) + "".join(callbacks.records))
+        self.assertEqual(source_path.read_bytes(), before_bytes)
 
     def test_attached_command_reports_unavailable_transient_display_without_content(
         self,

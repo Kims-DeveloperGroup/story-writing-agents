@@ -271,6 +271,7 @@ def prepare_agent_exchange_view(
     scope_subject: str,
     agent_id: str,
     typed_history: tuple[CollaborationEvent, ...] = (),
+    history_notice: str | None = None,
 ) -> ExternalOwnedViewOperation:
     """Prepare one immutable view before the terminal lifecycle is acquired."""
 
@@ -284,6 +285,8 @@ def prepare_agent_exchange_view(
     inspection, notice = _inspection(api, projection)
     context = tuple(api.Context(label, _preview(value)) for label, value in (
         ("Session", session_id), (scope_kind.value.title(), f"{scope_id} — {scope_subject}"), ("Agent", agent_id)))
+    if history_notice is not None:
+        context += (api.Context("History", _preview(history_notice)),)
     if notice is not None:
         context += (api.Context("Inspection", _preview(notice)),)
     expected_projection = (

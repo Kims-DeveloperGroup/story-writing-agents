@@ -3865,6 +3865,67 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertEqual({call.phase for call in ambiguous.calls}, {None})
             self.assertFalse(evaluate(parse_jsonl(raw), catalog, filters, next(e.event_id for e in history if e.payload is judgment), -1).items)
 
+            if seed:
+                from tests.test_lead_orchestration import _decision, _synthesis_outcome
+                from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id
+                from jsonl_viewer.inspection import MISSING
+                task = proposed.proposal.authoring_scope
+                self.assertGreaterEqual(proposed.proposal.assignments[0].max_physical_calls, 2)
+                self.assertIsNone(proposed.proposal.stage_plan)
+                script = ExplicitPhaseScript(("{}", lambda call, _provider: wire_answer(
+                    {"assessment": "supports", "message": "The supplied candidate supports the scoped review."},
+                    wire_contract_id(call.payload)), _synthesis_outcome()))
+                with mock.patch.object(backend_module._BoundContextProvider, "invoke_context", new=observed_invoke):
+                    completed = await runtime.decide_lead_step(_decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
+                self.assertIs(completed.turn.state, c.CollaborationStepState.COMPLETED, (completed, callback_errors))
+                script.require_fixture_valid()
+                history = runtime.conversation_storage_services.event_store.read("preliminary_capture", prior)
+                replies = [event.payload for event in history if type(event.payload) is c.CollaborationSpecialistReplyPayload
+                           and event.payload.proposal_id == proposed.proposal.proposal_id and event.sender.agent_id == PLOT_ARCHITECT]
+                self.assertEqual(len(replies), 1)
+                dispatch = next(event.payload for event in history if event.event_id == replies[0].dispatch_event_id)
+                self.assertEqual((dispatch.proposal_id, dispatch.proposal_revision, dispatch.proposal_digest),
+                                 (proposed.proposal.proposal_id, proposed.proposal.proposal_revision, proposed.proposal.proposal_digest))
+                submitted_ids = {event.payload.call_id for event in history if type(event.payload) is c.CollaborationProviderCallPayload
+                                 and event.payload.state is c.CollaborationProviderCallState.SUBMITTED
+                                 and event.payload.invocation_id == replies[0].provider_invocation_id and event.payload.role == PLOT_ARCHITECT}
+                self.assertGreaterEqual(len(submitted_ids), 2)
+                for native, call in zip(self.provider_invocations()[native_before:], physical_calls, strict=True):
+                    expected_payload = call.canonical_payload if type(call) is ContextProviderCallRequest else canonical_provider_json(call.payload)
+                    self.assertEqual(native["raw_payload"].encode(), expected_payload)
+                selection = AgentExchangeSelection("preliminary_capture", AgentExchangeScopeKind.CONVERSATION, prior, PLOT_ARCHITECT)
+                raw = WorkspaceAgentExchangeStore(self.workspace).snapshot(selection).jsonl_bytes
+                records = [json.loads(line) for line in io.BytesIO(raw)]
+                outcomes = [json.loads(row["content"]) for row in records if row["request_type"] == "outcome"]
+                diagnosed = [item for item in outcomes if "task_id" in item["host_diagnostics"]]
+                self.assertEqual(len(diagnosed), 1)
+                call_id = diagnosed[0]["host_diagnostics"]["call_id"]
+                self.assertIn(call_id, submitted_ids)
+                self.assertEqual(diagnosed, [{"code": "accepted", "outcome": "accepted", "host_diagnostics": {
+                    "call_id": call_id, "task_id": task.task_id, "task_revision": task.task_revision}}])
+                self.assertEqual({item["host_diagnostics"]["call_id"] for item in outcomes}, submitted_ids)
+                self.assertTrue(all(set(item["host_diagnostics"]) == {"call_id"} for item in outcomes if item is not diagnosed[0]))
+                specs.clear()
+                with mock.patch.object(jsonl_viewer, "view_jsonl", new=configured_view):
+                    _prepare_view(raw, session_id="preliminary_capture", scope_id=prior, agent_id=PLOT_ARCHITECT, typed_history=history)(_transport())
+                self.assertEqual(len(specs), 1)
+                expected_phase = MISSING
+                catalog = bind_catalog(parse_jsonl(raw), specs[0].inspection)
+                filters = tuple(frozenset({next(index for index, option in enumerate(facet.options) if option.value == expected_phase)})
+                                if facet.id == "phase" else frozenset() for facet in catalog.facets)
+                found = evaluate(parse_jsonl(raw), catalog, filters, task.task_id, -1)
+                self.assertTrue(found.items)
+                self.assertEqual(found.search.occurrences[0].text, task.task_id)
+                outcome_scope = next(index for index, scope in enumerate(catalog.scopes) if scope.id == "outcome")
+                scoped = evaluate(parse_jsonl(raw), catalog, filters, task.task_id, outcome_scope)
+                self.assertEqual(len(scoped.items), 1)
+                self.assertTrue(set(scoped.items).issubset(found.items))
+                self.assertTrue(set(scoped.matching_records).issubset(found.matching_records))
+                accepted_exchange = next(row["exchange_id"] for row in records if row["request_type"] == "outcome"
+                                         and json.loads(row["content"])["host_diagnostics"]["call_id"] == call_id)
+                self.assertEqual(set(catalog.items[scoped.items[0]].records),
+                                 {index for index, row in enumerate(records) if row["exchange_id"] == accepted_exchange})
+
     async def test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread(self) -> None:
         session_id = "contextual_physical"
         backend = self._session_backend(session_id)
