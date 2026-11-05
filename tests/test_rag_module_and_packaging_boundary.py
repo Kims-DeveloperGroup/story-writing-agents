@@ -2011,7 +2011,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     '"long_leaf": [truncated 4096/5000 UTF-8 bytes] "'
                     in truncated_lines[0]
                 )
-                assert "JSON display 2 expanded, 0 skipped, 1 truncated" in frame
+                assert frame.count('[expanded JSON string ×1] {{') == 2, frame
+                assert '[JSON expansion skipped:' not in frame, frame
                 key_lines = [
                     next(
                         index
