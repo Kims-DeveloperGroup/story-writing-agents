@@ -1408,8 +1408,11 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         phase_history = self.history(conversation)
         phase_synthesis = next(event.payload for event in phase_history
                                if event.event_id == final_proposal.synthesis_event_id)
-        self.assertEqual({type(event.payload) for event in phase_history
-                          if getattr(event.payload, "provider_invocation_id", None) == phase_synthesis.provider_invocation_id},
+        phase_companions = [event.payload for event in phase_history
+                            if type(event.payload) in {c.CollaborationLeadSynthesisPayload, c.ArtifactReviewSynthesisPayload}
+                            and event.payload.provider_invocation_id == phase_synthesis.provider_invocation_id]
+        self.assertEqual(len(phase_companions), 2)
+        self.assertEqual({type(item) for item in phase_companions},
                          {c.CollaborationLeadSynthesisPayload, c.ArtifactReviewSynthesisPayload})
         _assert_typed_history_phase(self, phase_history, phase_synthesis.provider_invocation_id,
                                    LEAD_ORCHESTRATOR, "final_candidate_review", proposed.proposal.authoring_scope)

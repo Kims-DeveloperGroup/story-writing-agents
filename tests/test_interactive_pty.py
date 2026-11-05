@@ -1580,8 +1580,10 @@ class InteractiveCliPtyTests(unittest.TestCase):
             self.assertEqual(visible.count("LEGITIMATE_ACCEPTED_MESSAGE"), 1, visible)
 
         def viewer_rows(data: bytes) -> list[str]:
-            frame = data[data.rfind(b"\x1b[1;1H\x1b[2K"):]
-            return [_ANSI_SGR_BYTES.sub(b"", line).removesuffix(b"\x1b[H").decode("utf-8") for line in re.split(rb"\x1b\[\d+;1H\x1b\[2K", frame)[1:]]
+            from tests._external_view_support import PortableTerminalScreen
+            screen = PortableTerminalScreen(width=120, height=24)
+            screen.write(data.decode("utf-8", errors="replace"))
+            return ["".join(row) for row in screen.screen]
         source = r'''
 import json
 import os
@@ -1645,8 +1647,9 @@ print(f"SHELL_VALUE={input('shell> ')}")
         process._read_available_terminal_bytes()
         self.assertEqual(process.normalized_bytes[mark:].replace(b"\r", b""), b"")
         gate.touch()
-        process.wait_for_text("Record 1/7")
-        process.wait_for_text("? help • q close")
+        process.wait_for_text("Records: 7 total · 7 filtered")
+        process.wait_for_text("> Record 1")
+        process.wait_for_text("? help · q close")
         assert termios is not None
         self.assertFalse(termios.tcgetattr(process.master_fd)[3] & termios.ICANON)
         if termination_during_view:
@@ -1659,36 +1662,37 @@ print(f"SHELL_VALUE={input('shell> ')}")
         row, line = next((index + 1, line) for index, line in enumerate(current) if '"content"' in line)
         column = line.index('"content"') + 1
         mark = process.output_mark(); process.send_bytes(f"\x1b[<0;{column};{row}M".encode())
-        process.wait_for_text("? help • q close", after=mark)
-        painted = process.text_after(mark); rows = viewer_rows(painted.encode())
+        process.wait_for_text("? help · q close", after=mark)
+        painted = process.text_after(mark); rows = [line.split(" │ ", 1)[-1] for line in viewer_rows(process.normalized_bytes)]
         if any(line.strip() == "^" for line in rows):
             caret = next(i for i, line in enumerate(rows) if line.strip() == "^"); self.assertEqual(rows[caret - 1][rows[caret].index("^")], '"')
         else: self.assertRegex(painted, r'\x1b\[(?:[0-9]+;)*7(?:;[0-9]+)*m"')
         mark = process.output_mark(); process.send_bytes(f"\x1b[<65;{column};{row}M".encode())
-        process.wait_for_text("? help • q close", after=mark)
-        painted = process.text_after(mark); rows = viewer_rows(painted.encode())
+        process.wait_for_text("? help · q close", after=mark)
+        painted = process.text_after(mark); rows = [line.split(" │ ", 1)[-1] for line in viewer_rows(process.normalized_bytes)]
         if any(line.strip() == "^" for line in rows):
             caret = next(i for i, line in enumerate(rows) if line.strip() == "^"); self.assertEqual(rows[caret - 1][rows[caret].index("^")], "}")
         else: self.assertRegex(painted, r"\x1b\[(?:[0-9]+;)*7(?:;[0-9]+)*m\}")
         self.assertNotIn(f"65;{column};{row}M", process.normalized_text)
         mark = process.output_mark()
-        process.wait_for_text("? help • q close", after=mark)
+        process.wait_for_text("? help · q close", after=mark)
         self.assertNotRegex(process.text_after(mark), r"\x1b\[(?:[0-9]+;)*4(?:;[0-9]+)*m")
         mark = process.output_mark()
         query = b"wrong\x15" + "개요".encode() if edit_query else "개요".encode()
         process.send_bytes(b"/" + query[:-1])
         time.sleep(0.6)  # An idle poll must preserve the incomplete final UTF-8 character.
         process.send_bytes(query[-1:] + b"\nn")
-        process.wait_for_text("2/14 occurrences • Search all text='개요'", after=mark)
-        process.wait_for_text("? help • q close", after=mark)
+        process.wait_for_text("Occurrence 2/14", after=mark)
+        process.wait_for_text("? help · q close", after=mark)
         # Wait for the final selected-match frame, not an earlier search frame.
-        selected = process.normalized_bytes.rfind("2/14 occurrences • Search all text='개요'".encode("utf-8"))
-        process.wait_for_text("? help • q close", after=selected)
+        selected = process.normalized_bytes.rfind("Occurrence 2/14".encode("utf-8"))
+        process.wait_for_text("? help · q close", after=selected)
         captured = process.normalized_text
-        footer = captured.rfind("? help • q close")
-        active = captured[:footer + len("? help • q close")].rsplit("\x1b[1;1H\x1b[2K", 1)[1]
+        footer = captured.rfind("? help · q close")
+        active = captured[:footer + len("? help · q close")].rsplit("\x1b[1;1H\x1b[2K", 1)[1]
         self.assertIn('"content": "개요 ⟦개요⟧ 0"', active)
-        for draft, prompt in ((b"/JKdraft", "Search query: JKdraft│"), (b"g999", "Go to source line: 999│")):
+        self.assertIn("Search: '개요'", active)
+        for draft, prompt in ((b"/JKdraft", "Query: 개요JKdraft│"), (b"g999", "Go to source line: 999│")):
             mark = process.output_mark()
             process.send_bytes(draft)
             process.wait_for_text(prompt, after=mark)
@@ -1698,7 +1702,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
             process.wait_for_text("\x1b[1;1H\x1b[2K" + active, after=mark)
         mark = process.output_mark()
         process.send_bytes(b"n")
-        process.wait_for_text("3/14 occurrences • Search all text='개요'", after=mark)
+        process.wait_for_text("Occurrence 3/14", after=mark)
         process.send_bytes(b"q\x1b[<65;8;8M\x1b[<0;8;8mafter-viewer\n")
         process.wait_for_text("AFTER_VIEWER=after-viewer")
         process.wait_for_text("native> ", readiness=lambda: termios.tcgetattr(process.master_fd) == process.original_terminal_attributes)

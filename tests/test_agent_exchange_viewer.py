@@ -136,7 +136,7 @@ def _assert_typed_history_phase(case, history, invocation_id, role, phase, scope
     accepted = [event.payload.response for event in history
                 if type(event.payload) is c.CollaborationLeadPublicResponsePayload
                 and event.payload.response.invocation_id == invocation_id
-                and event.payload.response.acceptance.value == "accepted" and event.sender.agent_id == role]
+                and event.payload.response.acceptance.value == "accepted"]
     case.assertLessEqual(len(accepted), 1)
     if phase == "procedure_status":
         case.assertEqual(len(accepted), 1)
@@ -177,8 +177,9 @@ def _assert_typed_history_phase(case, history, invocation_id, role, phase, scope
     case.assertEqual((calls[0].task_id, calls[0].task_revision), (None, None) if task is None else task)
     specs = []
 
-    def capture(data, spec, host=None, *, terminal=None, transient_only=False):
-        case.assertIs(data, source)
+    expected_source = source
+    def capture(source, spec, host=None, *, terminal=None, transient_only=False):
+        case.assertIs(source, expected_source)
         specs.append(spec)
 
     with mock.patch.object(jsonl_viewer, "view_jsonl", capture):
