@@ -62,43 +62,11 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         await case.record_book_readiness(seed_before_capture=True)
         conversation_id = case.conversation("Default grouped budget boundary")
         call_start = len(case.backend.calls)
-        import traceback
-        specialist_notes = []
-        original_assignment = case.runtime._run_specialist_assignment
-        async def observed_assignment(*args, **kwargs):
-            result = await original_assignment(*args, **kwargs)
-            if len(specialist_notes) < 3:
-                try:
-                    failure = result.failure
-                    if failure is not None:
-                        chain, current, terminal = [], failure, failure
-                        for _ in range(8):
-                            if current is None:
-                                break
-                            chain.append(type(current).__name__[:80])
-                            terminal = current
-                            current = current.__cause__ or current.__context__
-                        frames = traceback.extract_tb(terminal.__traceback__, limit=-1)
-                        agent = kwargs["assignment"].specialist_id
-                        specialist_notes.append({"agent": agent if agent in ROSTER else "unknown", "failure_type": chain[0],
-                            "message": str(failure)[:500], "cause_types": chain[1:],
-                            "terminal": None if not frames else f"{frames[-1].filename.rsplit('/', 1)[-1]}:{frames[-1].name}:{frames[-1].lineno}",
-                            "submitted": int(result.submitted_physical_calls), "backend_calls": len(case.backend.calls)})
-                except Exception as diagnostic_error:
-                    specialist_notes.append({"diagnostic_error": type(diagnostic_error).__name__})
-            return result
         original_result = lead._live_result
-        with (
-            mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(
-                call, {**value, "message": brief} if value.get("kind") == "proposal" else value)),
-            mock.patch.object(case.runtime, "_run_specialist_assignment", new=observed_assignment),
-        ):
-            try:
-                await case.start(conversation_id, message=text, target_path=None, specialist_ids=ROSTER,
-                                 authoring_paths=(path,), native_inputs=native_inputs, response_text=brief)
-            except AssertionError as error:
-                error.add_note("Specialist failure diagnostics: " + json.dumps(specialist_notes, ensure_ascii=True))
-                raise
+        with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(
+                call, {**value, "message": brief} if value.get("kind") == "proposal" else value)):
+            await case.start(conversation_id, message=text, target_path=None, specialist_ids=ROSTER,
+                             authoring_paths=(path,), native_inputs=native_inputs, response_text=brief)
         self.assertEqual(len(case.backend.calls) - call_start, 6)
         first = case.backend.calls[call_start:call_start + 2]
         self.assertEqual(tuple(call.contract.schema_group_phase.value for call in first), ("select", "generate"))

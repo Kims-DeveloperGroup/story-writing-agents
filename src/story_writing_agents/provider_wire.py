@@ -2717,3 +2717,7 @@ _catalog("availability source_status source_manifest_digest", "Host-issued sourc
 DYNAMIC_CHOICE_FIELDS = DYNAMIC_CHOICE_FIELDS | frozenset({"source_input_ids", "required_condition_ids"})
 _catalog("planning_target", "Semantic document kind for a genuine formal-writing clarification only. Null for freeform, workflow, review and already-targeted work; not a path, task, readiness or write authority.")
 DYNAMIC_CHOICE_FIELDS = DYNAMIC_CHOICE_FIELDS | frozenset({"planning_target"})
+_catalog("document_node", "Host-bound document node and scoped predecessor-candidate input permissions. Exact plan, node and source correlations are context, never task selection, canonical readiness, execution, final review, Apply or Commit authority.")
+_catalog("document_selection", "Document-node or remaining-target selection intent with optional predecessor-candidate input intent. Host validation and a fresh exact proposal Confirm remain required; selection alone authorizes no specialist execution or write.")
+_catalog("plan_candidate_material", "Literal same-plan predecessor candidate material supplied only for the disclosed coverage and purpose. Input use establishes no canonical prerequisite completion, current READ, final review or Apply authority.")
+_catalog("document_work_plan", "Retained original USER goal and bounded document window with qualified progress and actual cumulative cost. Guidance only: resolve blockers and separately confirm each node, final review, Apply and Commit.")
