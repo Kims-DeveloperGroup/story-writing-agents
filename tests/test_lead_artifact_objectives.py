@@ -511,7 +511,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(len(bootstrap_facts), 2)
         for event in bootstrap_facts:
             self.assertIsNone(event.payload.document_node)
-            self.assertEqual(event.payload.document_goal, goal_plan.planning_goal)
+            self.assertIsNone(event.payload.document_goal)
             self.assertEqual(c.decode_collaboration_event(c.encode_collaboration_event(event)).payload, event.payload)
         self.assertEqual((initial_plan_turn.document_plan.physical_calls_spent, initial_plan_turn.document_plan.rounds_spent), (2, 0))
         self.assertEqual(initial_plan_turn.document_plan.remaining_physical_calls, 10)
