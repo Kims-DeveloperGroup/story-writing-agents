@@ -1077,7 +1077,11 @@ Both `lead_turn` facades accept optional keyword `document_selection: DocumentNo
 
 A formal authoring question can use the finite `planning_target` classification when the exact path is unknown. It identifies the requested document kind for planning; it does not establish a path, task, readiness or write authority. Untargeted draft, exploration and targetless review retain their own behavior.
 
+`DocumentPlan.remaining_target_paths` preserves every original target outside the active window. Read-only `DocumentPlanView.completed_target_paths` projects matching Apply evidence across windows; unfinished unplanned targets are the remaining paths minus this completion set. A later rewrite cannot borrow another task's completion.
+
 Selecting a replacement window uses an exact node proposal and its own Confirm. A preparation-only recommendation cannot carry that pending window; Lead can instead ask for missing input. Preparation recommendations remain available for nodes in the active window.
+
+Task references in these host values are for API and UI inspection. Providers receive identity-free semantic scopes through the existing task-metadata projection; document bindings do not introduce provider task selectors. Candidate and source revisions retain their provenance meaning.
 
 For example, inspect the current plan, select its part-outline node, and pass that intent together with an actual new-task decision:
 
