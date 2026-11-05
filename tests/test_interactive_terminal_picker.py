@@ -1658,7 +1658,7 @@ class PickerRenderingTests(unittest.TestCase):
         compact = "".join(plain.text.split())
         self.assertIn("Currente\u0301—Current:one", compact)
         self.assertIn(
-            r"Pending界é(selected)—Pending:界édanger\x1b[31m\x00acrossrows",
+            "Pending界é(selected)—Pending:界édanger[control]acrossrows",
             compact,
         )
         summary_starts = []
@@ -1681,7 +1681,7 @@ class PickerRenderingTests(unittest.TestCase):
         long_pending_lines = tuple(
             line
             for line in ansi.text.splitlines()
-            if "Pending: 界" in line or "b[31m\\x00 across rows" in line
+            if "Pending: 界" in line or "ntrol] across rows" in line
         )
         self.assertEqual(len(long_pending_lines), 2)
         self.assertTrue(
@@ -1703,7 +1703,7 @@ class PickerRenderingTests(unittest.TestCase):
         for rendered in (narrow, fallback):
             rendered_compact = "".join(rendered.text.split())
             self.assertIn(
-                r"Pending:界édanger\x1b[31m\x00acrossrows",
+                "Pending:界édanger[control]acrossrows",
                 rendered_compact,
             )
             self.assertNotIn("\x1b", rendered.text)
@@ -2237,7 +2237,7 @@ class PickerRenderingTests(unittest.TestCase):
             "  1. [available] Save (*Required) \u2014 Writes settings."
         )
         hostile_line = (
-            "  2. [available] Hostile (*Required)\\x1b[31m\\x00"
+            "  2. [available] Hostile (*Required)[control]"
         )
         self.assertIn(description_line, plain.text.splitlines())
         self.assertIn(hostile_line, plain.text.splitlines())
@@ -2251,7 +2251,7 @@ class PickerRenderingTests(unittest.TestCase):
         )
         self.assertIn(
             "  2. [available] Hostile "
-            "\x1b[33m(*Required)\\x1b[31m\\x00\x1b[0m",
+            "\x1b[33m(*Required)[control]\x1b[0m",
             ansi.text.splitlines(),
         )
         self.assertEqual(ansi.text.count("\x1b[33m"), 2)
@@ -2297,7 +2297,7 @@ class PickerRenderingTests(unittest.TestCase):
                 self.assertEqual(line.text, plain.text)
                 self.assertNotIn("\x1b", plain.text)
                 self.assertNotIn("\x1b", line.text)
-                self.assertIn(r"\x1b[31m\x00", plain.text.replace("\n", ""))
+                self.assertIn("danger[control]acrossrows", "".join(plain.text.split()))
                 self.assertGreaterEqual(ansi.text.count("\x1b[33m"), 2)
                 self.assertGreaterEqual(ansi.text.count("\x1b[31m"), 2)
                 for rendered_line in plain.text.splitlines():
@@ -2310,8 +2310,8 @@ class PickerRenderingTests(unittest.TestCase):
         )
         self.assertEqual(fallback.text, fallback.plain_text)
         self.assertNotIn("\x1b", fallback.text)
-        self.assertIn(r"\x1b[", fallback.text)
-        self.assertIn(r"31m\x00", fallback.text)
+        self.assertIn("danger[control]acrossrows", "".join(fallback.text.split()))
+        self.assertNotIn(r"\x1b[", fallback.text)
         for rendered_line in fallback.text.splitlines():
             self.assertLessEqual(_physical_width(rendered_line), 24)
 
@@ -2511,10 +2511,10 @@ class PickerRenderingTests(unittest.TestCase):
         )
         plain = strip_decorative_sgr(frame.text)
         self.assertIn(r"Unsafe\x1b", plain)
-        self.assertIn(r"bad\x1b]0;owned\x07\u202", plain)
-        self.assertIn("e界e\u0301", plain)
-        self.assertIn(r"desc\x00", plain)
-        self.assertIn(r"why\x1b[31m", plain)
+        self.assertIn("bad[control]界e\u0301", plain)
+        self.assertIn("desc[control]", "".join(plain.split()))
+        self.assertIn("disabled: why", plain)
+        self.assertNotIn("owned", plain)
         self.assertNotIn("opaque-id", plain)
         self.assertNotIn("\x1b]", frame.text)
         self.assertNotIn("\x07", frame.text)

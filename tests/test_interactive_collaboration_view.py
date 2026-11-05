@@ -433,6 +433,11 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Input tokens: unavailable | Output tokens: unavailable", rendered)
             self.assertIn("Usage scope: physical call", rendered)
             self.assertIn("Usage scope: invocation (5 calls)", rendered)
+            self.assertNotIn("\\x0a", rendered)
+            if acceptance is task.LeadPublicResponseAcceptance.ACCEPTED:
+                self.assertEqual(rendered.count(shared_text), 1)
+                self.assertRegex(rendered, r"\[Response metadata\]\n +Outcome: accepted\n"
+                    r" +Usage scope: physical call\n +Input tokens: 79,930 \| Output tokens: 901")
 
 
 if __name__ == "__main__": unittest.main()

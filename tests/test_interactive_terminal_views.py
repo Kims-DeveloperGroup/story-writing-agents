@@ -38,6 +38,7 @@ from story_writing_agents.interactive_terminal._model import (
     CapabilityProfile,
     TerminalCapabilities,
 )
+from story_writing_agents.interactive_terminal._metadata_text import format_metadata_text
 from story_writing_agents.interactive_terminal._render import (
     format_agent_reply_content,
     render_component,
@@ -382,6 +383,50 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             narrow = render_plain(_chat_block_message("界界界 e\u0301 🌊 x", metadata=None), width=width).text
             self.assertTrue(all(_physical_width(row) <= width for row in narrow.splitlines()))
             self.assertEqual(narrow.count("界"), 3); self.assertIn("e\u0301", narrow)
+        for value in (*range(0x20), 0x7F, *range(0x80, 0xA0)):
+            character = chr(value)
+            expected = ("\n" if character in "\n\r\v\f\x85" else
+                        "    " if character == "\t" else "[control]")
+            self.assertEqual(format_metadata_text(character), expected)
+        self.assertEqual(format_metadata_text("one\r\ntwo\rthree\vfour\ffive\x85six\u2028seven\u2029end"),
+                         "one\ntwo\nthree\nfour\nfive\nsix\nseven\nend")
+        self.assertEqual(format_metadata_text("a\r\nb\tc", inline=True), "a b    c")
+        literal = r"\x1b[31m \u202e \U0001f30a \n \r \t \x00"
+        self.assertEqual(format_metadata_text(literal), literal)
+        self.assertEqual(format_metadata_text("한글 e\u0301 🌊 \u202e\u200b\ud800"),
+                         "한글 e\u0301 🌊 [control][control]\ufffd")
+        sequences = ("\x1b[31m", "\x1b[?25l", "\x1b(B", "\x1b7", "\x9b31m",
+                     "\x1b]title\x07", "\x9dtitle\x07")
+        sequences += tuple(start + "discarded" + end
+                           for start in ("\x1bP", "\x1bX", "\x1b]", "\x1b^", "\x1b_",
+                                         "\x90", "\x98", "\x9d", "\x9e", "\x9f")
+                           for end in ("\x1b\\", "\x9c"))
+        for sequence in sequences:
+            self.assertEqual(format_metadata_text(sequence + "kept"), "kept")
+        self.assertEqual(format_metadata_text("\x1b]8;;https://example.com\x07link\x1b]8;;\x1b\\"), "link")
+        self.assertEqual(format_metadata_text("\x1bPone\x07two\x1b\\kept"), "kept")
+        for malformed in ("\x1b", "\x1b[31", "\x1b]open", "\x1b[\x00broken", "\x9fopen", "\x1b\x00"):
+            self.assertEqual(format_metadata_text(malformed + "\r\nkept"), "[control]\nkept")
+        metadata = "first\r\nsecond\t\x00\x1b[31mred\x1b[0m\u202e\ud800"
+        cleaned = "first\nsecond    [control]red[control]\ufffd"
+        for actual, expected_component in (
+            (Field("Metadata", metadata), Field("Metadata", cleaned)),
+            (Notice(metadata, label="Metadata"), Notice(cleaned, label="Metadata")),
+            (_chat_block_message("body", metadata=metadata), _chat_block_message("body", metadata=cleaned)),
+        ):
+            for width in (20, 40, 80):
+                for profile in (CapabilityProfile.ANSI, CapabilityProfile.PLAIN, CapabilityProfile.LINE):
+                    capabilities = _capability(profile, width=width)
+                    rendered = render_component(actual, capabilities)
+                    self.assertEqual(rendered, render_component(expected_component, capabilities))
+                    self.assertNotIn("\\x", rendered.text); self.assertNotIn("\\u", rendered.text)
+                    rendered.text.encode("utf-8", errors="strict")
+        raw_content = "raw\x00\x1b[31m\n" + literal
+        raw_record = Record("literal", content=raw_content)
+        raw_rendered = render_plain(raw_record, width=240).text
+        self.assertEqual(raw_record.content, raw_content)
+        self.assertIn("raw\\x00\\x1b[31m\n", raw_rendered)
+        self.assertIn(literal, raw_rendered)
 
 
     def test_completed_state_is_silent_without_rewriting_literal_content(self) -> None:
@@ -572,7 +617,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             render_plain(_literal_view(), width=80).text,
             "--- Status ---------------------------------------------------------------------\n"
             "  Workspace: /stories/界\n"
-            "  [warning] Unsafe\\x1b[31m text\n"
+            "  [warning] Unsafe text\n"
             "  plot> Line one\n"
             "        line two\n"
             "  [debate_1] Consensus [success]\n"
@@ -585,7 +630,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             "--- Status ---------------------\n"
             " Workspace:\n"
             "  /stories/界\n"
-            " [warning] Unsafe\\x1b[31m text\n"
+            " [warning] Unsafe text\n"
             " plot> Line one\n"
             "       line two\n"
             " [debate_1] Consensus [success]\n"
@@ -605,7 +650,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             ansi.text,
             "\x1b[1m--- Status ---------------------------------------------------------------------\x1b[0m\n"
             "  Workspace: /stories/界\n"
-            "\x1b[33m  [warning] Unsafe\\x1b[31m text\x1b[0m\n"
+            "\x1b[33m  [warning] Unsafe text\x1b[0m\n"
             "\x1b[1m  plot> Line one\x1b[0m\n"
             "\x1b[1m        line two\x1b[0m\n"
             "\x1b[32m  [debate_1] Consensus [success]\x1b[0m\n"
@@ -623,7 +668,8 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
         self.assertEqual(plain, line)
         self.assertNotIn("\x1b", plain.text)
-        self.assertIn("Unsafe\\x1b[31m", plain.text)
+        self.assertIn("Unsafe text", plain.text)
+        self.assertNotIn("\\x1b", plain.text)
 
     def test_dense_view_has_exact_plain_narrow_ansi_and_line_equivalence(
         self,
@@ -637,7 +683,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             "    Status: active\n"
             "    Focus: focused\n"
             "    Subject: Harbor 界 e\u0301\n"
-            "    Snippet: Unsafe\\x1b]8;;owned\\x07\\u202e text",
+            "    Snippet: Unsafe[control] text",
         )
         self.assertEqual((wide.width, wide.line_count), (80, 6))
 
@@ -653,10 +699,9 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             "  Subject:\n"
             "   Harbor 界 e\u0301\n"
             "  Snippet:\n"
-            "   Unsafe\\x1b]8;;owned\\x07\\u202e\n"
-            "    text",
+            "   Unsafe[control] text",
         )
-        self.assertEqual((narrow.width, narrow.line_count), (32, 11))
+        self.assertEqual((narrow.width, narrow.line_count), (32, 10))
 
         ansi = render_component(
             view,
@@ -669,7 +714,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             "    Status: active\n"
             "    Focus: focused\n"
             "    Subject: Harbor 界 e\u0301\n"
-            "    Snippet: Unsafe\\x1b]8;;owned\\x07\\u202e text",
+            "    Snippet: Unsafe[control] text",
         )
         plain = render_component(
             view,
@@ -684,7 +729,8 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         self.assertNotIn("\x1b]", ansi.text)
         self.assertNotIn("\x07", ansi.text)
         self.assertNotIn("\u202e", ansi.text)
-        self.assertIn("\\x1b]8;;owned\\x07\\u202e", ansi.text)
+        self.assertIn("Unsafe[control] text", ansi.text)
+        self.assertNotIn("\\x1b", ansi.text)
         self.assertEqual(view.items[0].state, ViewState.COMPLETED)
         self.assertTrue(
             all(field.state is ViewState.IDLE for field in view.items[0].fields)
