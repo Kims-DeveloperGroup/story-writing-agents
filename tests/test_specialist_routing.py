@@ -665,7 +665,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertEqual(agent_metadata["content"], source_metadata["content"])
         self.assertEqual(source_metadata["document_node"], documents.document_node_binding_to_dict(binding))
         self.assertEqual(source_metadata["preliminary_review"], review.preliminary_review_to_dict(report))
-        from story_writing_agents.provider_wire import add_contract_guidance
+        from story_writing_agents.provider_wire import add_contract_guidance, project_context_payload
         document_input = {"task_input": {"document_node": agent_metadata["document_node"],
             "document_plan": documents.document_plan_to_dict(plan),
             "document_selection": documents.document_node_selection_to_dict(node_selection),
@@ -704,8 +704,9 @@ class SpecialistRoutingTests(unittest.TestCase):
             before_compaction = canonical(unchanged_input)
             self.assertIs(StoryRuntime._compact_document_plan_input(unchanged_input), unchanged_input)
             self.assertEqual(canonical(unchanged_input), before_compaction)
-        guided_document = add_contract_guidance({"task_input": compacted}, {})
-        self.assertEqual({key: value for key, value in guided_document.items() if key != "contract_guidance"}, {"task_input": compacted})
+        wire_document, _, _ = project_context_payload({"task_input": compacted}, {})
+        guided_document = add_contract_guidance(wire_document, {})
+        self.assertEqual({key: value for key, value in guided_document.items() if key != "contract_guidance"}, wire_document)
         self.assertTrue(guided_document["contract_guidance"]["input_fields"])
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
