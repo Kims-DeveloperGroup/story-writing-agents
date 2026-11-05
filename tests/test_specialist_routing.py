@@ -667,6 +667,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertEqual(source_metadata["preliminary_review"], review.preliminary_review_to_dict(report))
         from story_writing_agents.provider_wire import add_contract_guidance
         document_input = {"task_input": {"document_node": agent_metadata["document_node"],
+            "document_plan": documents.document_plan_to_dict(plan),
             "document_selection": documents.document_node_selection_to_dict(node_selection),
             "plan_candidate_material": [{"candidate": json.loads(artifacts.serialize_artifact_review_candidate(exact_candidate))}],
             "document_work_plan": {"plan": documents.document_plan_to_dict(plan)}}}
