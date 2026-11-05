@@ -66,6 +66,29 @@ def _viewer_host_source(size, source_line=""):
                     assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal); actual_view(source, spec, active_host)
                 jsonl_viewer.view_jsonl = owned; transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)"""
 
+def _locked_runtime_wheels(directory: Path) -> Path:
+    from importlib.metadata import distribution
+    from setuptools.command.bdist_wheel import WheelFile
+    directory.mkdir()
+    packages = tomllib.loads((_REPOSITORY_ROOT / "uv.lock").read_text())["package"]
+    for name in ("markdown-it-py", "mdurl"):
+        installed = distribution(name)
+        assert installed.version == next(item["version"] for item in packages if item["name"] == name)
+        metadata = installed.read_text("WHEEL") or ""
+        assert "Root-Is-Purelib: true" in metadata and "Tag: py3-none-any" in metadata
+        info = next(path.parent for path in installed.files or () if path.name == "METADATA")
+        with WheelFile(directory / f"{info.name.removesuffix('.dist-info')}-py3-none-any.whl", "w") as archive:
+            for path in installed.files or ():
+                if ".." in path.parts or path.suffix == ".pyc" or path.name in {"RECORD", "RECORD.jws", "RECORD.p7s", "INSTALLER", "REQUESTED", "direct_url.json"}:
+                    continue
+                archive.write(installed.locate_file(path), str(path))
+    return directory
+
+def _extract_wheels(target: Path, wheels) -> None:
+    for wheel in wheels:
+        with zipfile.ZipFile(wheel) as archive:
+            archive.extractall(target)
+
 def _module_inventory() -> dict[str, Path]:
     modules: dict[str, Path] = {}
     for path in _SOURCE_ROOT.rglob("*.py"):
@@ -1132,7 +1155,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 ["rag", "viewer"],
             )
             requires = metadata.get_all("Requires-Dist") or []
-            self.assertEqual(len(requires), 2)
+            self.assertEqual(len(requires), 3)
+            self.assertIn("markdown-it-py<5,>=4.2", requires)
             normalized_requires = []
             for requirement in requires:
                 name, separator, reference = requirement.partition("@")
@@ -1264,10 +1288,10 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 self.assertFalse(any("/generic_rag/" in f"/{name}/" for name in names))
                 self.assertFalse(any("/jsonl_viewer/" in f"/{name}/" for name in names))
 
+            runtime_wheels = tuple(_locked_runtime_wheels(root / "runtime-wheels").glob("*.whl"))
             damaged_target = root / "damaged-install"
             damaged_target.mkdir()
-            with zipfile.ZipFile(story_wheel) as archive:
-                archive.extractall(damaged_target)
+            _extract_wheels(damaged_target, (story_wheel, *runtime_wheels))
             damaged_script = textwrap.dedent(
                 f"""
                 import sys
@@ -1400,9 +1424,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
 
             optional_target = root / "optional-install"
             optional_target.mkdir()
-            for wheel in (story_wheel, generic_wheel, viewer_wheel):
-                with zipfile.ZipFile(wheel) as archive:
-                    archive.extractall(optional_target)
+            _extract_wheels(optional_target, (story_wheel, generic_wheel, viewer_wheel, *runtime_wheels))
             optional_script = textwrap.dedent(
                 f"""
                 import sys
@@ -1437,9 +1459,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
 
             viewer_target = root / "viewer-install"
             viewer_target.mkdir()
-            for wheel in (story_wheel, viewer_wheel):
-                with zipfile.ZipFile(wheel) as archive:
-                    archive.extractall(viewer_target)
+            _extract_wheels(viewer_target, (story_wheel, viewer_wheel, *runtime_wheels))
             viewer_script = textwrap.dedent(
                 f"""
                 import sys
@@ -1511,6 +1531,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     "GIT_CONFIG_VALUE_0": _JSONL_VIEWER_REPOSITORY,
                     "PIP_DISABLE_PIP_VERSION_CHECK": "1",
                     "PIP_NO_INDEX": "1",
+                    "PIP_FIND_LINKS": str(_locked_runtime_wheels(root / "runtime-wheels")),
                     "PYTHONPATH": str(build_support),
                     "PYTHONNOUSERSITE": "1",
                 }
@@ -1779,6 +1800,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     "GIT_CONFIG_VALUE_0": _JSONL_VIEWER_REPOSITORY,
                     "PIP_DISABLE_PIP_VERSION_CHECK": "1",
                     "PIP_NO_INDEX": "1",
+                    "PIP_FIND_LINKS": str(_locked_runtime_wheels(root / "runtime-wheels")),
                     "PYTHONPATH": str(build_support),
                     "PYTHONNOUSERSITE": "1",
                 }

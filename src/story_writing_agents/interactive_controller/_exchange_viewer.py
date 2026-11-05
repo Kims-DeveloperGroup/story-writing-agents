@@ -240,7 +240,8 @@ def _inspection(api: object, projection: ExchangeProjection) -> tuple[object | N
                       ("provider", call.provider if call.provider is not None else missing),
                       ("phase", call.phase if call.phase is not None else missing),
                       ("completeness", call.completeness)) + tuple(
-                          (f"{section.id}_present", bool(section.records)) for section in call.sections)
+                          (f"{section.id}_present", call.response_present if section.id == "response" else bool(section.records))
+                          for section in call.sections)
             label = " · ".join((call.timestamp or "Time not recorded", _preview(call.exchange_id, 24),
                                 call.outcome or "Outcome not recorded", call.provider or "Provider not recorded",
                                 call.phase or "Phase not recorded"))

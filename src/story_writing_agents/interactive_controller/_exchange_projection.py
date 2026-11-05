@@ -56,6 +56,7 @@ class ExchangeCall:
     call_id: str | None = None
     task_id: str | None = None
     task_revision: int | None = None
+    response_present: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,13 +152,26 @@ def _history_facts(history: tuple[CollaborationEvent, ...], selection: AgentExch
         return None, None, ()
     invocation_id = submitted.payload.invocation_id
     related = tuple(event for event in events if (event.turn_id, event.step_id) == (submitted.turn_id, submitted.step_id))
-    by_id = {event.event_id: event for event in related}
+    step_events = tuple(event for event in events if event.step_id == submitted.step_id)
+    by_id = {event.event_id: event for event in step_events}
     annotations: list[tuple[str, str]] = [("Provider call event", submitted.event_id)]
     semantic = [event for event in related if type(event.payload) in {
         CollaborationLeadJudgmentPayload, CollaborationSpecialistReplyPayload,
         CollaborationLeadSynthesisPayload, ArtifactReviewSynthesisPayload,
     } and event.payload.provider_invocation_id == invocation_id and event.sender.agent_id == selection.agent_id]
-    if len(semantic) != 1:
+    companion = None
+    if len(semantic) == 2 and {type(event.payload) for event in semantic} == {
+        CollaborationLeadSynthesisPayload, ArtifactReviewSynthesisPayload,
+    }:
+        companion = next(event for event in semantic if type(event.payload) is CollaborationLeadSynthesisPayload)
+        result = next(event for event in semantic if type(event.payload) is ArtifactReviewSynthesisPayload)
+        if (_proposal_key(companion.payload) != _proposal_key(result.payload, consultation=True)
+                or companion.payload.execution_attempt_id != result.payload.execution_attempt_id
+                or companion.payload.reply_event_ids != result.payload.reply_event_ids):
+            return None, None, ()
+    elif len(semantic) == 1 and type(semantic[0].payload) is not ArtifactReviewSynthesisPayload:
+        result = semantic[0]
+    else:
         return None, None, ()
     public = [event for event in related if type(event.payload) is CollaborationLeadPublicResponsePayload
               and event.payload.response.invocation_id == invocation_id
@@ -192,30 +206,31 @@ def _history_facts(history: tuple[CollaborationEvent, ...], selection: AgentExch
             return "procedure_status", bound_task, tuple(annotations)
     if not exact_terminal:
         return None, None, ()
-    replies = [event for event in related if type(event.payload) is CollaborationSpecialistReplyPayload
-               and event.payload.provider_invocation_id == invocation_id and event.sender.agent_id == selection.agent_id]
-    syntheses = [event for event in related if type(event.payload) in {CollaborationLeadSynthesisPayload, ArtifactReviewSynthesisPayload}
-                 and event.payload.provider_invocation_id == invocation_id and event.sender.agent_id == selection.agent_id]
-    result = _one(replies + syntheses)
-    if result is None:
+    if type(result.payload) not in {CollaborationSpecialistReplyPayload, CollaborationLeadSynthesisPayload, ArtifactReviewSynthesisPayload}:
         return None, None, ()
     payload = result.payload
     is_final_synthesis = type(payload) is ArtifactReviewSynthesisPayload
     key = _proposal_key(payload, consultation=is_final_synthesis)
-    proposals = [event for event in related if type(event.payload) is CollaborationProposal and _proposal_key(event.payload) == key]
+    proposals = [event for event in step_events if type(event.payload) is CollaborationProposal
+                 and event.payload.step_id == submitted.step_id and _proposal_key(event.payload) == key]
     proposal_event = _one(proposals)
     if proposal_event is None:
         return None, None, ()
     proposal = proposal_event.payload
     scope, plan = proposal.authoring_scope, proposal.stage_plan
-    if scope is None or plan is None or (plan.task_id, plan.task_revision) != (scope.task_id, scope.task_revision):
+    if scope is None or (plan is not None and (plan.task_id, plan.task_revision) != (scope.task_id, scope.task_revision)):
         return None, None, ()
     bound_task = scope.task_id, scope.task_revision
     if task is not None and task != bound_task:
         return None, None, ()
+    synthesis_scope = companion.payload.authoring_scope if companion is not None else (
+        payload.authoring_scope if type(payload) is CollaborationLeadSynthesisPayload else None)
+    if (companion is not None or type(payload) is CollaborationLeadSynthesisPayload) and synthesis_scope != scope:
+        return None, None, ()
     if type(payload) is CollaborationSpecialistReplyPayload:
         dispatch = by_id.get(payload.dispatch_event_id)
-        if dispatch is None or type(dispatch.payload) is not CollaborationAssignmentDispatchPayload:
+        if (dispatch is None or dispatch.turn_id != submitted.turn_id
+                or type(dispatch.payload) is not CollaborationAssignmentDispatchPayload):
             return None, None, ()
         dispatched = dispatch.payload
         if (_proposal_key(dispatched) != key or dispatched.execution_attempt_id != payload.execution_attempt_id
@@ -224,16 +239,25 @@ def _history_facts(history: tuple[CollaborationEvent, ...], selection: AgentExch
                 or dispatched.assignment not in proposal.assignments):
             return None, None, ()
         annotations.append(("Dispatch event", dispatch.event_id))
-    phase = plan.stage.value
-    if phase not in {"specialist_work", "final_candidate_review"}:
+    candidates = [event for event in step_events if type(event.payload) is ArtifactReviewCandidatePayload
+                  and _proposal_key(event.payload, consultation=True) == key]
+    if len(candidates) > 1:
         return None, None, ()
-    annotations.extend((("Typed result event", result.event_id), ("Stage plan event", proposal_event.event_id)))
-    if phase == "final_candidate_review":
-        candidates = [event for event in related if type(event.payload) is ArtifactReviewCandidatePayload
-                      and _proposal_key(event.payload, consultation=True) == key]
-        candidate_event = _one(candidates)
-        if candidate_event is None:
+    candidate_event = _one(candidates)
+    if candidate_event is not None:
+        phase = "final_candidate_review"
+        if scope.activity.value != "review" or (plan is not None and plan.stage.value != phase):
             return None, None, ()
+    elif plan is not None and plan.stage.value == "specialist_work" and not is_final_synthesis:
+        phase = "specialist_work"
+    else:
+        return None, None, ()
+    annotations.extend((("Typed result event", result.event_id), ("Proposal event", proposal_event.event_id)))
+    if plan is not None:
+        annotations.append(("Stage plan event", proposal_event.event_id))
+    if companion is not None:
+        annotations.append(("Collaboration synthesis event", companion.event_id))
+    if phase == "final_candidate_review":
         candidate_record = candidate_event.payload
         judgment = by_id.get(candidate_record.lead_judgment_event_id)
         if judgment is None or type(judgment.payload) is not CollaborationLeadJudgmentPayload:
@@ -250,7 +274,7 @@ def _history_facts(history: tuple[CollaborationEvent, ...], selection: AgentExch
             ("Candidate event", candidate_event.event_id),
             ("Disclosed reviewers", ", ".join(candidate_record.disclosed_specialist_ids)),
         ))
-        reviewed = [event for event in related if type(event.payload) is ArtifactReviewedProposal
+        reviewed = [event for event in step_events if type(event.payload) is ArtifactReviewedProposal
                     and (event.payload.candidate.candidate_id, event.payload.candidate.candidate_revision,
                          event.payload.candidate.candidate_digest) == candidate_key
                     and _proposal_key(event.payload, consultation=True) == key]
@@ -261,6 +285,10 @@ def _history_facts(history: tuple[CollaborationEvent, ...], selection: AgentExch
             proof = record.final_review_evidence
             synthesis = by_id.get(record.synthesis_event_id)
             if (synthesis is None or type(synthesis.payload) is not ArtifactReviewSynthesisPayload
+                    or synthesis.turn_id != submitted.turn_id
+                    or synthesis.payload.execution_attempt_id != payload.execution_attempt_id
+                    or (is_final_synthesis and synthesis.event_id != result.event_id)
+                    or (type(payload) is CollaborationSpecialistReplyPayload and result.event_id not in proof.reply_event_ids)
                     or record.lead_judgment_event_id != candidate_record.lead_judgment_event_id
                     or _proposal_key(synthesis.payload, consultation=True) != key
                     or (synthesis.payload.candidate_id, synthesis.payload.candidate_revision,
@@ -278,6 +306,7 @@ def _history_facts(history: tuple[CollaborationEvent, ...], selection: AgentExch
                 if (reply_event.sender.agent_id != reviewer_id or _proposal_key(reply) != key
                         or reply.execution_attempt_id != synthesis.payload.execution_attempt_id
                         or dispatch is None or type(dispatch.payload) is not CollaborationAssignmentDispatchPayload
+                        or reply_event.turn_id != synthesis.turn_id or dispatch.turn_id != synthesis.turn_id
                         or _proposal_key(dispatch.payload) != key
                         or dispatch.payload.execution_attempt_id != reply.execution_attempt_id
                         or dispatch.payload.assignment.assignment_id != reply.assignment_id
@@ -356,15 +385,21 @@ def project_agent_exchanges(source: bytes, selection: AgentExchangeSelection,
         terminals = [decoded for _, record, decoded in members if record["request_type"] == "outcome"]
         terminal = terminals[0] if len(terminals) == 1 else None
         outcome = terminal.get("outcome") if terminal is not None else None
-        if outcome not in {"accepted", "rejected", "provider_failure", "cancelled", "post_response_runtime_failure"}:
+        if type(outcome) is not str or outcome not in {"accepted", "rejected", "provider_failure", "cancelled", "post_response_runtime_failure"}:
             outcome = None
+        response_present = any(record["request_type"] == "response" for _, record, _ in members)
         identities = [_call_id(decoded) for _, record, decoded in members if record["request_type"] in {"request", "outcome"}]
         known = {identity for identity in identities if identity is not None}
         unique_request = len(sections[0].records) <= 1
         call_id = next(iter(known)) if len(known) == 1 and unique_request and len(terminals) <= 1 and provider is not None else None
         task = _task(terminal.get("host_diagnostics")) if terminal is not None and outcome == "accepted" else None
         phase, bound_task, notes = (None, None, ())
-        if call_id is not None and selection.scope_kind is AgentExchangeScopeKind.CONVERSATION:
+        # A post-response teardown/publication failure can follow a durably
+        # published validated result. Its stage remains a historical fact,
+        # independently of the unsuccessful terminal outcome. Rejection,
+        # provider failure and cancellation do not establish such an answer.
+        if (call_id is not None and selection.scope_kind is AgentExchangeScopeKind.CONVERSATION
+                and outcome not in {"rejected", "provider_failure", "cancelled"}):
             phase, bound_task, notes = _history_facts(typed_history, selection, call_id, task)
         annotations = [("Exchange", _preview(exchange_id))]
         if call_id is not None:
@@ -376,7 +411,8 @@ def project_agent_exchanges(source: bytes, selection: AgentExchangeSelection,
             f"line-{members[0][0]}", exchange_id, tuple(item[0] for item in members), sections,
             members[0][1].get("timestamp") if type(members[0][1].get("timestamp")) is str else None,
             provider, outcome, phase,
-            "complete" if all(section.records for section in sections) else "incomplete", tuple(annotations), call_id,
+            "complete" if response_present and all(section.records for section in sections) else "incomplete", tuple(annotations), call_id,
             None if bound_task is None else bound_task[0], None if bound_task is None else bound_task[1],
+            response_present=response_present,
         ))
     return ExchangeProjection(tuple(calls), tuple(targets), tuple(unavailable))

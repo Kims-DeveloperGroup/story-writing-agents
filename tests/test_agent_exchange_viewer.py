@@ -96,6 +96,10 @@ def _inventory(
         count,)
 
 
+def _inventory_rows(*rows):
+    return tuple(_inventory(kind, identity, agent, first=first, last=last, **overrides)
+                 for kind, identity, agent, first, last, overrides in rows)
+
 def _message(content: str, **changes: object) -> DebateMessage:
     values: dict[str, object] = {
         "sender": "user",
@@ -227,37 +231,12 @@ class ExchangeProjectionTests(unittest.TestCase):
         self,
     ) -> None:
         conversation_id = "same_full_scope_id"
-        inventory = (
-            _inventory(
-                AgentExchangeScopeKind.CONVERSATION,
-                conversation_id,
-                ROSTER[0],
-                first=1,
-                last=4,
-                count=2,),
-            _inventory(
-                AgentExchangeScopeKind.DEBATE,
-                conversation_id,
-                ROSTER[1],
-                first=2,
-                last=6,
-            ),
-            _inventory(
-                AgentExchangeScopeKind.CONVERSATION,
-                conversation_id,
-                ROSTER[2],
-                first=3,
-                last=8,
-                count=3,
-            ),
-            _inventory(
-                AgentExchangeScopeKind.CONVERSATION,
-                "archived_conversation_full_id",
-                ROSTER[0],
-                first=5,
-                last=7,
-            ),
-        )
+        inventory = _inventory_rows(
+                        (AgentExchangeScopeKind.CONVERSATION, conversation_id, ROSTER[0], 1, 4, {'count': 2}),
+                        (AgentExchangeScopeKind.DEBATE, conversation_id, ROSTER[1], 2, 6, {}),
+                        (AgentExchangeScopeKind.CONVERSATION, conversation_id, ROSTER[2], 3, 8, {'count': 3}),
+                        (AgentExchangeScopeKind.CONVERSATION, 'archived_conversation_full_id', ROSTER[0], 5, 7, {}),
+                    )
         choices = project_exchange_scopes(
             "session_1",
             inventory,
@@ -306,20 +285,10 @@ class ExchangeProjectionTests(unittest.TestCase):
         self.assertNotIn("not_in_inventory", repr(choices))
 
     def test_scopes_and_agents_fail_closed_on_cross_session_or_duplicates(self) -> None:
-        item = _inventory(
-            AgentExchangeScopeKind.CONVERSATION,
-            "conversation_1",
-            ROSTER[0],
-            first=1,
-            last=1,
+        item, crossed = _inventory_rows(
+            (AgentExchangeScopeKind.CONVERSATION, 'conversation_1', ROSTER[0], 1, 1, {}),
+            (AgentExchangeScopeKind.CONVERSATION, 'conversation_1', ROSTER[1], 2, 2, {'session_id': 'session_2'}),
         )
-        crossed = _inventory(
-            AgentExchangeScopeKind.CONVERSATION,
-            "conversation_1",
-            ROSTER[1],
-            first=2,
-            last=2,
-            session_id="session_2",)
         with self.assertRaises(AgentExchangeProjectionError):
             project_exchange_scopes(
                 "session_1",
@@ -472,7 +441,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
             ),
         )
         self.assertFalse(hasattr(spec, "searchable_fields"))
-        self.assertEqual(source, b'{"content":"PRIVATE","provider":"codex"}\n')
+        self.assertEqual(observed_source, source)
         from jsonl_viewer._catalog import bind_catalog
         from jsonl_viewer._input import parse_jsonl
         from jsonl_viewer._query import evaluate
@@ -484,6 +453,10 @@ class LazyViewerAdapterTests(unittest.TestCase):
         conflicting = tuple(frozenset({next(i for i, option in enumerate(f.options) if option.value == "complete")})
                             if f.id == "completeness" else selected for f, selected in zip(catalog.facets, absent, strict=True))
         self.assertEqual(evaluate(snapshot, catalog, conflicting, None).items, ())
+        legacy = b'{"content":"PRIVATE","provider":"codex"}\n'
+        with mock.patch.object(viewer_module.importlib, "import_module", side_effect=_viewer_import(module)):
+            _prepare_view(legacy)(host)
+        self.assertIs(calls[-1][0], legacy)
         large = b"".join((json.dumps({**json.loads(source), "exchange_id": f"large-{i}",
             "content": json.dumps({"host_diagnostics": {"call_id": f"call-{i:05d}-" + "x" * 53},
                                    "payload": {}})}) + "\n").encode() for i in range(4096))
@@ -493,6 +466,26 @@ class LazyViewerAdapterTests(unittest.TestCase):
             _prepare_view(large, scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_full_id", agent_id=ROSTER[2])(host)
         self.assertTrue(calls[-1][0] is large and calls[-1][1].inspection is None)
         self.assertTrue(any(item.label == "Inspection" and "unchanged" in item.value for item in calls[-1][1].context))
+        from jsonl_viewer.inspection import MISSING
+        for invalid in ([], {}):
+            opaque = (json.dumps({**json.loads(source), "request_type": "outcome", "content": json.dumps({"outcome": invalid})}) + "\n").encode()
+            with mock.patch.object(viewer_module.importlib, "import_module", side_effect=_viewer_import(module)):
+                _prepare_view(opaque, scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_full_id", agent_id=ROSTER[2])(host)
+            self.assertIs(calls[-1][0], opaque)
+            self.assertIs(dict(calls[-1][1].inspection.groups[0].values)["outcome"], MISSING)
+        historical = (("request", "{}"), ("no_response", "historical_no_reply"), ("outcome", '{"outcome":"provider_failure"}'))
+        for present in (False, True):
+            retained = b"".join((json.dumps({**json.loads(source), "request_type": kind, "content": body}) + "\n").encode()
+                                for kind, body in historical + (("response", '{"response_text":"captured"}'),) * present)
+            with mock.patch.object(viewer_module.importlib, "import_module", side_effect=_viewer_import(module)):
+                _prepare_view(retained, scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_full_id", agent_id=ROSTER[2])(host)
+            group = calls[-1][1].inspection.groups[0]
+            self.assertIs(dict(group.values)["response_present"], present)
+            self.assertEqual(dict(group.values)["completeness"], "complete" if present else "incomplete")
+            self.assertIn(2, group.sections[1].records)
+            catalog = bind_catalog(parse_jsonl(retained), calls[-1][1].inspection)
+            found = evaluate(parse_jsonl(retained), catalog, tuple(frozenset() for _ in catalog.facets), "historical_no_reply", 1)
+            self.assertEqual(tuple(hit.record_index for hit in found.search.occurrences), (1,))
 
     def test_missing_nested_import_and_bad_public_surface_are_fixed_preterminal_failures(
         self,
@@ -653,8 +646,8 @@ class LazyViewerAdapterTests(unittest.TestCase):
             transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True); operation(transport)
             searched = [frame for frame in frames if "Search: 'CODEX'" in frame]
             assert closed == [True] and "READ ONLY" in frames[0] and any("provider" in frame and "2 occurrences" in frame for frame in searched)
-            assert ["1/2" in frame for frame in searched] == [True, False, True] and "Search: None" in frames[4], (
-                ["1/2" in frame for frame in searched], frames[4], [line for frame in frames for line in frame.splitlines() if "Search:" in line or "Occurrence" in line or "matched" in line])
+            cleared = frames[max(i for i, frame in enumerate(frames) if "Search: 'CODEX'" in frame) + 1]
+            assert ["1/2" in frame for frame in searched] == [True, False, True] and "Search: None" in cleared and "Search: 'CODEX'" not in cleared
             assert any("2 matched · 2 records · 3 occurrences" in frame and "In: Response content" in frame for frame in frames)
             frames.clear(); events = iter(("close",)); operation(transport)
             assert "READ ONLY" in frames[0] and "Search: None" in frames[0] and source == original

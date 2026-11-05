@@ -163,6 +163,12 @@ Reset all also clears the draft query and restores the default search scope.
 These resets take effect only with Apply. Cancel or Escape from the outer
 panel discards all drafts and restores the committed selection and scroll.
 
+Historical `no_response` records remain available in the Response section and
+source view, but do not count as an actual response. Without a `response` record,
+the response-presence filter is Absent and the record set is incomplete.
+Outcome values with an unsupported JSON type remain readable and have a Missing
+outcome facet.
+
 ### Search, results, and help
 
 Press `/` to edit a literal phrase, including spaces, then use Search. Select
@@ -205,7 +211,10 @@ Story derives stage and task facts from exact, qualified typed history links.
 Provider prose, a schema field named `stage`, task candidates offered to a
 provider, and temporal proximity cannot establish them. Ambiguous or missing
 links remain Missing. A displayed historical stage is not current permission
-to review, apply or commit an artifact.
+to review, apply or commit an artifact. A durably published typed stage can
+remain known when later teardown records a post-response runtime failure; stage
+and terminal outcome are separate diagnostic facts. Such a failure still does
+not gain an accepted-task claim in captured host diagnostics.
 
 New physical-call captures carry the local call ID in request and terminal
 host diagnostics. Only the accepted terminal, after authorized validation and
