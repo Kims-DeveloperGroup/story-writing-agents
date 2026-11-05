@@ -786,6 +786,47 @@ def _target_authoring_scope_prior(
     return source
 
 
+def _new_task_recommendation_source(
+    source: CollaborationEventDraft,
+    scope: AuthoringScope,
+    receipt: LeadTaskTransitionReceipt | None,
+    events: tuple[CollaborationEvent, ...],
+) -> bool:
+    """Match a new Lead judgment to its existing USER task-planning control."""
+    if (
+        type(receipt) is not LeadTaskTransitionReceipt
+        or receipt.origin_kind != "task_decision"
+        or receipt.action is not LeadTaskAction.NEW_TASK
+        or type(source.payload) is not CollaborationLeadJudgmentPayload
+        or source.payload.authoring_scope != scope
+        or (scope.task_id, scope.task_revision)
+        != (receipt.target_task_id, receipt.target_task_revision)
+        or scope.task_revision != 1
+        or receipt.planning_step_id != source.step_id
+        or (receipt.source_task_ref is not None
+            and receipt.source_task_ref.task_id == scope.task_id)
+    ):
+        return False
+    owner_step = (source.session_id, source.conversation_id, source.step_id)
+    transition = next((event for event in events
+                       if type(event.payload) is CollaborationLeadTaskTransitionPayload
+                       and event.payload.receipt == receipt
+                       and event.sender == _RUNTIME_ACTOR
+                       and (event.session_id, event.conversation_id, event.step_id) == owner_step), None)
+    origin = next((event for event in events
+                   if event.event_id == receipt.origin_event_id), None)
+    return bool(
+        transition is not None
+        and origin is not None
+        and type(origin.payload) is CollaborationLeadTaskDecisionPayload
+        and origin.sender == _USER_ACTOR
+        and (origin.session_id, origin.conversation_id, origin.step_id) == owner_step
+        and origin.batch_id == transition.batch_id
+        and origin.payload.decision.action is receipt.action
+        and origin.payload.decision.task_ref == receipt.source_task_ref
+    )
+
+
 def _lead_revision_result_contract(
     expected_relation: LeadProposalRelation, input_ids: tuple[str, ...],
     task_revisions: tuple[tuple[str, int], ...],
@@ -4547,6 +4588,7 @@ class StoryRuntime:
         preview_replies: tuple[CollaborationSpecialistReplyPayload, ...] = (),
         session_history: SessionHistorySnapshot | None = None,
         document_selection: DocumentNodeSelection | None = None,
+        task_receipt: LeadTaskTransitionReceipt | None = None,
     ) -> CollaborationEventDraft:
         if type(artifact_binding) is not SessionArtifactBinding:
             raise TypeError(
@@ -4764,8 +4806,10 @@ class StoryRuntime:
         )
         prior_scope = self._authoring_tasks(prior_events).get(scope.task_id)
         fresh_pair = (
-            scope.task_id == task_identity_for_origin(source.step_id)
-            and scope.task_revision == 1
+            (
+                scope.task_id == task_identity_for_origin(source.step_id)
+                and scope.task_revision == 1
+            ) or _new_task_recommendation_source(source, scope, task_receipt, events)
             if prior_scope is None
             else (
                 scope.task_revision == prior_scope.task_revision + 1
@@ -13730,6 +13774,7 @@ class StoryRuntime:
                         )
                         self._recommendation_request_draft(
                             source=source, document_selection=document_selection, action=decoded.recommended_action, inputs=inputs,
+                            task_receipt=task_receipt,
                             evidence=decoded_evidence, events=recommendation_events,
                             projection=recommendation_projection,
                             artifact_binding=artifact_binding,
@@ -14507,6 +14552,7 @@ class StoryRuntime:
                 refreshed = project_collaboration_history(recommendation_events)
                 request_draft = self._recommendation_request_draft(
                     source=judgment, document_selection=document_selection, action=outcome.recommended_action, inputs=inputs,
+                    task_receipt=task_receipt,
                     evidence=evidence, events=recommendation_events, projection=refreshed,
                     artifact_binding=artifact_binding,
                     tail_sequence=refreshed.last_sequence + len(final_drafts) + 1,
