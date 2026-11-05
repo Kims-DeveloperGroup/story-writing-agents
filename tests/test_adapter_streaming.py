@@ -28,6 +28,15 @@ from story_writing_agents.provider_process import ProcessRequest, ProcessResult
 from tests.helpers import live_provider_execution_workspace, pristine_initialized_workspace
 
 
+def _successful_antigravity_result(schema):
+    return {
+        "conversation_id": "c1",
+        "status": "SUCCESS",
+        "structured_output": {"status": "ok"},
+        "json_schema": schema,
+    }
+
+
 def _string_result_schema(field: str) -> dict[str, object]:
     return {
         "type": "object",
@@ -678,12 +687,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             thread_id=None,
             stream_sink=lambda _event: None,
         )
-        res = {
-            "conversation_id": "c1",
-            "status": "SUCCESS",
-            "structured_output": {"status": "ok"},
-            "json_schema": schema,
-        }
+        res = _successful_antigravity_result(schema)
         stream_lines = [
             b"not-json-line\n",
             json.dumps(res).encode("utf-8") + b"\n",
@@ -717,12 +721,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             thread_id=None,
             stream_sink=lambda _event: None,
         )
-        res = {
-            "conversation_id": "c1",
-            "status": "SUCCESS",
-            "structured_output": {"status": "ok"},
-            "json_schema": schema,
-        }
+        res = _successful_antigravity_result(schema)
         stream_lines = [
             b'{"type":"turn_start"}\n',
             json.dumps(res).encode("utf-8") + b"\n",
@@ -807,12 +806,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             thread_id=None,
             stream_sink=lambda _event: None,
         )
-        res = {
-            "conversation_id": "c1",
-            "status": "SUCCESS",
-            "structured_output": {"status": "ok"},
-            "json_schema": schema,
-        }
+        res = _successful_antigravity_result(schema)
         stream_lines = [
             b'{"type":"status","text":"first","text":"duplicate"}\n',
             json.dumps(res).encode("utf-8") + b"\n",
@@ -846,12 +840,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             thread_id=None,
             stream_sink=lambda _event: None,
         )
-        res = {
-            "conversation_id": "c1",
-            "status": "SUCCESS",
-            "structured_output": {"status": "ok"},
-            "json_schema": schema,
-        }
+        res = _successful_antigravity_result(schema)
         stream_lines = [
             b'{"type":"status","val":NaN}\n',
             json.dumps(res).encode("utf-8") + b"\n",
@@ -885,12 +874,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             thread_id=None,
             stream_sink=lambda _event: None,
         )
-        res = {
-            "conversation_id": "c1",
-            "status": "SUCCESS",
-            "structured_output": {"status": "ok"},
-            "json_schema": schema,
-        }
+        res = _successful_antigravity_result(schema)
         deep_nesting = b'{"a":' * 10000 + b'1' + b'}' * 10000
         stream_lines = [
             deep_nesting + b"\n",
@@ -957,12 +941,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             thread_id=None,
             stream_sink=lambda _event: None,
         )
-        res = {
-            "conversation_id": "c1",
-            "status": "SUCCESS",
-            "structured_output": {"status": "ok"},
-            "json_schema": schema,
-        }
+        res = _successful_antigravity_result(schema)
         stream_lines = [
             b'{"type":"unexpected_type","status":"running","text":"Working..."}\n',
             json.dumps(res).encode("utf-8") + b"\n",
@@ -1077,12 +1056,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             thread_id=None,
             stream_sink=lambda _event: None,
         )
-        res = {
-            "conversation_id": "c1",
-            "status": "SUCCESS",
-            "structured_output": {"status": "ok"},
-            "json_schema": schema,
-        }
+        res = _successful_antigravity_result(schema)
         stream_lines = [
             b'{"event":null,"status":"running"}\n',
             json.dumps(res).encode("utf-8") + b"\n",
