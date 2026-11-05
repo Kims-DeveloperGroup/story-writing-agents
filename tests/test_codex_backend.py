@@ -3738,7 +3738,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     "Explain the supplied motive: Mina hides a letter to protect her brother. Do not write or dispatch.")
             script.require_fixture_valid()
             report = result.preliminary_review
-            self.assertIsNotNone(report, (result, callback_errors, [json.loads(row["content"]) for row in _agent_exchange_records(self.workspace) if row["request_type"] == "outcome"]))
+            failure_details = [
+                (row["exchange_id"], row["request_type"], row["content"][:4096])
+                for row in _agent_exchange_records(self.workspace)
+                if row["request_type"] in ("response", "outcome")
+            ]
+            self.assertIsNotNone(report, (result, [(kind, detail[:512]) for kind, detail in callback_errors[:4]], failure_details[:8]))
             history = runtime.conversation_storage_services.event_store.read("preliminary_capture", conversation)
             judgment = next(e.payload for e in history if type(e.payload) is c.CollaborationLeadJudgmentPayload and e.payload.preliminary_review == report)
             public, = (e.payload.response for e in history if type(e.payload) is c.CollaborationLeadPublicResponsePayload

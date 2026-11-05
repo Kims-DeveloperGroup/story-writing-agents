@@ -650,7 +650,9 @@ class LazyViewerAdapterTests(unittest.TestCase):
             assert ["1/2" in frame for frame in searched] == [True, False, True] and "Search: None" in cleared and "Search: 'CODEX'" not in cleared
             assert any("2 matched · 2 records · 3 occurrences" in frame and "In: Response content" in frame for frame in frames)
             frames.clear(); events = iter(("close",)); operation(transport)
-            assert "READ ONLY" in frames[0] and "Search: None" in frames[0] and source == original
+            assert "READ ONLY" in frames[0] and "Search: None" in frames[0] and source == original, (
+                "reopened", frames[0][:512], frames[0][-2048:],
+                source is original, source == original, len(source), len(original))
             assert closed == [True, True]
         """)
         environment = dict(os.environ, PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(VIEWER_SOURCE))))

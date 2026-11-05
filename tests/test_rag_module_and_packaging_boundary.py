@@ -36,7 +36,7 @@ _GENERIC_RAG_PIN = "c77456321c614518e420e45c033e3f71dc5363b8"
 _GENERIC_RAG_REPOSITORY = "https://github.com/Kims-DeveloperGroup/generic-rag.git"
 _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}")
-_OLD_JSONL_VIEWER_PIN = "997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea"
+_OLD_JSONL_VIEWER_PIN = "717d17b0c180150e5137439ff72a48cef5f12397"
 _JSONL_VIEWER_PIN = "a38a975eda4123df11c1fa4f796fd49ab88efcee"
 _JSONL_VIEWER_VERSION = "0.7.0"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
@@ -1314,8 +1314,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 assert len(story_writing_agents.__all__) == 106
-                assert len(conversations.__all__) == 188
-                assert len(conversation_events.__all__) == 133
+                    assert len(conversations.__all__) == 208
+                    assert len(conversation_events.__all__) == 134
                 assert len(conversation_context.__all__) == 37
                 assert conversations.CollaborationProposal is conversation_events.CollaborationProposal
                 assert conversations.CollaborationEventStore is conversation_context.CollaborationEventStore
@@ -1550,7 +1550,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversations.context as context
                 import story_writing_agents.conversations.events as events
                 assert len(story_writing_agents.__all__) == 106
-                assert len(conversations.__all__) == 188
+                    assert len(conversations.__all__) == 208
                 assert len(events.__all__) == 133
                 assert len(context.__all__) == 37
                 assert catalog.ConversationCatalog is conversations.ConversationCatalog
@@ -1833,7 +1833,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import importlib.metadata
                 import json
                 viewer = importlib.metadata.distribution("jsonl-viewer")
-                assert viewer.version == "0.5.4"
+                assert viewer.version == "0.6.5"
                 direct_url = json.loads(viewer.read_text("direct_url.json"))
                 assert direct_url == {{
                     "url": {_JSONL_VIEWER_REPOSITORY!r},
