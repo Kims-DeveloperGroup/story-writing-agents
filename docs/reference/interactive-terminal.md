@@ -171,6 +171,20 @@ Illustrative output and counts:
 ╰──────────────────────────────────────────────────────────────────────╯
 ```
 
+Metadata and labeled diagnostics render line separators as real line breaks and
+tabs as four spaces. Labels keep a single line by replacing line breaks with
+spaces. Complete ANSI and terminal-control sequences are removed without being
+executed. Other nonprinting controls, including malformed terminal sequences,
+appear as `[control]`; invalid Unicode appears as `�`. A malformed sequence is
+discarded through the next line boundary so later metadata remains readable.
+Response diagnostics use a labeled multiline block rather than displaying
+numeric escapes such as `\x0a` between fields.
+
+Literal backslash escape text is not decoded. Message bodies, code/JSON and raw
+inspection views, and literal transcript or selected-material content keep
+their existing presentation. Stored records and provider token counters are
+unchanged.
+
 ## Confirmation decisions
 
 Shell binary questions, settings Apply/Discard, Lead preparation and specialist

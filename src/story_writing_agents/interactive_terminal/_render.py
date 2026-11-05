@@ -42,6 +42,7 @@ from ._model import (
 )
 from ._advisory_progress import render_detailed_advisory_progress
 from ._markdown import MarkdownLine, MarkdownSpan, literal_lines, project_markdown
+from ._metadata_text import format_metadata_text
 
 
 _RESET = "\x1b[0m"
@@ -1201,18 +1202,18 @@ def _form_picker_choice_lines(
     if choice.form_summary is not None and summary_start is None:
         lines.extend(
             (line, choice.form_summary_role)
-            for line in _wrap(choice.form_summary, width, indent=detail_indent)
+            for line in _wrap(_inline(choice.form_summary), width, indent=detail_indent)
         )
     if choice.description is not None:
         lines.extend(
             (line, choice.description_role)
-            for line in _wrap(choice.description, width, indent=detail_indent)
+            for line in _wrap(_inline(choice.description), width, indent=detail_indent)
         )
     if choice.disabled_reason is not None:
         lines.extend(
             (line, SemanticRole.MUTED)
             for line in _wrap(
-                f"Disabled: {choice.disabled_reason}",
+                f"Disabled: {_inline(choice.disabled_reason)}",
                 width,
                 indent=detail_indent,
             )
@@ -1571,7 +1572,7 @@ def _panel_lines(
     indent: int,
 ) -> list[tuple[str, SemanticRole]]:
     heading_lines = _wrap(
-        panel.title,
+        _inline(panel.title),
         width,
         indent=indent,
         initial_prefix="--- ",
@@ -1617,7 +1618,7 @@ def _section_lines(
     lines = [
         (line, SemanticRole.EMPHASIS)
         for line in _wrap(
-            f"{section.title}{_state_suffix(section.state)}",
+            f"{_inline(section.title)}{_state_suffix(section.state)}",
             width,
             indent=indent,
         )
@@ -1638,6 +1639,7 @@ def _field_lines(
         f"{_inline(field.label)}"
         f"{_semantic_suffix(field.state, field.role)}"
     )
+    value = format_metadata_text(field.value)
     if width - indent < 40:
         lines = [
             (line, SemanticRole.EMPHASIS)
@@ -1645,17 +1647,20 @@ def _field_lines(
         ]
         lines.extend(
             (line, field.role)
-            for line in _wrap(field.value, width, indent=_child_indent(width, indent))
+            for line in _wrap(
+                value, width, indent=_child_indent(width, indent), preserve_lines=True,
+            )
         )
         return lines
     return [
         (line, field.role)
         for line in _wrap(
-            field.value,
+            value,
             width,
             indent=indent,
             initial_prefix=f"{safe_label}: ",
             continuation_prefix=" " * (len(safe_label) + 2),
+            preserve_lines=True,
         )
     ]
 
@@ -1677,11 +1682,12 @@ def _notice_lines(
     return [
         (line, notice.role)
         for line in _wrap(
-            notice.text,
+            format_metadata_text(notice.text),
             width,
             indent=indent,
             initial_prefix=prefix,
             continuation_prefix=" " * len(prefix),
+            preserve_lines=True,
         )
     ]
 
@@ -1776,7 +1782,7 @@ def _metadata_line(text: str) -> MarkdownLine:
 
 def _metadata_lines(value: str, capacity: int) -> tuple[MarkdownLine, ...]:
     lines: list[MarkdownLine] = []
-    for row in literal_lines(value):
+    for row in literal_lines(format_metadata_text(value)):
         fields = row.text.split(" | ")
         standard = all(re.match(r"^(?:Outcome|Elapsed|Input tokens|Output tokens):", part)
                        for part in fields)
@@ -1941,7 +1947,7 @@ def _list_lines(
     lines = [
         (line, SemanticRole.EMPHASIS)
         for line in _wrap(
-            f"{view.title} ({position.strip()}){_state_suffix(view.state)}",
+            f"{_inline(view.title)} ({position.strip()}){_state_suffix(view.state)}",
             width,
             indent=indent,
         )
@@ -2167,9 +2173,9 @@ def _child_indent(width: int, indent: int) -> int:
 
 
 def _inline(text: str) -> str:
-    """Sanitize one inline value and make structural newlines visible."""
+    """Keep display labels on one line without exposing control spellings."""
 
-    return sanitize_terminal_text(text).replace("\n", "\\x0a")
+    return format_metadata_text(text, inline=True)
 
 
 def _wrap(

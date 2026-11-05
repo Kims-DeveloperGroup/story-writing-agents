@@ -94,6 +94,7 @@ from ._model import (
     ViewState,
 )
 from ._response_usage import ResponseUsage, response_footer, response_usage
+from ._metadata_text import format_metadata_text
 
 
 def project_conversation_messages(
@@ -647,7 +648,7 @@ def _public_response_omission_items(
 def _public_response_items(
     response: LeadPublicResponse, *, show_text: bool = True,
     usage: ResponseUsage | None = None, show_details: bool = True,
-) -> tuple[Field | Message | Notice, ...]:
+) -> tuple[Field | Message | Notice | Record, ...]:
     items = [Field("Public response disposition", response.acceptance.value),
              Field("Provider call", f"{response.call_kind} #{response.ordinal} ({response.call_id})"),
              (_message("Literal final response_text", response.response_text, metadata=response_footer(response.acceptance.value, usage or ResponseUsage(scope="physical_call", call_count=1))) if show_text else
@@ -659,7 +660,7 @@ def _public_response_items(
                             label="Call validation", role=SemanticRole.ERROR))
     items.append(Notice("Selectable literal input; no draft, verified evidence or write authority."))
     if usage is not None and not show_text:
-        items.append(Notice(response_footer(response.acceptance.value, usage), label="Response metadata"))
+        items.append(Record("Response metadata", content=format_metadata_text(response_footer(response.acceptance.value, usage))))
     return tuple(items)
 
 

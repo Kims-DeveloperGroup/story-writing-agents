@@ -1159,8 +1159,9 @@ class RenderingFoundationTests(unittest.TestCase):
             capability(CapabilityProfile.ANSI, width=40),
         )
         self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
-        self.assertIn("Unsafe\\x1b]0;owned\\x07", plain.text)
-        self.assertIn("bad\\x1b[31m text", plain.text)
+        self.assertIn("Unsafe", plain.text)
+        self.assertIn("bad text", plain.text)
+        self.assertNotIn("\\x", plain.text)
         self.assertNotIn("\x1b", plain.text)
         self.assertNotIn("\x07", plain.text)
         allowed = {
