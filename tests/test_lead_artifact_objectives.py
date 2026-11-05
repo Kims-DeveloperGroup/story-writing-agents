@@ -443,7 +443,9 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(durable_plan.plan, completed_plan.plan)
         self.assertEqual((durable_plan.current_node_id, durable_plan.physical_calls_spent, durable_plan.rounds_spent, durable_plan.cumulative_plan_physical_calls),
                          (completed_plan.current_node_id, completed_plan.physical_calls_spent, completed_plan.rounds_spent, completed_plan.cumulative_plan_physical_calls))
-        self.assertEqual(next(node for node in durable_plan.nodes if node.node_id == binding.node_id), completed_node)
+        durable_node = next(node for node in durable_plan.nodes if node.node_id == binding.node_id)
+        self.assertEqual(durable_node.prerequisite_sources, ())
+        self.assertEqual(durable_node, replace(completed_node, prerequisite_sources=()))
         restarted = StoryRuntime(self.control_workspace, self.backend)
         self.assertEqual(restarted.inspect_document_plans(self.session_id), session_plans)
         self.assertEqual(RuntimeSession(restarted, self.session_id).inspect_document_plans(), session_plans)
