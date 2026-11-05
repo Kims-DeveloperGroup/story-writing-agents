@@ -6433,7 +6433,10 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         self.assertEqual(progress.observed, [])
         self.assertEqual(len(output.submissions), 1); self.assertIsNone(output.active_scope)
         self.assertIsInstance(output.components[-1], terminal_module.Panel)
-        self.assertIn("Elapsed: 00:00:00", output.components[-1].items[0].metadata)
+        turn_usage = next(item for item in output.components[-1].items
+            if type(item) is terminal_module.Record and item.identity == "Turn usage")
+        self.assertIn("Elapsed: 00:00:00", turn_usage.content)
+        self.assertNotIn("Elapsed:", output.components[-1].items[0].metadata or "")
 
     def test_provider_invocation_failure_writes_error_notice_without_crashing(self) -> None:
         import io
@@ -6716,7 +6719,10 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
 
                     self.assertEqual(calls, [(_UNIQUE_C, label)])
                     self.assertEqual(len(output.components), 2)
-                    self.assertIn("Elapsed:", output.components[-1].items[0].metadata)
+                    turn_usage = next(item for item in output.components[-1].items
+                        if type(item) is terminal_module.Record and item.identity == "Turn usage")
+                    self.assertIn("Elapsed:", turn_usage.content)
+                    self.assertNotIn("Elapsed:", output.components[-1].items[0].metadata or "")
 
     def test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role(self) -> None:
         from story_writing_agents.reply_trace import ReplyTrace, ReplyTraceOrigin
