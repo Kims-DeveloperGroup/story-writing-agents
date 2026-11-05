@@ -6525,6 +6525,13 @@ class StoryRuntime:
         if not views:
             return result
         proposal = result.proposal
+        if proposal is None and result.artifact_proposal is not None:
+            candidate = result.artifact_proposal.candidate
+            current = None if projection is None else projection.current_proposal
+            if current is None or (current.proposal_id, current.proposal_revision, current.proposal_digest) != (
+                    candidate.consultation_proposal_id, candidate.consultation_proposal_revision, candidate.consultation_proposal_digest):
+                return result
+            proposal = current
         if proposal is not None and proposal.document_plan is not None:
             active = next((view for view in views if view.plan.ref.plan_id == proposal.document_plan.ref.plan_id), None)
             if active is not None and active.plan.ref != proposal.document_plan.ref:
@@ -11161,7 +11168,7 @@ class StoryRuntime:
                 ),
                 None,
             )
-        return LeadTurnResult(
+        turn = LeadTurnResult(
             events[-1].session_id,
             events[-1].conversation_id,
             turn_id,
@@ -11184,6 +11191,8 @@ class StoryRuntime:
             validation_details=validation_details,
             provider_invocation_id=None if artifact_synthesis is None else artifact_synthesis.provider_invocation_id,
         )
+        return (self._attach_document_plan(turn, events, projection)
+                if reviewed_proposal is not None and proposal.document_node is not None else turn)
 
     def _terminal_state_draft(
         self,
