@@ -744,6 +744,91 @@ class SpecialistRoutingTests(unittest.TestCase):
         question_value = json.loads(decoded_question.answer_json)
         self.assertEqual((question_value["kind"], question_value["planning_target"]), ("question", "manuscript"))
         self.assertEqual(question_value["authoring_scope"]["target_paths"], [])
+        from story_writing_agents.agent_context.actions import ContextCallReadFact
+        from story_writing_agents.agent_context.manifest import ContextSourceKind
+        from story_writing_agents.lead_provider_contracts import LeadDiscussionConstraints
+        from story_writing_agents.orchestrator import _lead_revision_result_contract
+        global_path = plan.nodes[0].target_path
+        global_selection = documents.DocumentNodeSelection(plan.ref, node_id=plan.nodes[0].node_id)
+        selected_facts = replace(facts, input_ids=("user_input", "reference_1"),
+            source_ids=("current_response", "user_input", "reference_1"), objective_ids=(),
+            reviewer_inputs=((document_fixture.PLOT_ARCHITECT, "reference_1"),),
+            document_node_digest=documents.document_value_digest(documents.document_node_selection_to_dict(global_selection)),
+            document_target_paths=(global_path,))
+        def revision_factory(capability_path):
+            revision_seed = _lead_revision_result_contract(c.LeadProposalRelation.NEW_STEP, selected_facts.input_ids,
+                selected_facts.task_revisions, selected_facts, LeadDiscussionConstraints(task.task_id, task.task_revision),
+                fresh_revision_only=True, source_scope=None, artifact_revision_only=False,
+                selected_document_review_path=capability_path)
+            return replace(factory, constraints=selected_facts, rule_seed=revision_seed, schema_group_protocol=False)
+        selected_factory = revision_factory(global_path)
+        ordinary_factory = revision_factory(None)
+        with self.assertRaises(ValueError):
+            revision_factory(plan.nodes[1].target_path)
+        old_global = baseline[global_path]
+        original_digest = hashlib.sha256(old_global).hexdigest()
+        delivered = ContextCallReadFact("reference_1", "reference_1", ContextSourceKind.WRITING_ARTIFACT,
+            "fixture-global-v1", original_digest, original_digest, True, global_path)
+        read_fact = replace(delivered, evidence_id="read_global")
+        limit_names = ("nonterminal_actions", "search_actions", "read_actions", "queries_per_search",
+            "cumulative_queries", "handles_per_read", "cumulative_handles", "query_characters")
+        selected_offers = replace(offers, call_id="selected-document-search", allowed_actions=("search", "read", "answer"),
+            action_limits=tuple(zip(limit_names, (3, 2, 2, 4, 8, 8, 16, 200), strict=True)),
+            search_source_kinds=(ContextSourceKind.WRITING_ARTIFACT,), delivery_read_facts=(delivered,), remaining_provider_calls=4)
+        search_bound = selected_factory.for_offer(selected_offers)
+        read_offers = replace(selected_offers, call_id="selected-document-read", action_index=2,
+            issued_handle_aliases=("h1",), remaining_provider_calls=3)
+        read_bound = selected_factory.for_offer(read_offers)
+        result_offers = replace(read_offers, call_id="selected-document-result", action_index=3,
+            completed_read_facts=(read_fact,), remaining_provider_calls=2)
+        result_bound = selected_factory.for_offer(result_offers)
+        self.assertTrue(all(bound.schema_group_phase is None for bound in (search_bound, read_bound, result_bound)))
+        self.assertEqual(check_schema(result_bound.schema_value()), ())
+        replacement_text = "USER supplied Global revision; preserve the promised ending.\n"
+        producer = document_fixture._document_global_candidate_script(global_path, old_global, replacement_text)
+        fixture_provider = SimpleNamespace(responses=[producer], used_handles=(), backend=SimpleNamespace(artifact_read_links={}),
+            callback_payload=lambda request: request.payload)
+        payload = {"task_input": {"workflow": "lead_front_channel", "input_aliases": [
+            {"input_id": "reference_1", "kind": "core_document"}]},
+            "core_document_statuses": [{"artifact_path": global_path, "document_status": "incomplete", "evidence_id": "reference_1"}]}
+        native_frames = []
+        for bound, observation in ((search_bound, None),
+                (read_bound, {"search_results": [{"read_handle": "h1", "provenance": {"source_locator": global_path}}]}),
+                (result_bound, {"read_results": [{"read_handle": "h1", "evidence_id": "read_global",
+                    "source": {"source_type": "story_document"}, "provenance": {
+                        "authority_type": "writing_artifact_repository", "source_locator": global_path}}]})):
+            current_payload = {**payload, **({} if observation is None else {"context_observation": observation})}
+            current_call = SimpleNamespace(contract=bound, payload=current_payload)
+            frame = fixture_provider.responses.pop(0)(current_call, fixture_provider)
+            self.assertEqual(bound.rule_graph.findings(json.loads(frame)), ())
+            self.assertTrue(bound.decode_response(frame).belongs_to(bound))
+            native_frames.append(frame)
+        self.assertEqual(fixture_provider.responses, [])
+        self.assertEqual(tuple(json.loads(frame)["agent_action"]["action_type"] for frame in native_frames),
+            ("search_context", "read_context", "submit_result"))
+        artifact_value = json.loads(result_bound.decode_response(native_frames[-1]).answer_json)
+        self.assertEqual((artifact_value["kind"], artifact_value["authoring_scope"]["intent"], artifact_value["authoring_scope"]["activity"]),
+            ("proposal", "authoring", "review"))
+        self.assertEqual(artifact_value["artifact_intent"]["operations"][0]["new_text"], replacement_text)
+        ordinary_bound = ordinary_factory.for_offer(result_offers)
+        ordinary_call = SimpleNamespace(contract=ordinary_bound, payload=current_payload)
+        with self.assertRaisesRegex(ValueError, "explicitly intended fixture family"):
+            producer(ordinary_call, fixture_provider)
+        review_scope = document_fixture.lead._live_scope(current_call, activity="review", domains=("plot_structure",),
+            paths=(global_path,), contributions=[{"domain": "plot_structure", "role": "constraint_assessor"}])
+        review_scope["intent"] = "review_only"
+        review_packet = document_fixture._document_plan_native_response(current_call, {"kind": "proposal", "message": "Review only the current Global input.",
+            "authoring_scope": review_scope, "proposal": {"assignments": [{"agent_id": document_fixture.PLOT_ARCHITECT,
+                "instruction": "Review only the current Global input.", "mode": "review", "input_ids": ["user_input", "reference_1"],
+                "review_basis": {"candidate_input_ids": ["reference_1"], "criteria": "Preserve the supplied promise and ending."}}]}})
+        self.assertEqual(result_bound.rule_graph.findings(json.loads(review_packet)), ())
+        review_value = json.loads(result_bound.decode_response(review_packet).answer_json)
+        self.assertEqual(review_value["authoring_scope"]["intent"], "review_only")
+        illegal_readonly_artifact = json.loads(native_frames[-1])
+        illegal_readonly_artifact["agent_action"]["task_result"]["response_details"]["task_scope"]["intent"] = "review_only"
+        self.assertTrue(result_bound.rule_graph.findings(illegal_readonly_artifact))
+        with self.assertRaises(ValueError):
+            result_bound.decode_response(json.dumps(illegal_readonly_artifact))
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
         from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment

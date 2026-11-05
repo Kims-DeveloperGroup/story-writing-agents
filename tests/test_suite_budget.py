@@ -151,12 +151,12 @@ class SuiteBudgetTests(unittest.TestCase):
                     suite_budget.check_monotonic(
                         dict(await_source, max_test_source_lines=limit),
                         dict(prior_source, max_test_source_lines=old))
-        document_source = dict(await_source, max_test_source_lines=150075)
+        document_source = dict(await_source, max_test_source_lines=150175)
         self.assertIsNone(suite_budget.check_monotonic(document_source, await_source))
-        for old, limit in ((148782, 150075),
-                           (148784, 150075),
-                           (148783, 150074),
-                           (148783, 150076)):
+        for old, limit in ((148782, 150175),
+                           (148784, 150175),
+                           (148783, 150174),
+                           (148783, 150176)):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic(
                     dict(document_source, max_test_source_lines=limit),
