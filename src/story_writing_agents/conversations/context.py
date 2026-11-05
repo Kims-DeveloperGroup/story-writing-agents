@@ -5959,6 +5959,39 @@ def project_document_plan_views(events: tuple[CollaborationEvent, ...],
             if old is not None and old.ref.plan_revision == plan.ref.plan_revision and old.ref != plan.ref:
                 raise ValueError("document plan revision has conflicting exact contents")
             plans[plan.ref.plan_id] = plan
+    requested = {}
+    revisions = {}
+    for event in events:
+        value = event.payload
+        if type(value) not in {CollaborationProposal, CollaborationLeadJudgmentPayload, LeadRecommendationRequestPayload}:
+            continue
+        scope = value.authoring_scope
+        if scope is None or scope.intent is not AuthoringIntent.AUTHORING or scope.activity not in {
+                AuthoringActivity.DRAFT, AuthoringActivity.REVISE, AuthoringActivity.REVIEW}:
+            continue
+        for path in scope.target_paths:
+            key = (scope.task_id, path)
+            revisions[key] = max(revisions.get(key, 0), scope.task_revision)
+        binding = value.document_node
+        if binding is not None:
+            requested.setdefault((binding.plan_ref.plan_id, binding.node_id), []).append((event, binding))
+    def rewrite_pending(plan_id, node_id, approval):
+        confirmed_event, confirmed_binding = approval
+        for event, binding in requested.get((plan_id, node_id), ()):
+            if binding.task_ref == confirmed_binding.task_ref:
+                continue
+            older = tuple(identity for identity, (_, record) in approval_by_id.items()
+                if record.plan_ref.plan_id == plan_id and record.node_id == node_id and record.task_ref == binding.task_ref)
+            if any(precedes(identity, confirmed_event.event_id) for identity in older):
+                continue
+            if event.conversation_id == confirmed_event.conversation_id:
+                if event.sequence > confirmed_event.sequence:
+                    return True
+                continue
+            previous = binding.prior_confirmation_event_id
+            if previous in approval_by_id and (previous == confirmed_event.event_id or precedes(confirmed_event.event_id, previous)):
+                return True
+        return False
     views = []
     for plan in plans.values():
         confirmed = {}
@@ -5994,6 +6027,12 @@ def project_document_plan_views(events: tuple[CollaborationEvent, ...],
                     proposal = proposals.get((reviewed.consultation_proposal_id, reviewed.consultation_proposal_revision, reviewed.consultation_proposal_digest))
                     node = None if proposal is None else proposal.document_node
                     if node is not None and node.plan_ref.plan_id == plan.ref.plan_id:
+                        declared = declarations.get(node.plan_ref)
+                        target = None if declared is None else next((item.target_path for item in declared.nodes if item.node_id == node.node_id), None)
+                        paths = {path for op in reviewed.candidate.change_set.operations for path in
+                            ((op.source_path, op.destination_path) if type(op) is ArtifactRenameOperation else (op.path,))}
+                        if target is None or paths != {target} or proposal.authoring_scope.target_paths != (target,):
+                            raise ValueError("document Apply proof differs from its declared exact node target")
                         completed.setdefault(node.node_id, []).append((event.event_id, node))
         creation = {event.step_id for event in events
                     if type(event.payload) in {CollaborationLeadJudgmentPayload, ArtifactObjectivePayload, ArtifactObjectivePayloadV2}
@@ -6005,6 +6044,27 @@ def project_document_plan_views(events: tuple[CollaborationEvent, ...],
         own = creation | {event.step_id for event in events if type(event.payload) is CollaborationProviderCallPayload
                   and event.payload.document_goal is not None and event.payload.document_goal.plan_id == plan.ref.plan_id
                   and event.payload.document_budget_task_id in goal_tasks}
+        paths_by_node = {}
+        for declaration in declarations.values():
+            if declaration.ref.plan_id != plan.ref.plan_id:
+                continue
+            for item in declaration.nodes:
+                if item.node_id in paths_by_node and paths_by_node[item.node_id] != item.target_path:
+                    raise ValueError("document node identity cannot change target across windows")
+                paths_by_node[item.node_id] = item.target_path
+        qualified_completed = set()
+        for node_id, path in paths_by_node.items():
+            eligible = node_heads.get((plan.ref.plan_id, node_id), set())
+            if len(eligible) != 1:
+                continue
+            approval = approval_by_id[next(iter(eligible))]
+            binding = approval[1]
+            if revisions.get((binding.task_ref.task_id, path), binding.task_ref.task_revision) != binding.task_ref.task_revision:
+                continue
+            if rewrite_pending(plan.ref.plan_id, node_id, approval):
+                continue
+            if any(record.task_ref == binding.task_ref for _, record in completed.get(node_id, ())):
+                qualified_completed.add(path)
         if current_binding is not None:
             calls, rounds, total = document_lineage_cost(events, current_binding)
         else:
@@ -6055,7 +6115,7 @@ def project_document_plan_views(events: tuple[CollaborationEvent, ...],
         for node in plan.nodes:
             approved = confirmed.get(node.node_id)
             applied = tuple(sorted(identity for identity, binding in completed.get(node.node_id, ())
-                if approved is not None and binding.task_ref == approved[1].task_ref))
+                if node.target_path in qualified_completed and approved is not None and binding.task_ref == approved[1].task_ref))
             done = bool(applied)
             state, next_action = ((DocumentNodeState.COMPLETE, DocumentNodeNextAction.COMPLETE) if done else
                 node_actions.get(node.node_id, (DocumentNodeState.IN_PROGRESS, DocumentNodeNextAction.PREPARE_NODE)
@@ -6074,7 +6134,8 @@ def project_document_plan_views(events: tuple[CollaborationEvent, ...],
         views.append(DocumentPlanView(plan, None if current_binding is None else current_binding.node_id,
             tuple(rows), calls, rounds, total, 0 if cursor_ambiguous else max(0, COLLABORATION_PHYSICAL_CALL_LIMIT - calls),
             0 if cursor_ambiguous else max(0, COLLABORATION_ROUND_LIMIT - rounds), goal_text=goal_texts.get(plan.ref.plan_id),
-            current_confirmation_event_id=current_id, cursor_ambiguous=cursor_ambiguous))
+            current_confirmation_event_id=current_id, cursor_ambiguous=cursor_ambiguous,
+            completed_target_paths=tuple(sorted(qualified_completed))))
     return tuple(views)
 
 

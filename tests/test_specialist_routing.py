@@ -534,6 +534,130 @@ class SpecialistRoutingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             replace(use, predecessor_node_id=use.consumer_node_id)
 
+        # Constructed projection records exercise progress; they are not a Host Apply capability.
+        from story_writing_agents import artifact_proposals as artifacts, writing_artifacts as applications
+        from story_writing_agents.agents import EXECUTION_SPECIALIST
+        history = []
+        def record(identity, kind, payload, *, sender=fixture.LEAD, recipient=fixture.USER):
+            draft = fixture.make_draft(identity, kind, sender, recipient, payload)
+            batch = fixture.make_batch(tuple(history), "batch_" + identity, draft)
+            row = c.CollaborationEvent(**{field.name: getattr(draft, field.name) for field in fields(draft)},
+                sequence=len(history) + 1, timestamp="2026-11-05T00:00:00+00:00", batch_id=batch.batch_id,
+                batch_ordinal=0, batch_size=1, batch_digest=c.collaboration_batch_digest(batch))
+            history.append(row)
+            return row
+        chapter3, chapter4 = plan.nodes[-1].target_path, plan.remaining_target_paths[0]
+        def window(revision, path, prior):
+            node = replace(plan.nodes[-1], node_id="node_chapter3" if path == chapter3 else "node_chapter4",
+                book_unit_ids=("chapter-03",) if path == chapter3 else ("chapter-04",),
+                expected_result=f"One exact candidate for {path}",
+                target_path=path, coverage=editorial.EditorialScopeCoverage(editorial.EditorialScope.whole(path)),
+                scope_rule=routing.authoring_scope_rules(Activity.DRAFT, Intent.AUTHORING, (Domain.TONE_EXECUTION,),
+                    (Contribution(Domain.TONE_EXECUTION, Role.DRAFT_OWNER),), target_paths=(path,)))
+            current = documents.DocumentPlan.create(plan_id=plan.ref.plan_id, plan_revision=revision,
+                goal_objective_id=plan.goal_objective_id, goal_facts_digest=plan.goal_facts_digest,
+                nodes=(*plan.nodes[:-1], node), remaining_target_paths=tuple(value for value in (chapter3, chapter4) if value != path))
+            scope = self.scope(schema_version=3, activity=Activity.REVIEW, intent=Intent.AUTHORING, task_id="window_" + str(revision),
+                domains=(Domain.TONE_EXECUTION,), contributions=(Contribution(Domain.TONE_EXECUTION, Role.CONSTRAINT_ASSESSOR),),
+                target_paths=(path,))
+            task_ref = LeadTaskRef(session_id=fixture.SESSION_ID, conversation_id=fixture.CONVERSATION_ID,
+                task_id=scope.task_id, task_revision=scope.task_revision, scope_event_id="scope_" + str(revision),
+                scope_digest=documents.document_value_digest(c.authoring_scope_to_dict(scope)))
+            node_binding = documents.DocumentNodeBinding(current.ref, node.node_id, task_ref, task_ref, fixture.STEP_ID,
+                prior_confirmation_event_id=prior)
+            template = fixture.make_proposal(proposal_id="window_proposal_" + str(revision),
+                assignments=(fixture.make_assignment(specialist_id=EXECUTION_SPECIALIST),))
+            proposal = fixture.replace_proposal(template, basis=replace(template.basis, schema_version=2),
+                authoring_scope=scope, document_node=node_binding, document_plan=current)
+            record("proposal_" + str(revision), c.CollaborationEventKind.MESSAGE, proposal)
+            confirmation = record("confirm_" + str(revision), c.CollaborationEventKind.CONFIRMATION,
+                c.CollaborationConfirmationPayload("request_" + str(revision), "request_event_" + str(revision),
+                    proposal.proposal_id, proposal.proposal_revision, proposal.proposal_digest,
+                    c.CollaborationConfirmationDecision.CONFIRM), sender=fixture.USER, recipient=fixture.RUNTIME)
+            return current, proposal, confirmation
+        first, first_proposal, first_confirmation = window(1, chapter3, None)
+        baseline = {node.target_path: b"Qualified complete core baseline.\n" for node in first.nodes[:-1]}
+        content = "Chapter 3 ends with the promised return.\n"
+        exact_candidate = artifacts.build_artifact_review_candidate(candidate_id="chapter3_candidate", candidate_revision=1,
+            intent=artifacts.ArtifactProposalIntent((artifacts.ArtifactCreateIntent(chapter3, content),)),
+            evidence=(), grounding_evidence_ids=("input_outline",), base_state=baseline, attached_core_paths=tuple(baseline))
+        reviewers = artifacts.artifact_review_specialists(exact_candidate.disclosed_review_domains)
+        final_evidence = review.FinalReviewEvidence(exact_candidate.candidate_id, exact_candidate.candidate_revision,
+            exact_candidate.candidate_digest, first_proposal.authoring_scope.task_id, first_proposal.authoring_scope.task_revision,
+            (review.ReviewTarget("candidate", review.ReviewTargetKind.CANDIDATE, exact_candidate.candidate_id, "1",
+                exact_candidate.candidate_digest, exact_candidate.candidate_digest, exact_candidate.candidate_digest, True),),
+            fixture.DIGEST_A, fixture.DIGEST_A, fixture.DIGEST_A, reviewers, tuple("reply_" + value for value in reviewers))
+        reviewed = c.ArtifactReviewedProposal.create(proposal_id="reviewed_chapter3", proposal_revision=1,
+            candidate=exact_candidate, session_id=fixture.SESSION_ID, conversation_id=fixture.CONVERSATION_ID,
+            turn_id=fixture.TURN_ID, step_id=fixture.STEP_ID, base_tail_sequence=1, reviewed_tail_sequence=2,
+            lead_judgment_event_id="review_judgment", synthesis_event_id="review_synthesis",
+            consultation_proposal_id=first_proposal.proposal_id, consultation_proposal_revision=first_proposal.proposal_revision,
+            consultation_proposal_digest=first_proposal.proposal_digest,
+            mandatory_specialist_ids=artifacts.artifact_review_specialists(exact_candidate.mandatory_review_domains),
+            disclosed_specialist_ids=reviewers, reviews=tuple(c.ArtifactReviewReply(specialist_id=value,
+                assessment=c.CollaborationSpecialistAssessment.SUPPORTS) for value in reviewers),
+            unresolved_input_ids=(), rationale="Exact candidate reviewed.", user_impact="Separate local Apply only.",
+            limitations="Constructed projection fixture.", grounding_evidence_ids=exact_candidate.grounding_evidence_ids,
+            final_review_evidence=final_evidence)
+        application = applications.build_artifact_application_request(application_id="apply_chapter3",
+            candidate_id=exact_candidate.candidate_id, candidate_revision=exact_candidate.candidate_revision,
+            candidate_digest=exact_candidate.candidate_digest, change_set=exact_candidate.change_set,
+            relationship_validation=exact_candidate.relationship_validation, attached_core_paths=tuple(baseline))
+        request_digest = "sha256:" + hashlib.sha256(applications.serialize_artifact_application_request(application)).hexdigest()
+        request = c.ArtifactApplicationRequestPayload("apply_request", reviewed, application, request_digest, 2,
+            (c.ArtifactApplicationDecisionKind.APPLY, c.ArtifactApplicationDecisionKind.REJECT,
+             c.ArtifactApplicationDecisionKind.REVISE), (c.CollaborationSideEffect.ARTIFACT_MUTATION,),
+            (c.CollaborationSideEffect.GIT_INDEX_MUTATION, c.CollaborationSideEffect.GIT_COMMIT,
+             c.CollaborationSideEffect.GIT_REMOTE_MUTATION, c.CollaborationSideEffect.GIT_MERGE))
+        record("apply_request", c.CollaborationEventKind.ARTIFACT_APPLICATION_REQUEST, request)
+        result = applications.ArtifactApplicationResult(applications.ARTIFACT_APPLICATION_SCHEMA_VERSION,
+            application.provenance, applications.ArtifactApplicationState.APPLIED, (chapter3,),
+            (applications.ArtifactApplicationFinalArtifact(chapter3, applications.ArtifactKind.MANUSCRIPT,
+                hashlib.sha256(content.encode("utf-8")).hexdigest()),), (), ())
+        applied = c.ArtifactApplicationResultPayload("apply_request", "apply_decision", reviewed.proposal_id,
+            reviewed.proposal_digest, application.application_id, request_digest, c.ArtifactApplicationOutcomeKind.APPLIED,
+            c.ArtifactApplicationNextAction.REQUEST_COMMIT_CONFIRMATION, result)
+        applied_event = record("applied_chapter3", c.CollaborationEventKind.ARTIFACT_APPLICATION_RESULT, applied, sender=fixture.ARTIFACT)
+        second, _second_proposal, second_confirmation = window(2, chapter4, first_confirmation.event_id)
+        projection = next(value for value in c.project_document_plan_views(tuple(history), ()) if value.plan.ref == second.ref)
+        self.assertEqual(projection.completed_target_paths, (chapter3,))
+        self.assertEqual(projection.plan.remaining_target_paths, (chapter3,))
+        self.assertEqual(first.remaining_target_paths, (chapter4,))
+        self.assertEqual((projection.plan.goal_objective_id, projection.plan.goal_facts_digest),
+                         (first.goal_objective_id, first.goal_facts_digest))
+        self.assertNotIn(chapter4, projection.completed_target_paths)
+        self.assertIsNot(next(row for row in projection.nodes if row.node_id == "node_chapter4").state, documents.DocumentNodeState.COMPLETE)
+        unmatched_application = replace(application, provenance=replace(application.provenance, application_id="unmatched_apply"))
+        unmatched = replace(applied, application_id=unmatched_application.application_id,
+            application_request_digest="sha256:" + hashlib.sha256(applications.serialize_artifact_application_request(unmatched_application)).hexdigest(),
+            result=replace(result, provenance=unmatched_application.provenance))
+        missing_request = tuple(replace(row, payload=unmatched) if row.event_id == applied_event.event_id else row for row in history)
+        changed_batch = fixture.batch_from_history(missing_request, applied_event.batch_id)
+        missing_request = tuple(replace(row, batch_digest=c.collaboration_batch_digest(changed_batch))
+            if row.event_id == applied_event.event_id else row for row in missing_request)
+        self.assertEqual(c.project_document_plan_views(missing_request, ())[0].completed_target_paths, ())
+        rewritten, _rewrite_proposal, _rewrite_confirmation = window(3, chapter3, second_confirmation.event_id)
+        rewrite_view = next(value for value in c.project_document_plan_views(tuple(history), ()) if value.plan.ref == rewritten.ref)
+        self.assertNotIn(chapter3, rewrite_view.completed_target_paths)
+        self.assertNotIn(chapter4, rewrite_view.completed_target_paths)
+        self.assertIsNot(next(row for row in rewrite_view.nodes if row.node_id == "node_chapter3").state, documents.DocumentNodeState.COMPLETE)
+
+        # Agent metadata drops task bindings; literal story data and source versions stay exact.
+        from story_writing_agents.agent_task_projection import project_agent_task_metadata
+        source_metadata = {
+            "document_node": documents.document_node_binding_to_dict(binding),
+            "preliminary_review": review.preliminary_review_to_dict(report),
+            "content": {"task_id": "Nora-character-label", "task_revision": 17, "revision": "story-source-revision"}}
+        agent_metadata = project_agent_task_metadata(source_metadata, "runtime_disclosure")
+        self.assertFalse({"task_ref", "budget_lineage_ref"} & agent_metadata["document_node"].keys())
+        self.assertNotIn("consumer_task_ref", agent_metadata["document_node"]["candidate_uses"][0])
+        self.assertEqual(agent_metadata["document_node"]["candidate_uses"][0]["candidate"],
+                         source_metadata["document_node"]["candidate_uses"][0]["candidate"])
+        self.assertEqual(agent_metadata["preliminary_review"]["targets"], source_metadata["preliminary_review"]["targets"])
+        self.assertEqual(agent_metadata["content"], source_metadata["content"])
+        self.assertEqual(source_metadata["document_node"], documents.document_node_binding_to_dict(binding))
+        self.assertEqual(source_metadata["preliminary_review"], review.preliminary_review_to_dict(report))
+
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
         from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
         legacy = fixture.make_proposal()
