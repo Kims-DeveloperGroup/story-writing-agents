@@ -777,8 +777,9 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             findings = revised_constraints.diagnose(answer)
             if findings:
                 raise LeadContractError(findings)
-            StoryRuntime._decode_lead_outcome(json.dumps(bind_task_outcome(json.loads(answer),
+            bound = StoryRuntime._decode_lead_outcome(json.dumps(bind_task_outcome(json.loads(answer),
                 TaskBindingPlan(revised_scope.task_id, revised_scope.task_revision, 'reserved'))))
+            self.assertEqual((bound.authoring_scope.task_id, bound.authoring_scope.task_revision), ('context-task', 2))
         revised_factory = replace(_LEAD_CALL_FACTORY, constraints=revised_constraints,
             rule_seed=_lead_front_result_contract(
                 LeadProposalRelation.NEW_STEP, revised_constraints.input_ids,
@@ -803,7 +804,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertIsNot(first_current.prepared_compilation, original_plan)
         self.assertEqual(selected.as_object(), original_selection)
         self.assertEqual(len(revised_result.group_state.workflow.history), 2)
-        self.assertEqual(json.loads(revised_result.answer)["authoring_scope"]["task"], "context-task@2")
+        self.assertTrue({'task', 'task_id', 'task_revision'}.isdisjoint(json.loads(revised_result.answer)['authoring_scope']))
         for call, phase in zip(revised_provider.calls, (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE), strict=True):
             assert_phase_guide(self, call, phase)
 

@@ -3954,6 +3954,82 @@ def _project_task_context(
             and state.confirmation_request_id == origin.payload.confirmation_request_id
         )
 
+    def _ordinary_supersedes_artifact_revision(receipt, subject, history) -> bool:
+        """A new literal USER request ends only its exact unconfirmed preparation plan."""
+        proposal = subject.payload
+        scope = proposal.authoring_scope
+        if (scope.schema_version != 3 or scope.intent is not AuthoringIntent.AUTHORING
+                or scope.activity is not AuthoringActivity.REVIEW
+                or proposal.proposal_revision != 1 or subject.step_id == receipt.planning_step_id
+                or confirmed_authoring_proposals(scope, history)):
+            return False
+        by_id = {item.event_id: item for item in history}
+        origin = by_id.get(receipt.origin_event_id)
+        if origin is None or type(origin.payload) is not CollaborationConfirmationPayload:
+            return False
+        originals = tuple(item.payload for item in history
+            if type(item.payload) is CollaborationProposal and
+            (item.payload.proposal_id, item.payload.proposal_revision, item.payload.proposal_digest)
+            == (origin.payload.proposal_id, origin.payload.proposal_revision, origin.payload.proposal_digest))
+        if (len(originals) != 1 or proposal.proposal_id == originals[0].proposal_id
+                or not _artifact_revision_source(receipt, originals[0], history)):
+            return False
+        original = originals[0]
+        publication = (subject.session_id, subject.conversation_id, subject.turn_id,
+            subject.step_id, subject.batch_id)
+        candidates = tuple(item for item in events
+            if (item.session_id, item.conversation_id, item.turn_id, item.step_id, item.batch_id) == publication
+            and type(item.payload) is ArtifactReviewCandidatePayload
+            and (item.payload.consultation_proposal_id, item.payload.consultation_proposal_revision,
+                 item.payload.consultation_proposal_digest)
+            == (proposal.proposal_id, proposal.proposal_revision, proposal.proposal_digest))
+        if len(candidates) != 1:
+            return False
+        for item in history:
+            request = item.payload
+            if (type(request) is not LeadRecommendationRequestPayload
+                    or request.kind is not LeadRecommendationActionKind.PREPARE_ARTIFACT
+                    or request.source_execution_attempt_id is not None
+                    or request.authoring_scope is None
+                    or (request.authoring_scope.task_id, request.authoring_scope.task_revision)
+                    != (receipt.target_task_id, receipt.target_task_revision)
+                    or (request.source_proposal_id, request.source_proposal_revision, request.source_proposal_digest)
+                    != (original.proposal_id, original.proposal_revision, original.proposal_digest)):
+                continue
+            source = by_id.get(request.source_recommendation_event_id)
+            if (source is None or type(source.payload) is not CollaborationLeadJudgmentPayload
+                    or source.payload.kind is not LeadOutcomeKind.RECOMMENDATION
+                    or source.step_id != receipt.planning_step_id or source.payload.authoring_scope is None
+                    or (source.payload.authoring_scope.task_id, source.payload.authoring_scope.task_revision)
+                    != (receipt.target_task_id, receipt.target_task_revision)):
+                continue
+            key = _recommendation_key(request)
+            if any(type(row.payload) in {LeadRecommendationDecisionPayload, LeadRecommendationStartedPayload}
+                   and _recommendation_key(row.payload) == key for row in history):
+                continue
+            closures = tuple(row for row in history
+                if type(row.payload) is LeadRecommendationResultPayload
+                and _recommendation_key(row.payload) == key)
+            if len(closures) != 1:
+                continue
+            closure = closures[0]
+            result = closure.payload
+            user = by_id.get(result.superseding_user_event_id)
+            if (result.state is LeadRecommendationState.SUPERSEDED
+                    and result.decision_event_id is None and result.start_event_id is None
+                    and result.lead_result_event_id is None
+                    and user is not None and type(user.payload) is CollaborationMessagePayload
+                    and user.sender.kind is CollaborationActorKind.USER
+                    and user.direction is CollaborationDirection.USER_TO_LEAD
+                    and (user.session_id, user.conversation_id, user.turn_id, user.step_id)
+                    == publication[:4]
+                    and (closure.session_id, closure.conversation_id, closure.turn_id, closure.step_id)
+                    == publication[:4]
+                    and user.batch_id == closure.batch_id
+                    and user.sequence + 1 == closure.sequence < subject.sequence):
+                return True
+        return False
+
     prior: dict[str, CollaborationEvent] = {}
     tasks: dict[str, tuple[CollaborationEvent, AuthoringScope]] = {}
     confirmations = confirmation_task_bindings(events)
@@ -4011,6 +4087,9 @@ def _project_task_context(
                              if (control.payload.receipt.target_task_id,
                                  control.payload.receipt.target_task_revision)
                              == (scope.task_id, scope.task_revision)), None)
+            if (planning is not None and _ordinary_supersedes_artifact_revision(
+                    planning, event, tuple(prior.values()))):
+                planning = None
             if planning is not None:
                 source_review_revision = False
                 source_artifact_revision = False

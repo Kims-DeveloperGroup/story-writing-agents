@@ -133,13 +133,9 @@ class LeadArtifactObjectiveTests(RecommendationCase):
                     'recipients': {'user_input': PLOT_ARCHITECT}, 'family': 0}
         await self._assert_default_budget_refusal(path, text, brief, source_inputs)
         source_positive_call_start = len(self.backend.calls)
-        original_result = lead._live_result
-        with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(call,
-                {**value, "message": brief, "authoring_scope": {**value["authoring_scope"],
-                    "interpretation": brief}} if value.get("kind") == "proposal" else value)):
-            conversation_id, _ = await self._source_setup_start(
-                conversation_id, message=text, target_path=None, specialist_ids=ROSTER,
-                authoring_paths=(path,), native_inputs=source_inputs, response_text=brief)
+        conversation_id, _ = await self._source_setup_start(
+            conversation_id, message=text, target_path=None, specialist_ids=ROSTER,
+            authoring_paths=(path,), native_inputs=source_inputs, response_text=brief)
         source = self.projection(conversation_id).offered_draft_sources[-1]
         scope = next(e.payload.authoring_scope for e in self.history(conversation_id) if e.event_id == source.event_id)
         self.assertEqual(scope.target_paths, (path,))
@@ -179,7 +175,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             editorial_refs=(), editorial_context_digest=None)).proposal_digest)
         self.assertNotIn(memory.record.event_id, {item.input_id for item in prepared.proposal.basis.inputs})
         self.assertEqual(prepared.proposal.authoring_scope, replace(request.authoring_scope, activity=lead.AuthoringActivity.REVIEW))
-        self.assertEqual(request.authoring_scope.interpretation, brief)
+        self.assertEqual(request.authoring_scope.interpretation, 'Draft from the current synthetic brief.')
         historical = next(item for item in prepared.proposal.basis.inputs if item.input_id == source.event_id)
         self.assertIs(historical.kind, c.CollaborationInputKind.CONVERSATION_EVENT)
         self.assertEqual(historical.revision_digest, source.content_digest)

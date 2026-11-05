@@ -12452,9 +12452,13 @@ class StoryRuntime:
                     raw_spec = proposed_value.get("authoring_scope")
                     if type(raw_spec) is dict:
                         spec = scope_spec_from_dict(raw_spec, interpretation=proposed_value["message"])
+                        workflow_cancellation = (spec.activity is AuthoringActivity.WORKFLOW
+                            and type(proposed_value.get("objective_intent")) is dict
+                            and proposed_value["objective_intent"].get("action") == LeadObjectiveAction.CANCEL.value)
                         authority_free = (proposed_value.get("kind", "answer") in {"answer", "question", "critique"}
                             and not any(proposed_value.get(name) for name in
-                                ("proposal", "recommended_action", "artifact_intent", "objective_intent"))
+                                ("proposal", "recommended_action", "artifact_intent"))
+                            and (not proposed_value.get("objective_intent") or workflow_cancellation)
                             and (spec.activity is AuthoringActivity.WORKFLOW
                                 or binding_pinned or "preliminary_review" in proposed_value))
                         prior_key = proposed_key = None

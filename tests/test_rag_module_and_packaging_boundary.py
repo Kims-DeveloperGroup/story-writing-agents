@@ -338,8 +338,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 172)
-        self.assertEqual(len(edges), 774)
+        self.assertEqual(len(modules), 174)
+        self.assertEqual(len(edges), 780)
         self.assertIn(("story_writing_agents.agent_context.service", "story_writing_agents.provider_adapter"), edges)
         self.assertIn(("story_writing_agents.interactive_terminal._advisory_progress", "story_writing_agents.agent_context.service"), edges)
         self.assertIn(("story_writing_agents.interactive_terminal._core", "story_writing_agents.agent_context.service"), edges)
@@ -378,6 +378,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.agent_context.group_observation',
             },
             "story_writing_agents.conversations.context": {
+                "story_writing_agents.authoring_task_lifecycle",
                 "story_writing_agents.review_contracts",
                 "story_writing_agents.lead_task_transitions",
                 "story_writing_agents.lead_exploration",
