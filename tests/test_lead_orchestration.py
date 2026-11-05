@@ -4999,7 +4999,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual((original.acceptance, correction.acceptance), (task.LeadPublicResponseAcceptance.REJECTED, task.LeadPublicResponseAcceptance.ACCEPTED))
         self.assertTrue(original.validation_details)
         self.assertEqual(correction.repair_of_call_id, original.call_id)
-        slot_calls, slot_rejected_text = [], 'Retain this outline request with the declared dependency slots.'
+        slot_calls, slot_repairs, slot_rejected_text = [], [], 'Retain this outline request with the declared dependency slots.'
         slot_basis = next(event for event in reversed(history) if type(event.payload) is CollaborationLeadJudgmentPayload)
         self.assertEqual(slot_basis.payload.message, question_text)
         def duplicate_slot_question(call, provider):
@@ -5013,25 +5013,25 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             slot_calls.append((call, packet))
             return json.dumps(packet)
         def repair_slot_question(call, provider):
-            failed, packet = slot_calls[0]
             guidance = _workflow_material(provider.callback_payload(call))['response_correction']['bound_contract']
-            self.assertEqual((guidance['current_physical_call_id'], guidance['current_offer_digest'], guidance['selected_schema_id']),
-                             (failed.call_id, failed.contract.offers.offer_digest, packet['agent_action']['schema_id']))
-            self.assertNotIn("task_revisions", guidance)
-            self.assertEqual(call.contract.action_index.policy.task_revisions, failed.contract.action_index.policy.task_revisions)
-            self.assertEqual((call.contract.phase, call.contract.logical_origin_call_id), ('repair', failed.call_id))
-            self.assertNotEqual(call.call_id, failed.call_id)
-            self.assertEqual(current_pending_scope(call), captured_scopes[0])
-            self._require_slot_repair(guidance)
             corrected = json.loads(clarify_pending(call, provider))
-            self.assertIn((corrected['agent_action']['schema_id'], corrected['agent_action']['task_result']['schema_id']),
-                          call.contract.outer_inner_schema_ids)
-            self.assertTrue(call.contract.decode_response(json.dumps(corrected)).belongs_to(call.contract))
+            slot_repairs.append((call, guidance, corrected))
             return json.dumps(corrected)
         call_start = len(case.backend.calls)
         case.backend.enqueue(duplicate_slot_question, control_plan=select("question.authoring"))
         case.backend.enqueue(repair_slot_question, control_plan=())
         slot_repaired = await case.runtime.lead_turn(case.session_id, pending_conversation, 'Retain the pending outline and clarify its ending.')
+        repair_call, guidance, corrected = slot_repairs[0]
+        failed, packet = slot_calls[0]
+        self.assertEqual((guidance['current_physical_call_id'], guidance['current_offer_digest'], guidance['selected_schema_id']), (failed.call_id, failed.contract.offers.offer_digest, packet['agent_action']['schema_id']))
+        self.assertNotIn('task_revisions', guidance)
+        self.assertEqual(repair_call.contract.action_index.policy.task_revisions, failed.contract.action_index.policy.task_revisions)
+        self.assertEqual((repair_call.contract.phase, repair_call.contract.logical_origin_call_id), ('repair', failed.call_id))
+        self.assertNotEqual(repair_call.call_id, failed.call_id)
+        self.assertEqual(current_pending_scope(repair_call), captured_scopes[0])
+        self._require_slot_repair(guidance)
+        self.assertIn((corrected['agent_action']['schema_id'], corrected['agent_action']['task_result']['schema_id']), repair_call.contract.outer_inner_schema_ids)
+        self.assertTrue(repair_call.contract.decode_response(json.dumps(corrected)).belongs_to(repair_call.contract))
         self.assertEqual((slot_repaired.kind, slot_repaired.message, getattr(slot_repaired.trace, 'origin', None)), (LeadOutcomeKind.QUESTION, question_text, ReplyTraceOrigin.RECOVERED))
         self.assertEqual(len(case.backend.calls) - call_start, 3)
         retained, slot_history = case.objective(pending_conversation), case.history(pending_conversation)
