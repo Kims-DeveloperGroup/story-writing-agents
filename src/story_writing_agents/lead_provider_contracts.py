@@ -12,7 +12,7 @@ from .specialist_routing import (ReviewStage, SpecialistWorkKind, SpecialistStag
     stage_participant_rosters, stage_focus_domains, stage_is_focused_review)
 
 from .review_contracts import (ReviewTarget, ReviewTargetAvailability, LeadPreliminaryReview, preliminary_intent_schema,
-    preliminary_scope_eligible, bind_preliminary_intent, preliminary_review_to_dict,
+    preliminary_scope_eligible, preliminary_intent_from_value, bind_preliminary_intent, preliminary_review_to_dict,
     review_target_to_dict)
 
 import json
@@ -564,6 +564,7 @@ def _lead_codec_dependencies() -> tuple[Callable, ...]:
             assignment_rule, AuthoringScopeRuleSet.__post_init__,
             LeadProviderConstraints._allocation_input_ids, lead_outcome_scope_paths,
             normalize_result, map_current_task_literals, _require_intrinsic_lead_result,
+            scope_spec_from_dict, preliminary_intent_from_value,
             project_lead_scope_schema, restore_lead_scope_result, project_lead_scope_diagnostic,
             diagnostic_to_wire, AuthoringScopeRuleSet.dependency_slot_id_rule,
             _has_free_dependency_slots, _require_dependency_slot_ids)
@@ -2773,6 +2774,7 @@ class LeadProviderConstraints:
                                bound_targets=targets if scoped else None,
                                bound_inputs=allocation_inputs if allocation_paths else (),
                                bound_review_candidates=self.review_candidate_ids if allocation_paths else None,
+                               bound_preliminary_targets=self.preliminary_targets,
                                bound_tasks=tasks, bound_contract_id=contract.contract_id) -> dict[str, object]:
                         result = deepcopy(body)
                         declaration = json.loads(bound_selector_schema)
@@ -2837,6 +2839,11 @@ class LeadProviderConstraints:
                         proposal_value = normalized.get("proposal")
                         if type(proposal_value) is dict and "stage_plan" in proposal_value:
                             stage_plan_spec_from_dict(proposal_value["stage_plan"])
+                        if "preliminary_review" in normalized:
+                            preliminary_scope = scope_spec_from_dict(normalized["authoring_scope"],
+                                interpretation=normalized["message"])
+                            preliminary_intent_from_value(normalized["preliminary_review"],
+                                bound_preliminary_targets, target_paths=preliminary_scope.target_paths)
                         return normalized
                     branch_key = f"{contract.contract_id}:{root_number}:{scope_number}:{roster_number}"
                     if grouped:
