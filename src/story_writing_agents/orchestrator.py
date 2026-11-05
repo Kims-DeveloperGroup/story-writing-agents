@@ -6489,6 +6489,40 @@ class StoryRuntime:
                 use.candidate.candidate_digest))
         return (*inputs, *additions)
 
+    @staticmethod
+    def _compact_document_plan_input(value: dict[str, object]) -> dict[str, object]:
+        """Reference only an identical full plan already supplied in this input."""
+        work = value.get("document_work_plan")
+        objectives = value.get("artifact_objectives")
+        if type(work) is not dict or type(objectives) is not dict:
+            return value
+        shared = work.get("plan")
+        rows = objectives.get("objectives")
+        if type(shared) is not dict or type(rows) is not list:
+            return value
+        reference = shared.get("ref")
+        if type(reference) is not dict or set(reference) != {"plan_id", "plan_revision", "plan_digest"}:
+            return value
+        shared_bytes = None
+        compacted = []
+        changed = False
+        for row in rows:
+            candidate = row.get("document_plan") if type(row) is dict else None
+            if (type(candidate) is dict and candidate.get("ref") == reference
+                    and "document_plan_ref" not in row):
+                if shared_bytes is None:
+                    shared_bytes = json.dumps(shared, ensure_ascii=False, sort_keys=True,
+                        allow_nan=False, separators=(",", ":")).encode("utf-8")
+                if json.dumps(candidate, ensure_ascii=False, sort_keys=True,
+                        allow_nan=False, separators=(",", ":")).encode("utf-8") == shared_bytes:
+                    row = {key: item for key, item in row.items() if key != "document_plan"}
+                    row["document_plan_ref"] = dict(reference)
+                    changed = True
+            compacted.append(row)
+        if not changed:
+            return value
+        return {**value, "artifact_objectives": {**objectives, "objectives": compacted}}
+
     def _attach_document_plan(self, result: LeadTurnResult, events=None, projection=None) -> LeadTurnResult:
         if result.document_plan is not None:
             return result
@@ -12907,6 +12941,7 @@ class StoryRuntime:
                     ]
                 if discussion_constraints is not None:
                     current_value["discussion_constraints"] = discussion_constraints.prompt_facts()
+                current_value = self._compact_document_plan_input(current_value)
                 current = self._context_material(
                     source_id="runtime_input:current",
                     semantic_channel=ContextSemanticChannel.CURRENT_INPUT,
