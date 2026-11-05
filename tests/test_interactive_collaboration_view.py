@@ -101,6 +101,21 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(origin, tuple(event for event, _ in projected))
             self.assertEqual(project_conversation_messages((origin,), history_events=final_history), ())
             self.assertIn("Input tokens: 0 | Output tokens: 2", next(message.metadata for event, message in projected if event == finalization_notice))
+            fallback_trace = ReplyTrace("lead_orchestrator", "none", recovered_fields=("structured_reply",),
+                origin=ReplyTraceOrigin.RUNTIME_FALLBACK)
+            fallback_history = tuple(replace(event, payload=replace(event.payload, trace=fallback_trace)) if event == origin else
+                replace(event, payload=replace(event.payload, trace=None)) if event == finalization_notice else event
+                for event in final_history)
+            fallback_notice = next(event for event in fallback_history if event.event_id == finalization_notice.event_id)
+            for component in (_collaboration_view.project_lead_turn_result(replace(finalized, trace=None),
+                    public_response_events=fallback_history),
+                    _collaboration_view.project_collaboration_event(fallback_notice, history_events=fallback_history)):
+                frame = next(item for item in component.items if type(item) is Message and item.content == finalized.message)
+                self.assertEqual((frame.sender, frame.metadata), ("Runtime", None))
+            fallback_messages = tuple(message for _, message in project_conversation_messages(fallback_history)
+                if message.content == finalized.message)
+            self.assertEqual(len(fallback_messages), 1)
+            self.assertEqual((fallback_messages[0].sender, fallback_messages[0].metadata), ("Runtime", None))
             long_prose, budget_notice = "L" * 32_768, "The provider round ended. The requested second specialist round exceeds the remaining call budget."
             for invocation_id in (origin.payload.provider_invocation_id, None):
                 overflow = tuple(replace(event, payload=replace(event.payload, message=long_prose, provider_invocation_id=invocation_id)) if event == origin else replace(event, payload=replace(event.payload, content=budget_notice, provider_invocation_id=invocation_id)) if event == finalization_notice else event for event in final_history)
@@ -165,10 +180,19 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(any(label in line and issue not in line for line in text.splitlines()))
 
             capability = _capability(CapabilityProfile.LINE, width=120)
-            generic = replace(notice, sender=LEAD, payload=CollaborationMessagePayload("Generic fallback literal.",
-                ReplyTrace("lead_orchestrator", "none", recovered_fields=("structured_reply",), origin=ReplyTraceOrigin.RUNTIME_FALLBACK)))
-            generic_text = render_component(_collaboration_view.project_collaboration_event(generic), capability).text
-            self.assertIn("Generic fallback literal.", generic_text)
+            generic = replace(notice, event_id="generic_fallback", batch_ordinal=0, batch_size=1, sender=LEAD,
+                payload=CollaborationMessagePayload("Generic fallback literal.",
+                    ReplyTrace("lead_orchestrator", "none", recovered_fields=("structured_reply",), origin=ReplyTraceOrigin.RUNTIME_FALLBACK),
+                    validation_details=("PRIVATE schema diagnostics.",)))
+            generic_view = _collaboration_view.project_collaboration_event(generic)
+            generic_text = render_component(generic_view, capability).text
+            self.assertIn("Generic fallback literal.", generic_text); self.assertIn("PRIVATE schema diagnostics.", generic_text)
+            generic_frame = next(item for item in generic_view.items if type(item) is Message)
+            self.assertEqual((generic_frame.sender, generic_frame.content, generic_frame.metadata), ("Runtime", "Generic fallback literal.", None))
+            generic_messages = project_conversation_messages((generic,))
+            self.assertEqual(len(generic_messages), 1)
+            self.assertEqual((generic_messages[0][1].sender, generic_messages[0][1].content, generic_messages[0][1].metadata),
+                ("Runtime", "Generic fallback literal.", None))
             lead_rendered = render_component(_collaboration_view.project_lead_turn_result(reviewed), capability).text
             application_rendered = render_component(_collaboration_view.project_artifact_application_decision_result(applied), capability).text
             commit_rendered = render_component(_collaboration_view.project_story_commit_decision_result(committed), capability).text

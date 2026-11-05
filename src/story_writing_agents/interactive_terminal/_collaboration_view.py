@@ -116,11 +116,23 @@ def _accepted_public_event(value: LeadTurnResult | CollaborationEvent,
 def _runtime_notice(value: LeadTurnResult | CollaborationEvent,
                     events: tuple[CollaborationEvent, ...]) -> bool:
     owner = value.payload if type(value) is CollaborationEvent else value
-    if type(value) is CollaborationEvent and type(owner) is not CollaborationLeadJudgmentPayload:
+    if type(value) is CollaborationEvent and (type(owner) not in {
+            CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload, CollaborationMessagePayload}
+            or value.sender.agent_id != LEAD_ORCHESTRATOR or value.recipient.kind.value != "user"):
         return False
     trace = getattr(owner, "trace", None)
     if trace is not None and trace.origin.value == "runtime_fallback":
         return True
+    if type(value) is CollaborationEvent:
+        if type(owner) is CollaborationMessagePayload:
+            source = _conversation_finalized_source(value, events, {event.event_id: event for event in events})
+            return source is not None and _runtime_notice(source, events)
+        if type(owner) is not CollaborationLeadJudgmentPayload:
+            return False
+    else:
+        source = _live_response_source(value, events)
+        if source is not None and _runtime_notice(source, events):
+            return True
     source = _accepted_public_event(value, events)
     return source is not None and source.payload.response.response_text != owner.message
 
@@ -153,8 +165,6 @@ def _front_response_metadata(value: LeadTurnResult | CollaborationEvent,
 def _live_response_source(result: LeadTurnResult,
                           events: tuple[CollaborationEvent, ...]) -> CollaborationEvent | None:
     """Resolve non-front response ownership through typed identities and finalization receipts."""
-    if result.provider_invocation_id is None:
-        return None
     header = (result.session_id, result.conversation_id, result.turn_id, result.step_id)
     sources = {}
     by_id = {event.event_id: event for event in events}
@@ -164,7 +174,8 @@ def _live_response_source(result: LeadTurnResult,
         payload = event.payload
         if type(payload) in {CollaborationLeadSynthesisPayload, ArtifactReviewSynthesisPayload,
                             CollaborationLeadDiscussionPayload}:
-            if payload.provider_invocation_id == result.provider_invocation_id:
+            if (result.provider_invocation_id is not None and
+                    payload.provider_invocation_id == result.provider_invocation_id):
                 sources[event.event_id] = event
         elif type(payload) is CollaborationLeadExplorationResultPayload:
             calls = tuple(fact for fact in events
@@ -180,10 +191,14 @@ def _live_response_source(result: LeadTurnResult,
         elif (type(payload) is CollaborationMessagePayload and
                 payload.provider_invocation_id == result.provider_invocation_id and
                 payload.content == result.message):
-            source = _conversation_finalized_source(event, events, by_id)
-            if (source is not None and
-                    source.payload.provider_invocation_id == result.provider_invocation_id):
-                sources[source.event_id] = source
+            if (event.sender.agent_id == LEAD_ORCHESTRATOR and event.recipient.kind.value == "user"
+                    and payload.trace is not None and payload.trace.origin.value == "runtime_fallback"):
+                sources[event.event_id] = event
+            elif result.provider_invocation_id is not None:
+                source = _conversation_finalized_source(event, events, by_id)
+                if (source is not None and
+                        source.payload.provider_invocation_id == result.provider_invocation_id):
+                    sources[source.event_id] = source
     for source in tuple(sources.values()):
         payload = source.payload
         if type(payload) is ArtifactReviewSynthesisPayload and any(
@@ -198,12 +213,13 @@ def _live_response_source(result: LeadTurnResult,
 
 
 def _live_response_metadata(result: LeadTurnResult,
-                            events: tuple[CollaborationEvent, ...]) -> str:
+                            events: tuple[CollaborationEvent, ...]) -> str | None:
     if _accepted_public_event(result, events) is None:
         source = _live_response_source(result, events)
         if source is not None:
             payload = source.payload
-            content = (payload.report.response_text if type(payload) is CollaborationLeadDiscussionPayload
+            content = (payload.content if type(payload) is CollaborationMessagePayload
+                else payload.report.response_text if type(payload) is CollaborationLeadDiscussionPayload
                 else payload.report.message if type(payload) is CollaborationLeadExplorationResultPayload
                 else payload.message)
             return _event_response_items((_message("Lead", content),), source, events)[0].metadata
@@ -325,7 +341,8 @@ def _conversation_message(
     agent_id = event.sender.agent_id
     role = SemanticRole.AGENT
     if type(payload) is CollaborationMessagePayload:
-        if payload.validation_details or event.sender.kind.value not in {"user", "lead", "specialist"}:
+        if ((payload.validation_details and not _runtime_notice(event, events))
+                or event.sender.kind.value not in {"user", "lead", "specialist"}):
             return None
         if event.sender.kind.value != "user" and event.recipient.kind.value != "user":
             return None
@@ -334,6 +351,8 @@ def _conversation_message(
             sender, role = "User", SemanticRole.DEFAULT
         else:
             sender = "Lead" if agent_id == LEAD_ORCHESTRATOR else AGENT_SPECS[agent_id].display_name
+            if _runtime_notice(event, events):
+                sender, role = "Runtime", SemanticRole.INFO
     elif type(payload) is CollaborationLeadPublicResponsePayload:
         if payload.response.acceptance.value != "accepted":
             return None
@@ -1835,11 +1854,13 @@ def _live_usage(result: LeadTurnResult, events: tuple[CollaborationEvent, ...]) 
             else CollaborationInvocationKind.LEAD_EXPLORATION
             if type(source.payload) is CollaborationLeadExplorationResultPayload
             else CollaborationInvocationKind.LEAD_SYNTHESIS)
+        kinds = (frozenset({CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_DISCUSSION})
+            if type(source.payload) is CollaborationMessagePayload else frozenset({kind}))
         return response_usage(tuple(event for event in events if event.sequence <= source.sequence),
             session_id=source.session_id, conversation_id=source.conversation_id,
             turn_id=source.turn_id, step_id=source.step_id,
             invocation_id=result.provider_invocation_id, role=LEAD_ORCHESTRATOR,
-            invocation_kinds=frozenset({kind}))
+            invocation_kinds=kinds)
     if result.kind.value == "discussion":
         kinds = frozenset({CollaborationInvocationKind.LEAD_DISCUSSION})
     elif result.kind.value == "exploration":
@@ -1889,10 +1910,11 @@ def _event_response_items(items: tuple, event: CollaborationEvent, events: tuple
     events = tuple(fact for fact in events if fact.sequence <= event.sequence)
     payload = event.payload
     if _runtime_notice(event, events):
+        body = payload.content if type(payload) is CollaborationMessagePayload else payload.message
         def runtime_items(values):
             projected = []
             for item in values:
-                if type(item) is Message and item.content == payload.message:
+                if type(item) is Message and item.content == body:
                     item = replace(item, sender="Runtime",
                         role=SemanticRole.ERROR if item.role is SemanticRole.ERROR else SemanticRole.INFO,
                         metadata=None)
@@ -1903,11 +1925,17 @@ def _event_response_items(items: tuple, event: CollaborationEvent, events: tuple
                 projected.append(item)
             return tuple(projected)
         projected = runtime_items(items)
-        if payload.provider_invocation_id is not None:
-            usage = response_usage(events, session_id=event.session_id,
-                conversation_id=event.conversation_id, turn_id=event.turn_id, step_id=event.step_id,
-                invocation_id=payload.provider_invocation_id, role=LEAD_ORCHESTRATOR,
-                invocation_kinds=frozenset({CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_DISCUSSION}))
+        source = (_conversation_finalized_source(event, events, {fact.event_id: fact for fact in events})
+            if type(payload) is CollaborationMessagePayload else None) or event
+        invocation = source.payload.provider_invocation_id
+        if invocation is not None:
+            kinds = (frozenset({CollaborationInvocationKind.LEAD_SYNTHESIS})
+                if type(source.payload) is CollaborationLeadSynthesisPayload else
+                frozenset({CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_DISCUSSION}))
+            usage = response_usage(tuple(fact for fact in events if fact.sequence <= source.sequence),
+                session_id=source.session_id, conversation_id=source.conversation_id,
+                turn_id=source.turn_id, step_id=source.step_id,
+                invocation_id=invocation, role=LEAD_ORCHESTRATOR, invocation_kinds=kinds)
             projected += (Record("Turn usage", content=format_metadata_text(turn_usage_summary(usage))),)
         return projected
     if type(payload) is CollaborationLeadJudgmentPayload:
