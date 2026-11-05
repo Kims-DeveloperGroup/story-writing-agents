@@ -3692,10 +3692,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(shared.exists())
                 finally: saved.replace(shared)
 
-    async def _exercise_preliminary_capture(self, *, repair=False):
+    async def _exercise_preliminary_capture(self, *, repair=False, seed=False, failure=None):
         with mock.patch.object(self, "workspace", pristine_initialized_workspace(self)):
-            from tests.provider_wire_fixture import ExplicitPhaseScript, selection_plan, lead_fixture_response, lead_fixture_bound_scope, finite_fixture_selection
+            from tests.provider_wire_fixture import ExplicitPhaseScript, selection_plan, lead_fixture_response, lead_fixture_bound_scope, finite_fixture_selection, CallbackContextViews
             from tests.test_lead_orchestration import _live_scope
+            from story_writing_agents import orchestrator as accounting_module
+            from story_writing_agents.agent_context.ledger import ContextLedger
             from story_writing_agents import conversations as c
             from story_writing_agents.agent_exchanges import AgentExchangeSelection, AgentExchangeScopeKind, WorkspaceAgentExchangeStore
             from tests.test_agent_exchange_viewer import _prepare_view, _transport
@@ -3717,16 +3719,35 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         "preliminary_review": intent}}, family=0)
             script = ExplicitPhaseScript(("{}", preliminary) if repair else (preliminary,), selection_plan("answer.observed_facts"))
             physical_calls, specs, callback_errors = [], [], []
+            callback_views, threads, validated, publications = CallbackContextViews(), {}, [], []
+            callback_provider = SimpleNamespace(callback_payload=callback_views.for_request)
+            original_task = accounting_module._AccountingContextProvider.record_validated_task
+            original_commit = ContextLedger.commit_attempt
+
+            def record_task(owner, call_id, task_id, task_revision):
+                observation = (call_id, task_id, task_revision, tuple(owner.task_revisions))
+                if failure == "diagnostic":
+                    validated.append(observation)
+                    raise RuntimeError("Synthetic validated diagnostic failure")
+                original_task(owner, call_id, task_id, task_revision)
+                validated.append(observation)
+
+            def commit(ledger, key, *, expected_generation, authorization):
+                if failure == "publication" and validated:
+                    publications.append(authorization.terminal_call_id)
+                    raise RuntimeError("Synthetic post-validation ledger failure")
+                return original_commit(ledger, key, expected_generation=expected_generation, authorization=authorization)
             original_invoke = backend_module._BoundContextProvider.invoke_context
             async def observed_invoke(provider, call):
                 physical_calls.append(call)
+                callback_views.observe(call)
                 response = script.next_response(call)
                 try:
-                    response = response(call, None) if callable(response) else response
+                    response = response(call, callback_provider) if callable(response) else response
                 except Exception as error:
                     callback_errors.append((type(error).__name__, str(error)))
                     raise
-                with mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_OUTPUT": response, "STORY_FAKE_CODEX_THREAD_ID": "thread-preliminary-capture"}):
+                with mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_OUTPUT": response, "STORY_FAKE_CODEX_THREAD_ID": threads.setdefault(call.scope, f"thread-fixture-{len(threads)}")}):
                     os.environ.pop("STORY_FAKE_CODEX_PHYSICAL_OUTPUTS", None)
                     os.environ.pop("STORY_FAKE_CODEX_OUTPUTS", None)
                     return await original_invoke(provider, call)
@@ -3734,10 +3755,36 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             native_backend = self._provisioned_backend("preliminary_capture")
             runtime = StoryRuntime(self.workspace, native_backend)
             conversation = runtime.conversation_storage_services.catalog.create("preliminary_capture", "First preliminary").conversation_id
-            with mock.patch.object(backend_module._BoundContextProvider, "invoke_context", new=observed_invoke):
+            with (mock.patch.object(backend_module._BoundContextProvider, "invoke_context", new=observed_invoke),
+                  mock.patch.object(accounting_module._AccountingContextProvider, "record_validated_task", new=record_task),
+                  mock.patch.object(ContextLedger, "commit_attempt", new=commit)):
+                if seed:
+                    from tests import test_specialist_routing_runtime as routing_fixtures
+                    pending = script
+                    writer = routing_fixtures.SpecialistRoutingRuntimeTests._native_scoped(
+                        self, PLOT_ARCHITECT, activity="review", intent="review_only", domains=("plot_structure",))
+                    script = ExplicitPhaseScript((writer,), selection_plan("consultation.review_only"))
+                    prior = runtime.conversation_storage_services.catalog.create("preliminary_capture", "Prior review").conversation_id
+                    proposed = await runtime.lead_turn("preliminary_capture", prior, "완성 원고.\r\nCafé. \r\n")
+                    self.assertIs(proposed.kind, c.LeadOutcomeKind.PROPOSAL, (proposed, callback_errors))
+                    self.assertEqual(proposed.proposal.authoring_scope.intent.value, "review_only")
+                    self.assertEqual(proposed.proposal.assignments[0].review_basis.candidate_input_ids, ("user_input",))
+                    script.require_fixture_valid()
+                    script = pending
                 result = await runtime.lead_turn("preliminary_capture", conversation,
                     "Explain the supplied motive: Mina hides a letter to protect her brother. Do not write or dispatch.")
             script.require_fixture_valid()
+            self.assertIsNone(callback_views.fixture_error_code)
+            selection = AgentExchangeSelection("preliminary_capture", AgentExchangeScopeKind.CONVERSATION, conversation, LEAD_ORCHESTRATOR)
+            raw = WorkspaceAgentExchangeStore(self.workspace).snapshot(selection).jsonl_bytes
+            records = [json.loads(line) for line in io.BytesIO(raw)]
+            outcomes = [json.loads(row["content"]) for row in records if row["request_type"] == "outcome"]
+            if failure == "publication":
+                self.assertEqual(len(validated), 1)
+                self.assertEqual(publications, [validated[0][0]])
+                self.assertEqual(outcomes, [{"outcome": "post_response_runtime_failure", "code": "context_runtime_failed",
+                                            "host_diagnostics": {"call_id": validated[0][0]}}])
+                return
             report = result.preliminary_review
             failure_details = [
                 (row["exchange_id"], row["request_type"], row["content"][:4096])
@@ -3753,20 +3800,30 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                              and e.payload.state is c.CollaborationProviderCallState.SUBMITTED and e.payload.invocation_id == judgment.provider_invocation_id and e.payload.call_id == public.call_id)
             self.assertEqual(sum(call.call_id == submitted.call_id for call in physical_calls), 1)
             self.assertEqual((public.ordinal, public.call_kind), (submitted.ordinal, submitted.call_kind.value))
+            self.assertEqual(validated[-1][:3], (submitted.call_id, report.task_id, report.task_revision))
+            self.assertIn((report.task_id, report.task_revision), validated[-1][3])
+            if seed:
+                self.assertGreater(len(validated[-1][3]), 1)
+                self.assertNotEqual((report.task_id, report.task_revision), validated[-1][3][0])
+                self.assertGreater(len(threads), 1)
             for native, call in zip(self.provider_invocations()[native_before:], physical_calls, strict=True):
                 self.assertEqual(native["raw_payload"].encode(), canonical_provider_json(call.payload))
                 self.assertNotIn(report.task_id, json.dumps((native["payload"], native["schema"])))
-            selection = AgentExchangeSelection("preliminary_capture", AgentExchangeScopeKind.CONVERSATION, conversation, LEAD_ORCHESTRATOR)
-            raw = WorkspaceAgentExchangeStore(self.workspace).snapshot(selection).jsonl_bytes
-            records = [json.loads(line) for line in raw.splitlines()]
+            if failure == "diagnostic":
+                self.assertEqual(outcomes, [{"code": "accepted", "outcome": "accepted",
+                                            "host_diagnostics": {"call_id": submitted.call_id}}])
+                return
             diagnosed = [json.loads(row["content"]) for row in records if row["request_type"] == "outcome"
                          and "task_id" in json.loads(row["content"]).get("host_diagnostics", {})]
             self.assertEqual(diagnosed, [{"code": "accepted", "outcome": "accepted", "host_diagnostics": {
                 "call_id": submitted.call_id, "task_id": report.task_id, "task_revision": report.task_revision}}])
             self.assertEqual({json.loads(row["content"])["host_diagnostics"]["call_id"] for row in records
                               if row["request_type"] == "outcome" and json.loads(row["content"])["outcome"] == "rejected"}, {public.repair_of_call_id} if repair else set())
+            selected_calls = {e.payload.call_id for e in history if type(e.payload) is c.CollaborationProviderCallPayload
+                              and e.payload.state is c.CollaborationProviderCallState.SUBMITTED}
             self.assertEqual({json.loads(row["content"])["host_diagnostics"]["call_id"] for row in records
-                              if row["request_type"] == "request"}, {call.call_id for call in physical_calls})
+                              if row["request_type"] == "request"}, selected_calls)
+            self.assertEqual(selected_calls, {call.call_id for call in physical_calls if call.call_id in selected_calls})
             def configured_view(source, spec, host=None, *, terminal=None, transient_only=False):
                 self.assertIs(source, raw)
                 specs.append(spec)
@@ -3854,7 +3911,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(restarted_provider.inspect_context_thread(scope, policy), first.thread_id)
         async with restarted_bound._direct_codex_execution_workspace(session_id, None) as execution_workspace:
             await self._assert_grouped_reader_transport(restarted, session_id, execution_workspace)
-        await self._exercise_preliminary_capture()
+        await self._exercise_preliminary_capture(seed=True)
 
     async def test_contextual_submitted_failure_taints_only_exact_context_thread(
         self,
@@ -4472,6 +4529,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             f"agent_states/orchestrator_state/provider_sessions/{session_id}.json"
         )
         self.assertEqual(manifest["provider_threads"], {})
+        await self._exercise_preliminary_capture(failure="diagnostic")
 
     async def test_antigravity_public_operations_use_provider_neutral_diagnostics(
         self,
@@ -6004,6 +6062,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIs(normal.trace.origin, ReplyTraceOrigin.PROVIDER)
         self.assertEqual(normal.validation_details, ())
         await self._exercise_preliminary_capture(repair=True)
+        await self._exercise_preliminary_capture(failure="publication")
 
     async def test_malformed_direct_json_keeps_terminal_code_and_safe_detail(self) -> None:
         session_id = "malformed_terminal_code"
