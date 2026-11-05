@@ -55,6 +55,7 @@ from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
 class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_artifact_and_local_commit_events_are_complete_and_safe( self, ) -> None:
         from tests.test_lead_story_commit import LeadStoryCommitTests
+        from tests.collaboration_contract_fixture import make_batch, store_batch
 
         case = LeadStoryCommitTests("test_request_is_inspectable_and_reject_is_zero_git_mutation")
         case.setUp()
@@ -103,9 +104,17 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Input tokens: 0 | Output tokens: 2", next(message.metadata for event, message in projected if event == finalization_notice))
             fallback_trace = ReplyTrace("lead_orchestrator", "none", recovered_fields=("structured_reply",),
                 origin=ReplyTraceOrigin.RUNTIME_FALLBACK)
-            fallback_history = tuple(replace(event, payload=replace(event.payload, trace=fallback_trace)) if event == origin else
-                replace(event, payload=replace(event.payload, trace=None)) if event == finalization_notice else event
-                for event in final_history)
+            fallback_history = ()
+            for batch_id in dict.fromkeys(event.batch_id for event in final_history):
+                drafts = tuple(replace(event.to_draft(), payload=replace(event.payload, trace=fallback_trace)) if event == origin else
+                    replace(event.to_draft(), payload=replace(event.payload, trace=None)) if event == finalization_notice else event.to_draft()
+                    for event in final_history if event.batch_id == batch_id)
+                fallback_history = store_batch(fallback_history, make_batch(fallback_history, batch_id, *drafts))
+            self.assertEqual(tuple(event.event_id for event in fallback_history), tuple(event.event_id for event in final_history))
+            fallback_origin = next(event for event in fallback_history if event.event_id == origin.event_id)
+            self.assertNotEqual(fallback_origin.batch_digest, origin.batch_digest)
+            self.assertEqual(next(event.payload.synthesis_result_event_id for event in fallback_history
+                if event.event_id == result_event.event_id), fallback_origin.event_id)
             fallback_notice = next(event for event in fallback_history if event.event_id == finalization_notice.event_id)
             for component in (_collaboration_view.project_lead_turn_result(replace(finalized, trace=None),
                     public_response_events=fallback_history),
@@ -180,16 +189,20 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(any(label in line and issue not in line for line in text.splitlines()))
 
             capability = _capability(CapabilityProfile.LINE, width=120)
-            generic = replace(notice, event_id="generic_fallback", batch_ordinal=0, batch_size=1, sender=LEAD,
+            generic_draft = replace(notice.to_draft(), event_id="generic_fallback", sender=LEAD,
                 payload=CollaborationMessagePayload("Generic fallback literal.",
                     ReplyTrace("lead_orchestrator", "none", recovered_fields=("structured_reply",), origin=ReplyTraceOrigin.RUNTIME_FALLBACK),
                     validation_details=("PRIVATE schema diagnostics.",)))
-            generic_view = _collaboration_view.project_collaboration_event(generic)
+            generic_user = replace(generic_draft, event_id="generic_user", sender=USER, recipient=LEAD,
+                payload=CollaborationMessagePayload("Show the runtime fallback."))
+            generic_history = store_batch((), make_batch((), "generic_fallback_batch", generic_user, generic_draft))
+            generic = generic_history[-1]
+            generic_view = _collaboration_view.project_collaboration_event(generic, history_events=generic_history)
             generic_text = render_component(generic_view, capability).text
             self.assertIn("Generic fallback literal.", generic_text); self.assertIn("PRIVATE schema diagnostics.", generic_text)
             generic_frame = next(item for item in generic_view.items if type(item) is Message)
             self.assertEqual((generic_frame.sender, generic_frame.content, generic_frame.metadata), ("Runtime", "Generic fallback literal.", None))
-            generic_messages = project_conversation_messages((generic,))
+            generic_messages = project_conversation_messages((generic,), history_events=generic_history)
             self.assertEqual(len(generic_messages), 1)
             self.assertEqual((generic_messages[0][1].sender, generic_messages[0][1].content, generic_messages[0][1].metadata),
                 ("Runtime", "Generic fallback literal.", None))
@@ -448,7 +461,6 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
                 c.CollaborationNextAction.REPLY_TO_LEAD,
                 evidence=c.CollaborationLeadEvidence(c.LeadOutcomeScope.WORKFLOW_META, c.LeadEvidenceStatus.NOT_APPLICABLE, ()),
                 trace=trace, public_responses=(c.LeadPublicResponseView(ref, public),), provider_invocation_id=lead.payload.invocation_id)
-            from tests.collaboration_contract_fixture import make_batch, store_batch
             drafts = [replace(lead.to_draft(), event_id="usage_user", kind=CollaborationEventKind.MESSAGE, sender=USER, recipient=LEAD,
                 payload=CollaborationMessagePayload("Show exact call usage."))]
             for call in call_facts:
