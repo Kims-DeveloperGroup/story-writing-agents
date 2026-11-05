@@ -129,6 +129,8 @@ Use the existing `/task` flow to select a plan node and any exact predecessor ca
 
 A plan window covers at most five exact artifacts: the relevant core documents and one manuscript file. Additional requested files stay visible as remaining targets. Completing the active window does not mark those files complete.
 
+When you move to another window, previously applied targets keep their completed progress. For example, after chapter 3 is applied, moving to chapter 4 does not put chapter 3 back in the unplanned list. A new rewrite request still needs its own matching completion evidence.
+
 An unapplied revision candidate can be supplemental input only for the disclosed same-plan consumer and permitted scope, confirmed through the ordinary exact proposal control. It does not replace canonical completion or grant Apply/Commit authority. In initial setup, an absent or incomplete global outline still blocks part-outline drafting. Changing the candidate, direction, task or scope requires fresh qualification and the appropriate confirmation.
 
 Moving between nodes, revisions or windows retains the applicable call and round budget. Lead discloses unfinished work when the budget is exhausted. A separately authorized new task has its own disclosed authority while the original goal and cumulative progress remain visible. Restart and conversation switching restore the current plan rather than borrowing old review or Apply authority.

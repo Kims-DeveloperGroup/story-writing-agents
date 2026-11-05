@@ -10,7 +10,7 @@ The user can choose another permitted direction. Editorial preferences remain ad
 
 ## Plan and ownership
 
-A pure document-plan value describes exact artifact nodes and prerequisites from the existing whole-book readiness policy. An active window has at most five nodes: the relevant four core files and one exact manuscript path. Every other original target remains explicitly unplanned in `remaining_target_paths`. Completing a window does not complete those other targets.
+A pure document-plan value describes exact artifact nodes and prerequisites from the existing whole-book readiness policy. An active window has at most five nodes: the relevant four core files and one exact manuscript path. Every original target outside the active window remains in `remaining_target_paths`, preserving the full goal. The view separates previously completed targets from unplanned work through matching task/Apply evidence across windows. Completing one window does not complete untouched targets.
 
 A planning-only goal reference can retain an exact user message before a canonical manuscript path exists. It marks the target unresolved and cannot satisfy artifact completion. Once an exact target is qualified and disclosed, the plan revision binds the ordinary artifact objective. The existing nonempty-path objective validation remains in force.
 
@@ -19,6 +19,8 @@ The existing conversation event stores preserve the original goal, plan revision
 A host-derived node binding can reference the exact preceding confirmation. Only the successor's actual Confirm supersedes that cursor. The history projection follows these links across conversations without ordering owners by their names or inventing a session clock. Independent confirmed branches remain visibly ambiguous instead of receiving an invented current task or fresh budget.
 
 The host builds the plan from actual scoped intent, sources and readiness. The provider selects the next work through the existing recommendation/proposal contracts. It does not author an arbitrary dependency graph. Schema, decoding and repair remain bound to their current contract owner.
+
+Task identity follows the runtime-owned binding introduced by #923. Document bindings are created after the host assigns the task scope. Their task references remain available to the API and user interface; the existing agent-context projection removes this lifecycle metadata from provider input. Candidate and source revisions remain evidence.
 
 ## Execution and approval
 

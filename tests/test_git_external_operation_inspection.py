@@ -393,7 +393,7 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
         self.assertEqual(len(modules), 176)
-        self.assertEqual(len(edges), 787)
+        self.assertEqual(len(edges), 793)
         git_contracts = "story_writing_agents.git.contracts"
         git_adapter = "story_writing_agents.git.adapter"
         self.assertEqual(
