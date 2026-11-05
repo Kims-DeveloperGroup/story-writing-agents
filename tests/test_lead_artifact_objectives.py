@@ -62,11 +62,28 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         await case.record_book_readiness(seed_before_capture=True)
         conversation_id = case.conversation("Default grouped budget boundary")
         call_start = len(case.backend.calls)
+        specialist_notes = []
+        original_assignment = case.runtime._run_specialist_assignment
+        async def observed_assignment(*args, **kwargs):
+            result = await original_assignment(*args, **kwargs)
+            if len(specialist_notes) < 3:
+                try:
+                    if result.failure is not None:
+                        specialist_notes.append({"agent": kwargs["assignment"].specialist_id,
+                            "type": type(result.failure).__name__, "message": str(result.failure)[:500]})
+                except Exception as diagnostic_error:
+                    specialist_notes.append({"agent": "unknown", "type": type(diagnostic_error).__name__, "message": "diagnostic unavailable"})
+            return result
         original_result = lead._live_result
-        with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(
+        with mock.patch.object(case.runtime, "_run_specialist_assignment", new=observed_assignment):
+            with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(
                 call, {**value, "message": brief} if value.get("kind") == "proposal" else value)):
-            await case.start(conversation_id, message=text, target_path=None, specialist_ids=ROSTER,
-                             authoring_paths=(path,), native_inputs=native_inputs, response_text=brief)
+                try:
+                    await case.start(conversation_id, message=text, target_path=None, specialist_ids=ROSTER,
+                                     authoring_paths=(path,), native_inputs=native_inputs, response_text=brief)
+                except AssertionError as error:
+                    error.add_note("Specialist failures: " + json.dumps(specialist_notes, ensure_ascii=True))
+                    raise
         self.assertEqual(len(case.backend.calls) - call_start, 6)
         first = case.backend.calls[call_start:call_start + 2]
         self.assertEqual(tuple(call.contract.schema_group_phase.value for call in first), ("select", "generate"))
