@@ -746,8 +746,12 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                         for agent, call in self.backend.call_records[confirmed_start:]]
         self.assertEqual([agent for agent, _ in stage_inputs],
                          [CHARACTER_CUSTODIAN, LEAD_ORCHESTRATOR])
+        expected_wire_plan = {key: value for key, value in routing.stage_plan_to_dict(plan).items()
+                              if key not in {'task_id', 'task_revision'}}
+        expected_wire_plan['questions'] = [{key: value for key, value in question.items()
+            if key not in {'task_id', 'task_revision'}} for question in expected_wire_plan['questions']]
         self.assertEqual([material["stage_plan"] for _, material in stage_inputs],
-                         [routing.stage_plan_to_dict(plan)] * 2)
+                         [expected_wire_plan] * 2)
         specialist_calls = [agent for agent, _ in self.backend.call_records[before:] if agent != LEAD_ORCHESTRATOR]
         self.assertEqual(specialist_calls, [CHARACTER_CUSTODIAN])
         original_history = self.history(conversation)
