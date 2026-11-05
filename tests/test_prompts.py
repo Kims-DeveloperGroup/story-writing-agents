@@ -132,27 +132,10 @@ class PromptAssemblerTests(unittest.TestCase):
 
     def test_lead_overlay_supersedes_retained_policy_and_preserves_specialist_bytes(self):
         from story_writing_agents.agents import behavior_policy_files
-        from story_writing_agents.workspace import project_default_agent_policy
-        from story_writing_agents.workspace._policy_baselines import PRE_RUNTIME_TASK_IDENTITY_V2_POLICY_FILES
-        from story_writing_agents.workspace.schema import DEFAULT_AGENT_PROMPTS, DEFAULT_SHARED_AGENT_POLICIES
-        published = dict(PRE_RUNTIME_TASK_IDENTITY_V2_POLICY_FILES)
-        lead_policy = AGENT_SPECS[LEAD_ORCHESTRATOR].system_prompt_file
-        shared_policy = 'config/agents/specialist_collaboration/AGENTS.md'
-        self.assertEqual(hashlib.sha256(published[lead_policy]).hexdigest(),
-                         '5a88796be697d9a3149f79172bea05fbdae117b80b9bc83c9670184e85ba1c0c')
-        self.assertEqual(hashlib.sha256(published[shared_policy]).hexdigest(),
-                         '275cf1e52b5faeb4011bafe4aa63c927fd3ee4e2d5e2e5c87adcd8b7b8c8aba6')
-        self.assertEqual(project_default_agent_policy(lead_policy, published[lead_policy]),
-                         DEFAULT_AGENT_PROMPTS[LEAD_ORCHESTRATOR].encode('utf-8'))
-        self.assertEqual(project_default_agent_policy(shared_policy, published[shared_policy]),
-                         DEFAULT_SHARED_AGENT_POLICIES[shared_policy].encode('utf-8'))
-        custom = b'\x00Custom task_id/task_revision policy\xff\n'
-        self.assertEqual(project_default_agent_policy(lead_policy, custom), custom)
-        self.assertEqual(project_default_agent_policy(shared_policy, custom), custom)
         baseline = {agent: self.assembler.build_definition(session_id="overlay", agent_id=agent) for agent in ROSTER}
         policy = next(path for path in behavior_policy_files(LEAD_ORCHESTRATOR) if "lead" in path)
         original = self.workspace.path(policy).read_bytes()
-        retained = b"\nRetained older policy fixture: return only the seven legacy front-channel fields.\n"
+        retained = b"\nCustom policy fixture: keep observations concise and preserve supplied wording.\n"
         self.workspace.path(policy).write_bytes(original + retained)
         changed = {agent: PromptAssembler(self.workspace).build_definition(session_id="overlay", agent_id=agent) for agent in ROSTER}
         lead = changed[LEAD_ORCHESTRATOR]

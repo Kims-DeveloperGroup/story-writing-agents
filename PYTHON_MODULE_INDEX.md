@@ -235,7 +235,7 @@ state paths, manage session lifecycle, and assess/reconcile recovery transitions
 
 `workspace.core` owns path validation and session source/configuration views; `initialization` owns creation,
 session artifact bindings, guarded repositories, and opaque generation-pin composition. Views borrow retained session
-roots through bounded owner contracts. `schema` owns schema-v2 validation, current initializer defaults, and recognized-default agent policy views without rewriting source files; `_policy_baselines` retains immutable published bytes for exact initialization compatibility.
+roots through bounded owner contracts. `schema` owns schema-v2 validation and current initializer defaults; `_policy_baselines` retains immutable published bytes for exact initialization compatibility.
 The binding calls the Git owner's index and effective-ignore proof after exclusion preparation
 and again after role publication. `session_role_projection` owns create-only, read-only native
 role files and the private Git exclusion: `/.agents/` must be its final nonempty record, and

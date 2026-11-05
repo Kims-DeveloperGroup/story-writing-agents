@@ -706,8 +706,10 @@ the same task and revision. Material changes to a confirmed capture need a
 successor revision and fresh confirmation. Normal stage progression does not
 advance a revision by itself. Published recommendations remain immutable, and
 confirmed preparation stays within its exact capability. Archived history is
-context without current routing authority. Existing stores retain task identity;
-no separate task database is introduced.
+context without current routing authority. Current runtime stores retain task
+identity; no separate task database is introduced. Data, policy defaults, and
+native sessions from earlier runtime versions have no migration or compatibility
+guarantee in this change.
 
 A `completed` consultation records that round, not completion of the authoring
 objective. Draft synthesis returns material; ask the Lead in a subsequent

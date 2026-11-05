@@ -20,7 +20,7 @@ WIRE_VERSION = "agent-provider-wire-v11"
 
 from .agent_task_projection import (
     HOST_TASK_FIELDS as _HOST_TASK_FIELDS, TASK_CONTEXT_SHAPES as _TASK_CONTEXT_SHAPES,
-    project_agent_task_metadata, project_legacy_task_disclosure,
+    project_agent_task_metadata,
 )
 
 BUILTIN_RESULT_CONTRACT_IDS = frozenset({
@@ -1147,8 +1147,7 @@ def project_retrieval_observation(frame: str) -> str:
                     for key, content in record.items() if key not in {"fields", "sender", "recipient"}}
             for actor in ("sender", "recipient"):
                 item[actor] = {("actor_type" if key == "kind" else key): deepcopy(content) for key, content in record[actor].items()}
-            item["readable_fields"] = [{({"key": "field_key", "text": "field_text"}.get(key, key)): (project_legacy_task_disclosure(content) if key == "text"
-                    and record["sender"].get("kind") != "user" else deepcopy(content))
+            item["readable_fields"] = [{({"key": "field_key", "text": "field_text"}.get(key, key)): deepcopy(content)
                     for key, content in field.items()} for field in record["fields"]]
             records.append(item)
         result["history_records"] = records

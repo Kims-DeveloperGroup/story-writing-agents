@@ -1007,6 +1007,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
     async def test_unread_and_truncated_search_fall_back_while_reads_attach_locally(
         self,
     ) -> None:
+        from story_writing_agents.authoring_task_lifecycle import task_identity_for_origin
         from story_writing_agents import conversations as c
         from story_writing_agents import ReplyTraceOrigin
         from story_writing_agents.lead_task_transitions import LeadPublicResponseAcceptance
@@ -1072,7 +1073,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             self.assertEqual((notice['code'], notice['language'], notice['state']),
                              ('LEAD_CONTRACT_REJECTED', 'KO', None))
             offered_tasks = tuple((item['task_id'], item['task_revision']) for item in tasks)
-            self.assertEqual(offered_tasks, retained_tasks + ((result.step_id, 1),))
+            self.assertEqual(offered_tasks, retained_tasks + ((task_identity_for_origin(result.step_id), 1),))
             self.assertTrue(all(call.contract.factory.constraints.task_revisions == offered_tasks
                                 for call in self.backend.calls[call_start:]))
             self.assertNotIn("task_revisions", notice)
@@ -1257,7 +1258,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 self.assertIsNotNone(read_scope)
                 self.assertIs(read_scope.activity, AuthoringActivity.REVIEW)
                 retained_tasks = ((read_scope.task_id, read_scope.task_revision),)
-                self.assertEqual(retained_tasks, ((result.step_id, 1),))
+                self.assertEqual(retained_tasks, ((task_identity_for_origin(result.step_id), 1),))
             self.assertIsNone(result.proposal)
             self.assertIsNone(result.artifact_proposal)
             self.assertIsNone(result.artifact_application_request)

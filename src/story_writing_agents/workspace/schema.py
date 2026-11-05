@@ -710,23 +710,6 @@ def decode_initialization_journal(payload: bytes) -> WorkspaceInitializationJour
     return journal
 
 
-def project_default_agent_policy(path: str, content: bytes) -> bytes:
-    """Render recognized published defaults with current policy; preserve customized bytes."""
-    from ._policy_baselines import (LEGACY_V2_POLICY_FILES, OBJECTIVE_V2_POLICY_FILES,
-        MAIN_V2_POLICY_FILES, PRE_GUIDANCE_V2_POLICY_FILES, PRE_EDITORIAL_V2_POLICY_FILES,
-        PRE_MIXED_ROLE_V2_POLICY_FILES, PRE_RUNTIME_TASK_IDENTITY_V2_POLICY_FILES)
-    defaults = {AGENT_SPECS[agent_id].system_prompt_file: DEFAULT_AGENT_PROMPTS[agent_id]
-        for agent_id in ROSTER} | dict(DEFAULT_SHARED_AGENT_POLICIES)
-    if path not in defaults:
-        return content
-    published = (LEGACY_V2_POLICY_FILES, OBJECTIVE_V2_POLICY_FILES, MAIN_V2_POLICY_FILES,
-        PRE_GUIDANCE_V2_POLICY_FILES, PRE_EDITORIAL_V2_POLICY_FILES, PRE_MIXED_ROLE_V2_POLICY_FILES,
-        PRE_RUNTIME_TASK_IDENTITY_V2_POLICY_FILES)
-    if any(dict(version).get(path) == content for version in published):
-        return defaults[path].encode("utf-8")
-    return content
-
-
 def canonical_initializer_scaffold() -> tuple[WorkspaceScaffoldEntry, ...]:
     """Return the complete exact initializer manifest selection."""
 

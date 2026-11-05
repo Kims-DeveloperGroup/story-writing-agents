@@ -136,6 +136,9 @@ stage duties without receiving or selecting lifecycle identifiers. Completing
 an undecided provisional target keeps the current task; a changed confirmed
 capture requires a runtime-assigned successor and fresh confirmation. Internal
 history and typed task controls retain exact identity and source provenance.
+This change targets current runtime data. Migration or compatibility for data,
+workspace policy defaults, and native sessions from earlier runtime versions is
+outside its scope.
 
 ## Install
 

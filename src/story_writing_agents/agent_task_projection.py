@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-import json
 
 HOST_TASK_FIELDS = frozenset({
     "task_id", "task_revision", "task_revisions", "task_reference",
@@ -43,20 +42,3 @@ def project_agent_task_metadata(value: object, shape: str = "") -> object:
             continue
         result[name] = project_agent_task_metadata(item, name)
     return result
-
-
-def project_legacy_task_disclosure(text: str) -> str:
-    """Project only the known generated disclosure suffix; never rewrite source prose."""
-    marker = "\n\nProposed responsibilities, immutable premises and bounded cost: "
-    message, separator, suffix = text.rpartition(marker)
-    if not separator:
-        return text
-    try:
-        disclosure = json.loads(suffix)
-    except (TypeError, ValueError):
-        return text
-    if (type(disclosure) is not dict or "writing_task_scope" not in disclosure
-            or not {"final_reviewers", "shared_premises", "rounds_spent"}.issubset(disclosure)):
-        return text
-    return message + marker + json.dumps(project_agent_task_metadata(disclosure),
-        ensure_ascii=False, sort_keys=True)

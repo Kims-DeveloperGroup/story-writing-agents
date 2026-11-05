@@ -4676,9 +4676,17 @@ class StoryRuntime:
         )
         prior_scope = self._authoring_tasks(prior_events).get(scope.task_id)
         fresh_pair = (
-            scope.task_id == source.step_id and scope.task_revision == 1
+            scope.task_id == task_identity_for_origin(source.step_id)
+            and scope.task_revision == 1
             if prior_scope is None
-            else scope.task_revision == prior_scope.task_revision + 1
+            else (
+                scope.task_revision == prior_scope.task_revision + 1
+                or (
+                    (scope.task_id, scope.task_revision)
+                    == (prior_scope.task_id, prior_scope.task_revision)
+                    and not confirmed_authoring_proposals(prior_scope, prior_events)
+                )
+            )
         )
         fresh_consultation = (
             scope.schema_version == 3

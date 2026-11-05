@@ -5163,6 +5163,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.backend.enqueue(_search_history, _read_history_hit, refined_recommendation)
         with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory):
             refreshed = await self.runtime.lead_turn(self.session_id, reading, "Use the global outline as the first target.\n" + _ADMISSION_BRIEF)
+        self.assertIs(refreshed.kind, LeadOutcomeKind.RECOMMENDATION, (refreshed.message, refreshed.validation_details, refreshed.public_responses))
         calls = self.backend.calls[start:]
 
         read_reports = self.runtime.lead_group_reports(self.session_id, reading)
@@ -5172,13 +5173,12 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(tuple(row["call_id"] for row in read_report["physical_calls"]),
                          tuple(call.call_id for call in calls))
         self.assertEqual(read_report["submitted_calls"], 5)
-        self.assertEqual(read_report["rejected_responses"], 1)
+        self.assertEqual(read_report["rejected_responses"], 1, (refreshed.message, refreshed.validation_details, refreshed.public_responses))
         self.assertTrue(read_report["result_accepted"])
         self.assertEqual((read_report["full_deliveries"], read_report["delta_deliveries"]), (5, 0))
         self.assertEqual(read_report["rates"]["full_redeliveries_per_followup_submitted_call"],
                          {"numerator": 4, "denominator": 4, "fraction": 1.0})
         failed, selection, snapshot, old_plan = retained[0]
-        self.assertIs(refreshed.kind, LeadOutcomeKind.RECOMMENDATION)
         new_scope = refreshed.recommendation_request.authoring_scope
         self.assertEqual((new_scope.task_id, new_scope.task_revision, new_scope.target_paths, new_scope.interpretation),
                          (old_scope.task_id, old_scope.task_revision, (OUTLINE,), new_brief))

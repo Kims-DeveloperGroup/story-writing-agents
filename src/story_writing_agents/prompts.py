@@ -24,7 +24,7 @@ from .models import (
     focused_story_context,
     select_owner_outcome_window,
 )
-from .workspace import Workspace, project_default_agent_policy
+from .workspace import Workspace
 from .writing_artifacts import ArtifactContentSnapshot
 from .writing_artifacts.repository import WritingArtifactRepository
 
@@ -290,9 +290,7 @@ class PromptAssembler:
             runtime_behavior_policy += b"\n\n" + _LEAD_RUNTIME_BEHAVIOR_POLICY
         system_prompt_file = PromptFileReference.from_bytes(
             policy_components[-1].path,
-            b"\n\n".join(project_default_agent_policy(
-                component.path.relative_to(self.workspace.root).as_posix(), component.content)
-                for component in policy_components)
+            b"\n\n".join(component.content for component in policy_components)
             + b"\n\n" + runtime_behavior_policy,
         )
         persona_file = self._reference(

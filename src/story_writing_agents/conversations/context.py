@@ -2786,7 +2786,7 @@ def _is_fresh_drafting_preparation(request, source, events) -> bool:
             and not confirmed_authoring_proposals(previous, prior)):
         return True
     return (
-        scope.task_id in {source.step_id, task_identity_for_origin(source.step_id)} and scope.task_revision == 1
+        scope.task_id == task_identity_for_origin(source.step_id) and scope.task_revision == 1
         if previous is None
         else scope.task_revision == previous.task_revision + 1
     )
