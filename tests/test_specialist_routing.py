@@ -708,6 +708,42 @@ class SpecialistRoutingTests(unittest.TestCase):
         guided_document = add_contract_guidance(wire_document, {})
         self.assertEqual({key: value for key, value in guided_document.items() if key != "contract_guidance"}, wire_document)
         self.assertTrue(guided_document["contract_guidance"]["input_fields"])
+        from types import SimpleNamespace
+        from story_writing_agents.agent_context.service import ContextCallOffers
+        from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
+        from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
+        from story_writing_agents.lead_schema_groups import LeadGroupRequestBasis
+        from story_writing_agents.orchestrator import OrchestrationLeadCallFactory, _lead_front_result_contract
+        from tests.test_agent_context_execution import _group_control
+        from tests.test_provider_schema_spec import check_schema
+        from tests import test_lead_artifact_objectives as document_fixture
+        facts = LeadProviderConstraints(input_ids=("user_input",), task_revisions=((task.task_id, task.task_revision),))
+        seed = _lead_front_result_contract(c.LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=facts)
+        def deny_authority(_result, _authorization):
+            raise ValueError("Pure fixture contract check grants no host authority")
+        factory = OrchestrationLeadCallFactory(facts, seed, "lead.front", "EN", deny_authority,
+            lambda _path: document_fixture.PLOT_ARCHITECT, schema_group_protocol=True)
+        offers = ContextCallOffers(call_id="formal-question-select", scope=ContextScope("workspace", task.session_id,
+            ContextSubjectKind.CONVERSATION, task.conversation_id, document_fixture.lead.LEAD_ORCHESTRATOR),
+            action_index=1, allowed_actions=("answer",), action_limits=(), search_source_kinds=(), issued_handle_aliases=(),
+            completed_read_facts=(), delivery_read_facts=(), core_status_facts=(), remaining_provider_calls=2)
+        question_basis = LeadGroupRequestBasis("question-operation", "question-result", "question-scope")
+        selector = factory.for_offer(offers, request_basis=question_basis)
+        selected = selector.decode_response(_group_control("question.authoring")(SimpleNamespace(contract=selector), None))
+        selected_record = selector.record_group_control(selected)
+        workflow = selector.group_workflow.accept(selected_record, remaining_calls=1)
+        generated = factory.for_offer(replace(offers, call_id="formal-question-generate", action_index=2, remaining_provider_calls=1),
+            request_basis=question_basis, group_workflow=workflow, prepared_compilation=selector.prepared_compilation)
+        self.assertIs(generated.prepared_compilation, selector.prepared_compilation)
+        self.assertEqual(check_schema(generated.schema_value()), ())
+        question_call = SimpleNamespace(contract=generated, payload={"task_input": {"workflow": "lead_front_channel"}})
+        question_frame = document_fixture._planning_question_response(question_call, None)
+        self.assertEqual(generated.rule_graph.findings(json.loads(question_frame)), ())
+        decoded_question = generated.decode_response(question_frame)
+        self.assertTrue(decoded_question.belongs_to(generated))
+        question_value = json.loads(decoded_question.answer_json)
+        self.assertEqual((question_value["kind"], question_value["planning_target"]), ("question", "manuscript"))
+        self.assertEqual(question_value["authoring_scope"]["target_paths"], [])
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
         from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
