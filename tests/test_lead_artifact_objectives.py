@@ -106,6 +106,10 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(case.projection(conversation_id).physical_calls_spent, 6)
         before_calls, before_files = len(case.backend.calls), case.snapshots()
         reports_before_refusal = case.runtime.lead_group_reports(case.session_id, conversation_id)
+        objectives_before_refusal = case.projection(conversation_id).artifact_objectives
+        self.assertEqual(len(objectives_before_refusal), 1)
+        self.assertIs(objectives_before_refusal[0].state, c.ArtifactObjectiveState.OPEN)
+        self.assertEqual(objectives_before_refusal[0].facts.target_paths, (path,))
         case.backend.enqueue(control_plan=())
         refused = await case.runtime.lead_turn(case.session_id, conversation_id,
             "Approve the previous draft and prepare it as a new document." + f" Target: {path}. {brief}"
@@ -132,7 +136,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(retained.ref.task_revision, scope.task_revision)
         self.assertEqual(retained.ref, source_task.ref)
         self.assertEqual((retained.status, len(retained.submitted_call_ids)), (source_task.status, 6))
-        self.assertEqual(case.projection(conversation_id).artifact_objectives, ())
+        self.assertEqual(case.projection(conversation_id).artifact_objectives, objectives_before_refusal)
         self.assertEqual(case.snapshots(), before_files)
 
     async def test_only_matching_successful_apply_satisfies_objective(self):
@@ -163,7 +167,10 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         source = self.projection(conversation_id).offered_draft_sources[-1]
         scope = next(e.payload.authoring_scope for e in self.history(conversation_id) if e.event_id == source.event_id)
         self.assertEqual(scope.target_paths, (path,))
-        self.assertEqual(self.projection(conversation_id).artifact_objectives, ())
+        source_objectives = self.projection(conversation_id).artifact_objectives
+        self.assertEqual(len(source_objectives), 1)
+        self.assertIs(source_objectives[0].state, c.ArtifactObjectiveState.OPEN)
+        self.assertEqual(source_objectives[0].facts.target_paths, (path,))
         followup_call_start = len(self.backend.calls)
         self.backend.enqueue(recommendation(message=brief,
             recommended_action=action(source_ids=(source.event_id,),
@@ -181,7 +188,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         request = offered.recommendation_request
         self.assertEqual(request.basis.editorial_refs, (memory.record_ref,))
         self.assertIsNone(request.objective_id)
-        self.assertEqual(self.projection(conversation_id).artifact_objectives, ())
+        self.assertEqual(self.projection(conversation_id).artifact_objectives, source_objectives)
         self.assertEqual(request.draft_sources, (source,))
         self.assertEqual((request.authoring_scope.task_id, request.authoring_scope.task_revision),
                          (scope.task_id, scope.task_revision))
