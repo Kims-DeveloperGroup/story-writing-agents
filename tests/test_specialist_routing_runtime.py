@@ -2027,12 +2027,12 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         capture = next(event for event in self.history(prior) if event.event_id in transition.material_capture_event_ids)
         self.assertEqual((capture.payload.capture.source, capture.payload.capture.selected_text),
                          (rejected_text.ref, "Selected rejected whole explanation."))
-        self.assertEqual((capture.payload.capture.target_task_id, capture.payload.capture.target_task_revision),
-                         (fresh_scope.task_id, fresh_scope.task_revision))
+        self.assertEqual((capture.payload.capture.target_task_id, capture.payload.capture.target_task_revision), (fresh_scope.task_id, fresh_scope.task_revision))
         front = next(_workflow_material(call.payload) for agent, call in reversed(self.backend.call_records)
                      if agent == LEAD_ORCHESTRATOR and _workflow_material(call.payload).get("selected_task_materials"))
-        self.assertEqual(front["selected_task_materials"], [{"input_id": selected_input.input_id,
-            "capture_event_id": capture.event_id, **{key: value for key, value in task.task_value_to_dict(capture.payload.capture).items() if key not in {'target_task_id', 'target_task_revision'}}}])
+        expected_material = {"input_id": selected_input.input_id, "capture_event_id": capture.event_id, **{key: value for key, value in task.task_value_to_dict(capture.payload.capture).items() if key not in {'target_task_id', 'target_task_revision'}}}
+        expected_material["source"]["record_type"] = expected_material["source"].pop("kind")
+        self.assertEqual(front["selected_task_materials"], [expected_material], (front["selected_task_materials"], expected_material))
         self.assertEqual((selected_input.kind, selected_input.locator, selected_input.revision_digest),
                          (c.CollaborationInputKind.CONVERSATION_EVENT, "conversation/" + capture.event_id,
                           "sha256:" + rejected_text.ref.material_digest))

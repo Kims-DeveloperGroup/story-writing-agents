@@ -213,7 +213,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             phase = [item for item in materials if ("assignment" in item or "replies" in item) and (item.get("assignment", {}).get("mode") == "review" or "artifact_candidate" in item) == is_review]
             self.assertEqual(len(phase), len(ROSTER) + 1)
             self.assertTrue(all(item["editorial_state"]["selected_refs"] == [editorial.editorial_ref_to_dict(memory.record_ref)] for item in phase))
-            self.assertTrue(all(item["authoring_scope"] == c.authoring_scope_to_dict(expected_scope) for item in phase))
+            self.assertTrue(all(item["authoring_scope"] == {key: value for key, value in c.authoring_scope_to_dict(expected_scope).items() if key not in {'task_id', 'task_revision'}} for item in phase))
             self.assertTrue(all(item["inputs"] == phase[0]["inputs"] for item in phase))
         self.assertEqual(next(item for item in phase[0]["inputs"] if item["input_id"] == source.event_id)["revision_digest"], source.content_digest)
         dispatches = self.payload_events(conversation_id, c.CollaborationAssignmentDispatchPayload)
