@@ -71,6 +71,17 @@ def _document_global_candidate_script(target_path, old_global_bytes, updated_glo
         read_queries=((target_path, old_global_bytes.decode("utf-8").splitlines()[0]),), read_prefix="core_documents/")
 
 
+def _document_global_draft_recommendation_script(target_path, purpose, chosen_ending):
+    """Reuse the exact explicitly authored Global DRAFT recommendation callback."""
+    def respond(call, provider):
+        scope = lead._live_scope(call, activity="draft", domains=("plot_structure",), paths=(target_path,), contributions=[{"domain": "plot_structure", "role": "draft_owner"}])
+        return recommendation(message=purpose,
+            recommended_action=action(kind="prepare_consultation", source_ids=("user_input",), purpose=purpose,
+                instruction=purpose + " " + chosen_ending, specialist_ids=(PLOT_ARCHITECT,)),
+            authoring_scope=scope, authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=(purpose,)))(call, provider)
+    return respond
+
+
 def _planning_question_response(call, _provider):
     return _document_plan_native_response(call, {
         "kind": "question", "message": "Next Plot step: resolve the ending decision, then update the global outline before the part outline.",
@@ -765,20 +776,14 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual((ready_to_write.physical_calls_spent, ready_to_write.rounds_spent, ready_to_write.remaining_physical_calls), (5, 1, 7))
         # The same Plot drafts Global before the separate Part node; neither draft is Apply.
         global_draft_purpose = "Draft only the Global outline using the existing complete baseline and the USER's chosen Chapter 3 closing action."
-        def recommend_global_draft(call, provider):
-            scope = lead._live_scope(call, activity="draft", domains=("plot_structure",), paths=(global_node.target_path,), contributions=[{"domain": "plot_structure", "role": "draft_owner"}])
-            return recommendation(message=global_draft_purpose,
-                recommended_action=action(kind="prepare_consultation", source_ids=("user_input",), purpose=global_draft_purpose,
-                    instruction=global_draft_purpose + " " + chosen_ending, specialist_ids=(PLOT_ARCHITECT,)),
-                authoring_scope=scope, authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=(global_draft_purpose,)))(call, provider)
-        self.backend.enqueue(recommend_global_draft, control_plan=())
+        self.backend.enqueue(_document_global_draft_recommendation_script(global_node.target_path, global_draft_purpose, chosen_ending), control_plan=())
         global_draft_start = len(self.backend.calls)
         global_draft_control = await self.runtime.decide_lead_task(task_controls.LeadTaskDecision.from_task(
             reviewed_task.ref, task_controls.LeadTaskAction.NEW_TASK,
             text=global_draft_purpose + " " + chosen_ending + " Source: ${" + global_node.target_path + "}. Do not Apply or change any other document."),
             document_selection=documents.DocumentNodeSelection(goal_plan.ref, node_id=global_node.node_id))
         global_recommendation = global_draft_control.turn
-        self.assertIs(global_recommendation.kind, c.LeadOutcomeKind.RECOMMENDATION)
+        self.assertIs(global_recommendation.kind, c.LeadOutcomeKind.RECOMMENDATION, global_recommendation.message[:1200])
         self.assertEqual(global_recommendation.recommendation_request.document_node.plan_ref, goal_plan.ref)
         def prepare_global_draft(call, _provider):
             return _document_plan_native_response(call, {"kind": "proposal", "message": global_draft_purpose,
@@ -839,7 +844,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             document_selection=draft_selection)
         draft_recommendation_turn = drafted_control.turn
         self.assertIsNotNone(draft_recommendation_turn)
-        self.assertIs(draft_recommendation_turn.kind, c.LeadOutcomeKind.RECOMMENDATION)
+        self.assertIs(draft_recommendation_turn.kind, c.LeadOutcomeKind.RECOMMENDATION, draft_recommendation_turn.message[:1200])
         self.assertEqual(tuple(agent for agent, _call in self.backend.call_records[draft_start:]), (lead.LEAD_ORCHESTRATOR,))
         draft_request = draft_recommendation_turn.recommendation_request
         self.assertIs(draft_request.kind, c.LeadRecommendationActionKind.PREPARE_CONSULTATION)
