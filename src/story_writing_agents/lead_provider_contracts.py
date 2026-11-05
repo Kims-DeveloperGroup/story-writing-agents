@@ -7,7 +7,7 @@ freshness, completed READ receipts, confirmation, candidate construction and sta
 from __future__ import annotations
 
 from .specialist_routing import (ReviewStage, SpecialistWorkKind, SpecialistStagePlan,
-    stage_plan_from_dict, stage_plan_to_dict, stage_plan_spec_from_dict, validate_stage_routing, stage_required_specialists,
+    stage_plan_to_dict, stage_plan_spec_from_dict, validate_stage_routing, stage_required_specialists,
     AuthoringScopeSpec, scope_spec_from_dict,
     stage_participant_rosters, stage_focus_domains, stage_is_focused_review)
 
@@ -3227,7 +3227,7 @@ class LeadProviderConstraints:
                         scope = None
                 if scope:
                     try:
-                        plan = stage_plan_from_dict(proposal["stage_plan"]) if "stage_plan" in proposal else None
+                        plan = declared_plan
                         required_roles = stage_required_specialists(scope, plan)
                         validate_stage_routing(scope, tuple(roles), plan,
                             source_input_ids=tuple((*self.input_ids, *read_ids)),

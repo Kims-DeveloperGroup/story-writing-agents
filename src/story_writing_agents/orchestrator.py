@@ -12455,11 +12455,13 @@ class StoryRuntime:
                         authority_free = (proposed_value.get("kind", "answer") in {"answer", "question", "critique"}
                             and not any(proposed_value.get(name) for name in
                                 ("proposal", "recommended_action", "artifact_intent", "objective_intent"))
-                            and (binding_pinned or "preliminary_review" in proposed_value))
+                            and (spec.activity is AuthoringActivity.WORKFLOW
+                                or binding_pinned or "preliminary_review" in proposed_value))
                         prior_key = proposed_key = None
                         confirmed = () if binding_prior is None else confirmed_authoring_proposals(
                             binding_prior, task_events)
-                        if confirmed and spec.schema_version == 3 and not authority_free:
+                        if (confirmed and spec.schema_version == 3 and not authority_free
+                                and spec.intent is binding_prior.intent):
                             captured = confirmed[-1]
                             comparison_scope = replace(binding_prior, activity=spec.activity,
                                 target_paths=spec.target_paths, domains=spec.domains,

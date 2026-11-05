@@ -169,6 +169,12 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertEqual(encoded["required_condition_ids"], ["characters", "scene"])
         self.assertEqual(encoded["agreed_direction"], "Keep the secret unresolved.")
         self.assertEqual(routing.stage_plan_from_dict(encoded), plan)
+        from story_writing_agents import lead_provider_contracts as contracts
+        diagnostic_scope = replace(review_scope, intent=Intent.REVIEW_ONLY)
+        unbound_plan = {key: value for key, value in encoded.items() if key not in {'task_id', 'task_revision'}}
+        unbound_plan['questions'] = [{key: value for key, value in row.items() if key not in {'task_id', 'task_revision'}} for row in encoded['questions']]
+        diagnostic_value = {'kind': 'proposal', 'message': plan.expected_result, 'authoring_scope': {key: value for key, value in c.authoring_scope_to_dict(diagnostic_scope).items() if key not in {'schema_version', 'task_id', 'task_revision'}}, 'proposal': {'shared_premises': [], 'stage_plan': unbound_plan, 'assignments': [{'agent_id': 'character_custodian', 'instruction': 'Assess the supplied motive.', 'mode': 'review', 'input_ids': list(sources), 'review_basis': {'candidate_input_ids': list(sources), 'criteria': 'Preserve the supplied motive.'}}]}}
+        self.assertEqual(contracts.LeadProviderConstraints(scope=diagnostic_scope, input_ids=sources, review_candidate_ids=sources, required_input_ids=plan.required_condition_ids).diagnose(json.dumps(diagnostic_value)), ())
         with self.assertRaises(FrozenInstanceError): plan.specialist_ids = ()
         for field in encoded:
             incomplete = dict(encoded)

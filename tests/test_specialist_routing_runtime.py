@@ -1027,7 +1027,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             scoped_proposal(PLOT_ARCHITECT, activity="review", candidate_ids=("reference_1",)),
             selection_group='consultation.authoring.review')
         self.assertIsNone(bad.proposal)
-        conversation = self.conversation()
+        conversation = bad_conversation
         original, before = "완성 원고.\r\nCafé.  \r\n", self.artifact_bytes()
         good = await self.proposal_for(conversation, self._native_scoped(
                 PLOT_ARCHITECT, activity='review', intent='review_only',
@@ -1043,8 +1043,11 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertTrue(all(request is None for request in (reviewed.turn.artifact_application_request, reviewed.turn.story_commit_request)))
         self.assertFalse(any(type(e.payload) in (c.ArtifactObjectivePayload, c.ArtifactObjectivePayloadV2) for e in self.history(conversation)))
 
-        self.backend.enqueue(_visible_outcome("answer", "The rejected empty review remains unexecuted."), control_plan=selection_plan('answer.workflow'))
-        await self.runtime.lead_turn(self.session_id, bad_conversation, "Resolve the failed interpretation.")
+        self.backend.enqueue(self._native_scoped(PLOT_ARCHITECT, paths=(OUTLINE,), authoring_assessment=_fixture_assessment()), control_plan=selection_plan('consultation.authoring.content'))
+        drafted = await self.runtime.lead_turn(self.session_id, conversation, _ADMISSION_BRIEF)
+        self.assertIsNotNone(drafted.proposal, (drafted.message, drafted.validation_details, drafted.public_responses))
+        self.assertEqual((drafted.proposal.authoring_scope.intent, drafted.proposal.authoring_scope.task_revision, self.artifact_bytes()), (AuthoringIntent.AUTHORING, 1, before))
+        self.assertNotEqual(drafted.proposal.authoring_scope.task_id, good.proposal.authoring_scope.task_id)
         source, owner = self.conversation("Review source A"), self.conversation("Selected review owner B")
         supplied = "Unused prefix.\n" + original + "\nUnused suffix."
         self.backend.enqueue(_current_exploration_outcome(supplied))

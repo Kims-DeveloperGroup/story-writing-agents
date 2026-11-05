@@ -5639,6 +5639,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         self.backend.enqueue(_visible_outcome("answer", "Yes is ordinary prose."), control_plan=selection_plan("answer.workflow"))
         answered = await self.runtime.lead_turn(self.session_id, free_id, "Yes")
         self.assertIs(answered.kind, LeadOutcomeKind.ANSWER)
+        self.assertIs(answered.trace.origin, ReplyTraceOrigin.PROVIDER, (answered.message, answered.validation_details, answered.public_responses))
         history = self.history(free_id)
         yes_event = next((event for event in history if type(
             event.payload) is CollaborationMessagePayload and event.payload.content == 'Yes'))
