@@ -214,9 +214,68 @@ class LeadArtifactObjectiveTests(RecommendationCase):
                 except Exception as diagnostic_error:
                     preparation_failures.append({"diagnostic_error_type": type(diagnostic_error).__name__})
             return original_close(*args, **kwargs)
+        from story_writing_agents.agent_context import service as context_service
+        from story_writing_agents.agent_context.planning import ContextPlanningError
+        planning_measurements = []
+        original_plan = context_service.plan_context_projection
+        def measured_plan(manifest, materials, *, policy, conditions, checkpoint,
+                active_provider_thread_id, mandatory_references=(), fresh=False):
+            try:
+                return original_plan(manifest, materials, policy=policy, conditions=conditions,
+                    checkpoint=checkpoint, active_provider_thread_id=active_provider_thread_id,
+                    mandatory_references=mandatory_references, fresh=fresh)
+            except ContextPlanningError:
+                if len(planning_measurements) < 3:
+                    try:
+                        required = tuple(entry for entry in manifest.entries if entry.priority.value == "p0_required")
+                        measurement = {"required_count": len(required), "required_utf8_bytes": sum(entry.utf8_bytes for entry in required),
+                            "policy": {name: getattr(policy, name) for name in ("total_source_utf8_bytes", "p0_source_utf8_bytes",
+                                "p1_source_utf8_bytes", "p2_source_utf8_bytes", "p3_source_utf8_bytes")},
+                            "required_rows": [{"source_kind": entry.source_kind.value, "semantic_channel": entry.semantic_channel.value,
+                                "utf8_bytes": entry.utf8_bytes} for entry in required[:16]]}
+                        current = next((material for material in materials if material.entry.semantic_channel.value == "current_input"), None)
+                        if current is not None:
+                            body = json.loads(current.body_utf8)
+                            missing = object()
+                            def at(*path):
+                                value = body
+                                for key in path:
+                                    value = value.get(key, missing) if isinstance(value, dict) else missing
+                                return value
+                            def utf8_bytes(value):
+                                return None if value is missing else len(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                    separators=(",", ":"), allow_nan=False).encode("utf-8"))
+                            measurement["current_input_component_bytes"] = {"whole_current_input": utf8_bytes(body),
+                                "artifact_objectives": utf8_bytes(at("artifact_objectives")),
+                                "document_work_plan": utf8_bytes(at("document_work_plan")),
+                                "document_work_plan.plan": utf8_bytes(at("document_work_plan", "plan")),
+                                "document_node": utf8_bytes(at("document_node")),
+                                "execution.request": utf8_bytes(at("structured_recommendation_execution", "request")),
+                                "execution.request.basis": utf8_bytes(at("structured_recommendation_execution", "request", "basis")),
+                                "execution.request.document_node": utf8_bytes(at("structured_recommendation_execution", "request", "document_node")),
+                                "execution.selected_inputs": utf8_bytes(at("structured_recommendation_execution", "selected_inputs"))}
+                            objective_rows = at("artifact_objectives", "objectives")
+                            plans = [] if not isinstance(objective_rows, list) else [row["document_plan"] for row in objective_rows
+                                if isinstance(row, dict) and isinstance(row.get("document_plan"), dict)]
+                            work_plan = at("document_work_plan", "plan")
+                            measurement["objective_document_plans"] = {"count": len(plans), "utf8_bytes_sum": sum(utf8_bytes(plan) for plan in plans),
+                                "same_ref_count": sum(plan.get("ref") == plans[0].get("ref") for plan in plans),
+                                "all_same_ref": bool(plans) and all(plan.get("ref") == plans[0].get("ref") for plan in plans),
+                                "same_work_plan_ref_count": sum(isinstance(work_plan, dict) and plan.get("ref") == work_plan.get("ref") for plan in plans)}
+                    except Exception as diagnostic_error:
+                        measurement = {"diagnostic_error_type": type(diagnostic_error).__name__}
+                    planning_measurements.append(measurement)
+                    try:
+                        print("DOCUMENT_CONTEXT_BUDGET " + json.dumps(measurement, ensure_ascii=True, sort_keys=True, allow_nan=False), flush=True)
+                    except Exception:
+                        pass
+                raise
+        planning_patcher = mock.patch.object(context_service, "plan_context_projection", new=measured_plan)
+        planning_patcher.start()
+        self.addCleanup(planning_patcher.stop)
         with mock.patch.object(self.runtime, "_close_failed_lead_attempt", new=observed_close):
             prepared = await self.confirm(offered, text=text)
-        self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, (prepared, preparation_failures))
+        self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, (prepared, preparation_failures, planning_measurements))
         self.assertEqual(len(self.backend.calls), calls + 1)
         self.assertEqual(prepared.proposal.participants, ROSTER)
         binding = prepared.proposal.document_node
