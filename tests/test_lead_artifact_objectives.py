@@ -575,7 +575,19 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             if type(event.payload) is c.CollaborationLeadJudgmentPayload and event.turn_id == initial_plan_turn.turn_id)
         goal_task = next(task for task in self.runtime.inspect_lead_collaboration(self.session_id, planning_conversation).available_tasks
             if task.ref.task_id == initial_judgment.authoring_scope.task_id)
-        self.assertEqual(len(goal_task.submitted_call_ids), 4)
+        self.assertEqual(goal_task.submitted_call_ids, tuple(event.payload.call_id for event in bootstrap_facts))
+        self.assertEqual((goal_task.ref.task_id, goal_task.ref.task_revision),
+            (initial_judgment.authoring_scope.task_id, initial_judgment.authoring_scope.task_revision))
+        def submitted_for(turn):
+            return tuple(event.payload for event in self.history(planning_conversation)
+                if type(event.payload) is c.CollaborationProviderCallPayload and event.turn_id == turn.turn_id
+                and event.step_id == turn.step_id and event.payload.state is c.CollaborationProviderCallState.SUBMITTED)
+        readiness_calls = submitted_for(readiness_turn)
+        self.assertEqual(tuple((item.document_goal, item.document_budget_task_id) for item in readiness_calls),
+            ((goal_plan.ref, goal_task.ref.task_id),) * 2)
+        self.assertTrue(set(goal_task.submitted_call_ids).isdisjoint(item.call_id for item in readiness_calls))
+        self.assertEqual((current_goal_view.physical_calls_spent, current_goal_view.rounds_spent, current_goal_view.remaining_physical_calls), (4, 0, 8))
+        self.assertEqual(current_goal_view.cumulative_plan_physical_calls, len(self.backend.calls) - planning_calls)
         old_global_bytes = self.workspace.path(global_node.target_path).read_bytes()
         updated_global = "[PROVISIONAL839] Preserve the established whole-book outcome. Update the return-unit approach; Chapter 3's closing action remains undecided."
         self.backend.enqueue(artifact._artifact_outcome(
@@ -684,6 +696,9 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertIsNot(next(row for row in after_consumer.nodes if row.node_id == part_node.node_id).state, c.DocumentNodeState.COMPLETE)
         self.assertEqual(after_consumer.cumulative_plan_physical_calls, len(self.backend.calls) - planning_calls)
         self.assertEqual((after_consumer.physical_calls_spent, after_consumer.rounds_spent, after_consumer.remaining_physical_calls), (4, 1, 8))
+        consumer_task = next(task for task in self.runtime.inspect_lead_collaboration(self.session_id, planning_conversation).available_tasks
+            if task.ref.task_id == consumer.proposal.authoring_scope.task_id)
+        self.assertEqual(len(consumer_task.submitted_call_ids), 4)
         self.assertNotIn(part_node.target_path, self.runtime.inspect_core_document_readiness(self.session_id).complete_documents)
         for earlier in (goal_task, global_task):
             retained = next(task for task in self.runtime.inspect_lead_collaboration(self.session_id, planning_conversation).available_tasks if task.ref.task_id == earlier.ref.task_id)
@@ -723,7 +738,12 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertNotIn(ending_decision_id, next(row for row in ready_to_write.nodes if row.node_id == part_node.node_id).required_inputs)
         reviewed_task = next(task for task in self.runtime.inspect_lead_collaboration(self.session_id, planning_conversation).available_tasks
             if task.ref.task_id == consumer.proposal.authoring_scope.task_id)
-        self.assertEqual(len(reviewed_task.submitted_call_ids), 6)
+        self.assertEqual(reviewed_task.submitted_call_ids, consumer_task.submitted_call_ids)
+        self.assertEqual(reviewed_task.ref, consumer_task.ref)
+        ending_calls = submitted_for(resolved_turn)
+        self.assertEqual(tuple((item.document_goal, item.document_budget_task_id) for item in ending_calls),
+            ((goal_plan.ref, consumer_task.ref.task_id),) * 2)
+        self.assertTrue(set(consumer_task.submitted_call_ids).isdisjoint(item.call_id for item in ending_calls))
         self.assertEqual((ready_to_write.physical_calls_spent, ready_to_write.rounds_spent, ready_to_write.remaining_physical_calls), (6, 1, 6))
         # The same Plot drafts Global before the separate Part node; neither draft is Apply.
         global_draft_purpose = "Draft only the Global outline using the existing complete baseline and the USER's chosen Chapter 3 closing action."
