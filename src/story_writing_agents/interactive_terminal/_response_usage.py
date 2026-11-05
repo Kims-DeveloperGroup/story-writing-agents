@@ -20,6 +20,7 @@ class ResponseUsage:
     output_tokens: int | None = None
     scope: str = field(default="invocation", kw_only=True, compare=False)
     call_count: int | None = field(default=None, kw_only=True, compare=False)
+    elapsed_ns: int | None = field(default=None, kw_only=True, compare=False)
 
 
 def response_usage(
@@ -93,19 +94,30 @@ def response_usage(
             return None
         return sum(value for value in values if value is not None)
 
+    call = next(iter(calls.values())) if call_id is not None and len(calls) == 1 else None
+    elapsed_ns = call.accounting.elapsed_ns if call is not None and call.accounting is not None else None
     return ResponseUsage(counter("input_tokens"), counter("output_tokens"),
-                         scope=scope, call_count=len(calls))
+                         scope=scope, call_count=len(calls), elapsed_ns=elapsed_ns)
 
 
 def response_footer(outcome: str, usage: ResponseUsage, *, elapsed: str | None = None) -> str:
     """Keep zero distinct from missing accounting and avoid cached-input double counting."""
     first = f"Outcome: {outcome}"
+    if elapsed is None and usage.elapsed_ns is not None:
+        seconds = usage.elapsed_ns // 1_000_000_000
+        elapsed = f"{seconds // 3600:02d}:{seconds // 60 % 60:02d}:{seconds % 60:02d}"
     if elapsed is not None:
         first += f" | Elapsed: {elapsed}"
+    return first + "\n" + turn_usage_summary(usage)
+
+
+def turn_usage_summary(usage: ResponseUsage, *, elapsed: str | None = None) -> str:
+    """Describe invocation cost outside any speaker's response metadata."""
     input_count = "unavailable" if usage.input_tokens is None else f"{usage.input_tokens:,}"
     output_count = "unavailable" if usage.output_tokens is None else f"{usage.output_tokens:,}"
     count = (f" ({usage.call_count} {'call' if usage.call_count == 1 else 'calls'})"
              if usage.call_count is not None else "")
     scope = ("physical call" if usage.scope == "physical_call" else
              "invocation" + count)
-    return first + f"\nUsage scope: {scope}\nInput tokens: {input_count} | Output tokens: {output_count}"
+    prefix = "" if elapsed is None else f"Elapsed: {elapsed}\n"
+    return prefix + f"Usage scope: {scope}\nInput tokens: {input_count} | Output tokens: {output_count}"
