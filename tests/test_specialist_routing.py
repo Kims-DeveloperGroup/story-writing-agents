@@ -864,8 +864,8 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertEqual(artifact_value["artifact_intent"]["operations"][0]["new_text"], replacement_text)
         ordinary_bound = ordinary_factory.for_offer(result_offers)
         ordinary_call = fixture_request(ordinary_bound, current_payload)
-        with self.assertRaisesRegex(ValueError, "explicitly intended fixture family"):
-            producer(ordinary_call, fixture_provider)
+        with self.assertRaisesRegex(ValueError, "Positive document fixture requires exactly one current offered member: 0"):
+            document_fixture._document_plan_native_response(ordinary_call, artifact_value)
         review_scope = document_fixture.lead._live_scope(current_call, activity="review", domains=("plot_structure",),
             paths=(global_path,), contributions=[{"domain": "plot_structure", "role": "constraint_assessor"}])
         review_scope["intent"] = "review_only"
