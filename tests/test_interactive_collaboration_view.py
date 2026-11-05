@@ -403,7 +403,8 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
         missing = response_usage(five_calls, **scope, call_id="missing_call")
         self.assertEqual((missing.scope, missing.call_count), ("physical_call", 1))
         shared_text, host_text = "Literal recommendation.\r\n  Exact body.", "Before drafting: choose the actual target."
-        known_calls = (cumulative_lead, cumulative_repair)
+        known_calls = (replace(cumulative_lead, event_id="recorded_call_1"),
+            replace(cumulative_repair, event_id="recorded_call_2"))
         cases = ((task.LeadPublicResponseAcceptance.ACCEPTED, "question", False, five_calls),
             (task.LeadPublicResponseAcceptance.ACCEPTED, "recommendation", True, known_calls),
             (task.LeadPublicResponseAcceptance.ACCEPTED, None, True, known_calls),

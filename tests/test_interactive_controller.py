@@ -6821,8 +6821,8 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             authoring_scope=lambda call: _live_scope(call, activity="review", domains=("plot_structure",), paths=(OUTLINE,),
                 contributions=[{"domain": "plot_structure", "role": "constraint_assessor"}]), authoring_assessment=assessment),
             control_plan=wire.selection_plan("prepare.consultation.authoring"))
-        rewritten = runner.run(case.runtime.lead_turn(case.session_id,
-            "Use the supplied facts for bounded preparation; retain separate confirmation.", conversation_id=conversation))
+        rewritten = runner.run(case.runtime.lead_turn(case.session_id, conversation,
+            "Use the supplied facts for bounded preparation; retain separate confirmation."))
         self.assertEqual((rewritten.kind, rewritten.trace.origin, rewritten.trace.action),
             (LeadOutcomeKind.QUESTION, ReplyTraceOrigin.RUNTIME_FALLBACK, "none"))
         self.assertEqual(rewritten.public_responses[-1].response.response_kind, "recommendation")
