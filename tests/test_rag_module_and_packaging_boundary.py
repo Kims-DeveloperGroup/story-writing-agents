@@ -890,7 +890,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertIn("story_writing_agents.review_contracts", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.review_contracts"}, set())
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.review_contracts"}, {
-            "story_writing_agents.conversations", "story_writing_agents.conversations.context",
+            "story_writing_agents.authoring_task_lifecycle", "story_writing_agents.conversations", "story_writing_agents.conversations.context",
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_terminal._collaboration_view",
             "story_writing_agents.lead_provider_contracts", "story_writing_agents.orchestrator"})
         self.assertIn("story_writing_agents.blocking_work", modules)
