@@ -14258,6 +14258,8 @@ class StoryRuntime:
         selected = [] if previous is None else [
             item.event_id for item in previous.draft_sources
         ]
+        if intent.action is LeadObjectiveAction.CANCEL:
+            return tuple(selected)
         scope = outcome.authoring_scope
         if scope is None:
             return tuple(selected)
