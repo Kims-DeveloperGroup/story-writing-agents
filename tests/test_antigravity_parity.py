@@ -952,14 +952,13 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         projected = (AntigravityAdapter.native_output_schema(declared)
                      if vendor == 'antigravity' else declared)
         lowering = 'integer_singleton_bounds' if vendor == 'antigravity' else 'identity'
-        request.contract.require_projection(projected, declared_lowering=lowering)
+        request.contract.require_projection(projected, declared_lowering=lowering if projected != declared else 'identity')
         with self.assertRaises(WireShapeError) as caught:
             request.contract.require_projection(projected, declared_lowering='unknown')
         self.assertEqual((caught.exception.wire_path, caught.exception.wire_requirement),
                          ('$', 'undeclared schema lowering'))
         with self.assertRaises(WireShapeError) as caught:
-            request.contract.require_submission(
-                request.payload, projected, declared_lowering='unknown')
+            request.contract.require_submission(request.payload, projected, declared_lowering='unknown')
         self.assertEqual((caught.exception.wire_path, caught.exception.wire_requirement),
                          ('$', 'undeclared schema lowering'))
         self.assertIs(projected['additionalProperties'], False)
@@ -973,7 +972,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             request.contract.require_submission(request.payload, lossy, declared_lowering=lowering)
         self.assertEqual((caught.exception.wire_path, caught.exception.wire_requirement),
                          ('$', 'native schema projection changed bound restrictions'))
-        if vendor == 'antigravity':
+        if projected != declared:
             with self.assertRaises(WireShapeError) as caught:
                 request.contract.require_projection(projected)
             self.assertEqual((caught.exception.wire_path, caught.exception.wire_requirement),
@@ -1702,7 +1701,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             codex_keys.append(
                 'codex:character_custodian:' + invocation.execution_workspace.continuation_digest(
                 'legacy-definition-policy', hashlib.sha256((
-                'agent-provider-wire-v10\x00' + codex_definition.fingerprint).encode()).hexdigest(
+                'agent-provider-wire-v11\x00' + codex_definition.fingerprint).encode()).hexdigest(
                 )).removeprefix('sha256:'))
             return ProviderResult(thread_id='codex-mixed-thread', response_text=direct_response(
                 '{"message":"codex mixed reply"}', json.loads(invocation.payload_json)))

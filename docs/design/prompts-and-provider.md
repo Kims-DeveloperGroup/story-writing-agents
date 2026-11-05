@@ -35,8 +35,8 @@ recovered-final path uses the same completion boundary. See the
 This section records the immutable historical #381 accounting baseline. Later
 children implemented selection, omission, a typed compact action wire, a
 content-free ledger, and live progress without changing the encoder or baseline
-workload. Current agent-provider-wire-v10 behavior is described in
-[Agent-context design](agent-context.md#agent-provider-wire-v10).
+workload. Current agent-provider-wire-v11 behavior is described in
+[Agent-context design](agent-context.md#agent-provider-wire-v11).
 
 ### Model-input boundary and canonical encoding
 
@@ -189,7 +189,7 @@ described next.
 The preceding byte table is the immutable historical #381 baseline. The
 built-in runtime now constructs definitions with `provider_managed_context=True`
 and no mutable `context_document_files`. Role prompt, persona, language,
-provider restrictions, and descriptive agent-provider-wire-v10 protocol remain stable binding material.
+provider restrictions, and descriptive agent-provider-wire-v11 protocol remain stable binding material.
 Prompt assembly captures ordered common/family/role file components and appends
 runtime-owned specialist routing policy v1. The effective `system_prompt_file`
 retains the role path but contains the full composition, so its bytes/hash
@@ -320,7 +320,7 @@ validated, without a synthetic user message. See the
 Live result contracts are `lead-response-v7` for fresh scope 3 (explicit legacy
 scopes 1/2 retains v6), `specialist-assignment-response-v3` for draft/review and v4
 for constraints, `consultation-summary-v4`, and `artifact-review-summary-v4`. Routing scope uses schema 3 for fresh Lead work and preserves historical versions 1/2;
-review basis uses schema 1, independently of agent-provider-wire-v10, runtime policy v1, and durable
+review basis uses schema 1, independently of agent-provider-wire-v11, runtime policy v1, and durable
 collaboration history schema v2. Historical omitted routing fields remain
 readable; they cannot authorize a new unscoped consultation.
 
@@ -357,7 +357,7 @@ bounded complete conversation pairs, invoking-agent owner outcomes, and current
 core identities. It is not the current built-in provider payload.
 
 The contextual service translates authoritative capture into
-`agent-provider-wire-v10`: required input/candidate and selected P2 material,
+`agent-provider-wire-v11`: required input/candidate and selected P2 material,
 content-free catalog/record changes, and bounded observations. Optional P3
 history and invoking-agent state remain SEARCH-first.
 
@@ -371,7 +371,7 @@ confirmation authority. Other source deltas use revisions, record changes,
 tombstones, and an exact candidate pointer or beneficial lossless single-splice.
 Invocation and evidence scope stays conversation-bound; specialists and
 consensus retain their separate scopes. See
-[Agent-context design](agent-context.md#agent-provider-wire-v10).
+[Agent-context design](agent-context.md#agent-provider-wire-v11).
 
 Retained session history includes objective origin, transitions, and exact
 candidate bindings. Visibility across conversation switches does not transfer
@@ -584,7 +584,7 @@ Both adapters explain the same descriptive properties, allowed values, offered
 identities, source trust, and confirmation boundaries. The runtime accounts the
 actual rendered instructions and schema before submission.
 
-Runtime-built contextual debate calls use agent-provider-wire-v10 for task/input,
+Runtime-built contextual debate calls use agent-provider-wire-v11 for task/input,
 candidate pointer/splice/full fallback, selected sources, and record changes.
 They do not repeat stable role prompts, persona, language directives, or
 unchanged core-document text. `story_session_context` is an internal capture

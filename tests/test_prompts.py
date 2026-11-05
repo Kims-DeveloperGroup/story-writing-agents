@@ -103,7 +103,7 @@ class PromptAssemblerTests(unittest.TestCase):
     def test_lead_prompt_is_front_channel_router_watcher_critic_and_non_authority(self):
         prompt = self.assembler.build_definition(session_id="lead-policy", agent_id=LEAD_ORCHESTRATOR).system_prompt_file.read_text()
         normalized = " ".join(prompt.split())
-        required = ('sole ordinary user-facing coordinator', 'answer workflow and factual status questions directly', 'Retain the semantic influence-domain union', 'Do not omit a required specialist to fit a budget', 'current invocation schema', 'integrate required current-task drafts', 'fresh complete user-supplied candidate', 'Preserve exact offered task/revision, source, evidence, and candidate identities', 'Status is not a READ receipt', 'Nonempty artifact changes require current attached reference or completed authorized READ evidence', 'Empty-file status proves only the exact empty target', 'Confirm authorizes only the exact disclosed step', 'Proposal preparation, specialist execution, candidate review, Apply, and Commit have separate authority boundaries', 'Confirmed preparation returns its exact proposal or asks a material clarification', 'does not repeat confirmation or silently downgrade to advice', 'Prose approval and retained decisions grant no current execution or write authority', 'Only its exact successful Apply (applied or unchanged) satisfies it', 'explicit cancellation closes it without writing', 'Lead does not vote', "never use a majority to erase a specialist's concern", 'Continuation must cover all original inputs and reply-event inputs', 'Never request a continuation the current schema does not offer')
+        required = ('sole ordinary user-facing coordinator', 'answer workflow and factual status questions directly', 'Retain the semantic influence-domain union', 'Do not omit a required specialist to fit a budget', 'current invocation schema', 'integrate required current-task drafts', 'fresh complete user-supplied candidate', 'Preserve exact offered source, evidence, and candidate identities', 'Status is not a READ receipt', 'Nonempty artifact changes require current attached reference or completed authorized READ evidence', 'Empty-file status proves only the exact empty target', 'Confirm authorizes only the exact disclosed step', 'Proposal preparation, specialist execution, candidate review, Apply, and Commit have separate authority boundaries', 'Confirmed preparation returns its exact proposal or asks a material clarification', 'does not repeat confirmation or silently downgrade to advice', 'Prose approval and retained decisions grant no current execution or write authority', 'Only its exact successful Apply (applied or unchanged) satisfies it', 'explicit cancellation closes it without writing', 'Lead does not vote', "never use a majority to erase a specialist's concern", 'Continuation must cover all original inputs and reply-event inputs', 'Never request a continuation the current schema does not offer')
         for phrase in required:
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, normalized)
@@ -135,7 +135,7 @@ class PromptAssemblerTests(unittest.TestCase):
         baseline = {agent: self.assembler.build_definition(session_id="overlay", agent_id=agent) for agent in ROSTER}
         policy = next(path for path in behavior_policy_files(LEAD_ORCHESTRATOR) if "lead" in path)
         original = self.workspace.path(policy).read_bytes()
-        retained = b"\nRetained older policy fixture: return only the seven legacy front-channel fields.\n"
+        retained = b"\nCustom policy fixture: keep observations concise and preserve supplied wording.\n"
         self.workspace.path(policy).write_bytes(original + retained)
         changed = {agent: PromptAssembler(self.workspace).build_definition(session_id="overlay", agent_id=agent) for agent in ROSTER}
         lead = changed[LEAD_ORCHESTRATOR]
@@ -149,7 +149,7 @@ class PromptAssemblerTests(unittest.TestCase):
         self.assertEqual(lead.system_prompt_file.content.count(common), 1)
         self.assertNotIn("현재 단계는 Phase 1".encode(), authority)
         self.assertNotIn("현재 단계는 Phase 2".encode(), authority)
-        for phrase in (b"takes precedence", b"current invocation schema owns available stage outcomes", b"exact offered task/revision, source, evidence, and candidate identities", b"Status is not a READ receipt", b"separate authority", b"exact successful Apply"):
+        for phrase in (b"takes precedence", b"current invocation schema owns available stage outcomes", b"exact offered source, evidence, and candidate identities", b"Status is not a READ receipt", b"separate authority", b"exact successful Apply"):
             self.assertIn(phrase, authority)
         self.assertNotIn(b"objective_intent", authority)
         self.assertNotIn(b"recommended_action", authority)

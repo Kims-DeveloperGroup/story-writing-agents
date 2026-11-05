@@ -7,11 +7,12 @@ freshness, completed READ receipts, confirmation, candidate construction and sta
 from __future__ import annotations
 
 from .specialist_routing import (ReviewStage, SpecialistWorkKind, SpecialistStagePlan,
-    stage_plan_from_dict, stage_plan_to_dict, validate_stage_routing, stage_required_specialists,
+    stage_plan_to_dict, stage_plan_spec_from_dict, validate_stage_routing, stage_required_specialists,
+    AuthoringScopeSpec, scope_spec_from_dict,
     stage_participant_rosters, stage_focus_domains, stage_is_focused_review)
 
 from .review_contracts import (ReviewTarget, ReviewTargetAvailability, LeadPreliminaryReview, preliminary_intent_schema,
-    preliminary_scope_eligible, bind_preliminary_intent, preliminary_review_to_dict,
+    preliminary_scope_eligible, preliminary_intent_from_value, bind_preliminary_intent, preliminary_review_to_dict,
     review_target_to_dict)
 
 import json
@@ -187,12 +188,8 @@ def _scope_wire_rule(rule: AuthoringScopeRuleSet, template: Mapping[str, object]
             properties["dependency_slots"] = {
                 "type": "array", "items": closed_object({}), "minItems": 0, "maxItems": 0,
             }
-    if not tasks:
-        raise ValueError("current Lead scope requires offered task pairs")
-    properties["task_reference"] = alternatives([closed_object({
-        "task_id": {"type": "string", "enum": [identity]},
-        "task_revision": {"type": "integer", "enum": [revision]},
-    }) for identity, revision in tasks])
+    properties.pop("task_reference", None)
+    result["required"] = [name for name in result["required"] if name != "task_reference"]
     return result
 
 
@@ -428,21 +425,7 @@ def _require_intrinsic_lead_result(value: object) -> None:
                 if child is None:
                     continue
                 if name == "authoring_scope":
-                    task_id, task_revision = None, None
-                    if child["task"] is not None:
-                        task_id, separator, raw_revision = child["task"].rpartition("@")
-                        if not separator:
-                            raise ValueError("current provider scope requires task@revision")
-                        task_revision = int(raw_revision)
-                    authoring_scope_from_dict(
-                        {
-                            "schema_version": 3,
-                            **{key: item for key, item in child.items() if key != "task"},
-                            "task_id": task_id,
-                            "task_revision": task_revision,
-                            "interpretation": value["message"],
-                        }
-                    )
+                    scope_spec_from_dict(child, interpretation=value["message"])
                 elif name == "authoring_assessment":
                     assessment_from_dict(child)
                 elif name == "core_document_assessment":
@@ -521,7 +504,6 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
             if type(value) is not ValidatedValue:
                 raise TypeError("Lead codec requires a selected whole-graph input")
             body = value.as_object()
-            map_current_task_literals(body, task_revisions)
             domain = variant_decode(body)
             if free_slots:
                 check_slots(domain)
@@ -582,6 +564,7 @@ def _lead_codec_dependencies() -> tuple[Callable, ...]:
             assignment_rule, AuthoringScopeRuleSet.__post_init__,
             LeadProviderConstraints._allocation_input_ids, lead_outcome_scope_paths,
             normalize_result, map_current_task_literals, _require_intrinsic_lead_result,
+            scope_spec_from_dict, preliminary_intent_from_value,
             project_lead_scope_schema, restore_lead_scope_result, project_lead_scope_diagnostic,
             diagnostic_to_wire, AuthoringScopeRuleSet.dependency_slot_id_rule,
             _has_free_dependency_slots, _require_dependency_slot_ids)
@@ -1627,14 +1610,8 @@ def _scope_extensions(scope: AuthoringScope | None) -> dict[str, object]:
     }
 
 
-def _scope_for_rules(raw: dict[str, object]) -> AuthoringScope:
-    task_id, revision = raw["task"].rsplit("@", 1)
-    version = 3 if "contributions" in raw else 2 if "intent" in raw else 1
-    return authoring_scope_from_dict({"schema_version": version, "activity": raw["activity"],
-        "target_paths": raw["target_paths"], "domains": raw["domains"],
-        "interpretation": "Provider constraint projection", "task_id": task_id, "task_revision": int(revision),
-        **({"intent": raw.get("intent", "authoring")} if version >= 2 else {}),
-        **({"contributions": raw["contributions"], "dependency_slots": raw["dependency_slots"]} if version == 3 else {})})
+def _scope_for_rules(raw: dict[str, object]) -> AuthoringScopeSpec:
+    return scope_spec_from_dict(raw, interpretation="Provider constraint projection")
 
 
 def canonical_scope(value: object) -> object:
@@ -1932,7 +1909,6 @@ def _compile_lead_families(
                 if len(candidates) > 1:
                     restored.pop("variant_id")
                 expanded.update(restored)
-                map_current_task_literals(expanded, offered_tasks)
                 if candidate.rules.findings(expanded):
                     raise ValueError("selected family details violate its bound choice graph")
                 return candidate.decode(expanded)
@@ -2798,6 +2774,7 @@ class LeadProviderConstraints:
                                bound_targets=targets if scoped else None,
                                bound_inputs=allocation_inputs if allocation_paths else (),
                                bound_review_candidates=self.review_candidate_ids if allocation_paths else None,
+                               bound_preliminary_targets=self.preliminary_targets,
                                bound_tasks=tasks, bound_contract_id=contract.contract_id) -> dict[str, object]:
                         result = deepcopy(body)
                         declaration = json.loads(bound_selector_schema)
@@ -2858,29 +2835,16 @@ class LeadProviderConstraints:
                             for name in assessment_path[:-1]:
                                 parent = parent[name]
                             parent[assessment_path[-1]] = decode_current_assessment(parent[assessment_path[-1]])
-                        map_current_task_literals(result, bound_tasks)
                         normalized = normalize_result(result, bound_contract_id)
                         proposal_value = normalized.get("proposal")
                         if type(proposal_value) is dict and "stage_plan" in proposal_value:
-                            scope_value = normalized["authoring_scope"]
-                            task_id, revision = scope_value["task"].rsplit("@", 1)
-                            plan = proposal_value["stage_plan"]
-                            plan.update(task_id=task_id, task_revision=int(revision))
-                            for question in plan["questions"]:
-                                question.update(task_id=task_id, task_revision=int(revision))
+                            stage_plan_spec_from_dict(proposal_value["stage_plan"])
+                        if "preliminary_review" in normalized:
+                            preliminary_scope = scope_spec_from_dict(normalized["authoring_scope"],
+                                interpretation=normalized["message"])
+                            preliminary_intent_from_value(normalized["preliminary_review"],
+                                bound_preliminary_targets, target_paths=preliminary_scope.target_paths)
                         return normalized
-                    if preliminary_answer:
-                        def decode_preliminary(body: dict[str, object], *,
-                                               source=decode, review_targets=self.preliminary_targets) -> dict[str, object]:
-                            normalized = source(body)
-                            scope_value = normalized["authoring_scope"]
-                            task_id, revision = scope_value["task"].rsplit("@", 1)
-                            normalized["preliminary_review"] = preliminary_review_to_dict(
-                                bind_preliminary_intent(normalized["preliminary_review"],
-                                    review_targets, task_id, int(revision),
-                                    target_paths=tuple(scope_value["target_paths"])))
-                            return normalized
-                        decode = decode_preliminary
                     branch_key = f"{contract.contract_id}:{root_number}:{scope_number}:{roster_number}"
                     if grouped:
                         branch_key += ":group:" + group_id
@@ -2929,7 +2893,6 @@ class LeadProviderConstraints:
                 "activity": self.scope.activity.value,
                 "target_paths": list(self.scope.target_paths),
                 "domains": [item.value for item in self.scope.domains],
-                "task": f"{self.scope.task_id}@{self.scope.task_revision}",
             },
             "preparation": None if self.preparation_kind is None else {
                 "kind": self.preparation_kind,
@@ -2986,10 +2949,6 @@ class LeadProviderConstraints:
         activities = ([scope.activity.value] if scope else [AuthoringActivity.REVIEW.value]
                       if intent is AuthoringIntent.REVIEW_ONLY else [AuthoringActivity.DRAFT.value, AuthoringActivity.REVISE.value]
                       if intent is AuthoringIntent.AUTHORING else [item.value for item in AuthoringActivity])
-        tokens = tuple(f"{task}@{revision}" for task, revision in self.task_revisions)
-        task: dict[str, object] = {"type": "string"}
-        if tokens:
-            task["enum"] = list(tokens)
         return {**closed_object({
             **_scope_extensions(scope),
             **({"intent": {
@@ -3002,6 +2961,8 @@ class LeadProviderConstraints:
                     "authoring work."
                 ),
             }} if scope is None or scope.schema_version >= 2 else {}),
+            "interpretation": {**nonempty_text_schema(), "description":
+                "The actual writing brief. Preserve the supplied brief when unchanged; describe requested substantive changes here, separately from response prose."},
             "activity": {"type": "string", "enum": (activities)},
             "target_paths": string_array(targets, minimum=len(targets) if targets is not None else 0, maximum=len(targets) if targets is not None else None),
             "domains": string_array(
@@ -3010,10 +2971,9 @@ class LeadProviderConstraints:
                 minimum=len(scope.domains) if scope else 0,
                 maximum=len(scope.domains) if scope else len(ArtifactReviewDomain),
             ),
-            "task": task,
         }), "description": (
             "Classify the current work and include every affected specialist domain and "
-            "canonical workspace-relative target. Preserve the bound scope and task/revision "
+            "canonical workspace-relative target. Preserve the bound work scope "
             "when supplied."
         )}
 
@@ -3051,7 +3011,7 @@ class LeadProviderConstraints:
                     "Nonempty UTF-8 task instructions specifying this specialist's "
                     "concrete deliverable and success criteria "
                     "against the shared writing-task brief. Preserve its protected elements, "
-                    "change boundaries, and exact offered task/source identities."
+                    "change boundaries, and exact offered source identities."
                 ),
             },
             "input_ids": {
@@ -3202,13 +3162,13 @@ class LeadProviderConstraints:
                 or paths != list(self.scope.target_paths)
                 or type(domains) is not list
                 or sorted(domains, key=str) != sorted(item.value for item in self.scope.domains)
-                or raw_scope.get("task") not in {f"{task}@{revision}" for task, revision in self.task_revisions}):
+               ):
                 rules.append(R.PREPARATION_SCOPE)
         if self.adoption_intent is not None and type(raw_scope) is dict and (raw_scope.get("intent") != self.adoption_intent.value
                 or raw_scope.get("activity") not in ([AuthoringActivity.REVIEW.value] if self.adoption_intent is AuthoringIntent.REVIEW_ONLY
                                                      else [AuthoringActivity.DRAFT.value, AuthoringActivity.REVISE.value])
                 or raw_scope.get("target_paths") != list(self.adoption_targets)
-                or raw_scope.get("task") not in {f"{task}@{revision}" for task, revision in self.task_revisions}):
+               ):
             rules.append(R.PREPARATION_SCOPE)
         proposal = value.get("next_intent" if self.continuation else "proposal")
         if type(proposal) is dict:
@@ -3249,7 +3209,7 @@ class LeadProviderConstraints:
                 if not required.issubset(selected):
                     rules.append(R.CONTINUATION_INPUT_COVERAGE if self.continuation else R.INPUT_COVERAGE)
                 try:
-                    declared_plan = stage_plan_from_dict(proposal["stage_plan"]) if "stage_plan" in proposal else None
+                    declared_plan = stage_plan_spec_from_dict(proposal["stage_plan"]) if "stage_plan" in proposal else None
                 except (TypeError, ValueError, KeyError):
                     declared_plan = None
                     rules.append(R.SPECIALIST_REQUIRED)
@@ -3267,7 +3227,7 @@ class LeadProviderConstraints:
                         scope = None
                 if scope:
                     try:
-                        plan = stage_plan_from_dict(proposal["stage_plan"]) if "stage_plan" in proposal else None
+                        plan = declared_plan
                         required_roles = stage_required_specialists(scope, plan)
                         validate_stage_routing(scope, tuple(roles), plan,
                             source_input_ids=tuple((*self.input_ids, *read_ids)),

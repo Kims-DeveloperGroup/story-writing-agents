@@ -25,6 +25,14 @@ Final review applies to the exact candidate content and the required domain cove
 
 ## Current-call contracts
 
-The delivered contract owners remain authoritative for provider schemas, selected validation and bounded repair. A new preliminary-review record must use that same current-call binding and retain task/revision and evidence ownership. Policy text, native response encoding, durable events and replay must agree on its meaning.
+The delivered contract owners remain authoritative for provider schemas, selected validation and bounded repair.
+A preliminary-review intent uses the current-call contract without
+agent-visible task identity. The runtime applies one task binding to the scope,
+stage plan, every question and preliminary record before publication.
+Internal records retain task/revision and evidence ownership. Review-target
+revisions and exact candidate revisions remain source evidence; they are
+separate from task identity. Scope refinement never reissues old final-review
+evidence without its source, criteria and current-READ qualification.
+Policy text, native response encoding, durable events and replay must agree on its meaning.
 
 See [Lead workflows](../guides/lead-agent.md) for the existing confirmation and artifact workflow.

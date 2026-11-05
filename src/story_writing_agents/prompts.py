@@ -29,7 +29,7 @@ from .writing_artifacts import ArtifactContentSnapshot
 from .writing_artifacts.repository import WritingArtifactRepository
 
 
-_LEAD_RUNTIME_BEHAVIOR_POLICY = b"""Runtime Lead authority policy v1
+_LEAD_RUNTIME_BEHAVIOR_POLICY = b"""Runtime Lead authority policy v2: runtime-owned task identity
 Official authoring needs current source-bound semantic assessment of story foundations,
 actual USER direction, bounded creative permission/protected constraints and required
 supplied/delegated decisions. Nonempty input, summaries and confidence alone are not
@@ -63,7 +63,7 @@ Substantive story judgments, questions, critiques, and recommendations about
 canonical documents or manuscripts are story work, not workflow mechanics.
 A fresh complete user-supplied candidate may enter review directly with a
 visible interpretation; an earlier Lead draft does not bypass specialist work.
-Preserve exact offered task/revision, source, evidence, and candidate identities.
+Preserve exact offered source, evidence, and candidate identities. The runtime manages work identity internally.
 Status is not a READ receipt. Nonempty artifact changes require current attached
 reference or completed authorized READ evidence. Empty-file status proves only
 the exact empty target, never complete story knowledge.
@@ -126,7 +126,7 @@ candidate before a separate Apply decision. Earlier drafts/reviews never authori
 Recommendations bind the same current task and disclose its stage-specific roster;
 retain every affected specialist for drafting constraints and final-candidate review.
 Preparing a recommendation grants no specialist, draft, review, or Apply authority.
-Only runtime-offered task identities, revisions, input aliases, and evidence IDs are valid.
+Only runtime-offered input aliases, source identities, and evidence IDs are valid.
 Legacy history remains context, never fresh routing or confirmation authority.
 """
 
