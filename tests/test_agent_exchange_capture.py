@@ -101,6 +101,7 @@ def _begin(
     store: _RecordingStore,
     *,
     invocation: ProviderInvocation | None = None,
+    diagnostic_call_id: str | None = None,
 ) -> AgentExchangeCaptureLifecycle:
     return _capture(store).begin(
         session_id="session_1",
@@ -109,12 +110,17 @@ def _begin(
         agent_id=ROSTER[0],
         provider=AgentExchangeProvider.CODEX,
         invocation=invocation or _invocation(),
+        diagnostic_call_id=diagnostic_call_id,
     )
 
 
 def _decoded(records: list[AgentExchangeRecordInput]) -> list[object]:
     return [json.loads(record.content) for record in records]
 
+
+def _started_capture(**options):
+    store = _RecordingStore()
+    return store, _begin(store, **options)
 
 class AgentExchangeCaptureContractTests(unittest.TestCase):
     def test_exact_closed_surfaces_and_no_root_expansion(self) -> None:
@@ -221,8 +227,7 @@ class AgentExchangeCaptureContractTests(unittest.TestCase):
         )
 
     def test_response_projects_exact_result_with_usage_and_nulls(self) -> None:
-        store = _RecordingStore()
-        lifecycle = _begin(store)
+        store, lifecycle = _started_capture()
         lifecycle.record_response(_result(usage=ProviderUsage(11, 7, 3)))
         self.assertEqual(
             _decoded(store.records)[1],
@@ -326,13 +331,13 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
         )
         for method_name, code, outcome, expected_code in cases:
             with self.subTest(code=expected_code):
-                store = _RecordingStore()
-                lifecycle = _begin(store)
+                store, lifecycle = _started_capture(diagnostic_call_id="physical-call-1")
                 lifecycle.record_response(_result())
                 method = getattr(lifecycle, method_name)
                 if code is AgentExchangeTerminalCode.ANSWER_VALIDATION_FAILED:
                     finalizer = _ContextExchangeFinalizer(lifecycle)
                     finalizer.set_validation_details((validation_detail,))
+                    finalizer.set_host_task_diagnostic("TASK-must-not-publish", 1)
                     finalizer.rejected(ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED)
                 else:
                     method() if code is None else method(code)
@@ -349,7 +354,7 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
                     {lifecycle.exchange_id},)
                 self.assertEqual(
                     _decoded(store.records)[2],
-                    {"code": expected_code, "outcome": outcome} | (
+                    {"code": expected_code, "outcome": outcome, "host_diagnostics": {"call_id": "physical-call-1"}} | (
                         {"validation_details": [validation_detail]}
                         if code is AgentExchangeTerminalCode.ANSWER_VALIDATION_FAILED else {}
                     ),
@@ -363,8 +368,7 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
             AgentExchangeTerminalCode.PROVIDER_CONTRACT_INVALID,
         ):
             with self.subTest(code=code):
-                store = _RecordingStore()
-                lifecycle = _begin(store)
+                store, lifecycle = _started_capture(diagnostic_call_id="physical-call-1")
                 lifecycle.provider_failure(code)
                 self.assertEqual(
                     [record.request_type for record in store.records],
@@ -379,24 +383,22 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
                     {"provider_failure": True},)
                 self.assertEqual(
                     _decoded(store.records)[2],
-                    {"code": code.value, "outcome": "provider_failure"},)
+                    {"code": code.value, "outcome": "provider_failure", "host_diagnostics": {"call_id": "physical-call-1"}},)
 
         for after_response in (False, True):
             with self.subTest(after_response=after_response):
-                store = _RecordingStore()
-                lifecycle = _begin(store)
+                store, lifecycle = _started_capture(diagnostic_call_id="physical-call-1")
                 if after_response:
                     lifecycle.record_response(_result())
                 lifecycle.cancelled()
                 self.assertEqual(
                     _decoded(store.records)[-1],
-                    {"code": "cancelled", "outcome": "cancelled"},)
+                    {"code": "cancelled", "outcome": "cancelled", "host_diagnostics": {"call_id": "physical-call-1"}},)
 
     def test_invalid_transitions_are_noops_and_valid_transition_remains_available(
         self,
     ) -> None:
-        store = _RecordingStore()
-        lifecycle = _begin(store)
+        store, lifecycle = _started_capture()
         lifecycle.accepted()
         lifecycle.rejected(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED)
         lifecycle.post_response_runtime_failure(
@@ -448,8 +450,7 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
         self.assertEqual(len(terminal_store.attempts), 3)
 
     def test_concurrent_response_and_terminal_calls_close_once(self) -> None:
-        store = _RecordingStore()
-        lifecycle = _begin(store)
+        store, lifecycle = _started_capture()
         with ThreadPoolExecutor(max_workers=16) as executor:
             list(
                 executor.map(
@@ -510,8 +511,7 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
 
     def test_failure_response_bytes_are_reversible_and_never_accepted(self):
         import base64
-        store = _RecordingStore()
-        lifecycle = _begin(store)
+        store, lifecycle = _started_capture()
         diagnostic = self.diagnostic()
         lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic)
         lifecycle.accepted()
@@ -531,8 +531,7 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
         self.assertEqual(len({r.exchange_id for r in store.records}), 1)
 
     def test_failure_response_preserves_only_error_status_exit_code_and_stderr(self):
-        store = _RecordingStore()
-        lifecycle = _begin(store)
+        store, lifecycle = _started_capture()
         stdout = json.dumps({
             "event": "result",
             "result": {
@@ -554,8 +553,7 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
 
     def test_failure_response_handles_nonfinite_json_and_codex_jsonl(self):
         # Non-finite JSON values fall back to None without failing serialization
-        store = _RecordingStore()
-        lifecycle = _begin(store)
+        store, lifecycle = _started_capture()
         diagnostic = ProviderResponseDiagnostic(b'{"status": NaN, "error": Infinity}', b"err", 1)
         lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic)
         response = _decoded(store.records)[1]
@@ -566,8 +564,7 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
             "stderr": {"data": "err", "encoding": "utf-8"},})
 
         # Codex JSONL multi-line event streams extract terminal error events
-        store = _RecordingStore()
-        lifecycle = _begin(store)
+        store, lifecycle = _started_capture()
         jsonl_stdout = (
             b'{"type":"thread.started","thread_id":"t1"}\n'
             b'{"type":"turn.failed","error":{"message":"Quota exceeded","code":429},"status":"failed"}\n'
@@ -584,8 +581,7 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
     def test_recovered_success_records_diagnostic_and_none_default_is_unchanged(self):
         for diagnostic in (None, self.diagnostic()):
             with self.subTest(diagnostic=diagnostic):
-                store = _RecordingStore()
-                lifecycle = _begin(store)
+                store, lifecycle = _started_capture()
                 lifecycle.record_response(ProviderResult('thread', 'answer', response_diagnostic=diagnostic))
                 lifecycle.accepted()
                 response = _decoded(store.records)[1]
@@ -605,13 +601,11 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
                 self.assertLessEqual(len(store.attempts), 3)
                 if failed_attempt == 2:
                     self.assertEqual(store.records[-1].request_type, AgentExchangeRequestType.OUTCOME)
-        store = _RecordingStore()
-        lifecycle = _begin(store)
+        store, lifecycle = _started_capture()
         with mock.patch.object(capture_module, '_response_diagnostic', side_effect=ValueError('private serialization')):
             lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic)
         self.assertEqual([r.request_type for r in store.records], [AgentExchangeRequestType.REQUEST, AgentExchangeRequestType.OUTCOME])
-        store = _RecordingStore()
-        lifecycle = _begin(store)
+        store, lifecycle = _started_capture()
         with ThreadPoolExecutor(max_workers=4) as pool:
             list(pool.map(lambda _: lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic), range(12)))
         self.assertEqual(len(store.records), 3)
@@ -621,8 +615,7 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
         diagnostic = self.diagnostic()
         failure = ProviderInvocationError('fixed', taint_existing_thread=True)
         failure.record_response_diagnostic(diagnostic)
-        store = _RecordingStore()
-        lifecycle = _begin(store)
+        store, lifecycle = _started_capture()
         AgentBackend._capture_provider_failure_without_replacing(lifecycle, AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, failure=failure)
         self.assertEqual(len(store.records), 3)
         self.assertEqual(str(failure), 'fixed')

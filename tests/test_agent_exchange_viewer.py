@@ -108,12 +108,23 @@ def _message(content: str, **changes: object) -> DebateMessage:
     return DebateMessage(**values)  # type: ignore[arg-type]
 
 
+def _prepare_view(source=b"", **overrides):
+    context = {
+        "session_id": "session_1",
+        "scope_kind": AgentExchangeScopeKind.CONVERSATION,
+        "scope_id": "conversation_1",
+        "scope_subject": "Subject",
+        "agent_id": ROSTER[0],
+    }
+    context.update(overrides)
+    return prepare_agent_exchange_view(source, **context)
+
 class _ExactViewerSpec:
     def __init__(
         self,
-        session_id,
-        conversation_id,
-        agent_id,
+        session_id=None,
+        conversation_id=None,
+        agent_id=None,
         date_time_field="timestamp",
         request_type_field="request_type",
         content_field="content",
@@ -121,18 +132,18 @@ class _ExactViewerSpec:
         conversation_label="Conversation",
         conversation_subject=None,
         input_protocol="semantic",
+        context=(),
+        inspection=None,
     ):
         self.session_id, self.conversation_id, self.agent_id = session_id, conversation_id, agent_id
+        self.context, self.inspection = context, inspection
         self.date_time_field, self.request_type_field, self.content_field = date_time_field, request_type_field, content_field
         self.title, self.conversation_label, self.conversation_subject = title, conversation_label, conversation_subject
         self.input_protocol = input_protocol
 
     @property
     def primary_fields(self):
-        return (
-            self.date_time_field,
-            self.request_type_field,
-            self.content_field,)
+        return ()
 
 
 class _ExactViewerHost:
@@ -162,6 +173,9 @@ def _transport():
     return ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)
 
 
+def _viewer_import(module):
+    from jsonl_viewer import inspection
+    return lambda name: inspection if name == "jsonl_viewer.inspection" else module
 def _viewer_module(view_jsonl=mock.DEFAULT) -> types.ModuleType:
     module = types.ModuleType("jsonl_viewer")
     module.__all__ = ["ViewerHost", "ViewerSpec", "ViewerTerminal", "view_jsonl"]
@@ -405,24 +419,30 @@ class LazyViewerAdapterTests(unittest.TestCase):
             calls.append((source, spec, terminal))
 
         module = _viewer_module(view_jsonl)
-        source = b'{"content":"PRIVATE","provider":"codex"}\n'
+        source = (json.dumps({"content": "PRIVATE", "provider": "codex", "session_id": "session_1",
+            "scope_kind": "debate", "scope_id": "debate_full_id", "agent_id": ROSTER[2],
+            "exchange_id": "e", "request_type": "request"}) + "\n").encode()
         with mock.patch.object(
-            viewer_module.importlib, "import_module", return_value=module
+            viewer_module.importlib, "import_module", side_effect=_viewer_import(module)
         ) as imported:
-            operation = prepare_agent_exchange_view(
-                source,
-                session_id="session_1",
-                scope_kind=AgentExchangeScopeKind.DEBATE,
-                scope_id="debate_full_id",
-                scope_subject="Subject",
-                agent_id=ROSTER[2],
-            )
-        imported.assert_called_once_with("jsonl_viewer")
+            operation = _prepare_view(
+                            source,
+                            scope_kind=AgentExchangeScopeKind.DEBATE,
+                            scope_id='debate_full_id',
+                            agent_id=ROSTER[2],
+                        )
+        self.assertEqual(imported.call_args_list, [mock.call("jsonl_viewer"), mock.call("jsonl_viewer.inspection")])
         self.assertEqual(calls, [])
         host = _transport()
         operation(host)
         self.assertEqual(len(calls), 1)
         observed_source, spec, observed_host = calls[0]
+        self.assertEqual({facet.id for facet in spec.inspection.facets},
+                         {"provider", "outcome", "phase", "completeness", "request_present", "response_present", "outcome_present"})
+        self.assertTrue(all({option.value for option in facet.options} == {True, False}
+                            for facet in spec.inspection.facets if facet.id.endswith("_present")))
+        self.assertEqual(tuple((item.label, item.value) for item in spec.context[:3]),
+                         (("Session", "session_1"), ("Debate", "debate_full_id — Subject"), ("Agent", ROSTER[2])))
         self.assertIs(observed_source, source)
         self.assertIs(type(observed_source), bytes)
         self.assertIs(observed_host.input_stream, host.input_stream)
@@ -440,18 +460,26 @@ class LazyViewerAdapterTests(unittest.TestCase):
                 spec.conversation_subject,
                 spec.input_protocol,),
             (
-                "session_1",
-                "debate_full_id",
-                ROSTER[2],
-                ("timestamp", "request_type", "content"),
+                None,
+                None,
+                None,
+                (),
                 "Agent Exchanges",
-                "Debate",
-                "Subject",
+                "Conversation",
+                None,
                 "keys",
             ),
         )
         self.assertFalse(hasattr(spec, "searchable_fields"))
         self.assertEqual(source, b'{"content":"PRIVATE","provider":"codex"}\n')
+        from jsonl_viewer import inspection as api
+        class Overflow(api.Inspection):
+            def __post_init__(self): raise ValueError("bounded descriptor fixture")
+        with (mock.patch.object(api, "Inspection", Overflow),
+              mock.patch.object(viewer_module.importlib, "import_module", side_effect=_viewer_import(module))):
+            _prepare_view(source, scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_full_id", agent_id=ROSTER[2])(host)
+        self.assertTrue(calls[-1][0] is source and calls[-1][1].inspection is None)
+        self.assertTrue(any(item.label == "Inspection" and "unchanged" in item.value for item in calls[-1][1].context))
 
     def test_missing_nested_import_and_bad_public_surface_are_fixed_preterminal_failures(
         self,
@@ -475,24 +503,16 @@ class LazyViewerAdapterTests(unittest.TestCase):
         )
         for imported, expected_code in cases:
             with self.subTest(imported=imported):
-                side_effect = imported if isinstance(imported, BaseException) else None
-                return_value = imported if side_effect is None else mock.DEFAULT
+                side_effect = imported if isinstance(imported, BaseException) else _viewer_import(imported)
                 with (
                     mock.patch.object(
                         viewer_module.importlib,
                         "import_module",
                         side_effect=side_effect,
-                        return_value=return_value,),
+                        ),
                     self.assertRaises(AgentExchangeViewerError) as raised,
                 ):
-                    prepare_agent_exchange_view(
-                        b"",
-                        session_id="session_1",
-                        scope_kind=AgentExchangeScopeKind.CONVERSATION,
-                        scope_id="conversation_1",
-                        scope_subject="Subject",
-                        agent_id=ROSTER[0],
-                    )
+                    _prepare_view()
                 self.assertEqual(raised.exception.code, expected_code)
                 self.assertEqual(
                     str(raised.exception),
@@ -550,17 +570,10 @@ class LazyViewerAdapterTests(unittest.TestCase):
                 mock.patch.object(
                     viewer_module.importlib,
                     "import_module",
-                    return_value=module,),
+                    side_effect=_viewer_import(module),),
                 self.assertRaises(AgentExchangeViewerError) as raised,
             ):
-                prepare_agent_exchange_view(
-                    b"",
-                    session_id="session_1",
-                    scope_kind=AgentExchangeScopeKind.CONVERSATION,
-                    scope_id="conversation_1",
-                    scope_subject="Subject",
-                    agent_id=ROSTER[0],
-                )
+                _prepare_view()
             self.assertEqual(raised.exception.code, "incompatible")
             self.assertEqual(
                 str(raised.exception),
@@ -572,16 +585,11 @@ class LazyViewerAdapterTests(unittest.TestCase):
     ) -> None:
         module = _viewer_module()
         with mock.patch.object(
-            viewer_module.importlib, "import_module", return_value=module
+            viewer_module.importlib, "import_module", side_effect=_viewer_import(module)
         ):
             with self.assertRaisesRegex(TypeError, "immutable bytes"):
-                prepare_agent_exchange_view(  # type: ignore[arg-type]
-                    bytearray(b"mutable"),
-                    session_id="session_1",
-                    scope_kind=AgentExchangeScopeKind.CONVERSATION,
-                    scope_id="conversation_1",
-                    scope_subject="Subject",
-                    agent_id=ROSTER[0],
+                _prepare_view(
+                    bytearray(b'mutable'),
                 )
 
         private = RuntimeError("PRIVATE provider response /tmp/private")
@@ -592,16 +600,11 @@ class LazyViewerAdapterTests(unittest.TestCase):
         with mock.patch.object(
             viewer_module.importlib,
             "import_module",
-            return_value=_viewer_module(failing_view_jsonl),
+            side_effect=_viewer_import(_viewer_module(failing_view_jsonl)),
         ):
-            operation = prepare_agent_exchange_view(
-                b"PRIVATE bytes\n",
-                session_id="session_1",
-                scope_kind=AgentExchangeScopeKind.CONVERSATION,
-                scope_id="conversation_1",
-                scope_subject="Subject",
-                agent_id=ROSTER[0],
-            )
+            operation = _prepare_view(
+                            b'PRIVATE bytes\n',
+                        )
         with self.assertRaises(AgentExchangeViewerError) as raised:
             operation(_transport())
         self.assertEqual(raised.exception.code, "view_failed")
@@ -610,28 +613,38 @@ class LazyViewerAdapterTests(unittest.TestCase):
 
     @unittest.skipUnless(VIEWER_SOURCE.is_dir(), "pinned jsonl-viewer is unavailable")
     def test_pinned_real_viewer_hidden_field_search_promotes_verbose_and_is_transient(self) -> None:
+        self.assertTrue(VIEWER_SOURCE.is_dir(), "adopted viewer source must be available")
         script = textwrap.dedent("""
             import io, inspect, json, jsonl_viewer
             from types import SimpleNamespace
             from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
             from story_writing_agents.interactive_controller._exchange_viewer import prepare_agent_exchange_view
             from story_writing_agents.interactive_terminal._external_view import ExternalTerminalIO
-            source = (json.dumps({"content": "body", "provider": "codex codex"}) + "\\n").encode(); original = bytes(source)
-            frames, closed = [], []; events = iter(("search\\tCODEX", "next_match", "previous_match", "clear_search", "close"))
+            common = {"session_id": "session_1", "scope_kind": "debate", "scope_id": "debate_1", "agent_id": "character_custodian"}
+            rows = (("legacy", "request", "body", "codex codex"),
+                    ("a", "response", json.dumps({"response_text": "동기 동기"}), "antigravity"),
+                    ("b", "response", json.dumps({"response_text": "동기"}), "antigravity"),
+                    ("c", "request", json.dumps({"payload": "동기"}), "antigravity"))
+            source = "".join(json.dumps({**common, "exchange_id": identity, "request_type": kind,
+                "content": content, "provider": provider}) + "\\n" for identity, kind, content, provider in rows).encode(); original = bytes(source)
+            frames, closed = [], []; events = iter(("search\\tCODEX", "next_match", "previous_match", "clear_search", "search\\t동기",
+                "text\\t/", "key\\ttab", "key\\tright", "key\\tright", "key\\ttab", "key\\tenter", "close"))
             borrowed = SimpleNamespace(terminal_size=lambda: (240, 28), color_enabled=lambda: False, present=frames.append, read_event=lambda: next(events, None), close_view=lambda: closed.append(True))
             actual = jsonl_viewer.view_jsonl
             assert tuple(inspect.signature(actual).parameters) == ("source", "spec", "host", "terminal", "transient_only")
             def owned(source, spec, host=None, *, terminal=None, transient_only=False):
-                assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal)
+                assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal) and spec.primary_fields == ()
                 actual(source, spec, borrowed)
             jsonl_viewer.view_jsonl = owned
             operation = prepare_agent_exchange_view(source, session_id="session_1", scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_1", scope_subject="Subject", agent_id="character_custodian")
             transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True); operation(transport)
-            searched = [frame for frame in frames if "Search all text='CODEX'" in frame]
-            assert closed == [True] and "SIMPLE" in frames[0] and all("VERBOSE" in frame for frame in searched)
-            assert ["1/2" in frame for frame in searched] == [True, False, True] and "Search all text=" not in frames[-1]
+            searched = [frame for frame in frames if "Search: 'CODEX'" in frame]
+            assert closed == [True] and "READ ONLY" in frames[0] and any("provider" in frame and "2 occurrences" in frame for frame in searched)
+            assert ["1/2" in frame for frame in searched] == [True, False, True] and "Search: None" in frames[4]
+            assert any("2 matched · 2 records · 3 occurrences" in frame and "In: Response content" in frame for frame in frames)
             frames.clear(); events = iter(("close",)); operation(transport)
-            assert "SIMPLE" in frames[0] and "Search all text=" not in frames[0] and source == original
+            assert "READ ONLY" in frames[0] and "Search: None" in frames[0] and source == original
+            assert closed == [True, True]
         """)
         environment = dict(os.environ, PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(VIEWER_SOURCE))))
         completed = subprocess.run([sys.executable, "-W", "error", "-c", script], cwd=ROOT, env=environment, text=True, capture_output=True, check=False)
@@ -770,7 +783,8 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
                     "scope_kind": AgentExchangeScopeKind.CONVERSATION,
                     "scope_id": conversation.conversation_id,
                     "scope_subject": "Archived subject",
-                    "agent_id": ROSTER[0],}
+                    "agent_id": ROSTER[0],
+                    "typed_history": (),}
             ],
         )
         self.assertIs(type(prepared[0]["source"]), bytes)

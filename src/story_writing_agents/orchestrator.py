@@ -1748,6 +1748,7 @@ class _AccountingContextProvider:
         self._public_response_contract_id: str | None = None
         self._public_observations: dict[str, tuple[str, int, CollaborationProviderCallKind]] = {}
         self._public_accepted_call_id: str | None = None
+        self._diagnostic_finalizers: dict[str, object] = {}
         self._public_responses_published = False
         self._group_observations: list[LeadGroupObservation] = []
         self._group_started_ns: int | None = None
@@ -1871,6 +1872,11 @@ class _AccountingContextProvider:
             if type(result) is ContextProviderCallResult else ()
         )
         self._record_result_submission(result, request.call_id, ordinal, kind, details)
+        try:
+            if type(result) is ContextProviderCallResult:
+                self._diagnostic_finalizers[request.call_id] = result.finalizer
+        except BaseException:
+            pass
         if type(result) is ContextProviderCallResult and self._public_response_contract_id is not None:
             public_text = recover_lead_public_response(
                 result.response_text, self._public_response_contract_id,
@@ -1879,6 +1885,16 @@ class _AccountingContextProvider:
             if public_text is not None and request.call_id in self._submitted_call_ids:
                 self._public_observations[request.call_id] = (public_text, ordinal, kind)
         return result
+
+    def record_validated_task(self, call_id: str, task_id: str, task_revision: int) -> None:
+        """Attach only a validated host task to its exact physical response."""
+        try:
+            finalizer = self._diagnostic_finalizers.get(call_id)
+            callback = getattr(finalizer, "set_host_task_diagnostic", None)
+            if callable(callback):
+                callback(task_id, task_revision)
+        except BaseException:
+            pass
 
     def record_validation_details(
         self, call_id: str, details: tuple[str, ...],
@@ -9100,6 +9116,10 @@ class StoryRuntime:
                         answer = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
                 decoded = decoder(answer, artifact_binding)
 
+            def record_validated_answer(call_id: str) -> None:
+                if decoded is not None and constraints is not None and constraints.scope is not None:
+                    provider.record_validated_task(call_id, constraints.scope.task_id, constraints.scope.task_revision)
+
             lead_factory = None
             if agent_id == LEAD_ORCHESTRATOR:
                 lead_factory = _lead_call_contract_factory(
@@ -9144,6 +9164,7 @@ class StoryRuntime:
                 execution_workspace=execution_workspace,
             )
             invocation_arguments = {
+                "validated_answer_sink": record_validated_answer,
                 "writing_artifacts": authorities[0],
                 "focused_conversation": authorities[1],
                 "active_debate": authorities[2],
@@ -12975,6 +12996,12 @@ class StoryRuntime:
                             session_history=session_history,
                         )
 
+                def record_validated_answer(call_id: str) -> None:
+                    if decoded is not None and decoded_discussion is None and decoded_exploration is None:
+                        scope = decoded.authoring_scope
+                        if scope is not None:
+                            provider.record_validated_task(call_id, scope.task_id, scope.task_revision)
+
                 lead_factory = _lead_call_contract_factory(
                     constraints=(constraints if type(constraints) is LeadProviderConstraints else
                                  LeadProviderConstraints(input_ids=tuple(item.input_id for item in inputs),
@@ -13042,6 +13069,7 @@ class StoryRuntime:
 
 
                         validation_sink=provider.record_validation_details,
+                        validated_answer_sink=record_validated_answer,
                             group_observation_sink=provider.record_group_observation,
                         event_sink=context_event_sink,
                         progress_sink=action_progress_sink,
@@ -13180,6 +13208,7 @@ class StoryRuntime:
                             active_debate=authorities[2],
                             own_agent_state=authorities[3],
                             validation_sink=provider.record_validation_details,
+                            validated_answer_sink=record_validated_answer,
                             group_observation_sink=provider.record_group_observation,
                             event_sink=context_event_sink,
                             progress_sink=action_progress_sink,

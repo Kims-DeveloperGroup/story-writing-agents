@@ -5913,6 +5913,7 @@ class AgentContextService:
         answer_diagnostic: Callable[[str], tuple[DomainValidationRule, ...]] | None = None,
         contract_lineage: BoundCallLineage | None = None,
         validation_sink: Callable[[str, tuple[str, ...]], object] | None = None,
+        validated_answer_sink: Callable[[str], object] | None = None,
         event_sink: ContextExecutionEventSink | None = None,
         group_observation_sink: LeadGroupObservationSink | None = None,
         progress_sink: ContextActionProgressSink | None = None,
@@ -5964,6 +5965,7 @@ class AgentContextService:
         elif contract_lineage is not None:
             raise TypeError("nonbound contracts cannot accept Lead lineage")
         _validate_sync_callback(validation_sink)
+        _validate_sync_callback(validated_answer_sink)
         _validate_sync_callback(event_sink)
         _validate_sync_callback(progress_sink)
         if request.subject_kind is ContextSubjectKind.DEBATE:
@@ -6082,6 +6084,7 @@ class AgentContextService:
                         answer_diagnostic=answer_diagnostic,
                         contract_lineage=contract_lineage,
                         validation_sink=validation_sink,
+                        validated_answer_sink=validated_answer_sink,
                         event_sink=event_sink,
                             group_observation_sink=group_observation_sink,
                         progress_sink=progress_sink,
@@ -6144,6 +6147,7 @@ class AgentContextService:
         answer_diagnostic: Callable[[str], tuple[DomainValidationRule, ...]] | None,
         contract_lineage: BoundCallLineage | None,
         validation_sink: Callable[[str, tuple[str, ...]], object] | None,
+        validated_answer_sink: Callable[[str], object] | None,
         event_sink: ContextExecutionEventSink | None,
         group_observation_sink: LeadGroupObservationSink | None,
         progress_sink: ContextActionProgressSink | None,
@@ -7355,6 +7359,13 @@ class AgentContextService:
                             ))
                         raise
                 stage = "answer_observer"
+                if validated_answer_sink is not None:
+                    # Diagnostics are observational: never replace execution or
+                    # authorization with a capture/observer failure.
+                    try:
+                        _require_sync_none(validated_answer_sink(call_id))
+                    except BaseException:
+                        pass
                 _emit_context_event(
                     event_sink,
                     execution_event(

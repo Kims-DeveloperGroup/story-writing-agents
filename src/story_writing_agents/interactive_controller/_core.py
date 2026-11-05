@@ -5694,6 +5694,11 @@ class InteractiveController:
                 return
 
         try:
+            typed_history = ()
+            if scope_choice.scope_kind is AgentExchangeScopeKind.CONVERSATION:
+                typed_history = self._run_picker_preparation(lambda: tuple(
+                    self._conversation_storage_services.event_store.read(session_id, scope_choice.scope_id)
+                ))
             operation = prepare_agent_exchange_view(
                 source,
                 session_id=session_id,
@@ -5701,7 +5706,10 @@ class InteractiveController:
                 scope_id=scope_choice.scope_id,
                 scope_subject=scope_choice.subject,
                 agent_id=agent_choice.agent_id,
+                typed_history=typed_history,
             )
+        except _ControllerAbort:
+            raise
         except AgentExchangeViewerError as failure:
             self._present_agent_exchange_viewer_failure(failure)
             return

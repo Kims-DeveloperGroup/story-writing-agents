@@ -37,8 +37,8 @@ _GENERIC_RAG_REPOSITORY = "https://github.com/Kims-DeveloperGroup/generic-rag.gi
 _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}")
 _OLD_JSONL_VIEWER_PIN = "997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea"
-_JSONL_VIEWER_PIN = "717d17b0c180150e5137439ff72a48cef5f12397"
-_JSONL_VIEWER_VERSION = "0.6.5"
+_JSONL_VIEWER_PIN = "a38a975eda4123df11c1fa4f796fd49ab88efcee"
+_JSONL_VIEWER_VERSION = "0.7.0"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
 _JSONL_VIEWER_REQUIREMENT = (
     f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}")
@@ -212,6 +212,11 @@ def _copy_setuptools_build_support(destination: Path) -> None:
 def _gitlink_git_directory(relative: str) -> Path:
     if relative not in _GITLINK_PATHS:
         raise ValueError("unsupported gitlink path")
+    child = _REPOSITORY_ROOT / relative
+    if (child / ".git").exists():
+        return Path(subprocess.run(
+            ["git", "-C", str(child), "rev-parse", "--absolute-git-dir"],
+            text=True, capture_output=True, check=True).stdout.strip())
     resolved = subprocess.run(
         ["git", "rev-parse", "--git-path", f"modules/{relative}"],
         cwd=_REPOSITORY_ROOT,
