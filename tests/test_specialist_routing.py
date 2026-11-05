@@ -534,7 +534,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             replace(use, predecessor_node_id=use.consumer_node_id)
 
-        # Constructed projection records exercise progress; they are not a Host Apply capability.
+        # Projection only: review-only metadata grants no Apply; independent Apply outcomes are supplied as facts.
         from story_writing_agents import artifact_proposals as artifacts, writing_artifacts as applications
         from story_writing_agents.agents import EXECUTION_SPECIALIST
         history = []
@@ -558,7 +558,7 @@ class SpecialistRoutingTests(unittest.TestCase):
             current = documents.DocumentPlan.create(plan_id=plan.ref.plan_id, plan_revision=revision,
                 goal_objective_id=plan.goal_objective_id, goal_facts_digest=plan.goal_facts_digest,
                 nodes=(*plan.nodes[:-1], node), remaining_target_paths=tuple(value for value in (chapter3, chapter4) if value != path))
-            scope = self.scope(schema_version=3, activity=Activity.REVIEW, intent=Intent.AUTHORING, task_id="window_" + str(revision),
+            scope = self.scope(schema_version=3, activity=Activity.REVIEW, intent=Intent.REVIEW_ONLY, task_id="window_" + str(revision),
                 domains=(Domain.TONE_EXECUTION,), contributions=(Contribution(Domain.TONE_EXECUTION, Role.CONSTRAINT_ASSESSOR),),
                 target_paths=(path,))
             task_ref = LeadTaskRef(session_id=fixture.SESSION_ID, conversation_id=fixture.CONVERSATION_ID,
