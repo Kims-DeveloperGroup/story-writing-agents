@@ -764,6 +764,28 @@ def _lead_discussion_result_contract(
     )
 
 
+def _target_authoring_scope_prior(
+    scope: AuthoringScope,
+    source: AuthoringScope | None,
+    receipt: LeadTaskTransitionReceipt | None,
+) -> AuthoringScope | None:
+    """Separate a caller-verified NEW_TASK target from its retained source evidence."""
+    if (
+        source is not None
+        and type(receipt) is LeadTaskTransitionReceipt
+        and receipt.origin_kind == "task_decision"
+        and receipt.action is LeadTaskAction.NEW_TASK
+        and (scope.task_id, scope.task_revision)
+        == (receipt.target_task_id, receipt.target_task_revision)
+        and scope.task_id != source.task_id
+        and receipt.source_task_ref is not None
+        and (receipt.source_task_ref.task_id, receipt.source_task_ref.task_revision)
+        == (source.task_id, source.task_revision)
+    ):
+        return None
+    return source
+
+
 def _lead_revision_result_contract(
     expected_relation: LeadProposalRelation, input_ids: tuple[str, ...],
     task_revisions: tuple[tuple[str, int], ...],
@@ -13387,23 +13409,26 @@ class StoryRuntime:
                             '$.authoring_scope',
                             'selected authoring task changed while the Lead was interpreting the request',
                         )
+                    target_prior = _target_authoring_scope_prior(
+                        authoring_scope, selected_prior, task_receipt,
+                    )
                     provisional_brief_refinement = (
-                        selected_prior is not None
+                        target_prior is not None
                         and authoring_scope.schema_version >= 3
-                        and authoring_scope.task_revision == selected_prior.task_revision
+                        and authoring_scope.task_revision == target_prior.task_revision
                         and not binding_pinned
                         and host_binding_plan is not None
                         and host_binding_plan.transition == "refine"
                         and type(raw_spec) is dict
                         and "interpretation" in raw_spec
                     )
-                    if selected_prior is not None and not provisional_brief_refinement and (
+                    if target_prior is not None and not provisional_brief_refinement and (
                         authoring_scope.schema_version < 3
-                        or authoring_scope.task_revision == selected_prior.task_revision
+                        or authoring_scope.task_revision == target_prior.task_revision
                     ):
                         authoring_scope = replace(
                             authoring_scope,
-                            interpretation=selected_prior.interpretation,
+                            interpretation=target_prior.interpretation,
                         )
                     objective_intent = decoded.objective_intent
                     if objective_intent is not None and authoring_scope.activity is not AuthoringActivity.WORKFLOW:
@@ -13419,7 +13444,7 @@ class StoryRuntime:
                             authoring_scope = replace(authoring_scope, target_paths=tuple(dict.fromkeys(
                                 (*authoring_scope.target_paths, *objective_paths),
                             )))
-                    resolved_scope = self._resolve_authoring_scope(authoring_scope, inputs, decoded_evidence, selected_prior,
+                    resolved_scope = self._resolve_authoring_scope(authoring_scope, inputs, decoded_evidence, target_prior,
                         allow_provisional=not binding_pinned,
                         allow_view=(host_binding_plan is not None and authority_free))
                     if decoded.preliminary_review is not None:

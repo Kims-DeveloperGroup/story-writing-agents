@@ -823,7 +823,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         review_scope["intent"] = "review_only"
         review_packet = document_fixture._document_plan_native_response(current_call, {"kind": "proposal", "message": "Review only the current Global input.",
             "authoring_scope": review_scope, "proposal": {"assignments": [{"agent_id": document_fixture.PLOT_ARCHITECT,
-                "instruction": "Review only the current Global input.", "mode": "review", "input_ids": ["user_input", "reference_1"],
+                "instruction": "Review only the current Global input.", "mode": "review", "input_ids": ["user_input", "reference_1", "read_global"],
                 "review_basis": {"candidate_input_ids": ["reference_1"], "criteria": "Preserve the supplied promise and ending."}}]}})
         self.assertEqual(result_bound.rule_graph.findings(json.loads(review_packet)), ())
         review_value = json.loads(result_bound.decode_response(review_packet).answer_json)
@@ -833,6 +833,33 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertTrue(result_bound.rule_graph.findings(illegal_readonly_artifact))
         with self.assertRaises(ValueError):
             result_bound.decode_response(json.dumps(illegal_readonly_artifact))
+
+        from story_writing_agents.orchestrator import _target_authoring_scope_prior
+        from story_writing_agents.lead_task_transitions import LeadTaskAction, LeadTaskTransitionReceipt
+        # Pure scope-law fixtures: receipt verification remains the caller's responsibility.
+        artifact_scope, readonly_scope = (c.authoring_scope_from_dict(value["authoring_scope"]) for value in (artifact_value, review_value))
+        for source_scope, next_scope in ((artifact_scope, readonly_scope), (readonly_scope, artifact_scope)):
+            fresh_scope = replace(next_scope, task_id="fresh_scope_task", task_revision=1)
+            source_ref = replace(task, task_id=source_scope.task_id, task_revision=source_scope.task_revision,
+                                 scope_digest=documents.document_value_digest(c.authoring_scope_to_dict(source_scope)))
+            receipt = LeadTaskTransitionReceipt(origin_event_id="scope_task_decision", origin_kind="task_decision",
+                action=LeadTaskAction.NEW_TASK, source_task_ref=source_ref, target_task_id=fresh_scope.task_id,
+                target_task_revision=fresh_scope.task_revision, planning_step_id="scope_planning_step")
+            self.assertIsNone(_target_authoring_scope_prior(fresh_scope, source_scope, receipt))
+            same_task_scope = replace(fresh_scope, task_id=source_scope.task_id, task_revision=source_scope.task_revision)
+            same_task_receipt = replace(receipt, target_task_id=same_task_scope.task_id, target_task_revision=same_task_scope.task_revision)
+            foreign_scope = replace(source_scope, task_id="foreign_scope_task")
+            foreign_ref = replace(source_ref, task_id=foreign_scope.task_id, scope_event_id="foreign_scope_event",
+                                  scope_digest=documents.document_value_digest(c.authoring_scope_to_dict(foreign_scope)))
+            for retained_scope, retained_receipt in (
+                (fresh_scope, None),
+                (same_task_scope, replace(same_task_receipt, action=LeadTaskAction.RESUME)),
+                (fresh_scope, replace(receipt, origin_kind="revise_decision")),
+                (same_task_scope, same_task_receipt),
+                (fresh_scope, replace(receipt, target_task_revision=fresh_scope.task_revision + 1)),
+                (fresh_scope, replace(receipt, source_task_ref=foreign_ref)),
+            ):
+                self.assertIs(_target_authoring_scope_prior(retained_scope, source_scope, retained_receipt), source_scope)
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
         from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
