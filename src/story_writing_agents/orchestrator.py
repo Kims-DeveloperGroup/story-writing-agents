@@ -65,7 +65,8 @@ from .lead_provider_contracts import (
     LeadDecodedResult,
     empty_core_status_evidence,
 )
-from .provider_wire import normalize_result, recover_lead_public_response, hoist_schema_definitions
+from .provider_wire import (normalize_result, recover_lead_public_response,
+    recover_lead_public_response_kind, hoist_schema_definitions)
 
 from .lead_premise_decisions import (
     PremiseQuestionIntent, PremiseDecisionSpec, PremiseDecisionSelection,
@@ -1746,7 +1747,7 @@ class _AccountingContextProvider:
             getattr(delegate, "reference_operation_id"),
         )
         self._public_response_contract_id: str | None = None
-        self._public_observations: dict[str, tuple[str, int, CollaborationProviderCallKind]] = {}
+        self._public_observations: dict[str, tuple[str, int, CollaborationProviderCallKind, str | None]] = {}
         self._public_accepted_call_id: str | None = None
         self._diagnostic_finalizers: dict[str, object] = {}
         self._public_responses_published = False
@@ -1883,7 +1884,10 @@ class _AccountingContextProvider:
                 maximum_utf8_bytes=COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
             )
             if public_text is not None and request.call_id in self._submitted_call_ids:
-                self._public_observations[request.call_id] = (public_text, ordinal, kind)
+                self._public_observations[request.call_id] = (public_text, ordinal, kind,
+                    recover_lead_public_response_kind(result.response_text,
+                        self._public_response_contract_id,
+                        maximum_utf8_bytes=COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES))
         return result
 
     def record_validated_task(self, call_id: str, task_id: str, task_revision: int) -> None:
@@ -1992,7 +1996,7 @@ class _AccountingContextProvider:
             accepted = call_id == self._public_accepted_call_id
             observation = self._public_observations.get(call_id)
             if observation is not None:
-                text, ordinal, kind = observation
+                text, ordinal, kind, response_kind = observation
                 if ordinal != call.ordinal or kind is not call.call_kind:
                     raise BackendProtocolError("public response changed its actual call identity")
                 acceptance = (
@@ -2005,6 +2009,7 @@ class _AccountingContextProvider:
                     call_kind=kind.value, acceptance=acceptance, response_text=text,
                     material_digest=task_material_sha256(text),
                     repair_of_call_id=previous_rejected, validation_details=details,
+                    response_kind=response_kind,
                 )
                 drafts.append(self._runtime._draft(
                     session_id=self._session_id, conversation_id=self._conversation_id,
@@ -12861,7 +12866,9 @@ class StoryRuntime:
                         if type(qualified) is AuthoringAdmissionNeeded:
                             decoded = replace(decoded, kind=LeadOutcomeKind.QUESTION,
                                 message=qualified.message, proposal=None, artifact_intent=None,
-                                objective_intent=None, recommended_action=None)
+                                objective_intent=None, recommended_action=None,
+                                trace=ReplyTrace(role=LEAD_ORCHESTRATOR, action="none", context_sources=(),
+                                    recovered_fields=("runtime_notice",), origin=ReplyTraceOrigin.RUNTIME_FALLBACK))
                         else:
                             needs_readiness_preparation = decoded.artifact_intent is not None or (decoded.recommended_action is not None and
                                 (decoded.recommended_action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT or decoded.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}))
@@ -12870,7 +12877,9 @@ class StoryRuntime:
                                          if needs_readiness_preparation or drafting else None)
                             if type(readiness) is CoreDocumentReadinessNeeded:
                                 decoded = replace(decoded, kind=LeadOutcomeKind.QUESTION, message=readiness.message,
-                                    proposal=None, artifact_intent=None, objective_intent=None, recommended_action=None)
+                                    proposal=None, artifact_intent=None, objective_intent=None, recommended_action=None,
+                                    trace=ReplyTrace(role=LEAD_ORCHESTRATOR, action="none", context_sources=(),
+                                        recovered_fields=("runtime_notice",), origin=ReplyTraceOrigin.RUNTIME_FALLBACK))
                                 return
                             decoded = replace(decoded, core_document_readiness=readiness, authoring_admission=qualified,
                                 proposal=(replace(decoded.proposal, authoring_admission=qualified,
@@ -13317,11 +13326,11 @@ class StoryRuntime:
                             action=outcome.kind.value,
                             request=contextual_request,
                             result=result,
-                            origin=(
-                                ReplyTraceOrigin.RECOVERED
-                                if corrective_rejection_code is not None
-                                else ReplyTraceOrigin.PROVIDER
-                            ),
+                            origin=(ReplyTraceOrigin.RUNTIME_FALLBACK
+                                if outcome.trace is not None and
+                                    outcome.trace.origin is ReplyTraceOrigin.RUNTIME_FALLBACK
+                                else ReplyTraceOrigin.RECOVERED if corrective_rejection_code is not None
+                                else ReplyTraceOrigin.PROVIDER),
                         ),
                     )
                 self._finish_reference_operation(reference_operation)
