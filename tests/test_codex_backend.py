@@ -288,7 +288,7 @@ if mode == "invalid_event_utf8":
 elif "resume" not in argv:
     print(json.dumps({
         "type": "thread.started",
-        "thread_id": (
+        "thread_id": os.environ.get("STORY_FAKE_CODEX_THREAD_ID") or (
             "thread-"
             + payload.get("session_id", "reference-read")
             + "-"
@@ -3725,7 +3725,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 except Exception as error:
                     callback_errors.append((type(error).__name__, str(error)))
                     raise
-                with mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_OUTPUT": response}):
+                with mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_OUTPUT": response, "STORY_FAKE_CODEX_THREAD_ID": "thread-preliminary-capture"}):
                     os.environ.pop("STORY_FAKE_CODEX_PHYSICAL_OUTPUTS", None)
                     os.environ.pop("STORY_FAKE_CODEX_OUTPUTS", None)
                     return await original_invoke(provider, call)

@@ -1314,8 +1314,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 assert len(story_writing_agents.__all__) == 106
-                    assert len(conversations.__all__) == 208
-                    assert len(conversation_events.__all__) == 134
+                assert len(conversations.__all__) == 208
+                assert len(conversation_events.__all__) == 134
                 assert len(conversation_context.__all__) == 37
                 assert conversations.CollaborationProposal is conversation_events.CollaborationProposal
                 assert conversations.CollaborationEventStore is conversation_context.CollaborationEventStore
@@ -1550,8 +1550,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversations.context as context
                 import story_writing_agents.conversations.events as events
                 assert len(story_writing_agents.__all__) == 106
-                    assert len(conversations.__all__) == 208
-                assert len(events.__all__) == 133
+                assert len(conversations.__all__) == 208
+                assert len(events.__all__) == 134
                 assert len(context.__all__) == 37
                 assert catalog.ConversationCatalog is conversations.ConversationCatalog
                 assert events.ConversationEvent is conversations.ConversationEvent
@@ -1786,7 +1786,16 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             python = environment / "bin" / "python"
             build_support = root / "build-support"
             _copy_setuptools_build_support(build_support)
-            viewer_git_directory = _gitlink_git_directory("vendor/jsonl-viewer")
+            viewer_git_directory = root / "viewer-upgrade.git"
+            source_commands = (
+                ["git", "clone", "--bare", _JSONL_VIEWER_REPOSITORY, str(viewer_git_directory)],
+                ["git", "--git-dir", str(viewer_git_directory), "cat-file", "-e", _OLD_JSONL_VIEWER_PIN + "^{commit}"],
+                ["git", "--git-dir", str(viewer_git_directory), "cat-file", "-e", _JSONL_VIEWER_PIN + "^{commit}"],
+                ["git", "--git-dir", str(viewer_git_directory), "fsck", "--full", "--no-dangling"],
+            )
+            for command in source_commands:
+                prepared = subprocess.run(command, text=True, capture_output=True, check=False)
+                self.assertEqual(prepared.returncode, 0, f"{command!r}\n{prepared.stdout}\n{prepared.stderr}")
             install_environment = os.environ.copy()
             for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
                 install_environment.pop(name, None)

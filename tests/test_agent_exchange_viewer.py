@@ -713,8 +713,9 @@ class LazyViewerAdapterTests(unittest.TestCase):
             assert ["1/2" in frame for frame in searched] == [True, False, True] and "Search: None" in cleared and "Search: 'CODEX'" not in cleared
             assert any("2 matched · 2 records · 3 occurrences" in frame and "In: Response content" in frame for frame in frames)
             frames.clear(); events = iter(("close",)); operation(transport)
-            assert "READ ONLY" in frames[0] and "Search: None" in frames[0] and source == original, (
-                "reopened", frames[0][:512], frames[0][-2048:],
+            reopened = next(frame for frame in frames if "Loading immutable JSONL snapshot…" not in frame)
+            assert "READ ONLY" in reopened and "Search: None" in reopened and source == original, (
+                "reopened", reopened[:512], reopened[-2048:],
                 source is original, source == original, len(source), len(original))
             assert closed == [True, True]
         """)
