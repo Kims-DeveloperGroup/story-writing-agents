@@ -665,6 +665,14 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertEqual(agent_metadata["content"], source_metadata["content"])
         self.assertEqual(source_metadata["document_node"], documents.document_node_binding_to_dict(binding))
         self.assertEqual(source_metadata["preliminary_review"], review.preliminary_review_to_dict(report))
+        from story_writing_agents.provider_wire import add_contract_guidance
+        document_input = {"task_input": {"document_node": agent_metadata["document_node"],
+            "document_selection": documents.document_node_selection_to_dict(node_selection),
+            "plan_candidate_material": [{"candidate": json.loads(artifacts.serialize_artifact_review_candidate(exact_candidate))}],
+            "document_work_plan": {"plan": documents.document_plan_to_dict(plan)}}}
+        guided_document = add_contract_guidance(document_input, {})
+        self.assertEqual({key: value for key, value in guided_document.items() if key != "contract_guidance"}, document_input)
+        self.assertTrue(guided_document["contract_guidance"]["input_fields"])
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
         from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
