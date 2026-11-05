@@ -12652,7 +12652,17 @@ class StoryRuntime:
                             '$.authoring_scope',
                             'selected authoring task changed while the Lead was interpreting the request',
                         )
-                    if selected_prior is not None and (
+                    provisional_brief_refinement = (
+                        selected_prior is not None
+                        and authoring_scope.schema_version >= 3
+                        and authoring_scope.task_revision == selected_prior.task_revision
+                        and not binding_pinned
+                        and host_binding_plan is not None
+                        and host_binding_plan.transition == "refine"
+                        and type(raw_spec) is dict
+                        and "interpretation" in raw_spec
+                    )
+                    if selected_prior is not None and not provisional_brief_refinement and (
                         authoring_scope.schema_version < 3
                         or authoring_scope.task_revision == selected_prior.task_revision
                     ):

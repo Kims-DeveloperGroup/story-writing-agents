@@ -4992,13 +4992,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(case.snapshots(), before)
         judgment = next(event.payload for event in reversed(history)
                         if type(event.payload) is CollaborationLeadJudgmentPayload)
-        self.assertEqual((judgment.authoring_scope.task_id, judgment.authoring_scope.task_revision),
-                         (initial_scope.task_id, initial_scope.task_revision))
+        self.assertEqual((judgment.authoring_scope.task_id, judgment.authoring_scope.task_revision), (initial_scope.task_id, initial_scope.task_revision))
         self.assertEqual(len(repaired.public_responses), 2)
         original, correction = (item.response for item in repaired.public_responses)
         self.assertEqual((original.response_text, correction.response_text), (rejected_text, question_text))
-        self.assertEqual((original.acceptance, correction.acceptance),
-            (task.LeadPublicResponseAcceptance.REJECTED, task.LeadPublicResponseAcceptance.ACCEPTED))
+        self.assertEqual((original.acceptance, correction.acceptance), (task.LeadPublicResponseAcceptance.REJECTED, task.LeadPublicResponseAcceptance.ACCEPTED))
         self.assertTrue(original.validation_details)
         self.assertEqual(correction.repair_of_call_id, original.call_id)
         slot_calls, slot_rejected_text = [], 'Retain this outline request with the declared dependency slots.'
@@ -5034,8 +5032,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         case.backend.enqueue(duplicate_slot_question, control_plan=select("question.authoring"))
         case.backend.enqueue(repair_slot_question, control_plan=())
         slot_repaired = await case.runtime.lead_turn(case.session_id, pending_conversation, 'Retain the pending outline and clarify its ending.')
-        self.assertEqual((slot_repaired.kind, slot_repaired.message, getattr(slot_repaired.trace, 'origin', None)),
-                         (LeadOutcomeKind.QUESTION, question_text, ReplyTraceOrigin.RECOVERED))
+        self.assertEqual((slot_repaired.kind, slot_repaired.message, getattr(slot_repaired.trace, 'origin', None)), (LeadOutcomeKind.QUESTION, question_text, ReplyTraceOrigin.RECOVERED))
         self.assertEqual(len(case.backend.calls) - call_start, 3)
         retained, slot_history = case.objective(pending_conversation), case.history(pending_conversation)
         self.assertEqual(retained.facts, pending.facts)
@@ -5048,15 +5045,12 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                                        slot_repaired.artifact_application_request, slot_repaired.story_commit_request)))
         self.assertEqual(case.snapshots(), before)
         slot_judgment = next(event.payload for event in reversed(slot_history) if type(event.payload) is CollaborationLeadJudgmentPayload)
-        self.assertEqual((slot_judgment.authoring_scope.task_id, slot_judgment.authoring_scope.task_revision),
-                         (initial_scope.task_id, initial_scope.task_revision))
+        self.assertEqual((slot_judgment.authoring_scope.task_id, slot_judgment.authoring_scope.task_revision), (initial_scope.task_id, initial_scope.task_revision))
         self.assertEqual(len(slot_repaired.public_responses), 2)
         original, correction = (item.response for item in slot_repaired.public_responses)
         self.assertEqual((original.response_text, correction.response_text), (slot_rejected_text, question_text))
-        self.assertEqual((original.acceptance, correction.acceptance),
-                         (task.LeadPublicResponseAcceptance.REJECTED, task.LeadPublicResponseAcceptance.ACCEPTED))
-        self.assertEqual((original.call_id, correction.call_id, correction.repair_of_call_id),
-                         (slot_calls[0][0].call_id, case.backend.calls[-1].call_id, slot_calls[0][0].call_id))
+        self.assertEqual((original.acceptance, correction.acceptance), (task.LeadPublicResponseAcceptance.REJECTED, task.LeadPublicResponseAcceptance.ACCEPTED))
+        self.assertEqual((original.call_id, correction.call_id, correction.repair_of_call_id), (slot_calls[0][0].call_id, case.backend.calls[-1].call_id, slot_calls[0][0].call_id))
         self.assertTrue(any('$.agent_action.task_result.response_details.task_scope.slots[1].id' in item and
             'dependency slot IDs must be unique within one authoring scope' in item for item in original.validation_details))
 
@@ -5106,10 +5100,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertEqual(report["rejected_responses"], 1)
             self.assertTrue(report["result_accepted"])
             self.assertEqual(report["terminal_result"]["outcome_kind"], "answer")
-            self.assertEqual(report["rates"]["repair_calls_per_submitted_call"],
-                             {"numerator": 1, "denominator": 3, "fraction": 1 / 3})
-            self.assertEqual(report["rates"]["invocations_with_submitted_repair"],
-                             {"numerator": 1, "denominator": 1, "fraction": 1.0})
+            self.assertEqual(report["rates"]["repair_calls_per_submitted_call"], {"numerator": 1, "denominator": 3, "fraction": 1 / 3})
+            self.assertEqual(report["rates"]["invocations_with_submitted_repair"], {"numerator": 1, "denominator": 1, "fraction": 1.0})
             self.assertIsNone(report["task_completion"])
             self.assertIsNone(report["objective_completion"])
             self.assertIsNone(report["rates"]["max_output_tokens_failures"])
@@ -5143,19 +5135,34 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         with self.assertRaises(ValueError):
             failed.factory.for_offer(failed.offers, failed.repair_lineage(), request_basis=minted.request_basis)
         reading = self.conversation("Context during grouped repair")
-        self.backend.enqueue(_visible_outcome("answer", "A prior lead response for grouped repair.", grouped=True), control_plan=select("answer.workflow"))
-        await self.runtime.lead_turn(self.session_id, reading, "Seed group repair context.")
+        from tests.recommendation_fixture import action, recommendation, task_assessment
+        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF
+        old_brief, new_brief = 'Draft after choosing the target.', 'Draft the supplied bounded outline at the first target.'
+        def scope_question(call, provider, *, paths=(), brief=old_brief):
+            return _provider_envelope(call, {'kind': 'question', 'message': 'A prior lead response for grouped repair.',
+                'authoring_scope': {**_live_scope(call, activity='draft', domains=('plot_structure',), paths=paths), 'interpretation': brief}})
+        self.backend.enqueue(scope_question, control_plan=select("question.authoring"))
+        seeded = await self.runtime.lead_turn(self.session_id, reading, "Clarify the writing target before drafting.")
+        old_scope = next(event.payload.authoring_scope for event in reversed(self.history(reading))
+                         if type(event.payload) is CollaborationLeadJudgmentPayload)
+        self.assertEqual((seeded.kind, old_scope.target_paths, old_scope.interpretation), (LeadOutcomeKind.QUESTION, (), old_brief))
+        self.assertFalse(any(type(event.payload) is CollaborationConfirmationPayload for event in self.history(reading)))
+        refined_recommendation = recommendation(recommended_action=action(kind='prepare_consultation', source_ids=('user_input',)),
+            authoring_scope=lambda call: {**_live_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)), 'interpretation': new_brief},
+            authoring_assessment=task_assessment(foundation_ids=('user_input',), actions=('scene transitions', 'supporting dialogue')))
         retained = []
         def reject_with_snapshot(call, provider):
             selected = call.contract.group_workflow.active_selection
             retained.append((call.contract, selected, selected.as_object(), call.contract.prepared_compilation))
-            return invalid_generation(call, provider)
+            packet = json.loads(refined_recommendation(call, provider))
+            del packet['agent_action']['task_result']['response_text']
+            return json.dumps(packet)
         read_reports_before = self.runtime.lead_group_reports(self.session_id, reading)
         start = len(self.backend.calls)
-        self.backend.enqueue(reject_with_snapshot, control_plan=select("answer.workflow"))
-        self.backend.enqueue(_search_history, _read_history_hit, _visible_outcome("answer", grouped=True))
+        self.backend.enqueue(reject_with_snapshot, control_plan=select("prepare.consultation.authoring"))
+        self.backend.enqueue(_search_history, _read_history_hit, refined_recommendation)
         with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory):
-            refreshed = await self.runtime.lead_turn(self.session_id, reading, "Explain group repair context.")
+            refreshed = await self.runtime.lead_turn(self.session_id, reading, "Use the global outline as the first target.\n" + _ADMISSION_BRIEF)
         calls = self.backend.calls[start:]
 
         read_reports = self.runtime.lead_group_reports(self.session_id, reading)
@@ -5171,7 +5178,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(read_report["rates"]["full_redeliveries_per_followup_submitted_call"],
                          {"numerator": 4, "denominator": 4, "fraction": 1.0})
         failed, selection, snapshot, old_plan = retained[0]
-        self.assertIs(refreshed.kind, LeadOutcomeKind.ANSWER)
+        self.assertIs(refreshed.kind, LeadOutcomeKind.RECOMMENDATION)
+        new_scope = refreshed.recommendation_request.authoring_scope
+        self.assertEqual((new_scope.task_id, new_scope.task_revision, new_scope.target_paths, new_scope.interpretation),
+                         (old_scope.task_id, old_scope.task_revision, (OUTLINE,), new_brief))
         self.assertEqual(len(calls), 5)
         phases = (LeadGroupPhase.SELECT,) + (LeadGroupPhase.GENERATE,) * 4
         for call, phase in zip(calls, phases, strict=True):
