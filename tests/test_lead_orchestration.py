@@ -5037,8 +5037,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         retained, slot_history = case.objective(pending_conversation), case.history(pending_conversation)
         self.assertEqual(retained.facts, pending.facts)
         self.assertEqual((retained.state, retained.next_step), (collaboration.ArtifactObjectiveState.OPEN, collaboration.ArtifactObjectiveNextStep.CLARIFY))
-        self.assertEqual(retained.draft_sources, current.draft_sources + (collaboration.ArtifactDraftSource(
-            pending_conversation, slot_basis.event_id, 'sha256:' + hashlib.sha256(question_text.encode('utf-8')).hexdigest()),))
+        self.assertEqual(retained.draft_sources, current.draft_sources + (collaboration.ArtifactDraftSource( pending_conversation, slot_basis.event_id, 'sha256:' + hashlib.sha256(question_text.encode('utf-8')).hexdigest()),))
         self.assertEqual(slot_history[:len(history)], history)
         self.assertFalse(any(type(event.payload) is CollaborationAssignmentDispatchPayload for event in slot_history[len(history):]))
         self.assertTrue(all(value is None for value in (slot_repaired.proposal, slot_repaired.recommendation_request,
@@ -5139,13 +5138,14 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF
         old_brief, new_brief = 'Draft after choosing the target.', 'Draft the supplied bounded outline at the first target.'
         def scope_question(call, provider, *, paths=(), brief=old_brief):
-            return _provider_envelope(call, {'kind': 'question', 'message': 'A prior lead response for grouped repair.',
-                'authoring_scope': {**_live_scope(call, activity='draft', domains=('plot_structure',), paths=paths), 'interpretation': brief}})
+            return lead_fixture_response(call, {'response_type': 'clarification_question', 'response_text': 'A prior lead response for grouped repair.', 'response_details': {
+                'task_scope': lead_fixture_bound_scope(call, {**_live_scope(call, activity='draft', domains=('plot_structure',), paths=paths), 'interpretation': brief}, record=True)}}, family=0)
         self.backend.enqueue(scope_question, control_plan=select("question.authoring"))
         seeded = await self.runtime.lead_turn(self.session_id, reading, "Clarify the writing target before drafting.")
+        self.assertIs(seeded.kind, LeadOutcomeKind.QUESTION, (seeded.message, seeded.validation_details, seeded.provider_invocation_id, seeded.public_responses))
         old_scope = next(event.payload.authoring_scope for event in reversed(self.history(reading))
                          if type(event.payload) is CollaborationLeadJudgmentPayload)
-        self.assertEqual((seeded.kind, old_scope.target_paths, old_scope.interpretation), (LeadOutcomeKind.QUESTION, (), old_brief))
+        self.assertEqual((old_scope.target_paths, old_scope.interpretation), ((), old_brief))
         self.assertFalse(any(type(event.payload) is CollaborationConfirmationPayload for event in self.history(reading)))
         refined_recommendation = recommendation(recommended_action=action(kind='prepare_consultation', source_ids=('user_input',)),
             authoring_scope=lambda call: {**_live_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)), 'interpretation': new_brief},
