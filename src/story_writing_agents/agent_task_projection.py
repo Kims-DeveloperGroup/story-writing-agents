@@ -20,7 +20,7 @@ LITERAL_TASK_FIELDS = frozenset({"text", "content", "selected_text", "response_t
 TASK_CONTEXT_SHAPES = frozenset("""runtime_disclosure authoring_scope writing_task_scope task_scope scope
 confirmed_scope current_scope current_writing_scope stage_plan questions preliminary_review
 final_review_evidence authoring_admission task_context task_transition selected_task_materials
-exploration_adoption premise_selection premise_decision fresh_work_admission admission capture
+exploration_adoption premise_selection premise_decision fresh_work_admission discussion_constraints admission capture
 selection spec request decision start started basis report response prior_authoring_source_ref editorial_record editorial_records editorial_state
 editorial_context records record_content details draft current_records selected_records revisions""".split())
 

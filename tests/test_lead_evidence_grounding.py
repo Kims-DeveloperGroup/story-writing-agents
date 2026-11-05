@@ -1072,7 +1072,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             self.assertEqual(set(notice), {'code', 'language', 'state', 'paths'})
             self.assertEqual((notice['code'], notice['language'], notice['state']),
                              ('LEAD_CONTRACT_REJECTED', 'KO', None))
-            offered_tasks = tuple((item['task_id'], item['task_revision']) for item in tasks)
+            offered_tasks = self.backend.calls[call_start].contract.semantic_index.policy.task_revisions
             self.assertEqual(offered_tasks, retained_tasks + ((task_identity_for_origin(result.step_id), 1),))
             self.assertTrue(all(call.contract.factory.constraints.task_revisions == offered_tasks
                                 for call in self.backend.calls[call_start:]))

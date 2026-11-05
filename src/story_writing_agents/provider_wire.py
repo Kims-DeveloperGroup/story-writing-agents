@@ -1530,7 +1530,7 @@ _catalog("discussion_rule", "Host-selected discussion boundary and artifact-evid
 
 
 
-_catalog("task_transition discussion_constraints task_context", "Exact runtime-owned USER task/discussion transition. Preserve its disclosed task and scope identities; provider prose cannot select, hold, discard or resume a task.")
+_catalog("task_transition discussion_constraints task_context", "Runtime-owned USER work/discussion context. Use the disclosed work scope; only host USER controls select, hold, discard or resume work.")
 _catalog("selected_task_materials selected_material_source material_refs", "Explicit USER-selected whole same-session literal sources. These are inputs only, never specialist draft proof, artifact READ evidence or execution authority.")
 _catalog("capture_event_id material_capture_event_ids", "Exact durable whole-material capture identities bound to the USER transition and its prospective task.")
 _catalog("origin_event_id origin_control_event_id origin_message_event_id origin_kind", "Exact durable USER control and literal message origin in the enclosing receipt. Preserve the recorded control type and correlations.")
