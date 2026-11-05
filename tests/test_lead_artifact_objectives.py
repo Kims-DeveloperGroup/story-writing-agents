@@ -195,8 +195,28 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(source.content_digest, objectives.digest(text))
         calls = len(self.backend.calls)
         self.runtime = StoryRuntime(self.control_workspace, self.backend)
-        prepared = await self.confirm(offered, text=text)
-        self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, prepared)
+        from os.path import basename
+        from traceback import extract_tb
+        preparation_failures = []
+        original_close = self.runtime._close_failed_lead_attempt
+        def failure_details(error, maximum):
+            if error is None:
+                return None
+            terminal = extract_tb(error.__traceback__, limit=-1)
+            return {"type": type(error).__name__, "message": str(error)[:maximum],
+                "terminal": None if not terminal else (basename(terminal[0].filename), terminal[0].name, terminal[0].lineno)}
+        def observed_close(*args, **kwargs):
+            failure = kwargs.get("failure")
+            if failure is not None and len(preparation_failures) < 3:
+                try:
+                    preparation_failures.append({"failure": failure_details(failure, 1200),
+                        "cause": failure_details(failure.__cause__, 500)})
+                except Exception as diagnostic_error:
+                    preparation_failures.append({"diagnostic_error_type": type(diagnostic_error).__name__})
+            return original_close(*args, **kwargs)
+        with mock.patch.object(self.runtime, "_close_failed_lead_attempt", new=observed_close):
+            prepared = await self.confirm(offered, text=text)
+        self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, (prepared, preparation_failures))
         self.assertEqual(len(self.backend.calls), calls + 1)
         self.assertEqual(prepared.proposal.participants, ROSTER)
         binding = prepared.proposal.document_node
