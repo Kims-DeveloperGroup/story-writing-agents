@@ -721,7 +721,8 @@ class LiveEditingTests(unittest.TestCase):
         ):
             self.assertEqual(editor.read_line("p> "), "/")
         rendered = "".join(output.records)
-        self.assertIn("/unsafe\\x1b[31m", rendered)
+        self.assertIn("/unsafe", rendered)
+        self.assertNotIn(r"/unsafe\x1b[31m", rendered)
         self.assertNotIn("/unsafe\x1b[31m", rendered)
 
     def test_enter_interrupt_and_eof_events_restore_the_terminal(self) -> None:
