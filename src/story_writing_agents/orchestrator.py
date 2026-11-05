@@ -771,7 +771,14 @@ def _lead_revision_result_contract(
     discussion_constraints: LeadDiscussionConstraints, *,
     fresh_revision_only: bool = False, source_scope: AuthoringScope | None = None,
     artifact_revision_only: bool = False,
+    selected_document_review_path: str | None = None,
 ) -> LeadResultRuleSeed:
+    if selected_document_review_path is not None and (
+        not fresh_revision_only
+        or constraints.document_node_digest is None
+        or constraints.document_target_paths != (selected_document_review_path,)
+    ):
+        raise ValueError("selected document review requires its frozen exact node policy")
     authoring = _lead_front_result_contract(
         expected_relation, input_ids, task_revisions, constraints,
         fresh_revision_only=False,
@@ -815,6 +822,28 @@ def _lead_revision_result_contract(
             artifact_variants.append(variant)
         variants = artifact_variants
     elif fresh_revision_only or (source_scope is not None and source_scope.intent is AuthoringIntent.AUTHORING):
+        selected_reviews = []
+        if selected_document_review_path is not None:
+            for variant in variants:
+                properties = variant.get("properties", {})
+                scope = properties.get("writing_task_scope", {})
+                intent = scope.get("properties", {}).get("writing_intent", {}).get("enum", [])
+                response = properties.get("response_type", {}).get("enum", [])
+                if (
+                    response == ["artifact_change_proposal"]
+                    and intent == [AuthoringIntent.AUTHORING.value]
+                    and "authoring_assessment" in properties
+                ) or (
+                    response == ["specialist_consultation_proposal"]
+                    and intent == [AuthoringIntent.REVIEW_ONLY.value]
+                ):
+                    scope_properties = scope["properties"]
+                    scope_properties["activity_type"]["enum"] = ["review_writing"]
+                    scope_properties["target_artifact_paths"] = {
+                        **scope_properties["target_artifact_paths"],
+                        **string_array((selected_document_review_path,), minimum=1, maximum=1),
+                    }
+                    selected_reviews.append(variant)
         variants = [variant for variant in variants
                     if variant.get("properties", {}).get("response_type", {}).get("enum", [])
                     in (["specialist_consultation_proposal"], ["proposal_drafting_recommendation"])
@@ -850,6 +879,7 @@ def _lead_revision_result_contract(
             ):
                 scope["activity_type"]["enum"].insert(0, "review_writing")
             scope["writing_intent"]["enum"] = ["authoring"]
+        variants.extend(selected_reviews)
     return LeadResultRuleSeed.declare(
         "lead-response-v9",
         mutable({
@@ -12642,6 +12672,25 @@ class StoryRuntime:
                     offered_tasks = {(task_receipt.target_task_id, task_receipt.target_task_revision): source_scope}
                 elif discussion_only:
                     offered_tasks = {}
+            selected_document_review_path = None
+            if (document_selection is not None and task_receipt is not None
+                    and task_receipt.origin_kind == "task_decision"
+                    and task_receipt.action in {LeadTaskAction.NEW_TASK, LeadTaskAction.RESUME}):
+                origin = next((event for event in task_events
+                               if event.event_id == task_receipt.origin_event_id), None)
+                if (origin is None or type(origin.payload) is not CollaborationLeadTaskDecisionPayload
+                        or origin.sender != _USER_ACTOR
+                        or (origin.session_id, origin.conversation_id, origin.step_id)
+                        != (session_id, conversation_id, step_id)
+                        or origin.payload.document_selection != document_selection
+                        or origin.payload.decision.action is not task_receipt.action
+                        or origin.payload.decision.task_ref != task_receipt.source_task_ref
+                        or task_receipt.planning_step_id != step_id
+                        or (task_receipt.target_task_id, task_receipt.target_task_revision)
+                        not in offered_tasks
+                        or selected_path is None):
+                    raise BackendProtocolError("document review requires its exact USER task selection")
+                selected_document_review_path = selected_path
             inputs = self._document_candidate_inputs(session_id, document_selection or document_node, inputs)
             input_aliases = [
                 {
@@ -12995,6 +13044,7 @@ class StoryRuntime:
                         fresh_revision_only=successor_only or (task_receipt is not None and task_receipt.target_task_id is not None),
                         source_scope=revision_source_scope,
                         artifact_revision_only=source_artifact_revision,
+                        selected_document_review_path=selected_document_review_path,
                     ) if discussion_constraints is not None else _lead_result_rule_seed("lead-exploration-response-v1", constraints.schema()) if interaction_mode is LeadInteractionMode.EXPLORATION else _lead_front_result_contract(
                             expected_relation,
                             tuple(item.input_id for item in inputs),
@@ -13448,24 +13498,16 @@ class StoryRuntime:
                         ):
                             raise _LeadOutcomeValidationError("task planning changed the exact USER-selected task pair")
 
-                        selected_review = bool(document_selection is not None
-                            and task_receipt.origin_kind == "task_decision"
-                            and task_receipt.action in {LeadTaskAction.NEW_TASK, LeadTaskAction.RESUME}
-                            and scope.activity is AuthoringActivity.REVIEW and scope.target_paths == (selected_path,)
+                        selected_review = bool(selected_document_review_path is not None
+                            and scope.activity is AuthoringActivity.REVIEW
+                            and scope.target_paths == (selected_document_review_path,)
                             and decoded.kind is LeadOutcomeKind.PROPOSAL
                             and ((scope.intent is AuthoringIntent.REVIEW_ONLY and decoded.proposal is not None)
                                  or (scope.intent is AuthoringIntent.AUTHORING and decoded.artifact_intent is not None)))
-                        selected_review = bool(document_selection is not None
-                            and task_receipt.origin_kind == "task_decision"
-                            and task_receipt.action in {LeadTaskAction.NEW_TASK, LeadTaskAction.RESUME}
-                            and scope.activity is AuthoringActivity.REVIEW and scope.target_paths == (selected_path,)
-                            and decoded.kind is LeadOutcomeKind.PROPOSAL
-                            and ((scope.intent is AuthoringIntent.REVIEW_ONLY and decoded.proposal is not None)
-                                 or (scope.intent is AuthoringIntent.AUTHORING and decoded.artifact_intent is not None)))
-                        if not selected_review and (not selected_review and (scope.intent is not AuthoringIntent.AUTHORING or (
+                        if not selected_review and (scope.intent is not AuthoringIntent.AUTHORING or (
                             scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
                             and not (scope.activity is AuthoringActivity.REVIEW and (source_review_revision or source_artifact_revision))
-                        ))):
+                        )):
                             raise _LeadOutcomeValidationError("task selection requires fresh owner drafting before candidate review")
                         if source_artifact_revision and not (
                             (decoded.kind is LeadOutcomeKind.PROPOSAL and decoded.artifact_intent is not None)
