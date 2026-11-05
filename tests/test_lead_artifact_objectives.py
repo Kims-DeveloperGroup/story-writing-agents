@@ -41,9 +41,10 @@ def _document_plan_native_response(call, value):
         proposal.setdefault("shared_premises", [])
         rows = author_positive_fixture_review_bases(proposal["assignments"], candidate_choices=choices["review_candidate_ids"])
         anchors = {row["agent_id"]: row["input_source_ids"][0] for row in rows}
-        recipients = {} if logical["authoring_scope"]["intent"] == "review_only" else {
+        recipients = {
             source: next(row["agent_id"] for row in rows if source in row["input_source_ids"])
-            for source in choices["required_input_ids"] if any(source in row["input_source_ids"] for row in rows)}
+            for source in choices["required_input_ids"] if not (logical["authoring_scope"]["intent"] == "review_only" and source == "user_input")
+            and any(source in row["input_source_ids"] for row in rows)}
         proposal.update(lead_fixture_assignments(rows, input_choices=choices["allocation_input_ids"],
             review_choices=choices["review_candidate_ids"], anchors=anchors, recipients=recipients))
     current = call.contract
