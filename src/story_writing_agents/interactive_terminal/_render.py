@@ -597,7 +597,7 @@ def render_input_prompt(
     if view.initial_value is not None:
         lines.extend(
             _component_lines(
-                Field("Current value", view.initial_value),
+                Field("Current value", _literal_inline(view.initial_value)),
                 capabilities.width,
                 indent=0,
             )
@@ -864,7 +864,7 @@ def render_confirmation_prompt(
     if view.prompt.instruction:
         facts.append(MarkdownLine(_inline(view.prompt.instruction)))
     if view.initial_value is not None:
-        facts.append(MarkdownLine("Current draft: " + _inline(view.initial_value)))
+        facts.append(MarkdownLine("Current draft: " + _literal_inline(view.initial_value)))
     facts.append(MarkdownLine("KEYS Enter submit revision · Esc return to pending decision"))
     for line in facts:
         lines.extend(_framed_markdown_lines(line, width, "", box=box, accent=SpeakerAccent.CYAN))
@@ -1552,7 +1552,7 @@ def _form_input_prompt_lines(
     if view.initial_value is not None:
         lines.extend(
             _component_lines(
-                Field("Current value", view.initial_value),
+                Field("Current value", _literal_inline(view.initial_value)),
                 width,
                 indent=0,
             )
@@ -2176,6 +2176,11 @@ def _inline(text: str) -> str:
     """Keep display labels on one line without exposing control spellings."""
 
     return format_metadata_text(text, inline=True)
+
+
+def _literal_inline(text: str) -> str:
+    """Keep editable source previews literal within single-line display fields."""
+    return sanitize_terminal_text(text).replace("\n", "\\x0a")
 
 
 def _wrap(

@@ -181,9 +181,9 @@ Response diagnostics use a labeled multiline block rather than displaying
 numeric escapes such as `\x0a` between fields.
 
 Literal backslash escape text is not decoded. Message bodies, code/JSON and raw
-inspection views, and literal transcript or selected-material content keep
-their existing presentation. Stored records and provider token counters are
-unchanged.
+inspection views, editable-source previews, and literal transcript or
+selected-material content keep their existing presentation. Stored records and
+provider token counters are unchanged.
 
 ## Confirmation decisions
 
