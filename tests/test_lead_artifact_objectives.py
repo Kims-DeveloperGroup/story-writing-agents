@@ -196,8 +196,8 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         calls = len(self.backend.calls)
         self.runtime = StoryRuntime(self.control_workspace, self.backend)
         prepared = await self.confirm(offered, text=text)
-        self.assertEqual(len(self.backend.calls), calls + 1)
         self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, prepared)
+        self.assertEqual(len(self.backend.calls), calls + 1)
         self.assertEqual(prepared.proposal.participants, ROSTER)
         binding = prepared.proposal.document_node
         self.assertIsNotNone(binding)
