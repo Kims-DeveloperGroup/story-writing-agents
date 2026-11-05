@@ -1113,6 +1113,8 @@ class BoundCallContract:
         payload["current_offer_digest"] = self.offers.offer_digest
         payload["logical_origin_call_id"] = self.logical_origin_call_id
         payload["phase"] = self.phase
+        # Offered task pairs remain frozen host state, never model repair choices.
+        payload.pop("task_revisions", None)
         return json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
 
