@@ -3891,8 +3891,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                                  and event.payload.invocation_id == replies[0].provider_invocation_id and event.payload.role == PLOT_ARCHITECT}
                 self.assertGreaterEqual(len(submitted_ids), 2)
                 for native, call in zip(self.provider_invocations()[native_before:], physical_calls, strict=True):
-                    expected_payload = call.canonical_payload if type(call) is ContextProviderCallRequest else canonical_provider_json(call.payload)
-                    self.assertEqual(native["raw_payload"].encode(), expected_payload)
+                    self.assertEqual(native["raw_payload"].encode(), canonical_provider_json(call.payload))
                 selection = AgentExchangeSelection("preliminary_capture", AgentExchangeScopeKind.CONVERSATION, prior, PLOT_ARCHITECT)
                 raw = WorkspaceAgentExchangeStore(self.workspace).snapshot(selection).jsonl_bytes
                 records = [json.loads(line) for line in io.BytesIO(raw)]
