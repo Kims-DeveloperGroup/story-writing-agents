@@ -339,8 +339,15 @@ def _conversation_message(
             return None
         judgments = tuple(fact for fact in events
             if type(fact.payload) is CollaborationLeadJudgmentPayload
-            and _accepted_public_event(fact, events) == event)
-        if len(judgments) != 1 or not _runtime_notice(judgments[0], events):
+            and fact.sequence > event.sequence
+            and fact.payload.provider_invocation_id == payload.response.invocation_id
+            and (fact.session_id, fact.conversation_id, fact.turn_id, fact.step_id) ==
+                (event.session_id, event.conversation_id, event.turn_id, event.step_id))
+        if len(judgments) != 1 or _accepted_public_event(judgments[0], events) != event:
+            return None
+        judgment = judgments[0].payload
+        runtime = (judgment.trace is not None and judgment.trace.origin.value == "runtime_fallback")
+        if not runtime and payload.response.response_text == judgment.message:
             return None
         content, sender = payload.response.response_text, "Lead"
     elif type(payload) in {CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload, ArtifactReviewSynthesisPayload}:
