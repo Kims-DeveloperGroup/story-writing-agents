@@ -3919,7 +3919,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 scoped = evaluate(parse_jsonl(raw), catalog, filters, task.task_id, outcome_scope)
                 self.assertEqual(len(scoped.items), 1)
                 self.assertTrue(set(scoped.items).issubset(found.items))
-                self.assertTrue(set(scoped.matching_records).issubset(found.matching_records))
+                self.assertTrue(0 < scoped.matching_records <= found.matching_records)
                 accepted_exchange = next(row["exchange_id"] for row in records if row["request_type"] == "outcome"
                                          and json.loads(row["content"])["host_diagnostics"]["call_id"] == call_id)
                 self.assertEqual(set(catalog.items[scoped.items[0]].records),
