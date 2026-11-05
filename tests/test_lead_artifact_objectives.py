@@ -49,7 +49,7 @@ def _document_plan_native_response(call, value):
     current = call.contract
     frames = []
     for member in current.semantic_index.contracts:
-        if type(member.owner) is not LeadResultContractOwner or member.rule_graph.literal_at(("response_type",)) != native["response_type"]:
+        if type(member.owner) is not LeadResultContractOwner:
             continue
         outer, = (outer for outer, inner in current.outer_inner_schema_ids if inner == member.schema_id)
         frame = indexed_response({"action_type": "submit_result", "task_result": lead_fixture_result(native)},
