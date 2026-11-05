@@ -124,6 +124,69 @@ def _prepare_view(source=b"", **overrides):
     context.update(overrides)
     return prepare_agent_exchange_view(source, **context)
 
+def _assert_typed_history_phase(case, history, invocation_id, role, phase, scope):
+    """Synthetic capture checks consumer joins against an actual Runtime history."""
+    import jsonl_viewer
+    from jsonl_viewer._catalog import bind_catalog
+    from jsonl_viewer._input import parse_jsonl
+    from jsonl_viewer._query import evaluate
+    from story_writing_agents import conversations as c
+    from story_writing_agents.interactive_controller._exchange_projection import project_agent_exchanges
+
+    submitted = [event for event in history
+                 if type(event.payload) is c.CollaborationProviderCallPayload
+                 and event.payload.state is c.CollaborationProviderCallState.SUBMITTED
+                 and event.payload.invocation_id == invocation_id and event.payload.role == role]
+    case.assertEqual(len(submitted), 1)
+    event = submitted[0]
+    requests = [request for agent, request in case.backend.call_records
+                if agent == role and request.call_id == event.payload.call_id]
+    case.assertEqual(len(requests), 1)
+    selection = AgentExchangeSelection(event.session_id, AgentExchangeScopeKind.CONVERSATION, event.conversation_id, role)
+    task = None if scope is None else (scope.task_id, scope.task_revision)
+
+    def captured(pair):
+        diagnostic = {"call_id": requests[0].call_id}
+        if pair is not None:
+            diagnostic.update(task_id=pair[0], task_revision=pair[1])
+        contents = (
+            ("request", {"payload": {}, "host_diagnostics": {"call_id": requests[0].call_id}}),
+            ("response", {"response_text": "Synthetic consumer capture"}),
+            ("outcome", {"outcome": "accepted", "code": "accepted", "host_diagnostics": diagnostic}),
+        )
+        return b"".join(json.dumps({
+            "timestamp": "2026-08-30T00:00:00Z", "request_type": kind,
+            "provider": "codex", "exchange_id": "consumer-fixture", "content": json.dumps(content),
+        }).encode() + b"\n" for kind, content in contents)
+
+    source = captured(task)
+    calls = project_agent_exchanges(source, selection, history).calls
+    case.assertEqual(len(calls), 1)
+    case.assertEqual((calls[0].phase, calls[0].call_id), (phase, requests[0].call_id))
+    case.assertEqual((calls[0].task_id, calls[0].task_revision), (None, None) if task is None else task)
+    specs = []
+
+    def capture(data, spec, host=None, *, terminal=None, transient_only=False):
+        case.assertIs(data, source)
+        specs.append(spec)
+
+    with mock.patch.object(jsonl_viewer, "view_jsonl", capture):
+        _prepare_view(source, session_id=event.session_id, scope_id=event.conversation_id,
+                      agent_id=role, typed_history=history)(_transport())
+    case.assertEqual(len(specs), 1)
+    snapshot = parse_jsonl(source)
+    catalog = bind_catalog(snapshot, specs[0].inspection)
+    filters = tuple(frozenset({next(index for index, option in enumerate(facet.options) if option.value == phase)})
+                    if facet.id == "phase" else frozenset() for facet in catalog.facets)
+    case.assertEqual(len(evaluate(snapshot, catalog, filters, None).items), 1)
+    negatives = [(source, ()), (source, history + (event,))]
+    if task is not None:
+        negatives.append((captured((task[0], task[1] + 1)), history))
+    for data, typed_history in negatives:
+        missing = project_agent_exchanges(data, selection, typed_history).calls[0]
+        case.assertEqual((missing.phase, missing.task_id, missing.task_revision), (None, None, None))
+
+
 class _ExactViewerSpec:
     def __init__(
         self,

@@ -5289,6 +5289,12 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(accepted.message, "Scoped workflow answer.")
         self.assertIs(accepted.trace.origin, ReplyTraceOrigin.PROVIDER)
         self.assertIs(accepted.evidence.scope, LeadOutcomeScope.WORKFLOW_META)
+        from tests.test_agent_exchange_viewer import _assert_typed_history_phase
+        phase_judgment = next(event.payload for event in self.history(conversation_id)
+                              if type(event.payload) is CollaborationLeadJudgmentPayload
+                              and event.payload.provider_invocation_id == accepted.provider_invocation_id)
+        _assert_typed_history_phase(self, self.history(conversation_id), accepted.provider_invocation_id,
+                                   LEAD_ORCHESTRATOR, "procedure_status", phase_judgment.authoring_scope)
 
         def substantive(kind: str, activity: str):
             def respond(call: ContextProviderCallRequest, _provider: _LeadContextProvider) -> str:
