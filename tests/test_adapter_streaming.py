@@ -28,6 +28,14 @@ from story_writing_agents.provider_process import ProcessRequest, ProcessResult
 from tests.helpers import live_provider_execution_workspace, pristine_initialized_workspace
 
 
+def _successful_stream_result(stream_lines):
+    return ProcessResult(
+        stdout=b"".join(stream_lines),
+        stderr=b"",
+        returncode=0,
+    )
+
+
 def _successful_antigravity_result(schema):
     return {
         "conversation_id": "c1",
@@ -121,11 +129,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
                 request.on_stdout_line(line)
             request.on_stdout_line(b"not json line\n")
 
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
             result = await self._invoke_codex(binding, invocation)
@@ -240,11 +244,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(request.on_stdout_line)
             for line in stream_lines:
                 request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             result = await self._invoke_antigravity(adapter, binding, invocation)
@@ -410,11 +410,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -452,11 +448,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
             result = await self._invoke_codex(binding, invocation)
@@ -498,11 +490,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             result = await self._invoke_antigravity(adapter, binding, invocation)
@@ -565,11 +553,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             if request.on_stdout_line:
                 for line in stream_lines:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             result = await self._invoke_antigravity(adapter, binding, invocation)
@@ -603,11 +587,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             if request.on_stdout_line:
                 for line in stream_lines:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
             result = await self._invoke_codex(binding, invocation)
@@ -663,11 +643,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -697,11 +673,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -731,11 +703,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -816,11 +784,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -850,11 +814,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -885,11 +845,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -917,11 +873,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -951,11 +903,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -1032,11 +980,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -1066,11 +1010,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -1100,11 +1040,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             result = await self._invoke_antigravity(adapter, binding, invocation)
@@ -1131,11 +1067,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -1163,11 +1095,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -1210,11 +1138,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
             result = await self._invoke_codex(binding, invocation)
@@ -1275,11 +1199,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
             result = await self._invoke_codex(binding, invocation)
@@ -1331,11 +1251,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
             result = await self._invoke_codex(binding, invocation)
@@ -1397,11 +1313,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
             result = await self._invoke_codex(binding, invocation)
@@ -1446,11 +1358,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(request.on_stdout_line)
             for line in stream_lines:
                 request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             result = await self._invoke_antigravity(adapter, binding, invocation)
@@ -1702,11 +1610,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(request.on_stdout_line)
             for line in stream_lines:
                 request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             await self._invoke_antigravity(adapter, binding, invocation)
@@ -1962,11 +1866,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             await self._invoke_antigravity(adapter, binding, invocation)
@@ -2007,11 +1907,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             await self._invoke_antigravity(adapter, binding, invocation)
