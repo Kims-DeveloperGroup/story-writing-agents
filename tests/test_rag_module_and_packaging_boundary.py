@@ -48,6 +48,24 @@ _GITLINK_PATHS = {
 }
 
 
+_VIEWER_SOURCE_ASSIGNMENT = '                source = b\'{"timestamp":"2026-08-30T00:00:00Z","request_type":"request","content":"ok"}\\n\'\n'
+
+def _viewer_host_source(size, source_line=""):
+    return f"""                class Host:
+                    def __init__(self): self.frames = []; self.closed = 0
+                    def terminal_size(self): return {size!r}
+                    def color_enabled(self): return False
+                    def present(self, frame): self.frames.append(frame)
+                    def read_event(self): return "close"
+                    def close_view(self): self.closed += 1
+{source_line}                host = Host()
+                import io, jsonl_viewer
+                from story_writing_agents.interactive_terminal._external_view import ExternalTerminalIO
+                active_host = host; actual_view = jsonl_viewer.view_jsonl
+                def owned(source, spec, host=None, *, terminal=None, transient_only=False):
+                    assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal); actual_view(source, spec, active_host)
+                jsonl_viewer.view_jsonl = owned; transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)"""
+
 def _module_inventory() -> dict[str, Path]:
     modules: dict[str, Path] = {}
     for path in _SOURCE_ROOT.rglob("*.py"):
@@ -343,8 +361,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 175)
-        self.assertEqual(len(edges), 783)
+        self.assertEqual(len(modules), 176)
+        self.assertEqual(len(edges), 787)
         self.assertIn(("story_writing_agents.agent_context.service", "story_writing_agents.provider_adapter"), edges)
         self.assertIn(("story_writing_agents.interactive_terminal._advisory_progress", "story_writing_agents.agent_context.service"), edges)
         self.assertIn(("story_writing_agents.interactive_terminal._core", "story_writing_agents.agent_context.service"), edges)
@@ -1434,20 +1452,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     name == "generic_rag" or name.startswith("generic_rag.")
                     for name in sys.modules
                 )
-                class Host:
-                    def __init__(self): self.frames = []; self.closed = 0
-                    def terminal_size(self): return (80, 24)
-                    def color_enabled(self): return False
-                    def present(self, frame): self.frames.append(frame)
-                    def read_event(self): return "close"
-                    def close_view(self): self.closed += 1
-                host = Host()
-                import io, jsonl_viewer
-                from story_writing_agents.interactive_terminal._external_view import ExternalTerminalIO
-                active_host = host; actual_view = jsonl_viewer.view_jsonl
-                def owned(source, spec, host=None, *, terminal=None, transient_only=False):
-                    assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal); actual_view(source, spec, active_host)
-                jsonl_viewer.view_jsonl = owned; transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)
+{_viewer_host_source((80, 24))}
                 operation = prepare_agent_exchange_view(
                     b"",
                     session_id="session_1",
@@ -1643,21 +1648,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
 
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 from story_writing_agents.interactive_controller._exchange_viewer import prepare_agent_exchange_view
-                class Host:
-                    def __init__(self): self.frames = []; self.closed = 0
-                    def terminal_size(self): return (80, 24)
-                    def color_enabled(self): return False
-                    def present(self, frame): self.frames.append(frame)
-                    def read_event(self): return "close"
-                    def close_view(self): self.closed += 1
-                source = b'{{"timestamp":"2026-08-30T00:00:00Z","request_type":"request","content":"ok"}}\\n'
-                host = Host()
-                import io, jsonl_viewer
-                from story_writing_agents.interactive_terminal._external_view import ExternalTerminalIO
-                active_host = host; actual_view = jsonl_viewer.view_jsonl
-                def owned(source, spec, host=None, *, terminal=None, transient_only=False):
-                    assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal); actual_view(source, spec, active_host)
-                jsonl_viewer.view_jsonl = owned; transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)
+{_viewer_host_source((80, 24), _VIEWER_SOURCE_ASSIGNMENT)}
                 operation = prepare_agent_exchange_view(
                     source,
                     session_id="session_1",
@@ -1952,20 +1943,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     + "\\n"
                 ).encode("utf-8")
                 original = bytes(source)
-                class Host:
-                    def __init__(self): self.frames = []; self.closed = 0
-                    def terminal_size(self): return (240, 40)
-                    def color_enabled(self): return False
-                    def present(self, frame): self.frames.append(frame)
-                    def read_event(self): return "close"
-                    def close_view(self): self.closed += 1
-                host = Host()
-                import io, jsonl_viewer
-                from story_writing_agents.interactive_terminal._external_view import ExternalTerminalIO
-                active_host = host; actual_view = jsonl_viewer.view_jsonl
-                def owned(source, spec, host=None, *, terminal=None, transient_only=False):
-                    assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal); actual_view(source, spec, active_host)
-                jsonl_viewer.view_jsonl = owned; transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)
+{_viewer_host_source((240, 40))}
                 operation = prepare_agent_exchange_view(
                     source,
                     session_id="session_1",
@@ -2035,7 +2013,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     agent_id="lead_orchestrator",
                 )(transport)
                 assert searched_host.closed == 1
-                assert "1/14 occurrences • Search all text='개요'" in searched_host.frames[-1]
+                assert "Occurrence 1/14" in searched_host.frames[-1] and "Search: '개요'" in searched_host.frames[-1] and "In: All text" in searched_host.frames[-1]
                 assert '"content": "개요 ⟦개요⟧ 0"' in searched_host.frames[-2]
                 assert '"content": "⟦개요⟧ 개요 0"' in searched_host.frames[-1]
                 assert "U0015" not in searched_host.frames[-1]

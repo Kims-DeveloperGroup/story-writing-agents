@@ -53,6 +53,7 @@ from story_writing_agents import (CONVERSATION_CONTEXT_POLICY,
     SessionLifecycleState, Workspace,
 )
 from story_writing_agents import cli as cli_module
+from story_writing_agents import backend as backend_module
 from story_writing_agents.conversation_retrieval import (CONVERSATION_RETRIEVAL_POLICY,
     ConversationRagAttemptOutcome, ConversationRagContext,
     ConversationRagExcerpt, serialize_conversation_retrieval_observation,
@@ -3686,6 +3687,92 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(shared.exists())
                 finally: saved.replace(shared)
 
+    async def _exercise_preliminary_capture(self, *, repair=False):
+        from tests.provider_wire_fixture import ExplicitPhaseScript, selection_plan, lead_fixture_response, lead_fixture_bound_scope, finite_fixture_selection
+        from tests.test_lead_orchestration import _live_scope
+        from story_writing_agents import conversations as c
+        from story_writing_agents.agent_exchanges import AgentExchangeSelection, AgentExchangeScopeKind, WorkspaceAgentExchangeStore
+        from tests.test_agent_exchange_viewer import _prepare_view, _transport
+        import jsonl_viewer
+        from jsonl_viewer._catalog import bind_catalog
+        from jsonl_viewer._input import parse_jsonl
+        from jsonl_viewer._query import evaluate
+        def preliminary(call, _provider):
+            targets = tuple(map(json.loads, dict(call.contract.semantic_index.policy.choices)["preliminary_targets"]))
+            available = tuple(t["input_id"] for t in targets if t["availability"] != "unread")
+            intent = {"stage": "lead_preliminary_review", "inspection": {
+                t["input_id"]: "inspected" if t["input_id"] == "user_input" else "excluded" for t in targets},
+                "findings": [{"message": "Mina protects her brother.", "evidence_input_ids": finite_fixture_selection(available, ("user_input",))}],
+                "conflicts": [], "missing_information": ["Unread artifacts were not inspected."],
+                "further_review_required": True, "next_action": "request_information"}
+            return lead_fixture_response(call, {"response_type": "answer", "response_text": "Mina protects her brother.",
+                "response_details": {"task_scope": lead_fixture_bound_scope(call,
+                    _live_scope(call, activity="review", domains=("character_world",)), record=True),
+                    "preliminary_review": intent}}, family=0)
+        script = ExplicitPhaseScript(("{}", preliminary) if repair else (preliminary,), selection_plan("answer.observed_facts"))
+        physical_calls, specs = [], []
+        original_invoke = backend_module._BoundContextProvider.invoke_context
+        async def observed_invoke(provider, call):
+            physical_calls.append(call)
+            response = script.next_response(call)
+            with mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_OUTPUT": response(call, None) if callable(response) else response}):
+                return await original_invoke(provider, call)
+        native_before = len(self.provider_invocations())
+        native_backend = self._provisioned_backend("preliminary_capture")
+        runtime = StoryRuntime(self.workspace, native_backend)
+        conversation = runtime.conversation_storage_services.catalog.create("preliminary_capture", "First preliminary").conversation_id
+        with mock.patch.object(backend_module._BoundContextProvider, "invoke_context", new=observed_invoke):
+            result = await runtime.lead_turn("preliminary_capture", conversation,
+                "Explain the supplied motive: Mina hides a letter to protect her brother. Do not write or dispatch.")
+        script.require_fixture_valid()
+        report = result.preliminary_review
+        self.assertIsNotNone(report, result)
+        history = runtime.conversation_storage_services.event_store.read("preliminary_capture", conversation)
+        judgment = next(e.payload for e in history if type(e.payload) is c.CollaborationLeadJudgmentPayload and e.payload.preliminary_review == report)
+        public, = (e.payload.response for e in history if type(e.payload) is c.CollaborationLeadPublicResponsePayload
+                   and e.payload.response.invocation_id == judgment.provider_invocation_id and e.payload.response.acceptance.value == "accepted")
+        submitted = next(e.payload for e in history if type(e.payload) is c.CollaborationProviderCallPayload
+                         and e.payload.state is c.CollaborationProviderCallState.SUBMITTED and e.payload.invocation_id == judgment.provider_invocation_id and e.payload.call_id == public.call_id)
+        self.assertEqual(sum(call.call_id == submitted.call_id for call in physical_calls), 1)
+        self.assertEqual((public.ordinal, public.call_kind), (submitted.ordinal, submitted.call_kind.value))
+        for native, call in zip(self.provider_invocations()[native_before:], physical_calls, strict=True):
+            self.assertEqual(native["raw_payload"].encode(), canonical_provider_json(call.payload))
+            self.assertNotIn(report.task_id, json.dumps((native["payload"], native["schema"])))
+        selection = AgentExchangeSelection("preliminary_capture", AgentExchangeScopeKind.CONVERSATION, conversation, LEAD_ORCHESTRATOR)
+        raw = WorkspaceAgentExchangeStore(self.workspace).snapshot(selection).jsonl_bytes
+        records = [json.loads(line) for line in raw.splitlines()]
+        diagnosed = [json.loads(row["content"]) for row in records if row["request_type"] == "outcome"
+                     and "task_id" in json.loads(row["content"]).get("host_diagnostics", {})]
+        self.assertEqual(diagnosed, [{"code": "accepted", "outcome": "accepted", "host_diagnostics": {
+            "call_id": submitted.call_id, "task_id": report.task_id, "task_revision": report.task_revision}}])
+        self.assertEqual({json.loads(row["content"])["host_diagnostics"]["call_id"] for row in records
+                          if row["request_type"] == "outcome" and json.loads(row["content"])["outcome"] == "rejected"}, {public.repair_of_call_id} if repair else set())
+        self.assertEqual({json.loads(row["content"])["host_diagnostics"]["call_id"] for row in records
+                          if row["request_type"] == "request"}, {call.call_id for call in physical_calls})
+        def configured_view(source, spec, host=None, *, terminal=None, transient_only=False):
+            self.assertIs(source, raw)
+            specs.append(spec)
+        with mock.patch.object(jsonl_viewer, "view_jsonl", new=configured_view):
+            _prepare_view(raw, session_id="preliminary_capture", scope_id=conversation, agent_id=LEAD_ORCHESTRATOR, typed_history=history)(_transport())
+        self.assertEqual(len(specs), 1)
+        catalog = bind_catalog(parse_jsonl(raw), specs[0].inspection)
+        filters = tuple(frozenset({next(i for i, option in enumerate(f.options) if option.value == report.stage)})
+                        if f.id == "phase" else frozenset() for f in catalog.facets)
+        found = evaluate(parse_jsonl(raw), catalog, filters, report.task_id, -1)
+        self.assertEqual(len(found.items), 1)
+        self.assertEqual(found.search.occurrences[0].text, report.task_id)
+        outcome_scope = next(i for i, scope in enumerate(catalog.scopes) if scope.id == "outcome")
+        scoped = evaluate(parse_jsonl(raw), catalog, filters, report.task_id, outcome_scope)
+        self.assertEqual((scoped.items, scoped.matching_records), (found.items, found.matching_records))
+        terminal = next(row for row in records if row["request_type"] == "outcome" and json.loads(row["content"]) == diagnosed[0])
+        self.assertEqual({i + 1 for i in catalog.items[found.items[0]].records},
+                         {i + 1 for i, row in enumerate(records) if row["exchange_id"] == terminal["exchange_id"]})
+        from story_writing_agents.interactive_controller._exchange_projection import project_agent_exchanges
+        self.assertEqual({call.phase for call in project_agent_exchanges(raw, selection).calls}, {None})
+        ambiguous = project_agent_exchanges(raw, selection, history * 2)
+        self.assertEqual({call.phase for call in ambiguous.calls}, {None})
+        self.assertFalse(evaluate(parse_jsonl(raw), catalog, filters, next(e.event_id for e in history if e.payload is judgment), -1).items)
+
     async def test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread(self) -> None:
         session_id = "contextual_physical"
         backend = self._session_backend(session_id)
@@ -3749,85 +3836,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(restarted_provider.inspect_context_thread(scope, policy), first.thread_id)
         async with restarted_bound._direct_codex_execution_workspace(session_id, None) as execution_workspace:
             await self._assert_grouped_reader_transport(restarted, session_id, execution_workspace)
-        from tests.provider_wire_fixture import ExplicitPhaseScript, selection_plan, lead_fixture_response, lead_fixture_bound_scope, finite_fixture_selection
-        from tests.test_lead_orchestration import _live_scope
-        from story_writing_agents import conversations as c
-        from story_writing_agents.agent_exchanges import AgentExchangeSelection, AgentExchangeScopeKind, WorkspaceAgentExchangeStore
-        from tests.test_agent_exchange_viewer import _prepare_view, _transport
-        import jsonl_viewer
-        from jsonl_viewer._catalog import bind_catalog
-        from jsonl_viewer._input import parse_jsonl
-        from jsonl_viewer._query import evaluate
-        def preliminary(call, _provider):
-            targets = tuple(map(json.loads, dict(call.contract.semantic_index.policy.choices)["preliminary_targets"]))
-            available = tuple(t["input_id"] for t in targets if t["availability"] != "unread")
-            intent = {"stage": "lead_preliminary_review", "inspection": {
-                t["input_id"]: "inspected" if t["input_id"] == "user_input" else "excluded" for t in targets},
-                "findings": [{"message": "Mina protects her brother.", "evidence_input_ids": finite_fixture_selection(available, ("user_input",))}],
-                "conflicts": [], "missing_information": ["Unread artifacts were not inspected."],
-                "further_review_required": True, "next_action": "request_information"}
-            return lead_fixture_response(call, {"response_type": "answer", "response_text": "Mina protects her brother.",
-                "response_details": {"task_scope": lead_fixture_bound_scope(call,
-                    _live_scope(call, activity="review", domains=("character_world",)), record=True),
-                    "preliminary_review": intent}}, family=0)
-        script = ExplicitPhaseScript((preliminary,), selection_plan("answer.observed_facts"))
-        physical_calls, specs = [], []
-        original_invoke = backend_module._BoundContextProvider.invoke_context
-        async def observed_invoke(provider, call):
-            physical_calls.append(call)
-            response = script.next_response(call)
-            with mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_OUTPUT": response(call, None) if callable(response) else response}):
-                return await original_invoke(provider, call)
-        native_before = len(self.provider_invocations())
-        native_backend = self._provisioned_backend("preliminary_capture")
-        runtime = StoryRuntime(self.workspace, native_backend)
-        conversation = runtime.conversation_storage_services.catalog.create("preliminary_capture", "First preliminary").conversation_id
-        with mock.patch.object(backend_module._BoundContextProvider, "invoke_context", new=observed_invoke):
-            result = await runtime.lead_turn("preliminary_capture", conversation,
-                "Explain the supplied motive: Mina hides a letter to protect her brother. Do not write or dispatch.")
-        script.require_fixture_valid()
-        report = result.preliminary_review
-        self.assertIsNotNone(report, result)
-        history = runtime.conversation_storage_services.event_store.read("preliminary_capture", conversation)
-        judgment = next(e.payload for e in history if type(e.payload) is c.CollaborationLeadJudgmentPayload and e.payload.preliminary_review == report)
-        submitted = next(e.payload for e in history if type(e.payload) is c.CollaborationProviderCallPayload
-                         and e.payload.state is c.CollaborationProviderCallState.SUBMITTED and e.payload.invocation_id == judgment.provider_invocation_id)
-        self.assertEqual(sum(call.call_id == submitted.call_id for call in physical_calls), 1)
-        for native, call in zip(self.provider_invocations()[native_before:], physical_calls, strict=True):
-            self.assertEqual(native["raw_payload"].encode(), canonical_provider_json(call.payload))
-            self.assertNotIn(report.task_id, json.dumps((native["payload"], native["schema"])))
-        selection = AgentExchangeSelection("preliminary_capture", AgentExchangeScopeKind.CONVERSATION, conversation, LEAD_ORCHESTRATOR)
-        raw = WorkspaceAgentExchangeStore(self.workspace).snapshot(selection).jsonl_bytes
-        records = [json.loads(line) for line in raw.splitlines()]
-        diagnosed = [json.loads(row["content"]) for row in records if row["request_type"] == "outcome"
-                     and "task_id" in json.loads(row["content"]).get("host_diagnostics", {})]
-        self.assertEqual(diagnosed, [{"code": "accepted", "outcome": "accepted", "host_diagnostics": {
-            "call_id": submitted.call_id, "task_id": report.task_id, "task_revision": report.task_revision}}])
-        self.assertEqual({json.loads(row["content"])["host_diagnostics"]["call_id"] for row in records
-                          if row["request_type"] == "request"}, {call.call_id for call in physical_calls})
-        def configured_view(source, spec, host=None, *, terminal=None, transient_only=False):
-            self.assertIs(source, raw)
-            specs.append(spec)
-        with mock.patch.object(jsonl_viewer, "view_jsonl", new=configured_view):
-            _prepare_view(raw, session_id="preliminary_capture", scope_id=conversation, agent_id=LEAD_ORCHESTRATOR, typed_history=history)(_transport())
-        self.assertEqual(len(specs), 1)
-        catalog = bind_catalog(parse_jsonl(raw), specs[0].inspection)
-        filters = tuple(frozenset({next(i for i, option in enumerate(f.options) if option.value == report.stage)})
-                        if f.id == "phase" else frozenset() for f in catalog.facets)
-        found = evaluate(parse_jsonl(raw), catalog, filters, report.task_id, -1)
-        self.assertEqual(len(found.items), 1)
-        self.assertEqual(found.search.occurrences[0].text, report.task_id)
-        outcome_scope = next(i for i, scope in enumerate(catalog.scopes) if scope.id == "outcome")
-        scoped = evaluate(parse_jsonl(raw), catalog, filters, report.task_id, outcome_scope)
-        self.assertEqual((scoped.items, scoped.matching_records), (found.items, found.matching_records))
-        terminal = next(row for row in records if row["request_type"] == "outcome" and json.loads(row["content"]) == diagnosed[0])
-        self.assertEqual({i + 1 for i in catalog.items[found.items[0]].records},
-                         {i + 1 for i, row in enumerate(records) if row["exchange_id"] == terminal["exchange_id"]})
-        from story_writing_agents.interactive_controller._exchange_projection import project_agent_exchanges
-        self.assertEqual({call.phase for call in project_agent_exchanges(raw, selection).calls}, {None})
-        ambiguous = project_agent_exchanges(raw, selection, history * 2)
-        self.assertEqual({call.phase for call in ambiguous.calls}, {None})
-        self.assertFalse(evaluate(parse_jsonl(raw), catalog, filters, next(e.event_id for e in history if e.payload is judgment), -1).items)
+        await self._exercise_preliminary_capture()
 
     async def test_contextual_submitted_failure_taints_only_exact_context_thread(
         self,
@@ -5976,6 +5985,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIs(normal.trace.origin, ReplyTraceOrigin.PROVIDER)
         self.assertEqual(normal.validation_details, ())
+        await self._exercise_preliminary_capture(repair=True)
 
     async def test_malformed_direct_json_keeps_terminal_code_and_safe_detail(self) -> None:
         session_id = "malformed_terminal_code"

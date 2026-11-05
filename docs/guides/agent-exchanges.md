@@ -115,8 +115,9 @@ Story opens the copied snapshot with display context for the selected session,
 scope and agent. The viewer is the independent `jsonl-viewer` package: it knows
 records, optional groups/sections, scalar facets and explicit search paths.
 Story supplies all call grouping, stage, outcome and completeness meanings as
-immutable data. No Story object, callback, authority check or runtime preset is
-passed to the viewer.
+immutable data. Inspection metadata contains no Story runtime object, semantic
+callback, authority check or runtime preset. The existing generic terminal
+transport retains its input and ownership boundary.
 
 Each list item represents one captured physical call. Its summary includes the
 first capture time, a short exchange identity, provider, recorded outcome and

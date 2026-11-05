@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import subprocess
 import sys
@@ -472,13 +473,25 @@ class LazyViewerAdapterTests(unittest.TestCase):
         )
         self.assertFalse(hasattr(spec, "searchable_fields"))
         self.assertEqual(source, b'{"content":"PRIVATE","provider":"codex"}\n')
-        from jsonl_viewer import inspection as api
-        class Overflow(api.Inspection):
-            def __post_init__(self): raise ValueError("bounded descriptor fixture")
-        with (mock.patch.object(api, "Inspection", Overflow),
-              mock.patch.object(viewer_module.importlib, "import_module", side_effect=_viewer_import(module))):
-            _prepare_view(source, scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_full_id", agent_id=ROSTER[2])(host)
-        self.assertTrue(calls[-1][0] is source and calls[-1][1].inspection is None)
+        from jsonl_viewer._catalog import bind_catalog
+        from jsonl_viewer._input import parse_jsonl
+        from jsonl_viewer._query import evaluate
+        snapshot = parse_jsonl(source)
+        catalog = bind_catalog(snapshot, spec.inspection)
+        absent = tuple(frozenset({next(i for i, option in enumerate(f.options) if option.value is False)})
+                       if f.id == "response_present" else frozenset() for f in catalog.facets)
+        self.assertEqual(evaluate(snapshot, catalog, absent, None).items, (0,))
+        conflicting = tuple(frozenset({next(i for i, option in enumerate(f.options) if option.value == "complete")})
+                            if f.id == "completeness" else selected for f, selected in zip(catalog.facets, absent, strict=True))
+        self.assertEqual(evaluate(snapshot, catalog, conflicting, None).items, ())
+        large = b"".join((json.dumps({**json.loads(source), "exchange_id": f"large-{i}",
+            "content": json.dumps({"host_diagnostics": {"call_id": f"call-{i:05d}-" + "x" * 53},
+                                   "payload": {}})}) + "\n").encode() for i in range(4096))
+        self.assertEqual(len(parse_jsonl(large).records), 4096)
+        self.assertIsNone(viewer_module.project_agent_exchanges(large, _selection(AgentExchangeScopeKind.DEBATE, "debate_full_id", ROSTER[2])).notice)
+        with mock.patch.object(viewer_module.importlib, "import_module", side_effect=_viewer_import(module)):
+            _prepare_view(large, scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_full_id", agent_id=ROSTER[2])(host)
+        self.assertTrue(calls[-1][0] is large and calls[-1][1].inspection is None)
         self.assertTrue(any(item.label == "Inspection" and "unchanged" in item.value for item in calls[-1][1].context))
 
     def test_missing_nested_import_and_bad_public_surface_are_fixed_preterminal_failures(
@@ -640,7 +653,8 @@ class LazyViewerAdapterTests(unittest.TestCase):
             transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True); operation(transport)
             searched = [frame for frame in frames if "Search: 'CODEX'" in frame]
             assert closed == [True] and "READ ONLY" in frames[0] and any("provider" in frame and "2 occurrences" in frame for frame in searched)
-            assert ["1/2" in frame for frame in searched] == [True, False, True] and "Search: None" in frames[4]
+            assert ["1/2" in frame for frame in searched] == [True, False, True] and "Search: None" in frames[4], (
+                ["1/2" in frame for frame in searched], frames[4], [line for frame in frames for line in frame.splitlines() if "Search:" in line or "Occurrence" in line or "matched" in line])
             assert any("2 matched · 2 records · 3 occurrences" in frame and "In: Response content" in frame for frame in frames)
             frames.clear(); events = iter(("close",)); operation(transport)
             assert "READ ONLY" in frames[0] and "Search: None" in frames[0] and source == original

@@ -26,3 +26,13 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+
+[dependency-groups]
+
+test = ["setuptools>=84.2.1,<85"]
+
+
+[tool.uv]
+
+default-groups = ["test"]
