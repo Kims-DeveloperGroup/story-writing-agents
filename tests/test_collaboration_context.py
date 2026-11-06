@@ -237,7 +237,7 @@ class CollaborationTransitionTests(unittest.TestCase):
                 "execution_result_event_id",
                 "execution_result",
                 "next_safe_action",
-                "rounds_spent",
+                "rounds_spent", "document_plans",
                 "physical_calls_spent",
                 "current_artifact_candidate",
                 "current_artifact_state",
