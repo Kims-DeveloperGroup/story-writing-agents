@@ -524,7 +524,7 @@ class CollaborationTransitionTests(unittest.TestCase):
                 c.LeadRecommendationState.COMPLETED, "Constructed preparation returned its separately confirmed proposal.",
                 confirmation.event_id, start.event_id, judgment.event_id)), turn_id="prepared_turn")
         finished = fixture.store_batch(prepared_history, fixture.make_batch(prepared_history, "prepared_result",
-            *prep_calls, judgment, proposal_event, state, objective, closed))
+            *prep_calls, judgment, proposal_event, objective, closed, state))
         final = c.project_collaboration_history(finished)
         by_id = {row.facts.objective_id: row for row in final.artifact_objectives}
         self.assertEqual(by_id[root_facts.objective_id].facts, root_facts)
@@ -541,7 +541,7 @@ class CollaborationTransitionTests(unittest.TestCase):
                     replace(objective, payload=replace(objective.payload,
                         document_node=replace(binding, node_id=root_plan.nodes[1].node_id)))):
             malformed = fixture.make_batch(prepared_history, "wrong_prepared_result", *prep_calls, judgment,
-                                           proposal_event, state, bad, closed)
+                                           proposal_event, bad, closed, state)
             with self.assertRaises(c.CollaborationAppendError):
                 fixture.store_batch(prepared_history, malformed)
 
