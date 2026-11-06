@@ -413,6 +413,138 @@ class CollaborationTransitionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "v3 front recommendation requires exact completed confirmed authoring source"):
             c.project_collaboration_history(late)
 
+        # Constructed selected-node preparation: invoke original live producers, then public replay.
+        from types import SimpleNamespace
+        from story_writing_agents import document_plan as documents, authoring_task_lifecycle as lifecycle
+        from story_writing_agents.conversations.context import _task_scope_digest
+        from story_writing_agents.lead_task_transitions import LeadTaskRef
+        from story_writing_agents.orchestrator import StoryRuntime, _RecommendationCapability
+        class ObjectiveOwner:
+            _new_id = staticmethod(StoryRuntime._new_id)
+            _draft = staticmethod(StoryRuntime._draft)
+            _validate_objective_selection = staticmethod(StoryRuntime._validate_objective_selection)
+            _resolved_objective_source_ids = staticmethod(StoryRuntime._resolved_objective_source_ids)
+            _build_document_plan = StoryRuntime._build_document_plan
+            _objective_drafts = StoryRuntime._objective_drafts
+            _document_goal_facts = StoryRuntime._document_goal_facts
+            def __init__(owner, captured):
+                def read(session, conversation):
+                    self.assertEqual((session, conversation), (fixture.SESSION_ID, fixture.CONVERSATION_ID))
+                    return captured
+                owner.conversation_storage_services = SimpleNamespace(event_store=SimpleNamespace(read=read))
+        root_text = "Write the Global and Part outlines; retain both original targets."
+        root_scope = replace(scope, task_id=lifecycle.task_identity_for_origin("root_step"),
+                             target_paths=(global_path, "core_documents/part_outlines.md"))
+        root_facts = c.ArtifactObjectiveFacts("root_goal", fixture.CONVERSATION_ID, "root_user", root_text,
+                                             root_scope.target_paths, ())
+        root_plan = ObjectiveOwner(())._build_document_plan(root_facts, root_scope, ("user_input",))
+        root_evidence = replace(basis.evidence, receipts=tuple(replace(item, operation_id="lead_root_turn",
+            result_correlation_id="outcome_root_turn") for item in basis.evidence.receipts))
+        root_calls = fixture.provider_call_drafts(invocation_id="root_invocation", call_id="root_call",
+            role=fixture.LEAD_ORCHESTRATOR, recipient=fixture.LEAD, invocation_kind=c.CollaborationInvocationKind.LEAD)
+        root_drafts = (fixture.make_draft("root_user", c.CollaborationEventKind.MESSAGE, fixture.USER, fixture.LEAD,
+            c.CollaborationMessagePayload(root_text)), *root_calls,
+            fixture.make_draft("root_judgment", c.CollaborationEventKind.MESSAGE, fixture.LEAD, fixture.USER,
+                c.CollaborationLeadJudgmentPayload(c.LeadOutcomeKind.QUESTION, "Clarify only the remaining Part work.",
+                    root_evidence, authoring_scope=root_scope, document_plan=root_plan)),
+            fixture.make_draft("root_objective", c.CollaborationEventKind.ARTIFACT_OBJECTIVE, fixture.RUNTIME, fixture.USER,
+                c.ArtifactObjectivePayload(root_facts, c.LeadObjectiveAction.START, None, "root_judgment",
+                    c.ArtifactObjectiveNextStep.CLARIFY, document_plan=root_plan)))
+        root_drafts = tuple(replace(row, turn_id="root_turn", step_id="root_step") for row in root_drafts)
+        task_ref = LeadTaskRef(session_id=fixture.SESSION_ID, conversation_id=fixture.CONVERSATION_ID,
+            task_id=scope.task_id, task_revision=scope.task_revision, scope_event_id=source.event_id,
+            scope_digest=_task_scope_digest(scope))
+        node = root_plan.nodes[0]
+        binding = documents.DocumentNodeBinding(root_plan.ref, node.node_id, task_ref, task_ref, fixture.STEP_ID)
+        selected_origin = replace(origin, payload=replace(origin.payload,
+            document_selection=documents.DocumentNodeSelection(root_plan.ref, node_id=node.node_id)))
+        node_source = replace(source, payload=replace(source.payload, document_node=binding))
+        node_request = replace(request, document_node=binding, tail_sequence=len(root_drafts) + 7)
+        node_disclosed = replace(disclosed, payload=node_request)
+        selected = records((root_drafts, (selected_origin, user, transition), (*lead_calls, node_source, node_disclosed)))
+        selected_history = ()
+        for batch_id in dict.fromkeys(row.batch_id for row in selected):
+            selected_history = fixture.store_batch(selected_history, fixture.batch_from_history(selected, batch_id))
+        choice = c.LeadRecommendationDecision(fixture.SESSION_ID, fixture.CONVERSATION_ID, node_request.request_event_id,
+            node_request.tail_sequence, node_request.request_id, node_request.action_id, node_request.action_revision,
+            node_request.action_digest, c.CollaborationConfirmationDecision.CONFIRM)
+        confirmation = replace(fixture.make_draft("node_confirm", c.CollaborationEventKind.LEAD_RECOMMENDATION_DECISION,
+            fixture.USER, fixture.RUNTIME, c.LeadRecommendationDecisionPayload(choice)), turn_id="prepared_turn")
+        start = replace(fixture.make_draft("node_start", c.CollaborationEventKind.LEAD_RECOMMENDATION_STARTED,
+            fixture.RUNTIME, fixture.LEAD, c.LeadRecommendationStartedPayload("node_start", node_request.request_event_id,
+                confirmation.event_id, node_request.request_id, node_request.action_id, node_request.action_revision,
+                node_request.action_digest, "node_attempt")), turn_id="prepared_turn")
+        prepared_history = fixture.store_batch(selected_history, fixture.make_batch(selected_history, "node_controls", confirmation, start))
+        capability = _RecommendationCapability(prepared_history[-3], prepared_history[-2], prepared_history[-1])
+        references = tuple(fixture.make_input(alias, kind=c.CollaborationInputKind.CONVERSATION_EVENT,
+            locator="conversation/" + event.event_id, revision_digest="sha256:" + hashlib.sha256(json.dumps(
+                dataclasses.asdict(event.payload), ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+            start_line=None, end_line=None) for event, alias in ((prepared_history[-3], "recommendation_request"),
+                                                              (prepared_history[-2], "recommendation_decision")))
+        prepared_evidence = replace(basis.evidence, receipts=tuple(replace(item, operation_id="lead_prepared_turn",
+            result_correlation_id="outcome_prepared_turn") for item in basis.evidence.receipts))
+        prepared_basis = replace(basis, inputs=(*basis.inputs, *references), evidence=prepared_evidence)
+        inputs = tuple(item.input_id for item in prepared_basis.inputs)
+        assignment = replace(template.assignments[0], instruction=node_request.instruction, input_ids=inputs,
+                             mode=routing.SpecialistAssignmentMode.DRAFT)
+        proposal = fixture.replace_proposal(template, purpose=node_request.purpose, assignments=(assignment,), basis=prepared_basis,
+            budget=replace(template.budget, physical_calls_spent=2), authoring_scope=scope, document_node=binding)
+        intent = c.LeadProposalIntent(c.LeadProposalRelation.NEW_STEP, node_request.purpose,
+            (c.LeadAssignmentIntent(fixture.PLOT_ARCHITECT, node_request.instruction, inputs,
+                                   mode=routing.SpecialistAssignmentMode.DRAFT),), scope,
+            authoring_admission=basis.authoring_admission)
+        outcome = c.LeadProviderOutcome(c.LeadOutcomeKind.PROPOSAL, "Prepare this exact Global node.",
+            c.LeadOutcomeScope.STORY_SPECIFIC, c.LeadEvidenceStatus.VERIFIED,
+            tuple(item.evidence_id for item in prepared_evidence.receipts), proposal=intent,
+            authoring_scope=scope, authoring_assessment=assessment, authoring_admission=basis.authoring_admission, document_node=binding)
+        judgment = replace(fixture.make_draft("prepared_judgment", c.CollaborationEventKind.MESSAGE, fixture.LEAD, fixture.USER,
+            c.CollaborationLeadJudgmentPayload(c.LeadOutcomeKind.PROPOSAL, outcome.message, prepared_evidence,
+                authoring_scope=scope, authoring_admission=basis.authoring_admission, document_node=binding)), turn_id="prepared_turn")
+        owner = ObjectiveOwner(prepared_history)
+        from_goal = owner._document_goal_facts(fixture.SESSION_ID, judgment, scope.target_paths, preparation=capability)
+        objective, = owner._objective_drafts(outcome, c.project_collaboration_history(prepared_history), prepared_history,
+                                             judgment, preparation=capability, plan_override=root_plan)
+        self.assertEqual((from_goal.target_paths, objective.payload.facts.target_paths), (scope.target_paths, scope.target_paths))
+        self.assertEqual(node_request.target_paths, ())
+        self.assertIsNone(objective.payload.document_plan)
+        self.assertEqual(objective.payload.document_node, binding)
+        self.assertEqual((objective.payload.facts.origin_recommendation_request_event_id,
+                          objective.payload.facts.origin_recommendation_decision_event_id), (node_request.request_event_id, confirmation.event_id))
+        prep_calls = tuple(replace(row, turn_id="prepared_turn") for row in fixture.provider_call_drafts(
+            invocation_id="prepared_invocation", call_id="prepared_call", role=fixture.LEAD_ORCHESTRATOR,
+            recipient=fixture.LEAD, invocation_kind=c.CollaborationInvocationKind.LEAD))
+        proposal_event = replace(fixture.make_draft("prepared_proposal", c.CollaborationEventKind.MESSAGE,
+            fixture.LEAD, fixture.USER, proposal), turn_id="prepared_turn")
+        state = replace(fixture.make_draft("prepared_state", c.CollaborationEventKind.STEP_STATE, fixture.RUNTIME, fixture.USER,
+            fixture.proposal_state(proposal, c.CollaborationStepState.AWAITING_CONFIRMATION,
+                                   confirmation_request_id="prepared_confirmation")), turn_id="prepared_turn")
+        closed = replace(fixture.make_draft("preparation_closed", c.CollaborationEventKind.LEAD_RECOMMENDATION_RESULT,
+            fixture.RUNTIME, fixture.USER, c.LeadRecommendationResultPayload(node_request.request_event_id,
+                node_request.request_id, node_request.action_id, node_request.action_revision, node_request.action_digest,
+                c.LeadRecommendationState.COMPLETED, "Constructed preparation returned its separately confirmed proposal.",
+                confirmation.event_id, start.event_id, judgment.event_id)), turn_id="prepared_turn")
+        finished = fixture.store_batch(prepared_history, fixture.make_batch(prepared_history, "prepared_result",
+            *prep_calls, judgment, proposal_event, state, objective, closed))
+        final = c.project_collaboration_history(finished)
+        by_id = {row.facts.objective_id: row for row in final.artifact_objectives}
+        self.assertEqual(by_id[root_facts.objective_id].facts, root_facts)
+        self.assertEqual(by_id[objective.payload.facts.objective_id].facts, objective.payload.facts)
+        self.assertIs(by_id[objective.payload.facts.objective_id].state, c.ArtifactObjectiveState.OPEN)
+        artifact_request = replace(request, kind=c.LeadRecommendationActionKind.PREPARE_ARTIFACT, target_paths=(global_path,),
+            specialist_ids=(), basis=replace(basis, agent_profiles=tuple(row for row in basis.agent_profiles
+                                                                      if row.agent_id == fixture.LEAD_ORCHESTRATOR)))
+        self.assertIs(artifact_request.objective_target_paths, artifact_request.target_paths)
+        with self.assertRaisesRegex(TypeError, "artifact objective requires exact target paths"):
+            replace(objective.payload.facts, target_paths=())
+        for bad in (replace(objective, payload=replace(objective.payload, facts=replace(objective.payload.facts,
+                        origin_recommendation_decision_event_id="foreign_confirm"))),
+                    replace(objective, payload=replace(objective.payload,
+                        document_node=replace(binding, node_id=root_plan.nodes[1].node_id)))):
+            malformed = fixture.make_batch(prepared_history, "wrong_prepared_result", *prep_calls, judgment,
+                                           proposal_event, state, bad, closed)
+            with self.assertRaises(c.CollaborationAppendError):
+                fixture.store_batch(prepared_history, malformed)
+
 
 class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
     def test_first_second_and_third_round_boundaries_use_durable_lineage(self) -> None:
