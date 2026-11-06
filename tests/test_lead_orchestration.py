@@ -3254,7 +3254,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             objective["next_step"] = "prepare" if step != "prepare" else "consult"
             self.assertIn(Rule.OBJECTIVE_BRANCH, facts.diagnose(json.dumps(body)))
         question = {"kind": "question", "message": "Clarify.", "authoring_scope": value["authoring_scope"], "objective_intent": {"action": "continue", "objective_id": "objective", "next_step": "clarify"}}
-        self.assertEqual(diagnose_json_text(json.dumps(wire_result(question, "lead-response-v7")), contract), ())
+        self.assertEqual(diagnose_json_text(json.dumps(wire_result({**question, "planning_target": None}, "lead-response-v7")), contract), ())
         self.assertEqual(facts.diagnose(json.dumps(question)), ())
         for kind in ("answer", "critique"):
             bad = json.dumps({**question, "kind": kind})
