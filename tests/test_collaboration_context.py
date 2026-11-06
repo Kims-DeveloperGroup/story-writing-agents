@@ -405,7 +405,7 @@ class CollaborationTransitionTests(unittest.TestCase):
         replayed = c.project_collaboration_history(stored)
         self.assertEqual(replayed.current_recommendation_request, request)
         self.assertIs(replayed.current_recommendation_state, c.LeadRecommendationState.PENDING)
-        self.assertEqual(replayed.available_tasks[0].authoring_scope, scope)
+        self.assertEqual(replayed.available_tasks[0].scope, scope)
         self.assertEqual(replayed.physical_calls_spent, 1)
         # Later controls cannot authorize the earlier source; all stored batch digests remain exact.
         late_disclosed = replace(disclosed, payload=replace(request, tail_sequence=5))
