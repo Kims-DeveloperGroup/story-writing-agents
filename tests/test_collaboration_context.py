@@ -625,7 +625,7 @@ class CollaborationTransitionTests(unittest.TestCase):
                                                                (foreign_prepared[-2], "recommendation_decision")))
         foreign_basis = replace(prepared_basis, inputs=(*basis.inputs, *foreign_references))
         foreign_proposal = fixture.replace_proposal(proposal, basis=foreign_basis, document_node=foreign_binding,
-                                                   document_plan=qualified_plan)
+                                                   authoring_scope=scope, document_plan=qualified_plan)
         foreign_judgment = foreign_draft(replace(judgment, payload=replace(judgment.payload, document_node=foreign_binding)))
         foreign_owner = ObjectiveOwner(foreign_prepared, owner_conversation=foreign_id)
         foreign_capability = _RecommendationCapability(foreign_prepared[-3], foreign_prepared[-2], foreign_prepared[-1])
@@ -648,7 +648,7 @@ class CollaborationTransitionTests(unittest.TestCase):
         complete = SessionHistorySnapshot(fixture.SESSION_ID,
             (owner_row(root_history, "Original root owner"), owner_row(foreign_finished, "Successor owner")))
         self.assertEqual(next(row.plan for row in complete.document_plans() if row.plan.ref == root_plan.ref), root_plan)
-        missing_carrier = fixture.replace_proposal(foreign_proposal, document_plan=None)
+        missing_carrier = fixture.replace_proposal(foreign_proposal, authoring_scope=scope, document_node=foreign_binding, document_plan=None)
         missing_state = foreign_draft(replace(state, payload=fixture.proposal_state(missing_carrier,
             c.CollaborationStepState.AWAITING_CONFIRMATION, confirmation_request_id="prepared_confirmation")))
         with self.assertRaises(c.CollaborationAppendError):
