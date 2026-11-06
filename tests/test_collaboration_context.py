@@ -338,6 +338,78 @@ class CollaborationTransitionTests(unittest.TestCase):
         self.assertEqual(mixed.status, "unknown")
         self.assertEqual({target.source_sha256 for target in mixed.exclusions}, {"a" * 64, "b" * 64})
 
+        # Constructed public append/replay; no host dispatch, READ, Confirm or Apply authority.
+        from story_writing_agents import conversations as c, authoring_admission as admission, specialist_routing as routing
+        from story_writing_agents.lead_task_transitions import LeadTaskAction, LeadTaskDecision, LeadTaskTransitionReceipt
+        from tests import collaboration_contract_fixture as fixture
+        global_path = "core_documents/global_outline.md"
+        scope = routing.AuthoringScope(schema_version=3, activity=routing.AuthoringActivity.DRAFT,
+            target_paths=(global_path,), domains=(routing.ArtifactReviewDomain.PLOT_STRUCTURE,),
+            interpretation="Draft only the disclosed Global outline.", task_id="fresh_recommendation_target", task_revision=1,
+            contributions=(routing.AuthoringContribution(routing.ArtifactReviewDomain.PLOT_STRUCTURE,
+                                                       routing.AuthoringContributionRole.DRAFT_OWNER),))
+        text = "Draft three outline scenes from the supplied motive; preserve no magic and the unresolved ending. You may invent supporting dialogue and minor places."
+        decision = LeadTaskDecision.for_conversation(fixture.SESSION_ID, fixture.CONVERSATION_ID,
+            LeadTaskAction.NEW_TASK, text=text, request_id="replay_request")
+        receipt = LeadTaskTransitionReceipt(origin_event_id="replay_origin", origin_kind="task_decision",
+            action=LeadTaskAction.NEW_TASK, target_task_id=scope.task_id, target_task_revision=1,
+            planning_step_id=fixture.STEP_ID, origin_message_event_id="replay_user")
+        user = fixture.make_draft("replay_user", c.CollaborationEventKind.MESSAGE, fixture.USER, fixture.LEAD,
+                                  c.CollaborationMessagePayload(text))
+        origin = fixture.make_draft(receipt.origin_event_id, c.CollaborationEventKind.LEAD_TASK_DECISION,
+            fixture.USER, fixture.RUNTIME, c.CollaborationLeadTaskDecisionPayload(decision))
+        transition = fixture.make_draft("replay_transition", c.CollaborationEventKind.LEAD_TASK_TRANSITION,
+            fixture.RUNTIME, fixture.USER, c.CollaborationLeadTaskTransitionPayload(receipt))
+        user_input = fixture.make_input("user_input", kind=c.CollaborationInputKind.USER_INPUT,
+            locator="conversation/" + fixture.TURN_ID + "/user_input", start_line=None, end_line=None)
+        template = fixture.make_proposal(inputs=(user_input,), assignments=(fixture.make_assignment(
+            specialist_id=fixture.PLOT_ARCHITECT, input_ids=("user_input",)),))
+        foundation = admission.AdmissionEvidence("Story foundations", ("user_input",), "Literal supplied story facts.")
+        direction = admission.AdmissionEvidence("Direction", ("user_input",), "USER requests three outline scenes.")
+        latitude = admission.AdmissionEvidence("Creative scope", ("user_input",), "USER permits supporting details.")
+        delegated = admission.AdmissionDecision("Supporting details", admission.DecisionCoverage.DELEGATED,
+            ("user_input",), "USER delegates supporting dialogue and minor places.")
+        assessment = admission.AuthoringAssessment(admission.AdmissionStatus.SUFFICIENT, (foundation,), direction,
+            latitude, ("supporting dialogue", "minor places"), ("no magic", "unresolved ending"), (delegated,), (),
+            "Constructed assessment qualified against the exact stored USER bytes.")
+        basis = fixture.qualify_fixture_basis(replace(template.basis, schema_version=2), scope,
+                                             user_text=text, assessment=assessment)
+        source = fixture.make_draft("replay_judgment", c.CollaborationEventKind.MESSAGE, fixture.LEAD, fixture.USER,
+            c.CollaborationLeadJudgmentPayload(c.LeadOutcomeKind.RECOMMENDATION,
+                "Draft only the disclosed Global outline.", basis.evidence, authoring_scope=scope))
+        request = c.LeadRecommendationRequestPayload(request_event_id="replay_disclosure", request_id="replay_request_id",
+            action_id="replay_action", action_revision=1, kind=c.LeadRecommendationActionKind.PREPARE_CONSULTATION,
+            purpose="Prepare only Global outline.", instruction=text, expected_result="One disclosed Plot draft.",
+            target_paths=(), specialist_ids=(fixture.PLOT_ARCHITECT,), objective_id=None,
+            source_recommendation_event_id=source.event_id,
+            source_recommendation_digest="sha256:" + hashlib.sha256(source.payload.message.encode("utf-8")).hexdigest(),
+            draft_sources=(), basis=basis, source_fingerprint=fixture.DIGEST_A, physical_calls_spent=0,
+            max_preparation_physical_calls=1, tail_sequence=5, user_impact="Prepare one call; specialists still need Confirm.",
+            authoring_scope=scope)
+        disclosed = fixture.make_draft(request.request_event_id, c.CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST,
+                                      fixture.RUNTIME, fixture.USER, request)
+        def records(groups):
+            stored = []
+            for index, drafts in enumerate(groups):
+                batch = fixture.make_batch(tuple(stored), "replay_batch_" + str(index), *drafts)
+                for ordinal, draft in enumerate(drafts):
+                    stored.append(c.CollaborationEvent(**{field.name: getattr(draft, field.name) for field in dataclasses.fields(draft)},
+                        sequence=len(stored) + 1, timestamp="2026-11-06T00:00:00+00:00", batch_id=batch.batch_id,
+                        batch_ordinal=ordinal, batch_size=len(drafts), batch_digest=c.collaboration_batch_digest(batch)))
+            return tuple(stored)
+        publication = records(((user, origin, transition), (source, disclosed)))
+        prefix = fixture.store_batch((), fixture.batch_from_history(publication, publication[0].batch_id))
+        stored = fixture.store_batch(prefix, fixture.batch_from_history(publication, publication[-1].batch_id))
+        replayed = c.project_collaboration_history(stored)
+        self.assertEqual(replayed.current_recommendation_request, request)
+        self.assertIs(replayed.current_recommendation_state, c.LeadRecommendationState.PENDING)
+        self.assertEqual(replayed.available_tasks[0].authoring_scope, scope)
+        # Later controls cannot authorize the earlier source; all stored batch digests remain exact.
+        late_disclosed = replace(disclosed, payload=replace(request, tail_sequence=3))
+        late = records(((user,), (source, late_disclosed), (origin, transition)))
+        with self.assertRaisesRegex(ValueError, "v3 front recommendation requires exact completed confirmed authoring source"):
+            c.project_collaboration_history(late)
+
 
 class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
     def test_first_second_and_third_round_boundaries_use_durable_lineage(self) -> None:

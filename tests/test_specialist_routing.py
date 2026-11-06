@@ -980,46 +980,6 @@ class SpecialistRoutingTests(unittest.TestCase):
             same_id_receipt = replace(selector_receipt, source_task_ref=same_id_ref)
             self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, selector_events(selector_decision(same_id_ref), same_id_receipt)))
 
-        # Public append and replay, not host execution: exact USER bytes and frozen current scope.
-        from story_writing_agents import authoring_admission as admission
-        replay_decision = selector_decision(None)
-        replay_receipt = LeadTaskTransitionReceipt(origin_event_id="selector_origin", origin_kind="task_decision",
-            action=LeadTaskAction.NEW_TASK, target_task_id=selector_scope.task_id, target_task_revision=1,
-            planning_step_id=selector_source.step_id, origin_message_event_id="selector_user")
-        user = fixture.make_draft("selector_user", c.CollaborationEventKind.MESSAGE, fixture.USER, fixture.LEAD,
-                                  c.CollaborationMessagePayload(replay_decision.text))
-        user_input = fixture.make_input("user_input", kind=c.CollaborationInputKind.USER_INPUT,
-            locator="conversation/" + fixture.TURN_ID + "/user_input", start_line=None, end_line=None)
-        template = fixture.make_proposal(inputs=(user_input,), assignments=(fixture.make_assignment(
-            specialist_id=document_fixture.PLOT_ARCHITECT, input_ids=("user_input",)),))
-        replay_basis = fixture.qualify_fixture_basis(replace(template.basis, schema_version=2), selector_scope,
-            user_text=replay_decision.text, assessment=admission.assessment_from_dict(recommendation_value["authoring_assessment"]))
-        request = c.LeadRecommendationRequestPayload(request_event_id="selector_request", request_id="selector_disclosure",
-            action_id="selector_action", action_revision=1, kind=c.LeadRecommendationActionKind.PREPARE_CONSULTATION,
-            purpose="Prepare only Global outline.", instruction=replay_decision.text, expected_result="One disclosed Plot draft.",
-            target_paths=(), specialist_ids=(document_fixture.PLOT_ARCHITECT,), objective_id=None,
-            source_recommendation_event_id=selector_source.event_id,
-            source_recommendation_digest="sha256:" + hashlib.sha256(selector_source.payload.message.encode("utf-8")).hexdigest(),
-            draft_sources=(), basis=replay_basis, source_fingerprint=fixture.DIGEST_A, physical_calls_spent=0,
-            max_preparation_physical_calls=1, tail_sequence=5, user_impact="Prepare one call; specialists still need Confirm.",
-            authoring_scope=selector_scope)
-        disclosed = fixture.make_draft(request.request_event_id, c.CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST,
-                                      fixture.LEAD, fixture.USER, request)
-        control_records = selector_events(replay_decision, replay_receipt)
-        controls = tuple(row.to_draft() for row in control_records[:2])
-        publication = selector_records(((user, *controls), (selector_source, disclosed)))
-        prefix = fixture.store_batch((), fixture.batch_from_history(publication, publication[0].batch_id))
-        stored = fixture.store_batch(prefix, fixture.batch_from_history(publication, publication[-1].batch_id))
-        replayed = c.project_collaboration_history(stored)
-        self.assertEqual(replayed.current_recommendation_request, request)
-        self.assertIs(replayed.current_recommendation_state, c.LeadRecommendationState.PENDING)
-        self.assertEqual(replayed.available_tasks[0].authoring_scope, selector_scope)
-        # Later controls must not authorize an earlier publication, even with valid batch digests.
-        late_disclosed = replace(disclosed, payload=replace(request, tail_sequence=3))
-        late = selector_records(((user,), (selector_source, late_disclosed), controls))
-        with self.assertRaisesRegex(ValueError, "v3 front recommendation requires exact completed confirmed authoring source"):
-            c.project_collaboration_history(late)
-
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
         from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
         legacy = fixture.make_proposal()
