@@ -545,6 +545,46 @@ class CollaborationTransitionTests(unittest.TestCase):
             with self.assertRaises(c.CollaborationAppendError):
                 fixture.store_batch(prepared_history, malformed)
 
+        # Composition/delegation only: the spy does not qualify candidate or task authority.
+        part_scope = replace(scope, task_id="candidate_consumer", target_paths=(root_plan.nodes[1].target_path,))
+        part_ref = replace(task_ref, task_id=part_scope.task_id, scope_event_id="part_input_scope",
+                           scope_digest=_task_scope_digest(part_scope))
+        candidate = documents.DocumentCandidateRef("global_candidate_event", "global_candidate", 1, fixture.DIGEST_A)
+        use = documents.DocumentCandidateUseIntent(root_plan.ref, node.node_id, root_plan.nodes[1].node_id, candidate,
+            part_ref, node.coverage, "Use only the approved provisional Global input.", fixture.DIGEST_B)
+        candidate_binding = documents.DocumentNodeBinding(root_plan.ref, root_plan.nodes[1].node_id, part_ref,
+            part_ref, fixture.STEP_ID, (use,))
+        validations = []
+        class CandidateInputOwner:
+            _document_candidate_inputs = StoryRuntime._document_candidate_inputs
+            failure = None
+            def _validate_document_node(owner, session, value):
+                validations.append((session, value))
+                if owner.failure is not None:
+                    raise owner.failure
+        merge_owner = CandidateInputOwner()
+        expected = c.CollaborationInputRevision("plan_candidate_1", c.CollaborationInputKind.ARTIFACT_CANDIDATE,
+            "artifact-candidate/" + candidate.candidate_id, c.CollaborationInputState.PRESENT, candidate.candidate_digest)
+        base_inputs = (basis.inputs[0],)
+        extended = merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding, base_inputs)
+        self.assertEqual(extended, (*base_inputs, expected))
+        self.assertEqual(merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding, extended), extended)
+        self.assertEqual(validations[0], (fixture.SESSION_ID, candidate_binding))
+        for mismatched in (replace(expected, locator="artifact-candidate/foreign_candidate"),
+                           replace(expected, revision_digest=fixture.DIGEST_B),
+                           replace(expected, kind=c.CollaborationInputKind.CONVERSATION_EVENT),
+                           replace(expected, start_line=1, end_line=2),
+                           replace(expected, state=c.CollaborationInputState.ABSENT, revision_digest=expected.revision_digest)):
+            with self.assertRaises(ValueError):
+                merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding, (*base_inputs, mismatched))
+        with self.assertRaises(ValueError):
+            merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding,
+                (*base_inputs, expected, replace(expected, revision_digest=fixture.DIGEST_B)))
+        merge_owner.failure = ValueError("binding validation sentinel")
+        with self.assertRaisesRegex(ValueError, "^binding validation sentinel$"):
+            merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding, extended)
+        self.assertEqual(validations[-1], (fixture.SESSION_ID, candidate_binding))
+
 
 class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
     def test_first_second_and_third_round_boundaries_use_durable_lineage(self) -> None:
