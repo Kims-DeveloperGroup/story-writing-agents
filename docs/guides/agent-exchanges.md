@@ -25,9 +25,9 @@ Or install the distribution normally:
 python -m pip install story-writing-agents
 ```
 
-Both forms install the required independent `jsonl-viewer` 0.7.0 from its exact
+Both forms install the required independent `jsonl-viewer` 0.7.1 from its exact
 HTTPS VCS requirement at
-`a38a975eda4123df11c1fa4f796fd49ab88efcee`. A first install normally needs
+`26520240c4be3e2af3e1cf4232fe3129ee706a86`. A first install normally needs
 Git, network access, and repository access. Installation does not invoke a
 story provider, open an exchange, or enable a service. The historical
 `story-writing-agents[viewer]` and editable `'.[viewer]'` forms remain accepted
@@ -41,7 +41,7 @@ pulling updated Story source, rerun the normal editable installation:
 python -m pip install --editable .
 ```
 
-That ordinary reinstall upgrades older viewer installations to required 0.7.0
+That ordinary reinstall upgrades older viewer installations to required 0.7.1
 without an uninstall, `--force-reinstall`, or `--ignore-installed`. Reserve a forced
 reinstall for a genuinely damaged same-version installation, as described in
 [Troubleshooting](troubleshooting.md#exchanges-does-not-open-the-expected-response).
@@ -126,12 +126,20 @@ Request, Response and Outcome sections retain their original source lines;
 empty sections say that no record is retained. Other historical kinds remain
 accessible. Searching a call keeps its other records available for comparison.
 
-At 120 terminal cells or wider, list and detail appear side by side. Narrower
-screens show one pane at a time. Tab/Shift+Tab changes focus without losing
-selection, scroll or committed conditions; `[`/`]` changes sections. Up/Down
-moves through the focused list or detail. In detail, `h/j/k/l` moves the JSON
-cursor, Enter folds a container, Page Up/Down (`b`/Space) pages, and physical
-Left/Right pans long rows. `g` uses the original positive source-line number.
+Single is the default layout and opens directly on the first retained record in
+full-width detail. Tab/Shift+Tab switches between the full-width list and detail;
+Enter in the list returns to the selected item's current detail. These focus
+changes preserve its record, section, cursor, folds, scroll and committed conditions.
+Up/Down selects calls in the list and traverses original source records in detail.
+
+Press `v` in the main view to choose Split. At least 120 columns and 12 rows keep
+the left call list beside detail, including while detail has focus. Smaller
+terminals show one focused screen and restore the selected Split layout when
+enlarged. The footer shows the layout and shortcut; each new viewer starts in
+Single/detail. There are no separate list/detail click-switch buttons. `[`/`]`
+changes sections. In detail, `h/j/k/l` moves the JSON cursor, Enter folds a
+container, Page Up/Down (`b`/Space) pages, and physical Left/Right pans long rows.
+`g` uses the original positive source-line number.
 
 ### Filters and incomplete records
 
@@ -244,9 +252,9 @@ items, fields and buttons as keyboard actions; wheel input scrolls its painted
 region. Modal outside clicks do not discard drafts.
 
 The external package owns exact rendering and input behavior. See its pinned
-[generic design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/a38a975eda4123df11c1fa4f796fd49ab88efcee/docs/design-system.md),
-[inspection contract](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/a38a975eda4123df11c1fa4f796fd49ab88efcee/docs/inspection.md),
-and [nineteen deterministic sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/a38a975eda4123df11c1fa4f796fd49ab88efcee/docs/samples).
+[generic design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/26520240c4be3e2af3e1cf4232fe3129ee706a86/docs/design-system.md),
+[inspection contract](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/26520240c4be3e2af3e1cf4232fe3129ee706a86/docs/inspection.md),
+and [nineteen deterministic sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/26520240c4be3e2af3e1cf4232fe3129ee706a86/docs/samples).
 Story's grouping and provenance rules live only in this repository.
 
 ## Interpret request, response, and outcome
@@ -384,9 +392,9 @@ Common bounded failures are:
 | --- | --- |
 | No attached session | Attach the intended session, then retry bare `/exchanges`. |
 | No records for the session | Run the intended provider work; do not invoke it merely to manufacture diagnostics. |
-| Viewer 0.1.1, 0.2.0, 0.3.0, 0.4.0, 0.4.1, 0.4.2, 0.5.0, 0.5.1, 0.5.2, 0.5.3, 0.5.4, or 0.6.0 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.7.0; do not force or uninstall. |
+| An older viewer through 0.7.0 remains after updating a checkout | Rerun the normal editable Story install to upgrade to required 0.7.1, then restart Story. |
 | Required viewer unavailable | Rerun the normal Story installation, then retry. The compatibility extra is not a separate repair path. |
-| Viewer 0.7.0 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
+| Viewer 0.7.1 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
 | Store busy | Retry after the concurrent exchange write completes. |
 | Unsafe, corrupt, or uncorrelatable records | Preserve the workspace and inspect the content-safe runtime diagnostic before retrying. |
 | Selected stream disappeared | Rerun `/exchanges` to refresh retained inventory. |
