@@ -36,9 +36,9 @@ _GENERIC_RAG_PIN = "c77456321c614518e420e45c033e3f71dc5363b8"
 _GENERIC_RAG_REPOSITORY = "https://github.com/Kims-DeveloperGroup/generic-rag.git"
 _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}")
-_OLD_JSONL_VIEWER_PIN = "717d17b0c180150e5137439ff72a48cef5f12397"
-_JSONL_VIEWER_PIN = "a38a975eda4123df11c1fa4f796fd49ab88efcee"
-_JSONL_VIEWER_VERSION = "0.7.0"
+_OLD_JSONL_VIEWER_PIN = "a38a975eda4123df11c1fa4f796fd49ab88efcee"
+_JSONL_VIEWER_PIN = "26520240c4be3e2af3e1cf4232fe3129ee706a86"
+_JSONL_VIEWER_VERSION = "0.7.1"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
 _JSONL_VIEWER_REQUIREMENT = (
     f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}")
@@ -1001,6 +1001,13 @@ class RagModuleBoundaryTests(unittest.TestCase):
 
 
 class RagPackagingBoundaryTests(unittest.TestCase):
+    def _assert_process_succeeded(self, result: subprocess.CompletedProcess[str], stage: str) -> None:
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"{stage}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+        )
+
     def test_required_metadata_lock_and_gitlinks_share_exact_pins(self) -> None:
         with (_REPOSITORY_ROOT / "pyproject.toml").open("rb") as handle:
             project = tomllib.load(handle)["project"]
@@ -1427,11 +1434,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
-            self.assertEqual(
-                damaged.returncode,
-                0,
-                f"stdout:\n{damaged.stdout}\nstderr:\n{damaged.stderr}",
-            )
+            self._assert_process_succeeded(damaged, 'damaged')
 
             optional_target = root / "optional-install"
             optional_target.mkdir()
@@ -1462,11 +1465,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
-            self.assertEqual(
-                optional.returncode,
-                0,
-                f"stdout:\n{optional.stdout}\nstderr:\n{optional.stderr}",
-            )
+            self._assert_process_succeeded(optional, 'optional')
 
             viewer_target = root / "viewer-install"
             viewer_target.mkdir()
@@ -1503,11 +1502,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
-            self.assertEqual(
-                viewer.returncode,
-                0,
-                f"stdout:\n{viewer.stdout}\nstderr:\n{viewer.stderr}",
-            )
+            self._assert_process_succeeded(viewer, 'viewer')
 
     @unittest.skipUnless(
         importlib.util.find_spec("setuptools") is not None,
@@ -1716,11 +1711,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     capture_output=True,
                     check=False,
                 )
-                self.assertEqual(
-                    created.returncode,
-                    0,
-                    f"stdout:\n{created.stdout}\nstderr:\n{created.stderr}",
-                )
+                self._assert_process_succeeded(created, 'created')
                 python = environment / "bin" / "python"
                 installed = subprocess.run(
                     [
@@ -1737,11 +1728,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     capture_output=True,
                     check=False,
                 )
-                self.assertEqual(
-                    installed.returncode,
-                    0,
-                    f"stdout:\n{installed.stdout}\nstderr:\n{installed.stderr}",
-                )
+                self._assert_process_succeeded(installed, 'installed')
                 checked = subprocess.run(
                     [str(python), "-m", "pip", "check"],
                     env=install_environment,
@@ -1749,11 +1736,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     capture_output=True,
                     check=False,
                 )
-                self.assertEqual(
-                    checked.returncode,
-                    0,
-                    f"stdout:\n{checked.stdout}\nstderr:\n{checked.stderr}",
-                )
+                self._assert_process_succeeded(checked, 'checked')
                 verified = subprocess.run(
                     [str(python), "-I", "-W", "error", "-c", probe, mode],
                     env=install_environment,
@@ -1761,11 +1744,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     capture_output=True,
                     check=False,
                 )
-                self.assertEqual(
-                    verified.returncode,
-                    0,
-                    f"stdout:\n{verified.stdout}\nstderr:\n{verified.stderr}",
-                )
+                self._assert_process_succeeded(verified, 'verified')
 
     @unittest.skipUnless(
         importlib.util.find_spec("setuptools") is not None,
@@ -1790,11 +1769,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
-            self.assertEqual(
-                created.returncode,
-                0,
-                f"stdout:\n{created.stdout}\nstderr:\n{created.stderr}",
-            )
+            self._assert_process_succeeded(created, 'created')
             python = environment / "bin" / "python"
             build_support = root / "build-support"
             _copy_setuptools_build_support(build_support)
@@ -1849,17 +1824,13 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
-            self.assertEqual(
-                seeded.returncode,
-                0,
-                f"stdout:\n{seeded.stdout}\nstderr:\n{seeded.stderr}",
-            )
+            self._assert_process_succeeded(seeded, 'seeded')
             old_probe = textwrap.dedent(
                 f"""
                 import importlib.metadata
                 import json
                 viewer = importlib.metadata.distribution("jsonl-viewer")
-                assert viewer.version == "0.6.5"
+                assert viewer.version == "0.7.0"
                 direct_url = json.loads(viewer.read_text("direct_url.json"))
                 assert direct_url == {{
                     "url": {_JSONL_VIEWER_REPOSITORY!r},
@@ -1876,16 +1847,12 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import sys
                 sys.path.insert(0, {str(story_project / "src")!r})
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
-                from story_writing_agents.interactive_controller._exchange_viewer import AgentExchangeViewerError, prepare_agent_exchange_view
-                try:
-                    prepare_agent_exchange_view(
-                        b"", session_id="s", scope_kind=AgentExchangeScopeKind.CONVERSATION,
-                        scope_id="c", scope_subject="Subject", agent_id="lead_orchestrator",
-                    )
-                except AgentExchangeViewerError as failure:
-                    assert failure.code == "incompatible"
-                else:
-                    raise AssertionError("old viewer admitted before terminal operation")
+                from story_writing_agents.interactive_controller._exchange_viewer import prepare_agent_exchange_view
+                prepared = prepare_agent_exchange_view(
+                    b"", session_id="s", scope_kind=AgentExchangeScopeKind.CONVERSATION,
+                    scope_id="c", scope_subject="Subject", agent_id="lead_orchestrator",
+                )
+                assert callable(prepared)
                 """
             )
             old_verified = subprocess.run(
@@ -1895,11 +1862,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
-            self.assertEqual(
-                old_verified.returncode,
-                0,
-                f"stdout:\n{old_verified.stdout}\nstderr:\n{old_verified.stderr}",
-            )
+            self._assert_process_succeeded(old_verified, 'old_verified')
 
             upgrade_command = [
                 str(python),
@@ -1920,11 +1883,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
-            self.assertEqual(
-                upgraded.returncode,
-                0,
-                f"stdout:\n{upgraded.stdout}\nstderr:\n{upgraded.stderr}",
-            )
+            self._assert_process_succeeded(upgraded, 'upgraded')
             checked = subprocess.run(
                 [str(python), "-m", "pip", "check"],
                 env=install_environment,
@@ -1932,11 +1891,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
-            self.assertEqual(
-                checked.returncode,
-                0,
-                f"stdout:\n{checked.stdout}\nstderr:\n{checked.stderr}",
-            )
+            self._assert_process_succeeded(checked, 'checked')
             upgraded_probe = textwrap.dedent(
                 f"""
                 import importlib.metadata
@@ -2076,11 +2031,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
-            self.assertEqual(
-                verified.returncode,
-                0,
-                f"stdout:\n{verified.stdout}\nstderr:\n{verified.stderr}",
-            )
+            self._assert_process_succeeded(verified, 'verified')
 
 
 if __name__ == "__main__":

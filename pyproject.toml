@@ -8,7 +8,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "markdown-it-py>=4.2,<5",
-    "jsonl-viewer @ git+https://github.com/Kims-DeveloperGroup/jsonl-viewer.git@a38a975eda4123df11c1fa4f796fd49ab88efcee",
+    "jsonl-viewer @ git+https://github.com/Kims-DeveloperGroup/jsonl-viewer.git@26520240c4be3e2af3e1cf4232fe3129ee706a86",
 ]
 
 [project.optional-dependencies]

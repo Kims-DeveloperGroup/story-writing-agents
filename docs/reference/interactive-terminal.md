@@ -444,7 +444,9 @@ clears viewer rows before leaving the alternate screen, so repainting does not
 archive those rows into ordinary shell history.
 
 `/exchanges` uses the installed isolated JSONL viewer after Story chooses an
-immutable scope/agent snapshot. Story validates the pinned 0.7.0 four-name facade, inert inspection descriptors,
+immutable scope/agent snapshot. It opens in full-width Single/detail; Tab/Shift+Tab
+switches screens, and main-view `v` selects optional Split. Story validates the
+pinned 0.7.1 four-name facade, inert inspection descriptors,
 the `ViewerTerminal` transport constructor, and owned-call keyword arguments
 before terminal acquisition. The low-level handoff borrows streams and Story's
 persistent character reader under the existing input latch; it preserves the
