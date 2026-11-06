@@ -552,7 +552,7 @@ v9의 정상 후속 전송에 전체 입력이 반복되지 않는 경우를 검
 
 #839의 provider 기술 검증 도구에는 선택된 문서의 v9 계약을 직접 확인하는 두 사례120행을 추가했다. 기존 QUESTION 두 사례의 SELECT→GENERATE4회와 구성된 post-READ v9 두 사례의 단일 호출2회로 최대6회를 준비한다. 구성된 사례는 실제 READ·사용자 승인·HostApply 증거가 아니며, 이 소스 배정은 실행 허가나 큐 예외를 부여하지 않는다. 직렬1프로세스·호출당900초·배치3600초를 유지하고 실제 실행에는 새 소스별 admission과 필요한 큐 예외를 별도로 확인한다.
 
-main #927(`aefbe76c`) 통합 후에는 같은 원래 회귀를 보존하면서 upstream의 raw 소스가226행 줄어 raw149076이 됐다. §17의 공통 새 작업 판정·실제 append/이력 projection 회귀37행을 더한 현재 raw는149113이며 helper1302와 합쳐 **150415**다. 기존 상한150604는 유지하고 남은189행은 기존 배정 안의 여유다. 이번 정산으로 상한·ID·subTest·시간 한도를 늘리지 않는다. 새 회귀는 기존 K의 typed 값과 준비된 계약을 재사용하고, 실제 공개 append 검증과 history projection 및 미래 control 거절을 확인한다. 추가 schema 준비·HostRuntime·workspace·가짜 provider 호출은 없으며, 구성한 이력의 통과를 실제 HostRuntime 실행이나 provider 성공으로 보고하지 않는다.
+main #927(`aefbe76c`) 통합 후에는 같은 원래 회귀를 보존하면서 upstream의 raw 소스가226행 줄어 raw149076이 됐다. §17의 공통 새 작업 판정·실제 append/이력 projection 회귀37행을 더한 현재 raw는149113이며 helper1302와 합쳐 **150415**다. 기존 상한150604는 유지하고 남은189행은 기존 배정 안의 여유다. 이번 정산으로 상한·ID·subTest·시간 한도를 늘리지 않는다. §18에서는 새 append/replay block만 기존 순수 이력 projection ID로 옮겨 K37행을 줄이고 context69행을 더했다. 순증32행 후 현재 raw149145 + helper1302 = **150447**이며 같은 상한150604 안에157행이 남는다. 원래 계약/native-frame/predicate 검사는 유지하고 실제 append/replay 및 미래 control 거절만 독립 실행한다. 과거0.044651초는 selector 선정 근거이며 현행 실행 시간·통과를 대신하지 않는다. 새 회귀는 기존 K의 typed 값과 준비된 계약을 재사용하고, 실제 공개 append 검증과 history projection 및 미래 control 거절을 확인한다. 추가 schema 준비·HostRuntime·workspace·가짜 provider 호출은 없으며, 구성한 이력의 통과를 실제 HostRuntime 실행이나 provider 성공으로 보고하지 않는다.
 
 이 전환은 기존 2527개 ID·전체 subTest mapping·18000/3600초와 기존 허용 전환을 보존한다. 제품의 task당12회/2라운드 한도도 유지한다. source 실측은 실행 통과나 시간 개선의 증거가 아니며, 현재 리비전의 영향 테스트·전체 CI·엄격한 provider schema 검사와 필요한 실제 기술 호출 결과를 별도로 기록한다.
 
