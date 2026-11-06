@@ -149,6 +149,7 @@ from .events import (
     collaboration_batch_digest,
     ConversationEvent,
     ConversationEventKind,
+    CollaborationEventDraft,
 )
 from ..git.story_commit_contracts import StoryCommitDecision
 from ..writing_artifacts import ArtifactRenameOperation
@@ -2752,7 +2753,54 @@ def _recommendation_origin(
     return request, decision, start
 
 
-def _is_fresh_drafting_preparation(request, source, events) -> bool:
+def is_new_task_recommendation_source(
+    source: CollaborationEventDraft | CollaborationEventV2,
+    scope: AuthoringScope,
+    events: tuple[CollaborationEventV2, ...],
+) -> bool:
+    """Match a Lead judgment to its unique earlier USER NEW_TASK control."""
+    if (
+        type(scope) is not AuthoringScope
+        or type(source.payload) is not CollaborationLeadJudgmentPayload
+        or source.payload.authoring_scope != scope
+        or scope.task_revision != 1
+    ):
+        return False
+    if type(source) is CollaborationEventV2:
+        events = tuple(event for event in events if event.sequence < source.sequence)
+    owner_step = (source.session_id, source.conversation_id, source.step_id)
+    transitions = tuple(event for event in events
+                        if type(event.payload) is CollaborationLeadTaskTransitionPayload
+                        and type(event.payload.receipt) is LeadTaskTransitionReceipt
+                        and event.payload.receipt.origin_kind == "task_decision"
+                        and event.payload.receipt.action is LeadTaskAction.NEW_TASK
+                        and (event.payload.receipt.target_task_id,
+                             event.payload.receipt.target_task_revision)
+                        == (scope.task_id, scope.task_revision)
+                        and event.payload.receipt.planning_step_id == source.step_id
+                        and event.sender.kind is CollaborationActorKind.RUNTIME
+                        and (event.session_id, event.conversation_id, event.step_id) == owner_step)
+    if len(transitions) != 1:
+        return False
+    transition = transitions[0]
+    receipt = transition.payload.receipt
+    if receipt.source_task_ref is not None and receipt.source_task_ref.task_id == scope.task_id:
+        return False
+    origins = tuple(event for event in events if event.event_id == receipt.origin_event_id)
+    if len(origins) != 1:
+        return False
+    origin = origins[0]
+    return bool(
+        type(origin.payload) is CollaborationLeadTaskDecisionPayload
+        and origin.sender.kind is CollaborationActorKind.USER
+        and (origin.session_id, origin.conversation_id, origin.step_id) == owner_step
+        and origin.batch_id == transition.batch_id
+        and origin.payload.decision.action is receipt.action
+        and origin.payload.decision.task_ref == receipt.source_task_ref
+    )
+
+
+def _is_fresh_drafting_preparation(request, source, events, *, control_history: tuple[CollaborationEventV2, ...]) -> bool:
     scope = request.authoring_scope
     if (
         scope is None or scope.schema_version != 3
@@ -2798,7 +2846,8 @@ def _is_fresh_drafting_preparation(request, source, events) -> bool:
             and not confirmed_authoring_proposals(previous, prior)):
         return True
     return (
-        scope.task_id == task_identity_for_origin(source.step_id) and scope.task_revision == 1
+        (scope.task_id == task_identity_for_origin(source.step_id) and scope.task_revision == 1)
+        or is_new_task_recommendation_source(source, scope, control_history)
         if previous is None
         else scope.task_revision == previous.task_revision + 1
     )
@@ -2807,6 +2856,7 @@ def _is_fresh_drafting_preparation(request, source, events) -> bool:
 def _project_lead_recommendation_history(
     events: tuple[CollaborationEventV2, ...],
     task_origins: tuple[CollaborationEventV2, ...] = (),
+    *, control_history: tuple[CollaborationEventV2, ...],
 ) -> tuple[
     LeadRecommendationRequestPayload | None, LeadRecommendationDecisionPayload | None,
     LeadRecommendationStartedPayload | None, LeadRecommendationResultPayload | None,
@@ -2871,7 +2921,7 @@ def _project_lead_recommendation_history(
                         or not set(prior_scope.domains).issubset(scope.domains)
                         or not set(prior_scope.target_paths).issubset(scope.target_paths)):
                         raise ValueError("recommendation revision must retain its authoring task and obligations")
-            fresh_consultation = _is_fresh_drafting_preparation(payload, source, tuple(by_id.values()))
+            fresh_consultation = _is_fresh_drafting_preparation(payload, source, tuple(by_id.values()), control_history=control_history)
             source_proposal = (payload.source_proposal_id, payload.source_proposal_revision,
                                payload.source_proposal_digest)
             if type(source.payload) is CollaborationLeadSynthesisPayload:
@@ -3191,6 +3241,7 @@ def _project_lead_recommendation_history(
 
 def _lead_abandonment_is_safe(
     events: tuple[CollaborationEventV2, ...], turn_id: str, step_id: str,
+    *, control_history: tuple[CollaborationEventV2, ...],
 ) -> bool:
     """Exclude execution/write authority before exposing read-only retry."""
 
@@ -3221,7 +3272,7 @@ def _lead_abandonment_is_safe(
                 for event in current if type(event.payload) is CollaborationProviderCallPayload
             )
     try:
-        _validate_premise_history(events)
+        _validate_premise_history(events, control_history=control_history)
     except (ValueError, TypeError, KeyError):
         return False
     safe_premise_ids = set()
@@ -3383,7 +3434,7 @@ def _premise_source_cost(source, past):
         raise ValueError("premise prior costs cannot reset source calls or rounds")
 
 
-def _validate_premise_history(events):
+def _validate_premise_history(events, *, control_history: tuple[CollaborationEventV2, ...]):
     if not any(type(event.payload) in {
         CollaborationPremiseDecisionPayload, CollaborationPremiseSelectionPayload,
         CollaborationPremiseFreshWorkAdmissionPayload,
@@ -3590,7 +3641,7 @@ def _validate_premise_history(events):
                 scope = payload.authoring_scope
                 pair = PremiseAuthoringTaskRef(scope.task_id, scope.task_revision)
                 source = prior.get(payload.source_recommendation_event_id)
-                if (source is None or not _is_fresh_drafting_preparation(payload, source, past)
+                if (source is None or not _is_fresh_drafting_preparation(payload, source, past, control_history=control_history)
                         or pair not in admitted.offered_authoring_tasks
                         or (admitted.selected_authoring_task is not None
                             and pair != admitted.selected_authoring_task)):
@@ -4740,7 +4791,7 @@ def _project_validated_collaboration_history(
         return replace(projection, session_id=events[0].session_id, conversation_id=events[0].conversation_id,
                        last_sequence=events[-1].sequence)
     _validate_exploration_history(events)
-    premise_state = _validate_premise_history(events)
+    premise_state = _validate_premise_history(events, control_history=_control_history or events)
     artifact_candidates, artifact_states, artifact_reviewed = (
         _project_artifact_review_history(events)
     )
@@ -4748,7 +4799,7 @@ def _project_validated_collaboration_history(
         _project_artifact_operation_history(events, _control_history=_control_history)
     )
     recommendation_request, recommendation_decision, recommendation_start, recommendation_result, recommendation_state = (
-        _project_lead_recommendation_history(events, _task_origins)
+        _project_lead_recommendation_history(events, _task_origins, control_history=_control_history or events)
     )
     proposals: dict[str, CollaborationProposal] = {}
     states: dict[str, CollaborationStepState] = {}
@@ -4901,6 +4952,7 @@ def _project_validated_collaboration_history(
                 source = event_by_id[payload.source_recommendation_event_id]
                 fresh_consultation = _is_fresh_drafting_preparation(
                     payload, source, tuple(event_by_id.values()),
+                    control_history=_control_history or events,
                 )
                 source_spent = spent_calls.get(source.step_id, 0)
                 inherited_rounds = None
@@ -5109,6 +5161,7 @@ def _project_validated_collaboration_history(
                     raise ValueError("lead turn may close only once")
                 if not rejection and not _lead_abandonment_is_safe(
                     tuple(event_by_id.values()), event.turn_id, event.step_id,
+                    control_history=_control_history or events,
                 ):
                     raise ValueError("only an isolated read-only Lead attempt may be abandoned")
                 if payload.code is CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED:
@@ -5656,7 +5709,7 @@ def _project_validated_collaboration_history(
     recoverable_lead = (
         (state is None or state is CollaborationStepState.SUPERSEDED)
         and (pending_lead_request or current_lead_outcome_failed)
-        and _lead_abandonment_is_safe(events, current_turn_id, current_step_id)
+        and _lead_abandonment_is_safe(events, current_turn_id, current_step_id, control_history=_control_history or events)
     )
     if current_proposal is None and state is None and unmatched_submitted_lead and not recoverable_lead:
         state = CollaborationStepState.OUTCOME_UNKNOWN
