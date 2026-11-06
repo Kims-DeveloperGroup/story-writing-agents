@@ -853,8 +853,11 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(draft_request.document_node.node_id, part_node.node_id)
         self.backend.enqueue(lambda call, provider: review_provisional(call, provider, draft=True, purpose=draft_purpose))
         preparation_start = len(self.backend.calls)
-        prepared_draft = await self.runtime.decide_lead_recommendation(recommendation_decision(draft_recommendation_turn))
-        self.assertEqual(len(self.backend.calls) - preparation_start, 1)
+        original_close = self.runtime._close_failed_lead_attempt
+        preparation_failures.clear()
+        with mock.patch.object(self.runtime, "_close_failed_lead_attempt", new=observed_close):
+            prepared_draft = await self.runtime.decide_lead_recommendation(recommendation_decision(draft_recommendation_turn))
+        self.assertEqual(len(self.backend.calls) - preparation_start, 1, (prepared_draft.kind.value, prepared_draft.message[:1200], preparation_failures))
         draft_offer = prepared_draft
         self.assertIsNotNone(draft_offer)
         self.assertIs(draft_offer.kind, c.LeadOutcomeKind.PROPOSAL, draft_offer.message[:1200])

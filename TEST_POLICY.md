@@ -574,3 +574,19 @@ inventory contains 2,527 IDs (345 fewer than the original snapshot,
 the complete final shards passed in 292.2 and 152.5 seconds: 444.7 seconds
 (7.4 minutes) sequential equivalent and 4.9 minutes for the longer shard.
 The CI ceilings above remain the acceptance rule on the current runner.
+
+### #839 같은 준비 요청의 후보 자료 재사용 진단 배정
+
+Part 준비의 호출 수 단언은 예상1회를 유지한다. 반환 kind/message와 기존 원래 예외
+관찰기를 해당 await에만 추가한다. 진단은3행이고 새 테스트 ID·subTest·provider 호출이나
+HostRuntime/schema 준비를 추가하지 않는다. 실제 라우팅의 회귀는 기존 문서 작업 통합
+테스트로 검증하며, 변경되지 않은 resolver 단위 검사를 그 증거로 대신하지 않는다.
+
+사용자의 필요시 예산 확대 승인을 정확한 **150630→150645**에 적용한다.
+진단3행과 정책 회귀10행으로 raw149339, 정책 helper2행으로 helper1306이며
+현재 전체 상한은 **150645**다. 기존 모든 허용 이력은 유지한다. 원격 main의148783과
+직전 배정150630에서150645로의 정확한 두 전환만 추가하며, 각 출발값·도착값 ±1은
+거절한다. ID2527개·완전한 subTest mapping·18000/3600초·제품12회/2라운드는 바꾸지 않는다.
+
+이번 예산은 후보 자료의 현재 요청 내 재사용과 실패 관찰을 위한 소스 배정이다.
+통합 검증·최종 전체 CI·Whole Front·재조정·기술 provider·리뷰·완료 조건을 대체하지 않는다.
