@@ -427,9 +427,9 @@ class CollaborationTransitionTests(unittest.TestCase):
             _build_document_plan = StoryRuntime._build_document_plan
             _objective_drafts = StoryRuntime._objective_drafts
             _document_goal_facts = StoryRuntime._document_goal_facts
-            def __init__(owner, captured):
+            def __init__(owner, captured, *, owner_conversation=fixture.CONVERSATION_ID):
                 def read(session, conversation):
-                    self.assertEqual((session, conversation), (fixture.SESSION_ID, fixture.CONVERSATION_ID))
+                    self.assertEqual((session, conversation), (fixture.SESSION_ID, owner_conversation))
                     return captured
                 owner.conversation_storage_services = SimpleNamespace(event_store=SimpleNamespace(read=read))
         root_text = "Write the Global and Part outlines; retain both original targets."
@@ -584,6 +584,77 @@ class CollaborationTransitionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "^binding validation sentinel$"):
             merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding, extended)
         self.assertEqual(validations[-1], (fixture.SESSION_ID, candidate_binding))
+
+        # Cross-owner replay law only; full document workflow integration exercises the real proposal-builder bridge.
+        from story_writing_agents.conversations.catalog import ConversationMetadata, ConversationStatus, CONVERSATION_METADATA_SCHEMA_VERSION
+        from story_writing_agents.conversations.session_context import SessionConversationHistory, SessionHistorySnapshot
+        foreign_id = fixture.CONVERSATION_ID + "_successor"
+        def foreign_draft(row):
+            return replace(row, conversation_id=foreign_id)
+        def owner_row(history, subject):
+            return SessionConversationHistory(ConversationMetadata(schema_version=CONVERSATION_METADATA_SCHEMA_VERSION,
+                session_id=fixture.SESSION_ID, conversation_id=history[0].conversation_id, subject=subject,
+                subject_revision=1, status=ConversationStatus.ACTIVE,
+                created_at=history[0].timestamp, updated_at=history[-1].timestamp),
+                c.project_collaboration_readable_history(history))
+        root_history = fixture.store_batch((), fixture.make_batch((), "root_owner_batch", *root_drafts))
+        foreign_ref = replace(task_ref, conversation_id=foreign_id)
+        foreign_binding = replace(binding, task_ref=foreign_ref, budget_lineage_ref=foreign_ref)
+        foreign_request = replace(node_request, document_node=foreign_binding, tail_sequence=7)
+        foreign_origin = foreign_draft(replace(selected_origin, payload=replace(selected_origin.payload,
+            decision=replace(decision, conversation_id=foreign_id))))
+        foreign_source = foreign_draft(replace(node_source, payload=replace(node_source.payload, document_node=foreign_binding)))
+        foreign_disclosed = foreign_draft(replace(disclosed, payload=foreign_request))
+        foreign_records = records(((foreign_origin, foreign_draft(user), foreign_draft(transition)),
+            (*tuple(foreign_draft(row) for row in lead_calls), foreign_source, foreign_disclosed)))
+        foreign_history = ()
+        for batch_id in dict.fromkeys(row.batch_id for row in foreign_records):
+            foreign_history = fixture.store_batch(foreign_history, fixture.batch_from_history(foreign_records, batch_id))
+        foreign_choice = replace(choice, conversation_id=foreign_id, request_tail_sequence=7, action_digest=foreign_request.action_digest)
+        foreign_confirm = foreign_draft(replace(confirmation, payload=c.LeadRecommendationDecisionPayload(foreign_choice)))
+        foreign_start = foreign_draft(replace(start, payload=replace(start.payload, action_digest=foreign_request.action_digest)))
+        foreign_prepared = fixture.store_batch(foreign_history, fixture.make_batch(foreign_history, "foreign_controls",
+                                                                                 foreign_confirm, foreign_start))
+        captured = SessionHistorySnapshot(fixture.SESSION_ID,
+            (owner_row(root_history, "Original root owner"), owner_row(foreign_prepared, "Successor owner")))
+        qualified_plan = next(row.plan for row in captured.document_plans() if row.plan.ref == root_plan.ref)
+        foreign_references = tuple(fixture.make_input(alias, kind=c.CollaborationInputKind.CONVERSATION_EVENT,
+            locator="conversation/" + event.event_id, revision_digest="sha256:" + hashlib.sha256(json.dumps(
+                dataclasses.asdict(event.payload), ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+            start_line=None, end_line=None) for event, alias in ((foreign_prepared[-3], "recommendation_request"),
+                                                               (foreign_prepared[-2], "recommendation_decision")))
+        foreign_basis = replace(prepared_basis, inputs=(*basis.inputs, *foreign_references))
+        foreign_proposal = fixture.replace_proposal(proposal, basis=foreign_basis, document_node=foreign_binding,
+                                                   document_plan=qualified_plan)
+        foreign_judgment = foreign_draft(replace(judgment, payload=replace(judgment.payload, document_node=foreign_binding)))
+        foreign_owner = ObjectiveOwner(foreign_prepared, owner_conversation=foreign_id)
+        foreign_capability = _RecommendationCapability(foreign_prepared[-3], foreign_prepared[-2], foreign_prepared[-1])
+        foreign_objective, = foreign_owner._objective_drafts(replace(outcome, document_node=foreign_binding),
+            c.project_collaboration_history(foreign_prepared), foreign_prepared, foreign_judgment,
+            preparation=foreign_capability, plan_override=qualified_plan, session_events=captured.events())
+        foreign_proposal_event = foreign_draft(replace(proposal_event, payload=foreign_proposal))
+        foreign_state = foreign_draft(replace(state, payload=fixture.proposal_state(foreign_proposal,
+            c.CollaborationStepState.AWAITING_CONFIRMATION, confirmation_request_id="prepared_confirmation")))
+        foreign_closed = foreign_draft(replace(closed, payload=replace(closed.payload, action_digest=foreign_request.action_digest)))
+        foreign_calls = tuple(foreign_draft(row) for row in prep_calls)
+        foreign_finished = fixture.store_batch(foreign_prepared, fixture.make_batch(foreign_prepared, "foreign_result",
+            *foreign_calls, foreign_judgment, foreign_proposal_event, foreign_objective, foreign_closed, foreign_state))
+        local = c.project_collaboration_history(foreign_finished)
+        self.assertEqual(local.artifact_objectives[0].facts, foreign_objective.payload.facts)
+        self.assertEqual(foreign_proposal.document_plan, root_plan)
+        self.assertIsNone(foreign_objective.payload.document_plan)
+        self.assertEqual(foreign_objective.payload.facts.origin_conversation_id, foreign_id)
+        self.assertNotEqual(foreign_id, root_facts.origin_conversation_id)
+        complete = SessionHistorySnapshot(fixture.SESSION_ID,
+            (owner_row(root_history, "Original root owner"), owner_row(foreign_finished, "Successor owner")))
+        self.assertEqual(next(row.plan for row in complete.document_plans() if row.plan.ref == root_plan.ref), root_plan)
+        missing_carrier = fixture.replace_proposal(foreign_proposal, document_plan=None)
+        missing_state = foreign_draft(replace(state, payload=fixture.proposal_state(missing_carrier,
+            c.CollaborationStepState.AWAITING_CONFIRMATION, confirmation_request_id="prepared_confirmation")))
+        with self.assertRaises(c.CollaborationAppendError):
+            fixture.store_batch(foreign_prepared, fixture.make_batch(foreign_prepared, "missing_foreign_root",
+                *foreign_calls, foreign_judgment, replace(foreign_proposal_event, payload=missing_carrier),
+                foreign_objective, foreign_closed, missing_state))
 
 
 class CollaborationBudgetAndOutcomeTests(unittest.TestCase):

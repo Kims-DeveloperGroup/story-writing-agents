@@ -17913,7 +17913,10 @@ class StoryRuntime:
         if document_node is not None:
             stored = self._session_authoring_events(session_id)
             if any(event.event_id == document_node.task_ref.scope_event_id for event in stored):
-                self._validate_document_node(session_id, document_node, scope=intent.authoring_scope, proposed_plan=proposed_plan)
+                qualified_plan = self._validate_document_node(
+                    session_id, document_node, scope=intent.authoring_scope, proposed_plan=proposed_plan).plan
+                if preparation is not None and proposed_plan is None:
+                    proposed_plan = qualified_plan
             elif scope_event is None or scope_event.event_id != document_node.task_ref.scope_event_id:
                 raise ValueError("document binding source event is not this accepted scope")
             calls, rounds, _ = document_lineage_cost(stored, document_node, current_step_id=step_id)
