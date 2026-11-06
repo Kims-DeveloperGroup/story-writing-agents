@@ -921,7 +921,6 @@ class SpecialistRoutingTests(unittest.TestCase):
             ):
                 self.assertIs(_target_authoring_scope_prior(retained_scope, source_scope, retained_receipt), source_scope)
 
-        from story_writing_agents.orchestrator import _new_task_recommendation_source
         from story_writing_agents.lead_task_transitions import LeadTaskDecision
         selector_scope = self.scope(schema_version=3, activity=Activity.DRAFT, target_paths=(global_path,),
             task_id="fresh_recommendation_target", task_revision=1,
@@ -937,20 +936,22 @@ class SpecialistRoutingTests(unittest.TestCase):
                     text="Draft only Global outline from these USER facts.", request_id="selector_request")
             return LeadTaskDecision.from_task(prior_ref, LeadTaskAction.NEW_TASK,
                 text="Start a distinct Global drafting task; preserve the prior review.", request_id="selector_request")
-        def selector_events(decision, receipt, *, split_controls=False):
-            origin = fixture.make_draft(receipt.origin_event_id, c.CollaborationEventKind.LEAD_TASK_DECISION,
-                fixture.USER, fixture.RUNTIME, c.CollaborationLeadTaskDecisionPayload(decision))
-            transition = fixture.make_draft("selector_transition", c.CollaborationEventKind.LEAD_TASK_TRANSITION,
-                fixture.RUNTIME, fixture.USER, c.CollaborationLeadTaskTransitionPayload(receipt))
-            groups = ((origin,), (transition,)) if split_controls else ((origin, transition),)
+        def selector_records(groups):
             records = []
-            for index, drafts in enumerate((*groups, (selector_source,))):
+            for index, drafts in enumerate(groups):
                 batch = fixture.make_batch(tuple(records), "selector_batch_" + str(index), *drafts)
                 for ordinal, draft in enumerate(drafts):
                     records.append(c.CollaborationEvent(**{field.name: getattr(draft, field.name) for field in fields(draft)},
                         sequence=len(records) + 1, timestamp="2026-11-06T00:00:00+00:00", batch_id=batch.batch_id,
                         batch_ordinal=ordinal, batch_size=len(drafts), batch_digest=c.collaboration_batch_digest(batch)))
             return tuple(records)
+        def selector_events(decision, receipt, *, split_controls=False):
+            origin = fixture.make_draft(receipt.origin_event_id, c.CollaborationEventKind.LEAD_TASK_DECISION,
+                fixture.USER, fixture.RUNTIME, c.CollaborationLeadTaskDecisionPayload(decision))
+            transition = fixture.make_draft("selector_transition", c.CollaborationEventKind.LEAD_TASK_TRANSITION,
+                fixture.RUNTIME, fixture.USER, c.CollaborationLeadTaskTransitionPayload(receipt))
+            groups = ((origin,), (transition,)) if split_controls else ((origin, transition),)
+            return selector_records((*groups, (selector_source,)))
         # Constructed control records test only source eligibility, not host admission or a storage replay.
         for prior_ref in (None, readonly_ref):
             decision = selector_decision(prior_ref)
@@ -958,27 +959,66 @@ class SpecialistRoutingTests(unittest.TestCase):
                 action=LeadTaskAction.NEW_TASK, source_task_ref=prior_ref, target_task_id=selector_scope.task_id,
                 target_task_revision=selector_scope.task_revision, planning_step_id=selector_source.step_id)
             records = selector_events(decision, selector_receipt)
-            self.assertTrue(_new_task_recommendation_source(selector_source, selector_scope, selector_receipt, records))
+            self.assertTrue(c.is_new_task_recommendation_source(selector_source, selector_scope, records))
             self.assertEqual(records[0].batch_id, records[1].batch_id)
             self.assertNotEqual(records[0].batch_id, records[2].batch_id)
-            self.assertFalse(_new_task_recommendation_source(selector_source, selector_scope, None, records))
-            self.assertFalse(_new_task_recommendation_source(selector_source, selector_scope, selector_receipt, records[1:]))
-            self.assertFalse(_new_task_recommendation_source(selector_source, selector_scope, selector_receipt, records[:1] + records[2:]))
+            ambiguous = selector_records(((records[0].to_draft(), records[1].to_draft(),
+                                             replace(records[1].to_draft(), event_id="selector_duplicate_transition")), (selector_source,)))
+            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, ambiguous))
+            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, records[1:]))
+            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, records[:1] + records[2:]))
             other_scope = replace(selector_scope, task_id="other_recommendation_target")
             other_source = replace(selector_source, payload=replace(selector_source.payload, authoring_scope=other_scope))
-            self.assertFalse(_new_task_recommendation_source(other_source, other_scope, selector_receipt, records))
-            self.assertFalse(_new_task_recommendation_source(selector_source, replace(selector_scope, interpretation="Different disclosed work."), selector_receipt, records))
-            self.assertFalse(_new_task_recommendation_source(replace(selector_source, step_id="foreign_step"), selector_scope, selector_receipt, records))
-            self.assertFalse(_new_task_recommendation_source(replace(selector_source, conversation_id="foreign_conversation"), selector_scope, selector_receipt, records))
-            self.assertFalse(_new_task_recommendation_source(selector_source, selector_scope, selector_receipt,
-                selector_events(decision, selector_receipt, split_controls=True)))
-            self.assertFalse(_new_task_recommendation_source(selector_source, selector_scope, selector_receipt,
-                selector_events(replace(decision, action=LeadTaskAction.DISCUSS), selector_receipt)))
+            self.assertFalse(c.is_new_task_recommendation_source(other_source, other_scope, records))
+            self.assertFalse(c.is_new_task_recommendation_source(selector_source, replace(selector_scope, interpretation="Different disclosed work."), records))
+            self.assertFalse(c.is_new_task_recommendation_source(replace(selector_source, step_id="foreign_step"), selector_scope, records))
+            self.assertFalse(c.is_new_task_recommendation_source(replace(selector_source, conversation_id="foreign_conversation"), selector_scope, records))
+            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, selector_events(decision, selector_receipt, split_controls=True)))
+            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, selector_events(replace(decision, action=LeadTaskAction.DISCUSS), selector_receipt)))
             same_id_ref = replace(readonly_ref, task_id=selector_scope.task_id, task_revision=selector_scope.task_revision,
                 scope_digest=documents.document_value_digest(c.authoring_scope_to_dict(selector_scope)))
             same_id_receipt = replace(selector_receipt, source_task_ref=same_id_ref)
-            self.assertFalse(_new_task_recommendation_source(selector_source, selector_scope, same_id_receipt,
-                selector_events(selector_decision(same_id_ref), same_id_receipt)))
+            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, selector_events(selector_decision(same_id_ref), same_id_receipt)))
+
+        # Public append and replay, not host execution: exact USER bytes and frozen current scope.
+        from story_writing_agents import authoring_admission as admission
+        replay_decision = selector_decision(None)
+        replay_receipt = LeadTaskTransitionReceipt(origin_event_id="selector_origin", origin_kind="task_decision",
+            action=LeadTaskAction.NEW_TASK, target_task_id=selector_scope.task_id, target_task_revision=1,
+            planning_step_id=selector_source.step_id, origin_message_event_id="selector_user")
+        user = fixture.make_draft("selector_user", c.CollaborationEventKind.MESSAGE, fixture.USER, fixture.LEAD,
+                                  c.CollaborationMessagePayload(replay_decision.text))
+        user_input = fixture.make_input("user_input", kind=c.CollaborationInputKind.USER_INPUT,
+            locator="conversation/" + fixture.TURN_ID + "/user_input", start_line=None, end_line=None)
+        template = fixture.make_proposal(inputs=(user_input,), assignments=(fixture.make_assignment(
+            specialist_id=document_fixture.PLOT_ARCHITECT, input_ids=("user_input",)),))
+        replay_basis = fixture.qualify_fixture_basis(replace(template.basis, schema_version=2), selector_scope,
+            user_text=replay_decision.text, assessment=admission.assessment_from_dict(recommendation_value["authoring_assessment"]))
+        request = c.LeadRecommendationRequestPayload(request_event_id="selector_request", request_id="selector_disclosure",
+            action_id="selector_action", action_revision=1, kind=c.LeadRecommendationActionKind.PREPARE_CONSULTATION,
+            purpose="Prepare only Global outline.", instruction=replay_decision.text, expected_result="One disclosed Plot draft.",
+            target_paths=(global_path,), specialist_ids=(document_fixture.PLOT_ARCHITECT,), objective_id=None,
+            source_recommendation_event_id=selector_source.event_id,
+            source_recommendation_digest="sha256:" + hashlib.sha256(selector_source.payload.message.encode("utf-8")).hexdigest(),
+            draft_sources=(), basis=replay_basis, source_fingerprint=fixture.DIGEST_A, physical_calls_spent=0,
+            max_preparation_physical_calls=1, tail_sequence=5, user_impact="Prepare one call; specialists still need Confirm.",
+            authoring_scope=selector_scope)
+        disclosed = fixture.make_draft(request.request_event_id, c.CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST,
+                                      fixture.LEAD, fixture.USER, request)
+        control_records = selector_events(replay_decision, replay_receipt)
+        controls = tuple(row.to_draft() for row in control_records[:2])
+        publication = selector_records(((user, *controls), (selector_source, disclosed)))
+        prefix = fixture.store_batch((), fixture.batch_from_history(publication, publication[0].batch_id))
+        stored = fixture.store_batch(prefix, fixture.batch_from_history(publication, publication[-1].batch_id))
+        replayed = c.project_collaboration_history(stored)
+        self.assertEqual(replayed.current_recommendation_request, request)
+        self.assertIs(replayed.current_recommendation_state, c.LeadRecommendationState.PENDING)
+        self.assertEqual(replayed.available_tasks[0].authoring_scope, selector_scope)
+        # Later controls must not authorize an earlier publication, even with valid batch digests.
+        late_disclosed = replace(disclosed, payload=replace(request, tail_sequence=3))
+        late = selector_records(((user,), (selector_source, late_disclosed), controls))
+        with self.assertRaisesRegex(ValueError, "v3 front recommendation requires exact completed confirmed authoring source"):
+            c.project_collaboration_history(late)
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
         from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment

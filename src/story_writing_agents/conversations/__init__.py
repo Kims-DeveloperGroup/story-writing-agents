@@ -566,13 +566,13 @@ from ..document_plan import (DocumentPlanningGoalRef, DocumentPlanRef, DocumentN
     DocumentCandidateRef, DocumentCandidateUseIntent, DocumentNodeBinding, DocumentNodeView, DocumentPlanView,
     DocumentNodeState, DocumentNodeNextAction, document_plan_to_dict, document_plan_from_dict,
     document_node_binding_to_dict, document_node_binding_from_dict, document_value_digest)
-from .context import document_lineage_cost, project_document_plan_views
+from .context import document_lineage_cost, project_document_plan_views, is_new_task_recommendation_source
 
 __all__ += ("DocumentPlanningGoalRef", "DocumentPlanRef", "DocumentNodeSpec", "DocumentPlan",
     "DocumentCandidateRef", "DocumentCandidateUseIntent", "DocumentNodeBinding", "DocumentNodeView",
     "DocumentPlanView", "DocumentNodeState", "DocumentNodeNextAction", "document_plan_to_dict",
     "document_plan_from_dict", "document_node_binding_to_dict", "document_node_binding_from_dict",
-    "document_value_digest", "document_lineage_cost", "project_document_plan_views")
+    "document_value_digest", "document_lineage_cost", "project_document_plan_views", "is_new_task_recommendation_source")
 
 from ..document_plan import (DocumentNodeSelection, DocumentCandidateSelection,
     document_node_selection_to_dict, document_node_selection_from_dict,
