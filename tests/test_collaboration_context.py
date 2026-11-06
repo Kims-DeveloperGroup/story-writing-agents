@@ -449,7 +449,7 @@ class CollaborationTransitionTests(unittest.TestCase):
                     root_evidence, authoring_scope=root_scope, document_plan=root_plan)),
             fixture.make_draft("root_objective", c.CollaborationEventKind.ARTIFACT_OBJECTIVE, fixture.RUNTIME, fixture.USER,
                 c.ArtifactObjectivePayload(root_facts, c.LeadObjectiveAction.START, None, "root_judgment",
-                    c.ArtifactObjectiveNextStep.CLARIFY, document_plan=root_plan)))
+                    c.ArtifactObjectiveNextStep.CLARIFY, draft_sources=(), document_plan=root_plan)))
         root_drafts = tuple(replace(row, turn_id="root_turn", step_id="root_step") for row in root_drafts)
         task_ref = LeadTaskRef(session_id=fixture.SESSION_ID, conversation_id=fixture.CONVERSATION_ID,
             task_id=scope.task_id, task_revision=scope.task_revision, scope_event_id=source.event_id,
