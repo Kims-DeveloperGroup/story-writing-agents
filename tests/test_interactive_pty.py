@@ -1648,7 +1648,9 @@ print(f"SHELL_VALUE={input('shell> ')}")
         self.assertEqual(process.normalized_bytes[mark:].replace(b"\r", b""), b"")
         gate.touch()
         process.wait_for_text("Records: 7 total · 7 filtered")
-        process.wait_for_text("> Record 1")
+        process.wait_for_text("Single ·")
+        process.wait_for_text("Focus: Detail")
+        process.wait_for_text("record:1 · a annotations")
         process.wait_for_text("? help · q close")
         assert termios is not None
         self.assertFalse(termios.tcgetattr(process.master_fd)[3] & termios.ICANON)
@@ -1663,13 +1665,13 @@ print(f"SHELL_VALUE={input('shell> ')}")
         column = line.index('"content"') + 1
         mark = process.output_mark(); process.send_bytes(f"\x1b[<0;{column};{row}M".encode())
         process.wait_for_text("? help · q close", after=mark)
-        painted = process.text_after(mark); rows = [line.split(" │ ", 1)[-1] for line in viewer_rows(process.normalized_bytes)]
+        painted = process.text_after(mark); rows = viewer_rows(process.normalized_bytes)
         if any(line.strip() == "^" for line in rows):
             caret = next(i for i, line in enumerate(rows) if line.strip() == "^"); self.assertEqual(rows[caret - 1][rows[caret].index("^")], '"')
         else: self.assertRegex(painted, r'\x1b\[(?:[0-9]+;)*7(?:;[0-9]+)*m"')
         mark = process.output_mark(); process.send_bytes(f"\x1b[<65;{column};{row}M".encode())
         process.wait_for_text("? help · q close", after=mark)
-        painted = process.text_after(mark); rows = [line.split(" │ ", 1)[-1] for line in viewer_rows(process.normalized_bytes)]
+        painted = process.text_after(mark); rows = viewer_rows(process.normalized_bytes)
         if any(line.strip() == "^" for line in rows):
             caret = next(i for i, line in enumerate(rows) if line.strip() == "^"); self.assertEqual(rows[caret - 1][rows[caret].index("^")], "}")
         else: self.assertRegex(painted, r"\x1b\[(?:[0-9]+;)*7(?:;[0-9]+)*m\}")
