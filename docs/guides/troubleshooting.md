@@ -234,12 +234,12 @@ installation:
 python -m pip install --editable .
 ```
 
-That ordinary reinstall upgrades older viewer installations to required 0.6.3.
+That ordinary reinstall upgrades older viewer installations to required 0.7.0.
 It needs no uninstall, `--force-reinstall`, or `--ignore-installed`. A missing required
 viewer should likewise be repaired by rerunning the normal Story installation
 first; the `viewer` extra is not a separate fix.
 
-Use a forced reinstall only when viewer 0.6.3 is already selected at the exact
+Use a forced reinstall only when viewer 0.7.0 is already selected at the exact
 required pin but its installed files or four-name API are genuinely damaged.
 Use the applicable Story form so dependency parity is restored together:
 
@@ -254,7 +254,7 @@ incompatible-viewer result means the installed API or required physical-input
 capability does not match the exact required pin. Viewers 0.1.1 and 0.2.0
 are rejected before raw mode or an alternate screen opens; use the ordinary upgrade path
 above. Verify the project requirement and lock identify
-`6755a90ab77ab979073f6616e4a6c866b508dcad`. Checkout maintainers can also
+`a38a975eda4123df11c1fa4f796fd49ab88efcee`. Checkout maintainers can also
 initialize the matching submodule for audit or testing; runtime imports never
 come from `vendor/jsonl-viewer`.
 
@@ -298,7 +298,7 @@ current-call finish evidence plus normal validation before accepting it.
 One fixed Codex defect produced the first row when the compact output schema
 contained an array `items` node without an explicit supported type. Codex
 rejected the output schema before returning a valid provider result. Current
-agent-provider-wire-v10 instead uses a closed required `{agent_action}` root and
+agent-provider-wire-v11 instead uses a closed required `{agent_action}` root and
 closed SEARCH/READ/ANSWER variants with explicitly typed arrays and nested
 objects, consistent with
 [Codex Structured Outputs requirements](https://developers.openai.com/api/docs/guides/structured-outputs).

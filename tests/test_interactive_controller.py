@@ -317,6 +317,28 @@ def _autospec_method_patch(target, attribute):
 def _availability_patch(target, value):
     return mock.patch(target, autospec=True, return_value=value)
 
+_EXPECTED_SETTINGS_FIELDS = (
+    'language',
+    'persona',
+    'max_debate_rounds',
+    'conversation_storage',
+    'conversation_rag',
+    'show_message_details',
+    'providers',
+)
+
+
+_EXPECTED_SETTINGS_LABELS = (
+    'Language',
+    'Persona',
+    'Maximum debate rounds',
+    'Conversation storage',
+    'Conversation RAG',
+    'Message details',
+    'Agents',
+)
+
+
 class ScriptedTerminalCallbacks:
     """Record terminal traffic and supply scripted text, events, or callbacks."""
 
@@ -1769,8 +1791,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 172)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 774)
+        self.assertEqual(len(modules), 176)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 787)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -2331,15 +2353,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 for call in top_level_calls
             ),
             (
-                (
-                    "language",
-                    "persona",
-                    "max_debate_rounds",
-                    "conversation_storage",
-                    "conversation_rag",
-                    "show_message_details",
-                    "providers",
-                ),
+                _EXPECTED_SETTINGS_FIELDS,
                 (
                     "language",
                     "persona",
@@ -2351,24 +2365,8 @@ class ControllerSettingsTests(ControllerTestCase):
                     "save",
                     "cancel",
                 ),
-                (
-                    "language",
-                    "persona",
-                    "max_debate_rounds",
-                    "conversation_storage",
-                    "conversation_rag",
-                    "show_message_details",
-                    "providers",
-                ),
-                (
-                    "language",
-                    "persona",
-                    "max_debate_rounds",
-                    "conversation_storage",
-                    "conversation_rag",
-                    "show_message_details",
-                    "providers",
-                ),
+                _EXPECTED_SETTINGS_FIELDS,
+                _EXPECTED_SETTINGS_FIELDS,
             ),
         )
         self.assertEqual(
@@ -2377,15 +2375,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 for call in top_level_calls
             ),
             (
-                (
-                    "Language",
-                    "Persona",
-                    "Maximum debate rounds",
-                    "Conversation storage",
-                    "Conversation RAG",
-                    "Message details",
-                    "Agents",
-                ),
+                _EXPECTED_SETTINGS_LABELS,
                 (
                     "Language",
                     "Persona",
@@ -2397,24 +2387,8 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Apply Changes",
                     "Discard Changes",
                 ),
-                (
-                    "Language",
-                    "Persona",
-                    "Maximum debate rounds",
-                    "Conversation storage",
-                    "Conversation RAG",
-                    "Message details",
-                    "Agents",
-                ),
-                (
-                    "Language",
-                    "Persona",
-                    "Maximum debate rounds",
-                    "Conversation storage",
-                    "Conversation RAG",
-                    "Message details",
-                    "Agents",
-                ),
+                _EXPECTED_SETTINGS_LABELS,
+                _EXPECTED_SETTINGS_LABELS,
             ),
         )
         self.assertEqual(
@@ -3078,27 +3052,11 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertEqual(
             tuple(choice.identity for choice in settings_call.args[2]),
-            (
-                "language",
-                "persona",
-                "max_debate_rounds",
-                "conversation_storage",
-                "conversation_rag",
-                "show_message_details",
-                "providers",
-            ),
+            _EXPECTED_SETTINGS_FIELDS,
         )
         self.assertEqual(
             tuple(choice.label for choice in settings_call.args[2]),
-            (
-                "Language",
-                "Persona",
-                "Maximum debate rounds",
-                "Conversation storage",
-                "Conversation RAG",
-                "Message details",
-                "Agents",
-            ),
+            _EXPECTED_SETTINGS_LABELS,
         )
         self.assertEqual(
             tuple(choice.form_summary for choice in settings_call.args[2]),
@@ -4949,15 +4907,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertTrue(
             all(
                 tuple(choice.identity for choice in call.args[2])
-                == (
-                    "language",
-                    "persona",
-                    "max_debate_rounds",
-                    "conversation_storage",
-                    "conversation_rag",
-                    "show_message_details",
-                    "providers",
-                )
+                == _EXPECTED_SETTINGS_FIELDS
                 for call in picker.call_args_list
             )
         )
@@ -5010,15 +4960,7 @@ class ControllerSettingsTests(ControllerTestCase):
                             choice.identity
                             for choice in picker.call_args_list[1].args[2]
                         ),
-                        (
-                            "language",
-                            "persona",
-                            "max_debate_rounds",
-                            "conversation_storage",
-                            "conversation_rag",
-                            "show_message_details",
-                            "providers",
-                        ),
+                        _EXPECTED_SETTINGS_FIELDS,
                     )
                     self.assertIsNone(picker.call_args_list[1].kwargs["highlighted_id"])
                     self.assertNotIn(
@@ -6433,7 +6375,10 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         self.assertEqual(progress.observed, [])
         self.assertEqual(len(output.submissions), 1); self.assertIsNone(output.active_scope)
         self.assertIsInstance(output.components[-1], terminal_module.Panel)
-        self.assertIn("Elapsed: 00:00:00", output.components[-1].items[0].metadata)
+        turn_usage = next(item for item in output.components[-1].items
+            if type(item) is terminal_module.Record and item.identity == "Turn usage")
+        self.assertIn("Elapsed: 00:00:00", turn_usage.content)
+        self.assertNotIn("Elapsed:", output.components[-1].items[0].metadata or "")
 
     def test_provider_invocation_failure_writes_error_notice_without_crashing(self) -> None:
         import io
@@ -6716,9 +6661,14 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
 
                     self.assertEqual(calls, [(_UNIQUE_C, label)])
                     self.assertEqual(len(output.components), 2)
-                    self.assertIn("Elapsed:", output.components[-1].items[0].metadata)
+                    turn_usage = next(item for item in output.components[-1].items
+                        if type(item) is terminal_module.Record and item.identity == "Turn usage")
+                    self.assertIn("Elapsed:", turn_usage.content)
+                    self.assertNotIn("Elapsed:", output.components[-1].items[0].metadata or "")
 
     def test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role(self) -> None:
+        from story_writing_agents.reply_trace import ReplyTrace, ReplyTraceOrigin
+        from story_writing_agents.interactive_terminal import _collaboration_view
         session = RuntimeSession.__new__(RuntimeSession)
         runner = asyncio.Runner()
         self.addCleanup(runner.close)
@@ -6753,6 +6703,12 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             self.assertIs(message_item.role, terminal_module.SemanticRole.ERROR)
             self.assertIn("Inspect /history and /exchanges before continuing.", message_item.content)
             self.assertNotIn("No capacity available", message_item.content)
+        failed = replace(turn, trace=ReplyTrace("lead_orchestrator", "none", recovered_fields=("structured_reply",),
+            origin=ReplyTraceOrigin.RUNTIME_FALLBACK))
+        runtime_error = _collaboration_view.project_lead_turn_result(failed)
+        error_frame = next(item for item in runtime_error.items if type(item) is terminal_module.Message)
+        self.assertEqual((error_frame.sender, error_frame.role, error_frame.metadata),
+            ("Runtime", terminal_module.SemanticRole.ERROR, None))
 
         from tests.test_lead_orchestration import _task_fixture, _submitted_calls
         from tests.provider_wire_fixture import lead_fixture_response
@@ -6787,6 +6743,9 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             self.assertIn("Call validation", rendered)
             self.assertNotIn("PRIVATE", rendered)
             self.assertEqual(rendered.count("Public response disposition"), len(result.turn.public_responses))
+            self.assertTrue(all(public.response.response_kind == "answer" for public in result.turn.public_responses))
+            self.assertIn("Outcome: answer", rendered)
+            self.assertNotIn("Outcome: accepted", rendered); self.assertNotIn("Outcome: rejected", rendered)
             if correction is not None:
                 corrected = correction
                 self.assertEqual(rendered.count(corrected), 2 if corrected == "Original public text." else 1)
@@ -6797,6 +6756,31 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 self.assertIn(_submitted_calls(case.history(conversation))[-1].call_id, rendered)
                 notice = f"for rejected call {case.backend.calls[-1].call_id}:"
                 self.assertIn(notice + " no bounded literal final response_text was recoverable.", rendered)
+        from tests import provider_wire_fixture as wire
+        from tests.test_lead_orchestration import _live_scope
+        from tests.recommendation_fixture import action, recommendation, task_assessment, OUTLINE
+        from story_writing_agents.authoring_admission import AdmissionStatus
+        case = _task_fixture(self)
+        conversation = case.conversation("Host rewrite preserves original response provenance")
+        assessment = replace(task_assessment(foundation_ids=("user_input",), actions=("bounded preparation",)),
+            status=AdmissionStatus.ANALYSIS_ONLY, missing_information=("Preparation scope is undecided.",))
+        case.backend.enqueue(recommendation(message="Prepare a bounded specialist proposal.",
+            recommended_action=action(kind="prepare_consultation", source_ids=("user_input",)),
+            authoring_scope=lambda call: _live_scope(call, activity="review", domains=("plot_structure",), paths=(OUTLINE,),
+                contributions=[{"domain": "plot_structure", "role": "constraint_assessor"}]), authoring_assessment=assessment),
+            control_plan=wire.selection_plan("prepare.consultation.authoring"))
+        rewritten = runner.run(case.runtime.lead_turn(case.session_id, conversation,
+            "Use the supplied facts for bounded preparation; retain separate confirmation."))
+        self.assertEqual((rewritten.kind, rewritten.trace.origin, rewritten.trace.action),
+            (LeadOutcomeKind.QUESTION, ReplyTraceOrigin.RUNTIME_FALLBACK, "none"))
+        self.assertEqual(rewritten.public_responses[-1].response.response_kind, "recommendation")
+        self.assertIsNone(rewritten.recommendation_request)
+        component = _collaboration_view.project_lead_turn_result(rewritten, public_response_events=case.history(conversation))
+        frames = tuple(item for item in component.items if type(item) is terminal_module.Message)
+        self.assertEqual(tuple(item.sender for item in frames), ("Lead", "Runtime"))
+        self.assertEqual(frames[0].content, "Prepare a bounded specialist proposal.")
+        self.assertIn("Outcome: recommendation", frames[0].metadata)
+        self.assertIsNone(frames[1].metadata)
 
     def test_pending_commit_redisclosure_reuses_exact_picker_without_apply(self):
         digest = "sha256:" + "a" * 64

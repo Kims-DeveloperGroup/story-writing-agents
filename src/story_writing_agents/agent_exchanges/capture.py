@@ -90,19 +90,20 @@ def _canonical_json(value: object) -> str:
     )
 
 
-def _request_content(invocation: ProviderInvocation) -> str:
+def _request_content(invocation: ProviderInvocation, diagnostic_call_id: str | None = None) -> str:
     """Project only exact provider-neutral invocation fields."""
 
     if type(invocation) is not ProviderInvocation:
         raise TypeError("invocation must be a ProviderInvocation")
-    return _canonical_json(
-        {
-            "call_kind": invocation.call_kind.value,
-            "payload": dict(invocation.payload),
-            "prior_thread_id": invocation.thread_id,
-            "schema": dict(invocation.schema),
-        }
-    )
+    content: dict[str, object] = {
+        "call_kind": invocation.call_kind.value,
+        "payload": dict(invocation.payload),
+        "prior_thread_id": invocation.thread_id,
+        "schema": dict(invocation.schema),
+    }
+    if diagnostic_call_id is not None:
+        content["host_diagnostics"] = {"call_id": diagnostic_call_id}
+    return _canonical_json(content)
 
 
 def _response_content(result: ProviderResult) -> str:
@@ -125,6 +126,8 @@ def _response_content(result: ProviderResult) -> str:
             }
         ),
     }
+    if result.last_token_usage is not None:
+        content["last_token_usage"] = asdict(result.last_token_usage)
     if result.usage_observation is not None:
         content["usage_observation"] = asdict(result.usage_observation)
     if result.elapsed_ns is not None:
@@ -216,10 +219,17 @@ def _terminal_content(
     outcome: AgentExchangeOutcome,
     code: AgentExchangeTerminalCode,
     validation_details: tuple[str, ...] = (),
+    diagnostic_call_id: str | None = None,
+    diagnostic_task: tuple[str, int] | None = None,
 ) -> str:
     """Serialize one closed outcome with optional trusted validation findings."""
 
     content: dict[str, object] = {"code": code.value, "outcome": outcome.value}
+    if diagnostic_call_id is not None:
+        diagnostics: dict[str, object] = {"call_id": diagnostic_call_id}
+        if outcome is AgentExchangeOutcome.ACCEPTED and diagnostic_task is not None:
+            diagnostics.update(task_id=diagnostic_task[0], task_revision=diagnostic_task[1])
+        content["host_diagnostics"] = diagnostics
     if validation_details:
         content["validation_details"] = list(validation_details)
     return _canonical_json(content)
@@ -231,6 +241,7 @@ class AgentExchangeCaptureLifecycle:
     __slots__ = (
         "_agent_id",
         "_exchange_id",
+        "_diagnostic_call_id",
         "_lock",
         "_provider",
         "_scope_id",
@@ -251,8 +262,10 @@ class AgentExchangeCaptureLifecycle:
         provider: AgentExchangeProvider | None,
         exchange_id: str | None,
         enabled: bool,
+        diagnostic_call_id: str | None = None,
     ) -> None:
         self._store = store
+        self._diagnostic_call_id = diagnostic_call_id
         self._session_id = session_id
         self._scope_kind = scope_kind
         self._scope_id = scope_id
@@ -342,6 +355,7 @@ class AgentExchangeCaptureLifecycle:
         *,
         response_required: bool,
         validation_details: tuple[str, ...] = (),
+        diagnostic_task: tuple[str, int] | None = None,
     ) -> None:
         try:
             if type(code) is not AgentExchangeTerminalCode:
@@ -357,18 +371,19 @@ class AgentExchangeCaptureLifecycle:
                 self._state = _CaptureState.TERMINAL_ATTEMPTED
                 self._record(
                     AgentExchangeRequestType.OUTCOME,
-                    _terminal_content(outcome, code, validation_details),
+                    _terminal_content(outcome, code, validation_details, self._diagnostic_call_id, diagnostic_task),
                 )
         except BaseException:
             pass
 
-    def accepted(self) -> None:
+    def accepted(self, *, diagnostic_task: tuple[str, int] | None = None) -> None:
         """Attempt one accepted terminal after a completed response."""
 
         self._terminal(
             AgentExchangeOutcome.ACCEPTED,
             AgentExchangeTerminalCode.ACCEPTED,
             response_required=True,
+            diagnostic_task=diagnostic_task,
         )
 
     def rejected(
@@ -418,7 +433,7 @@ class AgentExchangeCaptureLifecycle:
                     pass
                 self._record(
                     AgentExchangeRequestType.OUTCOME,
-                    _terminal_content(AgentExchangeOutcome.PROVIDER_FAILURE, code),
+                    _terminal_content(AgentExchangeOutcome.PROVIDER_FAILURE, code, diagnostic_call_id=self._diagnostic_call_id),
                 )
         except BaseException:
             pass
@@ -439,6 +454,7 @@ class AgentExchangeCaptureLifecycle:
                     _terminal_content(
                         AgentExchangeOutcome.CANCELLED,
                         AgentExchangeTerminalCode.CANCELLED,
+                        diagnostic_call_id=self._diagnostic_call_id,
                     ),
                 )
         except BaseException:
@@ -479,6 +495,7 @@ class WorkspaceAgentExchangeCapture:
         agent_id: str,
         provider: AgentExchangeProvider,
         invocation: ProviderInvocation,
+        diagnostic_call_id: str | None = None,
     ) -> AgentExchangeCaptureLifecycle:
         """Record one exact request before invocation or return a disabled token."""
 
@@ -493,7 +510,7 @@ class WorkspaceAgentExchangeCapture:
                     provider=provider,
                     exchange_id=exchange_id,
                     request_type=AgentExchangeRequestType.REQUEST,
-                    content=_request_content(invocation),
+                    content=_request_content(invocation, diagnostic_call_id),
                 )
             )
             return AgentExchangeCaptureLifecycle(
@@ -505,6 +522,7 @@ class WorkspaceAgentExchangeCapture:
                 provider=provider,
                 exchange_id=exchange_id,
                 enabled=True,
+                diagnostic_call_id=diagnostic_call_id,
             )
         except BaseException:
             return AgentExchangeCaptureLifecycle._disabled()

@@ -256,15 +256,18 @@ class _CodexNativeObservation:
     cause: BaseException | None = None
     source_path: Path | None = field(default=None, repr=False)
     rediscovered: bool = False
+    last_token_usage: ProviderUsage | None = None
 
 
 def _native_observation_success(invocation, previous, before, witness,
-                                usage_pair=None, previous_usage=None, first=False):
+                                usage_pair=None, previous_usage=None, first=False,
+                                last_token_usage=None):
     check = NativeContextCheck(invocation.context_call_id,
         previous.call_id if type(previous) is ProviderContextWitness else None,
         (NativeContextObservation(NativeContextCheckStage.PRE_SUBMIT if before else NativeContextCheckStage.POST_COMPLETE,
             NativeContextSourceStage.COMPLETE, NativeContextCheckReason.VERIFIED),))
-    return _CodexNativeObservation(witness, check, usage_pair, previous_usage, first)
+    return _CodexNativeObservation(witness, check, usage_pair, previous_usage, first,
+                                   last_token_usage=last_token_usage)
 
 
 def _native_observation_failure(invocation, previous, before, point, reason, cause):
@@ -513,6 +516,7 @@ def _read_codex_native_observation(
         point = NativeContextSourceStage.RECORDS
         metadata, active_turn = None, None
         completed, inputs, settings, usage_records, history_effects = set(), [], {}, [], []
+        last_usage_by_turn: dict[str | None, ProviderUsage | None] = {}
         environment_inputs = []
         for position, line in enumerate(lines):
             record = json.loads(line)
@@ -551,6 +555,8 @@ def _read_codex_native_observation(
                     info = value.get("info")
                     total = _native_usage(info.get("total_token_usage")) if type(info) is dict else None
                     last = _native_usage(info.get("last_token_usage")) if type(info) is dict else None
+                    # A malformed latest observation supersedes earlier valid counters.
+                    last_usage_by_turn[active_turn] = last
                     if total is not None and last is not None:
                         usage_records.append((active_turn, total, last))
                 elif event == "thread_rolled_back":
@@ -641,7 +647,8 @@ def _read_codex_native_observation(
         current = [row for row in usage_records if row[0] == target[0]]
         prior_usage = [row for row in usage_records if previous is not None and row[0] == previous.turn_id]
         return replace(_native_observation_success(facts, previous, before, witness,
-            current[-1][1:] if current else None, prior_usage[-1][1] if prior_usage else None, len(completed) == 1), source_path=path, rediscovered=rediscovered)
+            current[-1][1:] if current else None, prior_usage[-1][1] if prior_usage else None, len(completed) == 1,
+            last_token_usage=last_usage_by_turn.get(target[0])), source_path=path, rediscovered=rediscovered)
     except _NativeContextUnavailable as failure:
         return replace(_native_observation_failure(facts, previous, before, point, failure.reason, failure), source_path=path, rediscovered=rediscovered)
     except (OSError, ValueError, TypeError, KeyError, RecursionError) as failure:
@@ -1560,6 +1567,10 @@ class CodexAdapter:
                     thread_id=thread_id,
                     response_text=response_text,
                     usage=raw_usage,
+                    last_token_usage=(
+                        None if native_observation is None or native_observation.witness is None
+                        else native_observation.last_token_usage
+                    ),
                     usage_observation=_codex_usage_observation(raw_usage, native_observation, invocation),
                     actual_transport_utf8_bytes=len(stdin),
                     context_witness=None if native_observation is None else native_observation.witness,

@@ -105,10 +105,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         return respond
 
     def scope(self, call, *, intent=None, activity="review"):
-        tasks = lead._workflow_material(self.backend.callback_payload(call))["authoring_tasks"]
-        task_id = self.objective_tasks.get((intent or {}).get("objective_id"))
-        index = next((i for i, task in enumerate(tasks) if task["task_id"] == task_id), -1)
-        return lead._live_scope(call, activity=activity, paths=(OUTLINE,), task_index=index)
+        return lead._live_scope(call, activity=activity, paths=(OUTLINE,))
 
     async def start(self, conversation_id=None, *, message=DRAFT, objective_id=None,
                     target_path=OUTLINE, specialist_ids=(PLOT_ARCHITECT,), authoring_paths=None,

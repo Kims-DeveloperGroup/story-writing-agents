@@ -134,6 +134,12 @@ def _canonical_line(value: dict[str, object]) -> bytes:
     )
 
 
+def _cleanup_failure(original_release):
+    def release_then_fail(descriptor: int) -> None:
+        original_release(descriptor)
+        raise OSError(errno.EIO, 'PRIVATE cleanup failure')
+    return release_then_fail
+
 class AgentExchangeStorageBehaviorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.workspace = initialized_workspace(self)
@@ -254,6 +260,22 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
         self.assertEqual(records[-1]["content_full_characters"], len(unicode_content))
         self.assertEqual(records[-1]["content_retained_characters"], len(retained))
         self.assertTrue(records[-1]["content_truncated"])
+        from story_writing_agents.agent_exchanges.capture import WorkspaceAgentExchangeCapture, AgentExchangeTerminalCode
+        from tests.test_agent_exchange_capture import _invocation
+        selected = _selection()
+        capture = WorkspaceAgentExchangeCapture(self.workspace).begin(
+            session_id=selected.session_id, scope_kind=selected.scope_kind, scope_id=selected.scope_id,
+            agent_id=selected.agent_id, provider=AgentExchangeProvider.CODEX,
+            invocation=_invocation(payload={"body": "x" * AGENT_EXCHANGE_CONTENT_MAX_BYTES}),
+            diagnostic_call_id="truncated-physical-call")
+        capture.provider_failure(AgentExchangeTerminalCode.PROVIDER_TIMED_OUT)
+        reloaded = [row for row in _decoded_snapshot(WorkspaceAgentExchangeStore(self.workspace))
+                    if row["exchange_id"] == capture.exchange_id]
+        self.assertTrue(reloaded[0]["content_truncated"])
+        with self.assertRaises(json.JSONDecodeError):
+            json.loads(reloaded[0]["content"])
+        self.assertFalse(reloaded[-1]["content_truncated"])
+        self.assertEqual(json.loads(reloaded[-1]["content"])["host_diagnostics"], {"call_id": "truncated-physical-call"})
 
     def test_global_and_per_stream_sequences_survive_new_store_instances(self) -> None:
         first = self.store.append(_input(exchange_id="e1"))
@@ -814,11 +836,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
         self.assertEqual( [record["sequence"] for record in _decoded_snapshot(self.store)], [1, 3], )
 
     def test_primary_capacity_failure_precedes_cleanup_io_failure(self) -> None:
-        original_release = storage_module._release_advisory_lock
-
-        def release_then_fail(descriptor: int) -> None:
-            original_release(descriptor)
-            raise OSError(errno.EIO, "PRIVATE cleanup failure")
+        release_then_fail = _cleanup_failure(storage_module._release_advisory_lock)
 
         with (
             mock.patch.object(
@@ -836,11 +854,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
         self.assertEqual(self.store.append(_input(exchange_id="after")).sequence, 3)
 
     def test_cleanup_only_failure_is_fixed_and_persisted_record_remains(self) -> None:
-        original_release = storage_module._release_advisory_lock
-
-        def release_then_fail(descriptor: int) -> None:
-            original_release(descriptor)
-            raise OSError(errno.EIO, "PRIVATE cleanup failure")
+        release_then_fail = _cleanup_failure(storage_module._release_advisory_lock)
 
         with mock.patch.object( storage_module, "_release_advisory_lock", side_effect=release_then_fail, ):
             error = _assert_storage_failure(
@@ -858,11 +872,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
     def test_control_exception_precedes_cleanup_failure_and_resources_release(
         self,
     ) -> None:
-        original_release = storage_module._release_advisory_lock
-
-        def release_then_fail(descriptor: int) -> None:
-            original_release(descriptor)
-            raise OSError(errno.EIO, "PRIVATE cleanup failure")
+        release_then_fail = _cleanup_failure(storage_module._release_advisory_lock)
 
         with (
             mock.patch.object(

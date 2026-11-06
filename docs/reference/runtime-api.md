@@ -850,8 +850,11 @@ contract is `lead-response-v7`; every branch includes explicit `response_type`,
 [agent JSON field guide](provider-wire.md) for all result variants, how to build
 the schema property, and complete input/response guidance.
 
-Provider scope selects the exact offered `task_reference` object containing
-`task_id` and `task_revision`. `proposal_drafting_request` asks for a concrete
+Provider scope declares writing content without `task_id`, `task_revision`,
+or a task selector. The runtime assigns identity before constructing the
+existing bound Python result; inspection and typed task-control APIs retain
+those internal references.
+`proposal_drafting_request` asks for a concrete
 proposal; `document_change_request_update` starts, continues, or cancels a
 tracked document change. These provider names normalize into the existing
 Python recommendation and objective values described below.

@@ -280,7 +280,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertGreaterEqual(12 - completed.physical_calls_spent, 4)
         self.assertEqual(self.artifact_bytes(), before)
         def successor(value, material):
-            self.assertEqual([(t["task_id"], t["task_revision"]) for t in material["authoring_tasks"]], [(proposed.proposal.authoring_scope.task_id, 2)])
+            self.assertNotIn("authoring_tasks", material)
             self.assertEqual(material["available_proposal_drafting_source_ids"], [])
         blocked = await self.proposal_for(conversation, self._native_scoped(
             PLOT_ARCHITECT, selected=proposed.proposal.authoring_scope.task_id,
@@ -318,7 +318,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.assertEqual(call.contract.semantic_index.policy.task_revisions,
                              ((proposed.proposal.authoring_scope.task_id, 2),))
             ((task_id, task_revision),) = call.contract.semantic_index.policy.task_revisions
-            scope = {"activity": "draft", "intent": "authoring", "target_paths": [OUTLINE],
+            scope = {"interpretation": "Inspect the declared synthetic scope.", "activity": "draft", "intent": "authoring", "target_paths": [OUTLINE],
                      "domains": ["plot_structure"], "task_id": task_id, "task_revision": task_revision,
                      "contributions": [{"domain": "plot_structure", "role": "draft_owner"}],
                      "dependency_slots": []}
@@ -746,8 +746,12 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                         for agent, call in self.backend.call_records[confirmed_start:]]
         self.assertEqual([agent for agent, _ in stage_inputs],
                          [CHARACTER_CUSTODIAN, LEAD_ORCHESTRATOR])
+        expected_wire_plan = {key: value for key, value in routing.stage_plan_to_dict(plan).items()
+                              if key not in {'task_id', 'task_revision'}}
+        expected_wire_plan['questions'] = [{key: value for key, value in question.items()
+            if key not in {'task_id', 'task_revision'}} for question in expected_wire_plan['questions']]
         self.assertEqual([material["stage_plan"] for _, material in stage_inputs],
-                         [routing.stage_plan_to_dict(plan)] * 2)
+                         [expected_wire_plan] * 2)
         specialist_calls = [agent for agent, _ in self.backend.call_records[before:] if agent != LEAD_ORCHESTRATOR]
         self.assertEqual(specialist_calls, [CHARACTER_CUSTODIAN])
         original_history = self.history(conversation)
@@ -755,6 +759,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                    and event.payload.proposal_id == focused.proposal.proposal_id]
         self.assertEqual(len(replies), 1)
         self.assertEqual(replies[0].payload.message, feedback)
+        from tests.test_agent_exchange_viewer import _assert_typed_history_phase
+        self.assertNotEqual(replies[0].turn_id, focused.turn_id)
+        _assert_typed_history_phase(self, original_history, replies[0].payload.provider_invocation_id,
+                                   CHARACTER_CUSTODIAN, "specialist_work", focused.proposal.authoring_scope)
         explained = "Character reported that the promise is established but the decision trigger is absent."
         def explain_feedback(call, provider):
             supplied = canonical_provider_json(provider.callback_payload(call)).decode("utf-8")
@@ -1023,7 +1031,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             scoped_proposal(PLOT_ARCHITECT, activity="review", candidate_ids=("reference_1",)),
             selection_group='consultation.authoring.review')
         self.assertIsNone(bad.proposal)
-        conversation = self.conversation()
+        conversation = bad_conversation
         original, before = "완성 원고.\r\nCafé.  \r\n", self.artifact_bytes()
         good = await self.proposal_for(conversation, self._native_scoped(
                 PLOT_ARCHITECT, activity='review', intent='review_only',
@@ -1039,8 +1047,11 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertTrue(all(request is None for request in (reviewed.turn.artifact_application_request, reviewed.turn.story_commit_request)))
         self.assertFalse(any(type(e.payload) in (c.ArtifactObjectivePayload, c.ArtifactObjectivePayloadV2) for e in self.history(conversation)))
 
-        self.backend.enqueue(_visible_outcome("answer", "The rejected empty review remains unexecuted."), control_plan=selection_plan('answer.workflow'))
-        await self.runtime.lead_turn(self.session_id, bad_conversation, "Resolve the failed interpretation.")
+        self.backend.enqueue(self._native_scoped(PLOT_ARCHITECT, paths=(OUTLINE,), domains=('plot_structure',), authoring_assessment=_fixture_assessment()), control_plan=selection_plan('consultation.authoring.content'))
+        drafted = await self.runtime.lead_turn(self.session_id, conversation, _ADMISSION_BRIEF)
+        self.assertIsNotNone(drafted.proposal, (drafted.message, drafted.validation_details, drafted.public_responses))
+        self.assertEqual((drafted.proposal.authoring_scope.intent, drafted.proposal.authoring_scope.task_revision, self.artifact_bytes()), (AuthoringIntent.AUTHORING, 1, before))
+        self.assertNotEqual(drafted.proposal.authoring_scope.task_id, good.proposal.authoring_scope.task_id)
         source, owner = self.conversation("Review source A"), self.conversation("Selected review owner B")
         supplied = "Unused prefix.\n" + original + "\nUnused suffix."
         self.backend.enqueue(_current_exploration_outcome(supplied))
@@ -1077,12 +1088,17 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertFalse(restarted.inspect_lead_collaboration(self.session_id, owner).artifact_objectives)
 
     async def test_wrong_task_pair_rejects_before_dispatch(self):
-        def wrong_pair(value, material): value["authoring_scope"]["task_revision"] += 1
-        result = await self._rejected_pair(
-            self.conversation(), _ADMISSION_BRIEF, scoped_proposal(PLOT_ARCHITECT, mutate=wrong_pair,
-                authoring_assessment=_fixture_assessment(),
-            ), selection_group='consultation.authoring.content')
-        self._assert_continuation(result, 'proposal')
+        conversation = self.conversation()
+        proposed = await self.proposal_for(conversation)
+        current = next(view.ref for view in self.runtime.inspect_lead_collaboration(
+            self.session_id, conversation).available_tasks if view.ref.task_id == proposed.proposal.authoring_scope.task_id)
+        stale = replace(current, task_revision=current.task_revision + 1)
+        decision = task.LeadTaskDecision.from_task(stale, task.LeadTaskAction.RESUME, text=_ADMISSION_BRIEF)
+        before, calls = self.history(conversation), len(self.backend.calls)
+        with self.assertRaises(ValueError):
+            await self.runtime.decide_lead_task(decision)
+        self.assertEqual(self.history(conversation), before)
+        self.assertEqual(len(self.backend.calls), calls)
 
     async def test_cross_conversation_selection_preserves_scope_and_rejects_workflow_relabel(self):
         original_conversation = self.conversation()
@@ -1100,11 +1116,14 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             selection_group='consultation.authoring.content')
         self._assert_continuation(bad, 'proposal')
         continued = await self.proposal_for(self.conversation(), self._native_scoped(
-            PLOT_ARCHITECT, domains=("plot_structure",), selected=selected,
+            PLOT_ARCHITECT, domains=("plot_structure",),
             authoring_assessment=_fixture_assessment(),
         ))
         self.assertIsNotNone(continued.proposal, continued)
-        self.assertEqual(continued.proposal.authoring_scope.task_id, selected)
+        from story_writing_agents.authoring_task_lifecycle import task_identity_for_origin
+        target_scope = continued.proposal.authoring_scope
+        self.assertEqual((target_scope.task_id, target_scope.task_revision), (task_identity_for_origin(continued.step_id), 1))
+        self.assertEqual(target_scope, replace(original.proposal.authoring_scope, task_id=target_scope.task_id, task_revision=target_scope.task_revision))
         self.assertEqual(self.history(original_conversation), prefix)
         self.backend.enqueue(_visible_outcome("answer", "The workflow relabel remains rejected."), control_plan=selection_plan('answer.workflow'))
         await self.runtime.lead_turn(self.session_id, bad.conversation_id, "Resolve the rejected interpretation.")
@@ -1384,6 +1403,19 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIsNotNone(reviewed.turn.artifact_application_request)
         self.assertEqual(self.history(conversation)[:len(draft_prefix)],draft_prefix)
         final_proposal = reviewed.turn.artifact_proposal.reviewed_proposal
+        from tests.test_agent_exchange_viewer import _assert_typed_history_phase
+        self.assertIsNone(proposed.proposal.stage_plan)
+        phase_history = self.history(conversation)
+        phase_synthesis = next(event.payload for event in phase_history
+                               if event.event_id == final_proposal.synthesis_event_id)
+        phase_companions = [event.payload for event in phase_history
+                            if type(event.payload) in {c.CollaborationLeadSynthesisPayload, c.ArtifactReviewSynthesisPayload}
+                            and event.payload.provider_invocation_id == phase_synthesis.provider_invocation_id]
+        self.assertEqual(len(phase_companions), 2)
+        self.assertEqual({type(item) for item in phase_companions},
+                         {c.CollaborationLeadSynthesisPayload, c.ArtifactReviewSynthesisPayload})
+        _assert_typed_history_phase(self, phase_history, phase_synthesis.provider_invocation_id,
+                                   LEAD_ORCHESTRATOR, "final_candidate_review", proposed.proposal.authoring_scope)
         self.assertEqual(final_proposal.final_review_evidence.reviewer_ids, ROSTER)
         self.assertEqual(final_proposal.final_review_evidence.reply_event_ids,
                          tuple(item.reply_event_id for item in final_proposal.reviews))
@@ -1424,7 +1456,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(applied.commit_request.application_result_event_id, next(e.event_id for e in history if type(e.payload) is c.ArtifactApplicationResultPayload and e.payload.outcome is c.ArtifactApplicationOutcomeKind.APPLIED))
         offered = []
         def status(call,provider):
-            offered.extend(_workflow_material(provider.callback_payload(call))["authoring_tasks"])
+            offered.extend(_live_task(call, i) for i, _ in enumerate(call.contract.semantic_index.policy.task_revisions))
+            self.assertNotIn("authoring_tasks", _workflow_material(provider.callback_payload(call)))
             return _visible_outcome("answer","The previous artifact application is recorded.")(call,provider)
         self.backend.enqueue(status, control_plan=selection_plan('answer.workflow'))
         await self.runtime.lead_turn(self.session_id,self.conversation(),"Report the recorded application status.")
@@ -1588,7 +1621,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.runtime.conversation_storage_services.catalog.archive(self.session_id, archived)
         offered=[]
         def answer(call,provider):
-            offered.extend(_workflow_material(provider.callback_payload(call))["authoring_tasks"])
+            offered.extend(_live_task(call, i) for i, _ in enumerate(call.contract.semantic_index.policy.task_revisions))
+            self.assertNotIn("authoring_tasks", _workflow_material(provider.callback_payload(call)))
             return _visible_outcome("answer", "The archived conversation remains readable history.")(call,provider)
         self.backend.enqueue(answer, control_plan=selection_plan('answer.workflow'))
         await self.runtime.lead_turn(self.session_id,self.conversation(),"Report active task status.")
@@ -1683,7 +1717,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             frame = json.loads(drifted_writer(call, provider))
             details = frame["agent_action"]["task_result"]["response_details"]
             details["proposal_drafting_request"]["source_ids"] = {old_source: True}
-            self.assertEqual(details["task_scope"]["task"], {"id": task_id, "revision": 1})
+            self.assertNotIn("task", details["task_scope"])
+            details["task_scope"]["intent"] = "review_only"
             raw = json.dumps(frame, ensure_ascii=False)
             self.assertTrue(call.contract.structural_findings(raw), raw)
             return raw
@@ -1731,7 +1766,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         pending = await self._lead_turn(conversation, _ADMISSION_BRIEF)
         self.assertEqual(len(successor_material), 1, pending)
         observed_successor = json.loads(successor_material[0])
-        self.assertEqual([(t["task_id"], t["task_revision"]) for t in observed_successor["authoring_tasks"]], [(task_id, 2)], pending)
+        self.assertNotIn("authoring_tasks", observed_successor)
         self.assertEqual([item["input_id"] for item in observed_successor["input_aliases"]], ["user_input"], pending)
         self.assertEqual(observed_successor["available_proposal_drafting_source_ids"], expected_aliases, pending)
         self.assertIs(pending.kind, c.LeadOutcomeKind.PROPOSAL, pending)
@@ -1745,10 +1780,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(len(_submitted_calls(self.history(conversation)[len(completed_prefix):])), 7)
         self.assertEqual(self.history(conversation)[:len(completed_prefix)], completed_prefix)
         def cross_product(value,material):
-            offered=material["authoring_tasks"]
-            self.assertTrue(any(t["task_revision"]==2 for t in offered))
-            self.assertEqual(value["authoring_scope"]["task_revision"],1)
-            value["authoring_scope"]["task_revision"]=2
+            self.assertNotIn("authoring_tasks", material)
+            self.assertNotIn("task_revision", value["authoring_scope"])
+            value["authoring_scope"]["interpretation"] = ""
         cross_writer = self._native_scoped(PLOT_ARCHITECT, mutate=cross_product, authoring_assessment=_fixture_assessment())
         def cross_frame(call, provider):
             self.assertTrue(call.contract.factory.schema_group_protocol)
@@ -1756,10 +1790,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.assertIn(call.contract.factory.rule_seed.contract_id, ("lead-response-v6", "lead-response-v7", "lead-response-v8"))
             self.assertEqual(call.contract.group_workflow.active_selection.group_id, "consultation.authoring.content")
             raw = cross_writer(call, provider)
-            bad = json.loads(raw)["agent_action"]["task_result"]["response_details"]["task_scope"]["task"]
-            self.assertEqual(bad["revision"], 2)
-            self.assertNotEqual(bad["id"], task_id)
-            self.assertNotIn((bad["id"], bad["revision"]), call.contract.semantic_index.policy.task_revisions)
+            bad = json.loads(raw)["agent_action"]["task_result"]["response_details"]["task_scope"]
+            self.assertEqual(bad["interpretation"], "")
             self.assertTrue(call.contract.structural_findings(raw), raw)
             return raw
         invalid = await self._rejected_pair(self.conversation(), _ADMISSION_BRIEF, cross_frame,
@@ -1894,8 +1926,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             receipt = transition_receipt(stale_resume).payload.receipt
             self.assertEqual((receipt.target_task_id, receipt.target_task_revision), (task_id, 3))
             self.assertIn(old_source, _workflow_material(provider.callback_payload(call))["available_proposal_drafting_source_ids"])
-            current = next(t["current_scope"] for t in _workflow_material(provider.callback_payload(call))["authoring_tasks"]
-                if t["task_id"] == task_id and t["task_revision"] == 3)
+            current = c.authoring_scope_to_dict(revised.proposal.authoring_scope)
             self.assertEqual((current["task_id"], current["task_revision"]), (task_id, 2))
             current = dict(current, task_revision=3)
             self.assertEqual((current["task_id"], current["task_revision"]), (task_id, 3))
@@ -1974,7 +2005,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             (admission.AdmissionSourceKind.MATERIAL, "rejected_public_response"))
         def prepare_historical(call, provider):
             material = _workflow_material(provider.callback_payload(call))
-            self.assertEqual(material["structured_recommendation_execution"]["request"]["authoring_scope"], c.authoring_scope_to_dict(fresh_scope))
+            self.assertEqual(material["structured_recommendation_execution"]["request"]["authoring_scope"],
+                {key: value for key, value in c.authoring_scope_to_dict(fresh_scope).items()
+                 if key not in {"task_id", "task_revision"}})
             native = wire_result({"authoring_assessment": asdict(request.basis.authoring_admission.assessment), "kind": "proposal", "message": request.purpose,
                 "authoring_scope": _compact_scope(c.authoring_scope_to_dict(fresh_scope)),
                 "proposal": {"shared_premises": [], "assignments": [{"agent_id": PLOT_ARCHITECT, "mode": "draft", "instruction": request.instruction,
@@ -2011,12 +2044,12 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         capture = next(event for event in self.history(prior) if event.event_id in transition.material_capture_event_ids)
         self.assertEqual((capture.payload.capture.source, capture.payload.capture.selected_text),
                          (rejected_text.ref, "Selected rejected whole explanation."))
-        self.assertEqual((capture.payload.capture.target_task_id, capture.payload.capture.target_task_revision),
-                         (fresh_scope.task_id, fresh_scope.task_revision))
+        self.assertEqual((capture.payload.capture.target_task_id, capture.payload.capture.target_task_revision), (fresh_scope.task_id, fresh_scope.task_revision))
         front = next(_workflow_material(call.payload) for agent, call in reversed(self.backend.call_records)
                      if agent == LEAD_ORCHESTRATOR and _workflow_material(call.payload).get("selected_task_materials"))
-        self.assertEqual(front["selected_task_materials"], [{"input_id": selected_input.input_id,
-                         "capture_event_id": capture.event_id, **task.task_value_to_dict(capture.payload.capture)}])
+        expected_material = {"input_id": selected_input.input_id, "capture_event_id": capture.event_id, **{key: value for key, value in task.task_value_to_dict(capture.payload.capture).items() if key not in {'target_task_id', 'target_task_revision'}}}
+        expected_material["source"]["record_type"] = expected_material["source"].pop("kind")
+        self.assertEqual(front["selected_task_materials"], [expected_material], (front["selected_task_materials"], expected_material))
         self.assertEqual((selected_input.kind, selected_input.locator, selected_input.revision_digest),
                          (c.CollaborationInputKind.CONVERSATION_EVENT, "conversation/" + capture.event_id,
                           "sha256:" + rejected_text.ref.material_digest))

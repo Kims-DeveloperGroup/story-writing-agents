@@ -36,9 +36,9 @@ _GENERIC_RAG_PIN = "c77456321c614518e420e45c033e3f71dc5363b8"
 _GENERIC_RAG_REPOSITORY = "https://github.com/Kims-DeveloperGroup/generic-rag.git"
 _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}")
-_OLD_JSONL_VIEWER_PIN = "997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea"
-_JSONL_VIEWER_PIN = "91e2e21f301a0628fd7651d248a3556c6d3b7f95"
-_JSONL_VIEWER_VERSION = "0.6.4"
+_OLD_JSONL_VIEWER_PIN = "717d17b0c180150e5137439ff72a48cef5f12397"
+_JSONL_VIEWER_PIN = "a38a975eda4123df11c1fa4f796fd49ab88efcee"
+_JSONL_VIEWER_VERSION = "0.7.0"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
 _JSONL_VIEWER_REQUIREMENT = (
     f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}")
@@ -47,6 +47,58 @@ _GITLINK_PATHS = {
     "vendor/jsonl-viewer": _JSONL_VIEWER_PIN,
 }
 
+
+_VIEWER_SOURCE_ASSIGNMENT = '                source = b\'{"timestamp":"2026-08-30T00:00:00Z","request_type":"request","content":"ok"}\\n\'\n'
+
+def _viewer_host_source(size, source_line=""):
+    return f"""                class Host:
+                    def __init__(self): self.frames = []; self.closed = 0
+                    def terminal_size(self): return {size!r}
+                    def color_enabled(self): return False
+                    def present(self, frame): self.frames.append(frame)
+                    def read_event(self): return "close"
+                    def close_view(self): self.closed += 1
+{source_line}                host = Host()
+                import io, jsonl_viewer
+                from story_writing_agents.interactive_terminal._external_view import ExternalTerminalIO
+                active_host = host; actual_view = jsonl_viewer.view_jsonl
+                def owned(source, spec, host=None, *, terminal=None, transient_only=False):
+                    assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal); actual_view(source, spec, active_host)
+                jsonl_viewer.view_jsonl = owned; transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)"""
+
+def _locked_runtime_wheels(directory: Path) -> Path:
+    script = textwrap.dedent("""
+        import sys, tomllib
+        from pathlib import Path
+        directory = Path(sys.argv[1])
+        from importlib.metadata import distribution
+        from setuptools.command.bdist_wheel import WheelFile
+        directory.mkdir()
+        packages = tomllib.loads(Path(sys.argv[2]).read_text())["package"]
+        for name in ("markdown-it-py", "mdurl"):
+            installed = distribution(name)
+            assert installed.version == next(item["version"] for item in packages if item["name"] == name)
+            metadata = installed.read_text("WHEEL") or ""
+            assert "Root-Is-Purelib: true" in metadata and "Tag: py3-none-any" in metadata
+            info = next(path.parent for path in installed.files or () if path.name == "METADATA")
+            with WheelFile(directory / f"{info.name.removesuffix('.dist-info')}-py3-none-any.whl", "w") as archive:
+                for path in installed.files or ():
+                    if ".." in path.parts or path.suffix == ".pyc" or path.name in {"RECORD", "RECORD.jws", "RECORD.p7s", "INSTALLER", "REQUESTED", "direct_url.json"}:
+                        continue
+                    archive.write(installed.locate_file(path), str(path))
+    """)
+    completed = subprocess.run(
+        [sys.executable, "-W", "error", "-c", script, str(directory), str(_REPOSITORY_ROOT / "uv.lock")],
+        text=True, capture_output=True, check=False,
+    )
+    if completed.returncode:
+        raise AssertionError(completed.stderr)
+    return directory
+
+def _extract_wheels(target: Path, wheels) -> None:
+    for wheel in wheels:
+        with zipfile.ZipFile(wheel) as archive:
+            archive.extractall(target)
 
 def _module_inventory() -> dict[str, Path]:
     modules: dict[str, Path] = {}
@@ -212,6 +264,11 @@ def _copy_setuptools_build_support(destination: Path) -> None:
 def _gitlink_git_directory(relative: str) -> Path:
     if relative not in _GITLINK_PATHS:
         raise ValueError("unsupported gitlink path")
+    child = _REPOSITORY_ROOT / relative
+    if (child / ".git").exists():
+        return Path(subprocess.run(
+            ["git", "-C", str(child), "rev-parse", "--absolute-git-dir"],
+            text=True, capture_output=True, check=True).stdout.strip())
     resolved = subprocess.run(
         ["git", "rev-parse", "--git-path", f"modules/{relative}"],
         cwd=_REPOSITORY_ROOT,
@@ -338,8 +395,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 172)
-        self.assertEqual(len(edges), 774)
+        self.assertEqual(len(modules), 176)
+        self.assertEqual(len(edges), 787)
         self.assertIn(("story_writing_agents.agent_context.service", "story_writing_agents.provider_adapter"), edges)
         self.assertIn(("story_writing_agents.interactive_terminal._advisory_progress", "story_writing_agents.agent_context.service"), edges)
         self.assertIn(("story_writing_agents.interactive_terminal._core", "story_writing_agents.agent_context.service"), edges)
@@ -378,6 +435,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.agent_context.group_observation',
             },
             "story_writing_agents.conversations.context": {
+                "story_writing_agents.authoring_task_lifecycle",
                 "story_writing_agents.review_contracts",
                 "story_writing_agents.lead_task_transitions",
                 "story_writing_agents.lead_exploration",
@@ -889,7 +947,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertIn("story_writing_agents.review_contracts", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.review_contracts"}, set())
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.review_contracts"}, {
-            "story_writing_agents.conversations", "story_writing_agents.conversations.context",
+            "story_writing_agents.authoring_task_lifecycle", "story_writing_agents.conversations", "story_writing_agents.conversations.context",
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_terminal._collaboration_view",
             "story_writing_agents.lead_provider_contracts", "story_writing_agents.orchestrator"})
         self.assertIn("story_writing_agents.blocking_work", modules)
@@ -1108,7 +1166,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 ["rag", "viewer"],
             )
             requires = metadata.get_all("Requires-Dist") or []
-            self.assertEqual(len(requires), 2)
+            self.assertEqual(len(requires), 3)
+            self.assertIn("markdown-it-py<5,>=4.2", requires)
             normalized_requires = []
             for requirement in requires:
                 name, separator, reference = requirement.partition("@")
@@ -1240,10 +1299,10 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 self.assertFalse(any("/generic_rag/" in f"/{name}/" for name in names))
                 self.assertFalse(any("/jsonl_viewer/" in f"/{name}/" for name in names))
 
+            runtime_wheels = tuple(_locked_runtime_wheels(root / "runtime-wheels").glob("*.whl"))
             damaged_target = root / "damaged-install"
             damaged_target.mkdir()
-            with zipfile.ZipFile(story_wheel) as archive:
-                archive.extractall(damaged_target)
+            _extract_wheels(damaged_target, (story_wheel, *runtime_wheels))
             damaged_script = textwrap.dedent(
                 f"""
                 import sys
@@ -1266,8 +1325,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 assert len(story_writing_agents.__all__) == 106
-                assert len(conversations.__all__) == 188
-                assert len(conversation_events.__all__) == 133
+                assert len(conversations.__all__) == 208
+                assert len(conversation_events.__all__) == 134
                 assert len(conversation_context.__all__) == 37
                 assert conversations.CollaborationProposal is conversation_events.CollaborationProposal
                 assert conversations.CollaborationEventStore is conversation_context.CollaborationEventStore
@@ -1376,9 +1435,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
 
             optional_target = root / "optional-install"
             optional_target.mkdir()
-            for wheel in (story_wheel, generic_wheel, viewer_wheel):
-                with zipfile.ZipFile(wheel) as archive:
-                    archive.extractall(optional_target)
+            _extract_wheels(optional_target, (story_wheel, generic_wheel, viewer_wheel, *runtime_wheels))
             optional_script = textwrap.dedent(
                 f"""
                 import sys
@@ -1413,9 +1470,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
 
             viewer_target = root / "viewer-install"
             viewer_target.mkdir()
-            for wheel in (story_wheel, viewer_wheel):
-                with zipfile.ZipFile(wheel) as archive:
-                    archive.extractall(viewer_target)
+            _extract_wheels(viewer_target, (story_wheel, viewer_wheel, *runtime_wheels))
             viewer_script = textwrap.dedent(
                 f"""
                 import sys
@@ -1428,20 +1483,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     name == "generic_rag" or name.startswith("generic_rag.")
                     for name in sys.modules
                 )
-                class Host:
-                    def __init__(self): self.frames = []; self.closed = 0
-                    def terminal_size(self): return (80, 24)
-                    def color_enabled(self): return False
-                    def present(self, frame): self.frames.append(frame)
-                    def read_event(self): return "close"
-                    def close_view(self): self.closed += 1
-                host = Host()
-                import io, jsonl_viewer
-                from story_writing_agents.interactive_terminal._external_view import ExternalTerminalIO
-                active_host = host; actual_view = jsonl_viewer.view_jsonl
-                def owned(source, spec, host=None, *, terminal=None, transient_only=False):
-                    assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal); actual_view(source, spec, active_host)
-                jsonl_viewer.view_jsonl = owned; transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)
+{_viewer_host_source((80, 24))}
                 operation = prepare_agent_exchange_view(
                     b"",
                     session_id="session_1",
@@ -1500,6 +1542,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     "GIT_CONFIG_VALUE_0": _JSONL_VIEWER_REPOSITORY,
                     "PIP_DISABLE_PIP_VERSION_CHECK": "1",
                     "PIP_NO_INDEX": "1",
+                    "PIP_FIND_LINKS": str(_locked_runtime_wheels(root / "runtime-wheels")),
                     "PYTHONPATH": str(build_support),
                     "PYTHONNOUSERSITE": "1",
                 }
@@ -1518,8 +1561,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversations.context as context
                 import story_writing_agents.conversations.events as events
                 assert len(story_writing_agents.__all__) == 106
-                assert len(conversations.__all__) == 188
-                assert len(events.__all__) == 133
+                assert len(conversations.__all__) == 208
+                assert len(events.__all__) == 134
                 assert len(context.__all__) == 37
                 assert catalog.ConversationCatalog is conversations.ConversationCatalog
                 assert events.ConversationEvent is conversations.ConversationEvent
@@ -1620,7 +1663,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     "viewer",
                 ]
                 requirements = story_distribution.metadata.get_all("Requires-Dist")
-                assert len(requirements) == 2
+                assert len(requirements) == 3
+                assert "markdown-it-py<5,>=4.2" in requirements
                 viewer_requirements = [
                     requirement
                     for requirement in requirements
@@ -1637,21 +1681,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
 
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 from story_writing_agents.interactive_controller._exchange_viewer import prepare_agent_exchange_view
-                class Host:
-                    def __init__(self): self.frames = []; self.closed = 0
-                    def terminal_size(self): return (80, 24)
-                    def color_enabled(self): return False
-                    def present(self, frame): self.frames.append(frame)
-                    def read_event(self): return "close"
-                    def close_view(self): self.closed += 1
-                source = b'{{"timestamp":"2026-08-30T00:00:00Z","request_type":"request","content":"ok"}}\\n'
-                host = Host()
-                import io, jsonl_viewer
-                from story_writing_agents.interactive_terminal._external_view import ExternalTerminalIO
-                active_host = host; actual_view = jsonl_viewer.view_jsonl
-                def owned(source, spec, host=None, *, terminal=None, transient_only=False):
-                    assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal); actual_view(source, spec, active_host)
-                jsonl_viewer.view_jsonl = owned; transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)
+{_viewer_host_source((80, 24), _VIEWER_SOURCE_ASSIGNMENT)}
                 operation = prepare_agent_exchange_view(
                     source,
                     session_id="session_1",
@@ -1768,7 +1798,16 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             python = environment / "bin" / "python"
             build_support = root / "build-support"
             _copy_setuptools_build_support(build_support)
-            viewer_git_directory = _gitlink_git_directory("vendor/jsonl-viewer")
+            viewer_git_directory = root / "viewer-upgrade.git"
+            source_commands = (
+                ["git", "clone", "--bare", _JSONL_VIEWER_REPOSITORY, str(viewer_git_directory)],
+                ["git", "--git-dir", str(viewer_git_directory), "cat-file", "-e", _OLD_JSONL_VIEWER_PIN + "^{commit}"],
+                ["git", "--git-dir", str(viewer_git_directory), "cat-file", "-e", _JSONL_VIEWER_PIN + "^{commit}"],
+                ["git", "--git-dir", str(viewer_git_directory), "fsck", "--full", "--no-dangling"],
+            )
+            for command in source_commands:
+                prepared = subprocess.run(command, text=True, capture_output=True, check=False)
+                self.assertEqual(prepared.returncode, 0, f"{command!r}\n{prepared.stdout}\n{prepared.stderr}")
             install_environment = os.environ.copy()
             for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
                 install_environment.pop(name, None)
@@ -1782,6 +1821,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     "GIT_CONFIG_VALUE_0": _JSONL_VIEWER_REPOSITORY,
                     "PIP_DISABLE_PIP_VERSION_CHECK": "1",
                     "PIP_NO_INDEX": "1",
+                    "PIP_FIND_LINKS": str(_locked_runtime_wheels(root / "runtime-wheels")),
                     "PYTHONPATH": str(build_support),
                     "PYTHONNOUSERSITE": "1",
                 }
@@ -1796,6 +1836,11 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 "install",
                 "--no-build-isolation",
                 old_requirement,
+                next(
+                    requirement
+                    for requirement in tomllib.loads((story_project / "pyproject.toml").read_text())["project"]["dependencies"]
+                    if requirement.startswith("markdown-it-py")
+                ),
             ]
             seeded = subprocess.run(
                 seed_command,
@@ -1814,7 +1859,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import importlib.metadata
                 import json
                 viewer = importlib.metadata.distribution("jsonl-viewer")
-                assert viewer.version == "0.5.4"
+                assert viewer.version == "0.6.5"
                 direct_url = json.loads(viewer.read_text("direct_url.json"))
                 assert direct_url == {{
                     "url": {_JSONL_VIEWER_REPOSITORY!r},
@@ -1946,20 +1991,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     + "\\n"
                 ).encode("utf-8")
                 original = bytes(source)
-                class Host:
-                    def __init__(self): self.frames = []; self.closed = 0
-                    def terminal_size(self): return (240, 40)
-                    def color_enabled(self): return False
-                    def present(self, frame): self.frames.append(frame)
-                    def read_event(self): return "close"
-                    def close_view(self): self.closed += 1
-                host = Host()
-                import io, jsonl_viewer
-                from story_writing_agents.interactive_terminal._external_view import ExternalTerminalIO
-                active_host = host; actual_view = jsonl_viewer.view_jsonl
-                def owned(source, spec, host=None, *, terminal=None, transient_only=False):
-                    assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal); actual_view(source, spec, active_host)
-                jsonl_viewer.view_jsonl = owned; transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)
+{_viewer_host_source((240, 40))}
                 operation = prepare_agent_exchange_view(
                     source,
                     session_id="session_1",
@@ -1990,7 +2022,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     '"long_leaf": [truncated 4096/5000 UTF-8 bytes] "'
                     in truncated_lines[0]
                 )
-                assert "JSON display 2 expanded, 0 skipped, 1 truncated" in frame
+                assert frame.count('[expanded JSON string ×1] {{') == 2, frame
+                assert '[JSON expansion skipped:' not in frame, frame
                 key_lines = [
                     next(
                         index
@@ -2029,7 +2062,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     agent_id="lead_orchestrator",
                 )(transport)
                 assert searched_host.closed == 1
-                assert "1/14 occurrences • Search all text='개요'" in searched_host.frames[-1]
+                assert "Occurrence 1/14" in searched_host.frames[-1] and "Search: '개요'" in searched_host.frames[-1] and "In: All text" in searched_host.frames[-1]
                 assert '"content": "개요 ⟦개요⟧ 0"' in searched_host.frames[-2]
                 assert '"content": "⟦개요⟧ 개요 0"' in searched_host.frames[-1]
                 assert "U0015" not in searched_host.frames[-1]

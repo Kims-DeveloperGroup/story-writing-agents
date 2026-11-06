@@ -1,6 +1,9 @@
 """Bounded conversation context and transcript-access contracts."""
 
 from __future__ import annotations
+from ..authoring_task_lifecycle import task_identity_for_origin
+from .events import authoring_scope_is_view, confirmation_task_bindings
+
 
 from .events import CollaborationLeadGroupTracePayload
 from ..agent_context.group_observation import LeadGroupTrace
@@ -2778,8 +2781,12 @@ def _is_fresh_drafting_preparation(request, source, events) -> bool:
                 and (proposal.authoring_scope.task_id, proposal.authoring_scope.task_revision)
                 == (previous.task_id, previous.task_revision)):
             previous = None
+    if (previous is not None and scope.task_id == previous.task_id
+            and scope.task_revision == previous.task_revision
+            and not confirmed_authoring_proposals(previous, prior)):
+        return True
     return (
-        scope.task_id == source.step_id and scope.task_revision == 1
+        scope.task_id == task_identity_for_origin(source.step_id) and scope.task_revision == 1
         if previous is None
         else scope.task_revision == previous.task_revision + 1
     )
@@ -3046,8 +3053,10 @@ def _project_lead_recommendation_history(
                         if payload.state not in {LeadRecommendationState.FAILED, LeadRecommendationState.INTERRUPTED, LeadRecommendationState.SUPERSEDED} or lead.sequence != event.sequence - 1:
                             raise ValueError("failed preparation must close after its exact Lead failure tail")
                     else:
+                        replanned = (decision.decision.kind is CollaborationConfirmationDecision.CONFIRM
+                            and lead.payload.kind is LeadOutcomeKind.RECOMMENDATION)
                         expected = (LeadRecommendationState.SUPERSEDED
-                                    if decision.decision.kind is CollaborationConfirmationDecision.REVISE
+                                    if decision.decision.kind is CollaborationConfirmationDecision.REVISE or replanned
                                     else LeadRecommendationState.COMPLETED)
                         if payload.state is not expected or lead.batch_id != event.batch_id:
                             raise ValueError("accepted preparation must co-batch action closure")
@@ -3061,6 +3070,17 @@ def _project_lead_recommendation_history(
                                 and item.payload.action_revision == request.action_revision + 1)
                             if lead.payload.kind is not LeadOutcomeKind.RECOMMENDATION or len(replacements) != 1:
                                 raise ValueError("Revise may only prepare a fresh recommendation")
+                        elif replanned:
+                            replacements = tuple(item.payload for item in events
+                                if item.batch_id == event.batch_id and type(item.payload) is LeadRecommendationRequestPayload
+                                and item.payload.source_recommendation_event_id == lead.event_id)
+                            old_scope = request.authoring_scope
+                            new_scope = lead.payload.authoring_scope
+                            if (len(replacements) != 1 or replacements[0].action_id == request.action_id
+                                    or old_scope is None or new_scope is None
+                                    or new_scope.task_id != old_scope.task_id
+                                    or new_scope.task_revision != old_scope.task_revision + 1):
+                                raise ValueError("changed preparation requires a fresh separately confirmed recommendation")
                         elif lead.payload.kind not in {LeadOutcomeKind.PROPOSAL, LeadOutcomeKind.QUESTION}:
                             raise ValueError("confirmed preparation cannot produce another recommendation")
                         if (decision.decision.kind is CollaborationConfirmationDecision.CONFIRM
@@ -3934,8 +3954,86 @@ def _project_task_context(
             and state.confirmation_request_id == origin.payload.confirmation_request_id
         )
 
+    def _ordinary_supersedes_artifact_revision(receipt, subject, history) -> bool:
+        """A new literal USER request ends only its exact unconfirmed preparation plan."""
+        proposal = subject.payload
+        scope = proposal.authoring_scope
+        if (scope.schema_version != 3 or scope.intent is not AuthoringIntent.AUTHORING
+                or scope.activity is not AuthoringActivity.REVIEW
+                or proposal.proposal_revision != 1 or subject.step_id == receipt.planning_step_id
+                or confirmed_authoring_proposals(scope, history)):
+            return False
+        by_id = {item.event_id: item for item in history}
+        origin = by_id.get(receipt.origin_event_id)
+        if origin is None or type(origin.payload) is not CollaborationConfirmationPayload:
+            return False
+        originals = tuple(item.payload for item in history
+            if type(item.payload) is CollaborationProposal and
+            (item.payload.proposal_id, item.payload.proposal_revision, item.payload.proposal_digest)
+            == (origin.payload.proposal_id, origin.payload.proposal_revision, origin.payload.proposal_digest))
+        if (len(originals) != 1 or proposal.proposal_id == originals[0].proposal_id
+                or not _artifact_revision_source(receipt, originals[0], history)):
+            return False
+        original = originals[0]
+        publication = (subject.session_id, subject.conversation_id, subject.turn_id,
+            subject.step_id, subject.batch_id)
+        candidates = tuple(item for item in events
+            if (item.session_id, item.conversation_id, item.turn_id, item.step_id, item.batch_id) == publication
+            and type(item.payload) is ArtifactReviewCandidatePayload
+            and (item.payload.consultation_proposal_id, item.payload.consultation_proposal_revision,
+                 item.payload.consultation_proposal_digest)
+            == (proposal.proposal_id, proposal.proposal_revision, proposal.proposal_digest))
+        if len(candidates) != 1:
+            return False
+        for item in history:
+            request = item.payload
+            if (type(request) is not LeadRecommendationRequestPayload
+                    or request.kind is not LeadRecommendationActionKind.PREPARE_ARTIFACT
+                    or request.source_execution_attempt_id is not None
+                    or request.authoring_scope is None
+                    or (request.authoring_scope.task_id, request.authoring_scope.task_revision)
+                    != (receipt.target_task_id, receipt.target_task_revision)
+                    or (request.source_proposal_id, request.source_proposal_revision, request.source_proposal_digest)
+                    != (original.proposal_id, original.proposal_revision, original.proposal_digest)):
+                continue
+            source = by_id.get(request.source_recommendation_event_id)
+            if (source is None or type(source.payload) is not CollaborationLeadJudgmentPayload
+                    or source.payload.kind is not LeadOutcomeKind.RECOMMENDATION
+                    or source.step_id != receipt.planning_step_id or source.payload.authoring_scope is None
+                    or (source.payload.authoring_scope.task_id, source.payload.authoring_scope.task_revision)
+                    != (receipt.target_task_id, receipt.target_task_revision)):
+                continue
+            key = _recommendation_key(request)
+            if any(type(row.payload) in {LeadRecommendationDecisionPayload, LeadRecommendationStartedPayload}
+                   and _recommendation_key(row.payload) == key for row in history):
+                continue
+            closures = tuple(row for row in history
+                if type(row.payload) is LeadRecommendationResultPayload
+                and _recommendation_key(row.payload) == key)
+            if len(closures) != 1:
+                continue
+            closure = closures[0]
+            result = closure.payload
+            user = by_id.get(result.superseding_user_event_id)
+            if (result.state is LeadRecommendationState.SUPERSEDED
+                    and result.decision_event_id is None and result.start_event_id is None
+                    and result.lead_result_event_id is None
+                    and user is not None and type(user.payload) is CollaborationMessagePayload
+                    and user.sender.kind is CollaborationActorKind.USER
+                    and user.direction is CollaborationDirection.USER_TO_LEAD
+                    and (user.session_id, user.conversation_id, user.turn_id, user.step_id)
+                    == publication[:4]
+                    and (closure.session_id, closure.conversation_id, closure.turn_id, closure.step_id)
+                    == publication[:4]
+                    and user.batch_id == closure.batch_id
+                    and user.sequence + 1 == closure.sequence < subject.sequence):
+                return True
+        return False
+
     prior: dict[str, CollaborationEvent] = {}
     tasks: dict[str, tuple[CollaborationEvent, AuthoringScope]] = {}
+    confirmations = confirmation_task_bindings(events)
+    pinned = set()
     goals: dict[str, str] = {}
     statuses: dict[str, str] = {}
     transitions: dict[str, CollaborationEvent] = {}
@@ -3969,6 +4067,8 @@ def _project_task_context(
         return scope
 
     for event in events:
+        if event.event_id in confirmations:
+            pinned.add(confirmations[event.event_id])
         payload = event.payload
         if (type(payload) is CollaborationMessagePayload
                 and event.sender.kind is CollaborationActorKind.RUNTIME
@@ -3987,6 +4087,9 @@ def _project_task_context(
                              if (control.payload.receipt.target_task_id,
                                  control.payload.receipt.target_task_revision)
                              == (scope.task_id, scope.task_revision)), None)
+            if (planning is not None and _ordinary_supersedes_artifact_revision(
+                    planning, event, tuple(prior.values()))):
+                planning = None
             if planning is not None:
                 source_review_revision = False
                 source_artifact_revision = False
@@ -4183,7 +4286,8 @@ def _project_task_context(
                             or (matching[0].start_line is not None or matching[0].end_line is not None)
                             or any(alias not in assignment.input_ids for assignment in payload.assignments)):
                         raise ValueError("task proposal must retain each exact whole selected input for every owner")
-        if scope is not None and scope.activity is not AuthoringActivity.WORKFLOW:
+        if (scope is not None and scope.activity is not AuthoringActivity.WORKFLOW
+                and not authoring_scope_is_view(payload, pinned)):
             previous = tasks.get(scope.task_id)
             if previous is None or scope.task_revision > previous[1].task_revision or (
                 scope.task_revision == previous[1].task_revision

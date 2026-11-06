@@ -7,6 +7,8 @@ session-wide event sequence.
 """
 
 from __future__ import annotations
+from ..agent_task_projection import project_agent_task_metadata
+
 
 from ..core_document_readiness import assessment_to_dict as readiness_assessment_to_dict
 
@@ -471,7 +473,7 @@ def _provider_record(
             value["input_ordinal"] = item.input_ordinal
         fields.append(value)
     details = {
-        key: value for key, value in _visible_details(record.payload).items()
+        key: value for key, value in project_agent_task_metadata(_visible_details(record.payload), "details").items()
         if key not in included_details
         and value is not None and value != () and value != [] and value != {}
     }

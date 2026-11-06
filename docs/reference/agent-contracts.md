@@ -79,7 +79,7 @@ change the stable definition fingerprint. Role-prompt and persona references
 remain content-backed at definition construction.
 
 The runtime appends shared agent JSON guidance to every provider-bound role.
-The current built-in wire is `agent-provider-wire-v10`; the separate result
+The current built-in wire is `agent-provider-wire-v11`; the separate result
 contracts are `lead-response-v7` (fresh scope3), `lead-response-v6` (explicit
 legacy scope1/2), `specialist-assignment-response-v3` (draft/review),
 `specialist-assignment-response-v4` (constraints), `consultation-summary-v4`,
@@ -134,7 +134,7 @@ lead invocation with the direct story-artifact inputs and all typed replies.
 
 ## Typed context action contract
 
-The provider wire is `agent-provider-wire-v10`; its complete
+The provider wire is `agent-provider-wire-v11`; its complete
 [field guide](provider-wire.md) covers contextual and direct calls. A contextual
 request supplies named controls in `response_contract`. The closed response root
 is `agent_action`, with one schema-permitted `action_type`:
@@ -340,12 +340,12 @@ scope1/2 bindings retain `lead-response-v6`. Ordinary draft/review uses
 retains `consultation-summary-v4` and `artifact-review-summary-v4`.
 These names are invocation contracts, with no global wire-version change.
 Provider scopes identify the current shape through required contribution and
-dependency arrays; durable scope codecs explicitly record version 3. JSON names
-are independent of Python values: provider `writing_task_scope` includes
-`activity_type`, `target_artifact_paths`, `specialist_domains`, and the exact
-`task_reference` object. The runtime reconstructs attribution and routing facts
-and never infers missing authority selectors.
-
+dependency arrays; durable scope codecs explicitly record version 3. Provider JSON names are independent of bound Python values. Writing scope
+contains activity, target paths, semantic domains, duties and dependencies,
+without a task reference or task revision. The runtime determines identity
+and applies the same binding to nested stage questions and preliminary
+records. Internal attribution, source provenance and confirmation controls
+retain their exact references; agents do not select lifecycle identities.
 Provider schemas are closed. Missing Lead scope receives one bounded repair;
 a second rejection becomes a runtime-owned visible no-action fallback. That
 fallback is not a provider-schema variant.
@@ -537,7 +537,7 @@ compatibility value. It must match the request's session and agent. The current
 built-in runtime translates authoritative capture into typed contextual wire
 v7; it does not send this object as the provider envelope. Direct noncontextual
 callers may still use the established request field. The context types are not
-package-root exports; see [Agent-context design](../design/agent-context.md#agent-provider-wire-v10).
+package-root exports; see [Agent-context design](../design/agent-context.md#agent-provider-wire-v11).
 
 ```python
 DebateMessage(sender: str, phase: str, round: int, revision: str,
@@ -579,7 +579,7 @@ their two trailing context fields default to `None`, and their reply adds
 ordered validated sources without changing the one-step pair.
 When present, story-session capture must match the request session, agent, and
 any focused conversation identity. Current built-in execution converts it to
-agent-provider-wire-v10; omitting it retains direct-request compatibility. An
+agent-provider-wire-v11; omitting it retains direct-request compatibility. An
 omitted `rag_context` means there was no attempted RAG envelope.
 See [Conversation transcripts](conversation-transcripts.md) for windows and
 [Bounded retrieval](conversation-retrieval.md) for actions and persistence.

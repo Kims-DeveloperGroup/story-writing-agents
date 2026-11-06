@@ -28,6 +28,32 @@ from story_writing_agents.provider_process import ProcessRequest, ProcessResult
 from tests.helpers import live_provider_execution_workspace, pristine_initialized_workspace
 
 
+def _successful_stream_result(stream_lines):
+    return ProcessResult(
+        stdout=b"".join(stream_lines),
+        stderr=b"",
+        returncode=0,
+    )
+
+
+def _successful_antigravity_result(schema):
+    return {
+        "conversation_id": "c1",
+        "status": "SUCCESS",
+        "structured_output": {"status": "ok"},
+        "json_schema": schema,
+    }
+
+
+def _string_result_schema(field: str) -> dict[str, object]:
+    return {
+        "type": "object",
+        "properties": {field: {"type": "string"}},
+        "required": [field],
+        "additionalProperties": False,
+    }
+
+
 class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.workspace = pristine_initialized_workspace(self)
@@ -68,12 +94,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         events: list[ProviderStreamEvent] = []
         sink = events.append
 
-        schema = {
-            "type": "object",
-            "properties": {"summary": {"type": "string"}},
-            "required": ["summary"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('summary')
         payload = {"task": "outline"}
 
         invocation = ProviderInvocation(
@@ -108,11 +129,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
                 request.on_stdout_line(line)
             request.on_stdout_line(b"not json line\n")
 
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
             result = await self._invoke_codex(binding, invocation)
@@ -136,12 +153,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         events: list[ProviderStreamEvent] = []
         sink = events.append
 
-        schema = {
-            "type": "object",
-            "properties": {"summary": {"type": "string"}},
-            "required": ["summary"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('summary')
         payload = {"task": "outline"}
 
         invocation = ProviderInvocation(
@@ -192,31 +204,12 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Valid text", emitted_texts)
 
     async def test_antigravity_adapter_streams_events_and_parses_stream_json(self) -> None:
-        agy_backend = AgentBackend(
-            self.workspace,
-            antigravity_executable=sys.executable,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        )
-        self.addCleanup(agy_backend.close)
-        adapter = agy_backend._antigravity_adapter
-        agy_definition = PromptAssembler(
-            self.workspace,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        ).build_definition(
-            session_id="definition_session_agy",
-            agent_id=PLOT_ARCHITECT,
-        )
-        binding = adapter.bind(agy_definition)
+        adapter, binding = self._make_agy_binding('definition_session_agy')
 
         events: list[ProviderStreamEvent] = []
         sink = events.append
 
-        schema = {
-            "type": "object",
-            "properties": {"outline": {"type": "string"}},
-            "required": ["outline"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('outline')
         payload = {"task": "draft"}
 
         invocation = ProviderInvocation(
@@ -251,11 +244,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(request.on_stdout_line)
             for line in stream_lines:
                 request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             result = await self._invoke_antigravity(adapter, binding, invocation)
@@ -280,28 +269,9 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[2].text, "The banners waved in the freezing mist.")
 
     async def test_antigravity_adapter_uses_json_when_no_stream_sink(self) -> None:
-        agy_backend = AgentBackend(
-            self.workspace,
-            antigravity_executable=sys.executable,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        )
-        self.addCleanup(agy_backend.close)
-        adapter = agy_backend._antigravity_adapter
-        agy_definition = PromptAssembler(
-            self.workspace,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        ).build_definition(
-            session_id="definition_session_agy_no_stream",
-            agent_id=PLOT_ARCHITECT,
-        )
-        binding = adapter.bind(agy_definition)
+        adapter, binding = self._make_agy_binding('definition_session_agy_no_stream')
 
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_agy_no_stream",
             schema=schema,
@@ -366,12 +336,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         adapter, binding = self._make_agy_binding("session_diag_test")
         events: list[ProviderStreamEvent] = []
 
-        schema = {
-            "type": "object",
-            "properties": {"outline": {"type": "string"}},
-            "required": ["outline"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('outline')
 
         invocation = ProviderInvocation(
             session_id="session_diag",
@@ -420,12 +385,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         adapter, binding = self._make_agy_binding("session_dup_test")
 
-        schema = {
-            "type": "object",
-            "properties": {"outline": {"type": "string"}},
-            "required": ["outline"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('outline')
 
         invocation = ProviderInvocation(
             session_id="session_dup",
@@ -450,11 +410,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -466,12 +422,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         binding = adapter.bind(self.definition)
         events: list[ProviderStreamEvent] = []
 
-        schema = {
-            "type": "object",
-            "properties": {"summary": {"type": "string"}},
-            "required": ["summary"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('summary')
         invocation = ProviderInvocation(
             session_id="session_codex_delta",
             schema=schema,
@@ -497,11 +448,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
             result = await self._invoke_codex(binding, invocation)
@@ -518,29 +465,10 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[4].text, ".")
 
     async def test_antigravity_adapter_running_status_notice_emits_status_and_is_not_captured_as_terminal(self) -> None:
-        agy_backend = AgentBackend(
-            self.workspace,
-            antigravity_executable=sys.executable,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        )
-        self.addCleanup(agy_backend.close)
-        adapter = agy_backend._antigravity_adapter
-        agy_definition = PromptAssembler(
-            self.workspace,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        ).build_definition(
-            session_id="definition_session_agy_status",
-            agent_id=PLOT_ARCHITECT,
-        )
-        binding = adapter.bind(agy_definition)
+        adapter, binding = self._make_agy_binding('definition_session_agy_status')
         events: list[ProviderStreamEvent] = []
 
-        schema = {
-            "type": "object",
-            "properties": {"summary": {"type": "string"}},
-            "required": ["summary"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('summary')
         invocation = ProviderInvocation(
             session_id="session_agy_running",
             schema=schema,
@@ -562,11 +490,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             result = await self._invoke_antigravity(adapter, binding, invocation)
@@ -577,21 +501,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[0].text, "Model working...")
 
     async def test_antigravity_adapter_recognizes_wrapped_authentication_error(self) -> None:
-        agy_backend = AgentBackend(
-            self.workspace,
-            antigravity_executable=sys.executable,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        )
-        self.addCleanup(agy_backend.close)
-        adapter = agy_backend._antigravity_adapter
-        agy_definition = PromptAssembler(
-            self.workspace,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        ).build_definition(
-            session_id="session_wrapped_auth_def",
-            agent_id=PLOT_ARCHITECT,
-        )
-        binding = adapter.bind(agy_definition)
+        adapter, binding = self._make_agy_binding('session_wrapped_auth_def')
         invocation = ProviderInvocation(
             session_id="session_agy_wrapped_auth",
             schema={"type": "object"},
@@ -623,24 +533,10 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
                 ProviderAuthenticationRequiredError,)
 
     async def test_antigravity_adapter_unwraps_event_alias_result_envelope(self) -> None:
-        agy_backend = AgentBackend(
-            self.workspace,
-            antigravity_executable=sys.executable,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        )
-        self.addCleanup(agy_backend.close)
-        adapter = agy_backend._antigravity_adapter
-        agy_definition = PromptAssembler(
-            self.workspace,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        ).build_definition(
-            session_id="session_event_alias_def",
-            agent_id=PLOT_ARCHITECT,
-        )
-        binding = adapter.bind(agy_definition)
+        adapter, binding = self._make_agy_binding('session_event_alias_def')
         invocation = ProviderInvocation(
             session_id="session_agy_event_alias",
-            schema={"type": "object", "properties": {"msg": {"type": "string"}}, "required": ["msg"], "additionalProperties": False},
+            schema=_string_result_schema('msg'),
             payload={},
             thread_id="thread_alias_1",
             stream_sink=lambda _ev: None,)
@@ -657,11 +553,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             if request.on_stdout_line:
                 for line in stream_lines:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             result = await self._invoke_antigravity(adapter, binding, invocation)
@@ -695,11 +587,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             if request.on_stdout_line:
                 for line in stream_lines:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
             result = await self._invoke_codex(binding, invocation)
@@ -725,12 +613,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_adapter import ProviderInvocationError
 
         adapter, binding = self._make_agy_binding("session_multi_terminal")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_multi_terminal",
             schema=schema,
@@ -760,11 +643,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -776,12 +655,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_adapter import ProviderInvocationError
 
         adapter, binding = self._make_agy_binding("session_invalid_line")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_invalid_line",
             schema=schema,
@@ -789,12 +663,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             thread_id=None,
             stream_sink=lambda _event: None,
         )
-        res = {
-            "conversation_id": "c1",
-            "status": "SUCCESS",
-            "structured_output": {"status": "ok"},
-            "json_schema": schema,
-        }
+        res = _successful_antigravity_result(schema)
         stream_lines = [
             b"not-json-line\n",
             json.dumps(res).encode("utf-8") + b"\n",
@@ -804,11 +673,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -820,12 +685,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_adapter import ProviderInvocationError
 
         adapter, binding = self._make_agy_binding("session_trailing_data")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_trailing_data",
             schema=schema,
@@ -833,12 +693,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             thread_id=None,
             stream_sink=lambda _event: None,
         )
-        res = {
-            "conversation_id": "c1",
-            "status": "SUCCESS",
-            "structured_output": {"status": "ok"},
-            "json_schema": schema,
-        }
+        res = _successful_antigravity_result(schema)
         stream_lines = [
             b'{"type":"turn_start"}\n',
             json.dumps(res).encode("utf-8") + b"\n",
@@ -848,11 +703,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -864,12 +715,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_adapter import ProviderInvocationError
 
         adapter, binding = self._make_agy_binding("session_auth_preamble")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_auth_preamble",
             schema=schema,
@@ -920,12 +766,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_adapter import ProviderInvocationError
 
         adapter, binding = self._make_agy_binding("session_dup_field")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_dup_field",
             schema=schema,
@@ -933,12 +774,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             thread_id=None,
             stream_sink=lambda _event: None,
         )
-        res = {
-            "conversation_id": "c1",
-            "status": "SUCCESS",
-            "structured_output": {"status": "ok"},
-            "json_schema": schema,
-        }
+        res = _successful_antigravity_result(schema)
         stream_lines = [
             b'{"type":"status","text":"first","text":"duplicate"}\n',
             json.dumps(res).encode("utf-8") + b"\n",
@@ -948,11 +784,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -964,12 +796,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_adapter import ProviderInvocationError
 
         adapter, binding = self._make_agy_binding("session_nan_field")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_nan_field",
             schema=schema,
@@ -977,12 +804,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             thread_id=None,
             stream_sink=lambda _event: None,
         )
-        res = {
-            "conversation_id": "c1",
-            "status": "SUCCESS",
-            "structured_output": {"status": "ok"},
-            "json_schema": schema,
-        }
+        res = _successful_antigravity_result(schema)
         stream_lines = [
             b'{"type":"status","val":NaN}\n',
             json.dumps(res).encode("utf-8") + b"\n",
@@ -992,11 +814,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -1008,12 +826,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_adapter import ProviderInvocationError
 
         adapter, binding = self._make_agy_binding("session_deep_recursion")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_deep_recursion",
             schema=schema,
@@ -1021,12 +834,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             thread_id=None,
             stream_sink=lambda _event: None,
         )
-        res = {
-            "conversation_id": "c1",
-            "status": "SUCCESS",
-            "structured_output": {"status": "ok"},
-            "json_schema": schema,
-        }
+        res = _successful_antigravity_result(schema)
         deep_nesting = b'{"a":' * 10000 + b'1' + b'}' * 10000
         stream_lines = [
             deep_nesting + b"\n",
@@ -1037,11 +845,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -1053,12 +857,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_adapter import ProviderInvocationError
 
         adapter, binding = self._make_agy_binding("session_unknown_type_structured")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_unknown_type_structured",
             schema=schema,
@@ -1074,11 +873,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -1090,12 +885,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_adapter import ProviderInvocationError
 
         adapter, binding = self._make_agy_binding("session_unknown_type_running")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_unknown_type_running",
             schema=schema,
@@ -1103,12 +893,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             thread_id=None,
             stream_sink=lambda _event: None,
         )
-        res = {
-            "conversation_id": "c1",
-            "status": "SUCCESS",
-            "structured_output": {"status": "ok"},
-            "json_schema": schema,
-        }
+        res = _successful_antigravity_result(schema)
         stream_lines = [
             b'{"type":"unexpected_type","status":"running","text":"Working..."}\n',
             json.dumps(res).encode("utf-8") + b"\n",
@@ -1118,11 +903,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -1134,12 +915,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_adapter import ProviderInvocationError
 
         adapter, binding = self._make_agy_binding("session_invalid_before_auth")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_invalid_before_auth",
             schema=schema,
@@ -1189,12 +965,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_adapter import ProviderInvocationError
 
         adapter, binding = self._make_agy_binding("session_null_type")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_null_type",
             schema=schema,
@@ -1209,11 +980,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -1225,12 +992,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_adapter import ProviderInvocationError
 
         adapter, binding = self._make_agy_binding("session_null_event_running")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_null_event_running",
             schema=schema,
@@ -1238,12 +1000,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             thread_id=None,
             stream_sink=lambda _event: None,
         )
-        res = {
-            "conversation_id": "c1",
-            "status": "SUCCESS",
-            "structured_output": {"status": "ok"},
-            "json_schema": schema,
-        }
+        res = _successful_antigravity_result(schema)
         stream_lines = [
             b'{"event":null,"status":"running"}\n',
             json.dumps(res).encode("utf-8") + b"\n",
@@ -1253,11 +1010,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -1267,12 +1020,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
     async def test_antigravity_adapter_unwraps_result_envelope_with_whitespace_discriminator(self) -> None:
         """Verify _unwrap_result_envelope normalizes whitespace in discriminators."""
         adapter, binding = self._make_agy_binding("session_whitespace_disc")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_whitespace_disc",
             schema=schema,
@@ -1292,11 +1040,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             result = await self._invoke_antigravity(adapter, binding, invocation)
@@ -1307,12 +1051,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_adapter import ProviderInvocationError
 
         adapter, binding = self._make_agy_binding("session_conflict_disc")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_conflict_disc",
             schema=schema,
@@ -1328,11 +1067,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -1344,12 +1079,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_adapter import ProviderInvocationError
 
         adapter, binding = self._make_agy_binding("session_one_null_disc")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_one_null_disc",
             schema=schema,
@@ -1365,11 +1095,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
@@ -1382,12 +1108,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         binding = adapter.bind(self.definition)
         events: list[ProviderStreamEvent] = []
 
-        schema = {
-            "type": "object",
-            "properties": {"summary": {"type": "string"}},
-            "required": ["summary"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('summary')
         invocation = ProviderInvocation(
             session_id="session_codex_item_delta",
             schema=schema,
@@ -1417,11 +1138,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
             result = await self._invoke_codex(binding, invocation)
@@ -1451,12 +1168,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         binding = adapter.bind(self.definition)
         events: list[ProviderStreamEvent] = []
 
-        schema = {
-            "type": "object",
-            "properties": {"summary": {"type": "string"}},
-            "required": ["summary"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('summary')
         invocation = ProviderInvocation(
             session_id="session_codex_nested_delta",
             schema=schema,
@@ -1487,11 +1199,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
             result = await self._invoke_codex(binding, invocation)
@@ -1513,12 +1221,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         binding = adapter.bind(self.definition)
         events: list[ProviderStreamEvent] = []
 
-        schema = {
-            "type": "object",
-            "properties": {"summary": {"type": "string"}},
-            "required": ["summary"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('summary')
         invocation = ProviderInvocation(
             session_id="session_codex_mismatch",
             schema=schema,
@@ -1548,11 +1251,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
             result = await self._invoke_codex(binding, invocation)
@@ -1571,12 +1270,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         binding = adapter.bind(self.definition)
         events: list[ProviderStreamEvent] = []
 
-        schema = {
-            "type": "object",
-            "properties": {"summary": {"type": "string"}},
-            "required": ["summary"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('summary')
         invocation = ProviderInvocation(
             session_id="session_codex_conflict",
             schema=schema,
@@ -1619,11 +1313,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
             result = await self._invoke_codex(binding, invocation)
@@ -1635,28 +1325,9 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[0].text, "clean valid text")
 
     async def test_antigravity_adapter_streams_native_step_update_and_init_events(self) -> None:
-        agy_backend = AgentBackend(
-            self.workspace,
-            antigravity_executable=sys.executable,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        )
-        self.addCleanup(agy_backend.close)
-        adapter = agy_backend._antigravity_adapter
-        definition = PromptAssembler(
-            self.workspace,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        ).build_definition(
-            session_id="session_agy_native_stream",
-            agent_id=PLOT_ARCHITECT,
-        )
-        binding = adapter.bind(definition)
+        adapter, binding = self._make_agy_binding('session_agy_native_stream')
 
-        schema = {
-            "type": "object",
-            "properties": {"reply": {"type": "string"}},
-            "required": ["reply"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('reply')
         events: list[ProviderStreamEvent] = []
         invocation = ProviderInvocation(
             session_id="session_agy_native_stream",
@@ -1687,11 +1358,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(request.on_stdout_line)
             for line in stream_lines:
                 request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             result = await self._invoke_antigravity(adapter, binding, invocation)
@@ -1711,21 +1378,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[4].text, "\n")
 
     async def test_antigravity_adapter_surfaces_provider_error_on_non_zero_returncode(self) -> None:
-        agy_backend = AgentBackend(
-            self.workspace,
-            antigravity_executable=sys.executable,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        )
-        self.addCleanup(agy_backend.close)
-        adapter = agy_backend._antigravity_adapter
-        definition = PromptAssembler(
-            self.workspace,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        ).build_definition(
-            session_id="session_agy_err_code",
-            agent_id=PLOT_ARCHITECT,
-        )
-        binding = adapter.bind(definition)
+        adapter, binding = self._make_agy_binding('session_agy_err_code')
 
         schema = {"type": "object", "properties": {"x": {"type": "string"}}}
         events: list[ProviderStreamEvent] = []
@@ -1766,21 +1419,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("No capacity available", events[0].text)
 
     async def test_antigravity_adapter_surfaces_provider_stderr_on_non_zero_returncode(self) -> None:
-        agy_backend = AgentBackend(
-            self.workspace,
-            antigravity_executable=sys.executable,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        )
-        self.addCleanup(agy_backend.close)
-        adapter = agy_backend._antigravity_adapter
-        definition = PromptAssembler(
-            self.workspace,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        ).build_definition(
-            session_id="session_agy_stderr_err",
-            agent_id=PLOT_ARCHITECT,
-        )
-        binding = adapter.bind(definition)
+        adapter, binding = self._make_agy_binding('session_agy_stderr_err')
 
         schema = {"type": "object", "properties": {"x": {"type": "string"}}}
         invocation = ProviderInvocation(
@@ -1807,21 +1446,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"invalid model selection (--model foo): unknown model", cm.exception.response_diagnostic.stderr)
 
     async def test_antigravity_adapter_replays_stdout_when_no_streaming_callbacks_delivered(self) -> None:
-        agy_backend = AgentBackend(
-            self.workspace,
-            antigravity_executable=sys.executable,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        )
-        self.addCleanup(agy_backend.close)
-        adapter = agy_backend._antigravity_adapter
-        definition = PromptAssembler(
-            self.workspace,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        ).build_definition(
-            session_id="session_agy_fallback",
-            agent_id=PLOT_ARCHITECT,
-        )
-        binding = adapter.bind(definition)
+        adapter, binding = self._make_agy_binding('session_agy_fallback')
 
         schema = {"type": "object", "properties": {"reply": {"type": "string"}}}
         events: list[ProviderStreamEvent] = []
@@ -1985,11 +1610,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(request.on_stdout_line)
             for line in stream_lines:
                 request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             await self._invoke_antigravity(adapter, binding, invocation)
@@ -2093,12 +1714,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         """Verify legacy terminal error event without result envelope emits stream error status."""
         adapter, binding = self._make_agy_binding("session_legacy_error")
         events: list[ProviderStreamEvent] = []
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         invocation = ProviderInvocation(
             session_id="session_legacy_error",
             schema=schema,
@@ -2250,11 +1866,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             await self._invoke_antigravity(adapter, binding, invocation)
@@ -2295,11 +1907,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             for line in stream_lines:
                 if request.on_stdout_line:
                     request.on_stdout_line(line)
-            return ProcessResult(
-                stdout=b"".join(stream_lines),
-                stderr=b"",
-                returncode=0,
-            )
+            return _successful_stream_result(stream_lines)
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             await self._invoke_antigravity(adapter, binding, invocation)
@@ -2318,12 +1926,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.agent_context.progress import ProviderStreamEventKind
 
         adapter, binding = self._make_agy_binding("session_err_dict_leak")
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
+        schema = _string_result_schema('status')
         events = []
         invocation = ProviderInvocation(
             session_id="session_err_dict_leak",
