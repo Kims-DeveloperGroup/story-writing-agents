@@ -122,9 +122,9 @@ Stable trusted schema/decoder implementations are not re-attested for each respo
 ### Agent exchange capture
 
 Responsibility: model, capture, locate, and persist provider exchange records. The package
-facade is public; capture adapts provider output and safe validation findings into
-terminal records for each physical original or repair call, while storage owns workspace
-persistence. Context and direct backend finalizers attach the actual rejection findings.
+facade is public; capture owns once-only physical terminal records and capture-only call
+identity. Context finalizers attach validated task diagnostics only on accepted publication;
+storage owns persistence. Diagnostic failures never change provider or workflow authority.
 
 - `agent_exchanges`, `agent_exchanges.contracts`, `agent_exchanges.capture`
 - `agent_exchanges.storage`, `agent_exchange_paths`
@@ -252,12 +252,12 @@ exchange, lead, session, and runtime concerns in focused private policy modules.
 
 - `interactive_controller`, `interactive_controller._core`
 - `interactive_controller._conversation_policy`, `interactive_controller._exchange_policy`
-- `interactive_controller._exchange_viewer`, `interactive_controller._lead_policy`
+- `interactive_controller._exchange_projection`, `interactive_controller._exchange_viewer`, `interactive_controller._lead_policy`
 - `interactive_controller._runtime_policy`, `interactive_controller._session_policy`
 
 Only `_core` composes the private policies. Other subsystems must not import those policies;
 the controller may depend on runtime/storage/terminal facades, never the reverse.
-The existing `_lead_policy` to `interactive_terminal._collaboration_view` and `_exchange_viewer` to `interactive_terminal._external_view` imports are narrow presentation bridges, not general private access. Exchanges validate the pinned four-export viewer contract and use its owned terminal transport. Transcript message paging uses one validated immutable store snapshot and preserves raw event-sequence anchors.
+The existing `_lead_policy` to `interactive_terminal._collaboration_view` and `_exchange_viewer` to `interactive_terminal._external_view` imports are narrow presentation bridges. `_exchange_projection` derives pure Story facts from exact source lines and typed history without authority re-evaluation; the lazy `_exchange_viewer` alone maps bounded inert descriptors to the pinned four-export generic viewer. `_core` owns history reads and terminal preparation; metadata overflow retains the whole raw source. Transcript paging preserves immutable store snapshots and raw event-sequence anchors.
 
 ### Interactive terminal and presentation
 

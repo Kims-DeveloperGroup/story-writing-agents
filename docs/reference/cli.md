@@ -468,3 +468,6 @@ exist; logging failure never replaces the primary result. Provider credentials,
 native authentication output, and raw provider stderr are not included in the
 fixed CLI error text. Initialization/discovery failures, explicit read-only
 smoke, and implicit temporary smoke never add this hint.
+
+For `/exchanges` call grouping, Stage/record-presence filters, literal search scopes,
+and draft/cancel behavior, see [Inspect agent exchanges](../guides/agent-exchanges.md#read-the-viewer).

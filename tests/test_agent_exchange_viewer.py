@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import subprocess
 import sys
@@ -95,6 +96,10 @@ def _inventory(
         count,)
 
 
+def _inventory_rows(*rows):
+    return tuple(_inventory(kind, identity, agent, first=first, last=last, **overrides)
+                 for kind, identity, agent, first, last, overrides in rows)
+
 def _message(content: str, **changes: object) -> DebateMessage:
     values: dict[str, object] = {
         "sender": "user",
@@ -108,12 +113,98 @@ def _message(content: str, **changes: object) -> DebateMessage:
     return DebateMessage(**values)  # type: ignore[arg-type]
 
 
+def _prepare_view(source=b"", **overrides):
+    context = {
+        "session_id": "session_1",
+        "scope_kind": AgentExchangeScopeKind.CONVERSATION,
+        "scope_id": "conversation_1",
+        "scope_subject": "Subject",
+        "agent_id": ROSTER[0],
+    }
+    context.update(overrides)
+    return prepare_agent_exchange_view(source, **context)
+
+def _assert_typed_history_phase(case, history, invocation_id, role, phase, scope):
+    """Synthetic capture checks consumer joins against an actual Runtime history."""
+    import jsonl_viewer
+    from jsonl_viewer._catalog import bind_catalog
+    from jsonl_viewer._input import parse_jsonl
+    from jsonl_viewer._query import evaluate
+    from story_writing_agents import conversations as c
+    from story_writing_agents.interactive_controller._exchange_projection import project_agent_exchanges
+
+    accepted = [event.payload.response for event in history
+                if type(event.payload) is c.CollaborationLeadPublicResponsePayload
+                and event.payload.response.invocation_id == invocation_id
+                and event.payload.response.acceptance.value == "accepted"]
+    case.assertLessEqual(len(accepted), 1)
+    if phase == "procedure_status":
+        case.assertEqual(len(accepted), 1)
+    accepted_call_id = accepted[0].call_id if accepted else None
+    submitted = [event for event in history
+                 if type(event.payload) is c.CollaborationProviderCallPayload
+                 and event.payload.state is c.CollaborationProviderCallState.SUBMITTED
+                 and event.payload.invocation_id == invocation_id and event.payload.role == role
+                 and (accepted_call_id is None or event.payload.call_id == accepted_call_id)]
+    case.assertEqual(len(submitted), 1)
+    event = submitted[0]
+    requests = [request for agent, request in case.backend.call_records
+                if agent == role and request.call_id == event.payload.call_id]
+    case.assertEqual(len(requests), 1)
+    selection = AgentExchangeSelection(event.session_id, AgentExchangeScopeKind.CONVERSATION, event.conversation_id, role)
+    task = None if scope is None else (scope.task_id, scope.task_revision)
+
+    def captured(pair):
+        diagnostic = {"call_id": requests[0].call_id}
+        if pair is not None:
+            diagnostic.update(task_id=pair[0], task_revision=pair[1])
+        contents = (
+            ("request", {"payload": {}, "host_diagnostics": {"call_id": requests[0].call_id}}),
+            ("response", {"response_text": "Synthetic consumer capture"}),
+            ("outcome", {"outcome": "accepted", "code": "accepted", "host_diagnostics": diagnostic}),
+        )
+        return b"".join(json.dumps({
+            "timestamp": "2026-08-30T00:00:00Z", "request_type": kind,
+            "session_id": selection.session_id, "scope_kind": selection.scope_kind.value,
+            "scope_id": selection.scope_id, "agent_id": selection.agent_id,
+            "provider": "codex", "exchange_id": "consumer-fixture", "content": json.dumps(content),
+        }).encode() + b"\n" for kind, content in contents)
+
+    source = captured(task)
+    calls = project_agent_exchanges(source, selection, history).calls
+    case.assertEqual(len(calls), 1)
+    case.assertEqual((calls[0].phase, calls[0].call_id), (phase, requests[0].call_id))
+    case.assertEqual((calls[0].task_id, calls[0].task_revision), (None, None) if task is None else task)
+    specs = []
+
+    expected_source = source
+    def capture(source, spec, host=None, *, terminal=None, transient_only=False):
+        case.assertIs(source, expected_source)
+        specs.append(spec)
+
+    with mock.patch.object(jsonl_viewer, "view_jsonl", capture):
+        _prepare_view(source, session_id=event.session_id, scope_id=event.conversation_id,
+                      agent_id=role, typed_history=history)(_transport())
+    case.assertEqual(len(specs), 1)
+    snapshot = parse_jsonl(source)
+    catalog = bind_catalog(snapshot, specs[0].inspection)
+    filters = tuple(frozenset({next(index for index, option in enumerate(facet.options) if option.value == phase)})
+                    if facet.id == "phase" else frozenset() for facet in catalog.facets)
+    case.assertEqual(len(evaluate(snapshot, catalog, filters, None).items), 1)
+    negatives = [(source, ()), (source, history + (event,))]
+    if task is not None:
+        negatives.append((captured((task[0], task[1] + 1)), history))
+    for data, typed_history in negatives:
+        missing = project_agent_exchanges(data, selection, typed_history).calls[0]
+        case.assertEqual((missing.phase, missing.task_id, missing.task_revision), (None, None, None))
+
+
 class _ExactViewerSpec:
     def __init__(
         self,
-        session_id,
-        conversation_id,
-        agent_id,
+        session_id=None,
+        conversation_id=None,
+        agent_id=None,
         date_time_field="timestamp",
         request_type_field="request_type",
         content_field="content",
@@ -121,18 +212,18 @@ class _ExactViewerSpec:
         conversation_label="Conversation",
         conversation_subject=None,
         input_protocol="semantic",
+        context=(),
+        inspection=None,
     ):
         self.session_id, self.conversation_id, self.agent_id = session_id, conversation_id, agent_id
+        self.context, self.inspection = context, inspection
         self.date_time_field, self.request_type_field, self.content_field = date_time_field, request_type_field, content_field
         self.title, self.conversation_label, self.conversation_subject = title, conversation_label, conversation_subject
         self.input_protocol = input_protocol
 
     @property
     def primary_fields(self):
-        return (
-            self.date_time_field,
-            self.request_type_field,
-            self.content_field,)
+        return ()
 
 
 class _ExactViewerHost:
@@ -162,6 +253,9 @@ def _transport():
     return ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)
 
 
+def _viewer_import(module):
+    from jsonl_viewer import inspection
+    return lambda name: inspection if name == "jsonl_viewer.inspection" else module
 def _viewer_module(view_jsonl=mock.DEFAULT) -> types.ModuleType:
     module = types.ModuleType("jsonl_viewer")
     module.__all__ = ["ViewerHost", "ViewerSpec", "ViewerTerminal", "view_jsonl"]
@@ -212,37 +306,12 @@ class ExchangeProjectionTests(unittest.TestCase):
         self,
     ) -> None:
         conversation_id = "same_full_scope_id"
-        inventory = (
-            _inventory(
-                AgentExchangeScopeKind.CONVERSATION,
-                conversation_id,
-                ROSTER[0],
-                first=1,
-                last=4,
-                count=2,),
-            _inventory(
-                AgentExchangeScopeKind.DEBATE,
-                conversation_id,
-                ROSTER[1],
-                first=2,
-                last=6,
-            ),
-            _inventory(
-                AgentExchangeScopeKind.CONVERSATION,
-                conversation_id,
-                ROSTER[2],
-                first=3,
-                last=8,
-                count=3,
-            ),
-            _inventory(
-                AgentExchangeScopeKind.CONVERSATION,
-                "archived_conversation_full_id",
-                ROSTER[0],
-                first=5,
-                last=7,
-            ),
-        )
+        inventory = _inventory_rows(
+                        (AgentExchangeScopeKind.CONVERSATION, conversation_id, ROSTER[0], 1, 4, {'count': 2}),
+                        (AgentExchangeScopeKind.DEBATE, conversation_id, ROSTER[1], 2, 6, {}),
+                        (AgentExchangeScopeKind.CONVERSATION, conversation_id, ROSTER[2], 3, 8, {'count': 3}),
+                        (AgentExchangeScopeKind.CONVERSATION, 'archived_conversation_full_id', ROSTER[0], 5, 7, {}),
+                    )
         choices = project_exchange_scopes(
             "session_1",
             inventory,
@@ -291,20 +360,10 @@ class ExchangeProjectionTests(unittest.TestCase):
         self.assertNotIn("not_in_inventory", repr(choices))
 
     def test_scopes_and_agents_fail_closed_on_cross_session_or_duplicates(self) -> None:
-        item = _inventory(
-            AgentExchangeScopeKind.CONVERSATION,
-            "conversation_1",
-            ROSTER[0],
-            first=1,
-            last=1,
+        item, crossed = _inventory_rows(
+            (AgentExchangeScopeKind.CONVERSATION, 'conversation_1', ROSTER[0], 1, 1, {}),
+            (AgentExchangeScopeKind.CONVERSATION, 'conversation_1', ROSTER[1], 2, 2, {'session_id': 'session_2'}),
         )
-        crossed = _inventory(
-            AgentExchangeScopeKind.CONVERSATION,
-            "conversation_1",
-            ROSTER[1],
-            first=2,
-            last=2,
-            session_id="session_2",)
         with self.assertRaises(AgentExchangeProjectionError):
             project_exchange_scopes(
                 "session_1",
@@ -405,24 +464,30 @@ class LazyViewerAdapterTests(unittest.TestCase):
             calls.append((source, spec, terminal))
 
         module = _viewer_module(view_jsonl)
-        source = b'{"content":"PRIVATE","provider":"codex"}\n'
+        source = (json.dumps({"content": "PRIVATE", "provider": "codex", "session_id": "session_1",
+            "scope_kind": "debate", "scope_id": "debate_full_id", "agent_id": ROSTER[2],
+            "exchange_id": "e", "request_type": "request"}) + "\n").encode()
         with mock.patch.object(
-            viewer_module.importlib, "import_module", return_value=module
+            viewer_module.importlib, "import_module", side_effect=_viewer_import(module)
         ) as imported:
-            operation = prepare_agent_exchange_view(
-                source,
-                session_id="session_1",
-                scope_kind=AgentExchangeScopeKind.DEBATE,
-                scope_id="debate_full_id",
-                scope_subject="Subject",
-                agent_id=ROSTER[2],
-            )
-        imported.assert_called_once_with("jsonl_viewer")
+            operation = _prepare_view(
+                            source,
+                            scope_kind=AgentExchangeScopeKind.DEBATE,
+                            scope_id='debate_full_id',
+                            agent_id=ROSTER[2],
+                        )
+        self.assertEqual(imported.call_args_list, [mock.call("jsonl_viewer"), mock.call("jsonl_viewer.inspection")])
         self.assertEqual(calls, [])
         host = _transport()
         operation(host)
         self.assertEqual(len(calls), 1)
         observed_source, spec, observed_host = calls[0]
+        self.assertEqual({facet.id for facet in spec.inspection.facets},
+                         {"provider", "outcome", "phase", "completeness", "request_present", "response_present", "outcome_present"})
+        self.assertTrue(all({option.value for option in facet.options} == {True, False}
+                            for facet in spec.inspection.facets if facet.id.endswith("_present")))
+        self.assertEqual(tuple((item.label, item.value) for item in spec.context[:3]),
+                         (("Session", "session_1"), ("Debate", "debate_full_id — Subject"), ("Agent", ROSTER[2])))
         self.assertIs(observed_source, source)
         self.assertIs(type(observed_source), bytes)
         self.assertIs(observed_host.input_stream, host.input_stream)
@@ -440,18 +505,62 @@ class LazyViewerAdapterTests(unittest.TestCase):
                 spec.conversation_subject,
                 spec.input_protocol,),
             (
-                "session_1",
-                "debate_full_id",
-                ROSTER[2],
-                ("timestamp", "request_type", "content"),
+                None,
+                None,
+                None,
+                (),
                 "Agent Exchanges",
-                "Debate",
-                "Subject",
+                "Conversation",
+                None,
                 "keys",
             ),
         )
         self.assertFalse(hasattr(spec, "searchable_fields"))
-        self.assertEqual(source, b'{"content":"PRIVATE","provider":"codex"}\n')
+        self.assertEqual(observed_source, source)
+        from jsonl_viewer._catalog import bind_catalog
+        from jsonl_viewer._input import parse_jsonl
+        from jsonl_viewer._query import evaluate
+        snapshot = parse_jsonl(source)
+        catalog = bind_catalog(snapshot, spec.inspection)
+        absent = tuple(frozenset({next(i for i, option in enumerate(f.options) if option.value is False)})
+                       if f.id == "response_present" else frozenset() for f in catalog.facets)
+        self.assertEqual(evaluate(snapshot, catalog, absent, None).items, (0,))
+        conflicting = tuple(frozenset({next(i for i, option in enumerate(f.options) if option.value == "complete")})
+                            if f.id == "completeness" else selected for f, selected in zip(catalog.facets, absent, strict=True))
+        self.assertEqual(evaluate(snapshot, catalog, conflicting, None).items, ())
+        legacy = b'{"content":"PRIVATE","provider":"codex"}\n'
+        with mock.patch.object(viewer_module.importlib, "import_module", side_effect=_viewer_import(module)):
+            _prepare_view(legacy)(host)
+        self.assertIs(calls[-1][0], legacy)
+        large = b"".join((json.dumps({**json.loads(source), "exchange_id": f"large-{i}",
+            "content": json.dumps({"host_diagnostics": {"call_id": f"call-{i:05d}-" + "x" * 53},
+                                   "payload": {}})}) + "\n").encode() for i in range(4096))
+        self.assertEqual(len(parse_jsonl(large).records), 4096)
+        self.assertIsNone(viewer_module.project_agent_exchanges(large, _selection(AgentExchangeScopeKind.DEBATE, "debate_full_id", ROSTER[2])).notice)
+        with mock.patch.object(viewer_module.importlib, "import_module", side_effect=_viewer_import(module)):
+            _prepare_view(large, scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_full_id", agent_id=ROSTER[2])(host)
+        self.assertTrue(calls[-1][0] is large and calls[-1][1].inspection is None)
+        self.assertTrue(any(item.label == "Inspection" and "unchanged" in item.value for item in calls[-1][1].context))
+        from jsonl_viewer.inspection import MISSING
+        for invalid in ([], {}):
+            opaque = (json.dumps({**json.loads(source), "request_type": "outcome", "content": json.dumps({"outcome": invalid})}) + "\n").encode()
+            with mock.patch.object(viewer_module.importlib, "import_module", side_effect=_viewer_import(module)):
+                _prepare_view(opaque, scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_full_id", agent_id=ROSTER[2])(host)
+            self.assertIs(calls[-1][0], opaque)
+            self.assertIs(dict(calls[-1][1].inspection.groups[0].values)["outcome"], MISSING)
+        historical = (("request", "{}"), ("no_response", "historical_no_reply"), ("outcome", '{"outcome":"provider_failure"}'))
+        for present in (False, True):
+            retained = b"".join((json.dumps({**json.loads(source), "request_type": kind, "content": body}) + "\n").encode()
+                                for kind, body in historical + (("response", '{"response_text":"captured"}'),) * present)
+            with mock.patch.object(viewer_module.importlib, "import_module", side_effect=_viewer_import(module)):
+                _prepare_view(retained, scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_full_id", agent_id=ROSTER[2])(host)
+            group = calls[-1][1].inspection.groups[0]
+            self.assertIs(dict(group.values)["response_present"], present)
+            self.assertEqual(dict(group.values)["completeness"], "complete" if present else "incomplete")
+            self.assertIn(2, group.sections[1].records)
+            catalog = bind_catalog(parse_jsonl(retained), calls[-1][1].inspection)
+            found = evaluate(parse_jsonl(retained), catalog, tuple(frozenset() for _ in catalog.facets), "historical_no_reply", 1)
+            self.assertEqual(tuple(hit.record_index for hit in found.search.occurrences), (1,))
 
     def test_missing_nested_import_and_bad_public_surface_are_fixed_preterminal_failures(
         self,
@@ -475,24 +584,16 @@ class LazyViewerAdapterTests(unittest.TestCase):
         )
         for imported, expected_code in cases:
             with self.subTest(imported=imported):
-                side_effect = imported if isinstance(imported, BaseException) else None
-                return_value = imported if side_effect is None else mock.DEFAULT
+                side_effect = imported if isinstance(imported, BaseException) else _viewer_import(imported)
                 with (
                     mock.patch.object(
                         viewer_module.importlib,
                         "import_module",
                         side_effect=side_effect,
-                        return_value=return_value,),
+                        ),
                     self.assertRaises(AgentExchangeViewerError) as raised,
                 ):
-                    prepare_agent_exchange_view(
-                        b"",
-                        session_id="session_1",
-                        scope_kind=AgentExchangeScopeKind.CONVERSATION,
-                        scope_id="conversation_1",
-                        scope_subject="Subject",
-                        agent_id=ROSTER[0],
-                    )
+                    _prepare_view()
                 self.assertEqual(raised.exception.code, expected_code)
                 self.assertEqual(
                     str(raised.exception),
@@ -550,17 +651,10 @@ class LazyViewerAdapterTests(unittest.TestCase):
                 mock.patch.object(
                     viewer_module.importlib,
                     "import_module",
-                    return_value=module,),
+                    side_effect=_viewer_import(module),),
                 self.assertRaises(AgentExchangeViewerError) as raised,
             ):
-                prepare_agent_exchange_view(
-                    b"",
-                    session_id="session_1",
-                    scope_kind=AgentExchangeScopeKind.CONVERSATION,
-                    scope_id="conversation_1",
-                    scope_subject="Subject",
-                    agent_id=ROSTER[0],
-                )
+                _prepare_view()
             self.assertEqual(raised.exception.code, "incompatible")
             self.assertEqual(
                 str(raised.exception),
@@ -572,16 +666,11 @@ class LazyViewerAdapterTests(unittest.TestCase):
     ) -> None:
         module = _viewer_module()
         with mock.patch.object(
-            viewer_module.importlib, "import_module", return_value=module
+            viewer_module.importlib, "import_module", side_effect=_viewer_import(module)
         ):
             with self.assertRaisesRegex(TypeError, "immutable bytes"):
-                prepare_agent_exchange_view(  # type: ignore[arg-type]
-                    bytearray(b"mutable"),
-                    session_id="session_1",
-                    scope_kind=AgentExchangeScopeKind.CONVERSATION,
-                    scope_id="conversation_1",
-                    scope_subject="Subject",
-                    agent_id=ROSTER[0],
+                _prepare_view(
+                    bytearray(b'mutable'),
                 )
 
         private = RuntimeError("PRIVATE provider response /tmp/private")
@@ -592,16 +681,11 @@ class LazyViewerAdapterTests(unittest.TestCase):
         with mock.patch.object(
             viewer_module.importlib,
             "import_module",
-            return_value=_viewer_module(failing_view_jsonl),
+            side_effect=_viewer_import(_viewer_module(failing_view_jsonl)),
         ):
-            operation = prepare_agent_exchange_view(
-                b"PRIVATE bytes\n",
-                session_id="session_1",
-                scope_kind=AgentExchangeScopeKind.CONVERSATION,
-                scope_id="conversation_1",
-                scope_subject="Subject",
-                agent_id=ROSTER[0],
-            )
+            operation = _prepare_view(
+                            b'PRIVATE bytes\n',
+                        )
         with self.assertRaises(AgentExchangeViewerError) as raised:
             operation(_transport())
         self.assertEqual(raised.exception.code, "view_failed")
@@ -610,28 +694,42 @@ class LazyViewerAdapterTests(unittest.TestCase):
 
     @unittest.skipUnless(VIEWER_SOURCE.is_dir(), "pinned jsonl-viewer is unavailable")
     def test_pinned_real_viewer_hidden_field_search_promotes_verbose_and_is_transient(self) -> None:
+        self.assertTrue(VIEWER_SOURCE.is_dir(), "adopted viewer source must be available")
         script = textwrap.dedent("""
             import io, inspect, json, jsonl_viewer
             from types import SimpleNamespace
             from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
             from story_writing_agents.interactive_controller._exchange_viewer import prepare_agent_exchange_view
             from story_writing_agents.interactive_terminal._external_view import ExternalTerminalIO
-            source = (json.dumps({"content": "body", "provider": "codex codex"}) + "\\n").encode(); original = bytes(source)
-            frames, closed = [], []; events = iter(("search\\tCODEX", "next_match", "previous_match", "clear_search", "close"))
+            common = {"session_id": "session_1", "scope_kind": "debate", "scope_id": "debate_1", "agent_id": "character_custodian"}
+            rows = (("legacy", "request", "body", "codex codex"),
+                    ("a", "response", json.dumps({"response_text": "동기 동기"}), "antigravity"),
+                    ("b", "response", json.dumps({"response_text": "동기"}), "antigravity"),
+                    ("c", "request", json.dumps({"payload": "동기"}), "antigravity"))
+            source = "".join(json.dumps({**common, "exchange_id": identity, "request_type": kind,
+                "content": content, "provider": provider}) + "\\n" for identity, kind, content, provider in rows).encode(); original = bytes(source)
+            frames, closed = [], []; events = iter(("search\\tCODEX", "next_match", "previous_match", "clear_search", "search\\t동기",
+                "text\\t/", "key\\ttab", "key\\tright", "key\\tright", "key\\ttab", "key\\tenter", "close"))
             borrowed = SimpleNamespace(terminal_size=lambda: (240, 28), color_enabled=lambda: False, present=frames.append, read_event=lambda: next(events, None), close_view=lambda: closed.append(True))
             actual = jsonl_viewer.view_jsonl
             assert tuple(inspect.signature(actual).parameters) == ("source", "spec", "host", "terminal", "transient_only")
             def owned(source, spec, host=None, *, terminal=None, transient_only=False):
-                assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal)
+                assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal) and spec.primary_fields == ()
                 actual(source, spec, borrowed)
             jsonl_viewer.view_jsonl = owned
             operation = prepare_agent_exchange_view(source, session_id="session_1", scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_1", scope_subject="Subject", agent_id="character_custodian")
             transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True); operation(transport)
-            searched = [frame for frame in frames if "Search all text='CODEX'" in frame]
-            assert closed == [True] and "SIMPLE" in frames[0] and all("VERBOSE" in frame for frame in searched)
-            assert ["1/2" in frame for frame in searched] == [True, False, True] and "Search all text=" not in frames[-1]
+            searched = [frame for frame in frames if "Search: 'CODEX'" in frame]
+            assert closed == [True] and "READ ONLY" in frames[0] and any("provider" in frame and "2 occurrences" in frame for frame in searched)
+            cleared = frames[max(i for i, frame in enumerate(frames) if "Search: 'CODEX'" in frame) + 1]
+            assert ["1/2" in frame for frame in searched] == [True, False, True] and "Search: None" in cleared and "Search: 'CODEX'" not in cleared
+            assert any("2 matched · 2 records · 3 occurrences" in frame and "In: Response content" in frame for frame in frames)
             frames.clear(); events = iter(("close",)); operation(transport)
-            assert "SIMPLE" in frames[0] and "Search all text=" not in frames[0] and source == original
+            reopened = next(frame for frame in frames if "Loading immutable JSONL snapshot…" not in frame)
+            assert "READ ONLY" in reopened and "Search: None" in reopened and source == original, (
+                "reopened", reopened[:512], reopened[-2048:],
+                source is original, source == original, len(source), len(original))
+            assert closed == [True, True]
         """)
         environment = dict(os.environ, PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(VIEWER_SOURCE))))
         completed = subprocess.run([sys.executable, "-W", "error", "-c", script], cwd=ROOT, env=environment, text=True, capture_output=True, check=False)
@@ -770,7 +868,8 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
                     "scope_kind": AgentExchangeScopeKind.CONVERSATION,
                     "scope_id": conversation.conversation_id,
                     "scope_subject": "Archived subject",
-                    "agent_id": ROSTER[0],}
+                    "agent_id": ROSTER[0],
+                    "typed_history": (), "history_notice": None,}
             ],
         )
         self.assertIs(type(prepared[0]["source"]), bytes)
@@ -778,6 +877,43 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
         self.assertIs(controller._focused_conversation, original_focus)
         self.assertIs(controller._context, original_context)
         self.assertEqual(callbacks.records, [])
+
+        import jsonl_viewer
+        from jsonl_viewer.inspection import MISSING
+        captured = []
+        private = "PRIVATE_HISTORY /tmp/private TOKEN=secret"
+        abort = controller_core_module._ControllerAbort(controller_core_module.InteractiveError(
+            controller_core_module.InteractiveErrorCode.CLEANUP_FAILED))
+
+        def display(source, spec, host=None, *, terminal=None, transient_only=False):
+            captured.append((source, spec))
+
+        for failure in (RuntimeError(private), abort):
+            with (mock.patch.object(type(controller._conversation_storage_services.event_store), "read", side_effect=failure),
+                  mock.patch.object(terminal_module.InteractivePickerInput, "read_picker", autospec=True,
+                                    side_effect=(self._commit(f"conversation:{conversation.conversation_id}"), self._commit(ROSTER[0]))),
+                  mock.patch.object(jsonl_viewer, "view_jsonl", new=display),
+                  mock.patch.object(terminal_module.InteractiveExternalViewer, "open_owned", autospec=True,
+                                    side_effect=lambda _viewer, operation: operation(_transport())) as opened):
+                if failure is abort:
+                    with self.assertRaises(controller_core_module._ControllerAbort) as held:
+                        controller._view_attached_agent_exchanges()
+                    self.assertIs(held.exception, abort)
+                    opened.assert_not_called()
+                else:
+                    controller._view_attached_agent_exchanges()
+                    opened.assert_called_once()
+        self.assertEqual(len(captured), 1)
+        source, spec = captured[0]
+        self.assertEqual(source, expected_source)
+        self.assertIsNotNone(spec.inspection)
+        self.assertEqual(len(spec.inspection.groups), 1)
+        self.assertTrue(all(dict(group.values)["phase"] is MISSING for group in spec.inspection.groups))
+        self.assertFalse(any(annotation.label in ("Typed review event", "Initial review overview (host-derived preview)", "Review targets (host-derived preview)") for group in spec.inspection.groups for annotation in group.annotations))
+        self.assertEqual(next(item.value for item in spec.context if item.label == "History"),
+                         "Conversation history is unavailable. Captured exchanges remain available; history-derived phase and review evidence could not be loaded.")
+        self.assertNotIn(private, repr(spec) + "".join(callbacks.records))
+        self.assertEqual(source_path.read_bytes(), before_bytes)
 
     def test_attached_command_reports_unavailable_transient_display_without_content(
         self,

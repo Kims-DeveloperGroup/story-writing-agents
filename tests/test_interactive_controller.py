@@ -317,6 +317,28 @@ def _autospec_method_patch(target, attribute):
 def _availability_patch(target, value):
     return mock.patch(target, autospec=True, return_value=value)
 
+_EXPECTED_SETTINGS_FIELDS = (
+    'language',
+    'persona',
+    'max_debate_rounds',
+    'conversation_storage',
+    'conversation_rag',
+    'show_message_details',
+    'providers',
+)
+
+
+_EXPECTED_SETTINGS_LABELS = (
+    'Language',
+    'Persona',
+    'Maximum debate rounds',
+    'Conversation storage',
+    'Conversation RAG',
+    'Message details',
+    'Agents',
+)
+
+
 class ScriptedTerminalCallbacks:
     """Record terminal traffic and supply scripted text, events, or callbacks."""
 
@@ -1769,8 +1791,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 175)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 783)
+        self.assertEqual(len(modules), 176)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 787)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -2331,15 +2353,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 for call in top_level_calls
             ),
             (
-                (
-                    "language",
-                    "persona",
-                    "max_debate_rounds",
-                    "conversation_storage",
-                    "conversation_rag",
-                    "show_message_details",
-                    "providers",
-                ),
+                _EXPECTED_SETTINGS_FIELDS,
                 (
                     "language",
                     "persona",
@@ -2351,24 +2365,8 @@ class ControllerSettingsTests(ControllerTestCase):
                     "save",
                     "cancel",
                 ),
-                (
-                    "language",
-                    "persona",
-                    "max_debate_rounds",
-                    "conversation_storage",
-                    "conversation_rag",
-                    "show_message_details",
-                    "providers",
-                ),
-                (
-                    "language",
-                    "persona",
-                    "max_debate_rounds",
-                    "conversation_storage",
-                    "conversation_rag",
-                    "show_message_details",
-                    "providers",
-                ),
+                _EXPECTED_SETTINGS_FIELDS,
+                _EXPECTED_SETTINGS_FIELDS,
             ),
         )
         self.assertEqual(
@@ -2377,15 +2375,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 for call in top_level_calls
             ),
             (
-                (
-                    "Language",
-                    "Persona",
-                    "Maximum debate rounds",
-                    "Conversation storage",
-                    "Conversation RAG",
-                    "Message details",
-                    "Agents",
-                ),
+                _EXPECTED_SETTINGS_LABELS,
                 (
                     "Language",
                     "Persona",
@@ -2397,24 +2387,8 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Apply Changes",
                     "Discard Changes",
                 ),
-                (
-                    "Language",
-                    "Persona",
-                    "Maximum debate rounds",
-                    "Conversation storage",
-                    "Conversation RAG",
-                    "Message details",
-                    "Agents",
-                ),
-                (
-                    "Language",
-                    "Persona",
-                    "Maximum debate rounds",
-                    "Conversation storage",
-                    "Conversation RAG",
-                    "Message details",
-                    "Agents",
-                ),
+                _EXPECTED_SETTINGS_LABELS,
+                _EXPECTED_SETTINGS_LABELS,
             ),
         )
         self.assertEqual(
@@ -3078,27 +3052,11 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertEqual(
             tuple(choice.identity for choice in settings_call.args[2]),
-            (
-                "language",
-                "persona",
-                "max_debate_rounds",
-                "conversation_storage",
-                "conversation_rag",
-                "show_message_details",
-                "providers",
-            ),
+            _EXPECTED_SETTINGS_FIELDS,
         )
         self.assertEqual(
             tuple(choice.label for choice in settings_call.args[2]),
-            (
-                "Language",
-                "Persona",
-                "Maximum debate rounds",
-                "Conversation storage",
-                "Conversation RAG",
-                "Message details",
-                "Agents",
-            ),
+            _EXPECTED_SETTINGS_LABELS,
         )
         self.assertEqual(
             tuple(choice.form_summary for choice in settings_call.args[2]),
@@ -4949,15 +4907,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertTrue(
             all(
                 tuple(choice.identity for choice in call.args[2])
-                == (
-                    "language",
-                    "persona",
-                    "max_debate_rounds",
-                    "conversation_storage",
-                    "conversation_rag",
-                    "show_message_details",
-                    "providers",
-                )
+                == _EXPECTED_SETTINGS_FIELDS
                 for call in picker.call_args_list
             )
         )
@@ -5010,15 +4960,7 @@ class ControllerSettingsTests(ControllerTestCase):
                             choice.identity
                             for choice in picker.call_args_list[1].args[2]
                         ),
-                        (
-                            "language",
-                            "persona",
-                            "max_debate_rounds",
-                            "conversation_storage",
-                            "conversation_rag",
-                            "show_message_details",
-                            "providers",
-                        ),
+                        _EXPECTED_SETTINGS_FIELDS,
                     )
                     self.assertIsNone(picker.call_args_list[1].kwargs["highlighted_id"])
                     self.assertNotIn(

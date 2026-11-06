@@ -25,15 +25,9 @@ Or install the distribution normally:
 python -m pip install story-writing-agents
 ```
 
-All `h/j/k/l` cursor keys cross page edges. Forward
-crossing lands on the next page’s first JSON row; backward crossing lands on
-the preceding page’s last. Page Up also opens the previous record’s final
-page when the current record’s beginning is visible. Page Down lands on the
-next page’s first row. Vertical cursor movement preserves its preferred column.
-
-Both forms install the required independent `jsonl-viewer` 0.6.3 from its exact
+Both forms install the required independent `jsonl-viewer` 0.7.0 from its exact
 HTTPS VCS requirement at
-`6755a90ab77ab979073f6616e4a6c866b508dcad`. A first install normally needs
+`a38a975eda4123df11c1fa4f796fd49ab88efcee`. A first install normally needs
 Git, network access, and repository access. Installation does not invoke a
 story provider, open an exchange, or enable a service. The historical
 `story-writing-agents[viewer]` and editable `'.[viewer]'` forms remain accepted
@@ -47,7 +41,7 @@ pulling updated Story source, rerun the normal editable installation:
 python -m pip install --editable .
 ```
 
-That ordinary reinstall upgrades older viewer installations to required 0.6.3
+That ordinary reinstall upgrades older viewer installations to required 0.7.0
 without an uninstall, `--force-reinstall`, or `--ignore-installed`. Reserve a forced
 reinstall for a genuinely damaged same-version installation, as described in
 [Troubleshooting](troubleshooting.md#exchanges-does-not-open-the-expected-response).
@@ -117,189 +111,143 @@ you to retry `/exchanges`; it never substitutes another scope or agent.
 
 ## Read the viewer
 
-Story passes one immutable in-memory JSONL snapshot to the isolated viewer. The
-header carries the attached session, exact selected Conversation or Debate ID
-and subject, and exact agent ID. A Story-hosted plain frame has this shape:
+Story opens the copied snapshot with display context for the selected session,
+scope and agent. The viewer is the independent `jsonl-viewer` package: it knows
+records, optional groups/sections, scalar facets and explicit search paths.
+Story supplies all call grouping, stage, outcome and completeness meanings as
+immutable data. Inspection metadata contains no Story runtime object, semantic
+callback, authority check or runtime preset. The existing generic terminal
+transport retains its input and ownership boundary.
 
-```text
-AGENT EXCHANGES • READ ONLY • SIMPLE
-Session: novel • Debate: d20260830T010412_ef567890 — Draft an opening. • Agent: character_custodian
-> 1 │ {
-      ^
-> 1 │   "timestamp": "2026-08-30T01:04:12.000+00:00",
-> 1 │   "request_type": "response",
-> 1 │   "content": [expanded JSON string ×1] {
-> 1 │     "response_text": [expanded JSON string ×1] {
-> 1 │       "agent_action": {"action_type": "unsupported_action"},
-> 1 │       "unexpected_metadata": []
-> 1 │     }
-> 1 │   }
-> 1 │ }
-Record 1/3 • source line 1 • JSON display 2 expanded, 0 skipped, 0 truncated
-h/j/k/l cursor • Enter fold • ↑/↓ records • PgUp/PgDn • / search • n/N • m mode • ? help • q close
-```
+Each list item represents one captured physical call. Its summary includes the
+first capture time, a short exchange identity, provider, recorded outcome and
+known stage. Exact identities remain in the details and original records.
+Request, Response and Outcome sections retain their original source lines;
+empty sections say that no record is retained. Other historical kinds remain
+accessible. Searching a call keeps its other records available for comparison.
 
-This preview shows the renderer's topology, not a retained Story screenshot.
-The external repository owns the byte-tested renderer contract:
+At 120 terminal cells or wider, list and detail appear side by side. Narrower
+screens show one pane at a time. Tab/Shift+Tab changes focus without losing
+selection, scroll or committed conditions; `[`/`]` changes sections. Up/Down
+moves through the focused list or detail. In detail, `h/j/k/l` moves the JSON
+cursor, Enter folds a container, Page Up/Down (`b`/Space) pages, and physical
+Left/Right pans long rows. `g` uses the original positive source-line number.
 
-- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/6755a90ab77ab979073f6616e4a6c866b508dcad/docs/design-system.md)
-- [Sixteen deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/6755a90ab77ab979073f6616e4a6c866b508dcad/docs/samples)
+### Filters and incomplete records
 
-Expanded records use well-formatted multiline JSON. The left gutter repeats
-the physical JSONL source-record line on continuation rows, so `g` can move to
-an exact positive source line. Up/Down changes records; Page Up/Page
-Down or `b`/Space pages within a large record and across record boundaries.
+Press `f` to edit a draft. Outcome, Provider and Stage allow multiple values:
+values within a field are OR; different fields and the text search are AND.
+Missing metadata is an explicit value, not an inferred stage or outcome.
+Canonical choices remain selectable even when they currently produce zero
+items.
 
-At a JSON row’s end, `l` moves to the next row’s first character; `h`
-at its beginning moves to the preceding row’s last character. All four
-`h/j/k/l` keys reveal adjacent pages at viewport edges, skipping gutters
-and annotations. Vertical movement keeps its preferred column.
+Record presence uses independent single-choice fields:
 
-In the main view, `h`/`l` moves the character cursor left/right and `j`/`k`
-moves it down/up through visible JSON. Enter folds or unfolds the innermost
-nonempty object or array containing the focused character, including containers
-expanded from encoded JSON strings. Collapsed objects and arrays show `{...}`
-and `[...]` with three full-contrast dots. ANSI output highlights the focused container’s visible matching brackets
-in bold inverse video, with underline distinguishing cursor overlap. Plain
-output retains its aligned caret. Reopening a parent preserves its nested folds.
-Cursor and fold state disappear when the viewer closes.
+| Field | Choices | Meaning |
+| --- | --- | --- |
+| Completeness | All, complete, incomplete | All three main record kinds are present, or at least one is absent. |
+| Request present | All, present, absent | A request record was retained. |
+| Response present | All, present, absent | A response record was retained, including a provider-failure marker. |
+| Outcome present | All, present, absent | A terminal outcome record was retained. |
 
-Search and `n`/`N` unfold the selected hit’s ancestors and focus its first
-character without changing occurrence counts. A manual fold remains effective
-until subsequent search navigation. The former `h` help and `j`/`k` record
-bindings are now `?` and Up/Down; prompt editing retains its existing behavior.
+For any missing response, choose Response present = absent and leave the other
+fields at All. To find calls with none of the three kinds, select absent in all
+three presence fields. Complete plus an absent kind is a valid zero-result
+query; changing one field never silently clears another. Historical
+`no_response` records stay readable but do not count as a response.
 
-The main-view cursor blinks every 500 ms while idle. Its character remains
-readable and the matching-container highlight stays steady; on a highlighted
-bracket, the cursor's underline blinks. Any input restores visible focus.
-Help and prompt editing pause blinking. Interactive NO_COLOR output blinks the
-caret while retaining its row; ordinary-line fallback remains static.
+Enter opens a field's options. Space changes a choice; Enter returns to the
+filter draft. Escape inside the options cancels only that field edit. Apply
+commits the complete draft. Reset filters restores only draft filters to All;
+Reset all also clears the draft query and restores the default search scope.
+These resets take effect only with Apply. Cancel or Escape from the outer
+panel discards all drafts and restores the committed selection and scroll.
 
-Up/Down cycle through records and reset to the first visible JSON character.
-Page Up/Down (`b`/Space) scroll within the current record first, then cycle
-records. Page Up focuses the prior page’s final JSON row and opens the prior
-record’s final page at a record boundary; Page Down focuses the next page’s
-first row. Endpoint notices are `First record.` and `Last record.`; a
-single-record snapshot shows `Only record.`. Notices survive idle/redraw and
-clear on ordinary cursor movement. Escape dismisses a notice before clearing
-an active search.
-
-Use `J` and `K` to jump to the next/previous sibling property key, from anywhere
-in its key or value. They use the nearest object's displayed order, including
-expanded JSON, and scroll to offscreen keys without opening folded values or
-changing search counts. The destination is the first character inside the key's
-quotes, or its opening quote when empty. Movement is circular within the same
-sibling group: `J` wraps last to first and `K` first to last, never crossing records.
-The footer shows `First sibling.` or `Last sibling.` on endpoint arrival, including
-wrapping, or `Only sibling.` for a single-property group. Notices persist during
-blinking, clear on interior jumps or ordinary cursor movement, and Escape dismisses
-them before clearing an active search. Root object delimiters enter the first/last key when
-unfolded; folded or empty roots have no reachable keys. Arrays use their nearest
-owning property. In prompts, `J` and `K` remain literal input.
-
-Simple mode shows `timestamp`, `request_type`, and `content`, in that order.
-Verbose mode keeps those fields first, followed by every other top-level field.
-`m` toggles modes unless the active keyword occurrence needs hidden fields.
-Simple string leaves retain a visible complete-code-point preview through 4,096 UTF-8
-bytes; Verbose string leaves retain one through 65,536 bytes. Before applying
-that leaf limit, a complete strict JSON object or array stored inside a string
-is recursively expanded through bounded encoding layers. The visible
-`[expanded JSON string ×N]` cues remove the extra outer quote/backslash escaping
-that otherwise obscures nested provider data; genuine text leaves retain the
-escaping required for valid JSON. Preview truncation applies independently to
-string leaves only—it never truncates a container, key, structural token, or
-child. A visible leaf marker and footer accounting distinguish preview
-truncation from terminal-width clipping. None of these derived projections
-changes the source snapshot. Full-text search independently includes bounded
-decoded nested keys and values, including text beyond these display previews.
-
-The capture store has an independent content bound: an outer `content` value
-retains the longest complete UTF-8 prefix through 262,144 bytes. In Verbose,
-inspect `content_full_utf8_bytes`, `content_retained_utf8_bytes`,
-`content_full_characters`, `content_retained_characters`, `content_truncated`,
-and `content_sha256` before treating a nested request or response as complete.
-Character counts are Unicode code-point counts, not display cells or grapheme
-clusters. The digest covers the complete pre-truncation UTF-8 value; it detects
-comparison differences but does not reveal or recover an omitted suffix.
+Historical `no_response` records remain available in the Response section and
+source view, but do not count as an actual response. Without a `response` record,
+the response-presence filter is Absent and the record set is incomplete.
+Outcome values with an unsupported JSON type remain readable and have a Missing
+outcome facet.
 
 ### Search, results, and help
 
-Press `/`, enter a nonempty phrase at `Search query:`, and press Enter.
-Search is literal and case-insensitive across the entire retained snapshot:
-keys, values, hidden fields, and bounded decoded JSON inside strings. It does
-not recover content omitted by capture or retention. Queries are bounded to
-1,024 characters. Field selectors have been removed in viewer 0.3.0.
+Press `/` to edit a literal phrase, including spaces, then use Search. Select
+the scope in the same panel. There is no regex, field-expression or command
+syntax; existing Unicode case comparison is retained. Korean input, cursor
+editing and cancellation use the same terminal input contract.
 
-On a capable terminal, the viewer owns one `Search query:` draft and the
-`Go to source line:` draft opened by `g`.
-Each appears in the frame footer with a printable `│` insertion cursor.
-Left/Right, Home/End or Ctrl-A/E, Backspace, and Delete edit the draft. Ctrl-U
-deletes before the cursor, Ctrl-K deletes after it, and Ctrl-W deletes the
-preceding word and intervening whitespace. Command letters such as `j`, `k`,
-`n`, and `q` insert literal text while a draft is open; Up/Down and Page keys
-leave the draft and viewer position unchanged. Enter submits the
-draft; invalid input keeps the draft open with a visible error.
+| Search scope | Original source searched |
+| --- | --- |
+| All text (default) | Every retained key/value and capture metadata, including request schemas. |
+| Request payload | The actual submitted payload; its own data keys named `schema` remain searchable. |
+| Response | Returned response text and retained provider failure/diagnostic content. |
+| Outcome | Outcome, code, validation details and captured host diagnostics. |
 
-Escape discards only the unfinished draft. The viewer renders its prior
-committed selection, mode, active search, current match, and `current/total`
-position. Unsupported or incomplete Escape sequences that decode to the
-viewer's unknown-Escape input also cancel the draft. Input failures can instead
-close the view and restore Story's terminal.
-Story owns the terminal lifecycle and transports physical input; the viewer
-owns editing, command interpretation, and cancellation.
+The scope paths are built by Story. The viewer follows only bounded key/index
+and explicit JSON-string decode steps. Folded fields, hidden fields and text
+beyond previews remain searchable. Invalid or truncated inner JSON is never
+recovered by parsing its prefix; unavailable coverage is reported. All text
+searches what was retained, not bytes omitted by capture limits. Synthetic
+annotations and host summaries are not silently added to source text.
 
-The footer reports `current/total occurrences`. The active keyword is focused
-as `⟦keyword⟧`; `n` and `N` move to the next or previous occurrence,
-wrapping in both directions. Multiple matches within one value or record are
-separate stops. Matching uses nonoverlapping original-character spans, including
-Unicode casefold expansions. The active record has `@`; other matching
-records have `*`, without highlighting their whole JSON.
+A query accepts at most 1,024 printable characters and 100,000 occurrences.
+Applying invalid or over-limit conditions keeps the previous committed result.
+A valid zero-result query applies and displays an empty result instead of
+leaving stale details. The viewer distinguishes total items, filter passes,
+search-matched items, matching source records and individual occurrences; in
+this view an item is a physical-call group. `n`/`N` moves occurrences, opening
+the relevant section and ancestor containers while keeping the current
+occurrence number visible. List movement remains separate from hit movement.
 
-Selecting an occurrence brings it into view with a bounded context window,
-even beyond normal leaf previews. A labeled raw, normalized, or decoded search
-excerpt supplies a match absent from the ordinary projection. At narrow widths,
-keyword focus takes priority over context and, when needed, its repeated
-gutter; geometry can still clip a long keyword. Manual paging remains available,
-and `n`/`N` reveals the next selected occurrence. Resizing recomputes the
-window. A selected hidden-field hit promotes to Verbose and prevents Simple
-while that occurrence needs hidden fields. More than 100,000 occurrences
-rejects the new search with a refine-query message and preserves the previous
-search and position. `c` clears search; `?` opens transient help.
+Escape inside the search panel cancels its draft, preserving the committed
+query, scope, focus and position. `?` opens current keyboard help. `q` closes
+the main view; Ctrl-C, EOF and the documented main Escape sequence retain the
+existing cleanup behavior. Reopening starts a fresh view; filters, drafts,
+folds and occurrence state are not saved by Story.
 
-Escape dismisses help, then search, then a transient status; with nothing left
-to dismiss it closes. This main-view behavior begins after a prompt has
-finished or been cancelled; draft Escape preserves the committed view.
-Ctrl-C applies the same cancel behavior in the main view and closes the view
-during a draft. EOF always closes; `q` closes from the main view. A terminal
-without alternate-screen support receives a content-free notice; `/exchanges`
-does not print viewer frames into ordinary scrollback. The viewer captures mouse
-reports while open: each wheel report moves the cursor one line like `j` or
-`k`, and a left click selects the clicked visible JSON character. Reports
-during search/goto drafts, help, or errors leave those views unchanged.
-Closing restores mouse modes and the previous screen. In iTerm2, mouse
-reporting must be enabled; a terminal setting or Option-wheel override can
-still select the terminal's own scrolling behavior.
+### Stage, task and evidence provenance
+
+Story derives stage and task facts from exact, qualified typed history links.
+Provider prose, a schema field named `stage`, task candidates offered to a
+provider, and temporal proximity cannot establish them. Ambiguous or missing
+links remain Missing. A displayed historical stage is not current permission
+to review, apply or commit an artifact. A durably published typed stage can
+remain known when later teardown records a post-response runtime failure; stage
+and terminal outcome are separate diagnostic facts. Such a failure still does
+not gain an accepted-task claim in captured host diagnostics.
+
+New physical-call captures carry the local call ID in request and terminal
+host diagnostics. Only the accepted terminal, after authorized validation and
+successful deferred publication, can contain the actual selected task ID and
+revision. Search that task ID in All text or Outcome and combine it with Stage
+to inspect the same call. Rejected, cancelled and publication/runtime failures
+do not gain a successful-task claim. Older captures are not rewritten; their
+facts can remain Missing. A complete terminal can supply the call ID when its
+request content was truncated, provided available identities agree.
+
+Some host-bound review targets and digests exist only in typed history.
+Their displayed summaries identify host provenance and exact event references;
+the full values are not promised to occur in exchange source text. Captured
+provider evidence remains accessible through original records and scopes.
+
+Display metadata is bounded independently of source bytes. If the required
+Story grouping or scope metadata cannot fit those bounds, the whole unchanged
+snapshot opens as generic records with an Inspection notice. It never presents
+only a silent prefix of the Story calls. Read failures remain content-safe.
 
 ### Where color is used
 
-On eligible ANSI terminals, bold cyan marks the header/chrome, current record,
-and Help heading; a dim gray gutter separates source line numbers from JSON.
-JSON keys are blue, strings green, numbers magenta, and booleans or `null`
-yellow. Only the active keyword uses black on yellow, with printable
-`⟦keyword⟧` focus and an `@` record marker. Other matching records use an
-underlined yellow `*` gutter marker. Warnings/status are yellow, errors red,
-truncation or other muted text gray, and ordinary footer/help text dim cyan.
-JSON punctuation uses terminal-default color; the focused container’s visible
-delimiters are bold. Character focus uses readable inverse video, independently
-of the search highlight.
+Color assists selection, keys, scalar types, matching containers and hits.
+Plain and NO_COLOR output retain structural alignment, focus/caret markers,
+explicit selection and occurrence counts. Mouse clicks use the same visible
+items, fields and buttons as keyboard actions; wheel input scrolls its painted
+region. Modal outside clicks do not discard drafts.
 
-Plain/NO_COLOR output places a caret on the row below the focused character.
-The caret row is included in terminal geometry, so plain and ANSI viewports can
-show different numbers of data rows at the same terminal size. Color never
-carries meaning alone. Plain and `NO_COLOR` views retain the same
-words, JSON, `⟦keyword⟧`, `>`, `@`, `*`, line numbers, result position, and help.
-The linked external design system is authoritative for exact SGR values and responsive
-placement.
+The external package owns exact rendering and input behavior. See its pinned
+[generic design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/a38a975eda4123df11c1fa4f796fd49ab88efcee/docs/design-system.md),
+[inspection contract](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/a38a975eda4123df11c1fa4f796fd49ab88efcee/docs/inspection.md),
+and [nineteen deterministic sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/a38a975eda4123df11c1fa4f796fd49ab88efcee/docs/samples).
+Story's grouping and provenance rules live only in this repository.
 
 ## Interpret request, response, and outcome
 
@@ -359,79 +307,36 @@ append, and never retries.
 
 ### Inspect exchanges after a normal installation
 
-1. Install Story normally, create or resume a session, and run provider work.
-2. Attach that session and enter bare `/exchanges`; there is no viewer setting,
-   enablement step, extra, or identifier argument.
-3. Choose the exact Conversation or Debate ID plus subject, then choose the
-   agent. The base-installed viewer opens the immutable snapshot.
-4. If an older automation command still installs
-   `story-writing-agents[viewer]`, it remains valid but supplies no capability
-   beyond the normal installation.
+Install Story normally, attach the intended session and enter `/exchanges`.
+Choose the exact recorded scope and agent. Use Tab to inspect a call's source
+sections. Closing the view returns to the same shell scope without another
+provider call or any stored filter state.
 
 ### Diagnose a rejected structured response
 
-If the shell reports
-``BackendProtocolError: contextual provider read action is invalid: `d` must
-contain source handles returned by the preceding context search``, Story
-received a recognizable contextual READ action before any search or with
-invalid/foreign values instead of handles from that preceding search. Story,
-not the provider, raises this fixed content-safe exception. Its terminal
-outcome is
-`rejected`/`malformed_structured_response`, the contextual attempt is tainted,
-its ready checkpoint does not advance, and the response is rejected. Raw `d`
-values do not enter the error or conversation history.
-
-If the shell instead reports
-``BackendProtocolError: contextual provider response is invalid: `c` does not
-match the current request correlation token``, valid exact-shape contextual
-JSON supplied the wrong `c` value—for example, provider answer/prose—instead of
-the current request correlation token. Story validates `c` before interpreting
-a misleading READ action or its data. Story, not the provider, raises this
-fixed exception; neither the received `c`, the expected token, nor prose placed
-in `c` enters the error or history. The terminal outcome is
-`rejected`/`response_correlation_mismatch`; the ledger is `MALFORMED`, the
-contextual attempt is tainted, its provider thread state is cleared, and its
-ready checkpoint does not advance.
-
-Both cases retain internal
-`ContextExecutionErrorCode.MALFORMED_ACTION`. Other malformed JSON or action
-shapes retain the generic `BackendProtocolError: contextual provider action is
-malformed`.
-
-1. Keep the affected workspace private and attach the affected session.
-2. Run `/exchanges`; choose the exact Debate or Conversation full ID and
-   subject, then the agent named by the sanitized error or runtime log.
-3. Search `exchange_id` or `request_type`; use `n`/`N` to compare the correlated
-   request, optional response, and outcome.
-4. In Verbose, check full/retained counts, `content_truncated`, and the digest.
-5. If the outcome is `rejected`, inspect the valid raw response projection. If
-   it is `provider_failure` with no response, do not infer missing native output
-   or retry merely to fill the diagnostic.
-6. Close with `q`. Reopening starts in fresh Simple mode with no prior cursor,
-   search, match position, footer result, or help state.
+Open Filters and choose Outcome = rejected. Optionally add Provider and Stage,
+then Apply. Search a validation property or literal message in Outcome. Use
+`n`/`N` for individual occurrences and the section controls to compare the
+same call's submitted payload, response and terminal classification. A genuine
+payload data key named `schema` remains in Request payload search; the outer
+request contract schema is available through All text. Missing stage evidence
+is not filled from schema text.
 
 ### Cancel an accidental search without losing your place
 
-1. While inspecting a match, press `/` and begin entering a query.
-2. Press Escape before Enter. The unfinished text disappears and the exact
-   prior read-only frame returns, including its source line, mode, active
-   search, selected match, result position, and footer.
-3. Press `n` or `N` to continue from that retained match, or `/` to start a new
-   search. Nothing from the cancelled draft is searched, recorded, or added to
-   command history.
-
-The separate `debug_logs/provider_error_responses/` channel may retain an
-eligible completed response rejected during decoding. It has different
-eligibility and retention and is not imported into agent exchanges. See
-[Privacy and provider exposure](../operations/privacy-and-provider.md#rejected-provider-response-artifacts).
+Open the search panel, change its phrase or scope, then press Escape. The
+committed query, selected call and occurrence, focus and scroll remain in place.
+Filter options have a separate local cancellation level; Apply is the point
+where the outer filter draft changes the result. A deliberate valid zero-result
+query applies and shows no stale call details.
 
 ### Confirm that one agent has no retained records
 
-Choose a scope, then select an agent row marked `No recorded exchanges`. The
-viewer shows its immutable empty state with the selected session/scope/agent
-header and close/help cues. It does not create an exchange, invoke a provider,
-or change which conversation or agent will receive the next story turn.
-
+The complete agent roster includes agents with no retained records. Selecting
+one opens the empty view without creating a diagnostic record. Distinguish
+this state from zero filter matches, zero text matches and unavailable scoped
+content. A retained provider-failure response marker counts as a response;
+older `no_response` records remain separate readable evidence.
 ## Privacy, immutability, and recovery
 
 Simple mode is not redaction, authorization, or access control. Request payloads
@@ -458,9 +363,9 @@ Common bounded failures are:
 | --- | --- |
 | No attached session | Attach the intended session, then retry bare `/exchanges`. |
 | No records for the session | Run the intended provider work; do not invoke it merely to manufacture diagnostics. |
-| Viewer 0.1.1, 0.2.0, 0.3.0, 0.4.0, 0.4.1, 0.4.2, 0.5.0, 0.5.1, 0.5.2, 0.5.3, 0.5.4, or 0.6.0 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.6.3; do not force or uninstall. |
+| Viewer 0.1.1, 0.2.0, 0.3.0, 0.4.0, 0.4.1, 0.4.2, 0.5.0, 0.5.1, 0.5.2, 0.5.3, 0.5.4, or 0.6.0 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.7.0; do not force or uninstall. |
 | Required viewer unavailable | Rerun the normal Story installation, then retry. The compatibility extra is not a separate repair path. |
-| Viewer 0.6.3 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
+| Viewer 0.7.0 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
 | Store busy | Retry after the concurrent exchange write completes. |
 | Unsafe, corrupt, or uncorrelatable records | Preserve the workspace and inspect the content-safe runtime diagnostic before retrying. |
 | Selected stream disappeared | Rerun `/exchanges` to refresh retained inventory. |

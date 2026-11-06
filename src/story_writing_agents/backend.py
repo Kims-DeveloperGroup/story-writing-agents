@@ -370,7 +370,7 @@ _CONTEXT_RUNTIME_FAILURE_CODES = {
 class _ContextExchangeFinalizer:
     """Adapt one capture lifecycle to the provider-neutral context protocol."""
 
-    __slots__ = ("_lifecycle", "_validation_details")
+    __slots__ = ("_lifecycle", "_validation_details", "_diagnostic_task")
 
     def __init__(
         self,
@@ -378,6 +378,12 @@ class _ContextExchangeFinalizer:
     ) -> None:
         self._lifecycle = lifecycle
         self._validation_details: tuple[str, ...] = ()
+        self._diagnostic_task: tuple[str, int] | None = None
+
+    def set_host_task_diagnostic(self, task_id: str, task_revision: int) -> None:
+        """Retain a validated host binding without changing provider input."""
+        if type(task_id) is str and task_id and type(task_revision) is int and task_revision > 0:
+            self._diagnostic_task = (task_id, task_revision)
 
     def set_validation_details(self, details: tuple[str, ...]) -> None:
         """Retain trusted findings for this rejected response."""
@@ -388,7 +394,7 @@ class _ContextExchangeFinalizer:
 
         try:
             if self._lifecycle is not None:
-                self._lifecycle.accepted()
+                self._lifecycle.accepted(diagnostic_task=self._diagnostic_task)
         except BaseException:
             pass
 
@@ -4390,6 +4396,7 @@ class AgentBackend:
         scope_kind: AgentExchangeScopeKind,
         scope_id: str,
         invocation: ProviderInvocation,
+        diagnostic_call_id: str | None = None,
     ) -> AgentExchangeCaptureLifecycle | None:
         """Begin one exact capture without affecting provider execution."""
 
@@ -4401,6 +4408,7 @@ class AgentBackend:
                 agent_id=bound_agent.definition.agent_id,
                 provider=AgentExchangeProvider(bound_agent.vendor),
                 invocation=invocation,
+                diagnostic_call_id=diagnostic_call_id,
             )
         except BaseException:
             return None
@@ -4438,6 +4446,7 @@ class AgentBackend:
         *,
         scope: ContextScope,
         invocation: ProviderInvocation,
+        diagnostic_call_id: str | None = None,
     ) -> AgentExchangeCaptureLifecycle | None:
         """Begin capture from one already validated contextual scope."""
 
@@ -4451,6 +4460,7 @@ class AgentBackend:
             scope_kind=scope_kind,
             scope_id=scope.subject_id,
             invocation=invocation,
+            diagnostic_call_id=diagnostic_call_id,
         )
 
     @staticmethod
@@ -5433,6 +5443,7 @@ class AgentBackend:
                 validate_provider_replay()
                 exchange = self._begin_context_agent_exchange(
                     bound_agent, scope=scope, invocation=invocation,
+                    diagnostic_call_id=request.call_id,
                 )
                 if type(request) is BoundContextProviderCallRequest:
                     request.contract.require_submission(

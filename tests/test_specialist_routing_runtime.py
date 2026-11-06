@@ -759,6 +759,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                    and event.payload.proposal_id == focused.proposal.proposal_id]
         self.assertEqual(len(replies), 1)
         self.assertEqual(replies[0].payload.message, feedback)
+        from tests.test_agent_exchange_viewer import _assert_typed_history_phase
+        self.assertNotEqual(replies[0].turn_id, focused.turn_id)
+        _assert_typed_history_phase(self, original_history, replies[0].payload.provider_invocation_id,
+                                   CHARACTER_CUSTODIAN, "specialist_work", focused.proposal.authoring_scope)
         explained = "Character reported that the promise is established but the decision trigger is absent."
         def explain_feedback(call, provider):
             supplied = canonical_provider_json(provider.callback_payload(call)).decode("utf-8")
@@ -1399,6 +1403,19 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIsNotNone(reviewed.turn.artifact_application_request)
         self.assertEqual(self.history(conversation)[:len(draft_prefix)],draft_prefix)
         final_proposal = reviewed.turn.artifact_proposal.reviewed_proposal
+        from tests.test_agent_exchange_viewer import _assert_typed_history_phase
+        self.assertIsNone(proposed.proposal.stage_plan)
+        phase_history = self.history(conversation)
+        phase_synthesis = next(event.payload for event in phase_history
+                               if event.event_id == final_proposal.synthesis_event_id)
+        phase_companions = [event.payload for event in phase_history
+                            if type(event.payload) in {c.CollaborationLeadSynthesisPayload, c.ArtifactReviewSynthesisPayload}
+                            and event.payload.provider_invocation_id == phase_synthesis.provider_invocation_id]
+        self.assertEqual(len(phase_companions), 2)
+        self.assertEqual({type(item) for item in phase_companions},
+                         {c.CollaborationLeadSynthesisPayload, c.ArtifactReviewSynthesisPayload})
+        _assert_typed_history_phase(self, phase_history, phase_synthesis.provider_invocation_id,
+                                   LEAD_ORCHESTRATOR, "final_candidate_review", proposed.proposal.authoring_scope)
         self.assertEqual(final_proposal.final_review_evidence.reviewer_ids, ROSTER)
         self.assertEqual(final_proposal.final_review_evidence.reply_event_ids,
                          tuple(item.reply_event_id for item in final_proposal.reviews))
