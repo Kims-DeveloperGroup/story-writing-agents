@@ -793,8 +793,8 @@ class LeadArtifactObjectiveTests(RecommendationCase):
                     "instruction": global_draft_purpose, "mode": "draft", "input_ids": list(dict(call.contract.semantic_index.policy.choices)["input_ids"])}]}})
         from tests.recommendation_fixture import decision as recommendation_decision
         self.backend.enqueue(prepare_global_draft)
-        global_draft_offer = (await self.runtime.decide_lead_recommendation(recommendation_decision(global_recommendation))).turn
-        self.assertIs(global_draft_offer.kind, c.LeadOutcomeKind.PROPOSAL)
+        global_draft_offer = await self.runtime.decide_lead_recommendation(recommendation_decision(global_recommendation))
+        self.assertIs(global_draft_offer.kind, c.LeadOutcomeKind.PROPOSAL, global_draft_offer.message[:1200])
         self.assertEqual(global_draft_offer.proposal.document_node.plan_ref, goal_plan.ref)
         self.assertEqual(global_draft_offer.proposal.document_node.node_id, global_node.node_id)
         self.assertEqual(global_draft_offer.proposal.document_node.prior_confirmation_event_id, review_confirmation.event_id)
@@ -855,9 +855,9 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         preparation_start = len(self.backend.calls)
         prepared_draft = await self.runtime.decide_lead_recommendation(recommendation_decision(draft_recommendation_turn))
         self.assertEqual(len(self.backend.calls) - preparation_start, 1)
-        draft_offer = prepared_draft.turn
+        draft_offer = prepared_draft
         self.assertIsNotNone(draft_offer)
-        self.assertIs(draft_offer.kind, c.LeadOutcomeKind.PROPOSAL)
+        self.assertIs(draft_offer.kind, c.LeadOutcomeKind.PROPOSAL, draft_offer.message[:1200])
         self.assertEqual(draft_offer.proposal.participants, (PLOT_ARCHITECT,))
         self.assertEqual(tuple(row.mode.value for row in draft_offer.proposal.assignments), ("draft",))
         self.assertEqual(draft_offer.proposal.authoring_scope.target_paths, (part_node.target_path,))
