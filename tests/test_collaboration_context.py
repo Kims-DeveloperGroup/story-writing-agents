@@ -377,14 +377,16 @@ class CollaborationTransitionTests(unittest.TestCase):
         source = fixture.make_draft("replay_judgment", c.CollaborationEventKind.MESSAGE, fixture.LEAD, fixture.USER,
             c.CollaborationLeadJudgmentPayload(c.LeadOutcomeKind.RECOMMENDATION,
                 "Draft only the disclosed Global outline.", basis.evidence, authoring_scope=scope))
+        lead_calls = fixture.provider_call_drafts(invocation_id="invocation_replay_lead", call_id="call_replay_lead",
+            role=fixture.LEAD_ORCHESTRATOR, recipient=fixture.LEAD, invocation_kind=c.CollaborationInvocationKind.LEAD)
         request = c.LeadRecommendationRequestPayload(request_event_id="replay_disclosure", request_id="replay_request_id",
             action_id="replay_action", action_revision=1, kind=c.LeadRecommendationActionKind.PREPARE_CONSULTATION,
             purpose="Prepare only Global outline.", instruction=text, expected_result="One disclosed Plot draft.",
             target_paths=(), specialist_ids=(fixture.PLOT_ARCHITECT,), objective_id=None,
             source_recommendation_event_id=source.event_id,
             source_recommendation_digest="sha256:" + hashlib.sha256(source.payload.message.encode("utf-8")).hexdigest(),
-            draft_sources=(), basis=basis, source_fingerprint=fixture.DIGEST_A, physical_calls_spent=0,
-            max_preparation_physical_calls=1, tail_sequence=5, user_impact="Prepare one call; specialists still need Confirm.",
+            draft_sources=(), basis=basis, source_fingerprint=fixture.DIGEST_A, physical_calls_spent=1,
+            max_preparation_physical_calls=1, tail_sequence=7, user_impact="Prepare one call; specialists still need Confirm.",
             authoring_scope=scope)
         disclosed = fixture.make_draft(request.request_event_id, c.CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST,
                                       fixture.RUNTIME, fixture.USER, request)
@@ -397,16 +399,17 @@ class CollaborationTransitionTests(unittest.TestCase):
                         sequence=len(stored) + 1, timestamp="2026-11-06T00:00:00+00:00", batch_id=batch.batch_id,
                         batch_ordinal=ordinal, batch_size=len(drafts), batch_digest=c.collaboration_batch_digest(batch)))
             return tuple(stored)
-        publication = records(((origin, user, transition), (source, disclosed)))
+        publication = records(((origin, user, transition), (*lead_calls, source, disclosed)))
         prefix = fixture.store_batch((), fixture.batch_from_history(publication, publication[0].batch_id))
         stored = fixture.store_batch(prefix, fixture.batch_from_history(publication, publication[-1].batch_id))
         replayed = c.project_collaboration_history(stored)
         self.assertEqual(replayed.current_recommendation_request, request)
         self.assertIs(replayed.current_recommendation_state, c.LeadRecommendationState.PENDING)
         self.assertEqual(replayed.available_tasks[0].authoring_scope, scope)
+        self.assertEqual(replayed.physical_calls_spent, 1)
         # Later controls cannot authorize the earlier source; all stored batch digests remain exact.
-        late_disclosed = replace(disclosed, payload=replace(request, tail_sequence=3))
-        late = records(((user,), (source, late_disclosed), (origin, transition)))
+        late_disclosed = replace(disclosed, payload=replace(request, tail_sequence=5))
+        late = records(((user, *lead_calls), (source, late_disclosed), (origin, transition)))
         with self.assertRaisesRegex(ValueError, "v3 front recommendation requires exact completed confirmed authoring source"):
             c.project_collaboration_history(late)
 
