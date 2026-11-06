@@ -350,7 +350,7 @@ class CollaborationTransitionTests(unittest.TestCase):
                                                        routing.AuthoringContributionRole.DRAFT_OWNER),))
         text = "Draft three outline scenes from the supplied motive; preserve no magic and the unresolved ending. You may invent supporting dialogue and minor places."
         decision = LeadTaskDecision.for_conversation(fixture.SESSION_ID, fixture.CONVERSATION_ID,
-            LeadTaskAction.NEW_TASK, text=text, request_id="replay_request")
+            LeadTaskAction.NEW_TASK, text=text, request_id="replay_origin")
         receipt = LeadTaskTransitionReceipt(origin_event_id="replay_origin", origin_kind="task_decision",
             action=LeadTaskAction.NEW_TASK, target_task_id=scope.task_id, target_task_revision=1,
             planning_step_id=fixture.STEP_ID, origin_message_event_id="replay_user")
@@ -397,7 +397,7 @@ class CollaborationTransitionTests(unittest.TestCase):
                         sequence=len(stored) + 1, timestamp="2026-11-06T00:00:00+00:00", batch_id=batch.batch_id,
                         batch_ordinal=ordinal, batch_size=len(drafts), batch_digest=c.collaboration_batch_digest(batch)))
             return tuple(stored)
-        publication = records(((user, origin, transition), (source, disclosed)))
+        publication = records(((origin, user, transition), (source, disclosed)))
         prefix = fixture.store_batch((), fixture.batch_from_history(publication, publication[0].batch_id))
         stored = fixture.store_batch(prefix, fixture.batch_from_history(publication, publication[-1].batch_id))
         replayed = c.project_collaboration_history(stored)
