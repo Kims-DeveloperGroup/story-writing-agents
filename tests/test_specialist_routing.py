@@ -997,7 +997,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         request = c.LeadRecommendationRequestPayload(request_event_id="selector_request", request_id="selector_disclosure",
             action_id="selector_action", action_revision=1, kind=c.LeadRecommendationActionKind.PREPARE_CONSULTATION,
             purpose="Prepare only Global outline.", instruction=replay_decision.text, expected_result="One disclosed Plot draft.",
-            target_paths=(global_path,), specialist_ids=(document_fixture.PLOT_ARCHITECT,), objective_id=None,
+            target_paths=(), specialist_ids=(document_fixture.PLOT_ARCHITECT,), objective_id=None,
             source_recommendation_event_id=selector_source.event_id,
             source_recommendation_digest="sha256:" + hashlib.sha256(selector_source.payload.message.encode("utf-8")).hexdigest(),
             draft_sources=(), basis=replay_basis, source_fingerprint=fixture.DIGEST_A, physical_calls_spent=0,
