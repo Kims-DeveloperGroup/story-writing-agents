@@ -6550,15 +6550,20 @@ class StoryRuntime:
             self._prepare_document_selection(session_id, binding)
         else:
             self._validate_document_node(session_id, binding)
-        known = {item.input_id for item in inputs}
+        known = {item.input_id: item for item in inputs}
+        if len(known) != len(inputs):
+            raise ValueError("document candidate input IDs are ambiguous")
         additions = []
         for number, use in enumerate(binding.candidate_uses, 1):
             alias = f"plan_candidate_{number}"
-            if alias in known:
-                raise ValueError("document candidate alias collides with a current input")
-            additions.append(CollaborationInputRevision(alias, CollaborationInputKind.ARTIFACT_CANDIDATE,
+            expected = CollaborationInputRevision(alias, CollaborationInputKind.ARTIFACT_CANDIDATE,
                 f"artifact-candidate/{use.candidate.candidate_id}", CollaborationInputState.PRESENT,
-                use.candidate.candidate_digest))
+                use.candidate.candidate_digest)
+            if alias in known:
+                if type(known[alias]) is not CollaborationInputRevision or known[alias] != expected:
+                    raise ValueError("document candidate alias collides with a current input")
+                continue
+            additions.append(expected)
         return (*inputs, *additions)
 
     @staticmethod
