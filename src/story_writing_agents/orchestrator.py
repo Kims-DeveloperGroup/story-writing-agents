@@ -12965,6 +12965,7 @@ class StoryRuntime:
                 candidate_inputs = tuple(item for item in inputs if item.input_id in candidate_aliases)
                 candidate_events = self._session_authoring_events(session_id) if candidate_inputs else ()
                 candidate_material = [self._collaboration_input_value(item, candidate_events) for item in candidate_inputs]
+                candidate_material_by_input = dict(zip(candidate_inputs, candidate_material))
                 current_value: dict[str, object] = {
                     **({"document_selection": document_node_selection_to_dict(document_selection)} if document_selection is not None else {}),
                     **({"document_node": document_node_binding_to_dict(document_node)} if document_node is not None else {}),
@@ -13038,7 +13039,8 @@ class StoryRuntime:
                         "request": asdict(preparation.request_event.payload),
                         "decision": asdict(preparation.decision_event.payload),
                         "start": asdict(preparation.start_event.payload),
-                        "selected_inputs": [self._collaboration_input_value(item, objective_events,
+                        "selected_inputs": [candidate_material_by_input[item] if item in candidate_material_by_input
+                                            else self._collaboration_input_value(item, objective_events,
                                                 evidence=preparation.request_event.payload.basis.evidence)
                                             for item in inputs],
                         "instruction": (
