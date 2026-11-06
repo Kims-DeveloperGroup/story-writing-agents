@@ -6377,7 +6377,7 @@ class StoryRuntime:
             request = preparation.request_event.payload
             return ArtifactObjectiveFactsV2(objective_id or self._new_id("obj"), scope_event.conversation_id,
                 request.request_event_id, preparation.decision_event.event_id, request.instruction,
-                request.target_paths, projected.offered_draft_sources)
+                request.objective_target_paths, projected.offered_draft_sources)
         origins = tuple(event for event in events if event.turn_id == scope_event.turn_id
             and type(event.payload) is CollaborationMessagePayload and event.sender.kind is CollaborationActorKind.USER
             and event.recipient.kind is CollaborationActorKind.LEAD)
@@ -15251,7 +15251,7 @@ class StoryRuntime:
                     objective_id=self._new_id("obj"), origin_conversation_id=judgment.conversation_id,
                     origin_recommendation_request_event_id=request.request_event_id,
                     origin_recommendation_decision_event_id=preparation.decision_event.event_id,
-                    request=request.instruction, target_paths=request.target_paths,
+                    request=request.instruction, target_paths=request.objective_target_paths,
                     offered_draft_sources=projection.offered_draft_sources,
                 )
             elif origin is None:

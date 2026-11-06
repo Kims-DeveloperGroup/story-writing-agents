@@ -2230,6 +2230,18 @@ class LeadRecommendationRequestPayload:
         ):
             raise ValueError("review-only recommendation cannot bind artifact authority")
 
+    @property
+    def objective_target_paths(self) -> tuple[str, ...]:
+        """Declared targets for objective capture; origin authority is checked separately."""
+        if self.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT:
+            return self.target_paths
+        scope = self.authoring_scope
+        if (self.kind is LeadRecommendationActionKind.PREPARE_CONSULTATION
+                and scope is not None and scope.intent is AuthoringIntent.AUTHORING
+                and scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}):
+            return scope.target_paths
+        return ()
+
 
 @dataclass(frozen=True, slots=True)
 class LeadRecommendationDecision:

@@ -2853,6 +2853,59 @@ def _is_fresh_drafting_preparation(request, source, events, *, control_history: 
     )
 
 
+def _consultation_objective_origin_matches(request, event, judgment, events) -> bool:
+    """Qualify the same confirmed consultation objective scope in every replay gate."""
+    payload = event.payload
+    if (type(payload) is not ArtifactObjectivePayloadV2
+            or payload.action is not LeadObjectiveAction.START
+            or request.kind is not LeadRecommendationActionKind.PREPARE_CONSULTATION
+            or request.objective_id is not None
+            or judgment is None or type(judgment.payload) is not CollaborationLeadJudgmentPayload):
+        return False
+    scope = judgment.payload.authoring_scope
+    expected = request.authoring_scope
+    if (scope is None or expected is None
+            or scope.intent is not AuthoringIntent.AUTHORING
+            or scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
+            or (scope.intent, scope.activity, scope.task_id, scope.task_revision,
+                scope.domains, scope.target_paths)
+            != (expected.intent, expected.activity, expected.task_id, expected.task_revision,
+                expected.domains, expected.target_paths)
+            or payload.lead_result_event_id != judgment.event_id
+            or judgment.sequence >= event.sequence
+            or (judgment.session_id, judgment.conversation_id, judgment.turn_id,
+                judgment.step_id, judgment.batch_id)
+            != (event.session_id, event.conversation_id, event.turn_id,
+                event.step_id, event.batch_id)
+            or payload.facts.origin_recommendation_request_event_id != request.request_event_id
+            or payload.facts.request != request.instruction
+            or payload.facts.target_paths != request.objective_target_paths):
+        return False
+    if payload.document_plan is not None:
+        return True
+    node = payload.document_node
+    original = request.document_node
+    if (node is None or original is None or judgment.payload.document_node != node
+            or (node.plan_ref, node.node_id) != (original.plan_ref, original.node_id)
+            or (node.task_ref.session_id, node.task_ref.conversation_id,
+                node.task_ref.task_id, node.task_ref.task_revision)
+            != (original.task_ref.session_id, original.task_ref.conversation_id,
+                original.task_ref.task_id, original.task_ref.task_revision)
+            or (node.task_ref.task_id, node.task_ref.task_revision)
+            != (scope.task_id, scope.task_revision)
+            or len(scope.target_paths) != 1 or payload.facts.target_paths != scope.target_paths):
+        return False
+    return any(
+        value.document_plan is not None and value.document_plan.ref == node.plan_ref
+        and any(item.node_id == node.node_id and item.target_path == scope.target_paths[0]
+                for item in value.document_plan.nodes)
+        for prior in events if prior.sequence <= event.sequence
+        for value in (prior.payload,)
+        if type(value) in {CollaborationLeadJudgmentPayload, ArtifactObjectivePayload,
+                          ArtifactObjectivePayloadV2, CollaborationProposal}
+    )
+
+
 def _project_lead_recommendation_history(
     events: tuple[CollaborationEventV2, ...],
     task_origins: tuple[CollaborationEventV2, ...] = (),
@@ -3210,7 +3263,9 @@ def _project_lead_recommendation_history(
                 if (payload.action is LeadObjectiveAction.CANCEL
                     or (request.objective_id is not None and payload.facts.objective_id != request.objective_id)
                     or (request.objective_id is None and (
-                        request.kind is not LeadRecommendationActionKind.PREPARE_ARTIFACT
+                        (request.kind is not LeadRecommendationActionKind.PREPARE_ARTIFACT
+                                and not _consultation_objective_origin_matches(
+                                    request, event, by_id.get(payload.lead_result_event_id), tuple(by_id.values())))
                         or type(payload) is not ArtifactObjectivePayloadV2
                         or payload.action is not LeadObjectiveAction.START))
                     or payload.draft_sources != request.draft_sources):
@@ -6254,13 +6309,10 @@ def _project_artifact_objective_history(
                             or origin[1].event_id != facts.origin_recommendation_decision_event_id
                             or origin[1].payload.decision.kind is not CollaborationConfirmationDecision.CONFIRM
                         or (origin[0].payload.kind is not LeadRecommendationActionKind.PREPARE_ARTIFACT
-                            and not (origin[0].payload.kind is LeadRecommendationActionKind.PREPARE_CONSULTATION
-                                and payload.document_plan is not None and judgment.payload.authoring_scope is not None
-                                and judgment.payload.authoring_scope.intent is AuthoringIntent.AUTHORING
-                                and judgment.payload.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}))
+                            and not (_consultation_objective_origin_matches(origin[0].payload, event, judgment, events)))
                             or origin[0].payload.objective_id is not None
                             or facts.request != origin[0].payload.instruction
-                            or facts.target_paths != origin[0].payload.target_paths
+                            or facts.target_paths != origin[0].payload.objective_target_paths
                             or payload.draft_sources != origin[0].payload.draft_sources
                             or previous is not None or facts.offered_draft_sources != offered
                         ):
