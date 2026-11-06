@@ -931,7 +931,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         for bad_node in (None, wrong_node):
             with self.assertRaises(ValueError):
                 c.project_collaboration_history(objectives.rewrite_history(self.history(draft_conversation), node_objective_event.event_id,
-                    replace(node_objective_event.payload, document_node=bad_node)))
+                    payload=replace(node_objective_event.payload, document_node=bad_node)))
         self.assertIsNot(next(row for row in after_writing.nodes if row.node_id == part_node.node_id).state, c.DocumentNodeState.COMPLETE)
         retained_review_task = next(task for task in self.runtime.inspect_lead_collaboration(self.session_id, planning_conversation).available_tasks if task.ref.task_id == reviewed_task.ref.task_id)
         self.assertEqual(retained_review_task.submitted_call_ids, reviewed_task.submitted_call_ids)
