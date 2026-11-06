@@ -126,6 +126,8 @@ def _response_content(result: ProviderResult) -> str:
             }
         ),
     }
+    if result.last_token_usage is not None:
+        content["last_token_usage"] = asdict(result.last_token_usage)
     if result.usage_observation is not None:
         content["usage_observation"] = asdict(result.usage_observation)
     if result.elapsed_ns is not None:

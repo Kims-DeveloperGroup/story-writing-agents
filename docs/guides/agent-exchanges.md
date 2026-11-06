@@ -303,6 +303,27 @@ not proof that the provider produced no native output, and a missing record is
 not proof that no call occurred. Capture is fail-open, advances before each
 append, and never retries.
 
+### Native token counters
+
+Each response record belongs to one physical call, but its `usage` counters retain
+the provider's reported scope. For Codex, they can be cumulative across a native
+thread; inspect `usage_observation.scope` before comparing or adding them.
+
+When native inspection identifies the current completed Codex request, the response
+also records its latest valid native `last_token_usage`. This optional object has
+`input_tokens`, `output_tokens`, and `cached_input_tokens`, separately from `usage`.
+For example, cumulative input/output counters of 84,460/593 can accompany native
+last counters of 44,142/417. These numbers illustrate the two different scopes.
+
+The last counters are observed diagnostic evidence, not a replacement for cumulative
+accounting. They can remain available when native total counters are missing or
+malformed, or when `usage_observation.scope` is `unknown`. Response metadata still
+uses the existing verified usage attribution; this extra record does not change it.
+Missing, malformed, or unbound native last counters omit the field. A malformed
+latest observation never falls back to an earlier counter, while measured zero
+remains zero. Other providers and older records need not contain this field;
+existing exchange files are not rewritten.
+
 ## User scenarios
 
 ### Inspect exchanges after a normal installation

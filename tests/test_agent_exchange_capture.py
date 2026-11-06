@@ -228,13 +228,15 @@ class AgentExchangeCaptureContractTests(unittest.TestCase):
 
     def test_response_projects_exact_result_with_usage_and_nulls(self) -> None:
         store, lifecycle = _started_capture()
-        lifecycle.record_response(_result(usage=ProviderUsage(11, 7, 3)))
+        result = replace(_result(usage=ProviderUsage(11, 7, 3)), last_token_usage=ProviderUsage(5, 2, 0))
+        lifecycle.record_response(result)
         self.assertEqual(
             _decoded(store.records)[1],
             {
                 "actual_transport_utf8_bytes": 777,
                 "response_text": "PRIVATE_RESPONSE_한🙂",
                 "thread_id": "result_thread",
+                "last_token_usage": {"cached_input_tokens": 0, "input_tokens": 5, "output_tokens": 2},
                 "usage": {
                     "cached_input_tokens": 3,
                     "input_tokens": 11,
@@ -242,6 +244,12 @@ class AgentExchangeCaptureContractTests(unittest.TestCase):
                 },
             },
         )
+
+        zero_store, zero = _started_capture()
+        zero.record_response(replace(result, usage=None, last_token_usage=ProviderUsage(0, 0, 0)))
+        self.assertEqual(_decoded(zero_store.records)[1]["last_token_usage"],
+                         {"cached_input_tokens": 0, "input_tokens": 0, "output_tokens": 0})
+        self.assertIsNone(_decoded(zero_store.records)[1]["usage"])
 
         no_usage_store = _RecordingStore()
         no_usage = _begin(no_usage_store)

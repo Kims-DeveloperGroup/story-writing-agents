@@ -499,9 +499,14 @@ class ProviderNeutralCompatibilityTests(unittest.TestCase):
 
     def test_result_metadata_is_additive_to_legacy_equality(self) -> None:
         legacy = ProviderResult("thread", "response")
-        enriched = ProviderResult("thread", "response", usage=ProviderUsage(1, 2, 3), actual_transport_utf8_bytes=9)
+        enriched = ProviderResult("thread", "response", usage=ProviderUsage(1, 2, 3),
+                                  last_token_usage=ProviderUsage(0, 1, 0), actual_transport_utf8_bytes=9)
         self.assertEqual(legacy, enriched)
         self.assertEqual(enriched.usage, ProviderUsage(1, 2, 3))
+        self.assertEqual(enriched.last_token_usage, ProviderUsage(0, 1, 0))
+        self.assertIsNone(legacy.last_token_usage)
+        with self.assertRaises(TypeError):
+            ProviderResult("thread", "response", last_token_usage={"input_tokens": 1})
         self.assertEqual(enriched.actual_transport_utf8_bytes, 9)
 
     def test_failure_accounting_covers_prepared_and_submitted_cancellation(

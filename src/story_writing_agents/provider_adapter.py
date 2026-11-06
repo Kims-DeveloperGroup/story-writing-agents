@@ -468,6 +468,7 @@ class ProviderResult:
     thread_id: str
     response_text: str
     usage: ProviderUsage | None = field(default=None, compare=False)
+    last_token_usage: ProviderUsage | None = field(default=None, kw_only=True, compare=False)
     usage_observation: ProviderUsageObservation | None = field(default=None, kw_only=True, compare=False)
     elapsed_ns: int | None = field(default=None, kw_only=True, compare=False)
     actual_transport_utf8_bytes: int | None = field(default=None, compare=False)
@@ -501,6 +502,8 @@ class ProviderResult:
             raise TypeError("provider response diagnostic has an invalid type")
         if self.usage is not None and type(self.usage) is not ProviderUsage:
             raise TypeError("provider result usage must be ProviderUsage or None")
+        if self.last_token_usage is not None and type(self.last_token_usage) is not ProviderUsage:
+            raise TypeError("provider result last token usage must be ProviderUsage or None")
         if self.actual_transport_utf8_bytes is not None:
             if type(self.actual_transport_utf8_bytes) is not int:
                 raise TypeError("provider transport UTF-8 bytes must be an integer")

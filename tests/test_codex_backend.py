@@ -2923,6 +2923,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(tuple(call.accounting.usage for call in result.provider_calls),
                          (ProviderUsage(28997, 195, 0), ProviderUsage(88866, 1411, 0)))
+        self.assertEqual(tuple(item.last_token_usage for item in native_results),
+                         (ProviderUsage(28997, 195, 0), ProviderUsage(59869, 1216, 0)))
         usage_observations = tuple(call.accounting.usage_observation for call in result.provider_calls)
         self.assertTrue(all(item.scope is ProviderUsageScope.SESSION_CUMULATIVE for item in usage_observations))
         self.assertTrue(usage_observations[0].session_start)
@@ -3171,6 +3173,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reselect_report["physical_calls"][1]["attributable_usage"],
                          {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0})
         self.assertIs(native_results[-1].usage_observation.scope, ProviderUsageScope.UNKNOWN)
+        self.assertEqual(native_results[-1].last_token_usage, ProviderUsage(1000, 10, 0))
         self.assertIsNone(reselect_report["physical_calls"][2]["attributable_usage"])
         assert_done_ledger(reselected)
 
@@ -3381,6 +3384,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         await service.invoke(unavailable_request, ObservedProvider(),
                             group_observation_sink=observations.append, **authorities)
             check = native_results[1].native_context_check
+            self.assertEqual(native_results[1].context_witness is not None, transient)
+            self.assertEqual(native_results[1].last_token_usage,
+                             ProviderUsage(1000, 10, 0) if transient else None)
             self.assertTrue(check.pre_submit_verified)
             self.assertEqual(check.normal_exit_code, 0)
             self.assertEqual(native_results[1].thread_id, native_thread)
@@ -3552,6 +3558,21 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             write(records)
             from story_writing_agents.agent_context.accounting import ProviderUsage, ProviderUsageScope, normalized_provider_usage
             raw_usage = ProviderUsage(7, 3, 0)
+            self.assertIsNone(codex_adapter._inspect_codex_native_observation(root, first, thread).last_token_usage)
+            def token_count(info):
+                return {"type": "event_msg", "payload": {"type": "token_count", "info": info}}
+            last = {"input_tokens": 7, "output_tokens": 3, "cached_input_tokens": 0}
+            stale = token_count({"total_token_usage": {"input_tokens": 91, "output_tokens": 10, "cached_input_tokens": 8},
+                                 "last_token_usage": {"input_tokens": 90, "output_tokens": 9, "cached_input_tokens": 8}})
+            for info, expected in (({"last_token_usage": last}, raw_usage),
+                    ({"total_token_usage": {"input_tokens": True}, "last_token_usage": last}, raw_usage),
+                    ({"last_token_usage": dict.fromkeys(last, 0)}, ProviderUsage(0, 0, 0)),
+                    ({"last_token_usage": {**last, "input_tokens": True}}, None), ({}, None)):
+                write([metadata, started, context, wire, stale, token_count(info), completed])
+                native = codex_adapter._inspect_codex_native_observation(root, first, thread)
+                self.assertIsNotNone(native.witness)
+                self.assertEqual(native.last_token_usage, expected)
+            write(records)
             uninspected = codex_adapter._codex_usage_observation(raw_usage, None, replace(first, context_call_id=None))
             self.assertEqual(uninspected.raw, raw_usage)
             self.assertIs(uninspected.scope, ProviderUsageScope.UNKNOWN)
@@ -3569,6 +3590,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             continued = codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness)
             self.assertIsNotNone(continued)
             self.assertEqual(continued.turn_id, "turn-2")
+            write([metadata, started, context, wire, stale, completed, *turn(second, "turn-2")])
+            native = codex_adapter._inspect_codex_native_observation(root, second, thread, previous=witness, anchor=witness)
+            self.assertIsNotNone(native.witness)
+            self.assertIsNone(native.last_token_usage)
+            write(extended)
             total_first, total_second, last_second = ProviderUsage(28997, 195, 0), ProviderUsage(88866, 1411, 0), ProviderUsage(59869, 1216, 0)
             first_observed = SimpleNamespace(witness=witness, usage_pair=(total_first, total_first), previous_usage=None, first_native_turn=True)
             resumed = codex_adapter._codex_usage_observation(total_first, first_observed, replace(first, thread_id=thread))
