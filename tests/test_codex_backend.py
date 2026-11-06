@@ -3384,7 +3384,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         await service.invoke(unavailable_request, ObservedProvider(),
                             group_observation_sink=observations.append, **authorities)
             check = native_results[1].native_context_check
-            self.assertIsNone(native_results[1].last_token_usage)
+            self.assertEqual(native_results[1].context_witness is not None, transient)
+            self.assertEqual(native_results[1].last_token_usage,
+                             ProviderUsage(1000, 10, 0) if transient else None)
             self.assertTrue(check.pre_submit_verified)
             self.assertEqual(check.normal_exit_code, 0)
             self.assertEqual(native_results[1].thread_id, native_thread)
