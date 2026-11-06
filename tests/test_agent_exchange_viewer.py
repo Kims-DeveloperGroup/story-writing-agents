@@ -721,7 +721,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
             transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True); operation(transport)
             initial = next(frame for frame in frames if "Focus:" in frame)
             assert "Single ·" in initial and "Focus: Detail" in initial, initial
-            assert " │ " not in initial, initial
+            assert any(line.startswith("> R1 L") for line in initial.splitlines()), initial
             searched = [frame for frame in frames if "Search: 'CODEX'" in frame]
             assert closed == [True] and "READ ONLY" in frames[0] and any("provider" in frame and "2 occurrences" in frame for frame in searched)
             cleared = frames[max(i for i, frame in enumerate(frames) if "Search: 'CODEX'" in frame) + 1]
