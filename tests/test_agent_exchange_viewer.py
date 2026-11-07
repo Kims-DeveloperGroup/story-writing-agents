@@ -719,6 +719,9 @@ class LazyViewerAdapterTests(unittest.TestCase):
             jsonl_viewer.view_jsonl = owned
             operation = prepare_agent_exchange_view(source, session_id="session_1", scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_1", scope_subject="Subject", agent_id="character_custodian")
             transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True); operation(transport)
+            initial = next(frame for frame in frames if "Focus:" in frame)
+            assert "Single ·" in initial and "Focus: Detail" in initial, initial
+            assert any(line.startswith("> R1 L") for line in initial.splitlines()), initial
             searched = [frame for frame in frames if "Search: 'CODEX'" in frame]
             assert closed == [True] and "READ ONLY" in frames[0] and any("provider" in frame and "2 occurrences" in frame for frame in searched)
             cleared = frames[max(i for i, frame in enumerate(frames) if "Search: 'CODEX'" in frame) + 1]
