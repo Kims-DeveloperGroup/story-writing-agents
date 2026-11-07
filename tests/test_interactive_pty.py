@@ -1670,6 +1670,8 @@ print(f"SHELL_VALUE={input('shell> ')}")
         if any(line.strip() == "^" for line in rows):
             caret = next(i for i, line in enumerate(rows) if line.strip() == "^"); self.assertEqual(rows[caret - 1][rows[caret].index("^")], '"')
         else: self.assertRegex(painted, r'\x1b\[(?:[0-9]+;)*7(?:;[0-9]+)*m"')
+        mark = process.output_mark(); process.send_bytes(f"\x1b[<0;{column};{row}m".encode())
+        process.wait_for_text("? help · q close", after=mark)
         mark = process.output_mark(); process.send_bytes(f"\x1b[<65;{column};{row}M".encode())
         process.wait_for_text("? help · q close", after=mark)
         painted = process.text_after(mark); rows = viewer_rows(process.normalized_bytes)
