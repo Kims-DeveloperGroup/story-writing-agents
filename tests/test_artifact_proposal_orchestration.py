@@ -217,7 +217,7 @@ def _artifact_outcome(
                 choices = dict(call.contract.semantic_index.policy.choices)
                 sources = (choices['input_ids'] if choices['source_binding'] == ('unbound',) else choices['source_ids'])
                 native['authoring_assessment'] = lead_fixture_assessment(
-                    native['authoring_assessment'], source_choices=choices['input_ids'])
+                    native['authoring_assessment'], source_choices=choices['input_ids'] + choices['historical_user_source_ids'])
             if 'writing_task_scope' in native:
                 native['task_scope'] = lead_fixture_bound_scope(call, native.pop('writing_task_scope'))
             return lead_fixture_response(call, lead_fixture_result(native), family=0)
@@ -684,7 +684,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                     drafting['target_artifact_paths'] = finite_fixture_selection(
                         choices['preparation_targets'], tuple(drafting['target_artifact_paths']))
                 native['authoring_assessment'] = lead_fixture_assessment(
-                    native['authoring_assessment'], source_choices=choices['input_ids'])
+                    native['authoring_assessment'], source_choices=choices['input_ids'] + choices['historical_user_source_ids'])
                 return self._require_revision_fixture(call, lead_fixture_response(call, lead_fixture_result(native), family=0),
                     first.proposal.authoring_scope, artifact=True)
             return encode_current(

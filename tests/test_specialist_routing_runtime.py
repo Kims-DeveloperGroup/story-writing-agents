@@ -2013,7 +2013,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             native['task_scope'] = lead_fixture_bound_scope(
                 call, native.pop('writing_task_scope'), record=True)
             native['authoring_assessment'] = lead_fixture_assessment(
-                native['authoring_assessment'], source_choices=choices['input_ids'])
+                native['authoring_assessment'], source_choices=choices['input_ids'] + choices['historical_user_source_ids'])
             proposal = native['specialist_consultation_proposal']
             allocation = lead_fixture_assignments(
                 author_positive_fixture_review_bases(
