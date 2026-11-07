@@ -370,15 +370,11 @@ class SpecialistRoutingTests(unittest.TestCase):
                 wrong = dict(wire); wrong.pop(key)
                 with self.subTest(missing=key), self.assertRaises((TypeError, ValueError)): decode(wrong)
             with self.assertRaises((TypeError, ValueError)): decode(dict(wire, authority=True))
-
-
         spec = premise.PremiseDecisionSpec("question-1", "knowledge", "Keep the knowledge choice unresolved.", (Domain.PLOT_STRUCTURE,), "user-1")
         encoded = premise.premise_value_to_dict(spec)
         self.assertEqual(premise.premise_spec_from_dict(encoded), spec)
         with self.assertRaises(ValueError):
             premise.premise_spec_from_dict({**encoded, "candidate_input_ids": ["user_input"]})
-
-        # Pure records are not READ proofs or host-granted final-review authority.
         whole_digest = "sha256:" + hashlib.sha256(b"Mara protects the letter.\n").hexdigest()
         range_digest = "sha256:" + hashlib.sha256(b"protects the letter").hexdigest()
         user = review.ReviewTarget(
@@ -472,7 +468,6 @@ class SpecialistRoutingTests(unittest.TestCase):
             excluded_input_ids=(), findings=(), conflicts=(), missing_information=(),
             further_review_required=False, next_action=review.PreliminaryNextAction.FINISH_DIRECT)
         self.assertTrue(complete.whole_target_coverage)
-
         from story_writing_agents.lead_task_transitions import LeadTaskRef
         plan = self._document_plan_fixture()
         origin = LeadTaskRef(session_id="session", conversation_id="conversation", task_id="task_outline",
@@ -516,6 +511,7 @@ class SpecialistRoutingTests(unittest.TestCase):
             with self.assertRaises((TypeError, ValueError)): decode({**encoded, "approved": True})
         wire = documents.document_plan_to_dict(plan)
         unsigned = json.loads(json.dumps(wire)); del unsigned["ref"]["plan_digest"]
+        unsigned = json.loads(json.dumps(wire)); del unsigned["ref"]["plan_digest"]
         expected_digest = "sha256:" + hashlib.sha256(json.dumps(unsigned, ensure_ascii=False, sort_keys=True,
             allow_nan=False, separators=(",", ":")).encode("utf-8")).hexdigest()
         self.assertEqual(plan.ref.plan_digest, expected_digest)
@@ -533,8 +529,6 @@ class SpecialistRoutingTests(unittest.TestCase):
             with self.assertRaises(ValueError): replace(binding, **changes)
         with self.assertRaises(ValueError):
             replace(use, predecessor_node_id=use.consumer_node_id)
-
-        # Projection only: review-only metadata grants no Apply; independent Apply outcomes are supplied as facts.
         from story_writing_agents import artifact_proposals as artifacts, writing_artifacts as applications
         from story_writing_agents.agents import EXECUTION_SPECIALIST
         history = []
@@ -649,8 +643,6 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertNotIn(chapter3, rewrite_view.completed_target_paths)
         self.assertNotIn(chapter4, rewrite_view.completed_target_paths)
         self.assertIsNot(next(row for row in rewrite_view.nodes if row.node_id == "node_chapter3").state, documents.DocumentNodeState.COMPLETE)
-
-        # Agent metadata drops task bindings; literal story data and source versions stay exact.
         from story_writing_agents.agent_task_projection import project_agent_task_metadata
         source_metadata = {
             "document_node": documents.document_node_binding_to_dict(binding),
@@ -672,7 +664,6 @@ class SpecialistRoutingTests(unittest.TestCase):
             "plan_candidate_material": [{"candidate": json.loads(artifacts.serialize_artifact_review_candidate(exact_candidate))}],
             "document_work_plan": {"plan": documents.document_plan_to_dict(plan)}}}
         from story_writing_agents import StoryRuntime
-        # Constructed context metadata tests lossless presentation, not objective authority.
         document_input["task_input"]["artifact_objectives"] = {"conversation_id": task.conversation_id,
             "objectives": [{"facts": {"target_paths": [node.target_path for node in plan.nodes],
                 "request": "Preserve the original requested draft and every exact target."}, "state": "open",
@@ -708,6 +699,98 @@ class SpecialistRoutingTests(unittest.TestCase):
         guided_document = add_contract_guidance(wire_document, {})
         self.assertEqual({key: value for key, value in guided_document.items() if key != "contract_guidance"}, wire_document)
         self.assertTrue(guided_document["contract_guidance"]["input_fields"])
+        global_path = plan.nodes[0].target_path
+        from story_writing_agents.orchestrator import _target_authoring_scope_prior
+        from story_writing_agents.lead_task_transitions import LeadTaskAction, LeadTaskTransitionReceipt
+        artifact_scope, readonly_scope = (self.scope(activity=Activity.REVIEW, intent=intent) for intent in (Intent.AUTHORING, Intent.REVIEW_ONLY))
+        for source_scope, next_scope in ((artifact_scope, readonly_scope), (readonly_scope, artifact_scope)):
+            fresh_scope = replace(next_scope, task_id="fresh_scope_task", task_revision=1)
+            source_ref = replace(task, task_id=source_scope.task_id, task_revision=source_scope.task_revision,
+                                 scope_digest=documents.document_value_digest(c.authoring_scope_to_dict(source_scope)))
+            receipt = LeadTaskTransitionReceipt(origin_event_id="scope_task_decision", origin_kind="task_decision",
+                action=LeadTaskAction.NEW_TASK, source_task_ref=source_ref, target_task_id=fresh_scope.task_id,
+                target_task_revision=fresh_scope.task_revision, planning_step_id="scope_planning_step")
+            self.assertIsNone(_target_authoring_scope_prior(fresh_scope, source_scope, receipt))
+            same_task_scope = replace(fresh_scope, task_id=source_scope.task_id, task_revision=source_scope.task_revision)
+            same_task_receipt = replace(receipt, target_task_id=same_task_scope.task_id, target_task_revision=same_task_scope.task_revision)
+            foreign_scope = replace(source_scope, task_id="foreign_scope_task")
+            foreign_ref = replace(source_ref, task_id=foreign_scope.task_id, scope_event_id="foreign_scope_event",
+                                  scope_digest=documents.document_value_digest(c.authoring_scope_to_dict(foreign_scope)))
+            for retained_scope, retained_receipt in (
+                (fresh_scope, None),
+                (same_task_scope, replace(same_task_receipt, action=LeadTaskAction.RESUME)),
+                (fresh_scope, replace(receipt, origin_kind="revise_decision")),
+                (same_task_scope, same_task_receipt),
+                (fresh_scope, replace(receipt, target_task_revision=fresh_scope.task_revision + 1)),
+                (fresh_scope, replace(receipt, source_task_ref=foreign_ref)),
+            ):
+                self.assertIs(_target_authoring_scope_prior(retained_scope, source_scope, retained_receipt), source_scope)
+        from story_writing_agents.lead_task_transitions import LeadTaskDecision
+        selector_scope = self.scope(schema_version=3, activity=Activity.DRAFT, target_paths=(global_path,),
+            task_id="fresh_recommendation_target", task_revision=1,
+            contributions=(Contribution(Domain.PLOT_STRUCTURE, Role.DRAFT_OWNER),))
+        selector_source = fixture.make_draft("selector_judgment", c.CollaborationEventKind.MESSAGE, fixture.LEAD, fixture.USER,
+            c.CollaborationLeadJudgmentPayload(c.LeadOutcomeKind.RECOMMENDATION, "Draft only the disclosed Global outline.",
+                first_proposal.basis.evidence, authoring_scope=selector_scope))
+        self.assertIs(first_proposal.authoring_scope.intent, Intent.REVIEW_ONLY)
+        readonly_ref = first_proposal.document_node.task_ref
+        def selector_decision(prior_ref):
+            if prior_ref is None:
+                return LeadTaskDecision.for_conversation(fixture.SESSION_ID, fixture.CONVERSATION_ID, LeadTaskAction.NEW_TASK,
+                    text="Draft only Global outline from these USER facts.", request_id="selector_request")
+            return LeadTaskDecision.from_task(prior_ref, LeadTaskAction.NEW_TASK,
+                text="Start a distinct Global drafting task; preserve the prior review.", request_id="selector_request")
+        def selector_records(groups):
+            records = []
+            for index, drafts in enumerate(groups):
+                batch = fixture.make_batch(tuple(records), "selector_batch_" + str(index), *drafts)
+                for ordinal, draft in enumerate(drafts):
+                    records.append(c.CollaborationEvent(**{field.name: getattr(draft, field.name) for field in fields(draft)},
+                        sequence=len(records) + 1, timestamp="2026-11-06T00:00:00+00:00", batch_id=batch.batch_id,
+                        batch_ordinal=ordinal, batch_size=len(drafts), batch_digest=c.collaboration_batch_digest(batch)))
+            return tuple(records)
+        def selector_events(decision, receipt, *, split_controls=False):
+            origin = fixture.make_draft(receipt.origin_event_id, c.CollaborationEventKind.LEAD_TASK_DECISION,
+                fixture.USER, fixture.RUNTIME, c.CollaborationLeadTaskDecisionPayload(decision))
+            transition = fixture.make_draft("selector_transition", c.CollaborationEventKind.LEAD_TASK_TRANSITION,
+                fixture.RUNTIME, fixture.USER, c.CollaborationLeadTaskTransitionPayload(receipt))
+            groups = ((origin,), (transition,)) if split_controls else ((origin, transition),)
+            return selector_records((*groups, (selector_source,)))
+        for prior_ref in (None, readonly_ref):
+            decision = selector_decision(prior_ref)
+            selector_receipt = LeadTaskTransitionReceipt(origin_event_id="selector_origin", origin_kind="task_decision",
+                action=LeadTaskAction.NEW_TASK, source_task_ref=prior_ref, target_task_id=selector_scope.task_id,
+                target_task_revision=selector_scope.task_revision, planning_step_id=selector_source.step_id)
+            records = selector_events(decision, selector_receipt)
+            self.assertTrue(c.is_new_task_recommendation_source(selector_source, selector_scope, records))
+            self.assertEqual(records[0].batch_id, records[1].batch_id)
+            self.assertNotEqual(records[0].batch_id, records[2].batch_id)
+            ambiguous = selector_records(((records[0].to_draft(), records[1].to_draft(),
+                                             replace(records[1].to_draft(), event_id="selector_duplicate_transition")), (selector_source,)))
+            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, ambiguous))
+            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, records[1:]))
+            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, records[:1] + records[2:]))
+            other_scope = replace(selector_scope, task_id="other_recommendation_target")
+            other_source = replace(selector_source, payload=replace(selector_source.payload, authoring_scope=other_scope))
+            self.assertFalse(c.is_new_task_recommendation_source(other_source, other_scope, records))
+            self.assertFalse(c.is_new_task_recommendation_source(selector_source, replace(selector_scope, interpretation="Different disclosed work."), records))
+            self.assertFalse(c.is_new_task_recommendation_source(replace(selector_source, step_id="foreign_step"), selector_scope, records))
+            self.assertFalse(c.is_new_task_recommendation_source(replace(selector_source, conversation_id="foreign_conversation"), selector_scope, records))
+            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, selector_events(decision, selector_receipt, split_controls=True)))
+            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, selector_events(replace(decision, action=LeadTaskAction.DISCUSS), selector_receipt)))
+            same_id_ref = replace(readonly_ref, task_id=selector_scope.task_id, task_revision=selector_scope.task_revision,
+                scope_digest=documents.document_value_digest(c.authoring_scope_to_dict(selector_scope)))
+            same_id_receipt = replace(selector_receipt, source_task_ref=same_id_ref)
+            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, selector_events(selector_decision(same_id_ref), same_id_receipt)))
+
+    @staticmethod
+    def _document_task_ref_fixture():
+        from story_writing_agents.lead_task_transitions import LeadTaskRef
+        return LeadTaskRef(session_id="session", conversation_id="conversation", task_id="task_outline",
+            task_revision=2, scope_event_id="scope_2", scope_digest=documents.document_value_digest({"scope": 2}))
+
+    def test_formal_planning_question_selected_gen_is_closed_and_owned(self):
+        task = self._document_task_ref_fixture()
         from types import SimpleNamespace
         from story_writing_agents.agent_context.service import ContextCallOffers, BoundContextProviderCallRequest
         from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
@@ -744,6 +827,26 @@ class SpecialistRoutingTests(unittest.TestCase):
         question_value = json.loads(decoded_question.answer_json)
         self.assertEqual((question_value["kind"], question_value["planning_target"]), ("question", "manuscript"))
         self.assertEqual(question_value["authoring_scope"]["target_paths"], [])
+
+    def test_selected_document_revision_frames_and_continuation_are_current(self):
+        canonical = lambda value: json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')
+        plan = self._document_plan_fixture()
+        task = self._document_task_ref_fixture()
+        baseline = {node.target_path: b"Core baseline for constructed projection.\n" for node in plan.nodes[:-1]}
+        from types import SimpleNamespace
+        from story_writing_agents.agent_context.service import ContextCallOffers, BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
+        from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
+        from story_writing_agents.orchestrator import OrchestrationLeadCallFactory
+        from tests.test_provider_schema_spec import check_schema
+        from tests import test_lead_artifact_objectives as document_fixture
+        facts = LeadProviderConstraints(input_ids=("user_input",), task_revisions=((task.task_id, task.task_revision),))
+        def deny_authority(_result, _authorization):
+            raise ValueError("Pure fixture contract check grants no host authority")
+        offers = ContextCallOffers(call_id="formal-question-select", scope=ContextScope("workspace", task.session_id,
+            ContextSubjectKind.CONVERSATION, task.conversation_id, document_fixture.lead.LEAD_ORCHESTRATOR),
+            action_index=1, allowed_actions=("answer",), action_limits=(), search_source_kinds=(), issued_handle_aliases=(),
+            completed_read_facts=(), delivery_read_facts=(), core_status_facts=(), remaining_provider_calls=2)
         from story_writing_agents.agent_context.actions import ContextCallReadFact
         from story_writing_agents.agent_context.accounting import ProviderCallKind
         from story_writing_agents.agent_context.manifest import ContextSourceKind
@@ -757,11 +860,8 @@ class SpecialistRoutingTests(unittest.TestCase):
             document_node_digest=documents.document_value_digest(documents.document_node_selection_to_dict(global_selection)),
             document_target_paths=(global_path,))
         def revision_factory(capability_path):
-            revision_seed = _lead_revision_result_contract(c.LeadProposalRelation.NEW_STEP, selected_facts.input_ids,
-                selected_facts.task_revisions, selected_facts, LeadDiscussionConstraints(task.task_id, task.task_revision),
-                fresh_revision_only=True, source_scope=None, artifact_revision_only=False,
-                selected_document_review_path=capability_path)
-            return replace(factory, constraints=selected_facts, rule_seed=revision_seed, schema_group_protocol=False)
+            revision_seed = _lead_revision_result_contract(c.LeadProposalRelation.NEW_STEP, selected_facts.input_ids, selected_facts.task_revisions, selected_facts, LeadDiscussionConstraints(task.task_id, task.task_revision), fresh_revision_only=True, source_scope=None, artifact_revision_only=False, selected_document_review_path=capability_path)
+            return OrchestrationLeadCallFactory(selected_facts, revision_seed, 'lead.front', 'EN', deny_authority, lambda _path: document_fixture.PLOT_ARCHITECT, schema_group_protocol=False)
         selected_factory = revision_factory(global_path)
         ordinary_factory = revision_factory(None)
         with self.assertRaises(ValueError):
@@ -893,92 +993,6 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertTrue(result_bound.rule_graph.findings(illegal_readonly_artifact))
         with self.assertRaises(ValueError):
             result_bound.decode_response(json.dumps(illegal_readonly_artifact))
-
-        from story_writing_agents.orchestrator import _target_authoring_scope_prior
-        from story_writing_agents.lead_task_transitions import LeadTaskAction, LeadTaskTransitionReceipt
-        # Pure scope-law fixtures: receipt verification remains the caller's responsibility.
-        artifact_scope, readonly_scope = (self.scope(activity=Activity.REVIEW, intent=intent) for intent in (Intent.AUTHORING, Intent.REVIEW_ONLY))
-        for source_scope, next_scope in ((artifact_scope, readonly_scope), (readonly_scope, artifact_scope)):
-            fresh_scope = replace(next_scope, task_id="fresh_scope_task", task_revision=1)
-            source_ref = replace(task, task_id=source_scope.task_id, task_revision=source_scope.task_revision,
-                                 scope_digest=documents.document_value_digest(c.authoring_scope_to_dict(source_scope)))
-            receipt = LeadTaskTransitionReceipt(origin_event_id="scope_task_decision", origin_kind="task_decision",
-                action=LeadTaskAction.NEW_TASK, source_task_ref=source_ref, target_task_id=fresh_scope.task_id,
-                target_task_revision=fresh_scope.task_revision, planning_step_id="scope_planning_step")
-            self.assertIsNone(_target_authoring_scope_prior(fresh_scope, source_scope, receipt))
-            same_task_scope = replace(fresh_scope, task_id=source_scope.task_id, task_revision=source_scope.task_revision)
-            same_task_receipt = replace(receipt, target_task_id=same_task_scope.task_id, target_task_revision=same_task_scope.task_revision)
-            foreign_scope = replace(source_scope, task_id="foreign_scope_task")
-            foreign_ref = replace(source_ref, task_id=foreign_scope.task_id, scope_event_id="foreign_scope_event",
-                                  scope_digest=documents.document_value_digest(c.authoring_scope_to_dict(foreign_scope)))
-            for retained_scope, retained_receipt in (
-                (fresh_scope, None),
-                (same_task_scope, replace(same_task_receipt, action=LeadTaskAction.RESUME)),
-                (fresh_scope, replace(receipt, origin_kind="revise_decision")),
-                (same_task_scope, same_task_receipt),
-                (fresh_scope, replace(receipt, target_task_revision=fresh_scope.task_revision + 1)),
-                (fresh_scope, replace(receipt, source_task_ref=foreign_ref)),
-            ):
-                self.assertIs(_target_authoring_scope_prior(retained_scope, source_scope, retained_receipt), source_scope)
-
-        from story_writing_agents.lead_task_transitions import LeadTaskDecision
-        selector_scope = self.scope(schema_version=3, activity=Activity.DRAFT, target_paths=(global_path,),
-            task_id="fresh_recommendation_target", task_revision=1,
-            contributions=(Contribution(Domain.PLOT_STRUCTURE, Role.DRAFT_OWNER),))
-        selector_source = fixture.make_draft("selector_judgment", c.CollaborationEventKind.MESSAGE, fixture.LEAD, fixture.USER,
-            c.CollaborationLeadJudgmentPayload(c.LeadOutcomeKind.RECOMMENDATION, "Draft only the disclosed Global outline.",
-                first_proposal.basis.evidence, authoring_scope=selector_scope))
-        self.assertIs(first_proposal.authoring_scope.intent, Intent.REVIEW_ONLY)
-        readonly_ref = first_proposal.document_node.task_ref
-        def selector_decision(prior_ref):
-            if prior_ref is None:
-                return LeadTaskDecision.for_conversation(fixture.SESSION_ID, fixture.CONVERSATION_ID, LeadTaskAction.NEW_TASK,
-                    text="Draft only Global outline from these USER facts.", request_id="selector_request")
-            return LeadTaskDecision.from_task(prior_ref, LeadTaskAction.NEW_TASK,
-                text="Start a distinct Global drafting task; preserve the prior review.", request_id="selector_request")
-        def selector_records(groups):
-            records = []
-            for index, drafts in enumerate(groups):
-                batch = fixture.make_batch(tuple(records), "selector_batch_" + str(index), *drafts)
-                for ordinal, draft in enumerate(drafts):
-                    records.append(c.CollaborationEvent(**{field.name: getattr(draft, field.name) for field in fields(draft)},
-                        sequence=len(records) + 1, timestamp="2026-11-06T00:00:00+00:00", batch_id=batch.batch_id,
-                        batch_ordinal=ordinal, batch_size=len(drafts), batch_digest=c.collaboration_batch_digest(batch)))
-            return tuple(records)
-        def selector_events(decision, receipt, *, split_controls=False):
-            origin = fixture.make_draft(receipt.origin_event_id, c.CollaborationEventKind.LEAD_TASK_DECISION,
-                fixture.USER, fixture.RUNTIME, c.CollaborationLeadTaskDecisionPayload(decision))
-            transition = fixture.make_draft("selector_transition", c.CollaborationEventKind.LEAD_TASK_TRANSITION,
-                fixture.RUNTIME, fixture.USER, c.CollaborationLeadTaskTransitionPayload(receipt))
-            groups = ((origin,), (transition,)) if split_controls else ((origin, transition),)
-            return selector_records((*groups, (selector_source,)))
-        # Constructed control records test only source eligibility, not host admission or a storage replay.
-        for prior_ref in (None, readonly_ref):
-            decision = selector_decision(prior_ref)
-            selector_receipt = LeadTaskTransitionReceipt(origin_event_id="selector_origin", origin_kind="task_decision",
-                action=LeadTaskAction.NEW_TASK, source_task_ref=prior_ref, target_task_id=selector_scope.task_id,
-                target_task_revision=selector_scope.task_revision, planning_step_id=selector_source.step_id)
-            records = selector_events(decision, selector_receipt)
-            self.assertTrue(c.is_new_task_recommendation_source(selector_source, selector_scope, records))
-            self.assertEqual(records[0].batch_id, records[1].batch_id)
-            self.assertNotEqual(records[0].batch_id, records[2].batch_id)
-            ambiguous = selector_records(((records[0].to_draft(), records[1].to_draft(),
-                                             replace(records[1].to_draft(), event_id="selector_duplicate_transition")), (selector_source,)))
-            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, ambiguous))
-            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, records[1:]))
-            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, records[:1] + records[2:]))
-            other_scope = replace(selector_scope, task_id="other_recommendation_target")
-            other_source = replace(selector_source, payload=replace(selector_source.payload, authoring_scope=other_scope))
-            self.assertFalse(c.is_new_task_recommendation_source(other_source, other_scope, records))
-            self.assertFalse(c.is_new_task_recommendation_source(selector_source, replace(selector_scope, interpretation="Different disclosed work."), records))
-            self.assertFalse(c.is_new_task_recommendation_source(replace(selector_source, step_id="foreign_step"), selector_scope, records))
-            self.assertFalse(c.is_new_task_recommendation_source(replace(selector_source, conversation_id="foreign_conversation"), selector_scope, records))
-            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, selector_events(decision, selector_receipt, split_controls=True)))
-            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, selector_events(replace(decision, action=LeadTaskAction.DISCUSS), selector_receipt)))
-            same_id_ref = replace(readonly_ref, task_id=selector_scope.task_id, task_revision=selector_scope.task_revision,
-                scope_digest=documents.document_value_digest(c.authoring_scope_to_dict(selector_scope)))
-            same_id_receipt = replace(selector_receipt, source_task_ref=same_id_ref)
-            self.assertFalse(c.is_new_task_recommendation_source(selector_source, selector_scope, selector_events(selector_decision(same_id_ref), same_id_receipt)))
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
         from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment

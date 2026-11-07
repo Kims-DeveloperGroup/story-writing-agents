@@ -6,11 +6,11 @@ An edit/test iteration should run the smallest independent regression selection
 that covers the changed behavior. Keep complete integration verification as the
 delivery gate; a selected run certifies only its recorded IDs and source.
 
-Issue #938 will account for a coverage-preserving case split before changing the
+Issue #938 records each coverage-preserving case split before changing the
 canonical inventory or subtest caps. Retain the original assertions, real host
 transitions, and full sequential workflows. Use fresh mutable fixtures for each
-independent case, and share only proven immutable preparation. This planning
-entry grants no inventory, source, timing, or failing-test exception.
+independent case, and share only proven immutable preparation. The exact first
+migration below is the sole new allocation; no failing-test exception is granted.
 
 The canonical suite is a bounded regression sample. Its checked-in inventory is
 [`tests/fixtures/test_budget_v1.json`](tests/fixtures/test_budget_v1.json).
@@ -318,7 +318,7 @@ between Python patches. Reconciliation still requires matching environments.
 
 ## Dedicated whole-front shard
 
-The maintainer-approved partition has five selections: 577/554/704/691/1 tests.
+The maintainer-approved partition has five selections: 621/618/632/667/1 tests.
 Run the original four-bin class-LPT assignment first, then extract only
 `tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict`
 into shard `5/5`. Other IDs keep their prior bin. This is the sole explicit
@@ -343,11 +343,12 @@ benchmark campaign is required.
 
 ## Hosted full-shard method scheduling
 
-Only hosted full shards opt into the fixed `audited-147-v3` profile: 147
-fixture-audited existing methods across 17 classes. The profile includes the eight
+Only hosted full shards opt into the fixed `audited-159-v4` profile: 159
+fixture-audited methods across 19 classes. The profile includes the eight
 provider-timeout recovery, ten context-recovery and thirteen interactive Lead
-adapter methods audited after v40's measured serial bottlenecks. The original four-bin class assignment stays fixed except for the extracted
-whole-front method, and every shard retains canonical selected-ID order. Noneligible tests run once
+adapter methods audited after v40's measured serial bottlenecks. The #938 case split retains class-LPT and isolates whole-front, with the exact
+new inventory and estimated weights described below. Each shard retains
+canonical selected-ID order. Noneligible tests run once
 in their original serial suite; then eligible whole methods run in fresh
 interpreters, with at most four active method processes. The frozen launch order
 starts whole-front, then seven other v40 failed or unexecuted methods in canonical
@@ -619,3 +620,35 @@ raw149462이고, 정책 helper2행 후 helper1308이며 전체 상한은 **15077
 각 base/target ±1은 거절한다. ID2527개·전체 subTest mapping·18000/3600초·
 제품12회/2라운드와 조건부22회 통합 시나리오는 변경하지 않는다.
 최종 전체 CI·Whole Front·재조정·기술 provider·리뷰·완료 조건을 대체하지 않는다.
+
+### #938 independent-case inventory and source allocation
+
+The maintainer-directed split preserves all 2,527 old IDs and adds twelve IDs:
+ten independent submitted-recovery combinations and two codec-contract cases.
+The old recovery cap moves from 12 to 2 plus ten new caps of 1. The pure codec
+cap stays 10; its two new contract cases have cap 0. The total cap sum is unchanged.
+The owning Issue records the complete scenario/assertion move and exact names.
+
+The only accepted identity migration starts from cap-map SHA256
+`e8d0ec716f086485451822317114c27efd70bd895fdcad012a9410ff406aff18` and applies that
+exact mapping, with no unrelated ID/cap changes. Its source pairs are exactly
+**148783→150868** and **150770→150868**, coupled to that migration and unchanged
+18,000/3,600-second limits. Prior approved transitions remain unchanged.
+
+After the mechanical main update, raw source was 149417 and charged helpers1308.
+This split adds 102 raw lines and 41 charged helper lines: **149519+1349=150868**,
+with no slack. This includes the strict migration regression and runner/budget
+changes; it does not grant unrelated expansion or a waiver of parent failures.
+
+All ten recovery combinations retain their original forty mocked submissions.
+Their minimal fixture omits the unused default Runtime; mutable history is fresh.
+The codec split retains six offer bindings and three fixture-provider invocations.
+The old pure codec ID remains serial; twelve new cases enter audited-159-v4.
+All 147 old profile memberships and their relative launch order are retained.
+
+The historical recovery class weight is shared with its new class using an
+explicit historical method/scenario estimate; their combined weight is conserved.
+The codec class weight combines the observed 183.99956-second baseline method
+with historical estimates for its other methods. Neither is a measured whole-class
+total or a speedup claim. The 385-group partition is **621/618/632/667/1** and covers
+all 2,539 IDs exactly once. Source-bound final runs establish actual cost and gates.

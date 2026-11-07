@@ -302,8 +302,9 @@
     "tests.test_lead_orchestration.LeadBudgetFinalizationTests": 350585623,
     "tests.test_lead_orchestration.LeadDecisionAuthorityTests": 204937499,
     "tests.test_lead_orchestration.LeadOutcomeAndProposalTests": 382558851,
-    "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests": 583902396,
+    "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests": 551819847,
     "tests.test_lead_orchestration.LeadReferenceFailurePrecedenceTests": 57685814,
+    "tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests": 32082549,
     "tests.test_lead_recommendations.LeadRecommendationRecoveryTests": 76855029,
     "tests.test_lead_recommendations.LeadRecommendationTests": 197180772,
     "tests.test_lead_session_continuity.LeadSessionContinuityTests": 91020635,
@@ -353,7 +354,7 @@
     "tests.test_smoke_cli.SmokeHelpAndTemporaryTests": 10090981,
     "tests.test_specialist_orchestration.SpecialistAccountingAcceptanceTests": 45054630,
     "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests": 479982213,
-    "tests.test_specialist_routing.SpecialistRoutingTests": 8429724,
+    "tests.test_specialist_routing.SpecialistRoutingTests": 191375569,
     "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests": 936861816,
     "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests": 3536484,
     "tests.test_sqlite_conversation_storage.SQLiteArchiveTests": 2266524,
@@ -387,6 +388,6 @@
     "tests.test_writing_artifacts.SecureStorageTests": 1752825
   },
   "policy_version": 2,
-  "provenance": "Issue #846 four-shard calibration: complete current #837 E2cbdfb2709ed0b9ea48dba4deefa3d7182faf1c/tree ce66303d363c434fa8a367b0f9d4a443fa6ea1a7 native shared two-worker Python3.11.16 reports (full-1 SHA256 31546b688fa8b034a25b80d9750e252f6ebd626a37995598e57be967e0990147, full-2 SHA256 3dbf6969b4ed4ba8e2fa431d176bf4f56c5d3f9b35d22ec712d026c1a052ad6f). Exact2527IDs,2503passed/24declaredskips; original strict elapsed-only budget exit1 retained. Sum terminal per-class test durations plus3ms/test, same384existing keys. Policy2 fixed-four class-LPT. Weights are partition input and projections, not observed four-way speedup or a strict budget pass.",
+  "provenance": "Issue #846 four-shard calibration: complete current #837 E2cbdfb2709ed0b9ea48dba4deefa3d7182faf1c/tree ce66303d363c434fa8a367b0f9d4a443fa6ea1a7 native shared two-worker Python3.11.16 reports (full-1 SHA256 31546b688fa8b034a25b80d9750e252f6ebd626a37995598e57be967e0990147, full-2 SHA256 3dbf6969b4ed4ba8e2fa431d176bf4f56c5d3f9b35d22ec712d026c1a052ad6f). Exact2527IDs,2503passed/24declaredskips; original strict elapsed-only budget exit1 retained. Sum terminal per-class test durations plus3ms/test, same384existing keys. Policy2 fixed-four class-LPT. Weights are partition input and projections, not observed four-way speedup or a strict budget pass. Issue938 stage1: recovery historical class weight conserved; one of14 method equal shares, then10 of13 source scenarios transferred to new class (estimate, not CPU/time shares). Codec class composite estimate replaces one of8 historical equal method shares with observed0937 codec183999560us from42351326846; class total is not measured.",
   "schema_version": 1
 }

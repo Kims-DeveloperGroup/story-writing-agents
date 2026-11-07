@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import subprocess
@@ -68,13 +69,42 @@ def load_base_budget(base_ref: str) -> dict[str, Any] | None:
         raise BudgetError(f"invalid base budget JSON: {error}") from error
 
 
+_FEEDBACK_BASE_CAP_DIGEST = 'e8d0ec716f086485451822317114c27efd70bd895fdcad012a9410ff406aff18'
+_FEEDBACK_NEW_CAPS = {
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_cancelled_before_correction_never_replays': 1,
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_cancelled_during_correction_never_replays': 1,
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_crashed_before_correction_never_replays': 1,
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_crashed_during_correction_never_replays': 1,
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_missing_before_correction_never_replays': 1,
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_missing_during_correction_never_replays': 1,
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_submission_uncertain_before_correction_never_replays': 1,
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_submission_uncertain_during_correction_never_replays': 1,
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_timed_out_before_correction_never_replays': 1,
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_timed_out_during_correction_never_replays': 1,
+    'tests.test_specialist_routing.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned': 0,
+    'tests.test_specialist_routing.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current': 0,
+}
+_FEEDBACK_OLD_CORE = 'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay'
+
+def _feedback_migration(current: dict[str, Any], base: dict[str, Any]) -> bool:
+    base_caps = base["subtest_caps"]
+    expected = {**base_caps, _FEEDBACK_OLD_CORE: 2, **_FEEDBACK_NEW_CAPS}
+    digest = hashlib.sha256(json.dumps(base_caps, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return (digest == _FEEDBACK_BASE_CAP_DIGEST and current["subtest_caps"] == expected
+            and base["schema_version"] == current["schema_version"] == 1
+            and tuple(base[name] for name in ("max_sequential_wall_seconds", "max_shard_wall_seconds")) == (18000, 3600)
+            and tuple(current[name] for name in ("max_sequential_wall_seconds", "max_shard_wall_seconds")) == (18000, 3600)
+            and (base["max_test_source_lines"], current["max_test_source_lines"]) in ((148783, 150868), (150770, 150868)))
+
+
 def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
+    approved_feedback_migration = _feedback_migration(current, base)
     added = sorted(set(current["subtest_caps"]) - set(base["subtest_caps"]))
-    if added:
+    if added and not approved_feedback_migration:
         raise BudgetError("new canonical test IDs: " + ", ".join(added))
     expanded = sorted(
         key for key, count in current["subtest_caps"].items()
-        if count > base["subtest_caps"][key]
+        if key in base["subtest_caps"] and count > base["subtest_caps"][key]
     )
     if expanded:
         raise BudgetError("increased subtest caps: " + ", ".join(expanded))
@@ -84,6 +114,8 @@ def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
         and tuple(current[name] for name in time_fields) == (18000, 3600)
     )
     approved_increases = set(time_fields) if approved_time_transition else set()
+    if approved_feedback_migration:
+        approved_increases.add("max_test_source_lines")
     if (((base["max_test_source_lines"], current["max_test_source_lines"]) == (142474, 142604)
             or (base["max_test_source_lines"], current["max_test_source_lines"]) == (142604, 142887)
             or (base["max_test_source_lines"], current["max_test_source_lines"]) == (142887, 143443)

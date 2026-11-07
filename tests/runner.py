@@ -803,7 +803,7 @@ def _write_reconciliation_human(report: dict[str, object], stream: TextIO) -> No
 
 # This closed profile is audited for fresh whole-method processes. Adding a method
 # (even in one of these classes) requires another fixture/eligibility review.
-_HOSTED_PROFILE = 'audited-147-v3'
+_HOSTED_PROFILE = 'audited-159-v4'
 _HOSTED_CLEANUP_SECONDS = 30.0
 _HOSTED_LAUNCH_IDS = (
     'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict',
@@ -817,6 +817,18 @@ _HOSTED_LAUNCH_IDS = (
     'tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_whole_and_range_conflict_bind_proposal_and_detect_drift',
     'tests.test_provider_auth_recovery.ContextRecoveryTests.test_safe_replay_preserves_wire_and_counts_distinct_physical_calls',
     'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay',
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_missing_before_correction_never_replays',
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_cancelled_before_correction_never_replays',
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_timed_out_before_correction_never_replays',
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_crashed_before_correction_never_replays',
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_submission_uncertain_before_correction_never_replays',
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_missing_during_correction_never_replays',
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_cancelled_during_correction_never_replays',
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_timed_out_during_correction_never_replays',
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_crashed_during_correction_never_replays',
+    'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_submission_uncertain_during_correction_never_replays',
+    'tests.test_specialist_routing.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned',
+    'tests.test_specialist_routing.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current',
     'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_old_drafted_revision_cannot_authorize_revised_candidate',
     'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does',
     'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing',
@@ -1004,7 +1016,7 @@ def _hosted_partition(canonical: CanonicalCollection, selection: CanonicalCollec
     eligible = set(_HOSTED_METHOD_IDS)
     classes = {identifier.rsplit(".", 1)[0] for identifier in eligible}
     present = {identifier for identifier in canonical.ids if identifier.rsplit(".", 1)[0] in classes}
-    if present != eligible or len(eligible) != 147:
+    if present != eligible or len(eligible) != 159:
         raise RunnerError("audited whole-method eligibility changed")
     serial = tuple(test for test in selection.tests if test.id() not in eligible)
     scheduled = tuple(identifier for identifier in selection.ids if identifier in eligible)

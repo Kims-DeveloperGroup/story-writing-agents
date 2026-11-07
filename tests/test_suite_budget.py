@@ -241,12 +241,57 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
+        migrated = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
+        expected_additions = {
+            'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_cancelled_before_correction_never_replays': 1,
+            'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_cancelled_during_correction_never_replays': 1,
+            'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_crashed_before_correction_never_replays': 1,
+            'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_crashed_during_correction_never_replays': 1,
+            'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_missing_before_correction_never_replays': 1,
+            'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_missing_during_correction_never_replays': 1,
+            'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_submission_uncertain_before_correction_never_replays': 1,
+            'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_submission_uncertain_during_correction_never_replays': 1,
+            'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_timed_out_before_correction_never_replays': 1,
+            'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_timed_out_during_correction_never_replays': 1,
+            'tests.test_specialist_routing.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned': 0,
+            'tests.test_specialist_routing.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current': 0,
+        }
+        prior_caps = {key: value for key, value in migrated["subtest_caps"].items() if key not in expected_additions}
+        recovery_id = 'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay'
+        prior_caps[recovery_id] = 12
+        self.assertEqual(set(migrated["subtest_caps"]) - set(prior_caps), set(expected_additions))
+        self.assertEqual({key: migrated["subtest_caps"][key] for key in expected_additions}, expected_additions)
+        self.assertEqual(migrated["max_test_source_lines"], 150868)
+        matrix_id = "tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_missing_before_correction_never_replays"
+        untouched_id = "tests.test_specialist_routing.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership"
+        self.assertEqual(prior_caps[untouched_id], 5)
+        for old_limit in (148783, 150770):
+            parent = dict(migrated, max_test_source_lines=old_limit, subtest_caps=prior_caps)
+            self.assertIsNone(suite_budget.check_monotonic(migrated, parent))
+            for old, limit in ((old_limit - 1, 150868), (old_limit + 1, 150868), (old_limit, 150867), (old_limit, 150869)):
+                self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                    dict(migrated, max_test_source_lines=limit), dict(parent, max_test_source_lines=old))
+            for caps in ({key: value for key, value in migrated["subtest_caps"].items() if key != matrix_id},
+                         {**migrated["subtest_caps"], "tests.unreviewed.Case.test_extra": 0},
+                         {**migrated["subtest_caps"], matrix_id: 0}, {**migrated["subtest_caps"], matrix_id: 2},
+                         {**migrated["subtest_caps"], recovery_id: 1}, {**migrated["subtest_caps"], recovery_id: 3},
+                         {**migrated["subtest_caps"], untouched_id: 4}, {**migrated["subtest_caps"], untouched_id: 6}):
+                self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(migrated, subtest_caps=caps), parent)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, migrated,
+                dict(parent, subtest_caps={**prior_caps, untouched_id: 4}))
+            for field in ("max_sequential_wall_seconds", "max_shard_wall_seconds"):
+                for change in (-1, 1):
+                    self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                        dict(migrated, **{field: migrated[field] + change}), parent)
+                    self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                        migrated, dict(parent, **{field: parent[field] + change}))
+
         from types import SimpleNamespace
         import os, sys, time
         ids = runner._HOSTED_METHOD_IDS
         self.assertEqual(runner._manifest(ids)["digest"],
-                         "sha256:131866173146033667a64af8c3dc6017a78671eb501bf4db4d97cc5e722521d7")
-        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (147, 17))
+                         "sha256:c2099b8816df4ce9cfc2d4f591f88a74e8a37a554fd1682429377d3a3be55fcf")
+        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (159, 19))
         cases = tuple(Mock(id=Mock(return_value=value)) for value in (*ids, "unreviewed.test"))
         canonical = runner.CanonicalCollection(cases, (*ids, "unreviewed.test"))
         serial, scheduled = runner._hosted_partition(canonical, canonical)
@@ -255,13 +300,13 @@ class SuiteBudgetTests(unittest.TestCase):
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner._hosted_partition(canonical, isolated)
         self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
-        launch_digest = "sha256:063fe2b7f1fdd8e58abd78e634dfb535db436ed1850270c2c02d4fc2c5c931f7"
+        launch_digest = "sha256:f7f22f6cb44ff2c741fcd9864a9afb11c36d1a671aa7712f365440f28515fd9a"
         self.assertEqual(runner._manifest(runner._hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner._hosted_launch_order(ids[::-1]), runner._hosted_launch_order(ids))
         self.assertEqual(runner._hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
         drift = runner.CanonicalCollection(cases, (*ids, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
         self.assertRaises(runner.RunnerError, runner._hosted_partition, drift, drift)
-        args = SimpleNamespace(command="run", hosted_methods="audited-147-v3", hosted_deadline_epoch=time.time()+3500,
+        args = SimpleNamespace(command="run", hosted_methods="audited-159-v4", hosted_deadline_epoch=time.time()+3500,
                                shard="1/5", id=[], module=[], tier=[], failfast=False, json="report.json")
         env = dict(GITHUB_ACTIONS="true", TEST_RUN_DEADLINE=str(time.time()+4500),
                    TEST_JOB_DEADLINE=str(time.time()+4500))
@@ -314,7 +359,7 @@ class SuiteBudgetTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             paths = self._reports(directory, (0, 0)); rows = self.report_data
-            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": "audited-147-v3",
+            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": "audited-159-v4",
                         "profile_manifest": runner._manifest(runner._HOSTED_METHOD_IDS),
                         "capacity": 2, "peak_children": 0, "work_deadline_epoch": 10000.0,
                         "cleanup_deadline_epoch": 10030.0, "launch_manifest": runner._manifest(()),
@@ -812,7 +857,7 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertEqual(state.normalize_boot_identity(old_boot), "sysctl:100:2")
             self.assertFalse(state.verified_boot_change(old_boot, same_boot))
             self.assertTrue(state.verified_boot_change(old_boot, "sysctl:101:2"))
-            for unsuitable in (None, "unparseable", "sysctl:100:1000000", "linux:12345678-1234-1234-1234-123456789abc"):
+            for unsuitable in (None, "unparseable", "sysctl:100:150869", "linux:12345678-1234-1234-1234-123456789abc"):
                 self.assertFalse(state.verified_boot_change(old_boot, unsuitable))
 
         import os, signal, subprocess, sys, time

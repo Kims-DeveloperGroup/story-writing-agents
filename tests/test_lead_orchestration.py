@@ -1001,7 +1001,7 @@ def _whole_book_assessment(call, answer, *, offered_inputs, logical_transform: C
 class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
     def _decide(self, turn, kind): return self.runtime.decide_lead_step(_decision(turn, kind))
 
-    def setUp(self) -> None:
+    def _set_up_workspace(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="lead-orchestration-")
         self.addCleanup(temporary.cleanup)
         self.control_workspace = materialize_pristine_initialized_workspace(f"{temporary.name}/story")
@@ -1016,12 +1016,18 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         part = self.workspace.path("manuscript/part-01")
         part.mkdir(parents=True, exist_ok=True)
         (part / "opening.md").write_text("Opening one.\nOpening two.\nOpening three.\n", encoding="utf-8",)
-        self.backend = _LeadBackend(test_case=self)
-        # This orchestration fake has no native provider process or role file.
+
+    def _set_up_fake_provider_boundary(self) -> None:
+        # The orchestration fake has no native provider process or role file.
         boundary_patch = mock.patch('story_writing_agents.orchestrator._provider_execution_workspace_manager',
             return_value=None)
         boundary_patch.start()
         self.addCleanup(boundary_patch.stop)
+
+    def setUp(self) -> None:
+        self._set_up_workspace()
+        self.backend = _LeadBackend(test_case=self)
+        self._set_up_fake_provider_boundary()
         self.runtime = StoryRuntime(  # type: ignore[arg-type]
             self.control_workspace, self.backend,)
 
@@ -6965,76 +6971,6 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
                 self.assertEqual(len(restarted_backend.calls), 2)
                 self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
-
-        def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
-            return _bound_rejection_envelope(call, [])
-
-        cases = (('missing', lambda: _SubmittedFailure(EOFError('missing response'))), ('cancelled',
-            lambda: _SubmittedFailure(asyncio.CancelledError())), ('timed_out',
-            lambda: _SubmittedFailure(TimeoutError('provider timed out'), timed_out=True)), ( 'crashed',
-            lambda: _SubmittedFailure(ConnectionError('provider crashed'))), ( 'submission_uncertain',
-            lambda: _SubmittedFailure(RuntimeError('submission uncertain'), submission_uncertain=True)))
-        for corrective in (False, True):
-            for label, failure_factory in cases:
-                with self.subTest(corrective=corrective, failure=label):
-                    backend = _LeadBackend(persist_context_threads=True, test_case=self)
-                    runtime = StoryRuntime(self.control_workspace, backend)
-                    conversation = self.conversation(f"{corrective}-{label}")
-                    original = f"Retain original {corrective}-{label} request."
-                    if corrective:
-                        backend.enqueue(malformed, control_plan=selection_plan("answer.workflow"))
-                        backend.enqueue(failure_factory(), control_plan=())
-                    else:
-                        backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, failure_factory()),))
-                    if label == "cancelled":
-                        with self.assertRaises(asyncio.CancelledError):
-                            await runtime.lead_turn(self.session_id, conversation, original)
-                    else:
-                        result = await runtime.lead_turn(self.session_id, conversation, original)
-                        self.assertIsNone(result.state)
-                        self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
-                    prefix = self.history(conversation)
-                    submitted = list(_submitted_calls(prefix))
-                    closure = [event.payload for event in prefix
-                               if type(event.payload) is CollaborationLeadOutcomeFailurePayload]
-                    self.assertEqual(len(backend.calls), 3 if corrective else 1)
-                    self.assertEqual(len(submitted), len(backend.calls))
-                    self.assertEqual(len(closure), 1)
-                    self.assertEqual(closure[0].call_id, submitted[-1].call_id)
-                    self.assertEqual(closure[0].invocation_id, submitted[-1].invocation_id)
-                    traces = tuple(event for event in prefix
-                                   if event.kind is CollaborationEventKind.LEAD_GROUP_TRACE)
-                    terminal_event = next(event for event in prefix
-                        if type(event.payload) is CollaborationLeadOutcomeFailurePayload)
-                    self.assertEqual(len(traces), 1)
-                    self.assertEqual((traces[0].batch_id, traces[0].turn_id, traces[0].step_id),
-                                     (terminal_event.batch_id, terminal_event.turn_id, terminal_event.step_id))
-                    reports = runtime.lead_group_reports(self.session_id, conversation)
-                    self.assertEqual(len(reports), 1)
-                    self.assertEqual(reports[0]["invocation_id"], closure[0].invocation_id)
-                    self.assertEqual(reports[0]["trace"], traces[0].payload.trace.as_object())
-                    self.assertFalse(reports[0]["result_accepted"])
-                    self.assertEqual(reports[0]["submitted_calls"], len(submitted))
-                    self.assertEqual(reports[0]["submission_coverage"]["known_submitted_call_ids"],
-                                     [item.call_id for item in submitted])
-                    self.assertIs(closure[0].code, { "cancelled": CollaborationLeadOutcomeFailureCode.CANCELLED,
-                        "timed_out": CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT,
-                    }.get(label, CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED))
-                    if corrective:
-                        self.assertEqual(backend.finalizers[0].calls, [("accepted", None)])
-                        self.assertEqual(backend.finalizers[1].calls, [
-                            ("rejected", ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)])
-                        self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
-                    restarted_backend = _LeadBackend(test_case=self)
-                    restarted_backend.enqueue(_visible_outcome("answer"), control_plan=selection_plan("answer.workflow"))
-                    restarted = StoryRuntime(self.control_workspace, restarted_backend)
-                    result = await restarted.lead_turn(self.session_id, conversation, "Explicit retry after failure.")
-                    self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
-                    self.assertEqual(len(restarted_backend.calls), 2)
-                    self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
-                    self.assertEqual(sum(type(event.payload) is CollaborationMessagePayload
-                                         and event.payload.content == original for event in self.history(conversation)), 1)
-
         case = _task_fixture(self)
         conversation = case.conversation("Unknown discussion submission")
         case.backend.enqueue(_SubmittedFailure(RuntimeError("uncertain discussion"), submission_uncertain=True))
@@ -7097,6 +7033,115 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         with self.assertRaises(BackendProtocolError): capability.consume()
         self.assertFalse(hasattr(RuntimeSession, "execution_capability"))
         self.assertFalse(hasattr(StoryRuntime, "execution_capability"))
+
+
+class LeadSubmittedFailureRecoveryTests(LeadOrchestrationTestCase):
+    def setUp(self) -> None:
+        self._set_up_workspace()
+        self._set_up_fake_provider_boundary()
+
+    async def _assert_submitted_failure_never_replays(self, label, corrective, failure_factory):
+        def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
+            return _bound_rejection_envelope(call, [])
+        with self.subTest(corrective=corrective, failure=label):
+            backend = _LeadBackend(persist_context_threads=True, test_case=self)
+            runtime = StoryRuntime(self.control_workspace, backend)
+            self.runtime = runtime
+            conversation = self.conversation(f"{corrective}-{label}")
+            original = f"Retain original {corrective}-{label} request."
+            if corrective:
+                backend.enqueue(malformed, control_plan=selection_plan("answer.workflow"))
+                backend.enqueue(failure_factory(), control_plan=())
+            else:
+                backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, failure_factory()),))
+            if label == "cancelled":
+                with self.assertRaises(asyncio.CancelledError):
+                    await runtime.lead_turn(self.session_id, conversation, original)
+            else:
+                result = await runtime.lead_turn(self.session_id, conversation, original)
+                self.assertIsNone(result.state)
+                self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+            prefix = self.history(conversation)
+            submitted = list(_submitted_calls(prefix))
+            closure = [event.payload for event in prefix
+                       if type(event.payload) is CollaborationLeadOutcomeFailurePayload]
+            self.assertEqual(len(backend.calls), 3 if corrective else 1)
+            self.assertEqual(len(submitted), len(backend.calls))
+            self.assertEqual(len(closure), 1)
+            self.assertEqual(closure[0].call_id, submitted[-1].call_id)
+            self.assertEqual(closure[0].invocation_id, submitted[-1].invocation_id)
+            traces = tuple(event for event in prefix
+                           if event.kind is CollaborationEventKind.LEAD_GROUP_TRACE)
+            terminal_event = next(event for event in prefix
+                if type(event.payload) is CollaborationLeadOutcomeFailurePayload)
+            self.assertEqual(len(traces), 1)
+            self.assertEqual((traces[0].batch_id, traces[0].turn_id, traces[0].step_id),
+                             (terminal_event.batch_id, terminal_event.turn_id, terminal_event.step_id))
+            reports = runtime.lead_group_reports(self.session_id, conversation)
+            self.assertEqual(len(reports), 1)
+            self.assertEqual(reports[0]["invocation_id"], closure[0].invocation_id)
+            self.assertEqual(reports[0]["trace"], traces[0].payload.trace.as_object())
+            self.assertFalse(reports[0]["result_accepted"])
+            self.assertEqual(reports[0]["submitted_calls"], len(submitted))
+            self.assertEqual(reports[0]["submission_coverage"]["known_submitted_call_ids"],
+                             [item.call_id for item in submitted])
+            self.assertIs(closure[0].code, { "cancelled": CollaborationLeadOutcomeFailureCode.CANCELLED,
+                "timed_out": CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT,
+            }.get(label, CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED))
+            if corrective:
+                self.assertEqual(backend.finalizers[0].calls, [("accepted", None)])
+                self.assertEqual(backend.finalizers[1].calls, [
+                    ("rejected", ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)])
+                self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
+            restarted_backend = _LeadBackend(test_case=self)
+            restarted_backend.enqueue(_visible_outcome("answer"), control_plan=selection_plan("answer.workflow"))
+            restarted = StoryRuntime(self.control_workspace, restarted_backend)
+            result = await restarted.lead_turn(self.session_id, conversation, "Explicit retry after failure.")
+            self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
+            self.assertEqual(len(restarted_backend.calls), 2)
+            self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
+            self.assertEqual(sum(type(event.payload) is CollaborationMessagePayload
+                                 and event.payload.content == original for event in self.history(conversation)), 1)
+
+    async def test_submitted_missing_before_correction_never_replays(self) -> None:
+        await self._assert_submitted_failure_never_replays('missing', False,
+            lambda: _SubmittedFailure(EOFError('missing response')))
+
+    async def test_submitted_cancelled_before_correction_never_replays(self) -> None:
+        await self._assert_submitted_failure_never_replays('cancelled', False,
+            lambda: _SubmittedFailure(asyncio.CancelledError()))
+
+    async def test_submitted_timed_out_before_correction_never_replays(self) -> None:
+        await self._assert_submitted_failure_never_replays('timed_out', False,
+            lambda: _SubmittedFailure(TimeoutError('provider timed out'), timed_out=True))
+
+    async def test_submitted_crashed_before_correction_never_replays(self) -> None:
+        await self._assert_submitted_failure_never_replays('crashed', False,
+            lambda: _SubmittedFailure(ConnectionError('provider crashed')))
+
+    async def test_submitted_submission_uncertain_before_correction_never_replays(self) -> None:
+        await self._assert_submitted_failure_never_replays('submission_uncertain', False,
+            lambda: _SubmittedFailure(RuntimeError('submission uncertain'), submission_uncertain=True))
+
+    async def test_submitted_missing_during_correction_never_replays(self) -> None:
+        await self._assert_submitted_failure_never_replays('missing', True,
+            lambda: _SubmittedFailure(EOFError('missing response')))
+
+    async def test_submitted_cancelled_during_correction_never_replays(self) -> None:
+        await self._assert_submitted_failure_never_replays('cancelled', True,
+            lambda: _SubmittedFailure(asyncio.CancelledError()))
+
+    async def test_submitted_timed_out_during_correction_never_replays(self) -> None:
+        await self._assert_submitted_failure_never_replays('timed_out', True,
+            lambda: _SubmittedFailure(TimeoutError('provider timed out'), timed_out=True))
+
+    async def test_submitted_crashed_during_correction_never_replays(self) -> None:
+        await self._assert_submitted_failure_never_replays('crashed', True,
+            lambda: _SubmittedFailure(ConnectionError('provider crashed')))
+
+    async def test_submitted_submission_uncertain_during_correction_never_replays(self) -> None:
+        await self._assert_submitted_failure_never_replays('submission_uncertain', True,
+            lambda: _SubmittedFailure(RuntimeError('submission uncertain'), submission_uncertain=True))
 
 
 class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
