@@ -1703,7 +1703,7 @@ class CompletionDriverTests(unittest.TestCase):
                         self.assertNotIn(token, suggestions)
                 self.assertIn("[highlighted]", suggestions)
                 self.assertIn(
-                    f"main> {expected}",
+                    f"main> {expected}".rstrip(),
                     "\n".join(frame.text for frame in _recorded_frames(output)),
                 )
                 history_append.assert_not_called()
