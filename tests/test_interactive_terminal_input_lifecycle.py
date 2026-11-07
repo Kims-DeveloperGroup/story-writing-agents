@@ -209,6 +209,7 @@ def _session_driver(*chunks):
     with (
         mock.patch.object(RawTerminalDriver, "capabilities", return_value=_live_capabilities()),
         mock.patch.object(driver_module, "_terminal_configuration", side_effect=lambda *_a, **_k: _configuration(termios, local_flags=termios.attributes[3])),
+        mock.patch.object(driver_module._select, "select", side_effect=lambda read, write, error, _timeout: (read, write, error)),
     ):
         yield driver, termios, stream, output, fallback
 
