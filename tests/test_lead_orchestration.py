@@ -3321,7 +3321,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         recommendation_facts = replace(recommendation_facts, scope=authoring_scope_from_dict(recommendation_record))
         recommendation_seed = orchestrator_module._lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=recommendation_facts)
-        complete_assessment = asdict(_fixture_assessment())
+        complete_assessment = json.loads(json.dumps(asdict(_fixture_assessment())))
         complete_native_assessment = lead_fixture_assessment(complete_assessment, source_choices=('user_input',))
         recommendation_native = lead_fixture_scope_record(recommendation_record, fixed_targets=True, fixed_dependencies=True)
         for kind, native_kind, selector, selected, choices in (('prepare_artifact', 'draft_document_change_proposal',
