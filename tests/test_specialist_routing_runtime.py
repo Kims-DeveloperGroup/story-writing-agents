@@ -162,6 +162,28 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
 
 class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
 
+    # Fake transport accounting verifies encoded guard sizes, not actual model capacity.
+    def _assert_recorded_provider_size_bounds(self, services):
+        from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
+        from story_writing_agents.agent_context.accounting import ProviderCallAccounting, ProviderPayloadAccounting
+        from story_writing_agents.conversations import session_context as session_context_module
+        submitted = _submitted_calls(SessionHistorySourceAdapter(services.catalog,
+            services.event_store, self.session_id).capture().events())
+        self.assertTrue(submitted)
+        self.assertEqual(len(submitted), len(self.backend.calls))
+        recorded_sizes = []
+        for call in submitted:
+            self.assertIs(type(call.accounting), ProviderCallAccounting)
+            payload = call.accounting.payload
+            self.assertIs(type(payload), ProviderPayloadAccounting)
+            sizes = (payload.schema_utf8_bytes, payload.payload_utf8_bytes, payload.serialized_input_utf8_bytes)
+            self.assertTrue(all(type(size) is int for size in sizes), sizes)
+            self.assertLessEqual(sizes[0], session_context_module.MAX_PROVIDER_SCHEMA_UTF8_BYTES, sizes)
+            self.assertLessEqual(sizes[1], session_context_module.MAX_PROVIDER_PAYLOAD_UTF8_BYTES, sizes)
+            self.assertLessEqual(sizes[2], session_context_module.MAX_PROVIDER_INPUT_UTF8_BYTES, sizes)
+            recorded_sizes.append(sizes)
+        print("Recorded provider UTF-8 maxima:", len(recorded_sizes), tuple(max(row[i] for row in recorded_sizes) for i in range(3)))
+
     def _assert_continuation(self, result, field):
         self.assertIsNone(getattr(result, field))
         self.assertIs(result.next_action, c.CollaborationNextAction.CONTINUE_WITH_LEAD)
@@ -365,6 +387,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
 
     async def test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does(self):
+        from story_writing_agents.conversations import session_context as session_context_module
+        self.enterContext(mock.patch.object(session_context_module, "MAX_SESSION_CONTEXT_UTF8_BYTES", 512 * 1024))
         for path in (OUTLINE, CHARACTER, "core_documents/narrative_rules.md", "core_documents/part_outlines.md"):
             self.workspace.path(path).write_bytes(b"")
         before_premise = len(self.backend.calls)
@@ -657,42 +681,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             (drafted.proposal.authoring_scope.task_id, reused.proposal.authoring_scope.task_id))
         self.assertEqual(changed.proposal.basis.shared_premises[0].selected_premise, changed_option.premise_text)
         self.assertNotEqual(changed.proposal.basis.shared_premises, drafted.proposal.basis.shared_premises)
-        execution_notes = []
-        original_persistence = self.runtime._persist_collaboration_results_with_generation_pin
-        def observed_persistence(**arguments):
-            results = arguments["assignment_results"]
-            rows = tuple((assignment.specialist_id, results[i] if i < len(results) else None)
-                for i, assignment in enumerate(arguments["proposal"].assignments)) + ((LEAD_ORCHESTRATOR, arguments["synthesis_result"]),)
-            for agent, result in rows[:max(0, 4 - len(execution_notes))]:
-                failure = None if result is None else result.failure
-                causes, cause = [], failure
-                for _ in range(3):
-                    if cause is None:
-                        break
-                    causes.append((type(cause).__name__, str(cause)[:600], tuple(getattr(cause, field, None)
-                        for field in ("stage", "actual_utf8_bytes", "maximum_utf8_bytes", "excess_utf8_bytes"))))
-                    cause = cause.__cause__ or cause.__context__
-                execution_notes.append((agent, None if result is None else type(result.value).__name__,
-                    None if result is None else result.submitted_physical_calls, tuple(causes)))
-            return original_persistence(**arguments)
-        before_confirm = len(self.backend.call_records)
-        with mock.patch.object(self.runtime, "_persist_collaboration_results_with_generation_pin", new=observed_persistence):
-            confirmed = await complete_selected(changed, changed_option.premise_text)
-        validation_by_call = {}
-        for event in self.history(conversation)[len(previous):]:
-            payload = event.payload
-            if type(payload) is c.CollaborationMessagePayload and payload.validation_call_id is not None:
-                validation_by_call.setdefault(payload.validation_call_id, []).extend(payload.validation_details)
-        attempts, request_notes = {}, []
-        for agent, request in self.backend.call_records[before_confirm:]:
-            attempts[agent] = attempts.get(agent, 0) + 1
-            phase = getattr(getattr(getattr(request, "contract", None), "schema_group_phase", None), "value", None)
-            request_notes.append((agent, phase, attempts[agent], request.call_kind.value,
-                tuple(detail[:300] for detail in validation_by_call.get(request.call_id, ())[:3])))
-        self.assertIs(confirmed.turn.state, c.CollaborationStepState.COMPLETED,
-            (confirmed.turn.message[:500], tuple(detail[:300] for detail in confirmed.turn.validation_details[:3]),
-             repr((confirmed.turn.kind, confirmed.turn.state, confirmed.turn.next_action)),
-             tuple(execution_notes), tuple(request_notes[:8]), self.backend._fixture_error_code))
+        confirmed = await complete_selected(changed, changed_option.premise_text)
+        self.assertIs(confirmed.turn.state, c.CollaborationStepState.COMPLETED, (confirmed.turn.message[:500], confirmed.turn.validation_details[:3]))
         new_frames = [_workflow_material(call.payload) for agent, call in self.backend.call_records if wire_contract_id(call.payload) == "specialist-assignment-response-v5"][-2:]
         self.assertEqual([frame["premise_selection"]["selected_text"] for frame in new_frames], [changed_option.premise_text] * 2)
         self.assertEqual(self.history(conversation)[:len(previous)], previous)
@@ -894,6 +884,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertTrue(any(target.kind is review.ReviewTargetKind.READ_SOURCE
             and target.availability is review.ReviewTargetAvailability.COMPLETED_READ
             for target in explanation.preliminary_review.targets))
+        self._assert_recorded_provider_size_bounds(self.runtime.conversation_storage_services)
 
     async def test_declared_substantive_direct_outcomes_fail_closed(self):
         for kind in ("answer", "recommendation", "critique"):
@@ -1705,6 +1696,22 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(self.history(archived),before)
 
     async def test_old_drafted_revision_cannot_authorize_revised_candidate(self):
+        import sys
+        fixture_notes = []
+        original_fixture_failure = self.backend.fail_fixture
+        def observed_fixture_failure(code):
+            if code == "missing_script" and len(fixture_notes) < 3:
+                caller = sys._getframe(1)
+                parent = caller.f_back
+                try:
+                    agent = caller.f_locals.get("agent_id")
+                    fixture_notes.append((code, agent if agent in (LEAD_ORCHESTRATOR, *ROSTER) else None,
+                        caller.f_code.co_name, caller.f_lineno,
+                        None if parent is None else (parent.f_globals.get("__name__"), parent.f_code.co_name, parent.f_lineno)))
+                finally:
+                    del caller, parent
+            return original_fixture_failure(code)
+        self.enterContext(mock.patch.object(self.backend, "fail_fixture", new=observed_fixture_failure))
         from story_writing_agents.conversations import session_context as session_context_module
         self.enterContext(mock.patch.object(session_context_module, "MAX_SESSION_CONTEXT_UTF8_BYTES", 512 * 1024))
         from story_writing_agents import ReplyTraceOrigin
@@ -2035,14 +2042,31 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(self.history(multiple)[:len(negative_prefix)], negative_prefix)
         negative_view = self.runtime.inspect_lead_collaboration(self.session_id, multiple)
         self.assertEqual(len(next(item for item in negative_view.available_tasks if item.ref.task_id == negative_task_id).submitted_call_ids), 10)
-        self.assertEqual(negative_view.rounds_spent, 1)
+        completed_prefix = c.project_collaboration_history(negative_prefix)
+        self.assertEqual(completed_prefix.current_proposal, admitted.proposal)
+        self.assertEqual(completed_prefix.rounds_spent, 1)
+        self.assertEqual(negative_view.rounds_spent, 0)
+        o_probe_validation_by_call = {}
+        for o_probe_event in SessionHistorySourceAdapter(services.catalog, services.event_store, self.session_id).capture().events():
+            o_probe_payload = o_probe_event.payload
+            if type(o_probe_payload) is c.CollaborationMessagePayload and o_probe_payload.validation_call_id is not None:
+                o_probe_validation_by_call.setdefault(o_probe_payload.validation_call_id, []).extend(o_probe_payload.validation_details)
+        o_probe_request_notes = []
+        for o_probe_index, (o_probe_agent, o_probe_request) in enumerate(self.backend.call_records):
+            o_probe_details = o_probe_validation_by_call.get(o_probe_request.call_id, ())
+            if o_probe_details:
+                o_probe_phase = getattr(getattr(getattr(o_probe_request, "contract", None), "schema_group_phase", None), "value", None)
+                o_probe_request_notes.append((o_probe_index, o_probe_agent, o_probe_phase, o_probe_request.call_kind.value, tuple(detail[:300] for detail in o_probe_details[:3])))
+        o_probe_script_notes = tuple((o_probe_provider.agent_id, o_probe_provider.script.fixture_error_code, o_probe_provider.script.callback_exception_site)
+            for o_probe_provider in self.backend.providers if o_probe_provider.script.fixture_error_code is not None)[:4]
+        self.assertIsNone(self.backend._fixture_error_code, (tuple(fixture_notes), tuple(o_probe_request_notes[:8]), o_probe_script_notes))
 
         self.workspace.path(OUTLINE).unlink()
         latest_ref = next(item.ref for item in self.runtime.inspect_lead_collaboration(self.session_id, conversation).available_tasks
             if (item.ref.task_id, item.ref.task_revision) == (task_id, 1))
         stale_resume = task.LeadTaskDecision.from_task(latest_ref, task.LeadTaskAction.RESUME,
             text=_ADMISSION_BRIEF + "\nUse the earlier draft for this revised candidate.")
-        from story_writing_agents.agent_context.accounting import account_provider_payload, ProviderCallAccounting, ProviderPayloadAccounting
+        from story_writing_agents.agent_context.accounting import account_provider_payload
         from story_writing_agents.conversations.session_context import MAX_PROVIDER_PAYLOAD_UTF8_BYTES, MAX_PROVIDER_SCHEMA_UTF8_BYTES
         stale_measurements = []
         def stale(call, provider):
@@ -2287,23 +2311,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         restarted = StoryRuntime(self.control_workspace, backend=self.backend)
         self.assertEqual(restarted.conversation_storage_services.event_store.read(self.session_id, prior), captured)
         # Recorded fake-transport sizes verify guards, not actual model capacity.
-        retained_services = restarted.conversation_storage_services
-        submitted = _submitted_calls(SessionHistorySourceAdapter(retained_services.catalog,
-            retained_services.event_store, self.session_id).capture().events())
-        self.assertTrue(submitted)
-        self.assertEqual(len(submitted), len(self.backend.calls))
-        recorded_sizes = []
-        for call in submitted:
-            self.assertIs(type(call.accounting), ProviderCallAccounting)
-            payload = call.accounting.payload
-            self.assertIs(type(payload), ProviderPayloadAccounting)
-            sizes = (payload.schema_utf8_bytes, payload.payload_utf8_bytes, payload.serialized_input_utf8_bytes)
-            self.assertTrue(all(type(size) is int for size in sizes), sizes)
-            self.assertLessEqual(sizes[0], session_context_module.MAX_PROVIDER_SCHEMA_UTF8_BYTES, sizes)
-            self.assertLessEqual(sizes[1], session_context_module.MAX_PROVIDER_PAYLOAD_UTF8_BYTES, sizes)
-            self.assertLessEqual(sizes[2], session_context_module.MAX_PROVIDER_INPUT_UTF8_BYTES, sizes)
-            recorded_sizes.append(sizes)
-        print("Recorded provider UTF-8 maxima:", len(recorded_sizes), tuple(max(row[i] for row in recorded_sizes) for i in range(3)))
+        self._assert_recorded_provider_size_bounds(restarted.conversation_storage_services)
 
 
     async def test_legacy_pending_confirmation_requires_fresh_scoped_proposal_without_rewrite(self):

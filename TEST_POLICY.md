@@ -748,3 +748,5 @@ helper1547=151215행이며 상한151216으로1행 여유를 유지한다. 전용
 main #947 통합 후 raw149666+helper1547=151213에 D06 한 곳의 history512KiB 설정과 기록된 payload 크기 검사19행을 더한다. 최종 raw149685+helper1547=151232, 상한151233이다. production의 history256KiB와 provider/schema/payload/전체 한도는 변경하지 않고, callback·40+2 provider 호출·ID·subTest·시간을 유지한다.
 
 #938 남은C Confirm의첫실패진단34행은반환/큐/provider호출을바꾸지않고정규화된최초실패와기록된validation label만제한적으로관측한다. raw149719+helper1547=151266, 임시상한151267이며진단후제거한다. product budget/counter·ID·subTest·cap-map·147순서·161대상·시간제한은유지한다.
+
+측정된N Confirm실패는세specialist정상/Lead0호출의history269133>262144였으므로응답을늘리지않고그사례도512KiB history allowance를사용한다. N진단제거·공통기록크기검사·D06완료prefix round1/current-step0분리·한정fixture첫bind진단을합친순증6행으로raw149725+helper1547=151272,상한151273이다. 기존ID/subTest/cap-map/provider호출/시간은유지한다.

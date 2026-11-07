@@ -97,7 +97,7 @@ def _feedback_migration(current: dict[str, Any], base: dict[str, Any]) -> bool:
             and base["schema_version"] == current["schema_version"] == 1
             and tuple(base[name] for name in ("max_sequential_wall_seconds", "max_shard_wall_seconds")) == (18000, 3600)
             and tuple(current[name] for name in ("max_sequential_wall_seconds", "max_shard_wall_seconds")) == (18000, 3600)
-            and (base["max_test_source_lines"], current["max_test_source_lines"]) in ((148783, 151267), (150770, 151267)))
+            and (base["max_test_source_lines"], current["max_test_source_lines"]) in ((148783, 151273), (150770, 151273)))
 
 
 def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
