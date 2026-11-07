@@ -1178,19 +1178,14 @@ class SemanticInputDriverTests(unittest.TestCase):
         driver, _input, _output, fallback, termios_double, _size = _driver(
             "first\nsecond\n"
         )
-        geometry = mock.Mock(
-            side_effect=(
-                os.terminal_size((80, 24)),
-                os.terminal_size((80, 24)),
-                os.terminal_size((40, 24)),
-                os.terminal_size((40, 24)),
-            )
-        )
+        geometry = mock.Mock(return_value=os.terminal_size((80, 24)))
         driver._os_provider().get_terminal_size = geometry
 
         self.assertEqual(driver.read_line("first> "), "first")
+        geometry.return_value = os.terminal_size((40, 24))
         self.assertEqual(driver.read_line("second> "), "second")
-        self.assertEqual(geometry.call_args_list, [mock.call(8)] * 4)
+        self.assertEqual({call.args for call in geometry.call_args_list}, {(8,)})
+        self.assertGreaterEqual(geometry.call_count, 4)
         fallback.assert_not_called()
         self.assertEqual(
             [when for _fd, when, _attrs in termios_double.set_calls],
@@ -1211,16 +1206,10 @@ class SemanticInputDriverTests(unittest.TestCase):
                 driver, _input, _output, fallback, termios_double, _size = _driver(
                     "first\nunused\n"
                 )
-                geometry = mock.Mock(
-                    side_effect=(
-                        os.terminal_size((80, 24)),
-                        os.terminal_size((80, 24)),
-                        os.terminal_size((40, 24)),
-                        setup_result,
-                    )
-                )
+                geometry = mock.Mock(return_value=os.terminal_size((80, 24)))
                 driver._os_provider().get_terminal_size = geometry
                 self.assertEqual(driver.read_line("first> "), "first")
+                geometry.side_effect = (os.terminal_size((40, 24)), setup_result)
                 with self.assertRaisesRegex(
                     RuntimeError,
                     "^live terminal input preflight failed$",
@@ -1385,7 +1374,7 @@ class SemanticInputDriverTests(unittest.TestCase):
             (mock.Mock(return_value=object()), lambda _buffer: (), TypeError),
             (
                 mock.Mock(
-                    return_value=RenderedInputFrame("input> ", "input> ", 79, 1)
+                    return_value=RenderedInputFrame("input> ", "input> ", 80, 1)
                 ),
                 lambda _buffer: (),
                 ValueError,

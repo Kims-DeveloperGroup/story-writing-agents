@@ -1835,7 +1835,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         capabilities = capability(CapabilityProfile.ANSI, width=60)
         prompt = Prompt("Maximum debate rounds", scope="settings")
         view = _model.InputPromptView((), prompt)
-        frame = render_input_prompt(view, capabilities)
+        frame = render_input_prompt(view, capability(CapabilityProfile.ANSI, width=59))
         renderer = mock.Mock(return_value=frame)
         configuration = _driver._TerminalConfiguration(
             7,
@@ -1868,14 +1868,15 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             self.assertEqual(call.args[3], LineInputState())
             self.assertIs(call.args[4], transition_prompt_input)
             self.assertIs(call.kwargs["configuration"], configuration)
-            self.assertEqual(call.kwargs["rendered_input"], frame)
+            self.assertIs(call.kwargs["live_capabilities"], capabilities)
+            self.assertEqual(call.kwargs["input_frame_provider"]("", 0, capability(CapabilityProfile.ANSI, width=59)), frame)
 
         prefilled_view = _model.InputPromptView(
             (),
             prompt,
             initial_value="초기",
         )
-        prefilled_frame = render_input_prompt(prefilled_view, capabilities)
+        prefilled_frame = render_input_prompt(prefilled_view, capability(CapabilityProfile.ANSI, width=59))
         prefilled_renderer = mock.Mock(return_value=prefilled_frame)
         with (
             _fresh_literal_object_return_value_autospec(RawTerminalDriver, 'capabilities', capabilities),
