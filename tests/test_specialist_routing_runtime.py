@@ -1671,6 +1671,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(self.history(archived),before)
 
     async def test_old_drafted_revision_cannot_authorize_revised_candidate(self):
+        from story_writing_agents.conversations import session_context as session_context_module
+        self.enterContext(mock.patch.object(session_context_module, "MAX_SESSION_CONTEXT_UTF8_BYTES", 512 * 1024))
         from story_writing_agents import ReplyTraceOrigin
         readiness = await self.record_book_readiness()
         from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
@@ -2006,7 +2008,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             if (item.ref.task_id, item.ref.task_revision) == (task_id, 1))
         stale_resume = task.LeadTaskDecision.from_task(latest_ref, task.LeadTaskAction.RESUME,
             text=_ADMISSION_BRIEF + "\nUse the earlier draft for this revised candidate.")
-        from story_writing_agents.agent_context.accounting import account_provider_payload
+        from story_writing_agents.agent_context.accounting import account_provider_payload, ProviderCallAccounting, ProviderPayloadAccounting
         from story_writing_agents.conversations.session_context import MAX_PROVIDER_PAYLOAD_UTF8_BYTES, MAX_PROVIDER_SCHEMA_UTF8_BYTES
         stale_measurements = []
         def stale(call, provider):
@@ -2250,6 +2252,24 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(c.project_collaboration_history(restored), c.project_collaboration_history(captured))
         restarted = StoryRuntime(self.control_workspace, backend=self.backend)
         self.assertEqual(restarted.conversation_storage_services.event_store.read(self.session_id, prior), captured)
+        # Recorded fake-transport sizes verify guards, not actual model capacity.
+        retained_services = restarted.conversation_storage_services
+        submitted = _submitted_calls(SessionHistorySourceAdapter(retained_services.catalog,
+            retained_services.event_store, self.session_id).capture().events())
+        self.assertTrue(submitted)
+        self.assertEqual(len(submitted), len(self.backend.calls))
+        recorded_sizes = []
+        for call in submitted:
+            self.assertIs(type(call.accounting), ProviderCallAccounting)
+            payload = call.accounting.payload
+            self.assertIs(type(payload), ProviderPayloadAccounting)
+            sizes = (payload.schema_utf8_bytes, payload.payload_utf8_bytes, payload.serialized_input_utf8_bytes)
+            self.assertTrue(all(type(size) is int for size in sizes), sizes)
+            self.assertLessEqual(sizes[0], session_context_module.MAX_PROVIDER_SCHEMA_UTF8_BYTES, sizes)
+            self.assertLessEqual(sizes[1], session_context_module.MAX_PROVIDER_PAYLOAD_UTF8_BYTES, sizes)
+            self.assertLessEqual(sizes[2], session_context_module.MAX_PROVIDER_INPUT_UTF8_BYTES, sizes)
+            recorded_sizes.append(sizes)
+        print("Recorded provider UTF-8 maxima:", len(recorded_sizes), tuple(max(row[i] for row in recorded_sizes) for i in range(3)))
 
 
     async def test_legacy_pending_confirmation_requires_fresh_scoped_proposal_without_rewrite(self):
