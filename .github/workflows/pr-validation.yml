@@ -92,6 +92,8 @@ jobs:
                   }
                   // A marker covers downstream jobs absent from an earlier API snapshot.
                   const terminalNames = ["Validation jobs complete", "Development partial validation notice", "Metadata-only validation notice", "Manual partial validation notice"];
+              // A job cancelled before needs resolve retains its exact name expression.
+              terminalNames.push("needs.classify.outputs.metadata_only == 'true' && 'Metadata-only validation notice' || needs.classify.outputs.development_only == 'true' && 'Development partial validation notice' || needs.classify.outputs.manual_mode == 'true' && 'Manual partial validation notice' || 'Validation jobs complete'");
                   complete = page.jobs.find(job => terminalNames.includes(job.name));
                 peersTerminal = page.jobs.every(job =>
                   job.name === "Enforce 75-minute workflow limit" || job.status === "completed");
