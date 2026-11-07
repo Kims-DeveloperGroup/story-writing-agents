@@ -1917,7 +1917,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                     lambda _view, _capabilities: RenderedInputFrame(
                         frame.text,
                         frame.plain_text,
-                        59,
+                        60,
                         frame.line_count,
                     ),
                     transition_prompt_input,
