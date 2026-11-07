@@ -129,7 +129,8 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             native = (native_inputs(call) if native_inputs is not None else {
                 'input_choices': ('user_input',), 'anchors': {PLOT_ARCHITECT: 'user_input'},
                 'recipients': {'user_input': PLOT_ARCHITECT},
-                'source_choices': ('user_input',), 'family': 0}
+                'source_choices': (dict(call.contract.semantic_index.policy.choices)['input_ids'] +
+                    dict(call.contract.semantic_index.policy.choices)['historical_user_source_ids']), 'family': 0}
                 if (native_start or native_continuation) else None)
             if native_start and native_inputs is None:
                 choices = dict(call.contract.semantic_index.policy.choices)
@@ -160,8 +161,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         proposed = await self.runtime.lead_turn(self.session_id, conversation_id,
             ((f"Draft {target_path or 'a synthetic scene'} from this brief: a lantern vanishes, its keeper is found, and it returns." + " Invent scene transitions and supporting dialogue; preserve the supplied brief facts."
             + (" Explicit authoring paths: " + ", ".join(authoring_paths) if authoring_paths is not None else ""))))
-        self.assertIs(proposed.kind, c.LeadOutcomeKind.PROPOSAL, proposed)
-        self.assertEqual(proposed.proposal.participants, specialist_ids)
+        self.assertIs(proposed.kind, c.LeadOutcomeKind.PROPOSAL, proposed); self.assertEqual(proposed.proposal.participants, specialist_ids)
         if intent is not None:
             self.objective_tasks[self.objective(conversation_id).facts.objective_id] = proposed.proposal.authoring_scope.task_id
         for agent in specialist_ids:
