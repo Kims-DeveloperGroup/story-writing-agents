@@ -377,7 +377,7 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
             self.assertIn("개요 one ⟦개요 one⟧", re.sub(r"\x1b\[[0-9;]*m", "", rendered))
             self.assertNotIn("U0015", rendered)
         self.assertEqual("".join(output.records).count("\x1b[?1049h"), 1)
-        self.assertEqual("".join(output.records).count("\x1b[?1002h"), 1)
+        self.assertEqual("".join(output.records).count("\x1b[?1000h"), 1)
         fallback.assert_not_called(); self.assertEqual(source, ('{"content":"개요 one 개요 one"}\n{"content":"other"}\n').encode())
 
     def test_fallback_never_acquires_raw_or_ansi_and_maps_interrupt_eof(self) -> None:

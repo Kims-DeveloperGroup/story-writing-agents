@@ -9,8 +9,8 @@ source = { git = "https://github.com/Kims-DeveloperGroup/generic-rag.git?rev=c77
 
 [[package]]
 name = "jsonl-viewer"
-version = "0.8.0"
-source = { git = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git?rev=358b1b325c7c26fa71deba9a9f16332d7df6a1b6#358b1b325c7c26fa71deba9a9f16332d7df6a1b6" }
+version = "0.8.3"
+source = { git = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git?rev=6619fd680efa730c520a0f93f7aaf5514bfabdec#6619fd680efa730c520a0f93f7aaf5514bfabdec" }
 
 [[package]]
 name = "markdown-it-py"
@@ -64,7 +64,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "generic-rag", marker = "extra == 'rag'", git = "https://github.com/Kims-DeveloperGroup/generic-rag.git?rev=c77456321c614518e420e45c033e3f71dc5363b8" },
-    { name = "jsonl-viewer", git = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git?rev=358b1b325c7c26fa71deba9a9f16332d7df6a1b6" },
+    { name = "jsonl-viewer", git = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git?rev=6619fd680efa730c520a0f93f7aaf5514bfabdec" },
     { name = "markdown-it-py", specifier = ">=4.2,<5" },
 ]
 provides-extras = ["rag", "viewer"]

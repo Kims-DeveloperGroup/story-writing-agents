@@ -36,9 +36,9 @@ _GENERIC_RAG_PIN = "c77456321c614518e420e45c033e3f71dc5363b8"
 _GENERIC_RAG_REPOSITORY = "https://github.com/Kims-DeveloperGroup/generic-rag.git"
 _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}")
-_OLD_JSONL_VIEWER_PIN = "26520240c4be3e2af3e1cf4232fe3129ee706a86"
-_JSONL_VIEWER_PIN = "358b1b325c7c26fa71deba9a9f16332d7df6a1b6"
-_JSONL_VIEWER_VERSION = "0.8.0"
+_OLD_JSONL_VIEWER_PIN = "a38a975eda4123df11c1fa4f796fd49ab88efcee"
+_JSONL_VIEWER_PIN = "6619fd680efa730c520a0f93f7aaf5514bfabdec"
+_JSONL_VIEWER_VERSION = "0.8.3"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
 _JSONL_VIEWER_REQUIREMENT = (
     f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}")
@@ -974,19 +974,6 @@ class RagModuleBoundaryTests(unittest.TestCase):
 
 
 class RagPackagingBoundaryTests(unittest.TestCase):
-    def _complete_viewer_git_fixture(self, root):
-        viewer_git_directory = root / "viewer-upgrade.git"
-        source_commands = (
-            ["git", "clone", "--bare", _JSONL_VIEWER_REPOSITORY, str(viewer_git_directory)],
-            ["git", "--git-dir", str(viewer_git_directory), "cat-file", "-e", _OLD_JSONL_VIEWER_PIN + "^{commit}"],
-            ["git", "--git-dir", str(viewer_git_directory), "cat-file", "-e", _JSONL_VIEWER_PIN + "^{commit}"],
-            ["git", "--git-dir", str(viewer_git_directory), "fsck", "--full", "--no-dangling"],
-        )
-        for command in source_commands:
-            prepared = subprocess.run(command, text=True, capture_output=True, check=False)
-            self.assertEqual(prepared.returncode, 0, f"{command!r}\n{prepared.stdout}\n{prepared.stderr}")
-        return viewer_git_directory
-
     def _assert_process_succeeded(self, result: subprocess.CompletedProcess[str], stage: str) -> None:
         self.assertEqual(
             result.returncode,
@@ -1512,7 +1499,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     text=True, capture_output=True, check=False)
                 self._assert_process_succeeded(prepared, f"offline source {arguments!r}")
                 return prepared.stdout.strip()
-            for directory, source in ((viewer_source, self._complete_viewer_git_fixture(root)),
+            for directory, source in ((viewer_source, _gitlink_git_directory("vendor/jsonl-viewer")),
                                       (viewer_git_directory, viewer_source)):
                 viewer_git(directory, "init", "--bare")
                 viewer_git(directory, "fetch", "--depth=1", "--update-shallow", "--no-tags",
@@ -1786,7 +1773,16 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             python = environment / "bin" / "python"
             build_support = root / "build-support"
             _copy_setuptools_build_support(build_support)
-            viewer_git_directory = self._complete_viewer_git_fixture(root)
+            viewer_git_directory = root / "viewer-upgrade.git"
+            source_commands = (
+                ["git", "clone", "--bare", _JSONL_VIEWER_REPOSITORY, str(viewer_git_directory)],
+                ["git", "--git-dir", str(viewer_git_directory), "cat-file", "-e", _OLD_JSONL_VIEWER_PIN + "^{commit}"],
+                ["git", "--git-dir", str(viewer_git_directory), "cat-file", "-e", _JSONL_VIEWER_PIN + "^{commit}"],
+                ["git", "--git-dir", str(viewer_git_directory), "fsck", "--full", "--no-dangling"],
+            )
+            for command in source_commands:
+                prepared = subprocess.run(command, text=True, capture_output=True, check=False)
+                self.assertEqual(prepared.returncode, 0, f"{command!r}\n{prepared.stdout}\n{prepared.stderr}")
             install_environment = os.environ.copy()
             for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
                 install_environment.pop(name, None)
@@ -1834,7 +1830,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import importlib.metadata
                 import json
                 viewer = importlib.metadata.distribution("jsonl-viewer")
-                assert viewer.version == "0.7.1"
+                assert viewer.version == "0.7.0"
                 direct_url = json.loads(viewer.read_text("direct_url.json"))
                 assert direct_url == {{
                     "url": {_JSONL_VIEWER_REPOSITORY!r},
