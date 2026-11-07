@@ -632,7 +632,9 @@ Only the complete recorded mapping with source pairs **148783→151083** or
 branches remain unchanged. The intermediate twelve-ID iteration is retained in
 its immutable source/history; the current guard uses the final fifteen-ID map.
 
-The current charge is **raw149548+helpers1535=151083**, with no slack. This includes
+After the main #939 integration, the current charge is **raw149526+helpers1535=151061**,
+within the allocated151083 ceiling with22 lines of slack. The upstream guidance
+adds18 assertion sites while folding other lines; all old assertions remain. This includes
 181 counted lines of the private, maintained workflow-context validation harness.
 It grants no unrelated ID/source expansion or failing-test waiver.
 
