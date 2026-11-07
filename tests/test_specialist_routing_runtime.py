@@ -1911,14 +1911,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(tuple((assignment.specialist_id, assignment.mode) for assignment in second_draft.proposal.assignments),
             ((PLOT_ARCHITECT, SpecialistAssignmentMode.DRAFT), (CHARACTER_CUSTODIAN, SpecialistAssignmentMode.DRAFT),
              (EXECUTION_SPECIALIST, SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT)))
-        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("drafted", "Summons leads choice; choice causes consequence."))
-        self.backend.enqueue_for(CHARACTER_CUSTODIAN, _specialist_outcome("drafted", "Summons leads choice; choice causes consequence."))
-        self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome("constraints_assessed", "Summons leads choice; choice causes consequence."))
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome(message="The draft material is available for integration; no artifact changed."))
-        second_result = await self.runtime.decide_lead_step(_decision(second_draft, c.CollaborationConfirmationDecision.CONFIRM))
-        self.assertIs(c.project_collaboration_history(self.history(multiple)).current_state, c.CollaborationStepState.COMPLETED)
-        self.assertEqual(second_result.proposal, second_draft.proposal)
-        self.assertEqual(len(_submitted_calls(self.history(multiple)[len(multi_prefix):])), 5)
+        before_reject = len(self.backend.calls)
+        rejected_pending = await self.runtime.decide_lead_step(_decision(second_draft, c.CollaborationConfirmationDecision.REJECT))
+        self.assertIs(rejected_pending.turn.state, c.CollaborationStepState.REJECTED)
+        self.assertEqual(len(self.backend.calls), before_reject)
         multi_prefix = self.history(multiple)
         expected = [(item.proposal.authoring_scope.task_id, 2) for item in (first_draft, second_draft)]
         inventory = self.runtime.inspect_lead_collaboration(self.session_id, multiple).available_tasks
@@ -1953,13 +1949,18 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(len(_submitted_calls(suffix)), 1)
         self.assertFalse(any(e.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for e in suffix))
         self.assertEqual(self.history(multiple)[:len(multi_prefix)], multi_prefix)
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("drafted", "Summons leads choice; choice causes consequence."))
+        self.backend.enqueue_for(CHARACTER_CUSTODIAN, _specialist_outcome("drafted", "Summons leads choice; choice causes consequence."))
+        self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome("constraints_assessed", "Summons leads choice; choice causes consequence."))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome(message="The draft material is available for integration; no artifact changed."))
+        second_result = await self.runtime.decide_lead_step(_decision(admitted, c.CollaborationConfirmationDecision.CONFIRM))
+        self.assertIs(c.project_collaboration_history(self.history(multiple)).current_state, c.CollaborationStepState.COMPLETED)
+        self.assertEqual(second_result.proposal, admitted.proposal)
+        self.assertEqual(len(_submitted_calls(self.history(multiple)[len(multi_prefix):])), 5)
+        self.assertEqual(len(self.backend.calls) - before_second, 6)
         self.assertEqual(self.artifact_bytes(), before_multiple)
-        before_reject = len(self.backend.calls)
-        rejected_pending = await self.runtime.decide_lead_step(_decision(admitted, c.CollaborationConfirmationDecision.REJECT))
-        self.assertIs(rejected_pending.turn.state, c.CollaborationStepState.REJECTED)
-        self.assertEqual(len(self.backend.calls), before_reject)
         negative_prefix = self.history(multiple)
-        negative_task_id = second_draft.proposal.authoring_scope.task_id
+        negative_task_id = admitted.proposal.authoring_scope.task_id
         negative_old_source = c.project_collaboration_history(negative_prefix).offered_draft_sources[-1].event_id
 
         def drifted_scope(call):
@@ -1967,7 +1968,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             index = next(i for i, pair in enumerate(call.contract.semantic_index.policy.task_revisions)
                          if pair == (negative_task_id, 3))
             self.assertEqual(_live_task(call, index), {"task_id": negative_task_id, "task_revision": 3})
-            return dict(c.authoring_scope_to_dict(second_draft.proposal.authoring_scope), task_revision=3,
+            return dict(c.authoring_scope_to_dict(admitted.proposal.authoring_scope), task_revision=3,
                 domains=["plot_structure", "character_world", "tone_execution"],
                 contributions=[{"domain": domain, "role": "draft_owner" if domain == "plot_structure" else "constraint_assessor"}
                     for domain in ("plot_structure", "character_world", "tone_execution")])
@@ -1987,7 +1988,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         direct_writer = self._native_scoped(*ROSTER,
             selected=negative_task_id, revision=3, activity="review", domains=("character_world", "tone_execution"),
             mutate=lambda value, material: value["authoring_scope"].update(contributions=c.authoring_scope_to_dict(
-                second_draft.proposal.authoring_scope)["contributions"]),
+                admitted.proposal.authoring_scope)["contributions"]),
             authoring_assessment=_fixture_assessment(),
         )
         def direct_frame(call, provider):
