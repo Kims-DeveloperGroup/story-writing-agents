@@ -25,9 +25,9 @@ Or install the distribution normally:
 python -m pip install story-writing-agents
 ```
 
-Both forms install the required independent `jsonl-viewer` 0.7.1 from its exact
+Both forms install the required independent `jsonl-viewer` 0.8.0 from its exact
 HTTPS VCS requirement at
-`26520240c4be3e2af3e1cf4232fe3129ee706a86`. A first install normally needs
+`358b1b325c7c26fa71deba9a9f16332d7df6a1b6`. A first install normally needs
 Git, network access, and repository access. Installation does not invoke a
 story provider, open an exchange, or enable a service. The historical
 `story-writing-agents[viewer]` and editable `'.[viewer]'` forms remain accepted
@@ -41,7 +41,7 @@ pulling updated Story source, rerun the normal editable installation:
 python -m pip install --editable .
 ```
 
-That ordinary reinstall upgrades older viewer installations to required 0.7.1
+That ordinary reinstall upgrades older viewer installations to required 0.8.0
 without an uninstall, `--force-reinstall`, or `--ignore-installed`. Reserve a forced
 reinstall for a genuinely damaged same-version installation, as described in
 [Troubleshooting](troubleshooting.md#exchanges-does-not-open-the-expected-response).
@@ -213,6 +213,16 @@ the main view; Ctrl-C, EOF and the documented main Escape sequence retain the
 existing cleanup behavior. Reopening starts a fresh view; filters, drafts,
 folds and occurrence state are not saved by Story.
 
+### Keyboard input language
+
+In the JSON record viewer, 0.8.0 automatically recovers English command input
+on supported local macOS/Linux desktops. After switching to Korean while the
+viewer is open, a non-ASCII command input selects and verifies English. That
+invalid input is consumed; press the command key again. Korean search drafts
+remain literal, and closing restores the input source active at viewer entry.
+Unsupported sessions or a failed source selection retain manual-switch guidance.
+The preceding Story-owned scope/agent pickers use Story's input policy.
+
 ### Stage, task and evidence provenance
 
 Story derives stage and task facts from exact, qualified typed history links.
@@ -252,9 +262,9 @@ items, fields and buttons as keyboard actions; wheel input scrolls its painted
 region. Modal outside clicks do not discard drafts.
 
 The external package owns exact rendering and input behavior. See its pinned
-[generic design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/26520240c4be3e2af3e1cf4232fe3129ee706a86/docs/design-system.md),
-[inspection contract](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/26520240c4be3e2af3e1cf4232fe3129ee706a86/docs/inspection.md),
-and [nineteen deterministic sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/26520240c4be3e2af3e1cf4232fe3129ee706a86/docs/samples).
+[generic design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/358b1b325c7c26fa71deba9a9f16332d7df6a1b6/docs/design-system.md),
+[inspection contract](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/358b1b325c7c26fa71deba9a9f16332d7df6a1b6/docs/inspection.md),
+and [nineteen deterministic sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/358b1b325c7c26fa71deba9a9f16332d7df6a1b6/docs/samples).
 Story's grouping and provenance rules live only in this repository.
 
 ## Interpret request, response, and outcome
@@ -392,9 +402,9 @@ Common bounded failures are:
 | --- | --- |
 | No attached session | Attach the intended session, then retry bare `/exchanges`. |
 | No records for the session | Run the intended provider work; do not invoke it merely to manufacture diagnostics. |
-| An older viewer through 0.7.0 remains after updating a checkout | Rerun the normal editable Story install to upgrade to required 0.7.1, then restart Story. |
+| An older viewer through 0.7.1 remains after updating a checkout | Rerun the normal editable Story install to upgrade to required 0.8.0, then restart Story. |
 | Required viewer unavailable | Rerun the normal Story installation, then retry. The compatibility extra is not a separate repair path. |
-| Viewer 0.7.1 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
+| Viewer 0.8.0 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
 | Store busy | Retry after the concurrent exchange write completes. |
 | Unsafe, corrupt, or uncorrelatable records | Preserve the workspace and inspect the content-safe runtime diagnostic before retrying. |
 | Selected stream disappeared | Rerun `/exchanges` to refresh retained inventory. |
