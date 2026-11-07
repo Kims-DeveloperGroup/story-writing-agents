@@ -1828,7 +1828,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 recommendation_family=1, recommended_action=action(source_ids=("current_response",),
                     target_paths=(multi_path,), specialist_ids=ROSTER))(call, provider)
         first_draft, first_drafted = await self.finish_draft(multiple, response=self._native_scoped(
-            *ROSTER, paths=(path_multiple,), domains=("plot_structure", "character_world", "tone_execution"),
+            *ROSTER, paths=(multi_path,), domains=("plot_structure", "character_world", "tone_execution"),
             mutate=two_owners, authoring_assessment=_fixture_assessment(),
         ), synthesis=multiple_recommendation)
         multiple_basis = first_draft.proposal.basis.core_document_readiness
