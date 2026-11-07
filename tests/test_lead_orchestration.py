@@ -3954,7 +3954,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 "contributions": [{"domain": "plot_structure",
                     "role": "draft_owner"}], "dependency_slots": []}}, "answer.observed_facts", logical_root=0)
 
-        operation_record = copy.deepcopy(profile_record)
+        operation_record = copy.deepcopy(profile_record); operation_record['target_paths'] = [future_path]
         operation_facts = replace(declared, scope=authoring_scope_from_dict(operation_record))
         operation_seed = orchestrator_module._lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, operation_facts.input_ids, constraints=operation_facts)
@@ -3974,7 +3974,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 operation_record, fixed_targets=True, fixed_dependencies=True),
                 "artifact_change_proposal": {"artifact_changes": native_changes}, "authoring_assessment": pending_assessment}}
         mixed_domain = {"kind": "proposal", "message": "Review five distinct changes.", "authoring_scope": {
-            **expected_profile_scope, "domains": ["tone_execution"]},
+            **expected_profile_scope, "domains": ["tone_execution"], "target_paths": [future_path]},
             "artifact_intent": {"operations": domain_changes}, "authoring_assessment": pending_assessment}
         operation_owner = replace(factory, constraints=operation_facts, rule_seed=operation_seed)
         legacy_operations = current_group(operation_owner, operation_offers, "artifact.changes")

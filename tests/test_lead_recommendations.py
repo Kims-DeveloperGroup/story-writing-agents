@@ -178,10 +178,11 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertEqual(qualification_starts[:1], [False])
         self.assertIs(type(prepared), c.LeadTurnResult)
         self.assertEqual(len(self.backend.calls) - calls, 3)
-        self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL)
+        self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, (prepared.message, prepared.validation_details,
+            tuple((script.fixture_error_code, script.callback_exception_site)
+                for script in self.backend._all_scripts[:8])))
         self.assertIs(prepared.next_action, c.CollaborationNextAction.SUBMIT_CONFIRMATION)
-        self.assertIsNone(prepared.recommendation_request)
-        self.assertIsNone(prepared.artifact_application_request)
+        self.assertIsNone(prepared.recommendation_request); self.assertIsNone(prepared.artifact_application_request)
         self.assertIsNone(prepared.story_commit_request)
         self.assertEqual(prepared.proposal.authoring_scope, request.authoring_scope)
         self.assertEqual(prepared.proposal.basis.authoring_admission, request.basis.authoring_admission)
@@ -191,8 +192,7 @@ class LeadRecommendationTests(RecommendationCase):
         candidate = prepared.artifact_proposal.candidate.candidate
         operation = candidate.change_set.operations[0]
         self.assertEqual((operation.operation_kind.value, operation.path, operation.content), ("replace", OUTLINE, DRAFT.encode()))
-        objective = self.objective(conversation_id)
-        self.assertIs(objective.state, c.ArtifactObjectiveState.OPEN)
+        objective = self.objective(conversation_id); self.assertIs(objective.state, c.ArtifactObjectiveState.OPEN)
         self.assertIs(type(objective.facts), c.ArtifactObjectiveFactsV2)
         self.assertEqual(objective.candidate_binding.candidate_digest, candidate.candidate_digest)
         self.assertEqual(objective.draft_sources, request.draft_sources)
