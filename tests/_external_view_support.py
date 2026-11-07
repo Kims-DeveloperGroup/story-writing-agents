@@ -252,7 +252,8 @@ def recording_driver(characters="", *, width=100, height=24, response="valid"):
     def paint(value):
         written = original_write(value)
         screen.write(value.replace("\n", "\r\n"))
-        enabled, disabled = value.rfind("\x1b[?1000h"), value.rfind("\x1b[?1000l")
+        enabled = max(value.rfind("\x1b[?1000h"), value.rfind("\x1b[?1002h"))
+        disabled = max(value.rfind("\x1b[?1000l"), value.rfind("\x1b[?1002l"))
         if max(enabled, disabled) >= 0:
             probe.mouse = enabled > disabled
         if "\x1b[6n" in value:
