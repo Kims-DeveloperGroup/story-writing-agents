@@ -168,6 +168,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         def observed(runtime, *args, **kwargs):
             if len(notes) < 8:
                 caller = trace = outer = projection = None
+                capture = captured_task_id = implicit_task_ids = retained_node = planning_node = current_view = None
+                events = confirmation_id = heads = confirmed_event = confirmation = proposals = head_node = None
+                target_nodes = target_plan_ids = target_anchors = None
                 try:
                     caller = sys._getframe(1)
                     failure = kwargs.get("failure")
@@ -177,10 +180,48 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                         if trace.tb_frame.f_code.co_name == "_run_lead_provider_guarded_pinned":
                             outer = trace.tb_frame
                             projection = outer.f_locals.get("projection")
-                            outer_budget = (outer.f_locals.get("ordinary_front_cap"),
-                                outer.f_locals.get("document_node") is not None,
+                            capture = outer.f_locals.get("premise_capture")
+                            captured_task_id = getattr(capture, "authoring_task_id", None)
+                            implicit_task_ids = outer.f_locals.get("implicit_task_ids")
+                            retained_node = getattr(getattr(projection, "current_proposal", None), "document_node", None)
+                            planning_node = getattr(getattr(outer.f_locals.get("planning_projection"), "current_proposal", None), "document_node", None)
+                            current_view = outer.f_locals.get("current_view")
+                            events = outer.f_locals.get("implicit_events")
+                            confirmation_id = getattr(current_view, "current_confirmation_event_id", None)
+                            heads = tuple(event for event in events if event.event_id == confirmation_id) if events is not None and confirmation_id is not None else None
+                            confirmed_event = heads[0] if heads is not None and len(heads) == 1 and type(heads[0].payload) is c.CollaborationConfirmationPayload and heads[0].payload.decision is c.CollaborationConfirmationDecision.CONFIRM else None
+                            confirmation = getattr(confirmed_event, "payload", None)
+                            proposals = tuple(event.payload for event in events
+                                if type(event.payload) is c.CollaborationProposal and event.conversation_id == confirmed_event.conversation_id
+                                and (event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest)
+                                    == (confirmation.proposal_id, confirmation.proposal_revision, confirmation.proposal_digest)) if confirmation is not None else None
+                            head_node = getattr(proposals[0], "document_node", None) if proposals is not None and len(proposals) == 1 else None
+                            target_nodes = tuple(node for event in events
+                                if type(event.payload) in {c.CollaborationProposal, c.CollaborationLeadJudgmentPayload, c.LeadRecommendationRequestPayload}
+                                for node in (getattr(event.payload, "document_node", None),)
+                                if node is not None and getattr(getattr(node, "task_ref", None), "task_id", None) == captured_task_id
+                            ) if captured_task_id is not None and events is not None else None
+                            target_plan_ids = {node.plan_ref.plan_id for node in target_nodes} if target_nodes is not None else None
+                            target_anchors = {(node.budget_lineage_ref, node.budget_origin_step_id) for node in target_nodes} if target_nodes is not None else None
+                            outer_budget = (
+                                outer.f_locals.get("ordinary_front_cap"), outer.f_locals.get("document_node") is not None,
                                 projection.physical_calls_spent if type(projection) is c.CollaborationHistoryProjection else None,
-                                projection.rounds_spent if type(projection) is c.CollaborationHistoryProjection else None)
+                                projection.rounds_spent if type(projection) is c.CollaborationHistoryProjection else None,
+                                capture is not None, captured_task_id is not None,
+                                captured_task_id in implicit_task_ids if captured_task_id is not None and isinstance(implicit_task_ids, (set, frozenset)) else None,
+                                captured_task_id is not None and outer.f_locals.get("document_budget_task_id") == captured_task_id,
+                                len(implicit_task_ids) if isinstance(implicit_task_ids, (set, frozenset)) else None,
+                                getattr(current_view, "remaining_physical_calls", None),
+                                captured_task_id is not None and getattr(getattr(retained_node, "budget_lineage_ref", None), "task_id", None) == captured_task_id if retained_node is not None else None,
+                                captured_task_id is not None and getattr(getattr(planning_node, "budget_lineage_ref", None), "task_id", None) == captured_task_id if planning_node is not None else None,
+                                len(heads) if heads is not None else None, len(proposals) if proposals is not None else None,
+                                head_node.plan_ref == current_view.plan.ref if head_node is not None and getattr(current_view, "plan", None) is not None else None,
+                                head_node.task_ref.task_id == captured_task_id if head_node is not None and captured_task_id is not None else None,
+                                head_node.budget_lineage_ref.task_id == captured_task_id if head_node is not None and captured_task_id is not None else None,
+                                len(target_plan_ids) if target_plan_ids is not None else None,
+                                len(target_anchors) if target_anchors is not None else None,
+                                (head_node.budget_lineage_ref, head_node.budget_origin_step_id) == next(iter(target_anchors)) if head_node is not None and target_anchors is not None and len(target_anchors) == 1 else None,
+                            )
                             if any(type(value) not in (int, bool, type(None)) for value in outer_budget):
                                 outer_budget = None
                         if trace.tb_next is None:
@@ -200,6 +241,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                     pass
                 finally:
                     del caller, trace, outer, projection
+                    del capture, captured_task_id, implicit_task_ids, retained_node, planning_node, current_view
+                    del events, confirmation_id, heads, confirmed_event, confirmation, proposals, head_node
+                    del target_nodes, target_plan_ids, target_anchors
             return original(runtime, *args, **kwargs)
         patcher = mock.patch.object(StoryRuntime, "_lead_outcome_failure_result", new=observed)
         patcher.start()
