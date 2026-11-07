@@ -243,6 +243,9 @@ class SuiteBudgetTests(unittest.TestCase):
 
         migrated = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
         expected_additions = {
+            'tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart': 0,
+            'tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation': 0,
+            'tests.test_lead_orchestration.LeadSchemaFactoringTests.test_small_factoring_annotations_and_owner_refs_are_exact': 0,
             'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_cancelled_before_correction_never_replays': 1,
             'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_cancelled_during_correction_never_replays': 1,
             'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_crashed_before_correction_never_replays': 1,
@@ -261,19 +264,22 @@ class SuiteBudgetTests(unittest.TestCase):
         prior_caps[recovery_id] = 12
         self.assertEqual(set(migrated["subtest_caps"]) - set(prior_caps), set(expected_additions))
         self.assertEqual({key: migrated["subtest_caps"][key] for key in expected_additions}, expected_additions)
-        self.assertEqual(migrated["max_test_source_lines"], 150868)
+        self.assertEqual(migrated["max_test_source_lines"], 151083)
         matrix_id = "tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_missing_before_correction_never_replays"
         untouched_id = "tests.test_specialist_routing.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership"
+        zero_id = 'tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation'
         self.assertEqual(prior_caps[untouched_id], 5)
         for old_limit in (148783, 150770):
             parent = dict(migrated, max_test_source_lines=old_limit, subtest_caps=prior_caps)
             self.assertIsNone(suite_budget.check_monotonic(migrated, parent))
-            for old, limit in ((old_limit - 1, 150868), (old_limit + 1, 150868), (old_limit, 150867), (old_limit, 150869)):
+            for old, limit in ((old_limit - 1, 151083), (old_limit + 1, 151083), (old_limit, 151082), (old_limit, 151084)):
                 self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
                     dict(migrated, max_test_source_lines=limit), dict(parent, max_test_source_lines=old))
             for caps in ({key: value for key, value in migrated["subtest_caps"].items() if key != matrix_id},
                          {**migrated["subtest_caps"], "tests.unreviewed.Case.test_extra": 0},
                          {**migrated["subtest_caps"], matrix_id: 0}, {**migrated["subtest_caps"], matrix_id: 2},
+                         {**migrated["subtest_caps"], zero_id: 1},
+                         {key: value for key, value in migrated["subtest_caps"].items() if key != zero_id},
                          {**migrated["subtest_caps"], recovery_id: 1}, {**migrated["subtest_caps"], recovery_id: 3},
                          {**migrated["subtest_caps"], untouched_id: 4}, {**migrated["subtest_caps"], untouched_id: 6}):
                 self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(migrated, subtest_caps=caps), parent)
@@ -290,8 +296,8 @@ class SuiteBudgetTests(unittest.TestCase):
         import os, sys, time
         ids = runner._HOSTED_METHOD_IDS
         self.assertEqual(runner._manifest(ids)["digest"],
-                         "sha256:c2099b8816df4ce9cfc2d4f591f88a74e8a37a554fd1682429377d3a3be55fcf")
-        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (159, 19))
+                         "sha256:18fb999bf223a0b6fdc5ea9cb67ab6c873cc378c0c43e76755bfbf60457c78cf")
+        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (161, 20))
         cases = tuple(Mock(id=Mock(return_value=value)) for value in (*ids, "unreviewed.test"))
         canonical = runner.CanonicalCollection(cases, (*ids, "unreviewed.test"))
         serial, scheduled = runner._hosted_partition(canonical, canonical)
@@ -300,13 +306,13 @@ class SuiteBudgetTests(unittest.TestCase):
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner._hosted_partition(canonical, isolated)
         self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
-        launch_digest = "sha256:f7f22f6cb44ff2c741fcd9864a9afb11c36d1a671aa7712f365440f28515fd9a"
+        launch_digest = "sha256:b9315ccd7308138488cf399fecb697551f2406613ff5c31a855f6b425594040a"
         self.assertEqual(runner._manifest(runner._hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner._hosted_launch_order(ids[::-1]), runner._hosted_launch_order(ids))
         self.assertEqual(runner._hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
         drift = runner.CanonicalCollection(cases, (*ids, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
         self.assertRaises(runner.RunnerError, runner._hosted_partition, drift, drift)
-        args = SimpleNamespace(command="run", hosted_methods="audited-159-v4", hosted_deadline_epoch=time.time()+3500,
+        args = SimpleNamespace(command="run", hosted_methods="audited-161-v5", hosted_deadline_epoch=time.time()+3500,
                                shard="1/5", id=[], module=[], tier=[], failfast=False, json="report.json")
         env = dict(GITHUB_ACTIONS="true", TEST_RUN_DEADLINE=str(time.time()+4500),
                    TEST_JOB_DEADLINE=str(time.time()+4500))
@@ -359,7 +365,7 @@ class SuiteBudgetTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             paths = self._reports(directory, (0, 0)); rows = self.report_data
-            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": "audited-159-v4",
+            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": "audited-161-v5",
                         "profile_manifest": runner._manifest(runner._HOSTED_METHOD_IDS),
                         "capacity": 2, "peak_children": 0, "work_deadline_epoch": 10000.0,
                         "cleanup_deadline_epoch": 10030.0, "launch_manifest": runner._manifest(()),
@@ -857,7 +863,7 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertEqual(state.normalize_boot_identity(old_boot), "sysctl:100:2")
             self.assertFalse(state.verified_boot_change(old_boot, same_boot))
             self.assertTrue(state.verified_boot_change(old_boot, "sysctl:101:2"))
-            for unsuitable in (None, "unparseable", "sysctl:100:150869", "linux:12345678-1234-1234-1234-123456789abc"):
+            for unsuitable in (None, "unparseable", "sysctl:100:151084", "linux:12345678-1234-1234-1234-123456789abc"):
                 self.assertFalse(state.verified_boot_change(old_boot, unsuitable))
 
         import os, signal, subprocess, sys, time

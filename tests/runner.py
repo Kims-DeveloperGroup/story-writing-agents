@@ -803,7 +803,7 @@ def _write_reconciliation_human(report: dict[str, object], stream: TextIO) -> No
 
 # This closed profile is audited for fresh whole-method processes. Adding a method
 # (even in one of these classes) requires another fixture/eligibility review.
-_HOSTED_PROFILE = 'audited-159-v4'
+_HOSTED_PROFILE = 'audited-161-v5'
 _HOSTED_CLEANUP_SECONDS = 30.0
 _HOSTED_LAUNCH_IDS = (
     'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict',
@@ -842,6 +842,8 @@ _HOSTED_LAUNCH_IDS = (
     'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_search_read_answer_uses_bounded_history_without_proposal',
     'tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_zero_hits_and_scoped_status_evidence_are_derived_locally',
     'tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_only_matching_successful_apply_satisfies_objective',
+    'tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart',
+    'tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation',
     'tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_unread_and_truncated_search_fall_back_while_reads_attach_locally',
     'tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_unknown_duplicate_reordered_and_prior_turn_ids_fail_once',
     'tests.test_recommendation_actions.RecommendationActionContractTests.test_current_response_alias_binds_exact_whole_message_before_action',
@@ -1016,7 +1018,7 @@ def _hosted_partition(canonical: CanonicalCollection, selection: CanonicalCollec
     eligible = set(_HOSTED_METHOD_IDS)
     classes = {identifier.rsplit(".", 1)[0] for identifier in eligible}
     present = {identifier for identifier in canonical.ids if identifier.rsplit(".", 1)[0] in classes}
-    if present != eligible or len(eligible) != 159:
+    if present != eligible or len(eligible) != 161:
         raise RunnerError("audited whole-method eligibility changed")
     serial = tuple(test for test in selection.tests if test.id() not in eligible)
     scheduled = tuple(identifier for identifier in selection.ids if identifier in eligible)

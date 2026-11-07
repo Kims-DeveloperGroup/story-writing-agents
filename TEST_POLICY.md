@@ -9,7 +9,7 @@ delivery gate; a selected run certifies only its recorded IDs and source.
 Issue #938 records each coverage-preserving case split before changing the
 canonical inventory or subtest caps. Retain the original assertions, real host
 transitions, and full sequential workflows. Use fresh mutable fixtures for each
-independent case, and share only proven immutable preparation. The exact first
+independent case, and share only proven immutable preparation. The exact current
 migration below is the sole new allocation; no failing-test exception is granted.
 
 The canonical suite is a bounded regression sample. Its checked-in inventory is
@@ -289,24 +289,21 @@ assertion은 유지한다. 승인된 hosted affected job은 기존 외부 timeou
 
 ### Canonical CI
 
-`pr-validation` runs the fast tier and all five full shards for any change under
-`src/`, `config/`, or `tests/`, or to the runtime dependency and test-policy
-files. It runs static validation for documentation-only changes. Local runtime
-work also runs affected exact test IDs or modules before the PR. CI reconciles
-complete, disjoint shards and checks their test outcomes, exact IDs, per-ID
-subtest counts, test source size, measured wall times, and the base-commit
-budget. A cancelled,
-incomplete, or failed run does not pass. A time overage also fails unless the
-maintainer-authorized exception below applies.
+For Ready PR runtime/test/dependency changes, run the fast tier and all five full
+shards. Draft pushes run static validation only; exact affected runtime evidence
+is requested explicitly through the existing manual route. `test:full` overrides
+Draft mode. A Draft notice is not runtime evidence or integration readiness.
 
-The timing-weight manifest balances shards; it is not evidence of actual run
-time. The budget gate uses the wall time in the current Python 3.11 runner
-reports. Report the observed full and shard times and any platform limitation
-when recalibrating weights.
+Pure documentation-only Ready or complete merge-group changes remain static.
+Ready base/unknown edits and test-policy label events expand conservatively.
+Body/title and unrelated-label events use isolated metadata notices; they neither
+cancel source validation nor overwrite the full runtime/reconciliation check names.
 
-All hosted test jobs use the exact patch in `RUNTIME_TEST_PYTHON_VERSION` for
-`setup-python` and `uv sync`; rolling runner images must not split a campaign
-between Python patches. Reconciliation still requires matching environments.
+Before Ready, runtime work requires its affected exact IDs/modules. Final delivery
+retains complete, disjoint full reports, source/environment identity, per-ID caps,
+source cost, timing, budget and cleanup gates. Failure, cancellation, interruption
+or an unexecuted selection is not pass. Historical timing weights are estimates.
+
 
 ### Actions의 지정 영향 검증
 
@@ -318,13 +315,13 @@ between Python patches. Reconciliation still requires matching environments.
 
 ## Dedicated whole-front shard
 
-The maintainer-approved partition has five selections: 621/618/632/667/1 tests.
-Run the original four-bin class-LPT assignment first, then extract only
-`tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict`
-into shard `5/5`. Other IDs keep their prior bin. This is the sole explicit
-whole-class grouping exception; the inventory, cases, assertions and per-ID caps
-remain frozen. Historical timing weights remain estimates, not measured proof of
-the new shard's duration. The combined 18,000-second ceiling is derived from five
+The current approved partition has five selections:595/715/582/649/1 tests.
+Class-LPT retains whole-front alone in5/5. The explicit938 coverage-preserving
+ID/class migration and estimated weights below account for the repartition;
+no old scenario/assertion is removed. Further inventory changes require their
+own accepted accounting rather than silently expanding an existing long method.
+
+The combined 18,000-second ceiling is derived from five
 3,600-second limits; the sole achievement target remains one hour per shard.
 
 Normal PR and merge-group validation run all five partitions. Manual dispatch
@@ -343,8 +340,8 @@ benchmark campaign is required.
 
 ## Hosted full-shard method scheduling
 
-Only hosted full shards opt into the fixed `audited-159-v4` profile: 159
-fixture-audited methods across 19 classes. The profile includes the eight
+Only hosted full shards opt into the fixed `audited-161-v5` profile: 161
+fixture-audited methods across 20 classes. The profile includes the eight
 provider-timeout recovery, ten context-recovery and thirteen interactive Lead
 adapter methods audited after v40's measured serial bottlenecks. The #938 case split retains class-LPT and isolates whole-front, with the exact
 new inventory and estimated weights described below. Each shard retains
@@ -623,32 +620,35 @@ raw149462이고, 정책 helper2행 후 helper1308이며 전체 상한은 **15077
 
 ### #938 independent-case inventory and source allocation
 
-The maintainer-directed split preserves all 2,527 old IDs and adds twelve IDs:
-ten independent submitted-recovery combinations and two codec-contract cases.
-The old recovery cap moves from 12 to 2 plus ten new caps of 1. The pure codec
-cap stays 10; its two new contract cases have cap 0. The total cap sum is unchanged.
-The owning Issue records the complete scenario/assertion move and exact names.
+The current split retains all 2,527 original IDs and adds fifteen IDs: ten
+submitted-recovery combinations, two codec-contract cases, two document cases,
+and one small factoring/ref case. The recovery cap moves12→2+ten×1; other old
+caps stay exact, and all five nonmatrix new caps are0. Total caps are conserved.
 
-The only accepted identity migration starts from cap-map SHA256
-`e8d0ec716f086485451822317114c27efd70bd895fdcad012a9410ff406aff18` and applies that
-exact mapping, with no unrelated ID/cap changes. Its source pairs are exactly
-**148783→150868** and **150770→150868**, coupled to that migration and unchanged
-18,000/3,600-second limits. Prior approved transitions remain unchanged.
+The exact original cap-map SHA256 is
+`e8d0ec716f086485451822317114c27efd70bd895fdcad012a9410ff406aff18`.
+Only the complete recorded mapping with source pairs **148783→151083** or
+**150770→151083** and unchanged18000/3600 limits is admitted. All pre938 approved
+branches remain unchanged. The intermediate twelve-ID iteration is retained in
+its immutable source/history; the current guard uses the final fifteen-ID map.
 
-After the mechanical main update, raw source was 149417 and charged helpers1308.
-This split adds 102 raw lines and 41 charged helper lines: **149519+1349=150868**,
-with no slack. This includes the strict migration regression and runner/budget
-changes; it does not grant unrelated expansion or a waiver of parent failures.
+The current charge is **raw149548+helpers1535=151083**, with no slack. This includes
+181 counted lines of the private, maintained workflow-context validation harness.
+It grants no unrelated ID/source expansion or failing-test waiver.
 
-All ten recovery combinations retain their original forty mocked submissions.
-Their minimal fixture omits the unused default Runtime; mutable history is fresh.
-The codec split retains six offer bindings and three fixture-provider invocations.
-The old pure codec ID remains serial; twelve new cases enter audited-159-v4.
-All 147 old profile memberships and their relative launch order are retained.
+The ten recovery combinations retain forty mocked submissions and use fresh
+mutable fixtures without the unused default Runtime. Pure codec stays serial;
+its six offer bindings and three fixture invocations remain in selected contracts.
+The real twenty-call document goal chain and two-call independent goal remain.
+The separated document fixture adds two honest baseline-readiness setup calls
+and a needed Runtime. Whole-suite speedup is not inferred from smaller selections.
+All twenty-seven small factoring assertions move together, with the later full
+catalogue/census/negative checks retained. Positive nullable QUESTION fixtures are
+explicitly corrected; negative cases and authority rules remain unchanged.
 
-The historical recovery class weight is shared with its new class using an
-explicit historical method/scenario estimate; their combined weight is conserved.
-The codec class weight combines the observed 183.99956-second baseline method
-with historical estimates for its other methods. Neither is a measured whole-class
-total or a speedup claim. The 385-group partition is **621/618/632/667/1** and covers
-all 2,539 IDs exactly once. Source-bound final runs establish actual cost and gates.
+Hosted profile is audited-161-v5:161IDs/20classes, at most4workers. The old147
+memberships and their relative launch order remain. Pure codec and small factoring
+stay serial. Historical weight transfers are source-responsibility estimates,
+not measured CPU/time shares; the codec estimate includes its observed baseline.
+The387-group partition is **595/715/582/649/1** and covers2542IDs exactly once.
+Actual source-bound execution and complete final reports establish passing gates.
