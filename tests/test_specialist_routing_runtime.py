@@ -167,19 +167,39 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         original = StoryRuntime._lead_outcome_failure_result
         def observed(runtime, *args, **kwargs):
             if len(notes) < 8:
-                caller = trace = None
+                caller = trace = outer = projection = None
                 try:
                     caller = sys._getframe(1)
                     failure = kwargs.get("failure")
                     trace = None if failure is None else failure.__traceback__
-                    while trace is not None and trace.tb_next is not None:
+                    outer_budget = None
+                    while trace is not None:
+                        if trace.tb_frame.f_code.co_name == "_run_lead_provider_guarded_pinned":
+                            outer = trace.tb_frame
+                            projection = outer.f_locals.get("projection")
+                            outer_budget = (outer.f_locals.get("ordinary_front_cap"),
+                                outer.f_locals.get("document_node") is not None,
+                                projection.physical_calls_spent if type(projection) is c.CollaborationHistoryProjection else None,
+                                projection.rounds_spent if type(projection) is c.CollaborationHistoryProjection else None)
+                            if any(type(value) not in (int, bool, type(None)) for value in outer_budget):
+                                outer_budget = None
+                        if trace.tb_next is None:
+                            break
                         trace = trace.tb_next
+                    terminal_budget = None
+                    if trace is not None and trace.tb_frame.f_code.co_name == "build_call_request":
+                        terminal_budget = (trace.tb_frame.f_locals.get("physical_call_limit"),
+                            len(trace.tb_frame.f_locals["calls"]), trace.tb_frame.f_locals.get("minimum"),
+                            trace.tb_frame.f_locals.get("lineage") is not None)
+                        if any(type(value) not in (int, bool, type(None)) for value in terminal_budget):
+                            terminal_budget = None
                     notes.append((caller.f_code.co_name, caller.f_lineno, kwargs["failure_code"].value,
-                        None if trace is None else (trace.tb_frame.f_code.co_name, trace.tb_lineno)))
+                        None if trace is None else (trace.tb_frame.f_code.co_name, trace.tb_lineno),
+                        terminal_budget, outer_budget))
                 except Exception:
                     pass
                 finally:
-                    del caller, trace
+                    del caller, trace, outer, projection
             return original(runtime, *args, **kwargs)
         patcher = mock.patch.object(StoryRuntime, "_lead_outcome_failure_result", new=observed)
         patcher.start()
