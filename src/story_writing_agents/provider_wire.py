@@ -1543,11 +1543,34 @@ _catalog("used_evidence", "Historical exact qualified artifact READ receipt fact
 _catalog("call_kind repair_of_call_id", "Exact producing physical-call category and optional diagnosed prior call repaired by this response; never infer or reset call cost.")
 
 
+_AUTHORING_ASSESSMENT_FIELD_GUIDANCE = {
+    "authoring_assessment": "Assess the current work and stage using all actually offered grounds, including source-qualified earlier USER facts. A short procedural reply does not erase those grounds. Describe semantic adequacy and real gaps; this is not confirmation or write authority.",
+    "authoring_admission": "The host-qualified basis captures exact request/task/source facts after assessment. It cannot manufacture a USER choice, a completed READ or permission absent from the original source.",
+    "status": "sufficient supports the assessed work after source qualification; needs_information identifies a concrete blocking fact, choice or unavailable necessary evidence; analysis_only allows grounded analysis while official authoring remains unadmitted. Do not force a state merely to advance the workflow.",
+    "foundations": "Name the story facts or supplied material needed for this deliverable and explain actual support. A procedure, file status or statement of confidence is not a foundation.",
+    "direction": "Ground the USER's intended deliverable and writing direction in offered literal USER evidence; an agent's proposed procedure is not a substitute.",
+    "creative_scope": "Record the source-qualified USER boundary between permitted construction/invention and protected facts. Explicit no-invention is a complete boundary when its actual USER evidence is offered. Null does not create permission; do not leave an evidenced boundary unresolved.",
+    "allowed_creative_actions": "Name concrete actions within the evidenced boundary, such as ordering supplied facts and refining prose without inventing events or feelings. Merely proceeding with a procedure does not delegate new invention.",
+    "protected_constraints": "Preserve established USER facts, voice and restrictions consistently with creative_scope and allowed actions. Do not invent constraints to fill the array.",
+    "decisions": "Assess choices required by the deliverable as supplied, explicitly delegated or genuinely missing. Retain settled choices and do not turn already delegated agent work into another USER question.",
+    "missing_information": "State concrete blockers after checking actually offered grounds. Distinguish genuinely unavailable necessary evidence from available agent retrieval/source-linking work; do not ask the USER to repeat settled facts or perform that work. Never pretend unavailable evidence was read.",
+    "rationale": "Briefly connect the cited grounds, permitted actions, constraints and actual gaps to this task/stage/status. Distinguish missing USER information from unavailable source binding.",
+    "requirement": "Name the specific foundation, USER direction or creative boundary that the evidence must establish for this work, not a vague claim of readiness.",
+    "source_ids": "Cite exact offered IDs whose delivered content supports this evidence or decision. USER direction, creative permission and delegation need actual literal USER support. Do not invent IDs, promote Lead/rejected material to USER authority, or mistake file status for completed READ evidence.",
+    "justification": "Explain how the selected source content establishes the named requirement, separating supplied facts from interpretation, proposed invention and unknowns.",
+    "decision": "Name one required authoring choice, including an already supplied choice or a bounded choice the USER explicitly delegated; not every detail requires a new question.",
+    "coverage": "supplied means actual cited input establishes the choice; delegated means cited literal USER input explicitly permits the agent to choose within a boundary; missing means a required choice is genuinely unresolved.",
+    "explanation": "Justify the decision's supplied/delegated coverage from actual content, or identify the exact missing choice. Internal source-linking work is not a missing USER decision.",
+}
+
+
 def field_description(name: str) -> str:
     try:
-        return FIELD_CATALOG[name]
+        meaning = FIELD_CATALOG[name]
     except KeyError:
         raise ValueError(f"provider wire catalog has no field: {name}") from None
+    context = _AUTHORING_ASSESSMENT_FIELD_GUIDANCE.get(name)
+    return meaning if context is None else meaning + " In authoring_assessment context: " + context
 
 
 _catalog("editorial_state editorial_record", "Cited retained USER editorial intent. Only exact typed USER intake changes approval; this is not artifact READ evidence or workflow permission.")
@@ -1723,7 +1746,7 @@ DYNAMIC_CHOICE_FIELDS = frozenset({"variant_id", "task_id", "task_revision", "ag
 _catalog("authoring_assessment authoring_admission", "Structured semantic assessment and host-bound source/task admission respectively. Neither grants READ, confirmation, review, artifact-write or budget authority.")
 _catalog("foundations direction creative_scope decisions", "Named foundation evidence, actual USER direction, bounded USER creative permission and supplied/delegated/missing decisions for this exact work. References must select actual offered inputs or completed READ receipts.")
 _catalog("requirement justification allowed_creative_actions protected_constraints missing_information explanation", "Explicit semantic requirement/support, authorized creative gaps/actions, preserved constraints and exact missing decisions. Nonempty text or confidence alone does not establish adequacy.")
-_catalog("offered_admission_source_ids authoring_admission_rule", "Current source choices and grounding rule for authoring admission. Retain supplied facts; identify only missing information. Literal USER foundations may support an initial draft with an empty target.")
+_catalog("offered_admission_source_ids authoring_admission_rule", "Current offered assessment-source choices and grounding rule. Retain supplied facts; distinguish actual missing information from unavailable source binding. Source choices alone do not establish adequate content, target/readiness admission or execution authority.")
 _catalog("source_identity original_authority", "Exact host-captured original source identity and its provenance category. Selected material, including rejected public answers, remains input-only and cannot manufacture a READ or accepted canonical fact.")
 _catalog("request_digest", "Host-bound digest of the exact originating USER request or consensus input/direction/ruling. A matching digest supplies identity, never semantic sufficiency or confirmation authority.")
 ENUM_MEANINGS.update({
