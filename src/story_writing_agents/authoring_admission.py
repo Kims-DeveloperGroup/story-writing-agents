@@ -362,38 +362,121 @@ def assessment_schema(
     label = nonblank_text_rule(maximum_characters=256)
     strings = {"type": "array", "items": text, "minItems": 0, "maxItems": 32}
     refs = {"type": "array", "items": text, "minItems": 0, "maxItems": 32}
+    meanings = {
+        "status": (
+            "Assess this task and stage using all actually offered grounds, not only the latest short reply. "
+            "sufficient means the assessed work is supported; needs_information identifies a concrete blocking "
+            "fact, decision or unavailable necessary evidence; analysis_only permits grounded analysis without "
+            "admitting official authoring. These states grant no execution or write authority."),
+        "foundations": (
+            "Named story facts or supplied material needed for this deliverable, with evidence explaining "
+            "their actual support. A procedural request to proceed is not itself story material and does not "
+            "erase earlier grounds that are actually offered. File status, plans and confidence are not foundations."),
+        "direction": (
+            "The actual USER's intended deliverable and direction for this work, bound to offered literal "
+            "USER evidence. Distinguish the writing goal from an agent's proposed procedure; null represents "
+            "an unresolved or unavailable direction, not permission to invent one."),
+        "creative_scope": (
+            "The source-qualified USER boundary between permitted construction or invention and facts that "
+            "must remain intact. An explicit no-invention instruction is a complete boundary when its actual "
+            "USER source is offered; it does not require permission to invent. Use null only when this boundary "
+            "is unresolved or lacks qualified evidence. Agent claims and summaries do not create USER permission."),
+        "allowed_creative_actions": (
+            "Concrete actions permitted within the evidenced creative boundary, such as arranging supplied "
+            "facts and refining wording without inventing dialogue, events or feelings. A preparation step, "
+            "general approval or named action alone does not establish creative permission or waive host checks."),
+        "protected_constraints": (
+            "Established facts, voice, interpretation and other USER constraints this work must preserve. "
+            "Keep no-invention limits consistent with creative_scope and allowed actions. Do not invent "
+            "constraints merely to fill this array; an empty array can be truthful."),
+        "decisions": (
+            "Choices required by this deliverable and whether each is supplied, explicitly delegated or genuinely "
+            "missing. Preserve settled choices; routine choices already delegated to the agent do not require "
+            "another USER decision. Do not substitute an agent's retrieval or source-linking task for an author decision."),
+        "missing_information": (
+            "Only concrete facts, choices or genuinely unavailable necessary evidence that block the assessed "
+            "stage. Check actually offered grounds first; distinguish internal retrieval or source-linking work "
+            "from information the USER must supply. Do not ask the USER to repeat settled facts or perform "
+            "available agent work. Never claim inaccessible evidence was read or source-qualified."),
+        "rationale": (
+            "A concise explanation of how the cited grounds, permitted actions, protected constraints and "
+            "remaining gaps support this status for the current task and stage. Distinguish missing USER "
+            "information from unavailable source binding; confidence or a restated plan is not evidence."),
+        "requirement": (
+            "The specific foundation, USER direction or creative boundary this evidence must establish. "
+            "Name the task-relevant need rather than repeating a vague plan or claiming general readiness."),
+        "source_ids": (
+            "Exact IDs of actually offered inputs or completed authorized READ receipts whose delivered "
+            "content supports this item. Direction, creative permission and delegation require actual literal "
+            "USER support. Do not invent IDs, treat a file indicator as a READ, or promote Lead/rejected text "
+            "to USER authority. A genuinely missing decision may have no supporting source."),
+        "justification": (
+            "Explain which supplied facts or USER choice in the selected sources establish this named "
+            "requirement. Keep evidence separate from interpretation, proposed invention and unknowns; "
+            "naming a source without actual support is insufficient."),
+        "decision": (
+            "One concrete choice needed for the requested deliverable, including an existing settled choice "
+            "or a bounded agent choice the USER explicitly delegated; not every implementation detail is a new question."),
+        "coverage": (
+            "supplied: cited actual input establishes the choice; delegated: cited literal USER input explicitly "
+            "permits the agent to make this bounded choice; missing: the required choice is genuinely unresolved. "
+            "A procedural instruction to proceed does not itself delegate new invention."),
+        "explanation": (
+            "Explain why the cited content supports this decision's supplied or delegated coverage, or exactly "
+            "which required choice remains missing. Do not use an internal retrieval instruction as a missing USER decision."),
+    }
     if source_ids is not None:
         refs = ({**refs, "items": {"type": "string", "enum": list(source_ids)}} if source_ids else
                 {"type": "array", "items": {"type": "string"}, "maxItems": 0})
-    evidence = (None if source_ids == () else closed_rule({"requirement": label,
-        "source_ids": {**refs, "minItems": 1}, "justification": text},
-        description="Justify this requirement with exact offered sources."))
-    unavailable = {"type": "null", "description": "This required USER decision is unavailable."}
+    evidence = (None if source_ids == () else closed_rule({
+        "requirement": {**label, "description": meanings["requirement"]},
+        "source_ids": {**refs, "minItems": 1, "description": meanings["source_ids"]},
+        "justification": {**text, "description": meanings["justification"]},
+    }, description="Bind one named requirement to actual content from exact offered sources; source identity alone is not support."))
+    unavailable = {"type": "null", "description": (
+        "This field's required evidence or USER decision is unresolved or unavailable. "
+        "Null creates no fact, creative permission or completed READ.")}
     nullable = unavailable if evidence is None else {"anyOf": [evidence, unavailable]}
-    decisions = [closed_rule({"decision": {**label, "description": "Creative choice."},
-        "coverage": {"type": "string", "enum": [coverage.value]},
-        "source_ids": {**refs, "minItems": 0 if coverage is DecisionCoverage.MISSING else 1},
-        "explanation": text}, description="Bind this decision to its actual source or USER delegation.")
+    decisions = [closed_rule({
+        "decision": {**label, "description": meanings["decision"]},
+        "coverage": {"type": "string", "enum": [coverage.value], "description": meanings["coverage"]},
+        "source_ids": {**refs, "minItems": 0 if coverage is DecisionCoverage.MISSING else 1,
+                       "description": meanings["source_ids"]},
+        "explanation": {**text, "description": meanings["explanation"]},
+    }, description="State one required choice and ground its supplied/delegated/missing coverage in actual sources.")
         for coverage in DecisionCoverage if source_ids != () or coverage is DecisionCoverage.MISSING]
-    fields = {"status": {"type": "string", "enum": [AdmissionStatus.NEEDS_INFORMATION.value, AdmissionStatus.ANALYSIS_ONLY.value]},
+    fields = {
+        "status": {"type": "string", "enum": [AdmissionStatus.NEEDS_INFORMATION.value, AdmissionStatus.ANALYSIS_ONLY.value],
+                   "description": meanings["status"]},
         "foundations": {"type": "array", "items": evidence or closed_rule({}), "minItems": 0,
-                        "maxItems": 0 if evidence is None else 32},
-        "direction": nullable, "creative_scope": nullable, "allowed_creative_actions": strings,
-        "protected_constraints": strings, "decisions": {"type": "array", "minItems": 0, "maxItems": 32,
-            "items": decisions[0] if len(decisions) == 1 else {"anyOf": decisions}},
-        "missing_information": strings, "rationale": text}
-    description = "Assess supplied foundations and USER-bounded creative work; host qualification remains separate."
+                        "maxItems": 0 if evidence is None else 32, "description": meanings["foundations"]},
+        "direction": {**nullable, "description": meanings["direction"]},
+        "creative_scope": {**nullable, "description": meanings["creative_scope"]},
+        "allowed_creative_actions": {**strings, "description": meanings["allowed_creative_actions"]},
+        "protected_constraints": {**strings, "description": meanings["protected_constraints"]},
+        "decisions": {"type": "array", "minItems": 0, "maxItems": 32,
+                      "items": decisions[0] if len(decisions) == 1 else {"anyOf": decisions},
+                      "description": meanings["decisions"]},
+        "missing_information": {**strings, "description": meanings["missing_information"]},
+        "rationale": {**text, "description": meanings["rationale"]},
+    }
+    description = (
+        "Assess the current work and stage against actual offered story foundations, literal USER direction, "
+        "creative boundaries and required decisions. Use earlier supplied grounds only through their offered "
+        "qualified sources; do not erase them merely because the current reply is procedural. Distinguish true "
+        "USER information gaps from agent retrieval/source-linking work. Host source qualification, current "
+        "targets, document readiness and separate Confirm/Apply/Commit controls remain independent.")
     information = closed_rule(fields, description=description)
     if evidence is None:
         if require_admission:
             raise ValueError("official authoring admission requires offered sources")
         return json.loads(json.dumps(information))
-    sufficient = {**fields,
-        "status": {"type": "string", "enum": [AdmissionStatus.SUFFICIENT.value]},
+    sufficient = {**fields, "status": {"type": "string", "enum": [AdmissionStatus.SUFFICIENT.value],
+                                      "description": meanings["status"]},
         "foundations": {**fields["foundations"], "minItems": 1},
-        "direction": evidence,
+        "direction": {**evidence, "description": meanings["direction"]},
         "decisions": {**fields["decisions"], "minItems": 1, "items": {"anyOf": decisions[:-1]}},
-        "missing_information": {**strings, "maxItems": 0}}
+        "missing_information": {**strings, "maxItems": 0, "description": meanings["missing_information"]}}
     if require_admission:
         creative_scope = {**evidence,
             "description": fields["creative_scope"].get("description", evidence["description"])}
@@ -405,9 +488,9 @@ def assessment_schema(
                         "qualification and currentness remain separate."))))
     # Guidance projection mutates occurrences; export a tree without shared nodes.
     return json.loads(json.dumps({"anyOf": [
-        closed_rule({**sufficient, "creative_scope": evidence},
-                    description="Sufficient assessment needs concrete foundations, direction and covered decisions; creative scope is grounded here."),
-        closed_rule({**sufficient, "creative_scope": {"type": "null"},
-                     "allowed_creative_actions": {**strings, "minItems": 1}},
-                    description="Without creative-scope evidence, sufficient structure requires named allowed actions; host USER-permission qualification remains separate."),
+        closed_rule({**sufficient, "creative_scope": {**evidence, "description": meanings["creative_scope"]}},
+                    description="Sufficient structure has concrete foundations, USER direction and covered decisions; the creative boundary is evidenced here. Host qualification still checks actual USER permission and named allowed actions."),
+        closed_rule({**sufficient, "creative_scope": {"type": "null", "description": meanings["creative_scope"]},
+                     "allowed_creative_actions": {**strings, "minItems": 1, "description": meanings["allowed_creative_actions"]}},
+                    description="This structural sufficient alternative names allowed actions without creative-scope evidence. It does not grant USER permission or bypass host qualification. Preserve a known qualified no-invention boundary rather than leaving it unresolved."),
         information], "description": description}))
