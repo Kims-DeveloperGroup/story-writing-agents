@@ -83,6 +83,7 @@ class ProgressSnapshot:
     header_row: int
     header_prefix: str
     content: ProgressContent
+    full_screen: bool = False
 
     def __post_init__(self) -> None:
         if (type(self.columns) is not int or not 2 <= self.columns <= _MAX_COLUMNS
@@ -93,7 +94,8 @@ class ProgressSnapshot:
                 or type(self.cursor_column) is not int or not 0 <= self.cursor_column < self.columns
                 or type(self.header_row) is not int or not 0 <= self.header_row < len(self.lines)
                 or not _safe(self.header_prefix) or "\x1b" in self.header_prefix
-                or len(self.header_prefix) > 16 or type(self.content) is not ProgressContent):
+                or len(self.header_prefix) > 16 or type(self.content) is not ProgressContent
+                or type(self.full_screen) is not bool):
             raise ValueError("invalid prepared progress snapshot")
 
     def record(self, epoch: int, revision: int) -> dict[str, object]:
@@ -101,14 +103,15 @@ class ProgressSnapshot:
                 "height": self.height, "lines": self.lines, "cursor_row": self.cursor_row,
                 "cursor_column": self.cursor_column, "header_row": self.header_row,
                 "header_prefix": self.header_prefix, "started_at": self.content.started_at,
-                "frames": self.content.frames, "suffix": self.content.suffix}
+                "frames": self.content.frames, "suffix": self.content.suffix,
+                "full_screen": self.full_screen}
 
     @classmethod
     def decode(cls, record: dict[str, object]) -> ProgressSnapshot:
         return cls(record["columns"], record["height"], tuple(record["lines"]),
                    record["cursor_row"], record["cursor_column"], record["header_row"],
                    record["header_prefix"], ProgressContent(record["started_at"],
-                   tuple(record["frames"]), record["suffix"]))
+                   tuple(record["frames"]), record["suffix"]), record.get("full_screen", False))
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,7 +312,8 @@ class ProgressProcess:
         if not self._send_command({"op": "begin", "epoch": self._epoch,
                 "origin": snapshot.content.started_at, "columns": snapshot.columns,
                 "height": snapshot.height, "owned_rows": owned_rows,
-                "cursor_row": cursor_row, "cursor_column": cursor_column}):
+                "cursor_row": cursor_row, "cursor_column": cursor_column,
+                "full_screen": snapshot.full_screen}):
             self._fail()
             return False
         self._active = True
@@ -460,6 +464,7 @@ class _Writer:
         self.active = False
         self.content = ProgressContent(time.monotonic(), _FRAMES, " · Working")
         self.geometry = (80, 24)
+        self.full_screen = False
         self.rows = self.cursor_row = self.cursor_column = 0
         self.header_row = 0
         self.header_prefix = ""
@@ -483,6 +488,10 @@ class _Writer:
     def begin(self, value: dict[str, object]) -> None:
         if self.active or self.pending:
             raise ValueError("overlapping progress lease")
+        full_screen = value.get("full_screen", False)
+        if type(full_screen) is not bool:
+            raise ValueError("invalid progress screen lease")
+        self.full_screen = full_screen
         self.epoch = value["epoch"]
         self.content = ProgressContent(value["origin"], _FRAMES, " · Working")
         self.geometry = (value["columns"], value["height"])
@@ -493,6 +502,10 @@ class _Writer:
         self.revision, self.painted_revision = 0, -1
         self.uncertain, self.failure, self.active = False, False, True
         header = _fit(self.content.header(time.monotonic()), max(0, self.geometry[0] - 1))
+        if self.full_screen:
+            self.header_row, self.header_prefix = 0, ""
+            self._queue("\x1b[H\x1b[2J" + header + "\r", 1, 0, 0)
+            return
         prefix = "\r" + "\x1b[B" * max(0, self.rows - 1 - self.cursor_row)
         if self.rows:
             prefix += "\n"
@@ -507,6 +520,8 @@ class _Writer:
         if type(revision) is not int or revision <= self.revision:
             return
         snapshot = ProgressSnapshot.decode(value)
+        if snapshot.full_screen != self.full_screen:
+            raise ValueError("progress snapshot changed its screen lease")
         self.snapshot, self.revision = snapshot, revision
 
     def tick(self, now: float) -> None:
@@ -525,7 +540,8 @@ class _Writer:
                 self.snapshot = None
             self.painted_revision = -1
             self.header_row, self.header_prefix = 0, ""
-            self._queue("\x18\x1b[0m\r\n" + _fit(self.content.header(now), geometry[0] - 1) + "\r", 1, 0, 0)
+            prefix = "\x1b[H\x1b[2J" if self.full_screen else "\r\n"
+            self._queue("\x18\x1b[0m" + prefix + _fit(self.content.header(now), geometry[0] - 1) + "\r", 1, 0, 0)
             return
         if self.pending:
             return
@@ -538,6 +554,8 @@ class _Writer:
             prefix = "\r" + "\x1b[A" * self.cursor_row + "\r"
             if self.rows:
                 prefix += "\x1b[2K\x1b[B\r" * (self.rows - 1) + "\x1b[2K" + "\x1b[A" * (self.rows - 1) + "\r"
+            if self.full_screen:
+                prefix = "\x1b[H\x1b[2J"
             text = prefix + "\n".join(lines) + "\x1b[A" * max(0, len(lines) - 1 - snapshot.cursor_row)
             text += "\r" + "\x1b[C" * snapshot.cursor_column
             self._queue(text, len(lines), snapshot.cursor_row, snapshot.cursor_column)

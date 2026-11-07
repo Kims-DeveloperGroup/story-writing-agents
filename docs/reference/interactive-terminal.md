@@ -261,7 +261,7 @@ Very short terminals show a dense role/task/call summary and retain full
 disclosure in the active conversation; if safe complete decision controls
 still cannot fit, the shell asks for resize or Esc and blocks execution.
 Below 40 available frame cells, the presentation uses the message-style compact
-header/rail; already printed native scrollback is not rewritten on resize.
+header/rail; retained disclosures reflow with the managed conversation screen.
 
 Line fallback prints the same facts and current grammar. Binary shell questions
 accept current ordinals or y/yes/n/no and default to NO. Action decisions accept
@@ -489,7 +489,9 @@ Partial UTF-8 and buffered input survive these nonfatal polling pauses.
 
 ## Retained agent-output history
 
-Capable terminals preserve completed turns in ordinary terminal scrollback.
+Capable terminals preserve completed turns in an application-managed
+conversation screen that reflows at the current terminal width, including while
+input is idle. Leaving the shell restores the preceding terminal screen.
 Each user message keeps its JSON/progress frames in their original chronological
 positions, followed by the resulting replies. Sending another message adds
 another turn below it. Long final answers remain readable in full after the
@@ -513,8 +515,8 @@ The existing `/progress` retention rules determine which previews remain.
 Transient progress is replaced in its original slot when it becomes retained
 JSON. Confirmations and retries stay with their originating user message.
 While a turn is awaiting a decision, its disclosures remain in the active
-presentation; F6 can review their full content. Completing the turn preserves
-its messages and retained previews in native scrollback once. The archived
+presentation; F6 can review their full content. Completing a turn preserves
+its messages and retained previews in the conversation timeline. Archived
 JSON frames are fixed snapshots; use F6 to scroll their contents.
 
 Messages and retained previews remain available for review throughout the
@@ -522,10 +524,10 @@ current shell, including across conversation and session switches. Opening an
 older frame does not reload files or call a provider. Review state is discarded
 on shell exit; restored messages use the same complete output presentation.
 
-The mouse wheel normally scrolls the terminal's own scrollback. Press `F6` to
-open conversation review on a temporary screen and focus the newest visible
-JSON frame, or the timeline when no frame is visible. `Tab` switches navigation
-between the timeline and a visible frame. Arrows, paging keys, `Home`, and `End`
+Press `F6` to enter conversation review on the managed screen and focus the
+newest visible JSON frame, or the timeline when no frame is visible. `Tab`
+switches navigation between the timeline and a visible frame. Arrows, paging
+keys, `Home`, and `End`
 act on that target. At a frame boundary, further vertical movement continues
 through the timeline. Keyboard review remains available when the terminal
 cannot enable pointer interaction.
@@ -536,13 +538,14 @@ gutter scrolls the whole timeline. The selected-control accent, `Focused` marker
 and `>` gutter marker identify frame focus even with `NO_COLOR` or clipped
 borders. A `T` in the gutter marks whole-timeline focus.
 
-Resizing reflows review content while keeping each JSON frame with its own user
-input. Completed native output is not printed again when the terminal changes
-size. Press `Escape`, `Enter`, or `F6` to return to the unchanged draft and cursor
-or pending decision without submitting or confirming it. Printable text returns
-to input and preserves that first character. Navigation does not add command
-history entries or change conversation focus, and temporary review copies do not
-enter native scrollback.
+Resizing reflows conversation content while keeping each JSON frame with its
+own user input. Completed message boxes are redrawn at the new width without
+duplicate conversation entries. Press `Escape`, `Enter`, or `F6` to return to
+the unchanged draft and cursor or pending decision without submitting or
+confirming it. Printable text returns to input and preserves that first
+character. Navigation does not add command history entries or change
+conversation focus. Conversation output stays on the managed screen;
+redirected or unsupported-terminal output remains linear.
 
 Inline pickers and prompts keep their disclosures available during confirmation.
 If a decision and its context cannot fit, enlarge the terminal or press Escape

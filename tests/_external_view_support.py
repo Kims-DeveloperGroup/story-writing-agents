@@ -166,7 +166,8 @@ class PortableTerminalScreen:
     def _newline(self):
         row, col = self.cursor
         if row == self.height - 1:
-            self.history.append("".join(self.screen.pop(0)))
+            removed = "".join(self.screen.pop(0))
+            if not self.alternate or getattr(self, "archive_alternate", True): self.history.append(removed)
             self.screen.append([" "] * self.width)
         else:
             row += 1
@@ -203,8 +204,7 @@ class PortableTerminalScreen:
                         self.screen[cleared] = [" "] * self.width
                 elif final == "J" and parameters == "2":
                     occupied = ["".join(row).rstrip() for row in self.screen]
-                    if any(occupied):
-                        self.history.extend(occupied)
+                    if any(occupied) and (not self.alternate or getattr(self, "archive_alternate", True)): self.history.extend(occupied)
                     self.screen[:] = [[" "] * self.width for _ in range(self.height)]
                 elif final == "K":
                     row, col = self.cursor
@@ -237,11 +237,14 @@ def recording_driver(characters="", *, width=100, height=24, response="valid"):
     """Observe real control reads and physical rows with optional terminal CPR."""
     driver, incoming, output, fallback, termios = _raw_driver(characters, width=width, height=height, stateful_terminal=True)
     screen = PortableTerminalScreen(width=width, height=height)
+    screen.archive_alternate = False
+    driver._os_provider().get_terminal_size = lambda _: os.terminal_size((screen.width, screen.height))
     screen.primary[:] = [[" "] * width for _ in range(height)]
     screen.cursor, screen.history = (0, 0), []
     probe = SimpleNamespace(driver=driver, incoming=incoming, output=output, fallback=fallback, termios=termios,
                             screen=screen, reads=[], attempts=0, phase="", queried=False, review_input="", mouse=False, observe=lambda: None)
     probe.text = lambda: "\n".join("".join(row) for row in screen.screen)
+    probe.poll = lambda read, write, error, timeout: (read if incoming.characters or timeout == _driver._PROGRESS_INTERVAL_SECONDS else (), write, error)
     original_write, original_read = output.write, RawTerminalDriver._read_character
     def reply():
         row, column = screen.cursor
@@ -256,22 +259,20 @@ def recording_driver(characters="", *, width=100, height=24, response="valid"):
             probe.queried = True
             if response in {"valid", "invalid"}:
                 incoming.characters[:0] = list(reply().encode())
-        if "\x1b[?1049h" in value:
+        if "\x1b[?1049h" in value or (enabled > disabled and probe.review_input):
             probe.review_history = tuple(screen.history)
             incoming.characters.extend(probe.review_input.encode())
             probe.review_input = ""
         return written
     def read(owner, **kwargs):
         probe.attempts += 1
-        if kwargs.get("before_read") is not None:
-            return original_read(owner, **kwargs)
         text, cursor, mouse, data = probe.text(), screen.cursor, probe.mouse, probe.observe()
         character = original_read(owner, **kwargs)
         probe.reads.append(SimpleNamespace(phase=probe.phase, character=character, text=text, cursor=cursor, mouse=mouse, data=data, alternate=screen.alternate))
         return character
     output.write = paint
     with (mock.patch.object(RawTerminalDriver, "_read_character", autospec=True, side_effect=read),
-          mock.patch.object(_driver._select, "select", side_effect=lambda read, write, error, _timeout: (read if incoming.characters else (), write, error))):
+          mock.patch.object(_driver._select, "select", side_effect=lambda *args: probe.poll(*args))):
         yield probe
 
 
