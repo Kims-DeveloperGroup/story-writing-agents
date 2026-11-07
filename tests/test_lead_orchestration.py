@@ -4472,8 +4472,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 guide_cache[guide_key] = guide_result
                 return guide_result
             for guide_provider, guide_schema, _guide_owner in native_projections:
-                guide_document, guide_cache = guide_schema, {}
-                guide_decoded = expand_guide_node(guide_schema)
+                guide_document, guide_cache = guide_schema, {}; guide_decoded = expand_guide_node(guide_schema)
                 guide_fields = [guide_arm['properties'] for guide_node in detail_nodes(guide_decoded, guide_decoded)
                     if 'authoring_assessment' in guide_node.get('properties', {})
                     for guide_arm in frozen_leaves(guide_decoded, guide_node['properties']['authoring_assessment'])]
@@ -4488,14 +4487,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 guide_seen = set()
                 for guide_name, guide_rule in guide_descriptions:
                     if guide_name not in guide_specs: continue
-                    guide_resolved = fixture_schema_node(guide_decoded, guide_rule)
-                    guide_text = guide_rule.get('description', guide_resolved.get('description', '')).casefold()
-                    guide_tokens = guide_specs[guide_name]
-                    if guide_name == 'status': guide_tokens += ('actually offered', 'not only')
-                    if guide_name == 'coverage':
-                        guide_tokens = {'supplied': ('decision', 'cited', 'inputs'),
-                            'delegated': ('literal user', 'bounded')}.get(guide_resolved.get('enum', [None])[0], guide_tokens)
-                    self.assertTrue(all(token in guide_text for token in guide_tokens), (guide_provider, guide_name, guide_text))
+                    guide_variants = tuple(frozen_leaves(guide_decoded, guide_rule)); self.assertTrue(guide_variants, guide_name)
+                    for guide_resolved in guide_variants:
+                        guide_text = guide_rule.get('description', guide_resolved.get('description', '')).casefold()
+                        guide_tokens = guide_specs[guide_name]
+                        if guide_name == 'status': guide_tokens += ('actually offered', 'not only')
+                        if guide_name == 'coverage':
+                            guide_tokens = {'supplied': ('decision', 'cited', 'inputs'),
+                                'delegated': ('literal user', 'bounded')}.get(guide_resolved.get('enum', [None])[0], guide_tokens)
+                        self.assertTrue(all(token in guide_text for token in guide_tokens), (guide_provider, guide_name, guide_text))
                     guide_seen.add(guide_name)
                 self.assertEqual(guide_seen, set(guide_specs), guide_provider)
                 input_guide = add_contract_guidance({'authoring_assessment': copy.deepcopy(sufficient)}, guide_schema)['contract_guidance']
