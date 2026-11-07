@@ -234,7 +234,7 @@ installation:
 python -m pip install --editable .
 ```
 
-That ordinary reinstall upgrades older viewer installations to required 0.7.2.
+That ordinary reinstall upgrades older viewer installations to required 0.8.0.
 Exit and restart an already running Story process so it loads the updated viewer;
 an existing process may still show the previous package's layout or input policy.
 It needs no uninstall, `--force-reinstall`, or `--ignore-installed`. A missing required
@@ -243,10 +243,10 @@ first; the `viewer` extra is not a separate fix.
 
 Automatic English command recovery needs a supported local desktop input source.
 Korean search text stays literal. Remote/unsupported sessions and an unverified
-native source selection retain manual-switch guidance even in 0.7.2; that alone
+native source selection retain manual-switch guidance even in 0.8.0; that alone
 does not indicate damaged package files.
 
-Use a forced reinstall only when viewer 0.7.2 is already selected at the exact
+Use a forced reinstall only when viewer 0.8.0 is already selected at the exact
 required pin but its installed files or four-name API are genuinely damaged.
 Use the applicable Story form so dependency parity is restored together:
 
@@ -261,7 +261,7 @@ incompatible-viewer result means the installed API or required physical-input
 capability does not match the exact required pin. Viewers 0.1.1 and 0.2.0
 are rejected before raw mode or an alternate screen opens; use the ordinary upgrade path
 above. Verify the project requirement and lock identify
-`aaf2af4d000844346f6d6ed3e25594fd4d434822`. Checkout maintainers can also
+`358b1b325c7c26fa71deba9a9f16332d7df6a1b6`. Checkout maintainers can also
 initialize the matching submodule for audit or testing; runtime imports never
 come from `vendor/jsonl-viewer`.
 
