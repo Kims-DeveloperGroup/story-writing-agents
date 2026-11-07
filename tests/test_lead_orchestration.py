@@ -1821,30 +1821,26 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             'right': {'$ref': '#/$defs/alias'}}, 'required': ['left', 'right'],
             'additionalProperties': False, '$defs': {'value': {'type': 'integer', 'enum': [1]},
                                                   'alias': {'$ref': '#/$defs/value'}}}
-        compact = factor_rule_schema(hoist_schema_definitions(graph))
-        original_rules, compact_rules = SchemaRules.declare(graph), SchemaRules.declare(compact)
+        compact = factor_rule_schema(hoist_schema_definitions(graph)); original_rules, compact_rules = SchemaRules.declare(graph), SchemaRules.declare(compact)
         for supplied, valid in (({'left': 1, 'right': 1}, True), ({'left': True, 'right': 1}, False),
                 ({'left': 1, 'right': None}, False), ({'left': 1}, False),
                 ({'left': 1, 'right': 2}, False), ({'left': 1, 'right': 1, 'extra': 1}, False)):
             self.assertEqual(not original_rules.findings(supplied), valid); self.assertEqual(not compact_rules.findings(supplied), valid)
-        self.assertEqual(original_rules.node_fingerprint(), compact_rules.node_fingerprint())
-        require_schema_projection(graph, graph)
+        self.assertEqual(original_rules.node_fingerprint(), compact_rules.node_fingerprint()); require_schema_projection(graph, graph)
         require_schema_projection(compact, compact)
         with self.assertRaises(WireShapeError): require_schema_projection(graph, compact)
         # Literal annotation overlays preserve one annotation and every nested annotation.
         inline = {'type': 'string', 'minLength': 2, 'maxLength': 3, 'description': 'Literal annotation.'}
         overlay = {'$ref': '#/$defs/text', 'description': 'Literal annotation.',
                    '$defs': {'text': {'type': 'string', 'minLength': 2, 'maxLength': 3}}}
-        inline_rules, overlay_rules = SchemaRules.declare(inline), SchemaRules.declare(overlay)
-        inline_fingerprint = inline_rules.node_fingerprint()
+        inline_rules, overlay_rules = SchemaRules.declare(inline), SchemaRules.declare(overlay); inline_fingerprint = inline_rules.node_fingerprint()
         self.assertEqual(inline_fingerprint, overlay_rules.node_fingerprint())
         for value, valid in (('ab', True), ('abc', True), ('a', False), ('abcd', False), (None, False), (2, False)):
             self.assertEqual(not inline_rules.findings(value), valid); self.assertEqual(not overlay_rules.findings(value), valid)
         distinct = ({**inline, 'description': 'Different annotation.'}, {**inline, 'minLength': 3}, {**inline, 'enum': ['ab']}, {**inline, 'enum': ['ac']})
         identities = {SchemaRules.declare(rule).node_fingerprint() for rule in distinct}
         self.assertEqual(len({inline_fingerprint, *identities}), 5); self.assertTrue(SchemaRules.declare({**inline, 'minLength': 3}).findings('ab'))
-        twice = {**overlay, '$defs': {'text': dict(inline)}}; twice_rules = SchemaRules.declare(twice)
-        self.assertNotEqual(inline_fingerprint, twice_rules.node_fingerprint())
+        twice = {**overlay, '$defs': {'text': dict(inline)}}; twice_rules = SchemaRules.declare(twice); self.assertNotEqual(inline_fingerprint, twice_rules.node_fingerprint())
         nested = copy.deepcopy(twice); nested['$defs']['text']['description'] = 'Changed inner annotation.'
         self.assertNotEqual(twice_rules.node_fingerprint(), SchemaRules.declare(nested).node_fingerprint())
         ordered = SchemaRules.declare({'anyOf': [{'type': 'integer'}, {'type': 'string'}]})
@@ -1877,8 +1873,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         for invalid_namespace in ('', '../fixture', 'fixture-integer', '1fixture'):
             with self.assertRaises(WireShapeError): rebase_schema_definitions(local_integer, invalid_namespace)
         associated = hoist_schema_definitions(associated_components); associated_rules = SchemaRules.declare(associated)
-        valid_owners = {'integer_owner': {'value': 1}, 'text_owner': {'value': 'literal'}}
-        self.assertFalse(associated_rules.findings(valid_owners))
+        valid_owners = {'integer_owner': {'value': 1}, 'text_owner': {'value': 'literal'}}; self.assertFalse(associated_rules.findings(valid_owners))
         for wrong_owner in ( {'integer_owner': {'value': 'literal'}, 'text_owner': {'value': 'literal'}},
                 {'integer_owner': {'value': 1}, 'text_owner': {'value': 1}},
                 {'integer_owner': {'value': True}, 'text_owner': {'value': 'literal'}}):
@@ -1886,10 +1881,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         rooted = {'$ref': '#/$defs/root', '$defs': {'root': associated_components}}
         rooted_rules = SchemaRules.declare(hoist_schema_definitions(rooted))
         self.assertFalse(rooted_rules.findings(valid_owners)); self.assertTrue(rooted_rules.findings({'integer_owner': {'value': 2}, 'text_owner': {'value': 'literal'}}))
-        flattened = factor_rule_schema(associated)
-        self.assertEqual(associated_rules.node_fingerprint(), SchemaRules.declare(flattened).node_fingerprint())
-        require_schema_projection(associated, associated)
-        require_schema_projection(flattened, flattened)
+        flattened = factor_rule_schema(associated); self.assertEqual(associated_rules.node_fingerprint(), SchemaRules.declare(flattened).node_fingerprint())
+        require_schema_projection(associated, associated); require_schema_projection(flattened, flattened)
         with self.assertRaises(WireShapeError): require_schema_projection(associated, flattened)
         self.assertFalse(SchemaRules.declare(flattened).findings(valid_owners))
         base_component = { 'type' : 'object' , 'properties' : { 'schema_id' : { '$ref' :
@@ -1908,27 +1901,22 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             {'base': {'schema_id': 'outer-binding'}, 'semantic': {'schema_id': 'outer-binding'}})):
             self.assertTrue(paired_rules.findings(swapped))
 
-        conversation_id = self.conversation("Minimal schema")
-        self.backend.enqueue(_visible_outcome("answer"), control_plan=selection_plan("answer.workflow"))
+        conversation_id = self.conversation("Minimal schema"); self.backend.enqueue(_visible_outcome("answer"), control_plan=selection_plan("answer.workflow"))
         from story_writing_agents.agent_context.service import AgentContextService
-        from unittest import mock; front_results = []; original_invoke = AgentContextService.invoke
-        front_failures = []
+        from unittest import mock; front_results = []; original_invoke = AgentContextService.invoke; front_failures = []
         async def retain_front_authority(service, *args, **kwargs):
             try:
                 result = await original_invoke(service, *args, **kwargs)
             except Exception as error:
                 import traceback
-                code = getattr(error, 'code', None)
-                code = getattr(code, 'value', code)
+                code = getattr(error, 'code', None); code = getattr(code, 'value', code)
                 if (type(code) not in (str, int, bool, type(None)) or (type(code) is str and len(code) > 128)): code = None
                 frames = tuple((frame.filename.rsplit('/', 1)[-1], frame.name, frame.lineno) for frame in traceback.extract_tb(error.__traceback__, limit=-8))
-                schema_metrics = None
-                trace = error.__traceback__
+                schema_metrics = None; trace = error.__traceback__
                 while trace is not None and trace.tb_next is not None:
                     trace = trace.tb_next
                 if trace is not None and trace.tb_frame.f_code is SchemaRules.provider_schema_value.__code__:
-                    values = trace.tb_frame.f_locals
-                    rules, schema_root, sizer = (values.get(name) for name in ('self', 'root', 'encoded_size'))
+                    values = trace.tb_frame.f_locals; rules, schema_root, sizer = (values.get(name) for name in ('self', 'root', 'encoded_size'))
                     if (type(rules) is SchemaRules and type(schema_root) is dict and inspect.isfunction(sizer)
                             and sizer.__code__.co_name == 'encoded_size'
                             and sizer.__globals__ is SchemaRules.provider_schema_value.__globals__
@@ -1941,8 +1929,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             return result
         with mock.patch.object(AgentContextService, 'invoke', retain_front_authority):
             outcome = await self.runtime.lead_turn( self.session_id, conversation_id, "Explain collaboration workflow.\nLiteral synthetic USER grounds for separately declared authoring fixtures:\n" + _ADMISSION_BRIEF + "\nExplain workflow only now; do not draft or dispatch.")
-        self.assertTrue(self.backend.calls, (outcome, front_failures))
-        self.assertEqual(len(self.backend.calls), 2, (outcome, front_failures))
+        self.assertTrue(self.backend.calls, (outcome, front_failures)); self.assertEqual(len(self.backend.calls), 2, (outcome, front_failures))
         def plain(value):
             if isinstance(value, Mapping): return {key: plain(item) for key, item in value.items()}
             return [plain(item) for item in value] if type(value) in (tuple, list) else value
@@ -1951,29 +1938,25 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         from types import SimpleNamespace
         from story_writing_agents.lead_provider_contracts import LeadResultContractOwner
         from story_writing_agents.lead_schema_groups import ( LEAD_SCHEMA_GROUPS, LeadGroupRequestBasis, SchemaGroupControlOwner, LeadGroupPhase)
-        group_contexts, typed_groups = {}, set()
-        semantic_examples = {}
+        group_contexts, typed_groups = {}, set(); semantic_examples = {}
         expected_groups = {"answer.workflow", "answer.observed_facts", "question.workflow", "question.authoring",
             "question.review_only", "critique.workflow", "prepare.artifact", "prepare.consultation.authoring",
             "prepare.consultation.review_only", "consultation.authoring.content", "consultation.authoring.review",
             "consultation.review_only", "artifact.changes", "premise.analysis", "readiness.core_documents"}
         self.assertEqual({group.group_id for group in LEAD_SCHEMA_GROUPS}, expected_groups)
         for group in LEAD_SCHEMA_GROUPS:
-            self.assertEqual(set(group.card()), {"group_id", "definition", "selection_criteria", "result_effect"})
-            self.assertTrue(all(group.card().values()))
+            self.assertEqual(set(group.card()), {"group_id", "definition", "selection_criteria", "result_effect"}); self.assertTrue(all(group.card().values()))
         def require_census(bound, expected_families):
             from collections import Counter
             from story_writing_agents.agent_context.manifest import ContextSourceKind
             self.assertEqual({bound.factory.rule_seed.contract_id + ':family:' + str(item.owner.variant.logical_root)
                               for item in bound.semantic_index.contracts if type(item.owner) is LeadResultContractOwner}, expected_families)
-            pairs = dict(bound.outer_inner_schema_ids)
-            self.assertEqual(set(pairs), set(bound.action_index.expected_schema_ids))
+            pairs = dict(bound.outer_inner_schema_ids); self.assertEqual(set(pairs), set(bound.action_index.expected_schema_ids))
             actions = Counter((item.owner.rules.literal_at(('action_type',)), item.owner.rules.property_names()) for item in bound.action_index.contracts)
             signatures = {'search': ('search_context', ('action_type', 'queries')),
                           'read': ('read_context', ('action_type', 'read_handles')),
                           'answer': ('submit_result', ('action_type', 'task_result'))}
-            offers = bound.eligibility_offers
-            physical_results = len(bound.semantic_index.expected_schema_ids)
+            offers = bound.eligibility_offers; physical_results = len(bound.semantic_index.expected_schema_ids)
             expected = Counter({signatures[name]: (physical_results if name == 'answer' else 1) for name in offers.allowed_actions})
             if ('search' in offers.allowed_actions
                     and ContextSourceKind.WRITING_ARTIFACT in offers.search_source_kinds):
@@ -1984,10 +1967,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         docs = tuple("core_documents/" + name + ".md" for name in ("global_outline", "part_outlines", "character_sheets", "narrative_rules"))
         logical_optional_fields, native_schemas = set(), {}
         def require_current_native(binding, exported=None):
-            full_schema = plain(binding.schema_value() if exported is None else exported)
-            native_schemas[id(binding)] = full_schema
-            self.assertEqual(check_schema(full_schema), ())
-            action_schema = fixture_schema_node( full_schema, full_schema["properties"]["agent_action"])
+            full_schema = plain(binding.schema_value() if exported is None else exported); native_schemas[id(binding)] = full_schema
+            self.assertEqual(check_schema(full_schema), ()); action_schema = fixture_schema_node( full_schema, full_schema["properties"]["agent_action"])
             branches = (fixture_schema_node(full_schema, branch) for branch in action_schema["anyOf"])
             result_schemas = tuple(fixture_schema_node(full_schema, branch["properties"]["task_result"])
                 for branch in branches if fixture_schema_node(full_schema, branch["properties"]["action_type"]).get("enum")
@@ -2011,18 +1992,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.assertEqual(set(schema['required']), {'schema_id', 'response_type', 'response_text', 'response_details'})
                 self.assertEqual(set(schema['properties']), set(schema['required']))
                 if binding.prepared_compilation is not initial_plan: continue
-                scope_field, scope_type = scope_profiles[family]
-                details = fixture_schema_node(full_schema, schema['properties']['response_details'])
+                scope_field, scope_type = scope_profiles[family]; details = fixture_schema_node(full_schema, schema['properties']['response_details'])
                 for branch in native_leaves(details):
-                    self.assertEqual(branch['type'], 'object')
-                    self.assertIn(scope_field, branch['required'])
+                    self.assertEqual(branch['type'], 'object'); self.assertIn(scope_field, branch['required'])
                     if family == 'lead-response-v8:family:11':
                         self.assertIn('preliminary_review', branch['required'])
                     elif family in {'lead-response-v8:family:12', 'lead-response-v8:family:13'}:
                         for allocation in native_leaves(branch['properties']['specialist_consultation_proposal']):
                             self.assertIn('stage_plan', allocation['required'])
-                    scope_choices = tuple(native_leaves(branch['properties'][scope_field]))
-                    self.assertTrue(scope_choices)
+                    scope_choices = tuple(native_leaves(branch['properties'][scope_field])); self.assertTrue(scope_choices)
                     for scope_choice in scope_choices: self.assertEqual(scope_choice['type'], scope_type)
             logical_schema = plain(result_index.rule_graph.schema_value()); encoded = json.dumps(logical_schema, separators=(",", ":"))
             self.assertLessEqual(max(len(member.rule_graph.canonical_bytes) for member in result_index.contracts), 64 * 1024)
@@ -2050,8 +2028,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     name = ref.removeprefix("#/$defs/").replace("~1", "/").replace("~0", "~")
                     self.assertTrue(name in definitions and name not in refs)
                     refs += (name,)
-                    node = definitions[name]
-                    self.assertIsInstance(node, Mapping)
+                    node = definitions[name]; self.assertIsInstance(node, Mapping)
                 return node
             def assert_strict(node, owner=None, path=(), refs=(), basis_mode=None, *, native=True):
                 if isinstance(node, Mapping):
@@ -2066,18 +2043,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         if native: self.assertEqual(set(node["required"]), set(node["properties"]))
                         else:
                             optional = set(node["properties"]) - set(node["required"])
-                            self.assertLessEqual(optional, {"document_change_request_update", "document_change_request_id"})
-                            logical_optional_fields.update(optional)
+                            self.assertLessEqual(optional, {"document_change_request_update", "document_change_request_id"}); logical_optional_fields.update(optional)
                         self.assertIs(node["additionalProperties"], False)
                     if (owner is not None and path in assignment_paths and node.get("type") == "object"):
-                        properties = node["properties"]
-                        self.assertIn("assignment_type", properties); self.assertIn("review_basis", properties)
-                        mode_rule = resolve_arm_field(properties["assignment_type"], refs)
-                        self.assertEqual(mode_rule.get("type"), "string")
-                        modes = mode_rule.get("enum")
-                        self.assertIs(type(modes), list); self.assertEqual(len(modes), 1)
-                        basis_mode = modes[0]
-                        self.assertIs(type(basis_mode), str); self.assertIn(basis_mode, basis_types)
+                        properties = node["properties"]; self.assertIn("assignment_type", properties); self.assertIn("review_basis", properties)
+                        mode_rule = resolve_arm_field(properties["assignment_type"], refs); self.assertEqual(mode_rule.get("type"), "string")
+                        modes = mode_rule.get("enum"); self.assertIs(type(modes), list); self.assertEqual(len(modes), 1)
+                        basis_mode = modes[0]; self.assertIs(type(basis_mode), str); self.assertIn(basis_mode, basis_types)
                         basis_rule = resolve_arm_field(properties["review_basis"], refs)
                         self.assertEqual(basis_rule.get("type"), basis_types[basis_mode], ("assignment_basis_type", owner, path, basis_mode))
                         if basis_mode == "review_content": self.assertEqual(set(basis_rule["properties"]), {"candidate_input_ids", "criteria"})
@@ -2085,11 +2057,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         ref = node["$ref"]
                         self.assertTrue(isinstance(ref, str) and ref.startswith("#/$defs/"))
                         name = ref.removeprefix("#/$defs/").replace("~1", "/").replace("~0", "~")
-                        self.assertTrue(name in definitions and name not in refs)
-                        assert_strict(definitions[name], owner, path, refs + (name,), basis_mode, native=native)
+                        self.assertTrue(name in definitions and name not in refs); assert_strict(definitions[name], owner, path, refs + (name,), basis_mode, native=native)
                     for name, value in node.get("properties", {}).items():
-                        component = "*" if path == document_map and name in docs else name
-                        assert_strict(value, owner, path + (component,), refs, basis_mode, native=native)
+                        component = "*" if path == document_map and name in docs else name; assert_strict(value, owner, path + (component,), refs, basis_mode, native=native)
                     for key in ("anyOf", "items", "type"):
                         if key in node:
                             child_path = path + ("*",) if key == "items" else path
