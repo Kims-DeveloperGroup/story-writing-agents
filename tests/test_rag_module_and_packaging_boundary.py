@@ -36,9 +36,9 @@ _GENERIC_RAG_PIN = "c77456321c614518e420e45c033e3f71dc5363b8"
 _GENERIC_RAG_REPOSITORY = "https://github.com/Kims-DeveloperGroup/generic-rag.git"
 _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}")
-_OLD_JSONL_VIEWER_PIN = "a38a975eda4123df11c1fa4f796fd49ab88efcee"
-_JSONL_VIEWER_PIN = "26520240c4be3e2af3e1cf4232fe3129ee706a86"
-_JSONL_VIEWER_VERSION = "0.7.1"
+_OLD_JSONL_VIEWER_PIN = "26520240c4be3e2af3e1cf4232fe3129ee706a86"
+_JSONL_VIEWER_PIN = "aaf2af4d000844346f6d6ed3e25594fd4d434822"
+_JSONL_VIEWER_VERSION = "0.7.2"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
 _JSONL_VIEWER_REQUIREMENT = (
     f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}")
@@ -1830,7 +1830,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import importlib.metadata
                 import json
                 viewer = importlib.metadata.distribution("jsonl-viewer")
-                assert viewer.version == "0.7.0"
+                assert viewer.version == "0.7.1"
                 direct_url = json.loads(viewer.read_text("direct_url.json"))
                 assert direct_url == {{
                     "url": {_JSONL_VIEWER_REPOSITORY!r},

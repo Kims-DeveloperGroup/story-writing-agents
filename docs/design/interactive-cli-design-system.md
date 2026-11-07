@@ -134,7 +134,7 @@ semantic model. It also governs the isolated package-internal ranged viewer
 where explicitly identified; the installed controller invokes it through
 provider-bound `$`/`$$` prompt editing without exporting it as a command. The
 separate `/exchanges` renderer contract lives in the pinned external
-[JSONL viewer design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/26520240c4be3e2af3e1cf4232fe3129ee706a86/docs/design-system.md);
+[JSONL viewer design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/aaf2af4d000844346f6d6ed3e25594fd4d434822/docs/design-system.md);
 this document governs only Story's picker and terminal-host integration.
 
 The words **must**, **must not**, and **may** below constrain the delivery
@@ -164,6 +164,7 @@ current production behavior.
 | #423 required viewer installation | Historical introduction: every normal Story wheel or editable installation resolves `jsonl-viewer` 0.6.3 from exact VCS commit `6755a90ab77ab979073f6616e4a6c866b508dcad`; `/exchanges` needs no setting, enablement, or extra. The empty `viewer` extra remains accepted for command compatibility, the matching git submodule is optional audit/development source rather than a runtime import path, and missing, older, or incompatible installations receive standard-install upgrade or repair guidance. |
 | #927 generic inspection integration | Implemented scope: independent viewer 0.7.0, caller-supplied grouping and seven scalar facets, explicit source search scopes, exact typed-history provenance, whole-source raw fallback and transient ownership. Runtime verification is recorded with the owning Issue and PR. |
 | #936 inspection layout | Implemented: viewer 0.7.1 starts Single/detail, Tab switches full-width screens, and main-view v selects the optional fixed-list Split. Split uses 120 columns and 12 rows; compact fallback retains that preference. Focus/layout/resize preserve the logical source cursor and committed inspection state. |
+| #946 command input recovery | Viewer 0.7.2 verifies English recovery after leading non-ASCII command text, consumes that invalid event without replay, and preserves literal Unicode search and exact entry-source restoration. Story's adapter and public viewer contract stay unchanged. |
 | #94 workspace Codex defaults | Implemented: the original slice added optional workspace fallback Codex model and reasoning values. The current closed twelve-field system schema also contains Antigravity model/effort, nullable `default_backend`, independent desired `conversation_storage_backend`, default-disabled local conversation-RAG provider/automatic values, and strict-boolean `show_message_details`; new workspaces initialize provider fields to null, automatic RAG and message details to false, and storage to filesystem. Legacy files remain valid and byte-preserved until a successful canonical persistence, and each backend validates and captures initial effective invocation values before the installed Settings activation path may replace its live-capable runtime generation. |
 | #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults, desired conversation storage, and per-agent provider/model/effort choices through shared picker and prompt controls. Confirmed full-path Apply Changes validates exact configuration, optional route-generation, and persona baselines, coordinates storage readiness, writes prepared system/agent/optional-route targets deterministically, and attempts exact rollback after failure. The workflow adds no supported public save API. |
 | #299 live execution profiles and context | Implemented: `/settings` authenticates, preflights, persists, and applies mixed live-capable runtime settings to the current shell without restart; desired storage and Conversation RAG remain next-shell settings, and launch overrides remain read-only. Message details controls whether responsive input/reply views include backend-authoritative provider/model/effort facts, sources, confirmation, and thread disposition; `/agents` and `/status` remain fully diagnostic. Provider switches advance durable route generations, while every substantive call rehydrates bounded belonging-session context even on a fresh native thread. Schema-v2 profile diagnostics remain content-free. |
@@ -692,7 +693,7 @@ starts Single. No separate click-switch controls are added.
 
 After two Story-owned transient pickers, `/exchanges` copies one immutable
 exchange snapshot and validates the pinned four-name facade: `ViewerSpec`,
-`ViewerHost`, `ViewerTerminal`, and `view_jsonl`. The exact 0.7.1 contract
+`ViewerHost`, `ViewerTerminal`, and `view_jsonl`. The exact 0.7.2 contract
 checks include the terminal transport and owned-call keyword arguments.
 Earlier APIs are rejected before terminal acquisition.
 
@@ -715,8 +716,8 @@ transient display; unsupported terminals receive a content-free notice.
 The retained `open(operation)` route uses `ExternalViewerHost` for validated
 complete frames/events and borrowed line callbacks. That route's behavior
 is unchanged. Story discards picker/view capabilities on return. Exact
-renderer rules remain in the pinned external [design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/26520240c4be3e2af3e1cf4232fe3129ee706a86/docs/design-system.md)
-and [nineteen deterministic samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/26520240c4be3e2af3e1cf4232fe3129ee706a86/docs/samples).
+renderer rules remain in the pinned external [design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/aaf2af4d000844346f6d6ed3e25594fd4d434822/docs/design-system.md)
+and [nineteen deterministic samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/aaf2af4d000844346f6d6ed3e25594fd4d434822/docs/samples).
 
 Main-view `h/j/k/l` moves character focus, Enter folds the focused container,
 arrows retain record navigation, and `?` opens help. The external renderer owns
@@ -744,10 +745,10 @@ remains accepted but is behaviorally identical. Checkout developers initialize
 `vendor/jsonl-viewer` only when they need to audit or test the pinned external
 source; Story artifacts omit that source, and runtime imports never use it. A
 source update alone does not mutate the active environment: rerunning the
-ordinary editable Story install upgrades older viewer installations to 0.7.1
+ordinary editable Story install upgrades older viewer installations to 0.7.2
 without force, ignore, or uninstall. A missing viewer uses the same normal installation path;
 forced reinstall is reserved for damaged or incompatible files after the exact
-0.7.1 pin is already selected.
+0.7.2 pin is already selected.
 
 ## Key and commit semantics
 
