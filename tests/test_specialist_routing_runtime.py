@@ -2052,7 +2052,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.assertEqual(negative_result.transition_event_id, transition_receipt(negative_resume).event_id)
             self.assertEqual(negative_turn.step_id, transition_receipt(negative_resume).payload.receipt.planning_step_id)
             self.assertIsNone(negative_turn.recommendation_request, negative_turn)
-            self._assert_continuation(negative_turn, expect_plot=False)
+            self._assert_continuation(negative_turn, "proposal")
         self.assertEqual(len(_submitted_calls(self.history(multiple)[len(negative_prefix):])), 4)
         self.assertFalse(any(e.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for e in self.history(multiple)[len(negative_prefix):]))
         self.assertEqual(self.history(multiple)[:len(negative_prefix)], negative_prefix)
