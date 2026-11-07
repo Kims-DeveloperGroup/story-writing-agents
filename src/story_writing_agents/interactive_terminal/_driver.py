@@ -5761,9 +5761,14 @@ class RawTerminalDriver:
         if state.history_review_active or state.history_primary_surface is not None:
             self._set_history_review_mode(state, False)
         if state.history_enabled:
-            self._render_inline_rows((), 0)
-            if line_break and not self._timeline_inline_depth:
-                self._write_live_text("\n")
+            if self._timeline_screen_active:
+                # Completed messages share this screen with the editor. Remove
+                # an interrupted draft by repainting the retained conversation.
+                self._paint_timeline()
+            else:
+                self._render_inline_rows((), 0)
+                if line_break and not self._timeline_inline_depth:
+                    self._write_live_text("\n")
             state.rendered_cursor_row = 0
             return
         payload = "".join(
