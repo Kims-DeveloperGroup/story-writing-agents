@@ -42,10 +42,7 @@ _JSONL_VIEWER_VERSION = "0.7.1"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
 _JSONL_VIEWER_REQUIREMENT = (
     f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}")
-_GITLINK_PATHS = {
-    "vendor/generic-rag": _GENERIC_RAG_PIN,
-    "vendor/jsonl-viewer": _JSONL_VIEWER_PIN,
-}
+_GITLINK_PATHS = {'vendor/generic-rag': _GENERIC_RAG_PIN, 'vendor/jsonl-viewer': _JSONL_VIEWER_PIN}
 
 
 _VIEWER_SOURCE_ASSIGNMENT = '                source = b\'{"timestamp":"2026-08-30T00:00:00Z","request_type":"request","content":"ok"}\\n\'\n'
@@ -253,10 +250,7 @@ def _copy_setuptools_build_support(destination: Path) -> None:
                 destination / package_name,
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
             )
-    for metadata in (
-        *site_packages.glob("setuptools-*.dist-info"),
-        *site_packages.glob("setuptools-*.egg-info"),
-    ):
+    for metadata in (*site_packages.glob('setuptools-*.dist-info'), *site_packages.glob('setuptools-*.egg-info')):
         if metadata.is_dir():
             shutil.copytree(metadata, destination / metadata.name)
 
@@ -509,10 +503,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     expected,
                 )
         git_dependencies = {
-            "story_writing_agents.git": {
-                "story_writing_agents.git.adapter",
-                "story_writing_agents.git.contracts",
-            },
+            "story_writing_agents.git": {'story_writing_agents.git.adapter', 'story_writing_agents.git.contracts'},
             "story_writing_agents.git.contracts": set(),
             "story_writing_agents.git.process": {
                 "story_writing_agents.git.contracts",
@@ -702,17 +693,11 @@ class RagModuleBoundaryTests(unittest.TestCase):
             },
         )
         self.assertIn(
-            (
-                "story_writing_agents.writing_artifacts",
-                "story_writing_agents.writing_artifacts.change_sets",
-            ),
+            ('story_writing_agents.writing_artifacts', 'story_writing_agents.writing_artifacts.change_sets'),
             edges,
         )
         self.assertIn(
-            (
-                "story_writing_agents.writing_artifacts",
-                "story_writing_agents.writing_artifacts.relationship_policy",
-            ),
+            ('story_writing_agents.writing_artifacts', 'story_writing_agents.writing_artifacts.relationship_policy'),
             edges,
         )
         self.assertEqual(
@@ -721,10 +706,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 for source, target in edges
                 if source == "story_writing_agents.conversation_rag_local"
             },
-            {
-                "story_writing_agents.conversation_literal_search",
-                "story_writing_agents.conversation_rag",
-            },
+            {'story_writing_agents.conversation_literal_search', 'story_writing_agents.conversation_rag'},
         )
         self.assertEqual(
             {
@@ -732,10 +714,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 for source, target in edges
                 if source == "story_writing_agents.agent_context"
             },
-            {
-                "story_writing_agents.agent_context.accounting",
-                "story_writing_agents.agent_context.progress",
-            },
+            {'story_writing_agents.agent_context.accounting', 'story_writing_agents.agent_context.progress'},
         )
         self.assertEqual(
             {
@@ -824,10 +803,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             },
         )
         self.assertIn(
-            (
-                "story_writing_agents.backend",
-                "story_writing_agents.agent_context.service",
-            ),
+            ('story_writing_agents.backend', 'story_writing_agents.agent_context.service'),
             edges,
         )
         self.assertEqual(
@@ -845,10 +821,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 for source, target in edges
                 if source == "story_writing_agents.conversation_rag_store"
             },
-            {
-                "story_writing_agents.conversation_rag",
-                "story_writing_agents.workspace",
-            },
+            {'story_writing_agents.conversation_rag', 'story_writing_agents.workspace'},
         )
         self.assertEqual(
             {
@@ -1015,10 +988,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
         self.assertEqual(project["dependencies"], ["markdown-it-py>=4.2,<5", _JSONL_VIEWER_REQUIREMENT])
         self.assertEqual(
             project["optional-dependencies"],
-            {
-                "rag": [_GENERIC_RAG_REQUIREMENT],
-                "viewer": [],
-            },
+            {'rag': [_GENERIC_RAG_REQUIREMENT], 'viewer': []},
         )
 
         with (_REPOSITORY_ROOT / "uv.lock").open("rb") as handle:
@@ -1521,7 +1491,37 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 story_project,
                 distribution,
             )
-            viewer_git_directory = _gitlink_git_directory("vendor/jsonl-viewer")
+            viewer_source = root / "viewer-upstream.git"
+            viewer_git_directory = root / "viewer-pinned.git"
+            def viewer_git(directory, *arguments, input=None):
+                prepared = subprocess.run(["git", "--git-dir", str(directory), *arguments],
+                    input=input, env={**os.environ, "GIT_ALLOW_PROTOCOL": "file"},
+                    text=True, capture_output=True, check=False)
+                self._assert_process_succeeded(prepared, f"offline source {arguments!r}")
+                return prepared.stdout.strip()
+            for directory, source in ((viewer_source, _gitlink_git_directory("vendor/jsonl-viewer")),
+                                      (viewer_git_directory, viewer_source)):
+                viewer_git(directory, "init", "--bare")
+                viewer_git(directory, "fetch", "--depth=1", "--update-shallow", "--no-tags",
+                           source.resolve().as_uri(), _JSONL_VIEWER_PIN)
+                if directory == viewer_source:
+                    tree = viewer_git(directory, "rev-parse", f"{_JSONL_VIEWER_PIN}^{{tree}}")
+                    upstream = viewer_git(directory, "hash-object", "-t", "commit", "-w", "--stdin",
+                        input=f"tree {tree}\nparent {_JSONL_VIEWER_PIN}\n"
+                        "author Fixture <fixture@example.test> 0 +0000\n"
+                        "committer Fixture <fixture@example.test> 0 +0000\n\nUpstream fixture\n")
+                    viewer_git(directory, "update-ref", "refs/heads/upstream", upstream)
+                    viewer_git(directory, "update-ref", "--no-deref", "HEAD", _JSONL_VIEWER_PIN)
+                    (directory / "shallow").write_text(f"{_JSONL_VIEWER_PIN}\n{upstream}\n")
+                    self.assertEqual(viewer_git(directory, "rev-parse", "HEAD"), _JSONL_VIEWER_PIN)
+                    self.assertNotEqual(viewer_git(directory, "rev-parse", "refs/heads/upstream"), _JSONL_VIEWER_PIN)
+                else:
+                    viewer_git(directory, "update-ref", "refs/heads/pinned", _JSONL_VIEWER_PIN)
+                    viewer_git(directory, "symbolic-ref", "HEAD", "refs/heads/pinned")
+                    viewer_git(directory, "fsck", "--full", "--no-dangling")
+                    self.assertEqual(viewer_git(directory, "rev-parse", "HEAD"), _JSONL_VIEWER_PIN)
+                    self.assertEqual((directory / "shallow").read_text().splitlines(), [_JSONL_VIEWER_PIN])
+                    self.assertEqual(viewer_git(directory, "for-each-ref", "--format=%(objectname)"), _JSONL_VIEWER_PIN)
             build_support = root / "build-support"
             _copy_setuptools_build_support(build_support)
             install_environment = os.environ.copy()
