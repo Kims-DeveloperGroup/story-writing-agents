@@ -129,12 +129,13 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             native = (native_inputs(call) if native_inputs is not None else {
                 'input_choices': ('user_input',), 'anchors': {PLOT_ARCHITECT: 'user_input'},
                 'recipients': {'user_input': PLOT_ARCHITECT},
-                'source_choices': ('user_input',), 'family': 0}
+                'source_choices': (dict(call.contract.semantic_index.policy.choices)['input_ids'] +
+                    dict(call.contract.semantic_index.policy.choices)['historical_user_source_ids']), 'family': 0}
                 if (native_start or native_continuation) else None)
             if native_start and native_inputs is None:
                 choices = dict(call.contract.semantic_index.policy.choices)
                 self.assertEqual(tuple(choices['required_input_ids']), ('user_input',))
-                native.update(input_choices=choices['input_ids'], source_choices=choices['input_ids'])
+                native.update(input_choices=choices['input_ids'], source_choices=choices['input_ids'] + choices['historical_user_source_ids'])
             def mutate(value, material):
                 if native_start:
                     value['proposal'].update(objective_intent={
@@ -160,8 +161,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         proposed = await self.runtime.lead_turn(self.session_id, conversation_id,
             ((f"Draft {target_path or 'a synthetic scene'} from this brief: a lantern vanishes, its keeper is found, and it returns." + " Invent scene transitions and supporting dialogue; preserve the supplied brief facts."
             + (" Explicit authoring paths: " + ", ".join(authoring_paths) if authoring_paths is not None else ""))))
-        self.assertIs(proposed.kind, c.LeadOutcomeKind.PROPOSAL, proposed)
-        self.assertEqual(proposed.proposal.participants, specialist_ids)
+        self.assertIs(proposed.kind, c.LeadOutcomeKind.PROPOSAL, proposed); self.assertEqual(proposed.proposal.participants, specialist_ids)
         if intent is not None:
             self.objective_tasks[self.objective(conversation_id).facts.objective_id] = proposed.proposal.authoring_scope.task_id
         for agent in specialist_ids:
@@ -350,8 +350,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
             ordinal = len(source_enqueues)
             source_enqueues.append(ordinal)
             if ordinal in (0, 1, 3):
-                self.assertEqual(tuple((cursor, phase) for cursor, phase, _response in values["control_plan"]),
-                                 ((0, LeadGroupPhase.SELECT),))
+                self.assertEqual(tuple((cursor, phase) for cursor, phase, _response in values["control_plan"]), ((0, LeadGroupPhase.SELECT),))
                 values = {**values, "control_plan": ()}
             else:
                 self.assertIn(ordinal, (2, 4))
@@ -366,17 +365,25 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
             self.assertEqual(len(self.backend.calls) - source_call_start, 5)
             selected = self.objective(conversation_id).draft_sources
             await self.runtime.decide_lead_step(lead._decision(first, c.CollaborationConfirmationDecision.REJECT))
-            await self.prepare(conversation_id, select=False)
+            second = await self.prepare(conversation_id, select=False)
             self.assertEqual(len(self.backend.calls) - source_call_start, 7)
             self.assertEqual(self.objective(conversation_id).draft_sources, selected)
         self.assertIs(orchestration._lead_call_contract_factory, factory)
         self.assertEqual(self.backend.enqueue, enqueue)
         self.assertEqual(source_front_flags, [True, True, False, True, False])
         self.assertEqual(source_enqueues, [0, 1, 2, 3, 4])
+        requests = [event.payload for event in self.history(conversation_id) if type(event.payload) is c.LeadRecommendationRequestPayload]
+        self.assertEqual(len(requests), 2)
+        for prepared, request in zip((first, second), requests):
+            basis = prepared.proposal.basis.authoring_admission
+            self.assertEqual(replace(basis, scope_digest=request.basis.authoring_admission.scope_digest), request.basis.authoring_admission)
+            self.assertEqual(prepared.proposal.authoring_scope.schema_version, 3)
+            self.assertEqual(basis.scope_digest, 'sha256:' + hashlib.sha256(json.dumps(asdict(prepared.proposal.authoring_scope),
+                ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest())
+            self.assertEqual(sum(source.kind is c.CollaborationInputKind.USER_INPUT for source in request.basis.inputs), 1)
         for index, group in ((0, 'consultation.authoring.content'), (3, 'prepare.artifact'), (5, 'prepare.artifact')):
             _assert_source_only_call(self, self.backend.calls[source_call_start + index], group)
-        self.assertEqual(tuple(self.backend.calls[source_call_start + index].contract.schema_group_phase
-                               for index in (0, 3, 4, 5, 6)), (None,) * 5)
+        self.assertEqual(tuple(self.backend.calls[source_call_start + index].contract.schema_group_phase for index in (0, 3, 4, 5, 6)), (None,) * 5)
         objective_id = self.objective(conversation_id).facts.objective_id
         self.backend.enqueue(lambda call, _provider: _native_objective_response(call, response_type='answer',
             message='Objective cancelled.', scope=lead._live_scope(call),
@@ -386,8 +393,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         cancel_call_start = len(self.backend.calls)
         cancel_event_start = len(self.history(conversation_id))
         cancelled = await self.runtime.lead_turn(self.session_id, conversation_id, "Cancel this writing objective.")
-        selects = [call for call in self.backend.calls[cancel_call_start:]
-                   if call.contract.group_workflow is not None and call.contract.group_workflow.phase.value == "select"]
+        selects = [call for call in self.backend.calls[cancel_call_start:] if call.contract.group_workflow is not None and call.contract.group_workflow.phase.value == "select"]
         current = selects[-1] if selects else None
         diagnostic = None if current is None else {
             "catalog_group_ids": current.contract.group_workflow.catalog.group_ids,
@@ -395,8 +401,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
             "remaining_provider_calls": current.contract.offers.remaining_provider_calls,
         }
         self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.CANCELLED, diagnostic)
-        self.assertEqual(tuple(call.contract.schema_group_phase for call in self.backend.calls[cancel_call_start:]),
-                         (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
+        self.assertEqual(tuple(call.contract.schema_group_phase for call in self.backend.calls[cancel_call_start:]), (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
         self.assertEqual(len(lead._submitted_calls(self.history(conversation_id)[cancel_event_start:])), 2)
         before = self.objective(conversation_id)
         bad = self.question(intent={"action": "continue", "objective_id": objective_id, "next_step": "clarify", "draft_source_event_ids": []})
@@ -404,6 +409,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.backend.enqueue(bad, control_plan=())
         await self.runtime.lead_turn(self.session_id, conversation_id, "Try the closed ID.")
         self.assertEqual(self.objective(conversation_id), before)
+        self.assertEqual([event.payload for event in self.history(conversation_id) if type(event.payload) is c.LeadRecommendationRequestPayload], requests)
 
     async def test_projection_retains_satisfaction_across_later_apply_commit_cycles(self):
         conversation_id, _ = await self.start()
