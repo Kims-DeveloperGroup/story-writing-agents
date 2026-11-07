@@ -2134,7 +2134,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             proposal.update(allocation)
             return lead_fixture_response(call, lead_fixture_result(native), family=0)
         self.backend.enqueue(prepare_historical)
-        prepared = await self.runtime.decide_lead_recommendation(recommendation_decision(suggested))
+        with mock.patch.object(self.runtime, "_close_failed_lead_attempt", wraps=self.runtime._close_failed_lead_attempt) as preparation_close:
+            prepared = await self.runtime.decide_lead_recommendation(recommendation_decision(suggested))
+        self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, (prepared.message[:1200], prepared.state, prepared.validation_details[:6],
+            tuple((type(failure).__name__, str(failure)[:600]) for record in preparation_close.call_args_list[:3] if (failure := record.kwargs.get("failure")) is not None)))
         self.assertEqual(prepared.proposal.authoring_scope, fresh_scope)
         self.assertEqual(prepared.proposal.budget.rounds_spent, 0)
         self.assertFalse(any(event.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for event in self.history(prior)[len(original_history):]))
