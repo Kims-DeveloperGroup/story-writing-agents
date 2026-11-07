@@ -6776,8 +6776,8 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         self.assertEqual(question.public_responses[-1].response.response_kind, "question")
         self.assertEqual(question.public_responses[-1].response.acceptance.value, "accepted")
         self.assertIsNone(question.recommendation_request); self.assertIsNone(question.artifact_application_request); self.assertIsNone(question.story_commit_request)
-        frames = [item for component in _collaboration_view.project_lead_turn_result(question,
-            public_response_events=case.history(conversation)) for item in component.items if isinstance(item, terminal_module.Message)]
+        question_panel = _collaboration_view.project_lead_turn_result(question, public_response_events=case.history(conversation))
+        frames = [item for item in question_panel.items if isinstance(item, terminal_module.Message)]
         self.assertEqual(tuple(item.sender for item in frames), ("Lead",))
         self.assertEqual(frames[0].content, "Preparation scope undecided.")
         self.assertIn("Outcome: question", frames[0].metadata)
