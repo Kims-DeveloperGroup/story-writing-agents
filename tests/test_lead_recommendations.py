@@ -118,7 +118,9 @@ class LeadRecommendationTests(RecommendationCase):
                     admission.DecisionCoverage.SUPPLIED, ('history_user_43',), 'Use only supplied experience.'),))
         self.workspace.path(OUTLINE).write_text("Outline source.\n", encoding="utf-8")
         before = self.snapshots(); positive_call_start = len(self.backend.calls)
-        self.backend.enqueue(recommendation(authoring_assessment=historical_assessment), control_plan=selection_plan('prepare.artifact'))
+        self.backend.enqueue(recommendation(authoring_assessment=historical_assessment,
+            authoring_scope=lambda call: lead._live_scope(call, activity='review', domains=('plot_structure',), paths=(OUTLINE,),
+                contributions=[{'domain': 'plot_structure', 'role': 'draft_owner'}])), control_plan=selection_plan('prepare.artifact'))
         turn = await self.runtime.lead_turn(self.session_id, conversation_id, '제안해준 절차대로 진행해줘.')
         self.assertIs(turn.kind, c.LeadOutcomeKind.RECOMMENDATION, turn); self.assertIsNotNone(turn.recommendation_request, turn)
         request = turn.recommendation_request

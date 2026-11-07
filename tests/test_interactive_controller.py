@@ -6771,7 +6771,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         question = runner.run(case.runtime.lead_turn(case.session_id, conversation,
             "Preparation scope is undecided. Ask what needs clarification before planning."))
         self.assertEqual((question.kind, question.trace.origin, question.trace.action, question.next_action),
-            (LeadOutcomeKind.QUESTION, ReplyTraceOrigin.PROVIDER, "none", CollaborationNextAction.REPLY_TO_LEAD))
+            (LeadOutcomeKind.QUESTION, ReplyTraceOrigin.PROVIDER, "question", CollaborationNextAction.REPLY_TO_LEAD))
         self.assertEqual(len(case.backend.calls) - calls_before, 2)
         self.assertEqual(question.public_responses[-1].response.response_kind, "question")
         self.assertEqual(question.public_responses[-1].response.acceptance.value, "accepted")

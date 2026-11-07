@@ -375,7 +375,11 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         requests = [event.payload for event in self.history(conversation_id) if type(event.payload) is c.LeadRecommendationRequestPayload]
         self.assertEqual(len(requests), 2)
         for prepared, request in zip((first, second), requests):
-            self.assertEqual(prepared.proposal.basis.authoring_admission, request.basis.authoring_admission)
+            basis = prepared.proposal.basis.authoring_admission
+            self.assertEqual(replace(basis, scope_digest=request.basis.authoring_admission.scope_digest), request.basis.authoring_admission)
+            self.assertEqual(prepared.proposal.authoring_scope.schema_version, 3)
+            self.assertEqual(basis.scope_digest, 'sha256:' + hashlib.sha256(json.dumps(asdict(prepared.proposal.authoring_scope),
+                ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest())
             self.assertEqual(sum(source.kind is c.CollaborationInputKind.USER_INPUT for source in request.basis.inputs), 1)
         for index, group in ((0, 'consultation.authoring.content'), (3, 'prepare.artifact'), (5, 'prepare.artifact')):
             _assert_source_only_call(self, self.backend.calls[source_call_start + index], group)
