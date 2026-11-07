@@ -863,7 +863,7 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertEqual(state.normalize_boot_identity(old_boot), "sysctl:100:2")
             self.assertFalse(state.verified_boot_change(old_boot, same_boot))
             self.assertTrue(state.verified_boot_change(old_boot, "sysctl:101:2"))
-            for unsuitable in (None, "unparseable", "sysctl:100:151084", "linux:12345678-1234-1234-1234-123456789abc"):
+            for unsuitable in (None, "unparseable", "sysctl:100:1000000", "linux:12345678-1234-1234-1234-123456789abc"):
                 self.assertFalse(state.verified_boot_change(old_boot, unsuitable))
 
         import os, signal, subprocess, sys, time
