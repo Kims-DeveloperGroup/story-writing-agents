@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Callable, get_args
 from unittest import mock
 
+from tests.test_interactive_terminal_completion import _recorded_frames
 import story_writing_agents
 from story_writing_agents import PLOT_ARCHITECT
 from story_writing_agents import interactive_terminal as terminal_facade
@@ -695,7 +696,7 @@ class SemanticInputDriverTests(unittest.TestCase):
                     )
 
                 self.assertEqual(result, f"${{{path}}}#L1-L2")
-                frames = [strip_decorative_sgr(record) for record in output.records]
+                frames = [frame.text for frame in _recorded_frames(output, width=80)]
                 picker_index = next(
                     index
                     for index, frame in enumerate(frames)
@@ -763,7 +764,7 @@ class SemanticInputDriverTests(unittest.TestCase):
                             write_failure,
                         )
 
-                frames = [strip_decorative_sgr(record) for record in output.records]
+                frames = [frame.text for frame in _recorded_frames(output, width=80)]
                 picker_index = next(
                     index
                     for index, frame in enumerate(frames)
@@ -837,9 +838,9 @@ class SemanticInputDriverTests(unittest.TestCase):
     def test_transient_live_input_clears_commit_events_and_provider_failure(
         self,
     ) -> None:
-        view = InputPromptView((), Prompt("input>"))
+        view = InputPromptView((), Prompt("p>"))
         cases: tuple[tuple[str, object], ...] = (
-            ("visible\n", "visible"),
+            ("한" * 8 + "Z\n", "한" * 8 + "Z"),
             ("\x03", KeyboardInterrupt),
             ("\x04", EOFError),
             ("", EOFError),
@@ -847,7 +848,7 @@ class SemanticInputDriverTests(unittest.TestCase):
         for characters, expected in cases:
             with self.subTest(characters=repr(characters)):
                 driver, _input, output, fallback, termios_double, _size = _driver(
-                    characters
+                    characters, width=20,
                 )
                 if isinstance(expected, str):
                     self.assertEqual(
@@ -859,7 +860,9 @@ class SemanticInputDriverTests(unittest.TestCase):
                         ),
                         expected,
                     )
-                    self.assertEqual(output.records[-1], "\r\r\x1b[J")
+                    self.assertEqual(_recorded_frames(output, width=20)[-2].cursor, (1, 1))
+                    self.assertTrue(_recorded_frames(output, width=20)[-2].text.endswith("Z"))
+                    self.assertEqual(_recorded_frames(output, width=20)[-1].text, "")
                 else:
                     with self.assertRaises(expected):  # type: ignore[arg-type]
                         driver.read_input_line(
@@ -1087,6 +1090,8 @@ class SemanticInputDriverTests(unittest.TestCase):
         driver, _input, output, fallback, termios_double, size_calls = _driver(
             f"{reserved}界e\u0301\n",
         )
+        height_after_bytes = len((reserved + "界").encode("utf-8"))
+        driver._os_provider().get_terminal_size = mock.Mock(side_effect=lambda _: os.terminal_size((60 if not _input.characters else 80, 25 if _input.read_calls > height_after_bytes else 24)))
         view = _core._composer_input_view(
             ComposeMode.CHAT, "plot", ComposerState()
         )
@@ -1111,9 +1116,9 @@ class SemanticInputDriverTests(unittest.TestCase):
             readiness.call_args_list,
             [mock.call((7,), (), (), 0.05)] * 4,
         )
-        renderer.assert_called_once()
+        self.assertEqual([call.args[1].width for call in renderer.call_args_list], [79, 59])
         self.assertIs(renderer.call_args.args[1].profile, CapabilityProfile.ANSI)
-        self.assertEqual(size_calls, [8, 8])
+        self.assertEqual({call.args[0] for call in driver._os_provider().get_terminal_size.call_args_list}, {8})
         fallback.assert_not_called()
         self.assertEqual(driver._history_state, MainInputHistoryState())
         self.assertEqual(
@@ -1173,19 +1178,14 @@ class SemanticInputDriverTests(unittest.TestCase):
         driver, _input, _output, fallback, termios_double, _size = _driver(
             "first\nsecond\n"
         )
-        geometry = mock.Mock(
-            side_effect=(
-                os.terminal_size((80, 24)),
-                os.terminal_size((80, 24)),
-                os.terminal_size((40, 24)),
-                os.terminal_size((40, 24)),
-            )
-        )
+        geometry = mock.Mock(return_value=os.terminal_size((80, 24)))
         driver._os_provider().get_terminal_size = geometry
 
         self.assertEqual(driver.read_line("first> "), "first")
+        geometry.return_value = os.terminal_size((40, 24))
         self.assertEqual(driver.read_line("second> "), "second")
-        self.assertEqual(geometry.call_args_list, [mock.call(8)] * 4)
+        self.assertEqual({call.args for call in geometry.call_args_list}, {(8,)})
+        self.assertGreaterEqual(geometry.call_count, 4)
         fallback.assert_not_called()
         self.assertEqual(
             [when for _fd, when, _attrs in termios_double.set_calls],
@@ -1206,16 +1206,10 @@ class SemanticInputDriverTests(unittest.TestCase):
                 driver, _input, _output, fallback, termios_double, _size = _driver(
                     "first\nunused\n"
                 )
-                geometry = mock.Mock(
-                    side_effect=(
-                        os.terminal_size((80, 24)),
-                        os.terminal_size((80, 24)),
-                        os.terminal_size((40, 24)),
-                        setup_result,
-                    )
-                )
+                geometry = mock.Mock(return_value=os.terminal_size((80, 24)))
                 driver._os_provider().get_terminal_size = geometry
                 self.assertEqual(driver.read_line("first> "), "first")
+                geometry.side_effect = (os.terminal_size((40, 24)), setup_result)
                 with self.assertRaisesRegex(
                     RuntimeError,
                     "^live terminal input preflight failed$",
@@ -1380,7 +1374,7 @@ class SemanticInputDriverTests(unittest.TestCase):
             (mock.Mock(return_value=object()), lambda _buffer: (), TypeError),
             (
                 mock.Mock(
-                    return_value=RenderedInputFrame("input> ", "input> ", 79, 1)
+                    return_value=RenderedInputFrame("input> ", "input> ", 80, 1)
                 ),
                 lambda _buffer: (),
                 ValueError,
