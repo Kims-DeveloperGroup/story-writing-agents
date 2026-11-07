@@ -365,7 +365,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
             self.assertEqual(len(self.backend.calls) - source_call_start, 5)
             selected = self.objective(conversation_id).draft_sources
             await self.runtime.decide_lead_step(lead._decision(first, c.CollaborationConfirmationDecision.REJECT))
-            await self.prepare(conversation_id, select=False)
+            second = await self.prepare(conversation_id, select=False)
             self.assertEqual(len(self.backend.calls) - source_call_start, 7)
             self.assertEqual(self.objective(conversation_id).draft_sources, selected)
         self.assertIs(orchestration._lead_call_contract_factory, factory)

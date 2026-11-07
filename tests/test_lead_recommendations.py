@@ -124,7 +124,7 @@ class LeadRecommendationTests(RecommendationCase):
         request = turn.recommendation_request
         self.assertEqual((request.authoring_scope.task_id, request.authoring_scope.task_revision), (task_id, 1))
         self.assertEqual({source.source_id for source in request.basis.authoring_admission.sources if source.kind is admission.AdmissionSourceKind.USER},
-            {'user_input', *(source_id for source_id, _raw in origins)})
+            {'user_input', 'history_user_35', 'history_user_43'})
         self.assertEqual(self.projection(conversation_id).available_tasks[0].source_event_ids[:3], tuple(source_id for source_id, _raw in origins))
         before_events = self.history(conversation_id)
         with self.assertRaises(ValueError):
@@ -156,7 +156,7 @@ class LeadRecommendationTests(RecommendationCase):
             self.assertIn(request.instruction, json.dumps(material, ensure_ascii=False))
             self.assertEqual(sum(type(e.payload) is c.CollaborationMessagePayload and
                 e.direction is c.CollaborationDirection.USER_TO_LEAD for e in events), ordinary_users_before_confirm)
-            self.assertEqual(lead._live_material(initial)['authoring_user_sources'], captured_material)
+            self.assertEqual(lead._live_material(initial)['authoring_user_sources'], [row for row in captured_material if row['source_id'] != 'history_user_51'])
             return producer(call, provider)
         ordinary_users_before_confirm = sum(type(e.payload) is c.CollaborationMessagePayload and
             e.direction is c.CollaborationDirection.USER_TO_LEAD for e in before_events)

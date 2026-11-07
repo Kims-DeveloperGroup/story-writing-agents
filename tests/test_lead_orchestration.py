@@ -1315,7 +1315,9 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                 changed = field_neighbor_value(packet, case)
                 if _path[:4] == ('agent_action', 'task_result', 'response_details', 'authoring_assessment') and _operation == 'set' and _replacement is None:
                     assessment = packet['agent_action']['task_result']['response_details']['authoring_assessment']
-                    native_valid = (_path[4:] == ('direction',) and assessment['status'] != 'sufficient'
+                    preparation_admission = (result.get('response_type') == 'proposal_drafting_recommendation'
+                        and scope.get('intent') == 'authoring' and scope.get('activity') != 'workflow_guidance')
+                    native_valid = not preparation_admission and (_path[4:] == ('direction',) and assessment['status'] != 'sufficient'
                         or _path[4:] == ('creative_scope',) and (assessment['status'] != 'sufficient' or bool(assessment['allowed_creative_actions'])))
                 with phase('production-value-and-strict-findings'):
                     self.assertEqual(not bool(bound.rule_graph.findings(changed)), native_valid, coordinate)
@@ -2296,8 +2298,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         from story_writing_agents.agent_context.service import BoundCallContract
         for method in ('schema', 'schema_value', 'validate', 'validate_authorized', 'repair',
                        'repair_input', 'corrective_input', 'decode_and_validate'):
-            with self.assertRaises(TypeError):
-                type('SeparatelyComposedOwner', (ContractOwner,), {method: lambda self: None})
+            with self.assertRaises(TypeError): type('SeparatelyComposedOwner', (ContractOwner,), {method: lambda self: None})
         for sealed in (BoundContract, BoundCallContract):
             with self.assertRaises(TypeError): type('OverriddenBinding', (sealed,), {})
         bound = call.contract
@@ -2560,7 +2561,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         # These are actual CURRENT work owners, not prospective request targets or future rosters.
         literal_operations = [{'change_type': 'create_artifact', 'proposed_artifact_path': future_path,'new_content_text': 'Literal supplied candidate.\n'}]
         artifact_scope = {"interpretation": "Inspect the declared synthetic scope.", 'writing_intent': 'authoring', 'activity_type': 'review_writing',
-            'target_artifact_paths': [], 'specialist_domains': ['tone_execution'],
+            'target_artifact_paths': [future_path], 'specialist_domains': ['tone_execution'],
             'contributions': [{'domain': 'tone_execution', 'role': 'constraint_assessor'}], 'dependency_slots': []}
         artifact_value = {'response_type': 'artifact_change_proposal',
             'response_text': 'Preserve the literal candidate before separate review.',
@@ -2573,12 +2574,12 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(json.loads(artifact_bound.decode_response(json.dumps(artifact_native)).answer_json), {
                 'kind': 'proposal', 'message': 'Preserve the literal candidate before separate review.',
                 'authoring_scope': {"interpretation": "Inspect the declared synthetic scope.", 'intent': 'authoring', 'activity': 'review',
-                    'target_paths': [], 'domains': ['tone_execution'],'contributions': [
+                    'target_paths': [future_path], 'domains': ['tone_execution'],'contributions': [
                         {'domain': 'tone_execution', 'role': 'constraint_assessor'}],
                     'dependency_slots': []}, 'authoring_assessment': pending_assessment,
                 'artifact_intent': {'operations': [{'kind': 'create',
                     'suggested_path': future_path, 'new_text': 'Literal supplied candidate.\n'}]}})
-        for invalid_scope in (workflow_scope, {**artifact_scope, 'writing_intent': 'review_only'}):
+        for invalid_scope in (workflow_scope, {**artifact_scope, 'writing_intent': 'review_only'}, {**artifact_scope, 'target_artifact_paths': []}):
             bad = copy.deepcopy(artifact_native); details = bad['agent_action']['task_result']['response_details']
             details['task_scope'] = lead_fixture_scope(invalid_scope)
             if invalid_scope['writing_intent'] == 'review_only': details.pop('authoring_assessment')
@@ -3686,8 +3687,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                         'response_details': {'task_scope': invalid_scope, **extra}}, family=0,
                                         logical_root=5 if intent == 'authoring' else 6))
                                     self.assertTrue(invalid_binding.rule_graph.findings(invalid))
-                                    with self.assertRaises(ValueError):
-                                        invalid_binding.decode_response(json.dumps(invalid))
+                                    with self.assertRaises(ValueError): invalid_binding.decode_response(json.dumps(invalid))
                                 continue
                             profile_cases.append((5 if intent == 'authoring' else 6, 'specialist_consultation_proposal', 'proposal', extra, semantic_extra))
                         if intent == 'authoring':
