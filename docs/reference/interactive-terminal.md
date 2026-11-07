@@ -463,7 +463,7 @@ archive those rows into ordinary shell history.
 `/exchanges` uses the installed isolated JSONL viewer after Story chooses an
 immutable scope/agent snapshot. It opens in full-width Single/detail; Tab/Shift+Tab
 switches screens, and main-view `v` selects optional Split. Story validates the
-pinned 0.7.1 four-name facade, inert inspection descriptors,
+pinned 0.8.3 four-name facade, inert inspection descriptors,
 the `ViewerTerminal` transport constructor, and owned-call keyword arguments
 before terminal acquisition. The low-level handoff borrows streams and Story's
 persistent character reader under the existing input latch; it preserves the
@@ -478,6 +478,14 @@ same shell scope, with earlier accepted messages still visible and no exchange
 frames retained. It cannot call or replay a provider. The owned call requires
 transient display; unavailable and callback-only terminals receive a
 content-free notice.
+
+On supported local desktops, viewer-owned command input also recovers English
+after non-ASCII command text. Recovery must be verified before that invalid
+event is consumed; the user presses the command again. Search Query text remains
+literal Unicode, and the library restores its exact entry input source on exit.
+Unavailable or failed source control retains manual switching. This library
+policy applies to the JSON record viewer; preceding Story pickers keep Story's
+input-source behavior.
 
 The existing generic `InteractiveExternalViewer.open(operation)` borrowed-host
 route remains available to internal callers. `/exchanges` instead calls
