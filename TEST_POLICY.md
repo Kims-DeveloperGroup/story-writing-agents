@@ -1,5 +1,17 @@
 # Test suite cost policy
 
+## Scoped development feedback — Issue #938
+
+An edit/test iteration should run the smallest independent regression selection
+that covers the changed behavior. Keep complete integration verification as the
+delivery gate; a selected run certifies only its recorded IDs and source.
+
+Issue #938 will account for a coverage-preserving case split before changing the
+canonical inventory or subtest caps. Retain the original assertions, real host
+transitions, and full sequential workflows. Use fresh mutable fixtures for each
+independent case, and share only proven immutable preparation. This planning
+entry grants no inventory, source, timing, or failing-test exception.
+
 The canonical suite is a bounded regression sample. Its checked-in inventory is
 [`tests/fixtures/test_budget_v1.json`](tests/fixtures/test_budget_v1.json).
 The accepted ceilings are **18,000 seconds** of sequential-equivalent wall time
