@@ -134,7 +134,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             if native_start and native_inputs is None:
                 choices = dict(call.contract.semantic_index.policy.choices)
                 self.assertEqual(tuple(choices['required_input_ids']), ('user_input',))
-                native.update(input_choices=choices['input_ids'], source_choices=choices['input_ids'])
+                native.update(input_choices=choices['input_ids'], source_choices=choices['input_ids'] + choices['historical_user_source_ids'])
             def mutate(value, material):
                 if native_start:
                     value['proposal'].update(objective_intent={

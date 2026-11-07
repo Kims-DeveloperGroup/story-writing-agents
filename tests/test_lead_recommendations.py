@@ -177,7 +177,7 @@ class LeadRecommendationTests(RecommendationCase):
                     self.assertEqual(choices['historical_user_source_ids'], tuple(source_id for source_id, _raw in origins))
                     self.assertEqual(choices['input_ids'], ('user_input',))
                     self.assertEqual(tuple(material['provider_constraints']['offered_admission_source_ids']), choices['input_ids'] + choices['historical_user_source_ids'])
-                    return replace(assessment, allowed_creative_actions=('bounded review judgments', 'separate proposal preparation'),
+                    return replace(assessment, allowed_creative_actions=('assess causal links in supplied events', 'suggest clearer ordering of supplied events'),
                         foundations=(admission.AdmissionEvidence('Supplied experience', ('history_user_43',), 'Exact historical USER events.'),),
                         creative_scope=admission.AdmissionEvidence('No invention', ('history_user_35',), 'Literal USER permits only actual events.'),
                         protected_constraints=(origins[0][1],), decisions=(admission.AdmissionDecision('Preserve actual experience',
@@ -198,6 +198,10 @@ class LeadRecommendationTests(RecommendationCase):
                 before_events = self.history(cid)
                 with self.assertRaises(ValueError):
                     replace(request, basis=replace(request.basis, authoring_admission=replace(request.basis.authoring_admission, task_id='foreign_task')))
+                with self.assertRaises(ValueError):
+                    replace(request, basis=replace(request.basis, inputs=tuple(
+                        replace(item, state=c.CollaborationInputState.ABSENT)
+                        if item.kind is c.CollaborationInputKind.USER_INPUT else item for item in request.basis.inputs)))
                 with self.assertRaises(ValueError):
                     c.project_collaboration_history(rewrite_history(before_events, origins[0][0], payload=c.CollaborationMessagePayload(origins[0][1] + ' changed')))
             source_ids = [item.input_id for item in request.basis.inputs]

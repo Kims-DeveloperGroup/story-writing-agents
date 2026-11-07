@@ -237,7 +237,7 @@ def _selected_premise_proposal(selection, *, authoring_assessment=None):
             "basis_input_ids": finite_fixture_selection(inputs, ("selected_premise",))}]
         if "authoring_assessment" in value:
             value["authoring_assessment"] = lead_fixture_assessment(
-                value["authoring_assessment"], source_choices=dict(call.contract.semantic_index.policy.choices)["input_ids"] + dict(call.contract.semantic_index.policy.choices)["historical_user_source_ids"])
+                value["authoring_assessment"], source_choices=tuple(material["provider_constraints"]["offered_admission_source_ids"]))
         for assignment in value["proposal"]["assignments"]:
             assignment["input_ids"].append("selected_premise")
             assignment["mode"] = "constraint_assessment" if assignment["agent_id"] == EXECUTION_SPECIALIST else "draft"
@@ -1826,8 +1826,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 ({'left': 1, 'right': None}, False), ({'left': 1}, False),
                 ({'left': 1, 'right': 2}, False), ({'left': 1, 'right': 1, 'extra': 1}, False)):
             self.assertEqual(not original_rules.findings(supplied), valid); self.assertEqual(not compact_rules.findings(supplied), valid)
-        self.assertEqual(original_rules.node_fingerprint(), compact_rules.node_fingerprint()); require_schema_projection(graph, graph)
-        require_schema_projection(compact, compact)
+        self.assertEqual(original_rules.node_fingerprint(), compact_rules.node_fingerprint()); require_schema_projection(graph, graph); require_schema_projection(compact, compact)
         with self.assertRaises(WireShapeError): require_schema_projection(graph, compact)
         # Literal annotation overlays preserve one annotation and every nested annotation.
         inline = {'type': 'string', 'minLength': 2, 'maxLength': 3, 'description': 'Literal annotation.'}
@@ -2062,8 +2061,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         component = "*" if path == document_map and name in docs else name; assert_strict(value, owner, path + (component,), refs, basis_mode, native=native)
                     for key in ("anyOf", "items", "type"):
                         if key in node:
-                            child_path = path + ("*",) if key == "items" else path
-                            assert_strict(node[key], owner, child_path, refs, basis_mode, native=native)
+                            child_path = path + ("*",) if key == "items" else path; assert_strict(node[key], owner, child_path, refs, basis_mode, native=native)
                 elif isinstance(node, (list, tuple)):
                     for value in node: assert_strict(value, owner, path, refs, basis_mode, native=native)
                 elif node == "null" and owner is not None:
@@ -2072,10 +2070,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         self.assertEqual(basis_types[basis_mode], "null", ("assignment_basis_type", owner, path, basis_mode))
                         return
                     self.assertIn(owner, null_slots.get(".".join(path), ()), ("nullable_native_slot", owner, ".".join(path)))
-            definitions = logical_schema.get("$defs", {})
-            assert_strict(logical_schema, native=False)
-            definitions = full_schema.get("$defs", {})
-            assert_strict(full_schema)
+            definitions = logical_schema.get("$defs", {}); assert_strict(logical_schema, native=False)
+            definitions = full_schema.get("$defs", {}); assert_strict(full_schema)
             self.assertEqual(len(family_by_id), len(schema_by_id))
             for member in result_index.contracts:
                 if member.schema_id in family_by_id: assert_strict(schema_by_id[member.schema_id], family_by_id[member.schema_id])
@@ -2086,13 +2082,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertEqual(binding.semantic_index.policy.maximum_schema_bytes, 65536); self.assertEqual(binding.action_index.policy.maximum_schema_bytes, 262144)
             self.assertEqual(binding.rule_graph.maximum_bytes, 524288)
             for budget_index, index_cap in ( (binding.semantic_index, 524288), (binding.action_index, 524288)):
-                self.assertEqual(budget_index.policy.maximum_index_schema_bytes, index_cap)
-                self.assertEqual(budget_index.rule_graph.maximum_bytes, index_cap)
+                self.assertEqual(budget_index.policy.maximum_index_schema_bytes, index_cap); self.assertEqual(budget_index.rule_graph.maximum_bytes, index_cap)
                 budget_index_bytes = len(json.dumps(plain(budget_index.rule_graph.schema_value()), separators=(',', ':'), ensure_ascii=False).encode('utf-8'))
                 self.assertLessEqual(budget_index_bytes, index_cap, budget_index_bytes)
             request_schema_bytes = len(json.dumps(full_schema, separators=(',', ':'), ensure_ascii=False).encode('utf-8'))
-            self.assertLessEqual(request_schema_bytes, 524288, request_schema_bytes)
-            binding.require_projection(full_schema)
+            self.assertLessEqual(request_schema_bytes, 524288, request_schema_bytes); binding.require_projection(full_schema)
         def group_control_packet(binding, group):
             control, = (member for member in binding.semantic_index.contracts if type(member.owner) is SchemaGroupControlOwner)
             choices = [name for name in binding.group_stage.catalog.group_ids if binding.schema_group_phase
@@ -2104,8 +2098,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 "catalog_id": binding.group_stage.catalog.catalog_id, "group_id": group,
                 "selection_reason": "Use the explicitly authored fixture's result meaning."}}}
         def detail_nodes(schema, node):
-            node = fixture_schema_node(schema, node)
-            yield node
+            node = fixture_schema_node(schema, node); yield node
             for child in (*node.get("properties", {}).values(), *node.get("anyOf", ())):
                 yield from detail_nodes(schema, child)
         def require_generation_members(selector, members, current, group):
@@ -4333,6 +4326,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         assessment_cases = [(sufficient, True)]
         for status in ('needs_information', 'analysis_only'):
             assessment_cases.append(({**pending_assessment, 'status': status}, True))
+            assessment_cases.append(({**pending_assessment, 'status': status, 'missing_information': [],
+                'rationale': 'Internal source-linking or pending approval needs explanation, not another USER request.'}, True))
         assessment_cases.extend((({**sufficient, 'creative_scope': None}, True),
             ({**sufficient, 'allowed_creative_actions': []}, True),
             ({**sufficient, 'creative_scope': None, 'allowed_creative_actions': []}, False)))
@@ -4376,12 +4371,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 'status': ('sufficient', 'needs_information', 'analysis_only'),
                 'foundations': ('story', 'material', 'procedur'),
                 'direction': ('user', 'deliverable', 'direction'),
-                'creative_scope': ('user', 'no-invention', 'boundary'),
-                'allowed_creative_actions': ('facts', 'without invent', 'feelings'),
+                'creative_scope': ('user', 'no-invention', 'boundary', 'content', 'transformations'),
+                'allowed_creative_actions': ('facts', 'without invent', 'feelings', 'content', 'transformations', 'procedural steps'),
                 'protected_constraints': ('constraints', 'creative_scope', 'actions'),
                 'decisions': ('supplied', 'delegated', 'missing'),
-                'missing_information': ('retrieval', 'source-linking', 'unavailable'),
-                'rationale': ('grounds', 'constraints', 'gaps'),
+                'missing_information': ('retrieval', 'source-linking', 'unavailable',
+                    'user must explicitly provide or decide now', '[]', 'rationale', 'confirm/apply/commit'),
+                'rationale': ('grounds', 'constraints', 'user requests', 'source-linking', 'approval', '[]'),
                 'requirement': ('foundation', 'direction', 'boundary'),
                 'source_ids': ('offered', 'literal user', 'lead/rejected'),
                 'justification': ('requirement', 'interpretation', 'unknowns'),

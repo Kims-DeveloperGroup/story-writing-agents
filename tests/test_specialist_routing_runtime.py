@@ -172,7 +172,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 and constraints.scope.intent is AuthoringIntent.REVIEW_ONLY)
             native = {'family': int(values.get('intent') == 'review_only' and not closed_review),
                       'input_choices': choices['input_ids'],
-                      'source_choices': choices['input_ids'], 'anchors': {}, 'recipients': {}}
+                      'source_choices': choices['input_ids'] + choices['historical_user_source_ids'], 'anchors': {}, 'recipients': {}}
             def prepare(value, material):
                 if mutate is not None:
                     mutate(value, material)

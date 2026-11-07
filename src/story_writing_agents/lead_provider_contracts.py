@@ -2948,14 +2948,24 @@ class LeadProviderConstraints:
             "preliminary_review_rule": "For useful direct preliminary advice select the offered preliminary arm, inspect actual supplied/READ inputs and exclude unread declared targets. Inventory does not expand scope; preserve conflicts and gaps without automatically dispatching specialists. This is not final review or objective completion.",
             "offered_admission_source_ids": list(self.assessment_source_ids),
             "authoring_admission_rule": (
-                "Before official drafting or document-change preparation, assess the actual supplied story foundations, "
-                "USER direction, bounded creative permissions/protected constraints and required decisions. "
-                "Use exact offered USER/material IDs or completed READ evidence IDs; a file indicator, summary or "
-                "confidence is not a READ or semantic sufficiency. A detailed literal USER brief may suffice for assessment. "
-                "Executable drafting needs an actual target; target-free grounded analysis remains available. "
-                "Identify only actual missing decisions; do not ask again for already supplied facts. "
-                "Use needs_information/analysis_only and grounded questions when inadequate. Rejected public "
-                "answers stay input-only. The assessment grants no confirmation, write or budget authority."
+                "Before official drafting or document-change preparation, assess actual supplied "
+                "foundations, USER direction, content choices and transformations, protected constraints "
+                "and required decisions. Cite exact offered USER/material IDs or completed READ receipts; "
+                "a file indicator, summary or confidence is not READ or sufficiency. A detailed literal "
+                "USER brief alone may suffice for assessment. Keep evidenced no-invention boundaries. "
+                "Preparing an assignment, selecting specialists, retrieval and "
+                "approval are procedures, not allowed_creative_actions or creative_scope. Do not "
+                "manufacture permission to fill fields or recommend preparation first and defer necessary "
+                "source qualification. missing_information contains only specific facts, decisions, "
+                "creative-scope permission or material the USER must explicitly provide or decide now. Do "
+                "not request supplied information again. For only internal retrieval, host source "
+                "delivery/source-linking or Confirm/Apply/Commit waits, keep missing_information=[] and "
+                "explain cause and stage impact in rationale; [] is not sufficiency or approval. If no "
+                "USER action is needed but grounding remains unavailable, explain that state through a "
+                "legal non-recommendation response without forcing answer kind. Actual targets are "
+                "required where the host's writing or preparation rules require them; target-free "
+                "grounded analysis remains available. Host admission and separate Confirm/Apply/Commit "
+                "apply at their existing boundaries; rejected public answers stay input-only."
             ),
             "offered_assignment_input_ids": list(self._allocation_input_ids()),
             "required_input_ids": [item for item in self.input_ids if (not self.preparation_kind or item not in PREPARATION_INPUT_IDS)
