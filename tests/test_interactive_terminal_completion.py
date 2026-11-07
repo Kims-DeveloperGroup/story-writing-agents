@@ -196,6 +196,21 @@ def _assert_raw_restoration(test, termios) -> None:
     )
 
 
+def _recorded_frames(output: RecordingOutput, width: int = 160) -> list[SimpleNamespace]:
+    from tests._external_view_support import PortableTerminalScreen
+    screen = PortableTerminalScreen(width=width, height=80)
+    screen.primary[:] = [[" "] * width for _ in range(screen.height)]
+    screen.cursor = (0, 0)
+    frames = []
+    for record in output.records:
+        screen.write(record.replace("\n", "\r\n"))
+        frames.append(SimpleNamespace(
+            text="\n".join("".join(row).rstrip() for row in screen.screen).rstrip(),
+            cursor=screen.cursor,
+        ))
+    return frames
+
+
 def _ready_select_patch():
     return mock.patch.object(_driver._select, 'select', side_effect=lambda r, w, x, _t: (r, w, x))
 
@@ -1590,6 +1605,7 @@ class CompletionDriverTests(unittest.TestCase):
                 )
                 _assert_raw_restoration(self, termios)
                 rendered = "".join(output.records)
+                visible = "\n".join(frame.text for frame in _recorded_frames(output, width=40))
                 self.assertEqual(rendered.count("\x1b[?1049h"), screen_enters)
                 self.assertEqual(rendered.count("\x1b[?1049l"), screen_exits)
                 self.assertEqual(
@@ -1599,12 +1615,12 @@ class CompletionDriverTests(unittest.TestCase):
                 if uses_ranged_picker:
                     self.assertIn(
                         "Up/Downselects;Enter/Tabopenstherangedviewer.",
-                        "".join(strip_decorative_sgr(rendered).split()),
+                        "".join(visible.split()),
                     )
                     for path in paths:
                         self.assertIn(
                             "".join(path.split()),
-                            "".join(strip_decorative_sgr(rendered).split()),
+                            "".join(visible.split()),
                         )
                 failure_writer.assert_not_called()
                 fallback.assert_not_called()
@@ -1665,11 +1681,9 @@ class CompletionDriverTests(unittest.TestCase):
                         )
 
                 active_frames = tuple(
-                    strip_decorative_sgr(record)
-                    for record in output.records
-                    if f"main> {original}" in strip_decorative_sgr(record)
-                    and "Writing artifact selection [open]"
-                    in strip_decorative_sgr(record)
+                    frame.text for frame in _recorded_frames(output)
+                    if f"main> {original}" in frame.text
+                    and "Writing artifact selection [open]" in frame.text
                 )
                 self.assertTrue(active_frames)
                 active = active_frames[-1]
@@ -1690,7 +1704,7 @@ class CompletionDriverTests(unittest.TestCase):
                 self.assertIn("[highlighted]", suggestions)
                 self.assertIn(
                     f"main> {expected}",
-                    strip_decorative_sgr("".join(output.records)),
+                    "\n".join(frame.text for frame in _recorded_frames(output)),
                 )
                 history_append.assert_not_called()
                 self.assertEqual(driver._history_state, MainInputHistoryState())
@@ -1720,10 +1734,8 @@ class CompletionDriverTests(unittest.TestCase):
                     reference_failure_writer=mock.Mock(),
                 )
         unmatched = next(
-            strip_decorative_sgr(record)
-            for record in output.records
-            if "main> $C" in strip_decorative_sgr(record)
-            and "Writing artifact selection [open]" in strip_decorative_sgr(record)
+            frame.text for frame in _recorded_frames(output)
+            if "main> $C" in frame.text and "Writing artifact selection [open]" in frame.text
         )
         self.assertIn(
             "[empty] No matching writing artifacts. Change the path fragment.",
@@ -1768,9 +1780,8 @@ class CompletionDriverTests(unittest.TestCase):
                         )
 
                 exact_frames = tuple(
-                    strip_decorative_sgr(record)
-                    for record in output.records
-                    if f"main> {original}" in strip_decorative_sgr(record)
+                    frame.text for frame in _recorded_frames(output)
+                    if "".join(f"main> {original}".split()) in "".join(frame.text.split())
                 )
                 self.assertTrue(exact_frames)
                 self.assertEqual(
@@ -1815,7 +1826,7 @@ class CompletionDriverTests(unittest.TestCase):
                             reference_failure_writer=write_failure,
                         )
 
-                frames = [strip_decorative_sgr(record) for record in output.records]
+                frames = [frame.text for frame in _recorded_frames(output, width=40)]
                 picker_index = next(
                     index
                     for index, frame in enumerate(frames)
@@ -2764,17 +2775,13 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertIn("Suggestions [open]", rendered)
         self.assertNotIn("Suggestions [open]", output.records[-1])
         alert_frames = [
-            frame for frame in output.records
-            if "Enteramessageorslashcommand." in "".join(
-                re.sub(r"\x1b\[[0-9;]*m", "", frame).split()
-            )
+            frame for frame in _recorded_frames(output, width=40)
+            if "Enteramessageorslashcommand." in "".join(frame.text.split())
         ]
         self.assertEqual(len(alert_frames), 2)
         for frame in alert_frames:
-            self.assertTrue(
-                frame.endswith("\x1b[A" * frame.count("\n") + "\r" + "\x1b[C" * 6)
-            )
-        self.assertEqual(output.records[-1], "\r\r\x1b[2K\r\r")
+            self.assertEqual(frame.cursor, (0, 6))
+        self.assertEqual(_recorded_frames(output, width=40)[-1].text, "")
 
     def test_completion_only_enter_does_not_append_before_interrupt(self) -> None:
         driver, _input, output, fallback, termios, _os = make_driver("/s\n\x03")
@@ -2787,7 +2794,7 @@ class CompletionDriverTests(unittest.TestCase):
         history_append.assert_not_called()
         self.assertEqual(driver._history_state, MainInputHistoryState())
         fallback.assert_not_called()
-        self.assertEqual("".join(output.records[-2:]), "\r\r\x1b[2K\r\r\n")
+        self.assertEqual(_recorded_frames(output, width=40)[-1].text, "")
         _assert_raw_restoration(self, termios)
 
     def test_dynamic_choice_live_commit_clears_restores_then_appends_identity(
@@ -2842,15 +2849,15 @@ class CompletionDriverTests(unittest.TestCase):
             driver._history_state,
             MainInputHistoryState(("/session resume beta",)),
         )
-        # Erase only the four owned palette rows, returning to their first row.
+        self.assertEqual(events[-3][0], "write")
         self.assertEqual(
-            events[-3:],
+            events[-2:],
             [
-                ("write", "\r\r" + "\x1b[2K\x1b[1B\r" * 3 + "\x1b[2K" + "\x1b[A" * 3 + "\r\r"),
                 ("termios", FakeTermios.TCSADRAIN),
                 ("history", "/session resume beta"),
             ],
         )
+        self.assertEqual(_recorded_frames(output, width=40)[-1].text, "")
         rendered = "".join(output.records)
         self.assertIn("[highlighted] Beta", rendered)
         self.assertNotIn("/say", rendered)
@@ -2872,7 +2879,7 @@ class CompletionDriverTests(unittest.TestCase):
         provider.assert_called_once_with("/", 1)
         fallback.assert_not_called()
         self.assertEqual(driver._history_state, MainInputHistoryState())
-        self.assertEqual("".join(output.records[-2:]), "\r\r\x1b[2K\r\r\n")
+        self.assertEqual(_recorded_frames(output, width=40)[-1].text, "")
         _assert_raw_restoration(self, termios)
 
     def test_contextual_runtime_header_redraws_for_route_and_backspace_states(
@@ -3123,7 +3130,7 @@ class CompletionDriverTests(unittest.TestCase):
                 fallback.assert_not_called()
                 self.assertEqual(driver._history_state, MainInputHistoryState())
                 _assert_raw_restoration(self, termios)
-                self.assertEqual("".join(output.records[-2:]), "\r\r\x1b[2K\r\r\n")
+                self.assertEqual(_recorded_frames(output, width=40)[-1].text, "")
 
     def test_line_fallback_bypasses_all_completion_and_live_collaborators(self) -> None:
         for terminal, term, widths in ((False, "xterm-256color", []), (True, "dumb", [8])):

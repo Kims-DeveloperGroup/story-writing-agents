@@ -666,7 +666,7 @@ class LiveEditingTests(unittest.TestCase):
         characters = value + "\x1b[D" * 2 + "X\x7f\x1b[3~\r"
         for width in (20, 40, 80):
             with self.subTest(width=width), recording_driver(characters, width=width, response="none") as rig:
-                rig.observe = lambda: tuple(tuple(row) for row in rig.screen.screen)
+                rig.observe = lambda: (tuple(tuple(row) for row in rig.screen.screen), "".join(rig.output.records).count("\x1b[2J"))
                 with rig.driver.input_session():
                     self.assertEqual(rig.driver.read_main_line(prompt, lambda _: ()), "x" * 90 + "한Z")
                     edits = [read for read in rig.reads if read.character in {"\x7f", "~", "\r"}]
@@ -674,12 +674,12 @@ class LiveEditingTests(unittest.TestCase):
                     for read, suffix in zip(edits, ("한X한Z", "한한Z", "한Z")):
                         self.assertIn("x" * 90 + suffix, "".join(read.text.split()))
                         target = "Z" if read.character == "\r" else "한"
-                        sentinel = max((r, c) for r, row in enumerate(read.data) for c, cell in enumerate(row) if cell == target)
+                        sentinel = max((r, c) for r, row in enumerate(read.data[0]) for c, cell in enumerate(row) if cell == target)
                         self.assertEqual(read.cursor, sentinel)
                     committed = edits[-1]
-                    self.assertTrue(all(row[-1] == " " for row in committed.data))
-                    self.assertGreater(sum(any(cell != " " for cell in row) for row in committed.data), 1)
-                    self.assertEqual("".join(rig.output.records).count("\x1b[2J"), 1)
+                    self.assertTrue(all(row[-1] == " " for row in committed.data[0]))
+                    self.assertGreater(sum(any(cell != " " for cell in row) for row in committed.data[0]), 1)
+                    self.assertEqual({read.data[1] for read in rig.reads}, {rig.reads[0].data[1]})
                 self.assertEqual(rig.termios.attributes, rig.termios.original)
                 rig.fallback.assert_not_called()
 

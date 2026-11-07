@@ -3382,7 +3382,8 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             '_model.py': set(),
             '_metadata_text.py': set(),
             '_progress_process.py': set(),
-            '_controls.py': {'._model'},
+            '_controls.py': {'._input_text', '._model'},
+            '_input_text.py': {'._model'},
             '_render.py': {'._metadata_text', '._advisory_progress', '._box', '._markdown', '._model'},
             '_viewer_model.py': set(),
             '_pointer.py': set(),
@@ -3391,7 +3392,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             '_viewer_render.py': {'._box', '._model', '._viewer_model'},
             '_transcript_view.py': {'..conversations', '._collaboration_view', '._external_view', '._model', '._render'},
             '_reference_activation.py': {'..writing_artifacts', '._model'},
-            '_driver.py': {'._external_view', '._input_lifecycle', '._input_sources', '._input_sources_linux', '._input_sources_macos', '._live_composer', '._model', '._output_history', '._pointer', '._progress_process', '._reference_activation', '._render', '._viewer_model'},
+            '_driver.py': {'._external_view', '._input_lifecycle', '._input_sources', '._input_sources_linux', '._input_sources_macos', '._input_text', '._live_composer', '._model', '._output_history', '._pointer', '._progress_process', '._reference_activation', '._render', '._viewer_model'},
             '_core.py': {'._metadata_text', '..agent_context.progress', '..agent_context.service', '..agents', '..conversations', '..errors', '..interactive_commands', '._advisory_progress', '._collaboration_view', '._controls', '._driver', '._external_view', '._live_composer', '._model', '._reference_activation', '._render', '._transcript_view', '._viewer_controls', '._viewer_model', '._viewer_render'},
             '_box.py': {'._model'},
             '_markdown.py': {'._model'},
@@ -3411,7 +3412,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 if isinstance(node, ast.ImportFrom) and node.level
             }
             # Keep the frozen subtest count; each new dependency set is still checked exactly.
-            if filename in {"_metadata_text.py", "_box.py", "_markdown.py", "_response_usage.py", "_transcript_view.py", "_pointer.py", "_output_history.py", "_input_sources.py", "_input_sources_linux.py", "_input_sources_macos.py", "_progress_process.py"}:
+            if filename in {"_metadata_text.py", "_box.py", "_markdown.py", "_response_usage.py", "_transcript_view.py", "_pointer.py", "_output_history.py", "_input_sources.py", "_input_sources_linux.py", "_input_sources_macos.py", "_input_text.py", "_progress_process.py"}:
                 self.assertEqual(dependencies, expected)
                 continue
             with self.subTest(filename=filename):

@@ -6912,7 +6912,9 @@ def _wrap_safe_text_with_cursor(
 
     Combining marks use zero cells, East Asian wide/fullwidth characters use
     two, and other visible characters use one. The function is deterministic,
-    standard-library-only, and side-effect free.
+    standard-library-only, and side-effect free. Preserve the supplied text:
+    dynamic input was already projected, while trusted prompt prefixes retain
+    their original source spelling for styled-prefix reconstruction.
     """
 
     if not isinstance(width, int) or isinstance(width, bool) or width <= 0:
@@ -6929,7 +6931,7 @@ def _wrap_safe_text_with_cursor(
             line_widths.append(0)
         if unit.start == cursor_offset:
             cursor_position = (len(lines) - 1, line_widths[-1])
-        lines[-1] += unit.display
+        lines[-1] += safe_text[unit.start:unit.end]
         line_widths[-1] += unit.cells
         if unit.start < cursor_offset < unit.end:
             cursor_position = (len(lines) - 1, line_widths[-1])
