@@ -161,6 +161,31 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
 
 
 class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
+    def _observe_failure_producers(self):
+        import sys
+        notes = []
+        original = StoryRuntime._lead_outcome_failure_result
+        def observed(runtime, *args, **kwargs):
+            if len(notes) < 8:
+                caller = trace = None
+                try:
+                    caller = sys._getframe(1)
+                    failure = kwargs.get("failure")
+                    trace = None if failure is None else failure.__traceback__
+                    while trace is not None and trace.tb_next is not None:
+                        trace = trace.tb_next
+                    notes.append((caller.f_code.co_name, caller.f_lineno, kwargs["failure_code"].value,
+                        None if trace is None else (trace.tb_frame.f_code.co_name, trace.tb_lineno)))
+                except Exception:
+                    pass
+                finally:
+                    del caller, trace
+            return original(runtime, *args, **kwargs)
+        patcher = mock.patch.object(StoryRuntime, "_lead_outcome_failure_result", new=observed)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return notes
+
     def _assert_continuation(self, result, field):
         self.assertIsNone(getattr(result, field))
         self.assertIs(result.next_action, c.CollaborationNextAction.CONTINUE_WITH_LEAD)
@@ -283,14 +308,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual((unchanged.rounds_spent, unchanged.physical_calls_spent), (completed.rounds_spent, completed.physical_calls_spent))
         self.assertGreaterEqual(12 - completed.physical_calls_spent, 4)
         self.assertEqual(self.artifact_bytes(), before)
-        def successor(value, material):
-            self.assertNotIn("authoring_tasks", material)
-            self.assertEqual(material["available_proposal_drafting_source_ids"], [])
-        blocked = await self.proposal_for(conversation, self._native_scoped(
-            PLOT_ARCHITECT, selected=proposed.proposal.authoring_scope.task_id,
-            domains=("plot_structure",), revision=2, activity="review", mutate=successor,
-            authoring_assessment=_fixture_assessment(),
-        ))
+        before_blocked = len(self.backend.calls)
+        blocked = await self.runtime.lead_turn(self.session_id, conversation, _ADMISSION_BRIEF)
+        self.assertEqual(len(self.backend.calls) - before_blocked, 0, blocked)
         self.assertIsNone(blocked.proposal, blocked)
         self.assertFalse(any(e.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for e in self.history(conversation)[len(prefix):]))
         self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
@@ -336,7 +356,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.backend.enqueue(
             partial(_search_history, text="Nora must recover her brother's letter"),
             request_inspection_source,
-            _visible_outcome("answer", "A third submission is not invoked."))
+            _visible_outcome("answer", "A third submission is not invoked."), control_plan=None)
         # USER-selected discussion inspects the same completed history without writing authority.
         with mock.patch.object(orchestrator_module, "_lead_call_contract_factory",
                                side_effect=bounded_history_factory) as boundary_factory:
@@ -622,12 +642,13 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 "selected_premise",
             ),
         )), control_plan=selection_plan('consultation.authoring.content'))
+        producer_notes = self._observe_failure_producers()
         changed = await self.runtime.lead_turn(
             self.session_id,
             conversation,
             "Draft changed whole premise freshly." + "\n" + _ADOPTION_DIRECTION,
             premise_selection=successor, )
-        self.assertIs(changed.kind, c.LeadOutcomeKind.PROPOSAL, changed)
+        self.assertIs(changed.kind, c.LeadOutcomeKind.PROPOSAL, (changed, tuple(producer_notes)))
         self.assertEqual((changed.proposal.authoring_scope.task_id, changed.proposal.authoring_scope.task_revision), (reused.proposal.authoring_scope.task_id, 2))
         self.assertEqual(changed.proposal.basis.shared_premises[0].selected_premise, changed_option.premise_text)
         self.assertNotEqual(changed.proposal.basis.shared_premises, drafted.proposal.basis.shared_premises)
@@ -1449,6 +1470,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual((completed.rounds_spent, completed.physical_calls_spent), (2, 11))
         submitted = _submitted_calls(self.history(conversation))
         self.assertEqual(len({(item.invocation_id, item.call_id) for item in submitted}), 11)
+        producer_notes = self._observe_failure_producers()
         for failure, code in ((ConnectionError("Known adoption failure"), c.CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED), (asyncio.CancelledError(), c.CollaborationLeadOutcomeFailureCode.CANCELLED)):
             self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, _SubmittedFailure(failure)),))
             if code is c.CollaborationLeadOutcomeFailureCode.CANCELLED:
@@ -1464,7 +1486,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.assertIs(c.project_collaboration_history(failed_history).next_safe_action, c.CollaborationNextAction.RETRY_LEAD_TURN)
             self.backend.enqueue(_visible_outcome("answer", "Known failure safely closed."), control_plan=selection_plan('answer.workflow'))
             resumed = await self.runtime.lead_turn(self.session_id, conversation, "Report status.")
-            self.assertIs(resumed.kind, c.LeadOutcomeKind.ANSWER, (resumed.message[:500], resumed.state, resumed.next_action, len(self.backend.calls)))
+            self.assertIs(resumed.kind, c.LeadOutcomeKind.ANSWER, (resumed.message[:500], resumed.state, resumed.next_action, len(self.backend.calls), tuple(producer_notes)))
             self.assertEqual(resumed.message, "Known failure safely closed.")
             self.assertEqual(self.history(conversation)[:len(failed_history)], failed_history)
             self.assertEqual(len(_submitted_calls(self.history(conversation))), len(submitted) + 2)
