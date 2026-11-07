@@ -12592,9 +12592,19 @@ class StoryRuntime:
                 document_budget_task_id = task_receipt.target_task_id
             if (document_goal is None and infer_document_context and not discussion_only and task_transition_event_id is None
                     and planning_projection is not None and len(planning_projection.document_plans) == 1):
-                document_goal = planning_projection.document_plans[0].plan.ref
-                if len(planning_projection.available_tasks) == 1:
-                    document_budget_task_id = planning_projection.available_tasks[0].ref.task_id
+                implicit_plan = planning_projection.document_plans[0].plan
+                implicit_events = session_history.events()
+                implicit_task_ids = {event.payload.document_node.task_ref.task_id for event in implicit_events
+                    if type(event.payload) in {CollaborationProposal, CollaborationLeadJudgmentPayload, LeadRecommendationRequestPayload}
+                    and event.payload.document_node is not None
+                    and event.payload.document_node.plan_ref.plan_id == implicit_plan.ref.plan_id}
+                active_conversation_ids = {history.metadata.conversation_id for history in session_history.conversations
+                    if history.metadata.status is ConversationStatus.ACTIVE}
+                if not implicit_task_ids or implicit_task_ids.intersection(self._authoring_tasks(tuple(
+                        event for event in implicit_events if event.conversation_id in active_conversation_ids))):
+                    document_goal = implicit_plan.ref
+                    if len(planning_projection.available_tasks) == 1:
+                        document_budget_task_id = planning_projection.available_tasks[0].ref.task_id
             ordinary_front_cap = None if task_receipt is not None or preparation is not None or interaction_mode is LeadInteractionMode.EXPLORATION or adoption_capture is not None or premise_capture is not None else self._ordinary_front_call_cap(session_id, conversation_id)
             if document_node is not None:
                 inherited_calls, inherited_rounds, _ = document_lineage_cost(
