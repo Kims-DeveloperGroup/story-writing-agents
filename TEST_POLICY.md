@@ -746,3 +746,5 @@ helper1547=151215행이며 상한151216으로1행 여유를 유지한다. 전용
 #938의 마지막 예산 원인은 과거 비용 오합산이 아니라 미래 준비1+최종검토4의 정상 예약이었다. 사용6인 B는 front1만 남아2-call 그룹을 시작하지 못한다. B2는 정확한0호출/REQUEST_NOT_SUBMITTED/기존scope유지를 검사하고, 원래혼합premise의긍정검증과실제6호출은새구조화선택C@1로옮긴다. 총provider모의호출은증가하지않는다. 임시observer90행제거와정정31행으로raw149665+helper1547=151212, 최종상한151213의1행여유를고정한다. 기존2542ID/전체cap-map/subTest/147상대순서/161병렬대상/5shard/4worker/18000·3600초를유지한다.
 
 main #947 통합 후 raw149666+helper1547=151213에 D06 한 곳의 history512KiB 설정과 기록된 payload 크기 검사19행을 더한다. 최종 raw149685+helper1547=151232, 상한151233이다. production의 history256KiB와 provider/schema/payload/전체 한도는 변경하지 않고, callback·40+2 provider 호출·ID·subTest·시간을 유지한다.
+
+#938 남은C Confirm의첫실패진단34행은반환/큐/provider호출을바꾸지않고정규화된최초실패와기록된validation label만제한적으로관측한다. raw149719+helper1547=151266, 임시상한151267이며진단후제거한다. product budget/counter·ID·subTest·cap-map·147순서·161대상·시간제한은유지한다.

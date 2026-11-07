@@ -657,8 +657,42 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             (drafted.proposal.authoring_scope.task_id, reused.proposal.authoring_scope.task_id))
         self.assertEqual(changed.proposal.basis.shared_premises[0].selected_premise, changed_option.premise_text)
         self.assertNotEqual(changed.proposal.basis.shared_premises, drafted.proposal.basis.shared_premises)
-        confirmed = await complete_selected(changed, changed_option.premise_text)
-        self.assertIs(confirmed.turn.state, c.CollaborationStepState.COMPLETED)
+        execution_notes = []
+        original_persistence = self.runtime._persist_collaboration_results_with_generation_pin
+        def observed_persistence(**arguments):
+            results = arguments["assignment_results"]
+            rows = tuple((assignment.specialist_id, results[i] if i < len(results) else None)
+                for i, assignment in enumerate(arguments["proposal"].assignments)) + ((LEAD_ORCHESTRATOR, arguments["synthesis_result"]),)
+            for agent, result in rows[:max(0, 4 - len(execution_notes))]:
+                failure = None if result is None else result.failure
+                causes, cause = [], failure
+                for _ in range(3):
+                    if cause is None:
+                        break
+                    causes.append((type(cause).__name__, str(cause)[:600], tuple(getattr(cause, field, None)
+                        for field in ("stage", "actual_utf8_bytes", "maximum_utf8_bytes", "excess_utf8_bytes"))))
+                    cause = cause.__cause__ or cause.__context__
+                execution_notes.append((agent, None if result is None else type(result.value).__name__,
+                    None if result is None else result.submitted_physical_calls, tuple(causes)))
+            return original_persistence(**arguments)
+        before_confirm = len(self.backend.call_records)
+        with mock.patch.object(self.runtime, "_persist_collaboration_results_with_generation_pin", new=observed_persistence):
+            confirmed = await complete_selected(changed, changed_option.premise_text)
+        validation_by_call = {}
+        for event in self.history(conversation)[len(previous):]:
+            payload = event.payload
+            if type(payload) is c.CollaborationMessagePayload and payload.validation_call_id is not None:
+                validation_by_call.setdefault(payload.validation_call_id, []).extend(payload.validation_details)
+        attempts, request_notes = {}, []
+        for agent, request in self.backend.call_records[before_confirm:]:
+            attempts[agent] = attempts.get(agent, 0) + 1
+            phase = getattr(getattr(getattr(request, "contract", None), "schema_group_phase", None), "value", None)
+            request_notes.append((agent, phase, attempts[agent], request.call_kind.value,
+                tuple(detail[:300] for detail in validation_by_call.get(request.call_id, ())[:3])))
+        self.assertIs(confirmed.turn.state, c.CollaborationStepState.COMPLETED,
+            (confirmed.turn.message[:500], tuple(detail[:300] for detail in confirmed.turn.validation_details[:3]),
+             repr((confirmed.turn.kind, confirmed.turn.state, confirmed.turn.next_action)),
+             tuple(execution_notes), tuple(request_notes[:8]), self.backend._fixture_error_code))
         new_frames = [_workflow_material(call.payload) for agent, call in self.backend.call_records if wire_contract_id(call.payload) == "specialist-assignment-response-v5"][-2:]
         self.assertEqual([frame["premise_selection"]["selected_text"] for frame in new_frames], [changed_option.premise_text] * 2)
         self.assertEqual(self.history(conversation)[:len(previous)], previous)
