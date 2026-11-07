@@ -1532,11 +1532,34 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 story_project,
                 distribution,
             )
-            viewer_git_directory = _gitlink_git_directory("vendor/jsonl-viewer")
+            viewer_source_git_directory = _gitlink_git_directory("vendor/jsonl-viewer")
+            # _copy_build_input already exported the exact pin before any URL rewrite.
+            viewer_git_directory = root / "jsonl-viewer.git"
+            mirror_environment = os.environ.copy()
+            for name in ("GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS"):
+                mirror_environment.pop(name, None)
+            mirror_environment.update({"GIT_ALLOW_PROTOCOL": "file", "GIT_CONFIG_COUNT": "0"})
+            for command in (
+                ["git", "init", "--bare", "--template=", str(viewer_git_directory)],
+                ["git", f"--git-dir={viewer_git_directory}", "fetch", "--no-tags", "--depth=1",
+                 viewer_source_git_directory.as_uri(), f"{_JSONL_VIEWER_PIN}:refs/heads/fixture"],
+                ["git", f"--git-dir={viewer_git_directory}", "symbolic-ref", "HEAD", "refs/heads/fixture"],
+                ["git", f"--git-dir={viewer_git_directory}", "fsck", "--full", "--strict"],
+            ):
+                mirrored = subprocess.run(command, env=mirror_environment,
+                    text=True, capture_output=True, check=False)
+                self._assert_process_succeeded(mirrored, "viewer_mirror")
+            self.assertFalse(any((viewer_git_directory / "objects" / "info" / name).exists()
+                for name in ("alternates", "http-alternates")))
+            self.assertEqual(tuple((viewer_git_directory / "objects" / "pack").glob("*.promisor")), ())
+            mirror_config = (viewer_git_directory / "config").read_text(encoding="utf-8").lower()
+            self.assertNotIn("promisor", mirror_config)
+            self.assertNotIn("partialclone", mirror_config)
             build_support = root / "build-support"
             _copy_setuptools_build_support(build_support)
             install_environment = os.environ.copy()
-            for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
+            for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "GIT_OBJECT_DIRECTORY",
+                         "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS"):
                 install_environment.pop(name, None)
             install_environment.update(
                 {
