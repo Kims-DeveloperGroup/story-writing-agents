@@ -1792,6 +1792,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             if (item.ref.task_id, item.ref.task_revision) == (task_id, 1))
         exhausted_resume = task.LeadTaskDecision.from_task(exhausted_task.ref, task.LeadTaskAction.RESUME, text=_ADMISSION_BRIEF)
         before_refusal = len(self.backend.calls)
+        self.backend.enqueue()
         refused = (await self.runtime.decide_lead_task(exhausted_resume)).turn
         self.assertEqual(len(self.backend.calls) - before_refusal, 0, refused)
         self.assertIsNone(refused.proposal, refused)
