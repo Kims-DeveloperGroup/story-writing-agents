@@ -4350,8 +4350,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         empty_observation = copy.deepcopy(observation_packet)
         empty_observation['agent_action']['task_result']['response_details'][ 'grounded_observations'] = []
         self.assertTrue(observation_packet_binding.rule_graph.findings(empty_observation))
-        with self.assertRaises(ValueError):
-            observation_packet_binding.decode_response(json.dumps(empty_observation))
+        with self.assertRaises(ValueError): observation_packet_binding.decode_response(json.dumps(empty_observation))
         premise_seed = _lead_result_rule_seed('lead-response-v8', premise.front_schema())
         premise_rows = [{'agent_id': PLOT_ARCHITECT, 'task_instructions': 'Assess this premise only.',
                          'assignment_type': 'analyze_premise', 'input_source_ids': ['user_input'],
