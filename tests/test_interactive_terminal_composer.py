@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Callable, get_args
 from unittest import mock
 
+from tests.test_interactive_terminal_completion import _recorded_frames
 import story_writing_agents
 from story_writing_agents import PLOT_ARCHITECT
 from story_writing_agents import interactive_terminal as terminal_facade
@@ -695,7 +696,7 @@ class SemanticInputDriverTests(unittest.TestCase):
                     )
 
                 self.assertEqual(result, f"${{{path}}}#L1-L2")
-                frames = [strip_decorative_sgr(record) for record in output.records]
+                frames = [frame.text for frame in _recorded_frames(output, width=80)]
                 picker_index = next(
                     index
                     for index, frame in enumerate(frames)
@@ -763,7 +764,7 @@ class SemanticInputDriverTests(unittest.TestCase):
                             write_failure,
                         )
 
-                frames = [strip_decorative_sgr(record) for record in output.records]
+                frames = [frame.text for frame in _recorded_frames(output, width=80)]
                 picker_index = next(
                     index
                     for index, frame in enumerate(frames)
