@@ -1464,7 +1464,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.assertIs(c.project_collaboration_history(failed_history).next_safe_action, c.CollaborationNextAction.RETRY_LEAD_TURN)
             self.backend.enqueue(_visible_outcome("answer", "Known failure safely closed."), control_plan=selection_plan('answer.workflow'))
             resumed = await self.runtime.lead_turn(self.session_id, conversation, "Report status.")
-            self.assertIs(resumed.kind, c.LeadOutcomeKind.ANSWER)
+            self.assertIs(resumed.kind, c.LeadOutcomeKind.ANSWER, (resumed.message[:500], resumed.state, resumed.next_action, len(self.backend.calls)))
             self.assertEqual(resumed.message, "Known failure safely closed.")
             self.assertEqual(self.history(conversation)[:len(failed_history)], failed_history)
             self.assertEqual(len(_submitted_calls(self.history(conversation))), len(submitted) + 2)
