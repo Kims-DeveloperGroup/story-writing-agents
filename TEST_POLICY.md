@@ -654,3 +654,24 @@ stay serial. Historical weight transfers are source-responsibility estimates,
 not measured CPU/time shares; the codec estimate includes its observed baseline.
 The387-group partition is **595/715/582/649/1** and covers2542IDs exactly once.
 Actual source-bound execution and complete final reports establish passing gates.
+
+### Change-driven development selections
+
+Use repeated canonical `--id` selectors or the manual `affected` input; do not
+filter a parent method's subTests and report that parent as fully verified.
+
+| Changed responsibility | First selection | Expand when |
+| --- | --- | --- |
+| One fixture or assertion | Its exact method ID. | A shared helper changes: include every affected consumer. |
+| One submitted-failure combination | Its `LeadSubmittedFailureRecoveryTests` method, retaining real closure and restart. | Shared submission, correction, taint or accounting changes: run all ten combinations, the retained pre-submission core and affected context lifecycle checks. |
+| Scope/review codec | The retained pure codec ID and its direct typed consumer. | Encoded shape, current-offer or transport changes: add the separated QUESTION and selected-v9 contract IDs and relevant producer/decoder checks. |
+| Small schema factoring/ref rule | `LeadSchemaFactoringTests.test_small_factoring_annotations_and_owner_refs_are_exact`. | Shared rule owner, schema family, repair or wire vocabulary changes: include the full schema catalogue and affected Lead/specialist/synthesis producers. |
+| Apply or default-budget boundary | Its matching-Apply or default-budget method. | Document identity, candidate inputs, Confirm or chronology changes: include the real document workflow and affected public history/replay/restart checks. Binder spies cannot replace the actual host transition. |
+| Display of unchanged values | The affected view/controller checks. | Controls, DTOs, codecs or forwarded selections change: include their source and host boundaries. |
+
+For multiple responsibilities, deduplicate the conservative union. For unknown
+impact, widen the selection rather than infer safety from import neighbors.
+If no existing focused witness reaches a new host path, implement that witness
+through valid public setup; a pure helper pass cannot certify the missing path.
+Record selected/unselected IDs, relevant source changes, setup/queue/execution
+time and actual fixture submissions. Final full-CI requirements are unchanged.
