@@ -742,3 +742,5 @@ helper1547=151215행이며 상한151216으로1행 여유를 유지한다. 전용
 #938 마지막 소유 관계 관측44행의 편성을 먼저 고정한다. 최신 통합raw149680에44행을 더한149724+helper1547=151271이며 임시 상한151272로1행 여유를 둔다. 기존cap-map/ID/subTest/시간과 원래147순서는 유지한다. 이 helper는 실제 한도·정확한Confirm 제안·unique budget anchor의 scalar 관계만 관측하고 진단 후 제거한다.
 
 #938의 취소된 Draft guard는 GitHub가 needs평가 전에 취소한 완료 job의 이름을 조건식 원문으로 남기는 경우도 exact일치로 식별한다. 알려진 완료 marker존재·completed·나머지 모든job종료 조건은 그대로 요구하며, 부분 job목록·누락/유사 marker·stale attempt·실행중 peer는 완료로 오인하지 않는다.75분 deadline·기존취소/force-cancel예약·check명·concurrency는 바꾸지 않는다. 실제 취소 실행42399269691에서 다른 job종료 후 약61분 잔류를 관측했고, 실제guard JavaScript의 가상시각8사례에서 기존3570초잔류가 해당완료입력에만 즉시종료로 바뀌는 것을 확인했다. 전체테스트통과 증거는 아니다.
+
+#938의 마지막 예산 원인은 과거 비용 오합산이 아니라 미래 준비1+최종검토4의 정상 예약이었다. 사용6인 B는 front1만 남아2-call 그룹을 시작하지 못한다. B2는 정확한0호출/REQUEST_NOT_SUBMITTED/기존scope유지를 검사하고, 원래혼합premise의긍정검증과실제6호출은새구조화선택C@1로옮긴다. 총provider모의호출은증가하지않는다. 임시observer90행제거와정정31행으로raw149665+helper1547=151212, 최종상한151213의1행여유를고정한다. 기존2542ID/전체cap-map/subTest/147상대순서/161병렬대상/5shard/4worker/18000·3600초를유지한다.
