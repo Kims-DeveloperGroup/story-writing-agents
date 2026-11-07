@@ -12432,18 +12432,30 @@ class StoryRuntime:
                 origin = next((event for event in controls if event.event_id == transition.payload.receipt.origin_event_id), None)
                 if origin is not None and type(origin.payload) is CollaborationLeadTaskDecisionPayload:
                     document_selection = origin.payload.document_selection
+        infer_document_context = adoption_capture is None and (
+            premise_capture is None or premise_capture.selection.authoring_task_id is not None)
+        retained_node = (None if planning_projection is None or planning_projection.current_proposal is None
+                         else planning_projection.current_proposal.document_node)
+        retained_scope = None
+        if (document_node is None and infer_document_context and retained_node is not None
+                and not discussion_only and task_transition_event_id is None):
+            retained_scope = self._authoring_tasks(
+                await run_blocking(self._session_authoring_events, session_id)).get(retained_node.task_ref.task_id)
+            infer_document_context = retained_scope is not None
         selected_path = None
         if document_selection is not None:
             _, selected_node = await run_blocking(self._prepare_document_selection, session_id, document_selection)
             selected_path = selected_node.target_path
-        if document_node is None and not discussion_only and task_transition_event_id is None and planning_projection is not None:
+        if (document_node is None and infer_document_context and not discussion_only
+                and task_transition_event_id is None and planning_projection is not None):
             retained = planning_projection
             if (retained.current_proposal is not None
                     and retained.confirmation_decision is CollaborationConfirmationDecision.CONFIRM
                     and (retained.discussion_context is None or (retained.discussion_context.action in {LeadTaskAction.RESUME, LeadTaskAction.NEW_TASK}
                         and retained.current_proposal.document_node is not None
                         and retained.discussion_context.target_task_id == retained.current_proposal.document_node.task_ref.task_id))):
-                document_node = retained.current_proposal.document_node
+                if retained_scope is not None and retained_scope.task_revision == retained_node.task_ref.task_revision:
+                    document_node = retained_node
         if document_node is not None:
             await run_blocking(self._validate_document_node, session_id, document_node)
 
@@ -12578,7 +12590,7 @@ class StoryRuntime:
             document_budget_task_id = document_node.budget_lineage_ref.task_id if document_node is not None else None
             if document_selection is not None and task_receipt is not None:
                 document_budget_task_id = task_receipt.target_task_id
-            if (document_goal is None and not discussion_only and task_transition_event_id is None
+            if (document_goal is None and infer_document_context and not discussion_only and task_transition_event_id is None
                     and planning_projection is not None and len(planning_projection.document_plans) == 1):
                 document_goal = planning_projection.document_plans[0].plan.ref
                 if len(planning_projection.available_tasks) == 1:
@@ -17276,6 +17288,14 @@ class StoryRuntime:
             spent = sum(1 for item in prefix if item.step_id == source.step_id
                         and type(item.payload) is CollaborationProviderCallPayload
                         and item.payload.state is CollaborationProviderCallState.SUBMITTED)
+            if source.document_node is not None:
+                spent, _, _ = document_lineage_cost(prefix, source.document_node, current_step_id=source.step_id)
+                if source.document_node.budget_lineage_ref.conversation_id != event.conversation_id:
+                    declaration = next(item for item in prefix if item.payload is source)
+                    declared_calls, _, _ = document_lineage_cost(
+                        tuple(item for item in prefix if item.sequence <= declaration.sequence),
+                        source.document_node, current_step_id=source.step_id)
+                    spent += max(0, source.budget.physical_calls_spent - declared_calls)
             if rounds != 1 or authoring_capture_identity(scope, source.basis) != authoring_capture_identity(source.authoring_scope, source.basis):
                 raise BackendProtocolError("completed authoring source capture or round is not current")
             projected = replace(projected, current_step_id=source.step_id, current_proposal=source,
