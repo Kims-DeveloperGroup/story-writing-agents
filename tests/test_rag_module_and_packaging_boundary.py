@@ -1001,6 +1001,19 @@ class RagModuleBoundaryTests(unittest.TestCase):
 
 
 class RagPackagingBoundaryTests(unittest.TestCase):
+    def _complete_viewer_git_fixture(self, root):
+        viewer_git_directory = root / "viewer-upgrade.git"
+        source_commands = (
+            ["git", "clone", "--bare", _JSONL_VIEWER_REPOSITORY, str(viewer_git_directory)],
+            ["git", "--git-dir", str(viewer_git_directory), "cat-file", "-e", _OLD_JSONL_VIEWER_PIN + "^{commit}"],
+            ["git", "--git-dir", str(viewer_git_directory), "cat-file", "-e", _JSONL_VIEWER_PIN + "^{commit}"],
+            ["git", "--git-dir", str(viewer_git_directory), "fsck", "--full", "--no-dangling"],
+        )
+        for command in source_commands:
+            prepared = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertEqual(prepared.returncode, 0, f"{command!r}\n{prepared.stdout}\n{prepared.stderr}")
+        return viewer_git_directory
+
     def _assert_process_succeeded(self, result: subprocess.CompletedProcess[str], stage: str) -> None:
         self.assertEqual(
             result.returncode,
@@ -1521,7 +1534,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 story_project,
                 distribution,
             )
-            viewer_git_directory = _gitlink_git_directory("vendor/jsonl-viewer")
+            viewer_git_directory = self._complete_viewer_git_fixture(root)
             build_support = root / "build-support"
             _copy_setuptools_build_support(build_support)
             install_environment = os.environ.copy()
@@ -1773,16 +1786,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             python = environment / "bin" / "python"
             build_support = root / "build-support"
             _copy_setuptools_build_support(build_support)
-            viewer_git_directory = root / "viewer-upgrade.git"
-            source_commands = (
-                ["git", "clone", "--bare", _JSONL_VIEWER_REPOSITORY, str(viewer_git_directory)],
-                ["git", "--git-dir", str(viewer_git_directory), "cat-file", "-e", _OLD_JSONL_VIEWER_PIN + "^{commit}"],
-                ["git", "--git-dir", str(viewer_git_directory), "cat-file", "-e", _JSONL_VIEWER_PIN + "^{commit}"],
-                ["git", "--git-dir", str(viewer_git_directory), "fsck", "--full", "--no-dangling"],
-            )
-            for command in source_commands:
-                prepared = subprocess.run(command, text=True, capture_output=True, check=False)
-                self.assertEqual(prepared.returncode, 0, f"{command!r}\n{prepared.stdout}\n{prepared.stderr}")
+            viewer_git_directory = self._complete_viewer_git_fixture(root)
             install_environment = os.environ.copy()
             for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
                 install_environment.pop(name, None)
