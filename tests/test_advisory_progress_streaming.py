@@ -2320,14 +2320,14 @@ print(json.dumps([data.hex(), stamps]), flush=True)
             started = time.monotonic()
             writer = process_progress._Writer(descriptor)
             writer.begin({"epoch": 1, "origin": started, "columns": 80, "height": 24,
-                          "owned_rows": 0, "cursor_row": 0, "cursor_column": 0})
+                          "owned_rows": 0, "cursor_row": 0, "cursor_column": 0, "full_screen": True})
             while writer.pending: writer.write()
-            writer.update(self._process_snapshot(started, "OLD_PREVIEW").record(1, 1))
+            writer.update(dict(self._process_snapshot(started, "OLD_PREVIEW").record(1, 1), full_screen=True))
             writer.tick(started)
             while writer.pending: writer.write()
             fcntl.ioctl(descriptor, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 47, 0, 0))
             fresh = process_progress.ProgressSnapshot(47, 12, ("", "CARD_VISIBLE", "PREVIEW_VISIBLE"),
-                2, 0, 0, "", self._process_snapshot(started).content)
+                2, 0, 0, "", self._process_snapshot(started).content, full_screen=True)
             writer.update(fresh.record(1, 2))
             for tick in range(1, 4):
                 writer.tick(started + tick * .08)
@@ -2337,6 +2337,7 @@ print(json.dumps([data.hex(), stamps]), flush=True)
         _result, captured, _stamps = self._capture_progress_process(resize_before_tick)
         self.assertIn(b"CARD_VISIBLE", captured)
         self.assertIn(b"PREVIEW_VISIBLE", captured)
+        self.assertIn(b"\x1b[H\x1b[2J", captured)
         from tests._external_view_support import PortableTerminalScreen
         screen = PortableTerminalScreen(width=47, height=12)
         screen.primary[:] = [[" "] * 47 for _ in range(12)]; screen.history.clear(); screen.cursor = (0, 0)
@@ -2652,7 +2653,7 @@ print(json.dumps([data.hex(), stamps]), flush=True)
             self.assertTrue(inspector_called[0]["keep_frame"])
 
     def test_nested_scroll_inspector_focus_cycling_and_frame_retention_on_success(self) -> None:
-        """Publish completed prose once and review retained frames without losing input."""
+        """Reflow retained conversation frames without losing reviewed or draft input."""
         from dataclasses import replace
         from tests._external_view_support import recording_driver
         from story_writing_agents.interactive_terminal._model import Message, MessagePresentation, SemanticRole
@@ -2703,7 +2704,6 @@ print(json.dumps([data.hex(), stamps]), flush=True)
         for height, paragraphs, release in ((60, 2, "\r"), (24, 80, "\r"), (16, 80, "\x1b"), (16, 80, "\x1b[17~"), (24, 80, "")):
             with recording_driver(height=height, response="none") as rig, rig.driver.input_session():
                 driver, timeline = rig.driver, rig.driver._output_history
-                native = lambda: "\n".join(rig.screen.history + ["".join(row) for row in rig.screen.primary])
                 def snapshot():
                     return tuple((e.identity, e.origin, e.component, tuple((f.identity, f.view.view_id, f.view.buffer_lines) for f in e.frames)) for e in timeline.entries)
                 rig.observe = snapshot
@@ -2727,14 +2727,31 @@ print(json.dumps([data.hex(), stamps]), flush=True)
                     if label == "A":
                         first = snapshot()
                 saved = snapshot()
-                for label, row in ((label, row) for label in "AB" for row in range(paragraphs)):
-                    self.assertEqual(len(re.findall(rf"\bLEAD_{label}_{row}\b", native())), 1, (height, label, row))
+                self.assertTrue(rig.screen.alternate)
+                for label in "AB":
+                    prose, = (e.component.content for e in timeline.entries if e.component and f"LEAD_{label}_0" in e.component.content)
+                    self.assertTrue(all(prose.count(f"LEAD_{label}_{row} ") == 1 for row in range(paragraphs)))
                 self.assertEqual([entry[1] for entry in saved], [saved[0][1]] * 3 + [saved[3][1]] * 3)
                 self.assertNotEqual(saved[0][1], saved[3][1])
                 navigation = "\t\x1b[H\x1b[<65;100;1M\x1b[H\t\x1b[B" + release + "x\r"
                 rig.phase, rig.review_input = "review", navigation
-                draft = "draft" if release else "draft" + " word" * 180
-                rig.incoming.characters.extend((draft + "\x1b[D\x1b[D\x1b[17~").encode())
+                draft = "draft界" if release else "draft" + " word" * 180
+                rig.incoming.characters.extend((draft + "\x1b[D\x1b[D").encode())
+                widths = [43, 7, 35, 100] if paragraphs == 2 else []
+                def poll(read, write, error, timeout):
+                    if not rig.incoming.characters:
+                        if widths:
+                            if rig.screen.width == 43:
+                                self.assertIn("main> draft界", rig.text())
+                                self.assertIn("╰", rig.text()); self.assertIn("╯", rig.text())
+                            self.assertEqual(snapshot(), saved)
+                            rig.screen.resize(widths.pop(0), height)
+                            return (), write, error
+                        self.assertEqual(rig.screen.width, 100)
+                        if paragraphs == 2: self.assertIn("main> draft界", rig.text())
+                        rig.incoming.characters.extend(b"\x1b[17~")
+                    return read, write, error
+                rig.poll = poll
                 expected = draft[:-2] + "x" + draft[-2:]
                 self.assertEqual(driver.read_main_line("main> ", lambda _: ()), expected)
                 inspections = [read for read in rig.reads if read.phase.startswith("inspect_") and read.character == "\r"]
@@ -2747,23 +2764,24 @@ print(json.dumps([data.hex(), stamps]), flush=True)
                 pointer = next(index for index, read in enumerate(review) if read.character == "M")
                 self.assertEqual(review[pointer + 1].text != review[pointer].text, paragraphs == 80)
                 self.assertFalse(rig.queried)
-                self.assertFalse(rig.screen.alternate)
+                self.assertTrue(rig.screen.alternate)
                 self.assertEqual(snapshot(), saved)
                 self.assertEqual(driver._history_state.entries, ("USER_A", "USER_B", expected))
                 self.assertEqual((list(driver._typeahead_buffer), rig.incoming.characters), ([], []))
-                self.assertEqual(tuple(rig.screen.history), rig.review_history)
-                for label in "AB":
-                    self.assertEqual(len(re.findall(rf"\bLEAD_{label}_{paragraphs - 1}\b", native())), 1)
+                self.assertEqual(rig.screen.history, [])
+                self.assertEqual("".join(rig.output.records).count("\x1b[?1049h"), 1)
                 rig.fallback.assert_not_called()
+            self.assertFalse(rig.screen.alternate)
             self.assertEqual((rig.termios.events.count("activate"), rig.termios.attributes), (rig.termios.events.count("restore"), rig.termios.original))
         for failure, key in ((EOFError, ""), (KeyboardInterrupt, "\x03")):
             with recording_driver("draft\x1b[17~", response="none") as rig, rig.driver.input_session():
                 rig.driver.write_component(Message("Lead", "NATIVE_SENTINEL"))
                 rig.review_input = key
                 with self.assertRaises(failure): rig.driver.read_main_line("main> ", lambda _: ())
-                self.assertFalse(rig.screen.alternate)
+                self.assertTrue(rig.screen.alternate)
                 self.assertNotIn("main> draft", rig.text())
-                self.assertEqual(("\n".join(rig.screen.history) + rig.text()).count("NATIVE_SENTINEL"), 1)
+                self.assertEqual(rig.text().count("NATIVE_SENTINEL"), 1)
+            self.assertFalse(rig.screen.alternate)
             self.assertEqual(rig.termios.attributes, rig.termios.original)
 
     def test_provide_scroll_state_on_success_sets_idle_state_and_does_not_record_error(self) -> None:

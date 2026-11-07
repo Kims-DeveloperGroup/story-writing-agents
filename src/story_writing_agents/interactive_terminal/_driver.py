@@ -534,7 +534,7 @@ def _timeline_borrowed_async(operation):
     """Keep the async live composer within the same borrowed-surface lifecycle."""
     @wraps(operation)
     async def run(self, *args, **kwargs):
-        with self._input_sources.suspended(), self._suspend_timeline():
+        with self._input_sources.suspended(), self._suspend_timeline(preserve_screen=True):
             return await operation(self, *args, **kwargs)
     return run
 
@@ -617,6 +617,7 @@ class RawTerminalDriver:
         "_history_state",
         "_output_history",
         "_timeline_enabled",
+        "_timeline_screen_active",
         "_timeline_rows",
         "_timeline_cursor_row",
         "_timeline_origin",
@@ -710,6 +711,7 @@ class RawTerminalDriver:
         self._history_state = MainInputHistoryState()
         self._output_history = ConversationTimeline()
         self._timeline_enabled = False
+        self._timeline_screen_active = False
         self._timeline_rows = 0
         self._timeline_cursor_row = 0
         self._timeline_origin: int | None = None
@@ -772,6 +774,8 @@ class RawTerminalDriver:
                         live=configuration is not None,
                     )
                     self._timeline_enabled = configuration is not None
+                    if configuration is not None:
+                        self._set_timeline_screen(True)
                     self._progress_notice_emitted = False
                     if (configuration is not None and os.name == "posix"
                             and type(self._output_stream) is io.TextIOWrapper
@@ -808,6 +812,11 @@ class RawTerminalDriver:
                             self._set_history_review_mode(self._timeline_review_owner, False)
                         except BaseException as failure:
                             review_failure = review_failure or failure
+                    if self._timeline_screen_active:
+                        try:
+                            self._set_timeline_screen(False)
+                        except BaseException as failure:
+                            review_failure = review_failure or failure
                     if configuration is not None:
                         _restore_terminal_or_raise(configuration, active_failure or review_failure)
                     if review_failure is not None and active_failure is None:
@@ -822,6 +831,7 @@ class RawTerminalDriver:
                     self._input_session_active = False
                     self._output_history = ConversationTimeline()
                     self._timeline_enabled = False
+                    self._timeline_screen_active = False
                     self._timeline_rows = self._timeline_cursor_row = 0
                     self._timeline_origin = None
                     self._timeline_geometry = None
@@ -953,13 +963,39 @@ class RawTerminalDriver:
             self._timeline_operation = previous
             self._paint_timeline()
 
+    def _set_timeline_screen(self, active: bool) -> None:
+        """Own one conversation screen, preserving the caller's primary screen."""
+        if self._timeline_screen_active == active:
+            return
+        if self._progress_output_blocked:
+            raise OSError("progress writer termination is unconfirmed")
+        if self._progress_process is not None and self._progress_process.active:
+            raise RuntimeError("conversation screen is lent to progress")
+        if active:
+            # Mark acquisition before writing so a partial enter still receives
+            # the matching exit during the owning session's cleanup.
+            self._timeline_screen_active = True
+            self._write_live_text(_VIEWER_SCREEN_ENTER)
+        else:
+            self._write_live_text(_MOUSE_DISABLE + _VIEWER_SCREEN_EXIT)
+            self._timeline_screen_active = False
+        self._timeline_rows = self._timeline_cursor_row = 0
+        self._timeline_origin = 1 if active else None
+        self._timeline_geometry = None
+
     def _render_inline_rows(self, lines: list[str] | tuple[str, ...], cursor_row: int, cursor_column: int = 0) -> None:
         """Replace only owned rows relative to the actual current cursor."""
         if self._timeline_failure is not None:
             raise self._timeline_failure
         geometry = self._text_viewer_geometry(self.capabilities().width, bounded_height=False)
         changed_geometry = self._timeline_geometry is not None and geometry != self._timeline_geometry
-        if changed_geometry:
+        if self._timeline_screen_active:
+            # This screen belongs entirely to the conversation. Address it from
+            # home after every paint, independently of terminal reflow.
+            prefix = _VIEWER_SCREEN_REDRAW
+            self._timeline_cursor_row = 0
+            self._timeline_origin = 1
+        elif changed_geometry:
             # Terminal reflow invalidates old physical offsets. Establish a fresh
             # surface instead of moving upward through unrelated terminal rows.
             prefix = ("\x1b[H\x1b[2J" if self._timeline_review_owner is not None
@@ -1007,7 +1043,7 @@ class RawTerminalDriver:
         """Append the completed prefix once, leaving native scrollback immutable."""
         if self._timeline_failure is not None:
             raise self._timeline_failure
-        if self._timeline_review_owner is not None:
+        if self._timeline_screen_active or self._timeline_review_owner is not None:
             return
         entries = self._output_history.publication_rows(self._timeline_published, capabilities)
         if not entries:
@@ -1046,6 +1082,9 @@ class RawTerminalDriver:
         available = max(0, min(height, _MAX_VIEWER_HEIGHT) - 1)
         layout = self._output_history.render(capabilities, available, after_identity=self._timeline_published)
         if capabilities.width < 8 or available == 0:
+            if self._timeline_screen_active:
+                self._render_inline_rows((), 0)
+                return True
             # An empty managed layout must never consume a semantic message.
             # Reflow made the previous origin uncertain: release interaction and
             # move only down to fresh linear output, without stale upward clears.
@@ -1083,13 +1122,16 @@ class RawTerminalDriver:
                 self._paint_timeline()
 
     @contextmanager
-    def _suspend_timeline(self) -> Iterator[None]:
+    def _suspend_timeline(self, *, preserve_screen: bool = False) -> Iterator[None]:
         """Lend a clean surface and restore only fresh physical geometry afterwards."""
         if self._timeline_review_owner is not None:
             self._set_history_review_mode(self._timeline_review_owner, False)
         active = (self._timeline_enabled
                   and self._timeline_suspended == self._timeline_inline_depth)
-        if active and self._timeline_rows:
+        screen = active and self._timeline_screen_active and not preserve_screen
+        if screen:
+            self._set_timeline_screen(False)
+        elif active and self._timeline_rows:
             self._render_inline_rows((), 0)
         self._timeline_suspended += 1
         try:
@@ -1097,6 +1139,8 @@ class RawTerminalDriver:
         finally:
             self._timeline_suspended -= 1
             if active:
+                if screen:
+                    self._set_timeline_screen(True)
                 self._timeline_rows = self._timeline_cursor_row = 0
                 self._timeline_origin = None
                 self._paint_timeline()
@@ -1239,7 +1283,7 @@ class RawTerminalDriver:
             lines = [" " + content.header(time.monotonic())] + (lines[-(available - 1):] if available > 1 else [])
             header_row = 0
         return ProgressSnapshot(width, height, tuple(lines), len(lines) - 1, 0,
-                                header_row, " ", content)
+                                header_row, " ", content, self._timeline_screen_active)
 
     def _publish_process_progress(self, *, begin: bool = False) -> bool:
         owner = self._progress_process
@@ -4584,9 +4628,25 @@ class RawTerminalDriver:
             palette_renderer,
             input_frame_provider,
         )
+
+        def before_read() -> None:
+            ready, _, _ = _select.select(
+                (configuration.input_descriptor,), (), (), _PROGRESS_INTERVAL_SECONDS,
+            )
+            if not ready:
+                raise LiveInputIdle
+
         while True:
             try:
-                character = self._read_character()
+                character = self._read_character(
+                    before_read=(before_read if self._timeline_screen_active
+                                 and display_state.history_enabled else None),
+                )
+            except LiveInputIdle:
+                geometry = self._text_viewer_geometry(configuration.width, bounded_height=False)
+                if geometry != self._timeline_geometry:
+                    redraw(control_state)
+                continue
             except EOFError:
                 display_state.escape_sequence = None
                 raise
@@ -4792,9 +4852,10 @@ class RawTerminalDriver:
             return state, None, True
         self._set_history_review_mode(display_state, False)
         try:
-            updated = self._run_live_reference_activation(
-                state, outcome, configuration, display_state, capabilities, bindings,
-            )
+            with self._suspend_timeline():
+                updated = self._run_live_reference_activation(
+                    state, outcome, configuration, display_state, capabilities, bindings,
+                )
         finally:
             if display_state.history_enabled:
                 display_state.history_anchored = False
@@ -5403,6 +5464,25 @@ class RawTerminalDriver:
         """Lend an alternate screen without publishing review copies to scrollback."""
         width, height = self._text_viewer_geometry(self.capabilities().width, bounded_height=False)
         active = active and self._output_history.has_entries and width >= 9 and height >= 3
+        if self._timeline_screen_active:
+            entering = active and not state.history_review_active
+            state.history_review_active = active
+            state.history_primary_surface = None
+            self._timeline_review_owner = state if active else None
+            if active:
+                if entering:
+                    capabilities = _capabilities_with_width(self.capabilities(), max(1, width - 1))
+                    state.history_layout = self._output_history.render(
+                        capabilities, max(1, min(height, _MAX_VIEWER_HEIGHT) - 2),
+                    )
+                    self._output_history.focus_visible(state.history_layout)
+                state.history_top = 1
+            else:
+                self._output_history.focused_id = None
+                self._output_history.timeline_focused = False
+                self._output_history.reveal_latest()
+            self._set_history_pointer_capture(state, active)
+            return
         if not active:
             state.history_review_active = False
             self._output_history.focused_id = None
