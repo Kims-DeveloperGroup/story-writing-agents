@@ -2134,10 +2134,41 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             proposal.update(allocation)
             return lead_fixture_response(call, lead_fixture_result(native), family=0)
         self.backend.enqueue(prepare_historical)
-        with mock.patch.object(self.runtime, "_close_failed_lead_attempt", wraps=self.runtime._close_failed_lead_attempt) as preparation_close:
+        import sys
+        preparation_results, preparation_closures, preparation_reads = [], [], []
+        original_preparation = self.runtime._run_lead_provider_locked
+        original_finalize = self.runtime._finalize_recommendation_failure_locked
+        original_read = self.runtime._read_lead_history
+        async def observe_preparation(*args, **kwargs):
+            result = await original_preparation(*args, **kwargs)
+            if len(preparation_results) < 2: preparation_results.append((result.kind, result.next_action, None if result.trace is None else result.trace.origin, result.message[:1200], result.validation_details[:6], result.proposal is not None, None if result.proposal is None else result.proposal.authoring_scope == fresh_scope))
+            return result
+        def observe_finalization(*args, **kwargs):
+            result = original_finalize(*args, **kwargs)
+            if len(preparation_closures) < 2: preparation_closures.append(None if result is None else (result.kind, result.state, result.next_action, result.message[:200]))
+            return result
+        def observe_preparation_read(*args, **kwargs):
+            value = original_read(*args, **kwargs)
+            if len(preparation_reads) < 2 and sys._getframe(1).f_code is original_finalize.__func__.__code__:
+                events, projection, failure = value
+                start = None if projection is None else projection.current_recommendation_start
+                current_request = None if projection is None else projection.current_recommendation_request
+                start_events = None if events is None or start is None else tuple(event for event in events if event.event_id == start.start_event_id)
+                exact_failures = None if start_events is None or len(start_events) != 1 else tuple(event for event in events if type(event.payload) is c.CollaborationLeadOutcomeFailurePayload and event.turn_id == start_events[0].turn_id and event.step_id == start_events[0].step_id and event.sequence >= start_events[0].sequence)
+                validation = getattr(failure, "validation_details", ())
+                preparation_reads.append((
+                    failure is not None, None if failure is None else type(failure).__name__, None if failure is None else str(failure)[:600], tuple(str(item)[:200] for item in validation[:3]) if isinstance(validation, (tuple, list)) else (),
+                    events is not None, projection is not None, None if projection is None or projection.current_recommendation_state is None else projection.current_recommendation_state.value, None if projection is None else start is not None,
+                    None if current_request is None else current_request.request_event_id == request.request_event_id, None if start is None else start.request_event_id == request.request_event_id, None if start_events is None else len(start_events),
+                    None if exact_failures is None else len(exact_failures), None if exact_failures is None else tuple(event.payload.code.value for event in exact_failures[:3])))
+            return value
+        with (
+            mock.patch.object(self.runtime, "_run_lead_provider_locked", new=observe_preparation),
+            mock.patch.object(self.runtime, "_finalize_recommendation_failure_locked", new=observe_finalization),
+            mock.patch.object(self.runtime, "_read_lead_history", new=observe_preparation_read),
+        ):
             prepared = await self.runtime.decide_lead_recommendation(recommendation_decision(suggested))
-        self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, (prepared.message[:1200], prepared.state, prepared.validation_details[:6],
-            tuple((type(failure).__name__, str(failure)[:600]) for record in preparation_close.call_args_list[:3] if (failure := record.kwargs.get("failure")) is not None)))
+        self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, (prepared.message[:1200], prepared.state, prepared.validation_details[:6], tuple(preparation_results), tuple(preparation_closures), tuple(preparation_reads)))
         self.assertEqual(prepared.proposal.authoring_scope, fresh_scope)
         self.assertEqual(prepared.proposal.budget.rounds_spent, 0)
         self.assertFalse(any(event.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for event in self.history(prior)[len(original_history):]))
