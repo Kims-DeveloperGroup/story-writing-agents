@@ -187,6 +187,44 @@ review, Apply or Commit completed. See [provider validation and repair](../refer
 Ordinary Lead and adoption obtain the assessment through their existing Lead front. Direct specialist and consensus AUTHORING API intakes accept an explicit `authoring_assessment`; absent or insufficient input returns `AuthoringAdmissionNeeded` with actionable guidance and available source IDs. Callers use those offered IDs and the retained actual input instead of inventing receipts. Assessment input grants no confirmation or write authority. Review-only work keeps its existing exact-input contract, and drafting still proceeds through specialist confirmation, all required final-candidate reviews, Apply and Commit.
 
 
+## Authoring assessment field meanings
+
+An `authoring_assessment` describes the declared work using actual supplied
+sources. It is untrusted semantic input: the runtime still qualifies source
+identity, currentness, task scope and readiness. It grants no Confirm, specialist
+execution, Apply or Commit authority.
+
+| Field | What the Agent should record |
+| --- | --- |
+| `status` | The assessment result for the declared work: sufficient evidence and decisions, specific information still needed, or grounded analysis only. A status label does not bypass host qualification. |
+| `foundations` | The story facts or source material needed for this work, each justified by actual offered sources. A procedural “continue” request does not replace the underlying story facts. |
+| `direction` | The USER's intended result, purpose and boundaries. Retain established direction when the latest input asks to proceed. |
+| `creative_scope` | The USER-grounded boundary between permitted invention and protected material. An explicit instruction to invent nothing is a definite boundary, not an undecided permission. |
+| `allowed_creative_actions` | Concrete actions within that boundary, such as organizing supplied events or improving wording without adding facts. |
+| `protected_constraints` | Facts, meanings and prohibitions the work must preserve. An Agent-authored constraint does not itself establish USER permission. |
+| `decisions` | The choices required for the deliverable, distinguishing supplied choices, actual USER delegation and unresolved choices. |
+| `missing_information` | Concrete unresolved foundations or decisions, or genuinely unavailable source evidence, that prevent the declared work. Distinguish those gaps from an explanation of the current input or a plan to retrieve existing records. |
+| `rationale` | Why the actual evidence, covered decisions and remaining gaps support the selected status. It does not replace the other structured fields. |
+
+For evidence, `requirement` names the condition, `source_ids` selects actual
+runtime-offered inputs or completed READ evidence, and `justification` explains
+how those sources support the condition. For a decision, `decision` names the
+choice, `coverage` distinguishes `supplied`, `delegated` and `missing`, and
+`explanation` explains that classification. Never invent a source ID or promote
+a Lead summary, rejected response or READ receipt into USER creative permission.
+
+Reuse supplied facts. If the available tools and workflow can retrieve and bind
+existing records, do that before declaring them missing; never claim acquisition
+without the actual source. If access or a material USER choice prevents
+acquisition, name the unavailable evidence, its effect on the work and the
+specific action needed. “The latest input asks to proceed” is context, and
+“connect the earlier records” is a preparation task; neither alone identifies a
+new fact the USER must supply.
+
+These meanings do not change the permitted schema values or the runtime's
+admission rules. Preparing a recommendation, confirming its preparation,
+executing specialists and applying a document remain distinct steps.
+
 ## Editing goals and protected conditions
 
 The Lead's shared editorial brief distinguishes explicit change prohibitions,
