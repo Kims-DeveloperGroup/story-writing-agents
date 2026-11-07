@@ -592,12 +592,12 @@ class LiveEditingTests(unittest.TestCase):
     def test_insert_cursor_delete_and_unknown_sequences_return_exact_text(self) -> None:
         characters = "".join(
             (
-                "abcd",
+                "A한가Z",
                 "\x1b[A",  # ignored up
                 "\x1b[D",
-                "\x1b[D",
-                "\x7f",  # remove b
-                "\x1b[3~",  # remove c
+                "\x1b[D\x1b[D\x1b[C",
+                "\x7f",  # remove the complete NFD syllable
+                "\x1b[3~",  # remove the NFC syllable
                 "\x1b[H",
                 "\x1b[C",
                 "X",
@@ -612,7 +612,7 @@ class LiveEditingTests(unittest.TestCase):
         termios_double = FakeTermios()
 
         with capable_terminal(termios_double):
-            self.assertEqual(editor.read_line("story[lobby]> "), "aXYd")
+            self.assertEqual(editor.read_line("story[lobby]> "), "AXYZ")
 
         fallback.assert_not_called()
         self.assertEqual(input_stream.read_calls, len(characters.encode("utf-8")))
@@ -644,7 +644,7 @@ class LiveEditingTests(unittest.TestCase):
                 fallback.assert_not_called()
 
     def test_unicode_buffer_is_returned_exactly_without_normalization(self) -> None:
-        value = "/search 한글 e\u0301 🌊\u2028"
+        value = "/search 한글 한 e\u0301 🌊\u2028"
         editor, _input, output, fallback = make_editor(value + "\n")
         _sources, adapter, _baseline, _english = _input_sources(driver=editor._driver)
         adapter.select_source.side_effect = TimeoutError("input service")
@@ -655,33 +655,33 @@ class LiveEditingTests(unittest.TestCase):
         fallback.assert_not_called()
         adapter.select_source.assert_called()
         rendered = "".join(output.records)
-        self.assertIn("한글 e\u0301 🌊", rendered)
+        self.assertIn("한글 한 e\u0301 🌊", rendered)
+        self.assertNotIn("한", rendered)
         self.assertIn("\\u2028", rendered)
         self.assertNotIn("\u2028", rendered)
 
     def test_widths_wrap_at_one_reserved_column_with_fixed_redraw(self) -> None:
-        prompt = "story> "
-        value = "x" * 90
+        from tests._external_view_support import recording_driver
+        prompt, value = "story> ", "x" * 90 + "한한Z"
+        characters = value + "\x1b[D" * 2 + "X\x7f\x1b[3~\r"
         for width in (20, 40, 80):
-            with self.subTest(width=width):
-                editor, _input, output, fallback = make_editor(value + "\n")
-                with capable_terminal(FakeTermios(), width=width):
-                    self.assertEqual(editor.read_line(prompt), value)
-                render_width = width - 1
-                text = prompt + value
-                lines = [
-                    text[index : index + render_width]
-                    for index in range(0, len(text), render_width)
-                ]
-                expected = "".join(
-                    (
-                        "\r",
-                        "\x1b[A" * (len(lines) - 1),
-                        "\r" + "\x1b[2K\x1b[1B\r" * (len(lines) - 1) + "\x1b[2K" + "\x1b[A" * (len(lines) - 1) + "\r\r",
-                    )
-                )
-                self.assertEqual(output.records[-1], expected)
-                fallback.assert_not_called()
+            with self.subTest(width=width), recording_driver(characters, width=width, response="none") as rig:
+                rig.observe = lambda: (tuple(tuple(row) for row in rig.screen.screen), "".join(rig.output.records).count("\x1b[2J"))
+                with rig.driver.input_session():
+                    self.assertEqual(rig.driver.read_main_line(prompt, lambda _: ()), "x" * 90 + "한Z")
+                    edits = [read for read in rig.reads if read.character in {"\x7f", "~", "\r"}]
+                    self.assertEqual(len(edits), 3)
+                    for read, suffix in zip(edits, ("한X한Z", "한한Z", "한Z")):
+                        self.assertIn("x" * 90 + suffix, "".join(read.text.split()))
+                        target = "Z" if read.character == "\r" else "한"
+                        sentinel = max((r, c) for r, row in enumerate(read.data[0]) for c, cell in enumerate(row) if cell == target)
+                        self.assertEqual(read.cursor, sentinel)
+                    committed = edits[-1]
+                    self.assertTrue(all(row[-1] == " " for row in committed.data[0]))
+                    self.assertGreater(sum(any(cell != " " for cell in row) for row in committed.data[0]), 1)
+                    self.assertEqual({read.data[1] for read in rig.reads}, {rig.reads[0].data[1]})
+                self.assertEqual(rig.termios.attributes, rig.termios.original)
+                rig.fallback.assert_not_called()
 
     def test_dynamic_text_is_sanitized_and_only_fixed_controls_are_emitted(
         self,
@@ -699,7 +699,7 @@ class LiveEditingTests(unittest.TestCase):
         self.assertNotIn("\x00", rendered)
         self.assertNotIn("\u2060", rendered)
         residue = rendered
-        for fixed_control in ("\x1b[J", "\x1b[2K", "\x1b[1B", "\x1b[A", "\x1b[C", "\r"):
+        for fixed_control in ("\x1b[J", "\x1b[K", "\x1b[2K", "\x1b[1B", "\x1b[A", "\x1b[C", "\r"):
             residue = residue.replace(fixed_control, "")
         self.assertNotIn("\x1b", residue)
 

@@ -948,19 +948,19 @@ class PureControlFoundationTests(unittest.TestCase):
     def test_line_input_transitions_edit_commit_and_preserve_terminal_events(
         self,
     ) -> None:
-        state = LineInputState("ac", 1)
+        state = LineInputState("A한가Z", 2)
         state, outcome = transition_line_input(
             state,
             KeyEvent(KeyKind.TEXT, text="b"),
         )
-        self.assertEqual((state, outcome), (LineInputState("abc", 2), None))
+        self.assertEqual((state, outcome), (LineInputState("A한b가Z", 5), None))
         expected_states = (
-            (KeyKind.LEFT, LineInputState("abc", 1)),
-            (KeyKind.BACKSPACE, LineInputState("bc", 0)),
-            (KeyKind.DELETE, LineInputState("c", 0)),
-            (KeyKind.RIGHT, LineInputState("c", 1)),
-            (KeyKind.HOME, LineInputState("c", 0)),
-            (KeyKind.END, LineInputState("c", 1)),
+            (KeyKind.LEFT, LineInputState("A한b가Z", 4)),
+            (KeyKind.BACKSPACE, LineInputState("Ab가Z", 1)),
+            (KeyKind.DELETE, LineInputState("A가Z", 1)),
+            (KeyKind.RIGHT, LineInputState("A가Z", 2)),
+            (KeyKind.HOME, LineInputState("A가Z", 0)),
+            (KeyKind.END, LineInputState("A가Z", 3)),
         )
         for kind, expected in expected_states:
             state, outcome = transition_line_input(state, KeyEvent(kind))
@@ -1835,7 +1835,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         capabilities = capability(CapabilityProfile.ANSI, width=60)
         prompt = Prompt("Maximum debate rounds", scope="settings")
         view = _model.InputPromptView((), prompt)
-        frame = render_input_prompt(view, capabilities)
+        frame = render_input_prompt(view, capability(CapabilityProfile.ANSI, width=59))
         renderer = mock.Mock(return_value=frame)
         configuration = _driver._TerminalConfiguration(
             7,
@@ -1868,14 +1868,15 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             self.assertEqual(call.args[3], LineInputState())
             self.assertIs(call.args[4], transition_prompt_input)
             self.assertIs(call.kwargs["configuration"], configuration)
-            self.assertEqual(call.kwargs["rendered_input"], frame)
+            self.assertIs(call.kwargs["live_capabilities"], capabilities)
+            self.assertEqual(call.kwargs["input_frame_provider"]("", 0, capability(CapabilityProfile.ANSI, width=59)), frame)
 
         prefilled_view = _model.InputPromptView(
             (),
             prompt,
             initial_value="초기",
         )
-        prefilled_frame = render_input_prompt(prefilled_view, capabilities)
+        prefilled_frame = render_input_prompt(prefilled_view, capability(CapabilityProfile.ANSI, width=59))
         prefilled_renderer = mock.Mock(return_value=prefilled_frame)
         with (
             _fresh_literal_object_return_value_autospec(RawTerminalDriver, 'capabilities', capabilities),
@@ -1916,7 +1917,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                     lambda _view, _capabilities: RenderedInputFrame(
                         frame.text,
                         frame.plain_text,
-                        59,
+                        60,
                         frame.line_count,
                     ),
                     transition_prompt_input,
@@ -3382,7 +3383,8 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             '_model.py': set(),
             '_metadata_text.py': set(),
             '_progress_process.py': set(),
-            '_controls.py': {'._model'},
+            '_controls.py': {'._input_text', '._model'},
+            '_input_text.py': {'._model'},
             '_render.py': {'._metadata_text', '._advisory_progress', '._box', '._markdown', '._model'},
             '_viewer_model.py': set(),
             '_pointer.py': set(),
@@ -3391,7 +3393,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             '_viewer_render.py': {'._box', '._model', '._viewer_model'},
             '_transcript_view.py': {'..conversations', '._collaboration_view', '._external_view', '._model', '._render'},
             '_reference_activation.py': {'..writing_artifacts', '._model'},
-            '_driver.py': {'._external_view', '._input_lifecycle', '._input_sources', '._input_sources_linux', '._input_sources_macos', '._live_composer', '._model', '._output_history', '._pointer', '._progress_process', '._reference_activation', '._render', '._viewer_model'},
+            '_driver.py': {'._external_view', '._input_lifecycle', '._input_sources', '._input_sources_linux', '._input_sources_macos', '._input_text', '._live_composer', '._model', '._output_history', '._pointer', '._progress_process', '._reference_activation', '._render', '._viewer_model'},
             '_core.py': {'._metadata_text', '..agent_context.progress', '..agent_context.service', '..agents', '..conversations', '..errors', '..interactive_commands', '._advisory_progress', '._collaboration_view', '._controls', '._driver', '._external_view', '._live_composer', '._model', '._reference_activation', '._render', '._transcript_view', '._viewer_controls', '._viewer_model', '._viewer_render'},
             '_box.py': {'._model'},
             '_markdown.py': {'._model'},
@@ -3411,7 +3413,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 if isinstance(node, ast.ImportFrom) and node.level
             }
             # Keep the frozen subtest count; each new dependency set is still checked exactly.
-            if filename in {"_metadata_text.py", "_box.py", "_markdown.py", "_response_usage.py", "_transcript_view.py", "_pointer.py", "_output_history.py", "_input_sources.py", "_input_sources_linux.py", "_input_sources_macos.py", "_progress_process.py"}:
+            if filename in {"_metadata_text.py", "_box.py", "_markdown.py", "_response_usage.py", "_transcript_view.py", "_pointer.py", "_output_history.py", "_input_sources.py", "_input_sources_linux.py", "_input_sources_macos.py", "_input_text.py", "_progress_process.py"}:
                 self.assertEqual(dependencies, expected)
                 continue
             with self.subTest(filename=filename):
