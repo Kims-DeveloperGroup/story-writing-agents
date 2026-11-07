@@ -4536,7 +4536,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     if guide_name not in guide_specs: continue
                     guide_marker = guide_value.partition(' ')[0]
                     guide_text = next((rule.partition(': ')[2] + guide_value[len(guide_marker):]
-                        for rule in input_guide['response_rules'] if rule.startswith('Input ' + guide_marker + ': ')), guide_value).casefold()
+                        for rule in input_guide['response_rules'] if rule.startswith('Input meaning ' + guide_marker + ': ')), guide_value).casefold()
                     self.assertTrue(all(token in guide_text for token in guide_specs[guide_name]), (guide_provider, guide_path, guide_text))
                     guide_seen.add(guide_name)
                 self.assertEqual(guide_seen, set(guide_specs), guide_provider)
