@@ -12620,6 +12620,11 @@ class StoryRuntime:
                 ordinary_front_cap = min(_CONTEXT_INVOCATION_CALL_LIMIT,
                                          COLLABORATION_PHYSICAL_CALL_LIMIT - (2 * len(SPECIALIST_IDS) + 4))
             elif ordinary_front_cap is not None and ordinary_front_cap < 1:
+                closed = self._lead_outcome_failure_result(
+                    session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
+                    invocation_id=None, call_id=None, failure_code=CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED)
+                if closed.next_action is not CollaborationNextAction.RETRY_LEAD_TURN:
+                    return closed
                 return self._structured_fallback_lead_result(
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
                     message="The offered current authoring task cannot fit preparation and full final review within its twelve-call lineage. Clarify or freshly propose a task revision.",
