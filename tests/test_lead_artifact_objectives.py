@@ -892,8 +892,11 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             if type(event.payload) is c.CollaborationLeadTaskDecisionPayload and event.payload.document_selection is not None
             and event.payload.document_selection.plan_ref == goal_plan.ref)
         self.assertEqual(tuple(item.decision.action for item in selected_tasks), (task_controls.LeadTaskAction.NEW_TASK,) * 4)
-        self.assertEqual(tuple(item.document_selection.node_id for item in selected_tasks), (global_node.node_id, part_node.node_id, global_node.node_id, part_node.node_id))
-        self.assertEqual(tuple(item.decision.conversation_id for item in selected_tasks), (planning_conversation, planning_conversation, planning_conversation, draft_conversation))
+        expected_controls = sorted(((planning_conversation, global_node.node_id),
+            (planning_conversation, part_node.node_id), (planning_conversation, global_node.node_id),
+            (draft_conversation, part_node.node_id)), key=lambda item: item[0])
+        self.assertEqual(tuple(item.document_selection.node_id for item in selected_tasks), tuple(node_id for _owner, node_id in expected_controls))
+        self.assertEqual(tuple(item.decision.conversation_id for item in selected_tasks), tuple(owner for owner, _node_id in expected_controls))
         current_draft_task = next(task for task in self.runtime.inspect_lead_collaboration(self.session_id, draft_conversation).available_tasks
             if task.ref.task_id == draft_offer.proposal.authoring_scope.task_id)
         bad_source = replace(candidate_ref, candidate_digest="sha256:" + "f" * 64)

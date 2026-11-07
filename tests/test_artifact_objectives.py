@@ -321,10 +321,16 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         events = self.history(conversation_id)
         transition = [e for e in events if isinstance(e.payload, c.ArtifactObjectivePayload)][-1]
         payload = transition.payload
+        for facts in (replace(payload.facts, origin_user_event_id="foreign_user"),
+                      replace(payload.facts, request="changed origin"),
+                      replace(payload.facts, target_paths=("core_documents/narrative_rules.md",))):
+            with self.assertRaisesRegex(ValueError, "document plan differs from its exact immutable original goal"):
+                replace(payload, facts=facts)
+        # Omit the optional declaration to reach the independent durable-facts replay guard.
         bad_payloads = [replace(payload, previous_objective_event_id="not_the_predecessor"),
-            replace(payload, facts=replace(payload.facts, origin_user_event_id="foreign_user")),
-            replace(payload, facts=replace(payload.facts, request="changed origin")),
-            replace(payload, facts=replace(payload.facts, target_paths=("core_documents/narrative_rules.md",))),
+            replace(payload, document_plan=None, facts=replace(payload.facts, origin_user_event_id="foreign_user")),
+            replace(payload, document_plan=None, facts=replace(payload.facts, request="changed origin")),
+            replace(payload, document_plan=None, facts=replace(payload.facts, target_paths=("core_documents/narrative_rules.md",))),
             replace(payload, draft_sources=(replace(payload.draft_sources[0], content_digest=digest("altered")),)),
             replace(payload, candidate_binding=replace(payload.candidate_binding, candidate_event_id="foreign_candidate")),
         ]

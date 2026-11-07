@@ -244,6 +244,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 recommended_action=action(source_ids=(draft_reply,), target_paths=(OUTLINE,)))(call, provider); self._synthesis_checks.append(call.contract.structural_findings(raw)); return raw
         proposed, result = await self.finish_draft(conversation, synthesis=recommend)
         self.assertEqual(proposed.proposal.participants, (PLOT_ARCHITECT,))
+        self.assertIs(proposed.proposal.authoring_scope.activity, AuthoringActivity.DRAFT)
+        self.assertEqual(proposed.proposal.authoring_scope.target_paths, (OUTLINE,))
         replies = [e.payload for e in self.history(conversation) if type(e.payload) is c.CollaborationSpecialistReplyPayload]
         self.assertEqual(len(replies), 1)
         self.assertIs(replies[0].assessment, c.CollaborationSpecialistAssessment.DRAFTED)
@@ -295,6 +297,12 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
 
 
         prefix = self.history(conversation)
+        inspection_before = self.runtime.inspect_lead_collaboration(self.session_id, conversation)
+        discussion_task = next(item for item in inspection_before.available_tasks
+            if item.ref.task_id == proposed.proposal.authoring_scope.task_id)
+        self.assertEqual(discussion_task.scope, proposed.proposal.authoring_scope)
+        discussion_decision = task.LeadTaskDecision.from_task(discussion_task.ref, task.LeadTaskAction.DISCUSS,
+            text="Inspect context before offering fresh work.")
         late_call_start = len(self.backend.calls)
         self.assertEqual(tuple(call.contract.schema_group_phase for call in self.backend.calls[:2]),
                          (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
@@ -304,12 +312,12 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         original_factory = orchestrator_module._lead_call_contract_factory
         def bounded_history_factory(*args, **kwargs):
             self.assertEqual(kwargs["stage"], "lead.front")
-            self.assertIs(kwargs["schema_group_protocol"], True)
-            return original_factory(*args, **{**kwargs, "schema_group_protocol": False})
+            self.assertIs(kwargs["schema_group_protocol"], False)
+            return original_factory(*args, **kwargs)
         def request_inspection_source(call, _provider):
             offers = call.contract.offers
-            self.assertEqual(offers.allowed_actions, ("answer",))
-            self.assertEqual(dict(offers.action_limits)["nonterminal_actions"], 0)
+            self.assertEqual(offers.allowed_actions, ("search", "read", "answer"))
+            self.assertEqual(dict(offers.action_limits)["nonterminal_actions"], 3)
             observation = _provider.callback_payload(call)["context_observation"]
             self.assertEqual(observation["observation_type"], "context_search_results")
             self.assertTrue(observation["search_results"])
@@ -317,27 +325,23 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                           offers.issued_handle_aliases)
             self.assertEqual(offers.completed_read_facts, ())
             self.assertEqual(offers.delivery_read_facts, ())
-            self.assertEqual(call.contract.semantic_index.policy.task_revisions,
-                             ((proposed.proposal.authoring_scope.task_id, 2),))
-            ((task_id, task_revision),) = call.contract.semantic_index.policy.task_revisions
-            scope = {"interpretation": "Inspect the declared synthetic scope.", "activity": "draft", "intent": "authoring", "target_paths": [OUTLINE],
-                     "domains": ["plot_structure"], "task_id": task_id, "task_revision": task_revision,
-                     "contributions": [{"domain": "plot_structure", "role": "draft_owner"}],
-                     "dependency_slots": []}
-            return lead_fixture_response(call, {
+            self.assertEqual(call.contract.semantic_index.policy.task_revisions, ())
+            self.assertEqual(call.contract.factory.rule_seed.contract_id, "lead-discussion-response-v1")
+            return lead_fixture_response(call, lead_fixture_result({
                 "response_type": "clarification_question",
                 "response_text": "Please provide the matching prior response so I can inspect it before offering fresh work.",
-                "response_details": {'planning_target': None, "task_scope": lead_fixture_bound_scope(call, scope, record=True)},
-            }, family=0, branch_key=call.contract.factory.rule_seed.contract_id + ":family:1")
+                "used_evidence_ids": {},
+            }), family=0)
 
         self.backend.enqueue(
             partial(_search_history, text="Nora must recover her brother's letter"),
             request_inspection_source,
             _visible_outcome("answer", "A third submission is not invoked."))
-        # This late SEARCH/QUESTION row retains its explicit single-phase domain boundary.
+        # USER-selected discussion inspects the same completed history without writing authority.
         with mock.patch.object(orchestrator_module, "_lead_call_contract_factory",
                                side_effect=bounded_history_factory) as boundary_factory:
-            bounded = await self.runtime.lead_turn(self.session_id, conversation, "Inspect context before offering fresh work.")
+            discussed = await self.runtime.decide_lead_task(discussion_decision)
+            bounded = discussed.turn
         self.assertEqual(boundary_factory.call_count, 1)
         self.assertIs(orchestrator_module._lead_call_contract_factory, original_factory)
         self.assertEqual(tuple(call.contract.factory.schema_group_protocol for call in self.backend.calls[late_call_start:]),
@@ -347,7 +351,19 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         calls = _submitted_calls(self.history(conversation)[len(prefix):])
         self.assertEqual(len(calls), 2)
         self.assertEqual(len(self.backend.calls) - late_call_start, 2)
-        self.assertIs(bounded.kind, c.LeadOutcomeKind.QUESTION)
+        self.assertIs(bounded.kind, c.LeadOutcomeKind.DISCUSSION)
+        self.assertEqual(bounded.discussion.response_kind, "question")
+        transition = next(event for event in self.history(conversation)[len(prefix):]
+            if type(event.payload) is c.CollaborationLeadTaskTransitionPayload)
+        self.assertEqual(transition.payload.receipt.origin_event_id, discussion_decision.request_id)
+        self.assertIs(transition.payload.receipt.action, task.LeadTaskAction.DISCUSS)
+        self.assertEqual(transition.payload.receipt.source_task_ref, discussion_task.ref)
+        self.assertEqual((bounded.discussion.origin_control_event_id, bounded.discussion.associated_task_ref),
+            (discussed.transition_event_id, discussion_task.ref))
+        inspection_after = self.runtime.inspect_lead_collaboration(self.session_id, conversation)
+        self.assertEqual(next(item.scope for item in inspection_after.available_tasks if item.ref == discussion_task.ref), discussion_task.scope)
+        self.assertEqual((inspection_after.rounds_spent, inspection_after.physical_calls_spent),
+            (inspection_before.rounds_spent, inspection_before.physical_calls_spent))
         self.assertIsNone(bounded.proposal)
         self.assertFalse(any(event.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for event in self.history(conversation)[len(prefix):]))
         self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
@@ -1634,6 +1650,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
     async def test_old_drafted_revision_cannot_authorize_revised_candidate(self):
         from story_writing_agents import ReplyTraceOrigin
         readiness = await self.record_book_readiness()
+        from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
+        services = self.runtime.conversation_storage_services
+        readiness_snapshot = SessionHistorySourceAdapter(services.catalog, services.event_store, self.session_id).capture()
+        expected_readiness_refs = tuple(readiness_snapshot.readiness_ref(row) for row in readiness_snapshot.readiness_heads())
         conversation=self.conversation()
         assessment = asdict(_fixture_assessment())
         from tests.test_lead_artifact_application import _application_decision
@@ -1661,10 +1681,13 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 recommendation_family=1, recommended_action=action(source_ids=("current_response",),
                     target_paths=(path,), specialist_ids=ROSTER))(call, provider)
         original, drafted = await self.finish_draft(conversation, response=self._native_scoped(
-            *ROSTER, domains=("plot_structure", "character_world", "tone_execution"),
+            *ROSTER, paths=(path,), domains=("plot_structure", "character_world", "tone_execution"),
             mutate=two_owners, authoring_assessment=_fixture_assessment(),
         ), synthesis=initial_recommendation)
-        self.assertIsNone(original.proposal.basis.core_document_readiness)
+        actual_basis = original.proposal.basis.core_document_readiness
+        self.assertIsNotNone(actual_basis)
+        self.assertEqual(actual_basis, replace(readiness.basis, prior_assessment_refs=expected_readiness_refs,
+            history_coverage=actual_basis.history_coverage, history_metadata=actual_basis.history_metadata))
         old_source = c.project_collaboration_history(self.history(conversation)).offered_draft_sources[-1].event_id
         task_id=original.proposal.authoring_scope.task_id
         ready = drafted.turn

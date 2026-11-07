@@ -84,7 +84,7 @@ _EXPECTED_DIGESTS = {
     "config/agents/character_custodian/AGENTS.md": "6680b88c21f14dbd4763df736b5d6222f361024de0a0ceb8ffa6642d400f6e8a",
     "config/agents/common/AGENTS.md": '9a586cd7dc266f03f7e4546c141abf125830c1727ab32f9486b654d808d6b86d',
     "config/agents/execution_specialist/AGENTS.md": "6a7b792c12dac78cfe902072be9508cbde167e0605c95ef6224fc1a97bdedbc5",
-    "config/agents/lead_orchestrator/AGENTS.md": 'c32a511282cd7d1e2c29f0c90d022d3136ebd4f98cfe4b4d6d5ba1bc61293417',
+    "config/agents/lead_orchestrator/AGENTS.md": '25cc7caba620c20b2b4d1f63d46c7f1969046b4414506101611dba11b4824b47',
     "config/agents/plot_architect/AGENTS.md": "e5a7dfb227b387ceb10a190ac0127f15108ea1e327b0f084554ea6d16f0e86d7",
     "config/agents/specialist_collaboration/AGENTS.md": 'df53815bbb7869ee9420af6c91552e6839f95f2bf80fb17c6d3e66304cabbcff',
     "config/persona_templates/alternative_templates/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
