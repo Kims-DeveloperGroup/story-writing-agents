@@ -196,15 +196,15 @@ execution, Apply or Commit authority.
 
 | Field | What the Agent should record |
 | --- | --- |
-| `status` | The assessment result for the declared work: sufficient evidence and decisions, specific information still needed, or grounded analysis only. A status label does not bypass host qualification. |
+| `status` | 현재 과제·단계에서 근거와 결정이 충분한지 평가합니다. `missing_information=[]`는 지금 USER에게 명시적으로 요청할 항목이 없다는 뜻이며, `sufficient`·준비 추천 승인·실행 권한을 뜻하지 않습니다. |
 | `foundations` | The story facts or source material needed for this work, each justified by actual offered sources. A procedural “continue” request does not replace the underlying story facts. |
 | `direction` | The USER's intended result, purpose and boundaries. Retain established direction when the latest input asks to proceed. |
-| `creative_scope` | The USER-grounded boundary between permitted invention and protected material. An explicit instruction to invent nothing is a definite boundary, not an undecided permission. |
-| `allowed_creative_actions` | Concrete actions within that boundary, such as organizing supplied events or improving wording without adding facts. |
+| `creative_scope` | 실제 USER 근거에 따른 내용상의 선택·변형 허용 범위와 보존 경계입니다. 창작하지 말라는 명시적 지시도 확정된 경계입니다. 준비·배정·조회 같은 절차를 창작 허가로 대신하지 않습니다. |
+| `allowed_creative_actions` | 현재 내용 범위에서 실제로 허용된 구체 선택·변형을 씁니다. 예: 제공 사건의 순서·인과 정리, 사실을 더하지 않는 표현 수정, USER가 허용한 범위의 대사 재구성. 배정안 준비·전문가 선택·조회·출처 연결·Confirm/Apply/Commit은 넣지 않으며, 항목 수를 채우려고 허가를 추정하지 않습니다. |
 | `protected_constraints` | Facts, meanings and prohibitions the work must preserve. An Agent-authored constraint does not itself establish USER permission. |
 | `decisions` | The choices required for the deliverable, distinguishing supplied choices, actual USER delegation and unresolved choices. |
-| `missing_information` | Concrete unresolved foundations or decisions, or genuinely unavailable source evidence, that prevent the declared work. Distinguish those gaps from an explanation of the current input or a plan to retrieve existing records. |
-| `rationale` | Why the actual evidence, covered decisions and remaining gaps support the selected status. It does not replace the other structured fields. |
+| `missing_information` | 이번 단계에서 USER에게 명시적으로 요청해야 하는 사실·결정·창작 범위 허가·자료만 구체 요청으로 씁니다. 내부 조회·호스트 출처 전달/연결·실행 승인 대기와 이미 제공한 사실의 반복 요청은 제외합니다. USER 행동이 필요하지 않으면 `[]`입니다. |
+| `rationale` | 실제 근거·허용 범위·결정과 현재 상태의 관계를 설명합니다. 내부 출처 미제공이나 연결 미완료는 해당 출처와 현재 단계에 미치는 영향을 여기에 씁니다. 빈 USER 요청 목록을 충분성으로 해석하거나 아직 확보하지 않은 근거를 준비 후 확보하겠다는 약속으로 대신하지 않습니다. |
 
 For evidence, `requirement` names the condition, `source_ids` selects actual
 runtime-offered inputs or completed READ evidence, and `justification` explains
@@ -213,13 +213,19 @@ choice, `coverage` distinguishes `supplied`, `delegated` and `missing`, and
 `explanation` explains that classification. Never invent a source ID or promote
 a Lead summary, rejected response or READ receipt into USER creative permission.
 
-Reuse supplied facts. If the available tools and workflow can retrieve and bind
-existing records, do that before declaring them missing; never claim acquisition
-without the actual source. If access or a material USER choice prevents
-acquisition, name the unavailable evidence, its effect on the work and the
-specific action needed. “The latest input asks to proceed” is context, and
-“connect the earlier records” is a preparation task; neither alone identifies a
-new fact the USER must supply.
+이미 제공한 사실과 허용 범위를 먼저 재사용합니다. 현재 허용된 도구·워크플로로 조회하거나 연결할 수 있는 자료는 에이전트·호스트가 처리합니다. 그 내부 작업을 USER의 정보 부족으로 쓰거나 같은 사실을 다시 요구하지 않습니다. 실제로 USER만 제공·결정·허가·선택할 수 있는 항목이 현재 단계를 막을 때만 `missing_information`에 구체 요청을 기록합니다.
+
+예를 들어 이전 경험과 대사 재구성 허용 발화가 평가에 인용 가능한 USER 출처로 전달되지 않았지만, USER에게 같은 내용을 다시 요구할 상황은 아니라면 다음과 같이 관련 필드를 구분합니다(전체 평가의 일부 필드 발췌).
+
+```json
+{
+  "status": "analysis_only",
+  "missing_information": [],
+  "rationale": "현재 평가에 인용 가능한 USER 출처에 이전 경험 설명과 대사 재구성 허용 발화가 포함되지 않아, 배정안 준비에 필요한 사실 근거와 창작 범위를 검증할 수 없다."
+}
+```
+
+이 빈 목록으로 충분성이 확인되지는 않습니다. 실제 이전 USER 원문을 제공하고 재평가한 결과가 충분할 때만 준비를 추천합니다. 근거 확보를 준비 단계로 미뤄 추천을 먼저 승인하지 않습니다. 내용상의 창작 범위에 대한 USER 결정과 별도 Confirm/Apply/Commit 실행 승인은 구분합니다.
 
 These meanings do not change the permitted schema values or the runtime's
 admission rules. Preparing a recommendation, confirming its preparation,
@@ -1394,6 +1400,29 @@ round. Runtime rejects any semantic or known-path domain that the selected speci
 cannot cover.
 
 ## What providers receive
+
+The Lead receives prior literal USER messages from the same verified task/revision
+as `authoring_user_sources`, separate from ordinary inputs. Each record contains
+the exact text, offered source ID, original locator, revision digest, UTF-8 size,
+and USER authority. These IDs may support the authoring assessment; they are not
+new assignment or recommendation inputs. A procedural follow-up can therefore
+reuse an earlier factual brief and its creative limits without asking the user to
+repeat them. Source membership alone does not establish current creative permission.
+
+Preparation recommendations that require official authoring admission also require
+a sufficient assessment: named foundations, USER direction, a source-bound creative
+scope, permitted actions, covered decisions, and no missing information. Where the
+host requires a target, the recommendation must identify one. Genuine gaps remain
+questions or explicit reselection work. Questions, analysis, and review-only work
+retain their own assessment rules.
+
+허용 창작 행위는 내용상의 선택·변형이며 배정안 준비 절차를 뜻하지 않습니다. `missing_information`은 USER에게 지금 요청할 항목만 담습니다. 내부 근거 전달·연결이 미완료라면 상태와 영향을 `rationale`에 설명하고, 실제 근거를 연결·평가한 뒤 준비 추천 여부를 판단합니다. 빈 목록만으로 충분성이나 승인을 얻지 않습니다.
+
+After confirmation, preparation and later authoring consumers receive only the
+historical USER originals pinned in the accepted basis. New messages are not added
+to that basis. Task cancellation, revision changes, and current-source validation
+remain separate checks; retaining text does not restore a retired task or grant
+READ, Confirm, Apply, or Commit authority.
 
 The runtime binds the selected agent and drives one bounded contextual invocation.
 Codex and Antigravity receive the same `agent-provider-wire-v11` payload and

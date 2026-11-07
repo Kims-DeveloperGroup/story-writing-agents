@@ -55,7 +55,7 @@ from .conversations import (
     COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES, LeadOutcomeKind, lead_outcome_scope_paths,
 )
 from .conversations.events import authoring_scope_from_dict
-from .conversations.session_context import MAX_PROVIDER_SCHEMA_UTF8_BYTES
+from .conversations.session_context import MAX_PROVIDER_SCHEMA_UTF8_BYTES, SessionContextCapacityError
 from .specialist_routing import (
     ArtifactReviewDomain, AuthoringActivity, AuthoringIntent, AuthoringScope,
     required_authoring_specialists, required_authoring_domains, assignment_mode_for_specialist,
@@ -1927,6 +1927,7 @@ class LeadProviderConstraints:
     """One immutable set of offered choices shared by schema, prompt and guard."""
 
     input_ids: tuple[str, ...] = ()
+    historical_user_source_ids: tuple[str, ...] = field(default=(), kw_only=True)
     scope_rule: AuthoringScopeRuleSet | None = field(default=None, kw_only=True)
     required_input_ids: tuple[str, ...] | None = field(default=None, kw_only=True)
     review_candidate_ids: tuple[str, ...] | None = field(default=None, kw_only=True)
@@ -1950,6 +1951,14 @@ class LeadProviderConstraints:
 
     preliminary_targets: tuple[ReviewTarget, ...] = field(default=(), kw_only=True)
     def __post_init__(self) -> None:
+        if (type(self.historical_user_source_ids) is not tuple
+                or len(self.historical_user_source_ids) > 64
+                or any(type(value) is not str or not value for value in self.historical_user_source_ids)
+                or len(set(self.historical_user_source_ids)) != len(self.historical_user_source_ids)
+                or set(self.historical_user_source_ids).intersection(self.input_ids)):
+            raise ValueError("historical USER assessment sources must be distinct offered aliases")
+        if self.historical_user_source_ids and len(self.assessment_source_ids) > 64:
+            raise SessionContextCapacityError()
         if (type(self.preliminary_targets) is not tuple
                 or any(type(item) is not ReviewTarget for item in self.preliminary_targets)
                 or len({item.input_id for item in self.preliminary_targets}) != len(self.preliminary_targets)
@@ -1979,6 +1988,24 @@ class LeadProviderConstraints:
         if self.adoption_intent is None and self.adoption_targets:
             raise ValueError("adoption targets require an explicit intent")
 
+    @property
+    def assessment_source_ids(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys((*self.input_ids, *self.historical_user_source_ids)))
+
+    @staticmethod
+    def authoring_requirements(*, intent, activity, proposal=False, artifact=False,
+                               preparation_kind=None, preparation=False,
+                               draft_assignments=False) -> tuple[bool, bool]:
+        """Share semantic authoring admission/target requirements with the runtime."""
+        prepares = preparation or preparation_kind is not None
+        prepare_artifact = preparation_kind == "prepare_artifact"
+        assessment = artifact or prepare_artifact or (
+            intent is AuthoringIntent.AUTHORING and (proposal or prepares))
+        target = artifact or prepare_artifact or draft_assignments or (
+            prepares and intent is AuthoringIntent.AUTHORING
+            and activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE})
+        return assessment, target
+
     def required_assignment_input_ids(self) -> tuple[str, ...]:
         if self.required_input_ids is not None:
             if type(self.required_input_ids) is not tuple or not set(self.required_input_ids).issubset(self.input_ids):
@@ -2005,6 +2032,7 @@ class LeadProviderConstraints:
         return (
             ("preliminary_targets", tuple(json.dumps(review_target_to_dict(item), ensure_ascii=False, sort_keys=True, separators=(",", ":")) for item in self.preliminary_targets)),
             ("input_ids", self.input_ids),
+            ("historical_user_source_ids", self.historical_user_source_ids),
             ("allocation_input_ids", self._allocation_input_ids()),
             ("required_input_ids", self.required_assignment_input_ids()),
             ("per_assignment_input_ids", self.per_assignment_input_ids),
@@ -2234,6 +2262,8 @@ class LeadProviderConstraints:
                 rules = (self.scope_rule or (authoring_scope_rules(self.scope.activity, self.scope.intent, self.scope.domains, self.scope.contributions,
                           target_paths=self.scope.target_paths, dependency_slots=self.scope.dependency_slots,
                           schema_version=self.scope.schema_version) if self.scope is not None else None),)
+            current_assignments = False
+            current_artifact_work = False
             if scoped:
                 # Current work families require the same substantive scope as their typed owners.
                 # Prospective objective/recommendation fields keep their separate declarations.
@@ -2302,13 +2332,56 @@ class LeadProviderConstraints:
                     group_id = schema_group_for(semantics).group_id
                     if selected_group_id is not None and group_id != selected_group_id:
                         continue
-                target_required = (scoped and rule is not None
-                    and rule.intent is AuthoringIntent.AUTHORING
-                    and rule.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
-                    and (current_assignments or current_artifact_work))
+                preparation = "proposal_drafting_request" in properties
+                admission_required, target_required = self.authoring_requirements(
+                    intent=None if rule is None else rule.intent,
+                    activity=None if rule is None else rule.activity,
+                    proposal=current_assignments, artifact=current_artifact_work,
+                    preparation_kind=preparation_kind,
+                    preparation=preparation,
+                    draft_assignments=bool(current_assignments and rule is not None
+                        and rule.intent is AuthoringIntent.AUTHORING
+                        and rule.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}))
+                # These combinations already fail the host's official-authoring guard.
+                if admission_required and (rule is None
+                        or rule.intent is not AuthoringIntent.AUTHORING
+                        or rule.activity is AuthoringActivity.WORKFLOW):
+                    continue
+                require_preparation_admission = preparation and admission_required
+                if require_preparation_admission and not self.assessment_source_ids:
+                    continue
+                target_required = scoped and rule is not None and target_required
                 if target_required and targets == ():
                     continue
                 root_schema = deepcopy(root)
+                if preparation and preparation_kind is None and rule is not None:
+                    # Keep ungrouped family/member identities while removing actions
+                    # that already fail the host's official-authoring scope guard.
+                    request = root_schema["properties"]["proposal_drafting_request"]
+                    permitted = []
+                    for action in request.get("anyOf", (request,)):
+                        choices = action.get("properties", {}).get("action_type", {}).get("enum", ())
+                        action_kind = next((domain for domain, native in DRAFTING_ACTIONS.items()
+                                            if list(choices) == [native]), None)
+                        if action_kind is None:
+                            raise ValueError("preparation requires one owned action type")
+                        action_admission, _ = self.authoring_requirements(
+                            intent=rule.intent, activity=rule.activity,
+                            preparation_kind=action_kind)
+                        if not action_admission or (rule.intent is AuthoringIntent.AUTHORING
+                                and rule.activity is not AuthoringActivity.WORKFLOW):
+                            permitted.append(action)
+                    if not permitted:
+                        continue
+                    if "anyOf" in request:
+                        if len(permitted) == 1:
+                            selected_request = permitted[0]
+                            for name, value in request.items():
+                                if name != "anyOf":
+                                    selected_request.setdefault(name, value)
+                            root_schema["properties"]["proposal_drafting_request"] = selected_request
+                        else:
+                            request["anyOf"] = permitted
                 if scope_kinds:
                     root_schema["properties"]["response_type"]["enum"] = list(eligible_kinds)
                 if scoped:
@@ -2335,7 +2408,8 @@ class LeadProviderConstraints:
                     props = node.get("properties", {})
                     for name, child in tuple(props.items()):
                         if name == "authoring_assessment":
-                            fresh = admission_rule(self.input_ids)
+                            fresh = admission_rule(self.assessment_source_ids,
+                                require_admission=require_preparation_admission)
                             for assessment in fresh.get("anyOf", (fresh,)):
                                 decisions = assessment["properties"]["decisions"]["items"]
                                 for decision in decisions.get("anyOf", (decisions,)):
@@ -2347,7 +2421,8 @@ class LeadProviderConstraints:
                                         coverage["description"] = (
                                             'actual literal USER input explicitly permits this '
                                             'bounded creative decision')
-                            if child.get("anyOf") and any(v.get("type") == "null" for v in child["anyOf"]):
+                            if (not require_preparation_admission and child.get("anyOf")
+                                    and any(v.get("type") == "null" for v in child["anyOf"])):
                                 fresh = {"anyOf": [fresh, next(
                                     dict(v) for v in child["anyOf"]
                                     if v.get("type") == "null")]}
@@ -2871,16 +2946,26 @@ class LeadProviderConstraints:
                 "premise_analysis_rule": "Only an undecided question needs target-free alternatives analysis. Reuse disclosed resolved inputs. Analysis requires its own Confirm and cannot draft, review a candidate, select a premise, or update an objective."}
                if self.premise_question_id is not None else {}),
             "preliminary_review_rule": "For useful direct preliminary advice select the offered preliminary arm, inspect actual supplied/READ inputs and exclude unread declared targets. Inventory does not expand scope; preserve conflicts and gaps without automatically dispatching specialists. This is not final review or objective completion.",
-            "offered_admission_source_ids": list(self.input_ids),
+            "offered_admission_source_ids": list(self.assessment_source_ids),
             "authoring_admission_rule": (
-                "Before official drafting or document-change preparation, assess the actual supplied story foundations, "
-                "USER direction, bounded creative permissions/protected constraints and required decisions. "
-                "Use exact offered USER/material IDs or completed READ evidence IDs; a file indicator, summary or "
-                "confidence is not a READ or semantic sufficiency. A detailed literal USER brief may suffice for assessment. "
-                "Executable drafting needs an actual target; target-free grounded analysis remains available. "
-                "Identify only actual missing decisions; do not ask again for already supplied facts. "
-                "Use needs_information/analysis_only and grounded questions when inadequate. Rejected public "
-                "answers stay input-only. The assessment grants no confirmation, write or budget authority."
+                "Before official drafting or document-change preparation, assess actual supplied "
+                "foundations, USER direction, content choices and transformations, protected constraints "
+                "and required decisions. Cite exact offered USER/material IDs or completed READ receipts; "
+                "a file indicator, summary or confidence is not READ or sufficiency. A detailed literal "
+                "USER brief alone may suffice for assessment. Keep evidenced no-invention boundaries. "
+                "Preparing an assignment, selecting specialists, retrieval and "
+                "approval are procedures, not allowed_creative_actions or creative_scope. Do not "
+                "manufacture permission to fill fields or recommend preparation first and defer necessary "
+                "source qualification. missing_information contains only specific facts, decisions, "
+                "creative-scope permission or material the USER must explicitly provide or decide now. Do "
+                "not request supplied information again. For only internal retrieval, host source "
+                "delivery/source-linking or Confirm/Apply/Commit waits, keep missing_information=[] and "
+                "explain cause and stage impact in rationale; [] is not sufficiency or approval. If no "
+                "USER action is needed but grounding remains unavailable, explain that state through a "
+                "legal non-recommendation response without forcing answer kind. Actual targets are "
+                "required where the host's writing or preparation rules require them; target-free "
+                "grounded analysis remains available. Host admission and separate Confirm/Apply/Commit "
+                "apply at their existing boundaries; rejected public answers stay input-only."
             ),
             "offered_assignment_input_ids": list(self._allocation_input_ids()),
             "required_input_ids": [item for item in self.input_ids if (not self.preparation_kind or item not in PREPARATION_INPUT_IDS)
