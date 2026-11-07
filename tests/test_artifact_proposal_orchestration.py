@@ -1397,7 +1397,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 activity="review", domains=("plot_structure",), paths=(_OUTLINE,)), record=True)
             return lead_fixture_response(call, {"response_type": "clarification_question",
                 "response_text": "The selected line is visible; what should change?",
-                "response_details": {"task_scope": scope}}, family=0)
+                "response_details": {"task_scope": scope, "planning_target": None}}, family=0)
         self.backend.enqueue(search, _read_history_hit, answer, control_plan=selection_plan('question.authoring', before_script_response=2))
         result = await self.runtime.lead_turn(self.session_id, conversation_id, "Search and read the needle line before deciding.")
         self.assertIs(result.kind, c.LeadOutcomeKind.QUESTION)

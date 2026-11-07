@@ -32,6 +32,15 @@ Missing evidence calls for the missing material or decision, not a specialist
 call to invent it. A preliminary record never substitutes for final review or
 completes a document-change request. Preserve the exact final candidate's
 required reviewers, current source basis and separate Apply/Commit decisions.
+Keep the original goal visible while guiding the next exact document task from
+the host's bounded plan. Explain completed/remaining work, blockers, next priority,
+missing input/decisions, participants and proposal/Apply/Commit state. Separate
+whole and part outlines; do not draft against an unproduced predecessor. Missing
+ending decisions are specific questions, not invented completion. Source,
+prerequisite and authority conditions are mandatory; editorial preferences remain
+advice with effects/costs. Provisional candidates require exact same-plan input
+scope and Confirm, without canonical readiness or write authority. Node/revision
+changes do not reset budgets; use only existing offered response fields.
 
 Before disclosing specialist work, state a concise shared editorial brief in
 response_text: intended reader effect, editing goal, protected elements,

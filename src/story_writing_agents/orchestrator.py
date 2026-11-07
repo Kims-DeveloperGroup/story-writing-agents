@@ -12455,18 +12455,30 @@ class StoryRuntime:
                 origin = next((event for event in controls if event.event_id == transition.payload.receipt.origin_event_id), None)
                 if origin is not None and type(origin.payload) is CollaborationLeadTaskDecisionPayload:
                     document_selection = origin.payload.document_selection
+        infer_document_context = adoption_capture is None and (
+            premise_capture is None or premise_capture.selection.authoring_task_id is not None)
+        retained_node = (None if planning_projection is None or planning_projection.current_proposal is None
+                         else planning_projection.current_proposal.document_node)
+        retained_scope = None
+        if (document_node is None and infer_document_context and retained_node is not None
+                and not discussion_only and task_transition_event_id is None):
+            retained_scope = self._authoring_tasks(
+                await run_blocking(self._session_authoring_events, session_id)).get(retained_node.task_ref.task_id)
+            infer_document_context = retained_scope is not None
         selected_path = None
         if document_selection is not None:
             _, selected_node = await run_blocking(self._prepare_document_selection, session_id, document_selection)
             selected_path = selected_node.target_path
-        if document_node is None and not discussion_only and task_transition_event_id is None and planning_projection is not None:
+        if (document_node is None and infer_document_context and not discussion_only
+                and task_transition_event_id is None and planning_projection is not None):
             retained = planning_projection
             if (retained.current_proposal is not None
                     and retained.confirmation_decision is CollaborationConfirmationDecision.CONFIRM
                     and (retained.discussion_context is None or (retained.discussion_context.action in {LeadTaskAction.RESUME, LeadTaskAction.NEW_TASK}
                         and retained.current_proposal.document_node is not None
                         and retained.discussion_context.target_task_id == retained.current_proposal.document_node.task_ref.task_id))):
-                document_node = retained.current_proposal.document_node
+                if retained_scope is not None and retained_scope.task_revision == retained_node.task_ref.task_revision:
+                    document_node = retained_node
         if document_node is not None:
             await run_blocking(self._validate_document_node, session_id, document_node)
 
@@ -12601,11 +12613,21 @@ class StoryRuntime:
             document_budget_task_id = document_node.budget_lineage_ref.task_id if document_node is not None else None
             if document_selection is not None and task_receipt is not None:
                 document_budget_task_id = task_receipt.target_task_id
-            if (document_goal is None and not discussion_only and task_transition_event_id is None
+            if (document_goal is None and infer_document_context and not discussion_only and task_transition_event_id is None
                     and planning_projection is not None and len(planning_projection.document_plans) == 1):
-                document_goal = planning_projection.document_plans[0].plan.ref
-                if len(planning_projection.available_tasks) == 1:
-                    document_budget_task_id = planning_projection.available_tasks[0].ref.task_id
+                implicit_plan = planning_projection.document_plans[0].plan
+                implicit_events = session_history.events()
+                implicit_task_ids = {event.payload.document_node.task_ref.task_id for event in implicit_events
+                    if type(event.payload) in {CollaborationProposal, CollaborationLeadJudgmentPayload, LeadRecommendationRequestPayload}
+                    and event.payload.document_node is not None
+                    and event.payload.document_node.plan_ref.plan_id == implicit_plan.ref.plan_id}
+                active_conversation_ids = {history.metadata.conversation_id for history in session_history.conversations
+                    if history.metadata.status is ConversationStatus.ACTIVE}
+                if not implicit_task_ids or implicit_task_ids.intersection(self._authoring_tasks(tuple(
+                        event for event in implicit_events if event.conversation_id in active_conversation_ids))):
+                    document_goal = implicit_plan.ref
+                    if len(planning_projection.available_tasks) == 1:
+                        document_budget_task_id = planning_projection.available_tasks[0].ref.task_id
             ordinary_front_cap = None if task_receipt is not None or preparation is not None or interaction_mode is LeadInteractionMode.EXPLORATION or adoption_capture is not None or premise_capture is not None else self._ordinary_front_call_cap(session_id, conversation_id)
             if document_node is not None:
                 inherited_calls, inherited_rounds, _ = document_lineage_cost(
@@ -12631,6 +12653,11 @@ class StoryRuntime:
                 ordinary_front_cap = min(_CONTEXT_INVOCATION_CALL_LIMIT,
                                          COLLABORATION_PHYSICAL_CALL_LIMIT - (2 * len(SPECIALIST_IDS) + 4))
             elif ordinary_front_cap is not None and ordinary_front_cap < 1:
+                closed = self._lead_outcome_failure_result(
+                    session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
+                    invocation_id=None, call_id=None, failure_code=CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED)
+                if closed.next_action is not CollaborationNextAction.RETRY_LEAD_TURN:
+                    return closed
                 return self._structured_fallback_lead_result(
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
                     message="The offered current authoring task cannot fit preparation and full final review within its twelve-call lineage. Clarify or freshly propose a task revision.",
@@ -17323,6 +17350,14 @@ class StoryRuntime:
             spent = sum(1 for item in prefix if item.step_id == source.step_id
                         and type(item.payload) is CollaborationProviderCallPayload
                         and item.payload.state is CollaborationProviderCallState.SUBMITTED)
+            if source.document_node is not None:
+                spent, _, _ = document_lineage_cost(prefix, source.document_node, current_step_id=source.step_id)
+                if source.document_node.budget_lineage_ref.conversation_id != event.conversation_id:
+                    declaration = next(item for item in prefix if item.payload is source)
+                    declared_calls, _, _ = document_lineage_cost(
+                        tuple(item for item in prefix if item.sequence <= declaration.sequence),
+                        source.document_node, current_step_id=source.step_id)
+                    spent += max(0, source.budget.physical_calls_spent - declared_calls)
             if rounds != 1 or authoring_capture_identity(scope, source.basis) != authoring_capture_identity(source.authoring_scope, source.basis):
                 raise BackendProtocolError("completed authoring source capture or round is not current")
             projected = replace(projected, current_step_id=source.step_id, current_proposal=source,
