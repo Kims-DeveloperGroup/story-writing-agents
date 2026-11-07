@@ -1721,74 +1721,44 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(completed.rounds_spent, 2)
         self.assertLess(12 - completed.physical_calls_spent, len(review.proposal.participants) + 2)
         self.assertEqual(completed.physical_calls_spent, 11)
-        selected_task = next(item for item in self.runtime.inspect_lead_collaboration(
+        exhausted_task = next(item for item in self.runtime.inspect_lead_collaboration(
             self.session_id, conversation).available_tasks
             if (item.ref.task_id, item.ref.task_revision) == (task_id, 1))
-        resume = task.LeadTaskDecision.from_task(selected_task.ref, task.LeadTaskAction.RESUME, text=_ADMISSION_BRIEF)
-        def drifted_scope(call):
-            selected_profile(call, (task_id, 2))
-            index = next(i for i, pair in enumerate(call.contract.semantic_index.policy.task_revisions)
-                         if pair == (task_id, 2))
-            self.assertEqual(_live_task(call, index), {"task_id": task_id, "task_revision": 2})
-            return dict(c.authoring_scope_to_dict(original.proposal.authoring_scope),
-                domains=["plot_structure", "character_world", "tone_execution"],
-                contributions=[{"domain": domain, "role": "draft_owner" if domain == "plot_structure" else "constraint_assessor"}
-                    for domain in ("plot_structure", "character_world", "tone_execution")])
-        drifted_writer = recommendation(recommended_action=action(source_ids=("user_input",), target_paths=(OUTLINE,), specialist_ids=ROSTER),
-            authoring_scope=drifted_scope, mutate=lambda value: value.update(authoring_assessment=assessment))
-        def drifted_frame(call, provider):
-            receipt = transition_receipt(resume).payload.receipt
-            self.assertEqual((receipt.target_task_id, receipt.target_task_revision), (task_id, 2))
-            frame = json.loads(drifted_writer(call, provider))
-            details = frame["agent_action"]["task_result"]["response_details"]
-            details["proposal_drafting_request"]["source_ids"] = {old_source: True}
-            self.assertNotIn("task", details["task_scope"])
-            details["task_scope"]["intent"] = "review_only"
-            raw = json.dumps(frame, ensure_ascii=False)
-            self.assertTrue(call.contract.structural_findings(raw), raw)
-            return raw
-        self.backend.enqueue(drifted_frame)
-        self.backend.enqueue(drifted_frame)
-        before_resume = len(self.backend.calls)
-        resumed = await self.runtime.decide_lead_task(resume)
-        drifted = resumed.turn
-        self.assertEqual(len(self.backend.calls) - before_resume, 2, drifted)
-        self.assertIs(drifted.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
-        self.assertEqual(resumed.transition_event_id, transition_receipt(resume).event_id)
-        self.assertEqual(drifted.step_id, transition_receipt(resume).payload.receipt.planning_step_id)
-        self.assertIsNone(drifted.recommendation_request, drifted)
-        self._assert_continuation(drifted, "proposal")
-        direct_writer = self._native_scoped(*ROSTER,
-            selected=task_id, revision=2, activity="review", domains=("character_world", "tone_execution"),
-            mutate=lambda value, material: value["authoring_scope"].update(contributions=c.authoring_scope_to_dict(
-                original.proposal.authoring_scope)["contributions"]),
-            authoring_assessment=_fixture_assessment(),
-        )
-        def direct_frame(call, provider):
-            selected_profile(call, (task_id, 2))
-            raw = direct_writer(call, provider)
-            self.assertTrue(call.contract.structural_findings(raw), raw)
-            return raw
-        direct_review = await self._rejected_pair(conversation, _ADMISSION_BRIEF, direct_frame)
-        self._assert_continuation(direct_review, "proposal")
+        exhausted_resume = task.LeadTaskDecision.from_task(exhausted_task.ref, task.LeadTaskAction.RESUME, text=_ADMISSION_BRIEF)
+        before_refusal = len(self.backend.calls)
+        refused = (await self.runtime.decide_lead_task(exhausted_resume)).turn
+        self.assertEqual(len(self.backend.calls) - before_refusal, 0, refused)
+        self.assertIsNone(refused.proposal, refused)
+        self.assertIsNone(refused.recommendation_request, refused)
         self.assertFalse(any(e.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for e in self.history(conversation)[len(completed_prefix):]))
+        positive_source = next(item for item in self.runtime.inspect_lead_collaboration(
+            self.session_id, conversation).available_tasks if item.ref.task_id == task_id)
+        self.assertEqual(len(positive_source.submitted_call_ids), 11)
+        positive_task = task.LeadTaskDecision.from_task(positive_source.ref, task.LeadTaskAction.NEW_TASK, text=_ADMISSION_BRIEF)
+
         successor_material = []
         def successor(value, material):
             successor_material.append(json.dumps(material, ensure_ascii=False))
-        successor_writer = self._native_scoped(
-            PLOT_ARCHITECT,
-            domains=("plot_structure",), selected=task_id,
-            revision=2,
-            mutate=successor,
-            authoring_assessment=_fixture_assessment(),
-        )
         def successor_frame(call, provider):
-            selected_profile(call, (task_id, 2))
-            return successor_writer(call, provider)
+            receipt = transition_receipt(positive_task).payload.receipt
+            self.assertEqual(receipt.source_task_ref, positive_source.ref)
+            self.assertNotEqual(receipt.target_task_id, positive_source.ref.task_id)
+            self.assertEqual(receipt.target_task_revision, 1)
+            selected_profile(call, (receipt.target_task_id, 1))
+            return self._native_scoped(
+                PLOT_ARCHITECT,
+                domains=("plot_structure",), selected=receipt.target_task_id,
+                revision=1,
+                mutate=successor,
+                authoring_assessment=_fixture_assessment(),
+            )(call, provider)
         self.backend.enqueue(successor_frame)
         expected_aliases = ["current_response",
             *(source.event_id for source in c.project_collaboration_history(self.history(conversation)).offered_draft_sources), "user_input"]
-        pending = await self._lead_turn(conversation, _ADMISSION_BRIEF)
+        positive_result = await self.runtime.decide_lead_task(positive_task)
+        pending = positive_result.turn
+        self.assertEqual(positive_result.transition_event_id, transition_receipt(positive_task).event_id)
+        task_id = transition_receipt(positive_task).payload.receipt.target_task_id
         self.assertEqual(len(successor_material), 1, pending)
         observed_successor = json.loads(successor_material[0])
         self.assertNotIn("authoring_tasks", observed_successor)
@@ -1801,8 +1771,13 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIsNotNone(pending.proposal, pending)
         self.assertEqual(pending.proposal.authoring_scope.task_id, task_id)
         self.assertIs(revised.turn.state, c.CollaborationStepState.COMPLETED)
-        self.assertEqual(revised.proposal.authoring_scope.task_revision,2)
-        self.assertEqual(len(_submitted_calls(self.history(conversation)[len(completed_prefix):])), 7)
+        self.assertEqual(revised.proposal.authoring_scope.task_revision,1)
+        self.assertEqual(len(_submitted_calls(self.history(conversation)[len(completed_prefix):])), 3)
+        positive_inventory = self.runtime.inspect_lead_collaboration(self.session_id, conversation).available_tasks
+        self.assertEqual(len(next(item for item in positive_inventory if item.ref == positive_source.ref).submitted_call_ids), 11)
+        self.assertEqual(len(next(item for item in positive_inventory if item.ref.task_id == task_id).submitted_call_ids), 3)
+        current_source = c.project_collaboration_history(self.history(conversation)).offered_draft_sources[-1].event_id
+        self.assertNotEqual(current_source, old_source)
         self.assertEqual(self.history(conversation)[:len(completed_prefix)], completed_prefix)
         def cross_product(value,material):
             self.assertNotIn("authoring_tasks", material)
@@ -1831,9 +1806,13 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 recommendation_family=1, recommended_action=action(source_ids=("current_response",),
                     target_paths=(multi_path,), specialist_ids=ROSTER))(call, provider)
         first_draft, first_drafted = await self.finish_draft(multiple, response=self._native_scoped(
-            *ROSTER, domains=("plot_structure", "character_world", "tone_execution"),
+            *ROSTER, paths=(path_multiple,), domains=("plot_structure", "character_world", "tone_execution"),
             mutate=two_owners, authoring_assessment=_fixture_assessment(),
         ), synthesis=multiple_recommendation)
+        multiple_basis = first_draft.proposal.basis.core_document_readiness
+        self.assertIsNotNone(multiple_basis)
+        self.assertEqual(multiple_basis, replace(readiness.basis, prior_assessment_refs=expected_readiness_refs,
+            history_coverage=multiple_basis.history_coverage, history_metadata=multiple_basis.history_metadata))
         first_source = c.project_collaboration_history(self.history(multiple)).offered_draft_sources[-1].event_id
         first_ready = first_drafted.turn
         self.assertIsNotNone(first_ready.recommendation_request, first_ready)
@@ -1933,39 +1912,104 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertFalse(any(e.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for e in suffix))
         self.assertEqual(self.history(multiple)[:len(multi_prefix)], multi_prefix)
         self.assertEqual(self.artifact_bytes(), before_multiple)
+        before_reject = len(self.backend.calls)
+        rejected_pending = await self.runtime.decide_lead_step(_decision(admitted, c.CollaborationConfirmationDecision.REJECT))
+        self.assertIs(rejected_pending.turn.state, c.CollaborationStepState.REJECTED)
+        self.assertEqual(len(self.backend.calls), before_reject)
+        negative_prefix = self.history(multiple)
+        negative_task_id = second_draft.proposal.authoring_scope.task_id
+        negative_old_source = c.project_collaboration_history(negative_prefix).offered_draft_sources[-1].event_id
+
+        def drifted_scope(call):
+            selected_profile(call, (negative_task_id, 3))
+            index = next(i for i, pair in enumerate(call.contract.semantic_index.policy.task_revisions)
+                         if pair == (negative_task_id, 3))
+            self.assertEqual(_live_task(call, index), {"task_id": negative_task_id, "task_revision": 3})
+            return dict(c.authoring_scope_to_dict(second_draft.proposal.authoring_scope), task_revision=3,
+                domains=["plot_structure", "character_world", "tone_execution"],
+                contributions=[{"domain": domain, "role": "draft_owner" if domain == "plot_structure" else "constraint_assessor"}
+                    for domain in ("plot_structure", "character_world", "tone_execution")])
+        drifted_writer = recommendation(recommended_action=action(source_ids=("user_input",), target_paths=(OUTLINE,), specialist_ids=ROSTER),
+            authoring_scope=drifted_scope, mutate=lambda value: value.update(authoring_assessment=assessment))
+        def drifted_frame(call, provider):
+            receipt = transition_receipt(negative_resume).payload.receipt
+            self.assertEqual((receipt.target_task_id, receipt.target_task_revision), (negative_task_id, 3))
+            frame = json.loads(drifted_writer(call, provider))
+            details = frame["agent_action"]["task_result"]["response_details"]
+            details["proposal_drafting_request"]["source_ids"] = {negative_old_source: True}
+            self.assertNotIn("task", details["task_scope"])
+            details["task_scope"]["intent"] = "review_only"
+            raw = json.dumps(frame, ensure_ascii=False)
+            self.assertTrue(call.contract.structural_findings(raw), raw)
+            return raw
+        direct_writer = self._native_scoped(*ROSTER,
+            selected=negative_task_id, revision=3, activity="review", domains=("character_world", "tone_execution"),
+            mutate=lambda value, material: value["authoring_scope"].update(contributions=c.authoring_scope_to_dict(
+                second_draft.proposal.authoring_scope)["contributions"]),
+            authoring_assessment=_fixture_assessment(),
+        )
+        def direct_frame(call, provider):
+            selected_profile(call, (negative_task_id, 3))
+            raw = direct_writer(call, provider)
+            self.assertTrue(call.contract.structural_findings(raw), raw)
+            return raw
+
+        for negative_frame in (drifted_frame, direct_frame):
+            negative_task = next(item for item in self.runtime.inspect_lead_collaboration(
+                self.session_id, multiple).available_tasks if item.ref.task_id == negative_task_id)
+            self.assertEqual(negative_task.ref.task_revision, 2)
+            negative_resume = task.LeadTaskDecision.from_task(negative_task.ref, task.LeadTaskAction.RESUME, text=_ADMISSION_BRIEF)
+            self.backend.enqueue(negative_frame)
+            self.backend.enqueue(negative_frame)
+            before_negative = len(self.backend.calls)
+            negative_result = await self.runtime.decide_lead_task(negative_resume)
+            negative_turn = negative_result.turn
+            self.assertEqual(len(self.backend.calls) - before_negative, 2, negative_turn)
+            self.assertIs(negative_turn.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
+            self.assertEqual(negative_result.transition_event_id, transition_receipt(negative_resume).event_id)
+            self.assertEqual(negative_turn.step_id, transition_receipt(negative_resume).payload.receipt.planning_step_id)
+            self.assertIsNone(negative_turn.recommendation_request, negative_turn)
+            self._assert_continuation(negative_turn, expect_plot=False)
+        self.assertEqual(len(_submitted_calls(self.history(multiple)[len(negative_prefix):])), 4)
+        self.assertFalse(any(e.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for e in self.history(multiple)[len(negative_prefix):]))
+        self.assertEqual(self.history(multiple)[:len(negative_prefix)], negative_prefix)
+        negative_view = self.runtime.inspect_lead_collaboration(self.session_id, multiple)
+        self.assertEqual(len(next(item for item in negative_view.available_tasks if item.ref.task_id == negative_task_id).submitted_call_ids), 10)
+        self.assertEqual(negative_view.rounds_spent, 1)
+
         self.workspace.path(OUTLINE).unlink()
         latest_ref = next(item.ref for item in self.runtime.inspect_lead_collaboration(self.session_id, conversation).available_tasks
-            if (item.ref.task_id, item.ref.task_revision) == (task_id, 2))
+            if (item.ref.task_id, item.ref.task_revision) == (task_id, 1))
         stale_resume = task.LeadTaskDecision.from_task(latest_ref, task.LeadTaskAction.RESUME,
             text=_ADMISSION_BRIEF + "\nUse the earlier draft for this revised candidate.")
         from story_writing_agents.agent_context.accounting import account_provider_payload
         from story_writing_agents.conversations.session_context import MAX_PROVIDER_PAYLOAD_UTF8_BYTES, MAX_PROVIDER_SCHEMA_UTF8_BYTES
         stale_measurements = []
         def stale(call, provider):
-            selected_profile(call, (task_id, 3))
+            selected_profile(call, (task_id, 2))
             payload_json, accounting = account_provider_payload(call.schema, call.payload, call_kind=call.call_kind,
                 component_paths=call.component_paths, mandatory_reference_paths=call.mandatory_reference_paths)
             self.assertLessEqual(len(payload_json), MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
             self.assertLessEqual(accounting.schema_utf8_bytes, MAX_PROVIDER_SCHEMA_UTF8_BYTES)
             stale_measurements.append((len(payload_json), accounting.schema_utf8_bytes))
             receipt = transition_receipt(stale_resume).payload.receipt
-            self.assertEqual((receipt.target_task_id, receipt.target_task_revision), (task_id, 3))
-            self.assertIn(old_source, _workflow_material(provider.callback_payload(call))["available_proposal_drafting_source_ids"])
+            self.assertEqual((receipt.target_task_id, receipt.target_task_revision), (task_id, 2))
+            self.assertIn(current_source, _workflow_material(provider.callback_payload(call))["available_proposal_drafting_source_ids"])
             current = c.authoring_scope_to_dict(revised.proposal.authoring_scope)
+            self.assertEqual((current["task_id"], current["task_revision"]), (task_id, 1))
+            current = dict(current, task_revision=2)
             self.assertEqual((current["task_id"], current["task_revision"]), (task_id, 2))
-            current = dict(current, task_revision=3)
-            self.assertEqual((current["task_id"], current["task_revision"]), (task_id, 3))
             source_choices = dict(call.contract.semantic_index.policy.choices)
             self.assertEqual(source_choices["source_binding"], ("bound",))
-            self.assertIn(old_source, source_choices["source_ids"])
+            self.assertIn(current_source, source_choices["source_ids"])
             raw = recommendation(message="Exclude the earlier revision draft.",
-                recommended_action=action(source_ids=(old_source,), target_paths=(OUTLINE,),
+                recommended_action=action(source_ids=(current_source,), target_paths=(OUTLINE,),
                 specialist_ids=(PLOT_ARCHITECT,)), authoring_scope=current,
                 mutate=lambda value: value.update(authoring_assessment=assessment),
             )(call, provider)
             frame = json.loads(raw)
             self.assertEqual(frame["agent_action"]["task_result"]["response_details"]["proposal_drafting_request"]["source_ids"],
-                finite_fixture_selection(source_choices["source_ids"], (old_source,)))
+                finite_fixture_selection(source_choices["source_ids"], (current_source,)))
             self.assertTrue(call.contract.structural_findings(raw), raw)
             return raw
         self.backend.enqueue(stale)
