@@ -102,14 +102,15 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertEqual((seed_scope.schema_version, seed_scope.activity, seed_scope.domains), (3, AuthoringActivity.DRAFT, (ArtifactReviewDomain.TONE_EXECUTION,)))
         captured_material = []
         def historical_assessment(call):
-            rows = lead._live_material(call)['authoring_user_sources']; captured_material[:] = rows
+            material = lead._live_material(call); rows = material['authoring_user_sources']; captured_material[:] = rows
             self.assertEqual([(row['source_id'], row['content_text']) for row in rows], list(origins))
             for row, (source_id, raw) in zip(rows, origins):
                 self.assertEqual((row['source_identity'], row['revision_digest'], row['utf8_bytes'], row['original_authority']),
                     ('conversation/history_turn_' + source_id + '/user_input', 'sha256:' + hashlib.sha256(raw.encode()).hexdigest(), len(raw.encode()), 'literal_user'))
-            policy = call.contract.semantic_index.policy
-            self.assertEqual(policy.historical_user_source_ids, tuple(source_id for source_id, _raw in origins))
-            self.assertEqual(policy.input_ids, ('user_input',)); self.assertEqual(policy.assessment_source_ids, ('user_input', *policy.historical_user_source_ids))
+            choices = dict(call.contract.semantic_index.policy.choices)
+            self.assertEqual(choices['historical_user_source_ids'], tuple(source_id for source_id, _raw in origins))
+            self.assertEqual(choices['input_ids'], ('user_input',))
+            self.assertEqual(tuple(material['provider_constraints']['offered_admission_source_ids']), choices['input_ids'] + choices['historical_user_source_ids'])
             return replace(assessment, allowed_creative_actions=('bounded review judgments', 'separate proposal preparation'),
                 foundations=(admission.AdmissionEvidence('Supplied experience', ('history_user_43',), 'Exact historical USER events.'),),
                 creative_scope=admission.AdmissionEvidence('No invention', ('history_user_35',), 'Literal USER permits only actual events.'),

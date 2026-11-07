@@ -531,7 +531,7 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
                     choices['preparation_targets'], tuple(drafting['target_artifact_paths']))
             if 'authoring_assessment' in native:
                 native['authoring_assessment'] = lead_fixture_assessment(
-                    native['authoring_assessment'], source_choices=call.contract.semantic_index.policy.assessment_source_ids)
+                    native['authoring_assessment'], source_choices=choices['input_ids'] + choices['historical_user_source_ids'])
             return lead_fixture_response(call, lead_fixture_result(native), family=0)
         return lead._provider_envelope(call, value)
     return respond
@@ -635,7 +635,7 @@ def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
             choices = dict(call.contract.semantic_index.policy.choices)
             if 'authoring_assessment' in native:
                 native['authoring_assessment'] = lead_fixture_assessment(
-                    native['authoring_assessment'], source_choices=call.contract.semantic_index.policy.assessment_source_ids)
+                    native['authoring_assessment'], source_choices=choices['input_ids'] + choices['historical_user_source_ids'])
             rows = (
                 [{'agent_id': row['agent_id'], 'assignment_type': 'review_content',
                 'task_instructions': row['instruction'],
@@ -679,9 +679,9 @@ def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
         if mutate is not None:
             mutate(body)
         native = result(body, 'lead-response-v9')
+        choices = dict(call.contract.semantic_index.policy.choices)
         if 'authoring_assessment' in native:
-            native['authoring_assessment'] = lead_fixture_assessment(native['authoring_assessment'],
-                source_choices=call.contract.semantic_index.policy.assessment_source_ids)
+            native['authoring_assessment'] = lead_fixture_assessment(native['authoring_assessment'], source_choices=choices['input_ids'] + choices['historical_user_source_ids'])
         from tests.provider_wire_fixture import lead_fixture_scope_record
         native.pop('writing_task_scope')
         native['task_scope'] = lead_fixture_bound_scope(call, body['authoring_scope'], record=True)

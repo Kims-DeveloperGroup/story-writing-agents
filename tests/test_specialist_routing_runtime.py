@@ -1120,7 +1120,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual((target_scope.task_id, target_scope.task_revision), (task_identity_for_origin(continued.step_id), 1))
         self.assertEqual(target_scope, replace(original.proposal.authoring_scope, task_id=target_scope.task_id, task_revision=target_scope.task_revision))
         self.assertEqual(self.history(original_conversation), prefix)
-        self.assertEqual(self.backend.calls[-1].contract.semantic_index.policy.historical_user_source_ids, ())
+        self.assertEqual(dict(self.backend.calls[-1].contract.semantic_index.policy.choices)['historical_user_source_ids'], ())
         with self.assertRaisesRegex(ValueError, 'local conversation'):
             self.runtime._historical_authoring_users(self.session_id, continued.conversation_id,
                 target_scope, continued.proposal.basis.inputs, events=prefix)

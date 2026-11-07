@@ -157,7 +157,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             current = self.backend.calls[call_start:]
             self.assertEqual(len(current), 2)
             self.assertEqual(lead._live_material(current[-1])['authoring_user_sources'], [])
-            self.assertEqual(current[-1].contract.semantic_index.policy.historical_user_source_ids, ())
+            self.assertEqual(dict(current[-1].contract.semantic_index.policy.choices)['historical_user_source_ids'], ())
             self.assertEqual(tuple(call.scope for call in current), (expected_scope,) * 2)
             self.assertEqual(tuple(call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"] for call in current), ("bootstrap",) * 2)
             self.assertTrue(all(call.context_witness is None and call.context_anchor is None for call in current))
@@ -275,7 +275,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(latest["terminal_result"]["outcome_kind"], "answer")
         self.assertEqual(latest["terminal_result"]["source_kind"], "message")
         self.assertEqual(lead._live_material(self.backend.calls[-1])['authoring_user_sources'], [])
-        self.assertEqual(self.backend.calls[-1].contract.semantic_index.policy.historical_user_source_ids, ())
+        self.assertEqual(dict(self.backend.calls[-1].contract.semantic_index.policy.choices)['historical_user_source_ids'], ())
         terminal_event = next(event for event in report_history if event.event_id == latest["terminal_result"]["source_event_id"])
         self.assertIs(terminal_event.kind, CollaborationEventKind.MESSAGE)
         self.assertIs(type(terminal_event.payload), CollaborationLeadJudgmentPayload)
