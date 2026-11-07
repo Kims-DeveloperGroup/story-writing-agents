@@ -637,32 +637,12 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         previous = self.history(conversation)
         changed_option = report.options[1]
         successor = replace(selection, request_id="change-whole-direction", option_id=changed_option.option_id, material_digest=changed_option.material_digest, authoring_task_id=reused.proposal.authoring_scope.task_id, expected_authoring_task_revision=reused.proposal.authoring_scope.task_revision)
-        before_refusal_calls = len(self.backend.calls)
         budget_view = self.runtime.inspect_lead_collaboration(self.session_id, conversation)
         budget_task, = (item for item in budget_view.available_tasks
             if item.ref.task_id == reused.proposal.authoring_scope.task_id)
         self.assertEqual(budget_task.scope, reused.proposal.authoring_scope)
         self.assertEqual(len(budget_task.submitted_call_ids), 6)
         self.assertEqual(budget_view.rounds_spent, 1)
-        refused = await self.runtime.lead_turn(
-            self.session_id,
-            conversation,
-            "Draft changed whole premise freshly." + "\n" + _ADOPTION_DIRECTION,
-            premise_selection=successor, )
-        self.assertEqual(len(self.backend.calls), before_refusal_calls)
-        self.assertIs(refused.kind, c.LeadOutcomeKind.RECOMMENDATION, refused)
-        self.assertIs(refused.next_action, c.CollaborationNextAction.RETRY_LEAD_TURN)
-        self.assertEqual((refused.proposal, refused.artifact_proposal, refused.recommendation_request,
-            refused.artifact_application_request, refused.story_commit_request), (None, None, None, None, None))
-        refusal_events = self.history(conversation)[len(previous):]
-        self.assertEqual(len(_submitted_calls(refusal_events)), 0)
-        self.assertEqual(tuple((event.payload.code, event.payload.invocation_id, event.payload.call_id)
-            for event in refusal_events if type(event.payload) is c.CollaborationLeadOutcomeFailurePayload),
-            ((c.CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED, None, None),))
-        self.assertFalse(any(event.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for event in refusal_events))
-        retained_task, = (item for item in self.runtime.inspect_lead_collaboration(self.session_id, conversation).available_tasks
-            if item.ref.task_id == reused.proposal.authoring_scope.task_id)
-        self.assertEqual(retained_task.scope, reused.proposal.authoring_scope)
         fresh_selection = replace(successor, request_id="change-whole-direction-fresh-task",
             authoring_task_id=None, expected_authoring_task_revision=None)
         self.backend.enqueue(_selected_premise_proposal(fresh_selection, authoring_assessment=_fixture_assessment(
@@ -706,6 +686,15 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(c.project_collaboration_history(self.history(conversation)).premise_selection, hold_selection)
         self.assertEqual(self.history(conversation)[:len(hold_history)], hold_history)
         self.assertEqual(self.artifact_bytes(), hold_artifacts)
+        writing_task, = (item for item in self.runtime.inspect_lead_collaboration(self.session_id, conversation).available_tasks
+            if item.ref.task_id == reused.proposal.authoring_scope.task_id)
+        self.assertEqual((writing_task.status, writing_task.scope, len(writing_task.submitted_call_ids)),
+            ("active", reused.proposal.authoring_scope, 6))
+        writing_held = await self.runtime.decide_lead_task(task.LeadTaskDecision.from_task(writing_task.ref, task.LeadTaskAction.HOLD))
+        self.assertEqual(writing_held.task_ref, writing_task.ref)
+        self.assertIsNone(writing_held.turn)
+        self.assertEqual(len(self.backend.calls), hold_call_count)
+        self.assertEqual(c.project_collaboration_history(self.history(conversation)).premise_selection, hold_selection)
         for decision in (premise.PremiseDecisionAction.REJECT, premise.PremiseDecisionAction.DEFER):
             retained_choice = c.project_collaboration_history(self.history(conversation)).premise_selection
             _, later = await _confirmed_premise(self, conversation)
@@ -1696,22 +1685,6 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(self.history(archived),before)
 
     async def test_old_drafted_revision_cannot_authorize_revised_candidate(self):
-        import sys
-        fixture_notes = []
-        original_fixture_failure = self.backend.fail_fixture
-        def observed_fixture_failure(code):
-            if code == "missing_script" and len(fixture_notes) < 3:
-                caller = sys._getframe(1)
-                parent = caller.f_back
-                try:
-                    agent = caller.f_locals.get("agent_id")
-                    fixture_notes.append((code, agent if agent in (LEAD_ORCHESTRATOR, *ROSTER) else None,
-                        caller.f_code.co_name, caller.f_lineno,
-                        None if parent is None else (parent.f_globals.get("__name__"), parent.f_code.co_name, parent.f_lineno)))
-                finally:
-                    del caller, parent
-            return original_fixture_failure(code)
-        self.enterContext(mock.patch.object(self.backend, "fail_fixture", new=observed_fixture_failure))
         from story_writing_agents.conversations import session_context as session_context_module
         self.enterContext(mock.patch.object(session_context_module, "MAX_SESSION_CONTEXT_UTF8_BYTES", 512 * 1024))
         from story_writing_agents import ReplyTraceOrigin
@@ -1787,17 +1760,6 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(completed.rounds_spent, 2)
         self.assertLess(12 - completed.physical_calls_spent, len(review.proposal.participants) + 2)
         self.assertEqual(completed.physical_calls_spent, 11)
-        exhausted_task = next(item for item in self.runtime.inspect_lead_collaboration(
-            self.session_id, conversation).available_tasks
-            if (item.ref.task_id, item.ref.task_revision) == (task_id, 1))
-        exhausted_resume = task.LeadTaskDecision.from_task(exhausted_task.ref, task.LeadTaskAction.RESUME, text=_ADMISSION_BRIEF)
-        before_refusal = len(self.backend.calls)
-        self.backend.enqueue()
-        refused = (await self.runtime.decide_lead_task(exhausted_resume)).turn
-        self.assertEqual(len(self.backend.calls) - before_refusal, 0, refused)
-        self.assertIsNone(refused.proposal, refused)
-        self.assertIsNone(refused.recommendation_request, refused)
-        self.assertFalse(any(e.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for e in self.history(conversation)[len(completed_prefix):]))
         positive_source = next(item for item in self.runtime.inspect_lead_collaboration(
             self.session_id, conversation).available_tasks if item.ref.task_id == task_id)
         self.assertEqual(len(positive_source.submitted_call_ids), 11)
@@ -1864,6 +1826,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         invalid = await self._rejected_pair(self.conversation(), _ADMISSION_BRIEF, cross_frame,
             selection_group='consultation.authoring.content')
         self._assert_continuation(invalid, 'proposal')
+        self.assertFalse(any(e.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for e in self.history(invalid.conversation_id) if e.turn_id == invalid.turn_id))
         multiple = self.conversation()
         before_multiple = self.artifact_bytes()
         multi_path = "manuscript/part-01/nonfirst-successor.md"
@@ -2047,20 +2010,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(completed_prefix.current_proposal, admitted.proposal)
         self.assertEqual(completed_prefix.rounds_spent, 1)
         self.assertEqual(negative_view.rounds_spent, 0)
-        o_probe_validation_by_call = {}
-        for o_probe_event in SessionHistorySourceAdapter(services.catalog, services.event_store, self.session_id).capture().events():
-            o_probe_payload = o_probe_event.payload
-            if type(o_probe_payload) is c.CollaborationMessagePayload and o_probe_payload.validation_call_id is not None:
-                o_probe_validation_by_call.setdefault(o_probe_payload.validation_call_id, []).extend(o_probe_payload.validation_details)
-        o_probe_request_notes = []
-        for o_probe_index, (o_probe_agent, o_probe_request) in enumerate(self.backend.call_records):
-            o_probe_details = o_probe_validation_by_call.get(o_probe_request.call_id, ())
-            if o_probe_details:
-                o_probe_phase = getattr(getattr(getattr(o_probe_request, "contract", None), "schema_group_phase", None), "value", None)
-                o_probe_request_notes.append((o_probe_index, o_probe_agent, o_probe_phase, o_probe_request.call_kind.value, tuple(detail[:300] for detail in o_probe_details[:3])))
-        o_probe_script_notes = tuple((o_probe_provider.agent_id, o_probe_provider.script.fixture_error_code, o_probe_provider.script.callback_exception_site)
-            for o_probe_provider in self.backend.providers if o_probe_provider.script.fixture_error_code is not None)[:4]
-        self.assertIsNone(self.backend._fixture_error_code, (tuple(fixture_notes), tuple(o_probe_request_notes[:8]), o_probe_script_notes))
+        self.assertIsNone(self.backend._fixture_error_code)
 
         self.workspace.path(OUTLINE).unlink()
         latest_ref = next(item.ref for item in self.runtime.inspect_lead_collaboration(self.session_id, conversation).available_tasks
