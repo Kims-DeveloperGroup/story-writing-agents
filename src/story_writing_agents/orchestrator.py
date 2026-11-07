@@ -1050,12 +1050,12 @@ def _lead_front_result_contract(
                 scoped_variant["properties"]["authoring_scope"]["properties"]["intent"]["enum"] = [intent]
                 if intent == AuthoringIntent.AUTHORING.value:
                     scoped_variant["properties"]["authoring_assessment"] = assessment_schema(
-                        None if facts.allow_read_sources else facts.input_ids)
+                        None if facts.allow_read_sources else facts.assessment_source_ids)
                     scoped_variant["required"].append("authoring_assessment")
                 qualified_variants.append(scoped_variant)
         else:
             properties["authoring_assessment"] = assessment_schema(
-                None if facts.allow_read_sources else facts.input_ids)
+                None if facts.allow_read_sources else facts.assessment_source_ids)
             variant["required"].append("authoring_assessment")
             qualified_variants.append(variant)
     variants = qualified_variants
@@ -4643,7 +4643,14 @@ class StoryRuntime:
             if original is not None and original.step_id == source.step_id:
                 admission = original.basis.authoring_admission
         if admission is not None:
+            historical_by_id = {fact.source_id: fact for fact, _text in
+                self._historical_authoring_users(source.session_id, source.conversation_id,
+                    source.payload.authoring_scope, inputs, events=events, admission=admission)}
             for fact in admission.sources:
+                if fact.source_id in historical_by_id:
+                    if historical_by_id[fact.source_id] != fact:
+                        raise _LeadOutcomeValidationError("recommendation historical USER source changed")
+                    continue
                 actual = aliases.get(fact.source_id)
                 if actual is None:
                     raise _LeadOutcomeValidationError("recommendation admission source is not offered")
@@ -4947,13 +4954,16 @@ class StoryRuntime:
             qualified_admission = self._qualify_authoring_inputs(
                 admission.assessment, inputs=selected_inputs, evidence=evidence, scope=scope,
                 events=events, pending_material=source, pending_replies=preview_replies,
-            )
+                admission=admission)
             if type(qualified_admission) is not AuthoringAdmissionBasis:
                 raise _LeadOutcomeValidationError("recommendation lost its current authoring admission")
-        if (self._official_authoring_scope(scope) or action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT) and qualified_admission is None:
+        requires_admission, target_required = LeadProviderConstraints.authoring_requirements(
+            intent=None if scope is None else scope.intent, activity=None if scope is None else scope.activity,
+            preparation_kind=action.kind.value)
+        if requires_admission and qualified_admission is None:
             raise _LeadOutcomeValidationError("official preparation requires qualified authoring admission")
         qualified_readiness = None
-        if action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT or (scope is not None and scope.intent is AuthoringIntent.AUTHORING and scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}):
+        if target_required:
             qualified_readiness = self._qualify_readiness_targets(source.session_id,
                 action.target_paths or (() if scope is None else scope.target_paths))
             if type(qualified_readiness) is CoreDocumentReadinessNeeded:
@@ -5197,7 +5207,7 @@ class StoryRuntime:
                         if request.authoring_scope is None:
                             raise ValueError("official recommendation admission has no authoring scope")
                         qualified = self._qualify_authoring_inputs(request.basis.authoring_admission.assessment,
-                            inputs=current_inputs, evidence=request.basis.evidence, scope=request.authoring_scope, events=events)
+                            inputs=current_inputs, evidence=request.basis.evidence, scope=request.authoring_scope, events=events, admission=request.basis.authoring_admission)
                         if qualified != request.basis.authoring_admission:
                             raise ValueError("recommendation authoring admission is stale")
                     if (current_inputs != request.basis.inputs
@@ -9062,6 +9072,7 @@ class StoryRuntime:
             action_progress_sink=action_progress_sink,
             editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
             evidence=proposal.basis.evidence,
+            authoring_basis=proposal.basis, authoring_scope=proposal.authoring_scope,
         )
 
     async def _run_lead_synthesis(
@@ -9234,6 +9245,7 @@ class StoryRuntime:
             ),
             action_progress_sink=action_progress_sink,
             editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
+            authoring_basis=proposal.basis, authoring_scope=proposal.authoring_scope,
         )
 
     async def _run_premise_assignment(
@@ -9266,6 +9278,7 @@ class StoryRuntime:
                 "message": _SAFE_STRUCTURED_FALLBACK_MESSAGE, "alternatives": []}),
             action_progress_sink=action_progress_sink, editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
             evidence=proposal.basis.evidence,
+            authoring_basis=proposal.basis, authoring_scope=proposal.authoring_scope,
         )
 
     async def _run_premise_synthesis(
@@ -9340,6 +9353,7 @@ class StoryRuntime:
             decoder=decode, fallback_answer=json.dumps({"status": "clarification",
                 "message": _SAFE_STRUCTURED_FALLBACK_MESSAGE, "options": [], "recommended_option_key": None}),
             action_progress_sink=action_progress_sink, editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
+            authoring_basis=proposal.basis, authoring_scope=proposal.authoring_scope,
         )
 
     @staticmethod
@@ -9519,6 +9533,8 @@ class StoryRuntime:
         fallback_answer: str,
         action_progress_sink: ContextActionProgressSink | None,
         constraints: LeadProviderConstraints | None = None,
+        authoring_basis: CollaborationProposalBasis | None = None,
+        authoring_scope: AuthoringScope | None = None,
         diagnostic_task: tuple[str, int] | None = None,
         editorial_refs: tuple[EditorialRecordRef, ...] = (),
         editorial_context_digest: str | None = None,
@@ -9535,6 +9551,13 @@ class StoryRuntime:
                 CollaborationInputKind.WRITING_ARTIFACT,
             }
         )
+        if authoring_basis is not None and authoring_basis.authoring_admission is not None:
+            historical = self._historical_authoring_users(session_id, conversation_id,
+                authoring_scope, authoring_basis.inputs, admission=authoring_basis.authoring_admission)
+            if historical:
+                if not isinstance(material_value, Mapping):
+                    raise BackendProtocolError("authoring source material requires the owned structured input")
+                material_value = {**material_value, "authoring_user_sources": self._authoring_user_materials(historical)}
         reference_operation: RuntimeReferenceOperation | None = None
         bound_agent: BoundAgent | None = None
         provider: _AccountingContextProvider | None = None
@@ -11485,7 +11508,7 @@ class StoryRuntime:
         if authoring_admission is not None:
             qualified = self._qualify_authoring_inputs(authoring_admission.assessment,
                 inputs=tuple(inputs), evidence=proposal.basis.evidence,
-                scope=next_intent.authoring_scope, events=events)
+                scope=next_intent.authoring_scope, events=events, admission=authoring_admission)
             if (type(qualified) is not AuthoringAdmissionBasis
                 or qualified.sources != authoring_admission.sources
                 or qualified.request_digest != authoring_admission.request_digest):
@@ -12814,6 +12837,44 @@ class StoryRuntime:
                 and not (source_review_revision or source_artifact_revision)
             ):
                 revision_source_scope = None
+            binding_prior = None
+            if preparation_request is not None:
+                binding_prior = preparation_request.authoring_scope
+            elif previous_scope is not None:
+                binding_prior = previous_scope
+            elif task_receipt is not None and task_receipt.source_task_ref is not None:
+                binding_prior = available_tasks.get(task_receipt.source_task_ref.task_id)
+            elif adoption_capture is None and premise_capture is None:
+                local_ids = {event.payload.authoring_scope.task_id
+                    for event in task_events if event.conversation_id == conversation_id
+                    and getattr(event.payload, "authoring_scope", None) is not None
+                    and event.payload.authoring_scope.task_id in available_tasks}
+                local_scopes = [available_tasks[identity] for identity in local_ids
+                    if available_tasks[identity].activity is not AuthoringActivity.WORKFLOW]
+                if len(local_scopes) > 1:
+                    self._fail_reference_operation(reference_operation,
+                        BackendProtocolError("explicit host task selection required"))
+                    return self._structured_fallback_lead_result(
+                        session_id=session_id, conversation_id=conversation_id,
+                        turn_id=turn_id, step_id=step_id,
+                        message="Select the writing work to continue through the task controls.",
+                        provider_invocation_id=None)
+                binding_prior = next(iter(local_scopes), None)
+            binding_reserved = (next(iter(offered_tasks)) if len(offered_tasks) == 1 else None)
+            binding_pinned = (binding_prior is not None and bool(
+                confirmed_authoring_proposals(binding_prior, task_events)))
+            source_scope = binding_prior
+            if task_receipt is not None and task_receipt.action is LeadTaskAction.NEW_TASK:
+                source_scope = None
+            elif (task_receipt is not None and task_receipt.action is LeadTaskAction.RESUME
+                    and source_scope is not None):
+                source_scope = replace(source_scope, task_id=task_receipt.target_task_id,
+                    task_revision=task_receipt.target_task_revision)
+            historical_user_sources = (() if interaction_mode is not LeadInteractionMode.ORCHESTRATION or discussion_only
+                else self._historical_authoring_users(session_id, conversation_id,
+                    source_scope, inputs, events=objective_events,
+                    admission=(preparation_request.basis.authoring_admission
+                        if preparation_request is not None and not is_revision else None)))
             readiness_offered_sources = self._readiness_sources(
                 inputs=inputs, evidence=None, events=objective_events)
             readiness_request_digest = next(item.revision_digest for item in inputs
@@ -12822,6 +12883,7 @@ class StoryRuntime:
             constraints = LeadProviderConstraints(
                 per_assignment_input_ids=tuple(f"selected_material_{ordinal}" for ordinal in range(1, len(task_material_events) + 1)) + (("adopted_idea",) if adoption_capture is not None else ()),
                 input_ids=tuple(item.input_id for item in inputs),
+                historical_user_source_ids=tuple(source.source_id for source, _text in historical_user_sources),
                 readiness_source_basis_ref=readiness_pin,
                 reviewer_inputs=tuple(
                     (reviewer, item.input_id) for item in inputs
@@ -12933,32 +12995,6 @@ class StoryRuntime:
                 reference_operation_id, reservations = self._reference_reservations(
                     reference_operation
                 )
-                binding_prior = None
-                if preparation_request is not None:
-                    binding_prior = preparation_request.authoring_scope
-                elif previous_scope is not None:
-                    binding_prior = previous_scope
-                elif task_receipt is not None and task_receipt.source_task_ref is not None:
-                    binding_prior = available_tasks.get(task_receipt.source_task_ref.task_id)
-                elif adoption_capture is None and premise_capture is None:
-                    local_ids = {event.payload.authoring_scope.task_id
-                        for event in task_events if event.conversation_id == conversation_id
-                        and getattr(event.payload, "authoring_scope", None) is not None
-                        and event.payload.authoring_scope.task_id in available_tasks}
-                    local_scopes = [available_tasks[identity] for identity in local_ids
-                        if available_tasks[identity].activity is not AuthoringActivity.WORKFLOW]
-                    if len(local_scopes) > 1:
-                        self._fail_reference_operation(reference_operation,
-                            BackendProtocolError("explicit host task selection required"))
-                        return self._structured_fallback_lead_result(
-                            session_id=session_id, conversation_id=conversation_id,
-                            turn_id=turn_id, step_id=step_id,
-                            message="Select the writing work to continue through the task controls.",
-                            provider_invocation_id=provider.invocation_id)
-                    binding_prior = next(iter(local_scopes), None)
-                binding_reserved = (next(iter(offered_tasks)) if len(offered_tasks) == 1 else None)
-                binding_pinned = (binding_prior is not None and bool(
-                    confirmed_authoring_proposals(binding_prior, task_events)))
                 document_input_intents = (document_selection.candidate_uses if document_selection is not None else
                     () if document_node is None else document_node.candidate_uses)
                 candidate_aliases = {f"plan_candidate_{index}" for index, _ in enumerate(document_input_intents, 1)}
@@ -12972,6 +13008,7 @@ class StoryRuntime:
                     **({"plan_candidate_material": candidate_material} if candidate_material else {}),
                     "conversation_id": conversation_id,
                     "provider_constraints": constraints.prompt_facts(),
+                    "authoring_user_sources": self._authoring_user_materials(historical_user_sources),
                     "artifact_objectives": artifact_objective_context(objective_projection),
                     "command": reference_operation.provider_text,
                     "input_aliases": input_aliases,
@@ -13620,21 +13657,34 @@ class StoryRuntime:
                         selected = tuple(item for item in decoded.proposal.shared_premises if item.slot_id == premise_capture.slot_id)
                         if len(selected) != 1 or selected[0].selected_premise != premise_capture.selected_text or "selected_premise" not in selected[0].basis_input_ids:
                             raise _LeadOutcomeValidationError("selected premise requires the exact disclosed dependency capture")
-                    requires_admission = ((self._official_authoring_scope(decoded.authoring_scope)
-                        and (decoded.proposal is not None or decoded.recommended_action is not None))
-                        or decoded.artifact_intent is not None
-                        or (decoded.recommended_action is not None
-                            and decoded.recommended_action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT))
+                    requires_admission, target_required = LeadProviderConstraints.authoring_requirements(
+                        intent=None if decoded.authoring_scope is None else decoded.authoring_scope.intent,
+                        activity=None if decoded.authoring_scope is None else decoded.authoring_scope.activity,
+                        proposal=decoded.proposal is not None, artifact=decoded.artifact_intent is not None,
+                        preparation_kind=None if decoded.recommended_action is None else decoded.recommended_action.kind.value,
+                        draft_assignments=decoded.proposal is not None and any(
+                            item.mode is SpecialistAssignmentMode.DRAFT for item in decoded.proposal.assignments))
                     if requires_admission:
                         if (decoded.authoring_scope is None
                                 or decoded.authoring_scope.intent is not AuthoringIntent.AUTHORING
                                 or decoded.authoring_scope.activity is AuthoringActivity.WORKFLOW):
                             raise _LeadOutcomeValidationError("official candidate preparation requires an explicit authoring scope")
+                        if decoded.authoring_assessment is not None:
+                            assessed = decoded.authoring_assessment
+                            citations = {identity for item in (*assessed.foundations, assessed.direction,
+                                assessed.creative_scope, *assessed.decisions) if item is not None for identity in item.source_ids}
+                            historical_ids = {fact.source_id for fact, _text in historical_user_sources}
+                            if citations.intersection(historical_ids) and (source_scope is None or
+                                    (source_scope.task_id, source_scope.task_revision) !=
+                                    (decoded.authoring_scope.task_id, decoded.authoring_scope.task_revision)):
+                                raise _LeadOutcomeValidationError("historical USER source belongs to a different captured task")
                         try:
                             qualified = self._qualify_authoring_inputs(
                                 decoded.authoring_assessment,
                                 inputs=self._materialize_lead_evidence_inputs(inputs, decoded_evidence),
                                 evidence=decoded_evidence, scope=decoded.authoring_scope, events=objective_events)
+                        except SessionContextCapacityError:
+                            raise
                         except (TypeError, ValueError) as exc:
                             raise validation_failure(_LeadOutcomeValidationError("authoring assessment is not source-qualified"),
                                 "$.authoring_assessment", "assessment must bind actual supplied USER/material/READ sources") from exc
@@ -13645,11 +13695,8 @@ class StoryRuntime:
                                 trace=ReplyTrace(role=LEAD_ORCHESTRATOR, action="none", context_sources=(),
                                     recovered_fields=("runtime_notice",), origin=ReplyTraceOrigin.RUNTIME_FALLBACK))
                         else:
-                            needs_readiness_preparation = decoded.artifact_intent is not None or (decoded.recommended_action is not None and
-                                (decoded.recommended_action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT or decoded.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}))
-                            drafting = decoded.proposal is not None and any(a.mode is SpecialistAssignmentMode.DRAFT for a in decoded.proposal.assignments)
                             readiness = (self._qualify_readiness_targets(session_id, decoded.authoring_scope.target_paths)
-                                         if needs_readiness_preparation or drafting else None)
+                                if target_required else None)
                             if type(readiness) is CoreDocumentReadinessNeeded:
                                 decoded = replace(decoded, kind=LeadOutcomeKind.QUESTION, message=readiness.message,
                                     proposal=None, artifact_intent=None, objective_intent=None, recommended_action=None,
@@ -14716,7 +14763,7 @@ class StoryRuntime:
         if type(outcome.authoring_admission) is not AuthoringAdmissionBasis:
             raise _LeadOutcomeValidationError("official candidate preparation lacks qualified admission")
         review_admission = self._qualify_authoring_inputs(outcome.authoring_admission.assessment,
-            inputs=tuple(materialized), evidence=evidence, scope=review_scope, events=objective_events)
+            inputs=tuple(materialized), evidence=evidence, scope=review_scope, events=objective_events, admission=outcome.authoring_admission)
         if type(review_admission) is not AuthoringAdmissionBasis:
             raise _LeadOutcomeValidationError("candidate review lost its current authoring admission")
         proposal_intent = LeadProposalIntent(
@@ -17623,6 +17670,75 @@ class StoryRuntime:
     def _official_authoring_scope(scope: AuthoringScope | None) -> bool:
         return scope is not None and scope.intent is AuthoringIntent.AUTHORING
 
+    def _historical_authoring_users(self, session_id: str, conversation_id: str,
+            scope: AuthoringScope | None, inputs: tuple[CollaborationInputRevision, ...], *,
+            events: tuple[CollaborationEvent, ...] | None = None,
+            admission: AuthoringAdmissionBasis | None = None) -> tuple[tuple[AdmissionSource, str], ...]:
+        """Capture local task-bound USER originals independently of assignment inputs."""
+        if scope is None or scope.intent is not AuthoringIntent.AUTHORING:
+            return ()
+        records = (self.conversation_storage_services.event_store.read(session_id, conversation_id)
+            if events is None else events)
+        if any((event.session_id, event.conversation_id) != (session_id, conversation_id) for event in records):
+            raise ValueError("historical USER sources must belong to the local conversation")
+        projection = project_collaboration_history(records)
+        transition_users: set[str] = set()
+        task_views = tuple(view for view in projection.available_tasks
+            if (view.scope.task_id, view.scope.task_revision) == (scope.task_id, scope.task_revision))
+        views = tuple(view for view in task_views
+            if view.status == "active" or (admission is not None and view.status == "protected"))
+        if not task_views:
+            for event in records:
+                if type(event.payload) is not CollaborationLeadTaskTransitionPayload:
+                    continue
+                receipt = event.payload.receipt
+                ref = receipt.source_task_ref
+                if (receipt.action is LeadTaskAction.RESUME and ref is not None
+                        and (receipt.target_task_id, receipt.target_task_revision) == (scope.task_id, scope.task_revision)
+                        and (ref.session_id, ref.conversation_id) == (session_id, conversation_id)):
+                    views = tuple(view for view in projection.available_tasks if view.ref == ref
+                        and view.status in {"active", "held", "protected"})
+                    if len(views) == 1:
+                        transition_users.update(item.event_id for item in records
+                            if type(item.payload) is CollaborationMessagePayload and item.sender == _USER_ACTOR
+                            and item.recipient == _LEAD_ACTOR and item.turn_id == event.turn_id
+                            and item.step_id == receipt.planning_step_id)
+        ids = set(views[0].source_event_ids) if len(views) == 1 else set()
+        ids.update(transition_users)
+        ordinary = {item.input_id for item in inputs}
+        requested = (None if admission is None else {source.source_id for source in admission.sources
+            if source.kind is AdmissionSourceKind.USER and source.source_id not in ordinary})
+        if requested is not None and not requested.issubset(ids):
+            raise ValueError("historical USER basis is outside the current task lineage")
+        excluded = {item.locator for item in inputs if item.kind is CollaborationInputKind.USER_INPUT}
+        selected = []
+        for event in records:
+            if event.event_id not in ids or (requested is not None and event.event_id not in requested):
+                continue
+            if (type(event.payload) is not CollaborationMessagePayload or event.sender != _USER_ACTOR
+                    or event.recipient != _LEAD_ACTOR):
+                raise ValueError("historical authoring source is not a literal USER origin")
+            locator = f"conversation/{event.turn_id}/user_input"
+            if locator in excluded:
+                continue
+            text = event.payload.content
+            selected.append((AdmissionSource(event.event_id, AdmissionSourceKind.USER, locator,
+                "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest(), "literal_user",
+                len(text.encode("utf-8"))), text))
+        if len(selected) + len(inputs) > 64:
+            raise SessionContextCapacityError()
+        if admission is not None:
+            expected = {source.source_id: source for source in admission.sources if source.source_id in (requested or ())}
+            if {source.source_id: source for source, _text in selected} != expected:
+                raise ValueError("historical USER admission bytes or identity changed")
+        return tuple(selected)
+
+    @staticmethod
+    def _authoring_user_materials(sources: tuple[tuple[AdmissionSource, str], ...]) -> list[dict[str, object]]:
+        return [{"source_id": source.source_id, "source_identity": source.source_identity,
+            "revision_digest": source.revision_digest, "utf8_bytes": source.utf8_bytes,
+            "original_authority": source.original_authority, "content_text": text} for source, text in sources]
+
     def _qualified_input_sources(
         self, *,
         inputs: tuple[CollaborationInputRevision, ...],
@@ -17807,12 +17923,25 @@ class StoryRuntime:
         events: tuple[CollaborationEvent, ...], pending_user_text: str | None = None,
         pending_material: CollaborationEventDraft | None = None,
         pending_replies: tuple[CollaborationSpecialistReplyPayload, ...] = (),
+        admission: AuthoringAdmissionBasis | None = None,
     ) -> AuthoringAdmissionBasis | AuthoringAdmissionNeeded:
         sources = self._qualified_input_sources(inputs=inputs, evidence=evidence, scope=scope,
             events=events, pending_user_text=pending_user_text, pending_material=pending_material,
             pending_replies=pending_replies)
-        user = next(v for v in inputs if v.kind is CollaborationInputKind.USER_INPUT
-                    and v.state is CollaborationInputState.PRESENT)
+        user = next(v for v in inputs if v.kind is CollaborationInputKind.USER_INPUT and v.state is CollaborationInputState.PRESENT)
+        turn = user.locator.removeprefix("conversation/").removesuffix("/user_input")
+        origins = tuple(event for event in events if event.turn_id == turn
+            and type(event.payload) is CollaborationMessagePayload and event.sender == _USER_ACTOR)
+        local = ({(origins[0].session_id, origins[0].conversation_id)} if len(origins) == 1
+            else {(event.session_id, event.conversation_id) for event in events})
+        if len(local) == 1:
+            session, conversation = next(iter(local))
+            historical = self._historical_authoring_users(session, conversation, scope, inputs,
+                events=tuple(event for event in events if (event.session_id, event.conversation_id) == (session, conversation)),
+                admission=admission)
+            sources = (*sources, *(source for source, _text in historical))
+        if len(sources) > 64:
+            raise SessionContextCapacityError()
         return qualify_authoring_assessment(assessment, sources=sources,
             request_digest=user.revision_digest, task_id=scope.task_id,
             task_revision=scope.task_revision, scope_digest=admission_digest(authoring_scope_to_dict(scope)))
@@ -18213,7 +18342,7 @@ class StoryRuntime:
                 assert proposal.authoring_scope is not None
                 current_admission = self._qualify_authoring_inputs(
                     proposal.basis.authoring_admission.assessment if proposal.basis.authoring_admission else None,
-                    inputs=inputs, evidence=proposal.basis.evidence, scope=proposal.authoring_scope, events=events)
+                    inputs=inputs, evidence=proposal.basis.evidence, scope=proposal.authoring_scope, events=events, admission=proposal.basis.authoring_admission)
                 if (type(current_admission) is not AuthoringAdmissionBasis
                         or current_admission != proposal.basis.authoring_admission):
                     raise ValueError("official authoring admission is missing or stale")

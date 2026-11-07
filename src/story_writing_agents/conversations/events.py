@@ -4681,6 +4681,7 @@ def _validate_captured_admission(
             or admission.scope_digest != admission_digest(authoring_scope_to_dict(scope))):
         raise ValueError("authoring admission changed its exact task or scope")
     facts = {v.source_id: v for v in authoring_source_facts(basis.inputs, basis.evidence)}
+    input_ids = {item.input_id for item in basis.inputs}
     for source in admission.sources:
         expected = source if source.kind is AdmissionSourceKind.READ else replace(
             source, utf8_bytes=None,
@@ -4688,8 +4689,18 @@ def _validate_captured_admission(
             else source.original_authority,
         )
         if facts.get(source.source_id) != expected:
-            raise ValueError("authoring admission sources are not exact captured inputs")
-    user = tuple(v for v in basis.inputs if v.kind is CollaborationInputKind.USER_INPUT)
+            if (source.kind is not AdmissionSourceKind.USER or source.source_id in facts or
+                    source.source_id in input_ids or
+                    not source.source_identity.startswith("conversation/") or
+                    not source.source_identity.endswith("/user_input") or source.utf8_bytes is None):
+                raise ValueError("authoring admission sources are not exact captured inputs")
+            # Historical literal USER sources are admission-only, not assignment inputs.
+            # The context owner must prove their exact origin and current task causality.
+            _validate_identifier(source.source_id, label="historical authoring USER source ID")
+            _validate_identifier(source.source_identity[len("conversation/"):-len("/user_input")],
+                label="historical authoring USER turn ID")
+    user = tuple(v for v in basis.inputs if v.kind is CollaborationInputKind.USER_INPUT
+        and v.state is CollaborationInputState.PRESENT)
     if not any(v.revision_digest == admission.request_digest for v in user):
         raise ValueError("authoring admission lacks its actual USER request")
 

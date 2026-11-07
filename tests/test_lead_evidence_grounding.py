@@ -337,7 +337,7 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None, input
                 tuple(drafting['specialist_ids']))
             if 'authoring_assessment' in native:
                 native['authoring_assessment'] = lead_fixture_assessment(
-                    native['authoring_assessment'], source_choices=choices['input_ids'])
+                    native['authoring_assessment'], source_choices=choices['input_ids'] + choices['historical_user_source_ids'])
             return lead_fixture_response(call, lead_fixture_result(native), family=0)
         from tests.provider_wire_fixture import (
             lead_fixture_assignments, lead_fixture_bound_scope,
@@ -361,7 +361,7 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None, input
                 "task_scope": lead_fixture_bound_scope(
                     call, value["authoring_scope"], record=True),
                 "authoring_assessment": lead_fixture_assessment(
-                    value.get("authoring_assessment"), source_choices=choices["input_ids"]),
+                    value.get("authoring_assessment"), source_choices=choices["input_ids"] + choices["historical_user_source_ids"]),
                 "specialist_consultation_proposal": {
                     "shared_premises": value["proposal"]["shared_premises"], **allocated}}},
             family=0)
@@ -408,7 +408,7 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
             if "authoring_assessment" in value:
                 choices = dict(call.contract.semantic_index.policy.choices)
                 details["authoring_assessment"] = lead_fixture_assessment(
-                    value["authoring_assessment"], source_choices=choices["input_ids"])
+                    value["authoring_assessment"], source_choices=choices["input_ids"] + choices["historical_user_source_ids"])
             return lead_fixture_response(call, {
                 "response_type": "clarification_question", "response_text": value["message"],
                 "response_details": details}, family=0,
@@ -438,7 +438,7 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
             'response_text': value['message'], 'response_details': {
                 'task_scope': lead_fixture_bound_scope(call, value['authoring_scope'], record=True),
                 'authoring_assessment': lead_fixture_assessment(
-                    value.get('authoring_assessment'), source_choices=choices['input_ids']),
+                    value.get('authoring_assessment'), source_choices=choices['input_ids'] + choices['historical_user_source_ids']),
                 'specialist_consultation_proposal': {
                     'shared_premises': value['proposal']['shared_premises'], **allocated}}},
             family=0)
