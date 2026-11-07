@@ -838,9 +838,9 @@ class SemanticInputDriverTests(unittest.TestCase):
     def test_transient_live_input_clears_commit_events_and_provider_failure(
         self,
     ) -> None:
-        view = InputPromptView((), Prompt("input>"))
+        view = InputPromptView((), Prompt("p>"))
         cases: tuple[tuple[str, object], ...] = (
-            ("visible\n", "visible"),
+            ("한" * 8 + "Z\n", "한" * 8 + "Z"),
             ("\x03", KeyboardInterrupt),
             ("\x04", EOFError),
             ("", EOFError),
@@ -848,7 +848,7 @@ class SemanticInputDriverTests(unittest.TestCase):
         for characters, expected in cases:
             with self.subTest(characters=repr(characters)):
                 driver, _input, output, fallback, termios_double, _size = _driver(
-                    characters
+                    characters, width=20,
                 )
                 if isinstance(expected, str):
                     self.assertEqual(
@@ -860,7 +860,9 @@ class SemanticInputDriverTests(unittest.TestCase):
                         ),
                         expected,
                     )
-                    self.assertEqual(output.records[-1], "\r\r\x1b[J")
+                    self.assertEqual(_recorded_frames(output, width=20)[-2].cursor, (1, 1))
+                    self.assertTrue(_recorded_frames(output, width=20)[-2].text.endswith("Z"))
+                    self.assertEqual(_recorded_frames(output, width=20)[-1].text, "")
                 else:
                     with self.assertRaises(expected):  # type: ignore[arg-type]
                         driver.read_input_line(
@@ -1088,6 +1090,8 @@ class SemanticInputDriverTests(unittest.TestCase):
         driver, _input, output, fallback, termios_double, size_calls = _driver(
             f"{reserved}界e\u0301\n",
         )
+        height_after_bytes = len((reserved + "界").encode("utf-8"))
+        driver._os_provider().get_terminal_size = mock.Mock(side_effect=lambda _: os.terminal_size((60 if not _input.characters else 80, 25 if _input.read_calls > height_after_bytes else 24)))
         view = _core._composer_input_view(
             ComposeMode.CHAT, "plot", ComposerState()
         )
@@ -1112,9 +1116,9 @@ class SemanticInputDriverTests(unittest.TestCase):
             readiness.call_args_list,
             [mock.call((7,), (), (), 0.05)] * 4,
         )
-        renderer.assert_called_once()
+        self.assertEqual([call.args[1].width for call in renderer.call_args_list], [79, 59])
         self.assertIs(renderer.call_args.args[1].profile, CapabilityProfile.ANSI)
-        self.assertEqual(size_calls, [8, 8])
+        self.assertEqual({call.args[0] for call in driver._os_provider().get_terminal_size.call_args_list}, {8})
         fallback.assert_not_called()
         self.assertEqual(driver._history_state, MainInputHistoryState())
         self.assertEqual(

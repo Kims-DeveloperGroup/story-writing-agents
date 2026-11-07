@@ -34,6 +34,7 @@ from story_writing_agents.interactive_terminal._model import (
     LineInputState,
     RenderedInputFrame,
 )
+from tests._external_view_support import recording_driver
 from tests.test_interactive_terminal_composer import _driver
 
 
@@ -183,51 +184,55 @@ class RawLiveComposerTests(unittest.IsolatedAsyncioTestCase):
     async def test_literal_slash_input_edits_during_operation_and_preserves_cursor(
         self,
     ) -> None:
-        driver, input_stream, _output, fallback, termios, _size = _driver(
-            "X\x1b[D\x1b[D\x1b[C/status\n"
-        )
+        prefix = "한" * 7 + "한"
         rendered: list[LineInputState] = []
 
         def renderer(
             state: LineInputState, frame: int, capabilities: object
         ) -> RenderedInputFrame:
             rendered.append(state)
-            return _frame(state, frame, capabilities)
+            width = capabilities.width  # type: ignore[attr-defined]
+            self.assertIn(width, (19, 20))
+            return RenderedInputFrame("p> ", "p> ", width, 1)
 
-        with mock.patch(
-            "story_writing_agents.interactive_terminal._driver._select.select",
-            side_effect=lambda *_args: ((7,), (), ())
-            if input_stream.characters
-            else ((), (), ()),
-        ):
-            result = await driver.run_live_composer(
+        with recording_driver("X\x1b[D\x1b[D\x1b[C/status\n", width=20) as rig:
+            def observe():
+                if rig.incoming.characters == list(b"/status\n"):
+                    rig.screen.resize(21, 24)
+                return tuple(tuple(row) for row in rig.screen.screen)
+            rig.observe = observe
+            result = await rig.driver.run_live_composer(
                 _pending(),
-                "story> ",
+                "p> ",
                 renderer,
                 lambda: LiveOperationBoundary.PRECOMMIT,
                 _joined_cancel,
-                initial_state=LineInputState("a한b", 4),
+                initial_state=LineInputState(prefix + "Z", 10),
             )
+            self.assertEqual(rig.reads[0].cursor, (1, 0))
+            self.assertTrue(all(read.cursor[1] < 19 for read in rig.reads))
+            self.assertTrue(all(all(row[-1] == " " for row in read.data) for read in rig.reads))
+            self.assertTrue(all("Z" in read.text for read in rig.reads))
+            last = rig.reads[-1]
+            self.assertEqual(last.cursor[1], 6)
+            self.assertEqual(last.data[last.cursor[0]][6:8], ("X", "Z"))
 
         self.assertEqual(result.kind, LiveComposerDeliveryKind.REPLAN)
-        self.assertEqual(result.state, LineInputState("a한/statusXb", 11))
-        self.assertEqual(result.text, "a한/statusXb")
-        self.assertIn(LineInputState("a한Xb", 5), rendered)
-        self.assertIn(LineInputState("a한/statusXb", 11), rendered)
-        self.assertFalse(fallback.called)
-        self.assertEqual([call[1] for call in termios.set_calls], [10, 11])
+        self.assertEqual(result.state, LineInputState(prefix + "/statusXZ", 17))
+        self.assertEqual(result.text, prefix + "/statusXZ")
+        self.assertIn(LineInputState(prefix + "XZ", 11), rendered)
+        self.assertIn(LineInputState(prefix + "/statusXZ", 17), rendered)
+        rig.fallback.assert_not_called()
+        self.assertEqual((rig.termios.events.count("activate"), rig.termios.events.count("restore")), (1, 1))
+        self.assertEqual(rig.termios.attributes, rig.termios.original)
 
     async def test_operation_first_completion_preserves_initial_draft_and_result(
         self,
     ) -> None:
-        driver, _input, _output, fallback, _termios, _size = _driver("")
-        initial = LineInputState("unfinished draft", 4)
+        initial = LineInputState("unfinished 한 draft", 4)
 
-        with mock.patch(
-            "story_writing_agents.interactive_terminal._driver._select.select",
-            return_value=((), (), ()),
-        ):
-            result = await driver.run_live_composer(
+        with recording_driver() as rig:
+            result = await rig.driver.run_live_composer(
                 asyncio.sleep(0, result={"done": True}),
                 "story> ",
                 _frame,
@@ -238,13 +243,13 @@ class RawLiveComposerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.kind, LiveComposerDeliveryKind.OPERATION_COMPLETED)
         self.assertIs(result.state, initial)
+        self.assertIn(initial.buffer, "".join(rig.output.records))
         self.assertEqual(result.operation_result, {"done": True})
-        self.assertFalse(fallback.called)
+        rig.fallback.assert_not_called()
 
     async def test_postcommit_waits_for_finalization_and_never_calls_cancel(
         self,
     ) -> None:
-        driver, input_stream, _output, _fallback, _termios, _size = _driver("next\n")
         finalized = asyncio.Event()
         input_observed = asyncio.Event()
         cancel = mock.AsyncMock(side_effect=AssertionError("must not cancel"))
@@ -254,17 +259,9 @@ class RawLiveComposerTests(unittest.IsolatedAsyncioTestCase):
             finalized.set()
             return "published"
 
-        def input_ready(*_args: object) -> tuple[tuple[int, ...], tuple[()], tuple[()]]:
-            if input_stream.characters:
-                input_observed.set()
-                return ((7,), (), ())
-            return ((), (), ())
-
-        with mock.patch(
-            "story_writing_agents.interactive_terminal._driver._select.select",
-            side_effect=input_ready,
-        ):
-            result = await driver.run_live_composer(
+        with recording_driver("next\n") as rig:
+            rig.observe = input_observed.set
+            result = await rig.driver.run_live_composer(
                 operation(),
                 "story> ",
                 _frame,

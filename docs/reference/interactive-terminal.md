@@ -334,7 +334,8 @@ syllables for consistent cell width and wrapping; submitted text and recalled
 history retain the original Unicode sequence. Enter keeps its existing
 submission and completion behavior.
 
-With unchanged terminal geometry, editing updates only changed display rows;
+Live input keeps a spare terminal column for stable caret placement. With
+unchanged terminal geometry, editing updates only changed display rows;
 cursor-only movement does not erase the draft. Resizing or returning from a
 borrowed view rebuilds the display from the retained input state. Terminal
 input methods own unfinished composition and its marked-text presentation;

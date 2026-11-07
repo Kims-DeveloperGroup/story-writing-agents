@@ -2497,22 +2497,25 @@ class RawTerminalDriver:
         ],
         capabilities: TerminalCapabilities,
     ) -> int:
-        rendered = renderer(state, frame, capabilities)
-        if type(rendered) is not RenderedInputFrame:
-            raise TypeError("frame_renderer must return a RenderedInputFrame")
-        if rendered.width != capabilities.width:
-            raise ValueError("live composer frame width must match capabilities")
+        def project(_buffer: str, _cursor: int, current: TerminalCapabilities) -> RenderedInputFrame:
+            rendered = renderer(state, frame, current)
+            if type(rendered) is not RenderedInputFrame:
+                raise TypeError("frame_renderer must return a RenderedInputFrame")
+            if rendered.width != current.width:
+                raise ValueError("live composer frame width must match capabilities")
+            return rendered
+
         return self._redraw_live_display(
             prompt,
             capabilities.width,
             display,
             state,
             _empty_suggestion_preview,
-            rendered,
+            None,
             capabilities,
             None,
             None,
-            None,
+            project,
         )
 
     def _live_composer_key_event(
@@ -3167,10 +3170,11 @@ class RawTerminalDriver:
 
         with self._input_latch.input_operation():
             observed_capabilities = self._observe_input_capabilities()
-            rendered_input = renderer(view, observed_capabilities)
+            render_capabilities = _input_render_capabilities(observed_capabilities)
+            rendered_input = renderer(view, render_capabilities)
             if type(rendered_input) is not RenderedInputFrame:
                 raise TypeError("renderer must return a RenderedInputFrame")
-            if rendered_input.width != observed_capabilities.width:
+            if rendered_input.width != render_capabilities.width:
                 raise ValueError("rendered input width must match current capabilities")
             capabilities, configuration = self._prepare_input(observed_capabilities)
             if configuration is None:
@@ -3184,7 +3188,8 @@ class RawTerminalDriver:
                 LineInputState(),
                 self._line_transition,
                 configuration=configuration,
-                rendered_input=rendered_input,
+                live_capabilities=capabilities,
+                input_frame_provider=_static_input_frame_provider(view, renderer, rendered_input),
                 transient=transient,
             )
 
@@ -3210,10 +3215,11 @@ class RawTerminalDriver:
 
         with self._input_latch.input_operation():
             observed_capabilities = self._observe_input_capabilities()
-            rendered_input = renderer(view, observed_capabilities)
+            render_capabilities = _input_render_capabilities(observed_capabilities)
+            rendered_input = renderer(view, render_capabilities)
             if type(rendered_input) is not RenderedInputFrame:
                 raise TypeError("renderer must return a RenderedInputFrame")
-            if rendered_input.width != observed_capabilities.width:
+            if rendered_input.width != render_capabilities.width:
                 raise ValueError("rendered input width must match current capabilities")
             capabilities, configuration = self._prepare_input(observed_capabilities)
             initial_state = (
@@ -3229,12 +3235,8 @@ class RawTerminalDriver:
                         initial_state,
                         transition,
                         configuration=configuration,
-                        rendered_input=None if self._timeline_inline_depth else rendered_input,
-                        live_capabilities=capabilities if self._timeline_inline_depth else None,
-                        input_frame_provider=(
-                            (lambda _buffer, _cursor, current: renderer(view, current))
-                            if self._timeline_inline_depth else None
-                        ),
+                        live_capabilities=capabilities,
+                        input_frame_provider=_static_input_frame_provider(view, renderer, rendered_input),
                         transient=transient,
                     )
                     if configuration is not None
@@ -3580,10 +3582,11 @@ class RawTerminalDriver:
 
         with self._input_latch.input_operation():
             observed_capabilities = self._observe_input_capabilities()
-            rendered_input = renderer(view, observed_capabilities)
+            render_capabilities = _input_render_capabilities(observed_capabilities)
+            rendered_input = renderer(view, render_capabilities)
             if type(rendered_input) is not RenderedInputFrame:
                 raise TypeError("renderer must return a RenderedInputFrame")
-            if rendered_input.width != observed_capabilities.width:
+            if rendered_input.width != render_capabilities.width:
                 raise ValueError("rendered input width must match current capabilities")
             capabilities, configuration = self._prepare_input(observed_capabilities)
             if configuration is None:
@@ -3598,11 +3601,7 @@ class RawTerminalDriver:
                 MainCommandControlState(),
                 transition,
                 configuration=configuration,
-                rendered_input=None if self._timeline_inline_depth else rendered_input,
-                input_frame_provider=(
-                    (lambda _buffer, _cursor, current: renderer(view, current))
-                    if self._timeline_inline_depth else None
-                ),
+                input_frame_provider=_static_input_frame_provider(view, renderer, rendered_input),
                 live_capabilities=capabilities,
                 palette_projector=palette_projector,
                 palette_renderer=palette_renderer,
@@ -4505,7 +4504,7 @@ class RawTerminalDriver:
             and type(rendered_input) is not RenderedInputFrame
         ):
             raise TypeError("rendered_input must be a RenderedInputFrame or None")
-        if rendered_input is not None and rendered_input.width != configuration.width:
+        if rendered_input is not None and rendered_input.width != max(1, configuration.width - 1):
             raise ValueError("rendered input and known width must match")
         if input_frame_provider is not None and not callable(input_frame_provider):
             raise TypeError("input_frame_provider must be callable or None")
@@ -4714,18 +4713,26 @@ class RawTerminalDriver:
             if not ready:
                 raise LiveInputIdle
 
+        def refresh_geometry() -> None:
+            geometry = self._text_viewer_geometry(configuration.width, bounded_height=False)
+            painted = (self._timeline_geometry if display_state.history_enabled
+                       else None if display_state.paint is None else display_state.paint.geometry)
+            if geometry != painted:
+                redraw(control_state)
+
         while True:
             try:
                 character = self._read_character(
-                    before_read=(before_read if self._timeline_screen_active
-                                 and display_state.history_enabled else None),
+                    before_read=before_read if self._timeline_screen_active else None,
                 )
+                if not display_state.history_enabled:
+                    refresh_geometry()
             except LiveInputIdle:
-                geometry = self._text_viewer_geometry(configuration.width, bounded_height=False)
-                if geometry != self._timeline_geometry:
-                    redraw(control_state)
+                refresh_geometry()
                 continue
             except EOFError:
+                if not display_state.history_enabled:
+                    refresh_geometry()
                 display_state.escape_sequence = None
                 raise
 
@@ -5638,11 +5645,26 @@ class RawTerminalDriver:
         propagates for the owning read boundary to clear and restore resources.
         """
 
+        physical_width, screen_height = self._text_viewer_geometry(width, bounded_height=False)
+        observed_geometry = (physical_width, screen_height)
         if display_state.history_enabled:
-            width, history_screen_height = self._text_viewer_geometry(width, bounded_height=False)
+            history_screen_height = screen_height
+            width = physical_width
             width = max(1, width - 1)
             if live_capabilities is not None:
                 live_capabilities = _capabilities_with_width(live_capabilities, width)
+        elif input_frame_provider is not None:
+            width = max(1, physical_width - 1)
+            if live_capabilities is not None:
+                live_capabilities = _capabilities_with_width(live_capabilities, width)
+        elif rendered_input is not None:
+            # Semantic renderers already reserved the physical final column.
+            # Reuse their width for both context and appended editable text.
+            width = rendered_input.width
+            if live_capabilities is not None:
+                live_capabilities = _capabilities_with_width(live_capabilities, width)
+        else:
+            width = physical_width
         line_state = _control_line_state(control_state)
         active_input = _resolve_contextual_input_frame(
             rendered_input,
@@ -5762,10 +5784,12 @@ class RawTerminalDriver:
                 output_lines, display_state, history_capabilities, history_screen_height,
                 cursor_row, cursor_column,
             )
-        height = self._text_viewer_geometry(width, bounded_height=False)[1]
+        absolute = bool(self._timeline_screen_active and self._timeline_suspended)
+        resized = display_state.paint is not None and display_state.paint.geometry != observed_geometry
         display_state.paint = self._paint_rows(
-            output_lines, cursor_row, cursor_column, (render_width, height),
+            output_lines, cursor_row, cursor_column, observed_geometry,
             display_state.paint, old_cursor_row=display_state.rendered_cursor_row,
+            absolute=absolute, reset_prefix="\r\n" if resized and not absolute else None,
         )
         return cursor_row
 
@@ -5786,6 +5810,17 @@ class RawTerminalDriver:
         owned by ``read_line``.
         """
 
+        physical_width, physical_height = self._text_viewer_geometry(width, bounded_height=False)
+        if input_frame_provider is not None:
+            width = max(1, physical_width - 1)
+            if live_capabilities is not None:
+                live_capabilities = _capabilities_with_width(live_capabilities, width)
+        elif rendered_input is not None:
+            width = rendered_input.width
+            if live_capabilities is not None:
+                live_capabilities = _capabilities_with_width(live_capabilities, width)
+        else:
+            width = physical_width
         active_input = _resolve_contextual_input_frame(
             rendered_input,
             input_frame_provider,
@@ -5807,13 +5842,14 @@ class RawTerminalDriver:
             self._paint_timeline()
             display_state.rendered_cursor_row = 0
             return len(input_lines)
-        move_to_top = _CURSOR_UP * display_state.rendered_cursor_row
+        resized = (display_state.paint is not None and
+                   display_state.paint.geometry != (physical_width, physical_height))
+        prefix = ("\r\n" if resized else _CARRIAGE_RETURN
+                  + _CURSOR_UP * display_state.rendered_cursor_row
+                  + _CARRIAGE_RETURN + _CLEAR_TO_END)
         payload = "".join(
             (
-                _CARRIAGE_RETURN,
-                move_to_top,
-                _CARRIAGE_RETURN,
-                _CLEAR_TO_END,
+                prefix,
                 "\n".join(input_lines),
                 "\n",
             )
@@ -5848,6 +5884,10 @@ class RawTerminalDriver:
                     self._write_live_text("\n")
             state.rendered_cursor_row = 0
             return
+        if (state.paint is not None and state.paint.geometry !=
+                self._text_viewer_geometry(state.paint.geometry[0], bounded_height=False)):
+            # A failed redraw after reflow cannot safely move through old rows.
+            state.rendered_cursor_row = 0
         payload = "".join(
             (
                 _CARRIAGE_RETURN,
@@ -6744,6 +6784,35 @@ def _capabilities_with_width(
         cursor_controls=capabilities.cursor_controls,
         decorative_sgr=capabilities.decorative_sgr,
     )
+
+
+def _input_render_capabilities(capabilities: TerminalCapabilities) -> TerminalCapabilities:
+    """Reserve one physical column for semantic live-input presentation only."""
+
+    if not capabilities.raw_mode:
+        return capabilities
+    return _capabilities_with_width(capabilities, max(1, capabilities.width - 1))
+
+
+def _static_input_frame_provider(
+    view: InputPromptView, renderer: _InputRenderer, initial_frame: RenderedInputFrame,
+) -> _InputFrameProvider:
+    """Keep a static view stable, re-rendering only when usable width changes."""
+
+    frame = initial_frame
+
+    def project(_buffer: str, _cursor: int, capabilities: TerminalCapabilities) -> RenderedInputFrame:
+        nonlocal frame
+        if frame.width != capabilities.width:
+            updated = renderer(view, capabilities)
+            if type(updated) is not RenderedInputFrame:
+                raise TypeError("renderer must return a RenderedInputFrame")
+            if updated.width != capabilities.width:
+                raise ValueError("rendered input width must match current capabilities")
+            frame = updated
+        return frame
+
+    return project
 
 
 def _completed_text_or_raise(outcome: ControlOutcome | None) -> str | None:
