@@ -679,3 +679,13 @@ If no existing focused witness reaches a new host path, implement that witness
 through valid public setup; a pure helper pass cannot certify the missing path.
 Record selected/unselected IDs, relevant source changes, setup/queue/execution
 time and actual fixture submissions. Final full-CI requirements are unchanged.
+
+### #938 최신 main 통합 소스 편성 — 2026-11-07
+
+최신 main `5d8e5ab7`(#943)을 부모 #839 `a52321a3`와 자식 #938에 반영했다.
+이 통합은 기존 테스트 ID·subTest 상한을 바꾸지 않고 raw 소스만29행 늘린다.
+혼합 클래스의 정확한 직렬8개 선언과 실제 inventory 회귀를 포함한 현재 편성은
+raw149564+기존과 #938 helper 청구1547=151111행이다. 이전151083에서
+새 상한151112로29행만 늘려 기존1행 여유를 유지한다. #938 전용 전환은
+동일한 cap-map·18000/3600초에서 정확한148783→151112 또는150770→151112만
+허용한다. 앞 절의151083 편성은 이전 리비전의 기록이며 이 통합에서 대체한다.
