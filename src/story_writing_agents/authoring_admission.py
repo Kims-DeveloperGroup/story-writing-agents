@@ -354,7 +354,9 @@ def admission_basis_from_dict(value: object) -> AuthoringAdmissionBasis:
                                   item["scope_digest"], tuple(sources), assessment_from_dict(item["assessment"]))
 
 
-def assessment_schema(source_ids: tuple[str, ...] | None = None) -> dict[str, object]:
+def assessment_schema(
+    source_ids: tuple[str, ...] | None = None, *, require_admission: bool = False,
+) -> dict[str, object]:
     """The source-owned closed semantic shape used by wire and typed parsing."""
     text = nonblank_text_rule(maximum_characters=4096)
     label = nonblank_text_rule(maximum_characters=256)
@@ -383,6 +385,8 @@ def assessment_schema(source_ids: tuple[str, ...] | None = None) -> dict[str, ob
     description = "Assess supplied foundations and USER-bounded creative work; host qualification remains separate."
     information = closed_rule(fields, description=description)
     if evidence is None:
+        if require_admission:
+            raise ValueError("official authoring admission requires offered sources")
         return json.loads(json.dumps(information))
     sufficient = {**fields,
         "status": {"type": "string", "enum": [AdmissionStatus.SUFFICIENT.value]},
@@ -390,6 +394,15 @@ def assessment_schema(source_ids: tuple[str, ...] | None = None) -> dict[str, ob
         "direction": evidence,
         "decisions": {**fields["decisions"], "minItems": 1, "items": {"anyOf": decisions[:-1]}},
         "missing_information": {**strings, "maxItems": 0}}
+    if require_admission:
+        creative_scope = {**evidence,
+            "description": fields["creative_scope"].get("description", evidence["description"])}
+        return json.loads(json.dumps(closed_rule({
+            **sufficient, "creative_scope": creative_scope,
+            "allowed_creative_actions": {**fields["allowed_creative_actions"], "minItems": 1},
+        }, description=("Official authoring preparation requires a sufficient assessment with "
+                        "source-bound creative scope and named allowed actions; host literal-USER "
+                        "qualification and currentness remain separate."))))
     # Guidance projection mutates occurrences; export a tree without shared nodes.
     return json.loads(json.dumps({"anyOf": [
         closed_rule({**sufficient, "creative_scope": evidence},

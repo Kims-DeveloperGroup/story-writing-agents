@@ -145,8 +145,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             'Proceed in the order you recommended. Literal JSON: {"task_id":"user-text","task_revision":17}',
             "Recall your last recommendation.",
             "Summarize our current discussion.", )
-        expected_scope = self.runtime._agent_context_service.scope(
-            self.session_id, ContextSubjectKind.CONVERSATION, second, LEAD_ORCHESTRATOR)
+        expected_scope = self.runtime._agent_context_service.scope( self.session_id, ContextSubjectKind.CONVERSATION, second, LEAD_ORCHESTRATOR)
         for index, text in enumerate(followups):
             prior_thread = self.checkpoint().checkpoint_view.provider_thread_id
             self.assertIs(type(prior_thread), str)
@@ -157,6 +156,8 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             await self.say(second, text, f"Follow-up answer {index}.")
             current = self.backend.calls[call_start:]
             self.assertEqual(len(current), 2)
+            self.assertEqual(lead._live_material(current[-1])['authoring_user_sources'], [])
+            self.assertEqual(current[-1].contract.semantic_index.policy.historical_user_source_ids, ())
             self.assertEqual(tuple(call.scope for call in current), (expected_scope,) * 2)
             self.assertEqual(tuple(call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"] for call in current), ("bootstrap",) * 2)
             self.assertTrue(all(call.context_witness is None and call.context_anchor is None for call in current))
@@ -185,35 +186,27 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertTrue(all("timestamp" not in record and "batch_digest" not in record
                             and "sequence" not in record
                             for call in calls for record in _records(self.backend.callback_payload(call)["session_history"])))
-        judgment = next(event for event in self.history(second)
-                        if type(event.payload) is CollaborationLeadJudgmentPayload)
-        host_fact = next(record for record in _records(self.backend.callback_payload(calls[5])["session_history"])
-                         if record["event_id"] == judgment.event_id)
+        judgment = next(event for event in self.history(second) if type(event.payload) is CollaborationLeadJudgmentPayload)
+        host_fact = next(record for record in _records(self.backend.callback_payload(calls[5])["session_history"]) if record["event_id"] == judgment.event_id)
         self.assertFalse({"task_id", "task_revision"} & host_fact["details"]["authoring_scope"].keys())
         self.assertTrue(judgment.payload.authoring_scope.task_id)
 
         snapshot = self.snapshot()
         records = tuple(record for conversation in snapshot.conversations for record in conversation.records)
         source = next(record for record in records if type(record.payload) is CollaborationLeadSynthesisPayload)
-        mirror = next(record for record in records if type(record.payload) is CollaborationMessagePayload
-                      and record.payload.content == plan)
-        state = next(record for record in records if type(record.payload) is CollaborationStepStatePayload
-                     and record.payload.execution_result_event_id is not None)
+        mirror = next(record for record in records if type(record.payload) is CollaborationMessagePayload and record.payload.content == plan)
+        state = next(record for record in records if type(record.payload) is CollaborationStepStatePayload and record.payload.execution_result_event_id is not None)
         synthesis_operation = f"synthesis_{source.payload.execution_attempt_id}"
         self.assertNotEqual((source.batch_id, source.turn_id), (mirror.batch_id, mirror.turn_id))
-        self.assertEqual(session_context_module._native_synthesis_mirrors(
-            records, synthesis_operation, LEAD_ORCHESTRATOR), frozenset({mirror.event_id}))
-        delta = snapshot.delivery(prior.coverage, known_native_operation_id=synthesis_operation,
-                                  native_agent_id=LEAD_ORCHESTRATOR)
+        self.assertEqual(session_context_module._native_synthesis_mirrors( records, synthesis_operation, LEAD_ORCHESTRATOR), frozenset({mirror.event_id}))
+        delta = snapshot.delivery(prior.coverage, known_native_operation_id=synthesis_operation, native_agent_id=LEAD_ORCHESTRATOR)
         self.assertNotIn(plan, _fields(delta))
         synthesis_fact = next(record for record in _records(delta) if record["event_id"] == source.event_id)
         self.assertFalse({"task_id", "task_revision"} & synthesis_fact["details"]["authoring_scope"].keys())
         self.assertTrue(source.payload.authoring_scope.task_id)
         changed_text = plan + "\nA runtime notice was appended."
-        changed = replace(mirror, payload=replace(mirror.payload, content=changed_text),
-                          fields=tuple(replace(field, text=changed_text) for field in mirror.fields))
-        recovered_source = replace(source, payload=replace(source.payload, trace=replace(
-            source.payload.trace, origin=ReplyTraceOrigin.RECOVERED, recovered_fields=("message",))))
+        changed = replace(mirror, payload=replace(mirror.payload, content=changed_text), fields=tuple(replace(field, text=changed_text) for field in mirror.fields))
+        recovered_source = replace(source, payload=replace(source.payload, trace=replace( source.payload.trace, origin=ReplyTraceOrigin.RECOVERED, recovered_fields=("message",))))
         variants = (
             tuple(record for record in records if record.event_id != state.payload.execution_result_event_id),
             tuple(replace(record, conversation_id=second) if record.event_id == source.event_id else record
@@ -224,34 +217,24 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             tuple(changed if record.event_id == mirror.event_id else record for record in records),
         )
         for variant in variants:
-            self.assertNotIn(mirror.event_id, session_context_module._native_synthesis_mirrors(
-                variant, synthesis_operation, LEAD_ORCHESTRATOR))
-        self.assertEqual(session_context_module._provider_record(changed, frozenset())["fields"][0]["text"],
-                         changed_text)
-        native = next(record for conversation in snapshot.conversations for record in conversation.records
-                      if record.event_id == judgment.event_id)
+            self.assertNotIn(mirror.event_id, session_context_module._native_synthesis_mirrors( variant, synthesis_operation, LEAD_ORCHESTRATOR))
+        self.assertEqual(session_context_module._provider_record(changed, frozenset())["fields"][0]["text"], changed_text)
+        native = next(record for conversation in snapshot.conversations for record in conversation.records if record.event_id == judgment.event_id)
         operation = f"lead_{native.turn_id}"
         self.assertTrue(session_context_module._known_native_result(native, operation, LEAD_ORCHESTRATOR))
-        recovered_trace = replace(native.payload.trace, origin=ReplyTraceOrigin.RECOVERED,
-                                  recovered_fields=("message",))
+        recovered_trace = replace(native.payload.trace, origin=ReplyTraceOrigin.RECOVERED, recovered_fields=("message",))
         recovered = replace(native, payload=replace(native.payload, trace=recovered_trace))
         self.assertFalse(session_context_module._known_native_result(recovered, operation, LEAD_ORCHESTRATOR))
         with mock.patch.object(session_context_module, "MAX_SESSION_CONTEXT_UTF8_BYTES", 1):
-            with self.assertRaises(SessionContextCapacityError):
-                snapshot.delivery()
+            with self.assertRaises(SessionContextCapacityError): snapshot.delivery()
         conversation = snapshot.conversations[0]
-        changed = replace(conversation, records=(
-            replace(conversation.records[0], timestamp="2030-01-01T00:00:00+00:00"),
-            *conversation.records[1:]))
+        changed = replace(conversation, records=( replace(conversation.records[0], timestamp="2030-01-01T00:00:00+00:00"), *conversation.records[1:]))
         altered = replace(snapshot, conversations=(changed, *snapshot.conversations[1:]))
-        with self.assertRaises(SessionContextHistoryChangedError):
-            altered.delivery(snapshot.coverage)
+        with self.assertRaises(SessionContextHistoryChangedError): altered.delivery(snapshot.coverage)
         for metadata in (replace(conversation.metadata, subject="Renamed synthetic planning"),
                          replace(conversation.metadata, status=type(conversation.metadata.status)("archived"))):
-            altered = replace(snapshot, conversations=(
-                replace(conversation, metadata=metadata), *snapshot.conversations[1:]))
-            with self.assertRaises(SessionContextHistoryChangedError):
-                altered.delivery(snapshot.coverage)
+            altered = replace(snapshot, conversations=( replace(conversation, metadata=metadata), *snapshot.conversations[1:]))
+            with self.assertRaises(SessionContextHistoryChangedError): altered.delivery(snapshot.coverage)
         empty = self.conversation("New empty conversation")
         missing = self.snapshot().delivery(snapshot.coverage)["conversations"]
         self.assertEqual([item["conversation_id"] for item in missing], [empty])
@@ -267,12 +250,9 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         terminal_batches = []
         def observe_terminal_batch(actual_store, batch):
             receipt = append_batch(actual_store, batch)
-            if actual_store is terminal_store and any(
-                    event.kind is CollaborationEventKind.LEAD_GROUP_TRACE for event in batch.events):
-                terminal_batches.append((batch, receipt))
+            if actual_store is terminal_store and any( event.kind is CollaborationEventKind.LEAD_GROUP_TRACE for event in batch.events): terminal_batches.append((batch, receipt))
             return receipt
-        with mock.patch.object(type(terminal_store), "append_batch", new=observe_terminal_batch):
-            await self.say(second, "Recall all retained planning.", runtime=restarted)
+        with mock.patch.object(type(terminal_store), "append_batch", new=observe_terminal_batch): await self.say(second, "Recall all retained planning.", runtime=restarted)
 
         reports_after_restart = restarted.lead_group_reports(self.session_id, second)
         self.assertTrue(reports_before_restart)
@@ -294,14 +274,14 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(latest["submitted_calls"], 2)
         self.assertEqual(latest["terminal_result"]["outcome_kind"], "answer")
         self.assertEqual(latest["terminal_result"]["source_kind"], "message")
-        terminal_event = next(event for event in report_history
-                              if event.event_id == latest["terminal_result"]["source_event_id"])
+        self.assertEqual(lead._live_material(self.backend.calls[-1])['authoring_user_sources'], [])
+        self.assertEqual(self.backend.calls[-1].contract.semantic_index.policy.historical_user_source_ids, ())
+        terminal_event = next(event for event in report_history if event.event_id == latest["terminal_result"]["source_event_id"])
         self.assertIs(terminal_event.kind, CollaborationEventKind.MESSAGE)
         self.assertIs(type(terminal_event.payload), CollaborationLeadJudgmentPayload)
         self.assertIs(terminal_event.payload.kind, LeadOutcomeKind.ANSWER)
         self.assertEqual(terminal_event.payload.provider_invocation_id, latest["invocation_id"])
-        self.assertIn(latest["terminal_result"]["source_event_id"],
-                      {event.event_id for event in report_history})
+        self.assertIn(latest["terminal_result"]["source_event_id"], {event.event_id for event in report_history})
         self.assertIsNone(latest["task_completion"])
         self.assertIsNone(latest["objective_completion"])
         self.assertIsNone(latest["end_to_end_elapsed_ns"])
@@ -312,8 +292,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         original_definition = latest["trace"]["observations"][0]["catalog"]["groups"][0]["definition"]
         latest["trace"]["observations"][0]["catalog"]["groups"][0]["definition"] = "MUTATED_REPORT_CARD"
         untouched = restarted.lead_group_reports(self.session_id, second)[-1]
-        self.assertEqual(untouched["trace"]["observations"][0]["catalog"]["groups"][0]["definition"],
-                         original_definition)
+        self.assertEqual(untouched["trace"]["observations"][0]["catalog"]["groups"][0]["definition"], original_definition)
         self.assertEqual(self.history(second), report_history)
         self.assertEqual(len(self.backend.calls), physical_count)
         fresh = self.backend.calls[-2]
@@ -325,8 +304,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(fresh.payload["session_history"]["context_delivery_mode"], "bootstrap")
         replay = _fields(fresh.payload["session_history"])
         self.assertEqual(replay.count(plan), 2)
-        replay_fact = next(record for record in _records(fresh.payload["session_history"])
-                           if record["event_id"] == source.event_id)
+        replay_fact = next(record for record in _records(fresh.payload["session_history"]) if record["event_id"] == source.event_id)
         self.assertEqual(replay_fact["details"]["authoring_scope"], synthesis_fact["details"]["authoring_scope"])
         self.assertIn(mirror.event_id, {record["event_id"] for record in _records(fresh.payload["session_history"])})
         self.assertTrue(all(text in replay for text in followups))
@@ -394,9 +372,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         second_source_path.write_text(second_source_text, encoding="utf-8")
         self.assertLessEqual(len(source_text.encode("utf-8")), 131_072)
         self.assertLessEqual(len(second_source_text.encode("utf-8")), 131_072)
-        self.assertLessEqual(
-            len(source_text.encode("utf-8")) + len(second_source_text.encode("utf-8")),
-            MAX_MANDATORY_REFERENCE_RESERVATION_UTF8_BYTES)
+        self.assertLessEqual( len(source_text.encode("utf-8")) + len(second_source_text.encode("utf-8")), MAX_MANDATORY_REFERENCE_RESERVATION_UTF8_BYTES)
         capacity_observations = []
         capacity_check = service_module._require_context_capacity
         def observe_capacity(schema, payload, *, stage):
@@ -410,8 +386,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             with self.assertRaises(SessionContextCapacityError) as initial_capacity:
                 await self.runtime.lead_turn(self.session_id, capacity_conversation,
                     "Review ${core_documents/global_outline.md} and ${core_documents/character_sheets.md} before answering.")
-        self.assertEqual(tuple(stage for stage, _ in capacity_observations),
-                         ("known_envelope", "provider_payload"))
+        self.assertEqual(tuple(stage for stage, _ in capacity_observations), ("known_envelope", "provider_payload"))
         self.assertEqual(initial_capacity.exception.actual_utf8_bytes, len(capacity_observations[-1][1]))
         for full_text in (source_text, second_source_text):
             encoded_text = json.dumps(full_text, ensure_ascii=False).encode("utf-8")
@@ -420,8 +395,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(initial_capacity.exception.stage, "provider_payload")
         self.assertGreater(initial_capacity.exception.actual_utf8_bytes, MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
         self.assertEqual(initial_capacity.exception.maximum_utf8_bytes, MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
-        self.assertEqual(initial_capacity.exception.excess_utf8_bytes,
-            initial_capacity.exception.actual_utf8_bytes - MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
+        self.assertEqual(initial_capacity.exception.excess_utf8_bytes, initial_capacity.exception.actual_utf8_bytes - MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
         self.assertNotIn(marker.strip(), str(initial_capacity.exception))
         self.assertNotIn(marker.strip(), repr(initial_capacity.exception))
         self.assertNotIn(second_marker.strip(), str(initial_capacity.exception))
@@ -440,10 +414,8 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         capacity_restart = StoryRuntime(self.workspace, self.backend)
         restart_conversation = self.conversation("Overflow after restart")
         restart_storage = capacity_restart.conversation_storage_services
-        retained_capacity = SessionHistorySourceAdapter(
-            restart_storage.catalog, restart_storage.event_store, self.session_id).capture()
-        archived_row = next(row for row in retained_capacity.conversations
-            if row.metadata.conversation_id == capacity_conversation)
+        retained_capacity = SessionHistorySourceAdapter( restart_storage.catalog, restart_storage.event_store, self.session_id).capture()
+        archived_row = next(row for row in retained_capacity.conversations if row.metadata.conversation_id == capacity_conversation)
         self.assertEqual(archived_row.metadata.status.value, "archived")
         self.assertEqual(restart_storage.event_store.read(self.session_id, capacity_conversation), capacity_history)
         self.backend.enqueue(control_plan=())
@@ -452,8 +424,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             with self.assertRaises(SessionContextCapacityError) as restarted_capacity:
                 await capacity_restart.lead_turn(self.session_id, restart_conversation,
                     "Review ${core_documents/global_outline.md} and ${core_documents/character_sheets.md} before answering.")
-        self.assertEqual(tuple(stage for stage, _ in capacity_observations),
-                         ("known_envelope", "provider_payload"))
+        self.assertEqual(tuple(stage for stage, _ in capacity_observations), ("known_envelope", "provider_payload"))
         self.assertEqual(restarted_capacity.exception.actual_utf8_bytes, len(capacity_observations[-1][1]))
         for full_text in (source_text, second_source_text):
             encoded_text = json.dumps(full_text, ensure_ascii=False).encode("utf-8")

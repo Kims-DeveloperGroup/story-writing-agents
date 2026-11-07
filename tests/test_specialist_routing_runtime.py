@@ -1108,23 +1108,22 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         def relabel(value, material):
             value["authoring_scope"].update(activity="workflow", target_paths=[], domains=[])
         def forbidden_relabel(call, provider):
-            native = {'family': 0, 'lookup_response_type': 'specialist_consultation_proposal',
-                      'source_choices': dict(call.contract.semantic_index.policy.choices)['input_ids']}
+            native = {'family': 0, 'lookup_response_type': 'specialist_consultation_proposal', 'source_choices': dict(call.contract.semantic_index.policy.choices)['input_ids']}
             return scoped_proposal(PLOT_ARCHITECT, selected=selected, kind="answer", mutate=relabel,
                 authoring_assessment=_fixture_assessment(), native_inputs=native)(call, provider)
-        bad = await self._rejected_pair(self.conversation(), _ADMISSION_BRIEF, forbidden_relabel,
-            selection_group='consultation.authoring.content')
+        bad = await self._rejected_pair(self.conversation(), _ADMISSION_BRIEF, forbidden_relabel, selection_group='consultation.authoring.content')
         self._assert_continuation(bad, 'proposal')
-        continued = await self.proposal_for(self.conversation(), self._native_scoped(
-            PLOT_ARCHITECT, domains=("plot_structure",),
-            authoring_assessment=_fixture_assessment(),
-        ))
+        continued = await self.proposal_for(self.conversation(), self._native_scoped( PLOT_ARCHITECT, domains=("plot_structure",), authoring_assessment=_fixture_assessment(), ))
         self.assertIsNotNone(continued.proposal, continued)
         from story_writing_agents.authoring_task_lifecycle import task_identity_for_origin
         target_scope = continued.proposal.authoring_scope
         self.assertEqual((target_scope.task_id, target_scope.task_revision), (task_identity_for_origin(continued.step_id), 1))
         self.assertEqual(target_scope, replace(original.proposal.authoring_scope, task_id=target_scope.task_id, task_revision=target_scope.task_revision))
         self.assertEqual(self.history(original_conversation), prefix)
+        self.assertEqual(self.backend.calls[-1].contract.semantic_index.policy.historical_user_source_ids, ())
+        with self.assertRaisesRegex(ValueError, 'local conversation'):
+            self.runtime._historical_authoring_users(self.session_id, continued.conversation_id,
+                target_scope, continued.proposal.basis.inputs, events=prefix)
         self.backend.enqueue(_visible_outcome("answer", "The workflow relabel remains rejected."), control_plan=selection_plan('answer.workflow'))
         await self.runtime.lead_turn(self.session_id, bad.conversation_id, "Resolve the rejected interpretation.")
         source, foreign_focus = self.conversation("Current provisional source"), self.conversation("Foreign focus")
@@ -1137,18 +1136,15 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             (foreign_focus, replace(selection, source_conversation_id="foreign-session-source")),
             (source, replace(selection, material_digest="0" * 64)),
             (source, replace(selection, result_event_id="stale-current-result")),):
-            with self.assertRaises(ValueError):
-                await self.runtime.lead_turn(self.session_id, focus, "Adopt the selected whole idea.", adoption=choice)
+            with self.assertRaises(ValueError): await self.runtime.lead_turn(self.session_id, focus, "Adopt the selected whole idea.", adoption=choice)
         self.assertEqual((self.history(source), self.history(foreign_focus), len(self.backend.calls)), before)
 
         adopted = await self.proposal_for(foreign_focus, self._native_scoped(PLOT_ARCHITECT,
             domains=("plot_structure",), candidate_ids=("adopted_idea",),
             authoring_assessment=_fixture_assessment(),), adoption=selection)
         self.assertIsNotNone(adopted.proposal, adopted)
-        capture = next(e.payload.capture for e in self.history(foreign_focus)
-                       if type(e.payload) is c.CollaborationExplorationAdoptionPayload)
-        self.assertEqual((capture.selection.source_conversation_id, capture.fresh_task_id, capture.task_revision),
-                         (source, adopted.proposal.authoring_scope.task_id, 1))
+        capture = next(e.payload.capture for e in self.history(foreign_focus) if type(e.payload) is c.CollaborationExplorationAdoptionPayload)
+        self.assertEqual((capture.selection.source_conversation_id, capture.fresh_task_id, capture.task_revision), (source, adopted.proposal.authoring_scope.task_id, 1))
         self.assertNotEqual(capture.fresh_task_id, selected)
         self.assertEqual(self.history(source), before[0])
 

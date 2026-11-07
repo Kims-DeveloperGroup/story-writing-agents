@@ -1357,6 +1357,27 @@ cannot cover.
 
 ## What providers receive
 
+The Lead receives prior literal USER messages from the same verified task/revision
+as `authoring_user_sources`, separate from ordinary inputs. Each record contains
+the exact text, offered source ID, original locator, revision digest, UTF-8 size,
+and USER authority. These IDs may support the authoring assessment; they are not
+new assignment or recommendation inputs. A procedural follow-up can therefore
+reuse an earlier factual brief and its creative limits without asking the user to
+repeat them. Source membership alone does not establish current creative permission.
+
+Preparation recommendations that require official authoring admission also require
+a sufficient assessment: named foundations, USER direction, a source-bound creative
+scope, permitted actions, covered decisions, and no missing information. Where the
+host requires a target, the recommendation must identify one. Genuine gaps remain
+questions or explicit reselection work. Questions, analysis, and review-only work
+retain their own assessment rules.
+
+After confirmation, preparation and later authoring consumers receive only the
+historical USER originals pinned in the accepted basis. New messages are not added
+to that basis. Task cancellation, revision changes, and current-source validation
+remain separate checks; retaining text does not restore a retired task or grant
+READ, Confirm, Apply, or Commit authority.
+
 The runtime binds the selected agent and drives one bounded contextual invocation.
 Codex and Antigravity receive the same `agent-provider-wire-v11` payload and
 response-schema semantics through their native transports. See the

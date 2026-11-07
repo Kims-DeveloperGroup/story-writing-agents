@@ -60,18 +60,76 @@ class LeadRecommendationTests(RecommendationCase):
             creative_scope=None, allowed_creative_actions=(), missing_information=('Memoir or fiction?',),
             decisions=(admission.AdmissionDecision('Genre', admission.DecisionCoverage.MISSING, (), 'Choose memoir or fiction.'),))
         cid = self.conversation('Actual unresolved USER choice'); before_gap, calls_gap = self.snapshots(), len(self.backend.calls)
-        self.backend.enqueue(recommendation(recommended_action=action(kind='prepare_consultation', source_ids=('user_input',)),
-            authoring_scope=lambda call: lead._live_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)),
-            authoring_assessment=unresolved), control_plan=selection_plan('prepare.consultation.authoring'))
+        from tests.provider_wire_fixture import lead_fixture_response, lead_fixture_bound_scope
+        def genuine_gap(call, _provider):
+            return lead_fixture_response(call, {'response_type': 'clarification_question', 'response_text': 'Memoir or fiction?',
+                'response_details': {'task_scope': lead_fixture_bound_scope(call,
+                    lead._live_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)), record=True)}}, family=0)
+        self.assertEqual(admission.assessment_from_dict(admission.assessment_to_dict(unresolved)), unresolved)
+        self.backend.enqueue(genuine_gap, control_plan=selection_plan('question.authoring'))
         question = await self.runtime.lead_turn(self.session_id, cid, 'Prepare a consultation: memoir versus fiction is undecided. Ask for that choice.')
         self.assertIs(question.kind, c.LeadOutcomeKind.QUESTION, question); self.assertIn('Memoir or fiction?', question.message)
         self.assertFalse(question.validation_details); self.assertTrue(any(item.response.acceptance.value == 'accepted' for item in question.public_responses))
         self.assertEqual(len(self.backend.calls) - calls_gap, 2); self.assert_no_downstream(cid); self.assertEqual(self.snapshots(), before_gap)
+        from tests.collaboration_contract_fixture import USER, LEAD, make_batch, store_batch, provider_call_drafts, make_lead_evidence
+        from story_writing_agents.authoring_task_lifecycle import task_identity_for_origin
+        from story_writing_agents.specialist_routing import AuthoringScope, ArtifactReviewDomain, AuthoringContribution, AuthoringContributionRole
+        conversation_id = self.conversation('Historical USER grounds and current procedure')
+        origins = (('history_user_35', '실제 있었던 내용으로만 쓸거야'), ('history_user_43', '다양한 사유로 싸웠어. 공부하는 방식, 공부하는 시간 등을 두고 충돌했어. 나는 최대한 공부로 간섭받고 싶지 않았고 어머니의 간섭이 나의 공부에 심리적 불안감을 줘서 오히려 방해가 됐어. 그러다가 항상 어머니의 비난과 그럴거면 공부를 포기하라는 날선 말들이 나왔고 나도 반항하려는 마음에 포기하겠다고 마음을 먹게됐지. 하지만 나는 공부를 포기하고 싶었던게 아니었고 공부에 대한 필요성도 강하게 느끼고 있었어. 결국 방으로 돌아와 책사에 앉게 됐지. 하지만 다툼으로 인해 심리적으로 불안정해진 나는 공부에 집중하기 어려웠어. 그래도 꾸역꾸역 공부를 했고 나름 중상위권의 성적을 유지했어. 당시에 나는 그저 응원과 지지가 필요했고 그것들이 나의 공부에 더 큰 도움이 됐을거라고 생각해. 왜냐면 나는 공부를 포기하지 못하는 사람이었기 때문에 의지가 있었어. 그리고 그 와중에 나쁘지 않은 성적을 유지할 정도의 학습능력도 갖췄었거든.'), ('history_user_51', '집필 준비 조건을 어떻게 확정하며 좋을까?'))
+        task_id = task_identity_for_origin('history_step_35')
+        for ordinal, (source_id, raw) in enumerate(origins):
+            turn_id, step_id = 'history_turn_' + source_id, 'history_step_' + source_id.rsplit('_', 1)[-1]
+            scope = AuthoringScope(AuthoringActivity.DRAFT, (), (ArtifactReviewDomain.TONE_EXECUTION,),
+                'Preserve actual events; clarify the target separately.', task_id, 1, schema_version=3,
+                contributions=(AuthoringContribution(ArtifactReviewDomain.TONE_EXECUTION, AuthoringContributionRole.DRAFT_OWNER),))
+            evidence = make_lead_evidence()
+            evidence = replace(evidence, receipts=tuple(replace(row, operation_id='lead_' + turn_id,
+                result_correlation_id='outcome_' + turn_id) for row in evidence.receipts))
+            if ordinal == 2:
+                scope = replace(scope, activity=AuthoringActivity.WORKFLOW, domains=(), contributions=())
+                evidence = c.CollaborationLeadEvidence(c.LeadOutcomeScope.WORKFLOW_META, c.LeadEvidenceStatus.NOT_APPLICABLE, ())
+            headers = dict(schema_version=2, session_id=self.session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id)
+            user = c.CollaborationEventDraft(**headers, event_id=source_id, kind=c.CollaborationEventKind.MESSAGE,
+                sender=USER, recipient=LEAD, payload=c.CollaborationMessagePayload(raw))
+            calls = tuple(replace(row, **headers) for row in provider_call_drafts(invocation_id='inv_' + source_id,
+                call_id='call_' + source_id, role=LEAD_ORCHESTRATOR, recipient=LEAD, invocation_kind=c.CollaborationInvocationKind.LEAD))
+            judgment = replace(user, event_id='scope_' + source_id, sender=LEAD, recipient=USER,
+                payload=c.CollaborationLeadJudgmentPayload(c.LeadOutcomeKind.ANSWER if ordinal == 2 else c.LeadOutcomeKind.QUESTION,
+                    'Retrieve existing grounds before asking for missing information.', evidence, authoring_scope=scope))
+            prefix = self.history(conversation_id); batch = make_batch(prefix, 'batch_' + source_id, user, *calls, judgment)
+            store_batch(prefix, batch); self.runtime.conversation_storage_services.event_store.append_batch(batch)
+        seed_scope = self.projection(conversation_id).available_tasks[0].scope
+        self.assertEqual((seed_scope.schema_version, seed_scope.activity, seed_scope.domains), (3, AuthoringActivity.DRAFT, (ArtifactReviewDomain.TONE_EXECUTION,)))
+        captured_material = []
+        def historical_assessment(call):
+            rows = lead._live_material(call)['authoring_user_sources']; captured_material[:] = rows
+            self.assertEqual([(row['source_id'], row['content_text']) for row in rows], list(origins))
+            for row, (source_id, raw) in zip(rows, origins):
+                self.assertEqual((row['source_identity'], row['revision_digest'], row['utf8_bytes'], row['original_authority']),
+                    ('conversation/history_turn_' + source_id + '/user_input', 'sha256:' + hashlib.sha256(raw.encode()).hexdigest(), len(raw.encode()), 'literal_user'))
+            policy = call.contract.semantic_index.policy
+            self.assertEqual(policy.historical_user_source_ids, tuple(source_id for source_id, _raw in origins))
+            self.assertEqual(policy.input_ids, ('user_input',)); self.assertEqual(policy.assessment_source_ids, ('user_input', *policy.historical_user_source_ids))
+            return replace(assessment, allowed_creative_actions=('bounded review judgments', 'separate proposal preparation'),
+                foundations=(admission.AdmissionEvidence('Supplied experience', ('history_user_43',), 'Exact historical USER events.'),),
+                creative_scope=admission.AdmissionEvidence('No invention', ('history_user_35',), 'Literal USER permits only actual events.'),
+                protected_constraints=(origins[0][1],), decisions=(admission.AdmissionDecision('Preserve actual experience',
+                    admission.DecisionCoverage.SUPPLIED, ('history_user_43',), 'Use only supplied experience.'),))
         self.workspace.path(OUTLINE).write_text("Outline source.\n", encoding="utf-8")
         before = self.snapshots(); positive_call_start = len(self.backend.calls)
-        conversation_id, turn = await self.recommend()
+        self.backend.enqueue(recommendation(authoring_assessment=historical_assessment), control_plan=selection_plan('prepare.artifact'))
+        turn = await self.runtime.lead_turn(self.session_id, conversation_id, '제안해준 절차대로 진행해줘.')
+        self.assertIs(turn.kind, c.LeadOutcomeKind.RECOMMENDATION, turn); self.assertIsNotNone(turn.recommendation_request, turn)
         request = turn.recommendation_request
+        self.assertEqual((request.authoring_scope.task_id, request.authoring_scope.task_revision), (task_id, 1))
+        self.assertEqual({source.source_id for source in request.basis.authoring_admission.sources if source.kind is admission.AdmissionSourceKind.USER},
+            {'user_input', *(source_id for source_id, _raw in origins)})
+        self.assertEqual(self.projection(conversation_id).available_tasks[0].source_event_ids[:3], tuple(source_id for source_id, _raw in origins))
         before_events = self.history(conversation_id)
+        with self.assertRaises(ValueError):
+            replace(request, basis=replace(request.basis, authoring_admission=replace(request.basis.authoring_admission, task_id='foreign_task')))
+        with self.assertRaises(ValueError):
+            c.project_collaboration_history(rewrite_history(before_events, origins[0][0], payload=c.CollaborationMessagePayload(origins[0][1] + ' changed')))
         self.assertIs(request.authoring_scope.activity, AuthoringActivity.REVIEW)
         self.assertFalse(self.payload_events(conversation_id, c.CollaborationAssignmentDispatchPayload))
         self.assertEqual(self.projection(conversation_id).artifact_objectives, ())
@@ -90,16 +148,20 @@ class LeadRecommendationTests(RecommendationCase):
             self.assertIs(initial.call_kind, lead.ProviderCallKind.COLLABORATION_INITIAL)
             material = lead._workflow_material(provider.callback_payload(initial))["structured_recommendation_execution"]
             self.assertEqual(initial.payload["context_reuse"]["format"], "shared-objects-v1")
-            self.assertLess(len(json.dumps(dict(initial.payload), ensure_ascii=False)),
-                            len(json.dumps(lead._expanded_context_payload(initial.payload),
-                                           ensure_ascii=False)))
+            self.assertLess(len(json.dumps(dict(initial.payload), ensure_ascii=False)), len(json.dumps(lead._expanded_context_payload(initial.payload), ensure_ascii=False)))
             self.assertEqual(material["request"]["action_digest"], request.action_digest)
             self.assertEqual(material["decision"]["decision"]["kind"], "confirm")
             self.assertEqual(material["start"]["execution_attempt_id"], started.payload.execution_attempt_id)
             self.assertIn(request.instruction, json.dumps(material, ensure_ascii=False))
             self.assertEqual(sum(type(e.payload) is c.CollaborationMessagePayload and
-                e.direction is c.CollaborationDirection.USER_TO_LEAD for e in events), 1)
+                e.direction is c.CollaborationDirection.USER_TO_LEAD for e in events), ordinary_users_before_confirm)
+            self.assertEqual(lead._live_material(initial)['authoring_user_sources'], captured_material)
             return producer(call, provider)
+        ordinary_users_before_confirm = sum(type(e.payload) is c.CollaborationMessagePayload and
+            e.direction is c.CollaborationDirection.USER_TO_LEAD for e in before_events)
+        self.assertEqual(ordinary_users_before_confirm, 4)
+        self.runtime = StoryRuntime(self.control_workspace, self.backend)
+        self.assertEqual(self.runtime.conversation_storage_services.event_store.read(self.session_id, conversation_id), before_events)
         self.enqueue_preparation(turn, answer=observed)
         calls = len(self.backend.calls)
         original_qualifier = self.runtime._qualify_authoring_inputs
@@ -119,12 +181,13 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertIsNone(prepared.artifact_application_request)
         self.assertIsNone(prepared.story_commit_request)
         self.assertEqual(prepared.proposal.authoring_scope, request.authoring_scope)
+        self.assertEqual(prepared.proposal.basis.authoring_admission, request.basis.authoring_admission)
+        self.assertEqual(sum(item.kind is c.CollaborationInputKind.USER_INPUT for item in prepared.proposal.basis.inputs), 1)
         self.assertEqual(prepared.proposal.participants, (PLOT_ARCHITECT,))
         self.assertTrue(all(item.mode.value == "review" for item in prepared.proposal.assignments))
         candidate = prepared.artifact_proposal.candidate.candidate
         operation = candidate.change_set.operations[0]
-        self.assertEqual((operation.operation_kind.value, operation.path, operation.content),
-                         ("replace", OUTLINE, DRAFT.encode()))
+        self.assertEqual((operation.operation_kind.value, operation.path, operation.content), ("replace", OUTLINE, DRAFT.encode()))
         objective = self.objective(conversation_id)
         self.assertIs(objective.state, c.ArtifactObjectiveState.OPEN)
         self.assertIs(type(objective.facts), c.ArtifactObjectiveFactsV2)
@@ -168,8 +231,7 @@ class LeadRecommendationTests(RecommendationCase):
                 for row in proposal["assignments"].values():
                     row.update(input_anchor_id=selected[0], optional_inputs={alias: alias in selected for alias in choices["allocation_input_ids"]})
                     row["review_basis"]["candidate_input_ids"] = finite_fixture_selection(choices["review_candidate_ids"], review_ids)
-                if omit_source:
-                    proposal["required_input_recipients"] = {}
+                if omit_source: proposal["required_input_recipients"] = {}
                 if staged:
                     proposal["stage_plan"] = {
                         "stage": "specialist_work", "work_kind": "deep_review",
@@ -229,8 +291,7 @@ class LeadRecommendationTests(RecommendationCase):
                     self.assertEqual(plan.specialist_ids, (PLOT_ARCHITECT,))
                     self.assertEqual(plan.required_condition_ids, tuple(source_ids))
                     self.assertEqual(plan.questions[0].required_condition_ids, tuple(source_ids))
-                    self.assertTrue(set(plan.required_condition_ids).isdisjoint(
-                        ("recommendation_request", "recommendation_decision")))
+                    self.assertTrue(set(plan.required_condition_ids).isdisjoint( ("recommendation_request", "recommendation_decision")))
                 for assignment in prepared.proposal.assignments:
                     self.assertEqual(set(assignment.input_ids), {*source_ids, "recommendation_request", "recommendation_decision"})
                     self.assertEqual(len(assignment.input_ids), len(source_ids) + 2)

@@ -350,8 +350,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
             ordinal = len(source_enqueues)
             source_enqueues.append(ordinal)
             if ordinal in (0, 1, 3):
-                self.assertEqual(tuple((cursor, phase) for cursor, phase, _response in values["control_plan"]),
-                                 ((0, LeadGroupPhase.SELECT),))
+                self.assertEqual(tuple((cursor, phase) for cursor, phase, _response in values["control_plan"]), ((0, LeadGroupPhase.SELECT),))
                 values = {**values, "control_plan": ()}
             else:
                 self.assertIn(ordinal, (2, 4))
@@ -373,10 +372,14 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.assertEqual(self.backend.enqueue, enqueue)
         self.assertEqual(source_front_flags, [True, True, False, True, False])
         self.assertEqual(source_enqueues, [0, 1, 2, 3, 4])
+        requests = [event.payload for event in self.history(conversation_id) if type(event.payload) is c.LeadRecommendationRequestPayload]
+        self.assertEqual(len(requests), 2)
+        for prepared, request in zip((first, second), requests):
+            self.assertEqual(prepared.proposal.basis.authoring_admission, request.basis.authoring_admission)
+            self.assertEqual(sum(source.kind is c.CollaborationInputKind.USER_INPUT for source in request.basis.inputs), 1)
         for index, group in ((0, 'consultation.authoring.content'), (3, 'prepare.artifact'), (5, 'prepare.artifact')):
             _assert_source_only_call(self, self.backend.calls[source_call_start + index], group)
-        self.assertEqual(tuple(self.backend.calls[source_call_start + index].contract.schema_group_phase
-                               for index in (0, 3, 4, 5, 6)), (None,) * 5)
+        self.assertEqual(tuple(self.backend.calls[source_call_start + index].contract.schema_group_phase for index in (0, 3, 4, 5, 6)), (None,) * 5)
         objective_id = self.objective(conversation_id).facts.objective_id
         self.backend.enqueue(lambda call, _provider: _native_objective_response(call, response_type='answer',
             message='Objective cancelled.', scope=lead._live_scope(call),
@@ -386,8 +389,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         cancel_call_start = len(self.backend.calls)
         cancel_event_start = len(self.history(conversation_id))
         cancelled = await self.runtime.lead_turn(self.session_id, conversation_id, "Cancel this writing objective.")
-        selects = [call for call in self.backend.calls[cancel_call_start:]
-                   if call.contract.group_workflow is not None and call.contract.group_workflow.phase.value == "select"]
+        selects = [call for call in self.backend.calls[cancel_call_start:] if call.contract.group_workflow is not None and call.contract.group_workflow.phase.value == "select"]
         current = selects[-1] if selects else None
         diagnostic = None if current is None else {
             "catalog_group_ids": current.contract.group_workflow.catalog.group_ids,
@@ -395,8 +397,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
             "remaining_provider_calls": current.contract.offers.remaining_provider_calls,
         }
         self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.CANCELLED, diagnostic)
-        self.assertEqual(tuple(call.contract.schema_group_phase for call in self.backend.calls[cancel_call_start:]),
-                         (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
+        self.assertEqual(tuple(call.contract.schema_group_phase for call in self.backend.calls[cancel_call_start:]), (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
         self.assertEqual(len(lead._submitted_calls(self.history(conversation_id)[cancel_event_start:])), 2)
         before = self.objective(conversation_id)
         bad = self.question(intent={"action": "continue", "objective_id": objective_id, "next_step": "clarify", "draft_source_event_ids": []})
@@ -404,6 +405,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.backend.enqueue(bad, control_plan=())
         await self.runtime.lead_turn(self.session_id, conversation_id, "Try the closed ID.")
         self.assertEqual(self.objective(conversation_id), before)
+        self.assertEqual([event.payload for event in self.history(conversation_id) if type(event.payload) is c.LeadRecommendationRequestPayload], requests)
 
     async def test_projection_retains_satisfaction_across_later_apply_commit_cycles(self):
         conversation_id, _ = await self.start()
