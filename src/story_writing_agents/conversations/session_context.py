@@ -39,6 +39,7 @@ from .context import (
 )
 from .events import (
     CollaborationMessagePayload,
+    CollaborationConfirmationPayload,
     CollaborationExecutionResult,
     CollaborationExecutionOutcomeKind,
     CollaborationStepStatePayload,
@@ -541,6 +542,10 @@ class SessionConversationHistory:
         """Derive current objective facts even when delivery contains no new records."""
         return artifact_objective_context(project_collaboration_history(self._events()))
 
+    def document_plans(self) -> tuple:
+        """Return typed views through this history owner's validated event adapter."""
+        return project_collaboration_history(self._events()).document_plans
+
 
 @dataclass(frozen=True, slots=True)
 class SessionHistorySnapshot:
@@ -747,6 +752,31 @@ class SessionHistorySnapshot:
              item.prefix_digest(len(item.records)))
             for item in self.conversations
         )
+
+    def document_plans(self) -> tuple:
+        """Reconcile exact plan/call/decision references across existing owner histories."""
+        from .context import project_document_plan_views
+        objectives = tuple(objective for row in self.conversations
+            for objective in project_collaboration_history(row._events()).artifact_objectives)
+        events = self.events()
+        by_id = {event.event_id: event for event in events}
+        source_counts = {}
+        for event in events:
+            source_counts[event.event_id] = source_counts.get(event.event_id, 0) + 1
+            value = event.payload
+            plan = value.document_plan if type(value) in {CollaborationLeadJudgmentPayload,
+                ArtifactObjectivePayload, ArtifactObjectivePayloadV2, CollaborationProposal} else None
+            if plan is not None and plan.planning_goal is not None and plan.planning_goal.user_event_id not in by_id:
+                raise ValueError("document plan original USER source is absent from session history")
+        referenced = {value.document_node.prior_confirmation_event_id for event in events
+            for value in (event.payload,) if type(value) in {CollaborationProposal, CollaborationLeadJudgmentPayload,
+                LeadRecommendationRequestPayload, CollaborationProviderCallPayload, ArtifactObjectivePayload, ArtifactObjectivePayloadV2}
+            and value.document_node is not None and value.document_node.prior_confirmation_event_id is not None}
+        for identity in referenced:
+            source = by_id.get(identity)
+            if source_counts.get(identity) != 1 or type(source.payload) is not CollaborationConfirmationPayload:
+                raise ValueError("document prior Confirm is missing or ambiguous in captured session history")
+        return project_document_plan_views(events, objectives)
 
     def events(self) -> tuple[CollaborationEvent, ...]:
         """Return the exact typed events of this immutable captured prefix."""

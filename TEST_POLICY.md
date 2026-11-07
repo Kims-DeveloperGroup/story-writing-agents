@@ -538,6 +538,28 @@ tracks regression verification and the actual PR-head five-shard gate. The PR
 validation workflow runs canonical checks without a diagnostic job or manual
 profiling dispatch path.
 
+### #839 문서 작업 계획 회귀 소스 배정
+
+사용자의 필요시 테스트 소스 예산 확대 허용을 정확한 **148783→150604** 전환에 적용한다. #923·#928·#930을 포함한 main `3fea15d6`의 `tests/test*.py` raw147845에 기존 ID의 계획·출처·Confirm·저장·UI 회귀와 정책 회귀를 더한 실측 raw149302를 청구한다. 실패에 한해 전문가·synthesis의 정규화된 반환 상태와 준비 실패 예외·필수 문맥 크기를 기존 실패 진단에 덧붙이는103행, 같은 계획의 Global→Part 실제 순차 작성 회귀와 빠른 입력 안내 렌더링 검증을 포함한다. 현행 native 응답 작성 함수로 바꾼 네 양성 fixture와 같은 첫 QUESTION의 선택·생성 계약을 직접 검사하는 추가58행도 raw에 포함하며, helper를 따로 늘리지 않는다. 순수 계약 검사도 공개 BoundContextProviderCallRequest로 native 분기를 사용하도록 맞춘 추가4행을 raw에 포함한다. 실제 선택 v9 계약의 양성·음성 경계와 공유 Global script를 검사하는 추가100행도 raw에 포함한다. 실제 task 제출 ID와 준비 검사 청구 태그를 구분하고 전체 비용·한도를 유지하는 추가20행도 raw에 포함한다. 기존 provider 호출·응답은 보존하며, 순차 Global 작성 경로의 가짜 예정 호출4회를 추가한다. 현행 v9의 네 불필요한 SELECT를 제외한 같은 업무의 예정 총22회는 원래 계획20회와 별도 목표2회를 구분하며 실제22회 통과를 주장하지 않는다. 정책 회귀13행은 이 raw에 이미 포함된다. 대화 전환의 실제 확인 연결·복원과 누락된 캡처 검사40행은 기존 통합 사례에 추가되며 provider 호출 수를 늘리지 않는다. 구간 완료 투영은 순수 값 검사로, 다중 대상의 완전한 목표 보존은 기존 통합 사례의 별도 실제 사용자 과업과 가짜 Lead 호출2회로 확인한다.
+
+읽기 전용 검토의 필수 입력 배정 수정1행과, 실제 NEW_TASK에서 출처 과업의 의도를 새 과업에 상속하지 않는 순수 경계 검사25행도 raw에 포함한다. 기존 ID 안에서 양방향 의도 전환과 RESUME·Revise·동일 ID·잘못된 참조·영수증 누락을 검사하며 provider 호출은 추가하지 않는다.
+
+v9의 정상 후속 전송에 전체 입력이 반복되지 않는 경우를 검증하는50행도 raw에 포함한다. 테스트 provider의 invocation별 입력 초기화·동일 invocation 내 보존2행과 기존 K의 실제 fixture bookkeeping·현재 토큰·상관관계·READ bytes·새 invocation 거절 검사48행이다. 기존 세 SEARCH/READ/result 계약과 가짜 호출3회는 재사용하며 새 HostRuntime·workspace·schema context나 제품 호출을 추가하지 않는다. 현재 관찰은 그대로 사용하고 원래 작업 material만 정확한 현재 토큰으로 조회한다.
+
+새 과업 작성 준비의 전이 증거를 검증하는72행도 raw에 포함한다. Global 추천 callback의 동일 본문을 공유해 L과 K가 함께 쓰는 추출3행과, K의 현행 v9 추천 findings·typed decode·원래 USER source/assessment 확인12행, 실제 typed USER/transition 기록의 source·target·step·owner·batch 정상/거절 경계57행이다. 기존에 관찰된 계약과 값 fixture를 재사용하며 추가 schema context·가짜 물리 호출·HostRuntime·workspace·ID·subTest를 만들지 않는다. 구성한 기록은 host admission·READ 자격·전체 이력 replay의 증거가 아니다.
+
+기존 helper1154에서 최신 main의 두 fixture 순감소8행과 완료된 #838 활성 도구819행을 빼고, 새 #839 기술 검증 도구974행과 이번 정책 helper1행을 청구하여 helper1302, 합계150604이다. 이전 도구와 증거는 변경 없이 보존하며 #839 실행 도구나 허가로 재사용하지 않는다. 두 도구를 동시에 활성화하면 각각 전체 비용을 다시 편성해야 한다.
+
+#839의 provider 기술 검증 도구에는 선택된 문서의 v9 계약을 직접 확인하는 두 사례120행을 추가했다. 기존 QUESTION 두 사례의 SELECT→GENERATE4회와 구성된 post-READ v9 두 사례의 단일 호출2회로 최대6회를 준비한다. 구성된 사례는 실제 READ·사용자 승인·HostApply 증거가 아니며, 이 소스 배정은 실행 허가나 큐 예외를 부여하지 않는다. 직렬1프로세스·호출당900초·배치3600초를 유지하고 실제 실행에는 새 소스별 admission과 필요한 큐 예외를 별도로 확인한다.
+
+main #927(`aefbe76c`) 통합 후에는 같은 원래 회귀를 보존하면서 upstream의 raw 소스가226행 줄어 raw149076이 됐다. §17의 공통 새 작업 판정·실제 append/이력 projection 회귀37행을 더한 현재 raw는149113이며 helper1302와 합쳐 **150415**다. 기존 상한150604는 유지하고 남은189행은 기존 배정 안의 여유다. 이번 정산으로 상한·ID·subTest·시간 한도를 늘리지 않는다. §18에서는 새 append/replay block만 기존 순수 이력 projection ID로 옮겨 K37행을 줄이고 context69행을 더했다. 순증32행 후 현재 raw149145 + helper1302 = **150447**이며 같은 상한150604 안에157행이 남는다. 원래 계약/native-frame/predicate 검사는 유지하고 실제 append/replay 및 미래 control 거절만 독립 실행한다. 과거0.044651초는 selector 선정 근거이며 현행 실행 시간·통과를 대신하지 않는다. 후속 순수 fixture에는 현행 이력 계약에 필요한 PREPARED/SUBMITTED Lead accounting 기록 두 건을 추가했다. 하나의 구성된 호출 ID와 spent1·tail7/5를 검증하는3행 후 현재 raw149148 + helper1302 = **150450**이며 상한150604 안에154행이 남는다. 이 기록은 실제 backend/provider 호출·HostRuntime·새 schema 준비를 실행하지 않는다. 새 회귀는 기존 K의 typed 값과 준비된 계약을 재사용하고, 실제 공개 append 검증과 history projection 및 미래 control 거절을 확인한다. 추가 schema 준비·HostRuntime·workspace·가짜 provider 호출은 없으며, 구성한 이력의 통과를 실제 HostRuntime 실행이나 provider 성공으로 보고하지 않는다.
+
+§19에서는 확인된 작성 범위로 산출물 목표를 생성하고 같은 출처 법칙으로 저장·재생하는 회귀를 기존 순수 이력 ID에 추가한다. 원래 단언을 유지하면서 두 실제 목표 생성 메서드, 구성된 Confirm/Started와 준비 결과의 공개 append/full projection, 원래 목표와 선택 노드 자체 목표의 구분 및 잘못된 출처·노드 거절을 검사한다. inline 무상태 소유자는 원래 production 메서드와 읽기 전용 기록만 사용하며 추가 HostRuntime·workspace·schema 준비·backend 호출은 없다. 원래 AST prefix와 다른 메서드를 보존한 순증130행/helper0 후 현재 raw149278 + helper1302 = **150580**이며 기존 상한150604 안에24행이 남는다. 구성된 기록 검증을 실제 provider·Confirm/Apply 권한 실행이나 전체 통합 통과로 주장하지 않는다.
+
+§20의 동일 후보 입력 재사용 회귀에는 현재 순수 이력 ID의 실제 typed 참조·binding과 검증 순서 spy를 사용한38raw를 추가한다. 누락 추가·정확한 재사용·유효한 불일치5종·충돌 중복·검증 우선 전달을 유지한다. spy는 데이터 구성과 delegation만 검증하며 실제 host 권한 통과 증거는 아니다. 필요한 정책 예외 회귀10raw와 정책 helper2행도 함께 청구해 **raw149326 + helper1304 =150630**이다. 기존 여유24행을 사용한 뒤 남은26행을 사용자의 필요시 예산 확대 허용으로 배정하여 소스 상한만 **150604→150630**으로 늘린다. 기존 허용 전환을 보존하고 **148783→150630**, **150604→150630**의 정확한 두 쌍만 추가한다. 전체 ID·완전한 subTest mapping·18000/3600초가 동일해야 인정하며 임의 기준/상한의1차이 증가를 거절한다. 새 ID/subTest·schema/HostRuntime/backend 호출·제품12회/2라운드·조건부22회·native 실행 허가는 늘리지 않는다. 최종 동적 결과와 전체 CI는 별도로 검증한다.
+
+이 전환은 기존 2527개 ID·전체 subTest mapping·18000/3600초와 기존 허용 전환을 보존한다. 제품의 task당12회/2라운드 한도도 유지한다. source 실측은 실행 통과나 시간 개선의 증거가 아니며, 현재 리비전의 영향 테스트·전체 CI·엄격한 provider schema 검사와 필요한 실제 기술 호출 결과를 별도로 기록한다.
+
 ## Initial calibration
 
 Issue #732 first reduced the 2,872-ID snapshot to 2,530 IDs (342 fewer,
@@ -552,3 +574,36 @@ inventory contains 2,527 IDs (345 fewer than the original snapshot,
 the complete final shards passed in 292.2 and 152.5 seconds: 444.7 seconds
 (7.4 minutes) sequential equivalent and 4.9 minutes for the longer shard.
 The CI ceilings above remain the acceptance rule on the current runner.
+
+### #839 같은 준비 요청의 후보 자료 재사용 진단 배정
+
+Part 준비의 호출 수 단언은 예상1회를 유지한다. 반환 kind/message와 기존 원래 예외
+관찰기를 해당 await에만 추가한다. 진단은3행이고 새 테스트 ID·subTest·provider 호출이나
+HostRuntime/schema 준비를 추가하지 않는다. 실제 라우팅의 회귀는 기존 문서 작업 통합
+테스트로 검증하며, 변경되지 않은 resolver 단위 검사를 그 증거로 대신하지 않는다.
+
+사용자의 필요시 예산 확대 승인을 정확한 **150630→150645**에 적용한다.
+진단3행과 정책 회귀10행으로 raw149339, 정책 helper2행으로 helper1306이며
+현재 전체 상한은 **150645**다. 기존 모든 허용 이력은 유지한다. 원격 main의148783과
+직전 배정150630에서150645로의 정확한 두 전환만 추가하며, 각 출발값·도착값 ±1은
+거절한다. ID2527개·완전한 subTest mapping·18000/3600초·제품12회/2라운드는 바꾸지 않는다.
+
+이번 예산은 후보 자료의 현재 요청 내 재사용과 실패 관찰을 위한 소스 배정이다.
+통합 검증·최종 전체 CI·Whole Front·재조정·기술 provider·리뷰·완료 조건을 대체하지 않는다.
+
+### #839 대화 간 원래 계획 보존과 최신 main 반영 배정
+
+기존 순수 이력 ID에 두 대화의 typed 준비·저장·재생·세션 계획 조회를69행 추가한다.
+제안서에 같은 원래 계획을 보존하고 자체 목표의 계획은None으로 남는 정상 사례와,
+제안서 계획 누락 시 로컬 append 거절을 확인한다. 새 ID·subTest·backend·HostRuntime·
+workspace·schema 준비는 없다. 구성된 Global 노드 사례는 대화 소유 경계의 보조 증거다.
+실제 Part/선행 후보·제안서 builder 실행은 기존 전체 문서 작업 통합으로 검증한다.
+known-goal fixture에 없는 planning-goal USER-ref 거절 조건을 임의로 주장하지 않는다.
+
+최신 main#934 반영의 raw44행을 중복 없이 포함한다. 필요시 확대 승인을 정확한
+**150645→150770**(+125)에 적용한다. main44+회귀69+정책 회귀10행으로
+raw149462이고, 정책 helper2행 후 helper1308이며 전체 상한은 **150770**다.
+기존 이력을 유지하고 정확한148783→150770 및150645→150770만 추가한다.
+각 base/target ±1은 거절한다. ID2527개·전체 subTest mapping·18000/3600초·
+제품12회/2라운드와 조건부22회 통합 시나리오는 변경하지 않는다.
+최종 전체 CI·Whole Front·재조정·기술 provider·리뷰·완료 조건을 대체하지 않는다.
