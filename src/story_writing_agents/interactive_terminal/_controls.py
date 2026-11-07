@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Callable
 from dataclasses import replace
 
+from ._input_text import align_input_cursor, input_text_boundaries
 from ._model import (
     ARTIFACT_REFERENCE_POSITION_PREFIX,
     EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX,
@@ -82,33 +84,42 @@ def transition_line_input(
     buffer = state.buffer
     cursor = state.cursor
     kind = event.kind
+    if kind in {
+        KeyKind.TEXT, KeyKind.BACKSPACE, KeyKind.DELETE, KeyKind.LEFT, KeyKind.RIGHT,
+    }:
+        boundaries = input_text_boundaries(buffer)
+        position = bisect_left(boundaries, cursor)
+        cursor = boundaries[position]
     if kind is KeyKind.TEXT:
         assert event.text is not None
+        updated = f"{buffer[:cursor]}{event.text}{buffer[cursor:]}"
         return (
             LineInputState(
-                f"{buffer[:cursor]}{event.text}{buffer[cursor:]}",
-                cursor + 1,
+                updated,
+                align_input_cursor(updated, cursor + 1),
             ),
             None,
         )
     if kind is KeyKind.BACKSPACE:
         if cursor == 0:
             return state, None
+        start = boundaries[position - 1]
         return (
             LineInputState(
-                f"{buffer[: cursor - 1]}{buffer[cursor:]}",
-                cursor - 1,
+                f"{buffer[:start]}{buffer[cursor:]}",
+                start,
             ),
             None,
         )
     if kind is KeyKind.DELETE:
         if cursor == len(buffer):
             return state, None
-        return LineInputState(f"{buffer[:cursor]}{buffer[cursor + 1:]}", cursor), None
+        end = boundaries[position + 1]
+        return LineInputState(f"{buffer[:cursor]}{buffer[end:]}", cursor), None
     if kind is KeyKind.LEFT:
-        return (LineInputState(buffer, max(0, cursor - 1)), None)
+        return LineInputState(buffer, boundaries[max(0, position - 1)]), None
     if kind is KeyKind.RIGHT:
-        return (LineInputState(buffer, min(len(buffer), cursor + 1)), None)
+        return LineInputState(buffer, boundaries[min(len(boundaries) - 1, position + 1)]), None
     if kind is KeyKind.HOME:
         return LineInputState(buffer, 0), None
     if kind is KeyKind.END:

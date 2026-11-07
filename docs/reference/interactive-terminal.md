@@ -325,6 +325,22 @@ keep their existing presentation.
 Fallback input shows equivalent notices as ordinary text and re-prompts. It
 does not erase terminal echo or promise a fixed physical cursor position.
 
+### Korean message editing
+
+Live one-line input moves left or right and deletes completed Hangul syllables
+as units, including syllables stored as decomposed conjoining jamo. Standalone
+compatibility jamo remain separate characters. Displayed Hangul uses composed
+syllables for consistent cell width and wrapping; submitted text and recalled
+history retain the original Unicode sequence. Enter keeps its existing
+submission and completion behavior.
+
+With unchanged terminal geometry, editing updates only changed display rows;
+cursor-only movement does not erase the draft. Resizing or returning from a
+borrowed view rebuilds the display from the retained input state. Terminal
+input methods own unfinished composition and its marked-text presentation;
+the editor handles the characters delivered by the terminal without inventing
+composition events or changing input-method preferences.
+
 ## Command input language
 
 On supported local macOS and Linux desktop terminals, a leading `/` selects an

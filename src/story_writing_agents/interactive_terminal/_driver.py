@@ -22,6 +22,7 @@ from ._output_history import ConversationTimeline, HistoryLayout
 from ._progress_process import ProgressContent, ProgressProcess, ProgressSnapshot
 from ._pointer import PointerEvent, decode_pointer
 from ._input_sources import InputSourceAdapter, InputSourceLifecycle
+from ._input_text import input_text_units, project_input_text
 from ._render import render_component
 
 from ._input_lifecycle import (
@@ -167,6 +168,18 @@ _DISCARDING_MOUSE_SEQUENCE = _DiscardingEscapeSequence()
 _EscapeSequenceState: TypeAlias = str | _DiscardingEscapeSequence | None
 
 
+@dataclass(frozen=True, slots=True)
+class _PaintSnapshot:
+    """Successfully painted rows belonging to one physical output generation."""
+
+    generation: int
+    geometry: tuple[int, int]
+    lines: tuple[str, ...]
+    cursor_row: int
+    cursor_column: int
+    absolute: bool
+
+
 @dataclass(slots=True)
 class _LiveEditorState:
     """Retain only call-local escape decoding and redraw position."""
@@ -183,6 +196,7 @@ class _LiveEditorState:
     history_line_count: int = 0
     inline_control_blocked: bool = False
     history_primary_surface: tuple[int, int, int | None, tuple[int, int] | None] | None = None
+    paint: _PaintSnapshot | None = None
 
 
 @dataclass(slots=True)
@@ -629,6 +643,8 @@ class RawTerminalDriver:
         "_timeline_linear_entries",
         "_timeline_failure",
         "_timeline_review_owner",
+        "_paint_generation",
+        "_timeline_paint",
         "_inspector_anchored",
         "_inspector_top",
         "_inspector_width",
@@ -723,6 +739,8 @@ class RawTerminalDriver:
         self._timeline_linear_entries: set[int] = set()
         self._timeline_failure: BaseException | None = None
         self._timeline_review_owner: _LiveEditorState | None = None
+        self._paint_generation = 0
+        self._timeline_paint: _PaintSnapshot | None = None
         self._inspector_anchored = False
         self._inspector_top = 1
         self._inspector_width = 1
@@ -835,6 +853,7 @@ class RawTerminalDriver:
                     self._timeline_rows = self._timeline_cursor_row = 0
                     self._timeline_origin = None
                     self._timeline_geometry = None
+                    self._timeline_paint = None
                     self._timeline_published = 0
                     self._timeline_linear_entries.clear()
                     self._timeline_failure = None
@@ -982,6 +1001,64 @@ class RawTerminalDriver:
         self._timeline_rows = self._timeline_cursor_row = 0
         self._timeline_origin = 1 if active else None
         self._timeline_geometry = None
+        self._timeline_paint = None
+
+    def _paint_rows(
+        self, lines: list[str] | tuple[str, ...], cursor_row: int, cursor_column: int,
+        geometry: tuple[int, int], snapshot: _PaintSnapshot | None,
+        *, old_cursor_row: int, absolute: bool = False,
+        reset_prefix: str | None = None,
+    ) -> _PaintSnapshot:
+        """Update only changed rows while retaining unedited input on screen."""
+        rows = tuple(lines)
+        row = min(max(0, cursor_row), max(0, len(rows) - 1))
+        valid = (snapshot is not None and snapshot.generation == self._paint_generation
+                 and snapshot.geometry == geometry and snapshot.absolute is absolute
+                 and reset_prefix is None)
+        if valid:
+            assert snapshot is not None
+            if (rows == snapshot.lines and row == snapshot.cursor_row
+                    and cursor_column == snapshot.cursor_column):
+                return snapshot
+            parts: list[str] = []
+            current_row = snapshot.cursor_row
+            for index in range(max(len(rows), len(snapshot.lines))):
+                previous = snapshot.lines[index] if index < len(snapshot.lines) else None
+                updated = rows[index] if index < len(rows) else None
+                if previous == updated:
+                    continue
+                if absolute:
+                    parts.append(f"\x1b[{index + 1};1H")
+                else:
+                    parts.append("\r")
+                    distance = index - current_row
+                    if distance < 0:
+                        parts.append(_CURSOR_UP * -distance)
+                    elif index >= len(snapshot.lines):
+                        parts.append("\n" * distance)
+                    else:
+                        parts.append("\x1b[1B" * distance)
+                # Erase only the obsolete tail after writing the replacement.
+                parts.extend((updated or "", "\x1b[K"))
+                current_row = index
+            if absolute:
+                parts.append(f"\x1b[{row + 1};{cursor_column + 1}H")
+            else:
+                distance = row - current_row
+                parts.extend(("\r", _CURSOR_UP * -distance if distance < 0
+                              else "\x1b[1B" * distance,
+                              _CURSOR_RIGHT * cursor_column))
+            payload = "".join(parts)
+        else:
+            prefix = (reset_prefix if reset_prefix is not None
+                      else _VIEWER_SCREEN_REDRAW if absolute
+                      else "\r" + _CURSOR_UP * old_cursor_row + "\r" + _CLEAR_TO_END)
+            payload = (prefix + "\n".join(rows)
+                       + _CURSOR_UP * max(0, len(rows) - 1 - row)
+                       + "\r" + _CURSOR_RIGHT * cursor_column)
+        self._write_live_text(payload)
+        return _PaintSnapshot(self._paint_generation, geometry, rows, row,
+                              cursor_column, absolute)
 
     def _render_inline_rows(self, lines: list[str] | tuple[str, ...], cursor_row: int, cursor_column: int = 0) -> None:
         """Replace only owned rows relative to the actual current cursor."""
@@ -989,30 +1066,23 @@ class RawTerminalDriver:
             raise self._timeline_failure
         geometry = self._text_viewer_geometry(self.capabilities().width, bounded_height=False)
         changed_geometry = self._timeline_geometry is not None and geometry != self._timeline_geometry
-        if self._timeline_screen_active:
-            # This screen belongs entirely to the conversation. Address it from
-            # home after every paint, independently of terminal reflow.
-            prefix = _VIEWER_SCREEN_REDRAW
-            self._timeline_cursor_row = 0
+        absolute = self._timeline_screen_active or self._timeline_review_owner is not None
+        reset_prefix = None
+        if absolute:
             self._timeline_origin = 1
         elif changed_geometry:
             # Terminal reflow invalidates old physical offsets. Establish a fresh
             # surface instead of moving upward through unrelated terminal rows.
-            prefix = ("\x1b[H\x1b[2J" if self._timeline_review_owner is not None
-                      else "\r\n" if self._timeline_rows else "\r")
+            reset_prefix = "\r\n" if self._timeline_rows else "\r"
             self._timeline_cursor_row = 0
-            self._timeline_origin = 1 if self._timeline_review_owner is not None else None
-        else:
-            prefix = "\r" + _CURSOR_UP * self._timeline_cursor_row + "\r"
-            if self._timeline_rows:
-                prefix += ("\x1b[2K\x1b[1B\r" * (self._timeline_rows - 1)
-                           + "\x1b[2K" + _CURSOR_UP * (self._timeline_rows - 1) + "\r")
+            self._timeline_origin = None
         row = min(max(0, cursor_row), max(0, len(lines) - 1))
-        payload = (prefix + "\n".join(lines)
-                   + _CURSOR_UP * max(0, len(lines) - 1 - row)
-                   + "\r" + _CURSOR_RIGHT * max(0, cursor_column))
         try:
-            self._write_live_text(payload)
+            self._timeline_paint = self._paint_rows(
+                lines, row, max(0, cursor_column), geometry, self._timeline_paint,
+                old_cursor_row=self._timeline_cursor_row, absolute=absolute,
+                reset_prefix=reset_prefix,
+            )
         except BaseException as failure:
             self._timeline_failure = failure
             self._timeline_rows = self._timeline_cursor_row = 0
@@ -1124,6 +1194,7 @@ class RawTerminalDriver:
     @contextmanager
     def _suspend_timeline(self, *, preserve_screen: bool = False) -> Iterator[None]:
         """Lend a clean surface and restore only fresh physical geometry afterwards."""
+        self._paint_generation += 1
         if self._timeline_review_owner is not None:
             self._set_history_review_mode(self._timeline_review_owner, False)
         active = (self._timeline_enabled
@@ -1137,6 +1208,7 @@ class RawTerminalDriver:
         try:
             yield
         finally:
+            self._paint_generation += 1
             self._timeline_suspended -= 1
             if active:
                 if screen:
@@ -1253,6 +1325,9 @@ class RawTerminalDriver:
             raise OSError("progress writer termination is unconfirmed")
         if self._progress_process is not None and self._progress_process.active:
             raise RuntimeError("terminal writing is lent to progress")
+        # Any physical output invalidates earlier snapshots. A successful
+        # painter alone can commit a snapshot in the resulting generation.
+        self._paint_generation += 1
 
         payload = text
         if self._progress_output_reset:
@@ -1300,6 +1375,7 @@ class RawTerminalDriver:
             if owner.active:
                 owner.publish(snapshot)
                 return True
+            self._paint_generation += 1
             if owner.begin(snapshot, owned_rows=self._timeline_rows,
                            cursor_row=self._timeline_cursor_row):
                 return True
@@ -1317,6 +1393,8 @@ class RawTerminalDriver:
         if owner is None:
             return
         was_active = owner.active
+        if was_active:
+            self._paint_generation += 1
         try:
             release = owner.close() if close else owner.quiesce()
         except BaseException:
@@ -5684,12 +5762,11 @@ class RawTerminalDriver:
                 output_lines, display_state, history_capabilities, history_screen_height,
                 cursor_row, cursor_column,
             )
-        move_to_top = _CURSOR_UP * display_state.rendered_cursor_row
-        move_to_cursor = _CURSOR_UP * (len(output_lines) - 1 - cursor_row)
-        payload = "".join((_CARRIAGE_RETURN, move_to_top, _CARRIAGE_RETURN, _CLEAR_TO_END,
-                           "\n".join(output_lines), move_to_cursor, _CARRIAGE_RETURN,
-                           _CURSOR_RIGHT * cursor_column))
-        self._write_live_text(payload)
+        height = self._text_viewer_geometry(width, bounded_height=False)[1]
+        display_state.paint = self._paint_rows(
+            output_lines, cursor_row, cursor_column, (render_width, height),
+            display_state.paint, old_cursor_row=display_state.rendered_cursor_row,
+        )
         return cursor_row
 
     def _finish_live_display(
@@ -6767,16 +6844,11 @@ def _wrapped_rendered_input(
     if len(styled_lines) != len(plain_lines):
         raise ValueError("rendered input projections must share line topology")
 
-    safe_before_cursor = "".join(
-        _editor_display_text(character) for character in buffer[:cursor]
-    )
-    safe_after_cursor = "".join(
-        _editor_display_text(character) for character in buffer[cursor:]
-    )
+    safe_buffer, projected_cursor = project_input_text(buffer, cursor)
     plain_prompt = plain_lines[-1]
     dynamic_lines, cursor_row, cursor_column = _wrap_safe_text_with_cursor(
-        f"{plain_prompt}{safe_before_cursor}{safe_after_cursor}",
-        len(plain_prompt) + len(safe_before_cursor),
+        f"{plain_prompt}{safe_buffer}",
+        len(plain_prompt) + projected_cursor,
         width,
     )
     if not dynamic_lines[0].startswith(plain_prompt):
@@ -6809,14 +6881,9 @@ def _wrapped_editor_input(
     if cursor < 0 or cursor > len(buffer):
         raise ValueError("cursor must identify a buffer boundary")
     safe_prompt = _editor_display_text(prompt)
-    safe_before_cursor = "".join(
-        _editor_display_text(character) for character in buffer[:cursor]
-    )
-    safe_after_cursor = "".join(
-        _editor_display_text(character) for character in buffer[cursor:]
-    )
-    safe_text = safe_prompt + safe_before_cursor + safe_after_cursor
-    cursor_offset = len(safe_prompt) + len(safe_before_cursor)
+    safe_buffer, projected_cursor = project_input_text(buffer, cursor)
+    safe_text = safe_prompt + safe_buffer
+    cursor_offset = len(safe_prompt) + projected_cursor
     return _wrap_safe_text_with_cursor(safe_text, cursor_offset, width)
 
 
@@ -6856,15 +6923,16 @@ def _wrap_safe_text_with_cursor(
     lines = [""]
     line_widths = [0]
     cursor_position: tuple[int, int] | None = None
-    for index, character in enumerate(safe_text):
-        character_width = _display_character_width(character)
-        if line_widths[-1] and line_widths[-1] + character_width > width:
+    for unit in input_text_units(safe_text):
+        if line_widths[-1] and line_widths[-1] + unit.cells > width:
             lines.append("")
             line_widths.append(0)
-        if index == cursor_offset:
+        if unit.start == cursor_offset:
             cursor_position = (len(lines) - 1, line_widths[-1])
-        lines[-1] += character
-        line_widths[-1] += character_width
+        lines[-1] += unit.display
+        line_widths[-1] += unit.cells
+        if unit.start < cursor_offset < unit.end:
+            cursor_position = (len(lines) - 1, line_widths[-1])
     if cursor_position is None:
         cursor_position = (len(lines) - 1, line_widths[-1])
     return lines, cursor_position[0], cursor_position[1]

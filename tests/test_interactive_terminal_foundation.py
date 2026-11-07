@@ -948,19 +948,19 @@ class PureControlFoundationTests(unittest.TestCase):
     def test_line_input_transitions_edit_commit_and_preserve_terminal_events(
         self,
     ) -> None:
-        state = LineInputState("ac", 1)
+        state = LineInputState("A한가Z", 2)
         state, outcome = transition_line_input(
             state,
             KeyEvent(KeyKind.TEXT, text="b"),
         )
-        self.assertEqual((state, outcome), (LineInputState("abc", 2), None))
+        self.assertEqual((state, outcome), (LineInputState("A한b가Z", 5), None))
         expected_states = (
-            (KeyKind.LEFT, LineInputState("abc", 1)),
-            (KeyKind.BACKSPACE, LineInputState("bc", 0)),
-            (KeyKind.DELETE, LineInputState("c", 0)),
-            (KeyKind.RIGHT, LineInputState("c", 1)),
-            (KeyKind.HOME, LineInputState("c", 0)),
-            (KeyKind.END, LineInputState("c", 1)),
+            (KeyKind.LEFT, LineInputState("A한b가Z", 4)),
+            (KeyKind.BACKSPACE, LineInputState("Ab가Z", 1)),
+            (KeyKind.DELETE, LineInputState("A가Z", 1)),
+            (KeyKind.RIGHT, LineInputState("A가Z", 2)),
+            (KeyKind.HOME, LineInputState("A가Z", 0)),
+            (KeyKind.END, LineInputState("A가Z", 3)),
         )
         for kind, expected in expected_states:
             state, outcome = transition_line_input(state, KeyEvent(kind))

@@ -184,7 +184,7 @@ class RawLiveComposerTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         driver, input_stream, _output, fallback, termios, _size = _driver(
-            "X\x1b[D/status\n"
+            "X\x1b[D\x1b[D\x1b[C/status\n"
         )
         rendered: list[LineInputState] = []
 
@@ -206,14 +206,14 @@ class RawLiveComposerTests(unittest.IsolatedAsyncioTestCase):
                 renderer,
                 lambda: LiveOperationBoundary.PRECOMMIT,
                 _joined_cancel,
-                initial_state=LineInputState("ab", 1),
+                initial_state=LineInputState("a한b", 4),
             )
 
         self.assertEqual(result.kind, LiveComposerDeliveryKind.REPLAN)
-        self.assertEqual(result.state, LineInputState("a/statusXb", 8))
-        self.assertEqual(result.text, "a/statusXb")
-        self.assertIn(LineInputState("aXb", 2), rendered)
-        self.assertIn(LineInputState("a/statusXb", 8), rendered)
+        self.assertEqual(result.state, LineInputState("a한/statusXb", 11))
+        self.assertEqual(result.text, "a한/statusXb")
+        self.assertIn(LineInputState("a한Xb", 5), rendered)
+        self.assertIn(LineInputState("a한/statusXb", 11), rendered)
         self.assertFalse(fallback.called)
         self.assertEqual([call[1] for call in termios.set_calls], [10, 11])
 
