@@ -6799,29 +6799,29 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 self.assertIn(notice + " no bounded literal final response_text was recoverable.", rendered)
         from tests import provider_wire_fixture as wire
         from tests.test_lead_orchestration import _live_scope
-        from tests.recommendation_fixture import action, recommendation, task_assessment, OUTLINE
-        from story_writing_agents.authoring_admission import AdmissionStatus
+        from tests.recommendation_fixture import OUTLINE
         case = _task_fixture(self)
-        conversation = case.conversation("Host rewrite preserves original response provenance")
-        assessment = replace(task_assessment(foundation_ids=("user_input",), actions=("bounded preparation",)),
-            status=AdmissionStatus.ANALYSIS_ONLY, missing_information=("Preparation scope is undecided.",))
-        case.backend.enqueue(recommendation(message="Prepare a bounded specialist proposal.",
-            recommended_action=action(kind="prepare_consultation", source_ids=("user_input",)),
-            authoring_scope=lambda call: _live_scope(call, activity="review", domains=("plot_structure",), paths=(OUTLINE,),
-                contributions=[{"domain": "plot_structure", "role": "constraint_assessor"}]), authoring_assessment=assessment),
-            control_plan=wire.selection_plan("prepare.consultation.authoring"))
-        rewritten = runner.run(case.runtime.lead_turn(case.session_id, conversation,
-            "Use the supplied facts for bounded preparation; retain separate confirmation."))
-        self.assertEqual((rewritten.kind, rewritten.trace.origin, rewritten.trace.action),
-            (LeadOutcomeKind.QUESTION, ReplyTraceOrigin.RUNTIME_FALLBACK, "none"))
-        self.assertEqual(rewritten.public_responses[-1].response.response_kind, "recommendation")
-        self.assertIsNone(rewritten.recommendation_request)
-        component = _collaboration_view.project_lead_turn_result(rewritten, public_response_events=case.history(conversation))
-        frames = tuple(item for item in component.items if type(item) is terminal_module.Message)
-        self.assertEqual(tuple(item.sender for item in frames), ("Lead", "Runtime"))
-        self.assertEqual(frames[0].content, "Prepare a bounded specialist proposal.")
-        self.assertIn("Outcome: recommendation", frames[0].metadata)
-        self.assertIsNone(frames[1].metadata)
+        conversation = case.conversation("A real preparation gap remains a question")
+        calls_before = len(case.backend.calls)
+        case.backend.enqueue(lambda call, _provider: wire.lead_fixture_response(call,
+            {"response_type": "clarification_question", "response_text": "Preparation scope undecided.",
+             "response_details": {"task_scope": wire.lead_fixture_bound_scope(call,
+                 _live_scope(call, activity="review", domains=("plot_structure",), paths=(OUTLINE,),
+                     contributions=[{"domain": "plot_structure", "role": "constraint_assessor"}]), record=True)}}, family=0),
+            control_plan=wire.selection_plan("question.authoring"))
+        question = runner.run(case.runtime.lead_turn(case.session_id, conversation,
+            "Preparation scope is undecided. Ask what needs clarification before planning."))
+        self.assertEqual((question.kind, question.trace.origin, question.trace.action, question.next_action),
+            (LeadOutcomeKind.QUESTION, ReplyTraceOrigin.PROVIDER, "question", CollaborationNextAction.REPLY_TO_LEAD))
+        self.assertEqual(len(case.backend.calls) - calls_before, 2)
+        self.assertEqual(question.public_responses[-1].response.response_kind, "question")
+        self.assertEqual(question.public_responses[-1].response.acceptance.value, "accepted")
+        self.assertIsNone(question.recommendation_request); self.assertIsNone(question.artifact_application_request); self.assertIsNone(question.story_commit_request)
+        question_panel = _collaboration_view.project_lead_turn_result(question, public_response_events=case.history(conversation))
+        frames = [item for item in question_panel.items if isinstance(item, terminal_module.Message)]
+        self.assertEqual(tuple(item.sender for item in frames), ("Lead",))
+        self.assertEqual(frames[0].content, "Preparation scope undecided.")
+        self.assertIn("Outcome: question", frames[0].metadata)
 
     def test_pending_commit_redisclosure_reuses_exact_picker_without_apply(self):
         digest = "sha256:" + "a" * 64

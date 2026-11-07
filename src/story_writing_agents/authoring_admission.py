@@ -354,7 +354,9 @@ def admission_basis_from_dict(value: object) -> AuthoringAdmissionBasis:
                                   item["scope_digest"], tuple(sources), assessment_from_dict(item["assessment"]))
 
 
-def assessment_schema(source_ids: tuple[str, ...] | None = None) -> dict[str, object]:
+def assessment_schema(
+    source_ids: tuple[str, ...] | None = None, *, require_admission: bool = False,
+) -> dict[str, object]:
     """The source-owned closed semantic shape used by wire and typed parsing."""
     text = nonblank_text_rule(maximum_characters=4096)
     label = nonblank_text_rule(maximum_characters=256)
@@ -362,10 +364,12 @@ def assessment_schema(source_ids: tuple[str, ...] | None = None) -> dict[str, ob
     refs = {"type": "array", "items": text, "minItems": 0, "maxItems": 32}
     meanings = {
         "status": (
-            "Assess this task and stage using all actually offered grounds, not only the latest short reply. "
-            "sufficient means the assessed work is supported; needs_information identifies a concrete blocking "
-            "fact, decision or unavailable necessary evidence; analysis_only permits grounded analysis without "
-            "admitting official authoring. These states grant no execution or write authority."),
+            "Assess this task stage using all actually offered grounds, not only the latest short reply. "
+            "sufficient means the assessed work is supported; needs_information identifies a concrete "
+            "inadequacy, and analysis_only permits grounded analysis without official authoring "
+            "admission. Either nonsufficient status may have missing_information=[] when no current USER "
+            "action is needed. An empty list is not sufficiency, Confirm, Apply, Commit or permission to "
+            "proceed."),
         "foundations": (
             "Named story facts or supplied material needed for this deliverable, with evidence explaining "
             "their actual support. A procedural request to proceed is not itself story material and does not "
@@ -375,14 +379,21 @@ def assessment_schema(source_ids: tuple[str, ...] | None = None) -> dict[str, ob
             "USER evidence. Distinguish the writing goal from an agent's proposed procedure; null represents "
             "an unresolved or unavailable direction, not permission to invent one."),
         "creative_scope": (
-            "The source-qualified USER boundary between permitted construction or invention and facts that "
-            "must remain intact. An explicit no-invention instruction is a complete boundary when its actual "
-            "USER source is offered; it does not require permission to invent. Use null only when this boundary "
-            "is unresolved or lacks qualified evidence. Agent claims and summaries do not create USER permission."),
+            "The source-qualified USER boundary for content choices and transformations at this stage, "
+            "between permitted construction or invention and protected facts. An explicit no-invention "
+            "instruction is a complete boundary when its actual USER source is offered; it does not "
+            "require permission to invent. Preparing an assignment, selecting specialists, retrieval and "
+            "approval are workflow steps, not this creative boundary. Use null when the boundary is "
+            "unresolved or lacks qualified evidence; do not invent permission or defer necessary source "
+            "binding until after recommending preparation."),
         "allowed_creative_actions": (
-            "Concrete actions permitted within the evidenced creative boundary, such as arranging supplied "
-            "facts and refining wording without inventing dialogue, events or feelings. A preparation step, "
-            "general approval or named action alone does not establish creative permission or waive host checks."),
+            "Concrete content choices or transformations permitted now within the evidenced creative "
+            "boundary. For fact-only work, arrange supplied facts and refine wording without inventing "
+            "dialogue, events, feelings or intentions. Where literal USER evidence explicitly permits "
+            "bounded reconstruction, dialogue may be reconstructed within that boundary. Preparing an "
+            "assignment, selecting specialists, retrieving sources and obtaining approval are procedural "
+            "steps, not creative actions. Do not manufacture facts or permission merely to fill this "
+            "array or make a recommendation admissible; do not fill it with procedures."),
         "protected_constraints": (
             "Established facts, voice, interpretation and other USER constraints this work must preserve. "
             "Keep no-invention limits consistent with creative_scope and allowed actions. Do not invent "
@@ -392,14 +403,20 @@ def assessment_schema(source_ids: tuple[str, ...] | None = None) -> dict[str, ob
             "missing. Preserve settled choices; routine choices already delegated to the agent do not require "
             "another USER decision. Do not substitute an agent's retrieval or source-linking task for an author decision."),
         "missing_information": (
-            "Only concrete facts, choices or genuinely unavailable necessary evidence that block the assessed "
-            "stage. Check actually offered grounds first; distinguish internal retrieval or source-linking work "
-            "from information the USER must supply. Do not ask the USER to repeat settled facts or perform "
-            "available agent work. Never claim inaccessible evidence was read or source-qualified."),
+            "Only concrete facts, decisions, creative-scope permission or material that the USER must "
+            "explicitly provide or decide now for this assessed stage. Check actually offered grounds "
+            "first; do not ask the USER to repeat supplied information. Internal retrieval, host source "
+            "delivery or source-linking work and pending Confirm/Apply/Commit are not USER information "
+            "requests: keep [] if these are the only blockers and explain their cause and stage impact in "
+            "rationale. Never claim unavailable evidence was read or source-qualified."),
         "rationale": (
-            "A concise explanation of how the cited grounds, permitted actions, protected constraints and "
-            "remaining gaps support this status for the current task and stage. Distinguish missing USER "
-            "information from unavailable source binding; confidence or a restated plan is not evidence."),
+            "Explain how actual cited grounds, content choices and transformations, protected constraints "
+            "and missing USER requests support this task/stage/status. Describe internal retrieval, host "
+            "source delivery or source-linking problems and pending approval here, including their cause "
+            "and stage impact. If no USER action is needed, explain the unavailable-grounding state "
+            "through a legal non-recommendation response; do not invent a USER request or postpone "
+            "required grounding until preparation. Confidence or a restated plan is not evidence; "
+            "missing_information=[] is not sufficiency or approval."),
         "requirement": (
             "The specific foundation, USER direction or creative boundary this evidence must establish. "
             "Name the task-relevant need rather than repeating a vague plan or claiming general readiness."),
@@ -459,13 +476,19 @@ def assessment_schema(source_ids: tuple[str, ...] | None = None) -> dict[str, ob
         "rationale": {**text, "description": meanings["rationale"]},
     }
     description = (
-        "Assess the current work and stage against actual offered story foundations, literal USER direction, "
-        "creative boundaries and required decisions. Use earlier supplied grounds only through their offered "
-        "qualified sources; do not erase them merely because the current reply is procedural. Distinguish true "
-        "USER information gaps from agent retrieval/source-linking work. Host source qualification, current "
-        "targets, document readiness and separate Confirm/Apply/Commit controls remain independent.")
+        "Assess actual supplied foundations, USER direction, content choices and transformations, "
+        "protected constraints and required decisions for this stage. Preserve qualified earlier grounds "
+        "when the current reply is procedural. missing_information names only explicit requests the USER "
+        "must satisfy now; internal retrieval, host source delivery or source-linking and pending "
+        "Confirm/Apply/Commit belong in rationale with their cause and stage impact. Reuse supplied USER "
+        "facts. Do not manufacture content permission or recommend preparation before its necessary "
+        "source qualification. When no USER action is needed but grounding remains unavailable, use a "
+        "legal non-recommendation response without forcing its response kind. Host qualification, "
+        "targets, readiness and separate execution/write controls remain independent.")
     information = closed_rule(fields, description=description)
     if evidence is None:
+        if require_admission:
+            raise ValueError("official authoring admission requires offered sources")
         return json.loads(json.dumps(information))
     sufficient = {**fields, "status": {"type": "string", "enum": [AdmissionStatus.SUFFICIENT.value],
                                       "description": meanings["status"]},
@@ -473,6 +496,15 @@ def assessment_schema(source_ids: tuple[str, ...] | None = None) -> dict[str, ob
         "direction": {**evidence, "description": meanings["direction"]},
         "decisions": {**fields["decisions"], "minItems": 1, "items": {"anyOf": decisions[:-1]}},
         "missing_information": {**strings, "maxItems": 0, "description": meanings["missing_information"]}}
+    if require_admission:
+        creative_scope = {**evidence,
+            "description": fields["creative_scope"].get("description", evidence["description"])}
+        return json.loads(json.dumps(closed_rule({
+            **sufficient, "creative_scope": creative_scope,
+            "allowed_creative_actions": {**fields["allowed_creative_actions"], "minItems": 1},
+        }, description=("Official authoring preparation requires a sufficient assessment with "
+                        "source-bound creative scope and named allowed actions; host literal-USER "
+                        "qualification and currentness remain separate."))))
     # Guidance projection mutates occurrences; export a tree without shared nodes.
     return json.loads(json.dumps({"anyOf": [
         closed_rule({**sufficient, "creative_scope": {**evidence, "description": meanings["creative_scope"]}},
