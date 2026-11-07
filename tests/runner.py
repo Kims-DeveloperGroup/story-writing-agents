@@ -969,6 +969,17 @@ _HOSTED_LAUNCH_IDS = (
     'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_provider_invocation_failure_surfaces_transient_stream_error_in_final_output',
 )
 _HOSTED_METHOD_IDS = tuple(sorted(_HOSTED_LAUNCH_IDS))
+# These retained pure methods remain serial in a mixed hosted class.
+_HOSTED_MIXED_SERIAL_IDS = (
+    'tests.test_specialist_routing.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership',
+    'tests.test_specialist_routing.SpecialistRoutingTests.test_drafted_is_neither_supports_nor_legacy_review_assessment',
+    'tests.test_specialist_routing.SpecialistRoutingTests.test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest',
+    'tests.test_specialist_routing.SpecialistRoutingTests.test_mixed_paths_and_semantics_union_without_inventory_inference',
+    'tests.test_specialist_routing.SpecialistRoutingTests.test_published_recommended_action_position_and_keyword_only_scope_are_preserved',
+    'tests.test_specialist_routing.SpecialistRoutingTests.test_review_requires_disclosed_concrete_basis_while_draft_forbids_it',
+    'tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip',
+    'tests.test_specialist_routing.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe',
+)
 _HOSTED_PRIORITY_ID = _HOSTED_LAUNCH_IDS[0]
 _METHOD_TOKEN_ENV = "STORY_TEST_METHOD_CHILD_TOKEN"
 
@@ -1016,9 +1027,11 @@ def _hosted_options(args) -> dict[str, object] | None:
 
 def _hosted_partition(canonical: CanonicalCollection, selection: CanonicalCollection):
     eligible = set(_HOSTED_METHOD_IDS)
+    mixed_serial = set(_HOSTED_MIXED_SERIAL_IDS)
     classes = {identifier.rsplit(".", 1)[0] for identifier in eligible}
     present = {identifier for identifier in canonical.ids if identifier.rsplit(".", 1)[0] in classes}
-    if present != eligible or len(eligible) != 161:
+    if (present != (eligible | mixed_serial) or len(eligible) != 161
+            or len(mixed_serial) != 8 or eligible & mixed_serial):
         raise RunnerError("audited whole-method eligibility changed")
     serial = tuple(test for test in selection.tests if test.id() not in eligible)
     scheduled = tuple(identifier for identifier in selection.ids if identifier in eligible)

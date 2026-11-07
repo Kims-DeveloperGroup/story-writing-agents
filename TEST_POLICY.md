@@ -340,6 +340,10 @@ benchmark campaign is required.
 
 ## Hosted full-shard method scheduling
 
+The mixed SpecialistRoutingTests class has two hosted contract methods and eight
+explicitly frozen serial methods. Eligibility requires exact coverage by these
+disjoint lists; a new or missing method still fails before execution.
+
 Only hosted full shards opt into the fixed `audited-161-v5` profile: 161
 fixture-audited methods across 20 classes. The profile includes the eight
 provider-timeout recovery, ten context-recovery and thirteen interactive Lead

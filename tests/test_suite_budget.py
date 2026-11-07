@@ -298,10 +298,10 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(runner._manifest(ids)["digest"],
                          "sha256:18fb999bf223a0b6fdc5ea9cb67ab6c873cc378c0c43e76755bfbf60457c78cf")
         self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (161, 20))
-        cases = tuple(Mock(id=Mock(return_value=value)) for value in (*ids, "unreviewed.test"))
-        canonical = runner.CanonicalCollection(cases, (*ids, "unreviewed.test"))
+        cases = tuple(Mock(id=Mock(return_value=value)) for value in (*ids, *runner._HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
+        canonical = runner.CanonicalCollection(cases, (*ids, *runner._HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         serial, scheduled = runner._hosted_partition(canonical, canonical)
-        self.assertEqual((serial.tests, scheduled), ((cases[-1],), ids))
+        self.assertEqual((serial.tests, scheduled), (cases[len(ids):], ids))
         isolated = runner.CanonicalCollection((cases[ids.index(suite_policy.ISOLATED_TEST_ID)],),
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner._hosted_partition(canonical, isolated)
@@ -310,8 +310,17 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(runner._manifest(runner._hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner._hosted_launch_order(ids[::-1]), runner._hosted_launch_order(ids))
         self.assertEqual(runner._hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
-        drift = runner.CanonicalCollection(cases, (*ids, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
+        drift = runner.CanonicalCollection(cases, (*ids, *runner._HOSTED_MIXED_SERIAL_IDS, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
         self.assertRaises(runner.RunnerError, runner._hosted_partition, drift, drift)
+        real = runner._discover_canonical()
+        real_serial, real_scheduled = runner._hosted_partition(real, real)
+        self.assertEqual(real_scheduled, ids)
+        self.assertEqual(set(real_serial.ids) & set(runner._HOSTED_MIXED_SERIAL_IDS), set(runner._HOSTED_MIXED_SERIAL_IDS))
+        self.assertFalse(set(real_scheduled) & set(runner._HOSTED_MIXED_SERIAL_IDS))
+        self.assertIn("tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip", real_serial.ids)
+        self.assertEqual(len(runner._HOSTED_MIXED_SERIAL_IDS), 8)
+        missing = runner.CanonicalCollection(cases, (*ids[:-1], *runner._HOSTED_MIXED_SERIAL_IDS))
+        self.assertRaises(runner.RunnerError, runner._hosted_partition, missing, missing)
         args = SimpleNamespace(command="run", hosted_methods="audited-161-v5", hosted_deadline_epoch=time.time()+3500,
                                shard="1/5", id=[], module=[], tier=[], failfast=False, json="report.json")
         env = dict(GITHUB_ACTIONS="true", TEST_RUN_DEADLINE=str(time.time()+4500),
