@@ -71,128 +71,51 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertIs(question.kind, c.LeadOutcomeKind.QUESTION, question); self.assertIn('Memoir or fiction?', question.message)
         self.assertFalse(question.validation_details); self.assertTrue(any(item.response.acceptance.value == 'accepted' for item in question.public_responses))
         self.assertEqual(len(self.backend.calls) - calls_gap, 2); self.assert_no_downstream(cid); self.assertEqual(self.snapshots(), before_gap)
-        from tests.collaboration_contract_fixture import USER, LEAD, make_batch, store_batch, provider_call_drafts, make_lead_evidence
-        from story_writing_agents.authoring_task_lifecycle import task_identity_for_origin
-        from story_writing_agents.specialist_routing import AuthoringScope, ArtifactReviewDomain, AuthoringContribution, AuthoringContributionRole
-        conversation_id = self.conversation('Historical USER grounds and current procedure')
-        origins = (('history_user_35', '실제 있었던 내용으로만 쓸거야'), ('history_user_43', '다양한 사유로 싸웠어. 공부하는 방식, 공부하는 시간 등을 두고 충돌했어. 나는 최대한 공부로 간섭받고 싶지 않았고 어머니의 간섭이 나의 공부에 심리적 불안감을 줘서 오히려 방해가 됐어. 그러다가 항상 어머니의 비난과 그럴거면 공부를 포기하라는 날선 말들이 나왔고 나도 반항하려는 마음에 포기하겠다고 마음을 먹게됐지. 하지만 나는 공부를 포기하고 싶었던게 아니었고 공부에 대한 필요성도 강하게 느끼고 있었어. 결국 방으로 돌아와 책사에 앉게 됐지. 하지만 다툼으로 인해 심리적으로 불안정해진 나는 공부에 집중하기 어려웠어. 그래도 꾸역꾸역 공부를 했고 나름 중상위권의 성적을 유지했어. 당시에 나는 그저 응원과 지지가 필요했고 그것들이 나의 공부에 더 큰 도움이 됐을거라고 생각해. 왜냐면 나는 공부를 포기하지 못하는 사람이었기 때문에 의지가 있었어. 그리고 그 와중에 나쁘지 않은 성적을 유지할 정도의 학습능력도 갖췄었거든.'), ('history_user_51', '집필 준비 조건을 어떻게 확정하며 좋을까?'))
-        task_id = task_identity_for_origin('history_step_35')
-        for ordinal, (source_id, raw) in enumerate(origins):
-            turn_id, step_id = 'history_turn_' + source_id, 'history_step_' + source_id.rsplit('_', 1)[-1]
-            scope = AuthoringScope(AuthoringActivity.DRAFT, (), (ArtifactReviewDomain.TONE_EXECUTION,),
-                'Preserve actual events; clarify the target separately.', task_id, 1, schema_version=3,
-                contributions=(AuthoringContribution(ArtifactReviewDomain.TONE_EXECUTION, AuthoringContributionRole.DRAFT_OWNER),))
-            evidence = make_lead_evidence()
-            evidence = replace(evidence, receipts=tuple(replace(row, operation_id='lead_' + turn_id,
-                result_correlation_id='outcome_' + turn_id) for row in evidence.receipts))
-            if ordinal == 2:
-                scope = replace(scope, activity=AuthoringActivity.WORKFLOW, domains=(), contributions=())
-                evidence = c.CollaborationLeadEvidence(c.LeadOutcomeScope.WORKFLOW_META, c.LeadEvidenceStatus.NOT_APPLICABLE, ())
-            headers = dict(schema_version=2, session_id=self.session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id)
-            user = c.CollaborationEventDraft(**headers, event_id=source_id, kind=c.CollaborationEventKind.MESSAGE,
-                sender=USER, recipient=LEAD, payload=c.CollaborationMessagePayload(raw))
-            calls = tuple(replace(row, **headers) for row in provider_call_drafts(invocation_id='inv_' + source_id,
-                call_id='call_' + source_id, role=LEAD_ORCHESTRATOR, recipient=LEAD, invocation_kind=c.CollaborationInvocationKind.LEAD))
-            judgment = replace(user, event_id='scope_' + source_id, sender=LEAD, recipient=USER,
-                payload=c.CollaborationLeadJudgmentPayload(c.LeadOutcomeKind.ANSWER if ordinal == 2 else c.LeadOutcomeKind.QUESTION,
-                    'Retrieve existing grounds before asking for missing information.', evidence, authoring_scope=scope))
-            prefix = self.history(conversation_id); batch = make_batch(prefix, 'batch_' + source_id, user, *calls, judgment)
-            store_batch(prefix, batch); self.runtime.conversation_storage_services.event_store.append_batch(batch)
-        seed_scope = self.projection(conversation_id).available_tasks[0].scope
-        self.assertEqual((seed_scope.schema_version, seed_scope.activity, seed_scope.domains), (3, AuthoringActivity.DRAFT, (ArtifactReviewDomain.TONE_EXECUTION,)))
-        captured_material = []
-        def historical_assessment(call):
-            material = lead._live_material(call); rows = material['authoring_user_sources']; captured_material[:] = rows
-            self.assertEqual([(row['source_id'], row['content_text']) for row in rows], list(origins))
-            for row, (source_id, raw) in zip(rows, origins):
-                self.assertEqual((row['source_identity'], row['revision_digest'], row['utf8_bytes'], row['original_authority']),
-                    ('conversation/history_turn_' + source_id + '/user_input', 'sha256:' + hashlib.sha256(raw.encode()).hexdigest(), len(raw.encode()), 'literal_user'))
-            choices = dict(call.contract.semantic_index.policy.choices)
-            self.assertEqual(choices['historical_user_source_ids'], tuple(source_id for source_id, _raw in origins))
-            self.assertEqual(choices['input_ids'], ('user_input',))
-            self.assertEqual(tuple(material['provider_constraints']['offered_admission_source_ids']), choices['input_ids'] + choices['historical_user_source_ids'])
-            return replace(assessment, allowed_creative_actions=('bounded review judgments', 'separate proposal preparation'),
-                foundations=(admission.AdmissionEvidence('Supplied experience', ('history_user_43',), 'Exact historical USER events.'),),
-                creative_scope=admission.AdmissionEvidence('No invention', ('history_user_35',), 'Literal USER permits only actual events.'),
-                protected_constraints=(origins[0][1],), decisions=(admission.AdmissionDecision('Preserve actual experience',
-                    admission.DecisionCoverage.SUPPLIED, ('history_user_43',), 'Use only supplied experience.'),))
-        self.workspace.path(OUTLINE).write_text("Outline source.\n", encoding="utf-8")
-        before = self.snapshots(); positive_call_start = len(self.backend.calls)
-        self.backend.enqueue(recommendation(authoring_assessment=historical_assessment,
-            authoring_scope=lambda call: lead._live_scope(call, activity='review', domains=('plot_structure',), paths=(OUTLINE,),
-                contributions=[{'domain': 'plot_structure', 'role': 'draft_owner'}])), control_plan=selection_plan('prepare.artifact'))
-        turn = await self.runtime.lead_turn(self.session_id, conversation_id, '제안해준 절차대로 진행해줘.')
-        self.assertIs(turn.kind, c.LeadOutcomeKind.RECOMMENDATION, turn); self.assertIsNotNone(turn.recommendation_request, turn)
-        request = turn.recommendation_request
-        self.assertEqual((request.authoring_scope.task_id, request.authoring_scope.task_revision), (task_id, 1))
-        self.assertEqual({source.source_id for source in request.basis.authoring_admission.sources if source.kind is admission.AdmissionSourceKind.USER},
-            {'user_input', 'history_user_35', 'history_user_43'})
-        self.assertEqual(self.projection(conversation_id).available_tasks[0].source_event_ids[:3], tuple(source_id for source_id, _raw in origins))
-        before_events = self.history(conversation_id)
-        with self.assertRaises(ValueError):
-            replace(request, basis=replace(request.basis, authoring_admission=replace(request.basis.authoring_admission, task_id='foreign_task')))
-        with self.assertRaises(ValueError):
-            c.project_collaboration_history(rewrite_history(before_events, origins[0][0], payload=c.CollaborationMessagePayload(origins[0][1] + ' changed')))
-        self.assertIs(request.authoring_scope.activity, AuthoringActivity.REVIEW)
-        self.assertFalse(self.payload_events(conversation_id, c.CollaborationAssignmentDispatchPayload))
-        self.assertEqual(self.projection(conversation_id).artifact_objectives, ())
-        self.assertEqual(self.snapshots(), before)
-        producer = preparation(turn)
+        self.workspace.path(OUTLINE).write_text("Outline source.\n", encoding="utf-8"); before = self.snapshots(); positive_call_start = len(self.backend.calls)
+        conversation_id, turn = await self.recommend(); request = turn.recommendation_request
+        before_events = self.history(conversation_id); self.assertIs(request.authoring_scope.activity, AuthoringActivity.REVIEW)
+        self.assertFalse(self.payload_events(conversation_id, c.CollaborationAssignmentDispatchPayload)); self.assertEqual(self.projection(conversation_id).artifact_objectives, ())
+        self.assertEqual(self.snapshots(), before); producer = preparation(turn)
         def observed(call, provider):
-            events = self.history(conversation_id)
-            decision_event = self.payload_events(conversation_id, c.LeadRecommendationDecisionPayload)[0]
-            started = self.payload_events(conversation_id, c.LeadRecommendationStartedPayload)[0]
-            self.assertEqual(decision_event.batch_id, started.batch_id)
-            self.assertEqual(started.payload.decision_event_id, decision_event.event_id)
-            self.assertEqual(started.payload.request_event_id, request.request_event_id)
-            initial = self.backend.calls[calls]
-            self.assertIs(initial.contract.factory, call.contract.factory)
-            self.assertEqual(initial.scope, call.scope)
-            self.assertIs(initial.call_kind, lead.ProviderCallKind.COLLABORATION_INITIAL)
+            events = self.history(conversation_id); decision_event = self.payload_events(conversation_id, c.LeadRecommendationDecisionPayload)[0]
+            started = self.payload_events(conversation_id, c.LeadRecommendationStartedPayload)[0]; self.assertEqual(decision_event.batch_id, started.batch_id)
+            self.assertEqual(started.payload.decision_event_id, decision_event.event_id); self.assertEqual(started.payload.request_event_id, request.request_event_id)
+            initial = self.backend.calls[calls]; self.assertIs(initial.contract.factory, call.contract.factory)
+            self.assertEqual(initial.scope, call.scope); self.assertIs(initial.call_kind, lead.ProviderCallKind.COLLABORATION_INITIAL)
             material = lead._workflow_material(provider.callback_payload(initial))["structured_recommendation_execution"]
             self.assertEqual(initial.payload["context_reuse"]["format"], "shared-objects-v1")
-            self.assertLess(len(json.dumps(dict(initial.payload), ensure_ascii=False)), len(json.dumps(lead._expanded_context_payload(initial.payload), ensure_ascii=False)))
-            self.assertEqual(material["request"]["action_digest"], request.action_digest)
-            self.assertEqual(material["decision"]["decision"]["kind"], "confirm")
+            self.assertLess(len(json.dumps(dict(initial.payload), ensure_ascii=False)),
+                            len(json.dumps(lead._expanded_context_payload(initial.payload),
+                                           ensure_ascii=False)))
+            self.assertEqual(material["request"]["action_digest"], request.action_digest); self.assertEqual(material["decision"]["decision"]["kind"], "confirm")
             self.assertEqual(material["start"]["execution_attempt_id"], started.payload.execution_attempt_id)
             self.assertIn(request.instruction, json.dumps(material, ensure_ascii=False))
             self.assertEqual(sum(type(e.payload) is c.CollaborationMessagePayload and
-                e.direction is c.CollaborationDirection.USER_TO_LEAD for e in events), ordinary_users_before_confirm)
-            self.assertEqual(lead._live_material(initial)['authoring_user_sources'], [row for row in captured_material if row['source_id'] != 'history_user_51'])
+                e.direction is c.CollaborationDirection.USER_TO_LEAD for e in events), 1)
             return producer(call, provider)
-        ordinary_users_before_confirm = sum(type(e.payload) is c.CollaborationMessagePayload and
-            e.direction is c.CollaborationDirection.USER_TO_LEAD for e in before_events)
-        self.assertEqual(ordinary_users_before_confirm, 4)
-        self.runtime = StoryRuntime(self.control_workspace, self.backend)
-        self.assertEqual(self.runtime.conversation_storage_services.event_store.read(self.session_id, conversation_id), before_events)
-        self.enqueue_preparation(turn, answer=observed)
-        calls = len(self.backend.calls)
-        original_qualifier = self.runtime._qualify_authoring_inputs
-        qualification_starts = []
+        self.enqueue_preparation(turn, answer=observed); calls = len(self.backend.calls)
+        original_qualifier = self.runtime._qualify_authoring_inputs; qualification_starts = []
         def checked_qualifier(*args, **kwargs):
             qualification_starts.append(bool(self.payload_events(conversation_id, c.LeadRecommendationStartedPayload)))
             return original_qualifier(*args, **kwargs)
         with mock.patch.object(self.runtime, "lead_turn", side_effect=AssertionError("recursive public Lead")), \
                 mock.patch.object(self.runtime, "_qualify_authoring_inputs", side_effect=checked_qualifier):
             prepared = await self.runtime.session(self.session_id).decide_lead_recommendation(decision(turn))
-        self.assertEqual(qualification_starts[:1], [False])
-        self.assertIs(type(prepared), c.LeadTurnResult)
-        self.assertEqual(len(self.backend.calls) - calls, 3)
-        self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, (prepared.message, prepared.validation_details,
-            tuple((script.fixture_error_code, script.callback_exception_site)
-                for script in self.backend._all_scripts[:8])))
+        self.assertEqual(qualification_starts[:1], [False]); self.assertIs(type(prepared), c.LeadTurnResult)
+        self.assertEqual(len(self.backend.calls) - calls, 3); self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL)
         self.assertIs(prepared.next_action, c.CollaborationNextAction.SUBMIT_CONFIRMATION)
-        self.assertIsNone(prepared.recommendation_request); self.assertIsNone(prepared.artifact_application_request)
+        self.assertIsNone(prepared.recommendation_request)
+        self.assertIsNone(prepared.artifact_application_request)
         self.assertIsNone(prepared.story_commit_request)
         self.assertEqual(prepared.proposal.authoring_scope, request.authoring_scope)
-        self.assertEqual(prepared.proposal.basis.authoring_admission, request.basis.authoring_admission)
-        self.assertEqual(sum(item.kind is c.CollaborationInputKind.USER_INPUT for item in prepared.proposal.basis.inputs), 1)
         self.assertEqual(prepared.proposal.participants, (PLOT_ARCHITECT,))
         self.assertTrue(all(item.mode.value == "review" for item in prepared.proposal.assignments))
         candidate = prepared.artifact_proposal.candidate.candidate
         operation = candidate.change_set.operations[0]
-        self.assertEqual((operation.operation_kind.value, operation.path, operation.content), ("replace", OUTLINE, DRAFT.encode()))
-        objective = self.objective(conversation_id); self.assertIs(objective.state, c.ArtifactObjectiveState.OPEN)
+        self.assertEqual((operation.operation_kind.value, operation.path, operation.content),
+                         ("replace", OUTLINE, DRAFT.encode()))
+        objective = self.objective(conversation_id)
+        self.assertIs(objective.state, c.ArtifactObjectiveState.OPEN)
         self.assertIs(type(objective.facts), c.ArtifactObjectiveFactsV2)
         self.assertEqual(objective.candidate_binding.candidate_digest, candidate.candidate_digest)
         self.assertEqual(objective.draft_sources, request.draft_sources)
@@ -206,21 +129,79 @@ class LeadRecommendationTests(RecommendationCase):
         for call in self.backend.calls[positive_call_start:]:
             self.assertNotIn('"response_correction":', json.dumps(self.backend.callback_payload(call)))
             self.assertNotIn("structured_response_repair", call.payload)
+
+        from tests.collaboration_contract_fixture import USER, LEAD, make_batch, store_batch, provider_call_drafts, make_lead_evidence
+        from story_writing_agents.authoring_task_lifecycle import task_identity_for_origin
+        from story_writing_agents.specialist_routing import AuthoringScope, ArtifactReviewDomain, AuthoringContribution, AuthoringContributionRole
         from tests.provider_wire_fixture import finite_fixture_selection, lead_fixture_response
         for aliases, omit_source in (((), False), (("recommendation_request",), False),
                                      (("recommendation_decision",), False),
                                      (("recommendation_request", "recommendation_decision"), True)):
             cid = self.conversation("Raw confirmed drafting consultation")
+            staged = not aliases and not omit_source
+            if staged:
+                conversation_id = cid
+                origins = (('history_user_35', '실제 있었던 내용으로만 쓸거야'), ('history_user_43', '다양한 사유로 싸웠어. 공부하는 방식, 공부하는 시간 등을 두고 충돌했어. 나는 최대한 공부로 간섭받고 싶지 않았고 어머니의 간섭이 나의 공부에 심리적 불안감을 줘서 오히려 방해가 됐어. 그러다가 항상 어머니의 비난과 그럴거면 공부를 포기하라는 날선 말들이 나왔고 나도 반항하려는 마음에 포기하겠다고 마음을 먹게됐지. 하지만 나는 공부를 포기하고 싶었던게 아니었고 공부에 대한 필요성도 강하게 느끼고 있었어. 결국 방으로 돌아와 책사에 앉게 됐지. 하지만 다툼으로 인해 심리적으로 불안정해진 나는 공부에 집중하기 어려웠어. 그래도 꾸역꾸역 공부를 했고 나름 중상위권의 성적을 유지했어. 당시에 나는 그저 응원과 지지가 필요했고 그것들이 나의 공부에 더 큰 도움이 됐을거라고 생각해. 왜냐면 나는 공부를 포기하지 못하는 사람이었기 때문에 의지가 있었어. 그리고 그 와중에 나쁘지 않은 성적을 유지할 정도의 학습능력도 갖췄었거든.'), ('history_user_51', '집필 준비 조건을 어떻게 확정하며 좋을까?'))
+                task_id = task_identity_for_origin('history_step_35')
+                for ordinal, (source_id, raw) in enumerate(origins):
+                    turn_id, step_id = 'history_turn_' + source_id, 'history_step_' + source_id.rsplit('_', 1)[-1]
+                    scope = AuthoringScope(AuthoringActivity.DRAFT, (), (ArtifactReviewDomain.TONE_EXECUTION,),
+                        'Preserve actual events; clarify the target separately.', task_id, 1, schema_version=3,
+                        contributions=(AuthoringContribution(ArtifactReviewDomain.TONE_EXECUTION, AuthoringContributionRole.DRAFT_OWNER),))
+                    evidence = make_lead_evidence()
+                    evidence = replace(evidence, receipts=tuple(replace(row, operation_id='lead_' + turn_id,
+                        result_correlation_id='outcome_' + turn_id) for row in evidence.receipts))
+                    if ordinal == 2:
+                        scope = replace(scope, activity=AuthoringActivity.WORKFLOW, domains=(), contributions=())
+                        evidence = c.CollaborationLeadEvidence(c.LeadOutcomeScope.WORKFLOW_META, c.LeadEvidenceStatus.NOT_APPLICABLE, ())
+                    headers = dict(schema_version=2, session_id=self.session_id, conversation_id=cid, turn_id=turn_id, step_id=step_id)
+                    user = c.CollaborationEventDraft(**headers, event_id=source_id, kind=c.CollaborationEventKind.MESSAGE,
+                        sender=USER, recipient=LEAD, payload=c.CollaborationMessagePayload(raw))
+                    calls = tuple(replace(row, **headers) for row in provider_call_drafts(invocation_id='inv_' + source_id,
+                        call_id='call_' + source_id, role=LEAD_ORCHESTRATOR, recipient=LEAD, invocation_kind=c.CollaborationInvocationKind.LEAD))
+                    judgment = replace(user, event_id='scope_' + source_id, sender=LEAD, recipient=USER,
+                        payload=c.CollaborationLeadJudgmentPayload(c.LeadOutcomeKind.ANSWER if ordinal == 2 else c.LeadOutcomeKind.QUESTION,
+                            'Retrieve existing grounds before asking for missing information.', evidence, authoring_scope=scope))
+                    prefix = self.history(cid); batch = make_batch(prefix, 'batch_' + source_id, user, *calls, judgment)
+                    store_batch(prefix, batch); self.runtime.conversation_storage_services.event_store.append_batch(batch)
+                seed_scope = self.projection(cid).available_tasks[0].scope
+                self.assertEqual((seed_scope.schema_version, seed_scope.activity, seed_scope.domains), (3, AuthoringActivity.DRAFT, (ArtifactReviewDomain.TONE_EXECUTION,)))
+                captured_material = []
+                def historical_assessment(call):
+                    material = lead._live_material(call); rows = material['authoring_user_sources']; captured_material[:] = rows
+                    self.assertEqual([(row['source_id'], row['content_text']) for row in rows], list(origins))
+                    for row, (source_id, raw) in zip(rows, origins):
+                        self.assertEqual((row['source_identity'], row['revision_digest'], row['utf8_bytes'], row['original_authority']),
+                            ('conversation/history_turn_' + source_id + '/user_input', 'sha256:' + hashlib.sha256(raw.encode()).hexdigest(), len(raw.encode()), 'literal_user'))
+                    choices = dict(call.contract.semantic_index.policy.choices)
+                    self.assertEqual(choices['historical_user_source_ids'], tuple(source_id for source_id, _raw in origins))
+                    self.assertEqual(choices['input_ids'], ('user_input',))
+                    self.assertEqual(tuple(material['provider_constraints']['offered_admission_source_ids']), choices['input_ids'] + choices['historical_user_source_ids'])
+                    return replace(assessment, allowed_creative_actions=('bounded review judgments', 'separate proposal preparation'),
+                        foundations=(admission.AdmissionEvidence('Supplied experience', ('history_user_43',), 'Exact historical USER events.'),),
+                        creative_scope=admission.AdmissionEvidence('No invention', ('history_user_35',), 'Literal USER permits only actual events.'),
+                        protected_constraints=(origins[0][1],), decisions=(admission.AdmissionDecision('Preserve actual experience',
+                            admission.DecisionCoverage.SUPPLIED, ('history_user_43',), 'Use only supplied experience.'),))
             self.backend.enqueue(recommendation(recommended_action=action(kind="prepare_consultation", source_ids=("user_input",)),
-                authoring_scope=lambda call: lead._live_scope(call, activity="review", domains=("plot_structure",)),
-                authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation'))), control_plan=selection_plan("prepare.consultation.authoring"))
+                authoring_scope=lambda call: lead._live_scope(call, activity="review", domains=("plot_structure",),
+                    contributions=[{'domain': 'plot_structure', 'role': 'draft_owner'}] if staged else None),
+                authoring_assessment=historical_assessment if staged else task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation'))), control_plan=selection_plan("prepare.consultation.authoring"))
             offered = await self.runtime.lead_turn(self.session_id, cid,
-                ("Recommend Plot review of this complete supplied candidate: " + DRAFT + "\nYou may make bounded Plot review judgments and prepare a separate Plot review proposal; preserve the supplied candidate facts."))
+                (('제안해준 절차대로 진행해줘.\n' if staged else '') + "Recommend Plot review of this complete supplied candidate: " + DRAFT + "\nYou may make bounded Plot review judgments and prepare a separate Plot review proposal; preserve the supplied candidate facts."))
             self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
             request = offered.recommendation_request
+            if staged:
+                self.assertEqual((request.authoring_scope.task_id, request.authoring_scope.task_revision), (task_id, 1))
+                self.assertEqual({source.source_id for source in request.basis.authoring_admission.sources if source.kind is admission.AdmissionSourceKind.USER},
+                    {'user_input', 'history_user_35', 'history_user_43'})
+                self.assertEqual(self.projection(cid).available_tasks[0].source_event_ids[:3], tuple(source_id for source_id, _raw in origins))
+                before_events = self.history(cid)
+                with self.assertRaises(ValueError):
+                    replace(request, basis=replace(request.basis, authoring_admission=replace(request.basis.authoring_admission, task_id='foreign_task')))
+                with self.assertRaises(ValueError):
+                    c.project_collaboration_history(rewrite_history(before_events, origins[0][0], payload=c.CollaborationMessagePayload(origins[0][1] + ' changed')))
             source_ids = [item.input_id for item in request.basis.inputs]
             self.assertTrue(source_ids)
-            staged = not aliases and not omit_source
             if staged:
                 self.assertEqual(len(request.basis.inputs), 1)
                 self.assertIs(request.basis.inputs[0].kind, c.CollaborationInputKind.USER_INPUT)
@@ -228,6 +209,11 @@ class LeadRecommendationTests(RecommendationCase):
             review_ids = () if omit_source else tuple(source_ids)
             raw_observations = []
             def raw(call, _provider):
+                if staged:
+                    self.assertEqual(lead._live_material(call)['authoring_user_sources'],
+                        [row for row in captured_material if row['source_id'] != 'history_user_51'])
+                    self.assertEqual(sum(type(e.payload) is c.CollaborationMessagePayload and
+                        e.direction is c.CollaborationDirection.USER_TO_LEAD for e in self.history(cid)), ordinary_users_before_confirm)
                 packet = json.loads(preparation(offered)(call, _provider))["agent_action"]
                 choices = dict(call.contract.semantic_index.policy.choices)
                 proposal = packet["task_result"]["response_details"]["specialist_consultation_proposal"]
@@ -256,7 +242,19 @@ class LeadRecommendationTests(RecommendationCase):
             self.backend.enqueue(raw)
             if omit_source: self.backend.enqueue(raw)
             calls = len(self.backend.calls)
-            prepared = await self.runtime.decide_lead_recommendation(decision(offered))
+            if staged:
+                ordinary_users_before_confirm = sum(type(e.payload) is c.CollaborationMessagePayload and
+                    e.direction is c.CollaborationDirection.USER_TO_LEAD for e in before_events)
+                self.assertEqual(ordinary_users_before_confirm, 4)
+                self.runtime = StoryRuntime(self.control_workspace, self.backend)
+                self.assertEqual(self.runtime.conversation_storage_services.event_store.read(self.session_id, cid), before_events)
+                original_qualifier, qualification_starts = self.runtime._qualify_authoring_inputs, []
+                with mock.patch.object(self.runtime, "lead_turn", side_effect=AssertionError("recursive public Lead")), \
+                        mock.patch.object(self.runtime, '_qualify_authoring_inputs', side_effect=checked_qualifier):
+                    prepared = await self.runtime.session(self.session_id).decide_lead_recommendation(decision(offered))
+                self.assertEqual(qualification_starts[:1], [False])
+            else:
+                prepared = await self.runtime.decide_lead_recommendation(decision(offered))
             self.assertTrue(raw_observations, prepared)
             for packet, choices, pairs, issues in raw_observations:
                 self.assertIn((packet["schema_id"], packet["task_result"]["schema_id"]), pairs)
@@ -289,6 +287,9 @@ class LeadRecommendationTests(RecommendationCase):
                 self.assertEqual(prepared.proposal.authoring_scope, request.authoring_scope)
                 self.assertEqual(prepared.proposal.purpose, request.purpose)
                 if staged:
+                    self.assertEqual(prepared.proposal.basis.authoring_admission, request.basis.authoring_admission)
+                    self.assertEqual(sum(item.kind is c.CollaborationInputKind.USER_INPUT for item in prepared.proposal.basis.inputs), 1)
+                    self.assertEqual(self.history(cid)[:len(before_events)], before_events)
                     plan = prepared.proposal.stage_plan
                     self.assertIs(plan.work_kind, SpecialistWorkKind.DEEP_REVIEW)
                     self.assertEqual(plan.specialist_ids, (PLOT_ARCHITECT,))
