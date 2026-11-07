@@ -1569,15 +1569,16 @@ class InteractiveCliPtyTests(unittest.TestCase):
 
     def _exercise_external_library_pty(self, *, edit_query: bool, termination_signal: int | None = None, termination_during_view: bool = False) -> None:
         gate = self.temporary_root / f"viewer-ready-{edit_query}-{termination_signal}"
-        def assert_accepted_message_retained_once():
+        def assert_accepted_message_retained_once(managed=True):
             from tests._external_view_support import PortableTerminalScreen
             screen = PortableTerminalScreen(width=120, height=24)
             screen.primary[:] = [[" "] * 120 for _ in range(24)]
             screen.cursor = (0, 0); screen.history.clear()
+            screen.archive_alternate = False
             screen.write(bytes(process.raw_bytes).decode("utf-8", errors="replace"))
-            visible = "\n".join([*screen.history, *("".join(row) for row in screen.primary)])
-            self.assertFalse(screen.alternate)
-            self.assertEqual(visible.count("LEGITIMATE_ACCEPTED_MESSAGE"), 1, visible)
+            visible = "\n".join([*screen.history, *("".join(row) for row in screen.screen)])
+            self.assertEqual(screen.alternate, managed)
+            self.assertEqual(visible.count("LEGITIMATE_ACCEPTED_MESSAGE"), int(managed), visible)
 
         def viewer_rows(data: bytes) -> list[str]:
             from tests._external_view_support import PortableTerminalScreen
@@ -1716,7 +1717,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
         self.assertFalse(termios.tcgetattr(process.master_fd)[3] & termios.ECHO)
         process.send_line("\x1b[17~\x1b[H\x1bafter-native")
         process.wait_for_text("shell> ")
-        assert_accepted_message_retained_once()
+        assert_accepted_message_retained_once(managed=False)
         self.assertTrue(termios.tcgetattr(process.master_fd)[3] & termios.ICANON)
         process.send_line("after-view")
         process.wait_for_text("SHELL_VALUE=after-view")
@@ -1724,8 +1725,8 @@ print(f"SHELL_VALUE={input('shell> ')}")
         self.assertIn("SOURCE_UNCHANGED=True", process.normalized_text)
         self.assertIn("NATIVE_VALUE=opaque-native-input", process.normalized_text)
         self.assertNotIn("U0015", process.normalized_text)
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 2)
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 2)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 4)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 4)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1006h\x1b[?1000h"), 1)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1000l\x1b[?1006l"), 1)
         self.assertNotIn(b"65;8;8M", process.raw_bytes)
@@ -1801,6 +1802,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
 import asyncio, os, sys, time
 from pathlib import Path
 from story_writing_agents.interactive_terminal._core import build_stream_terminal, InteractiveAdvisoryProgress, InteractiveInputLifecycle
+from story_writing_agents.interactive_terminal import Message, MessagePresentation, InteractiveSemanticOutput
 terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
 progress = InteractiveAdvisoryProgress(terminal)
 progress.begin()
@@ -1811,11 +1813,19 @@ async def operation():
         if time.monotonic() > deadline: raise RuntimeError("parent block watchdog expired")
     await asyncio.sleep(5)
 with InteractiveInputLifecycle(terminal).session():
+    InteractiveSemanticOutput(terminal).write_component(Message("Lead", "RESIZE_COMPLETE 界 é", presentation=MessagePresentation.CHAT_BLOCK))
+    terminal.read_main()
     try: asyncio.run(progress.run(operation(), keep_frame=False))
     except KeyboardInterrupt: print("PROGRESS_INTERRUPTED", flush=True)
 print("PROGRESS_FINAL", flush=True)
 """, environment_overrides={"TERM": "xterm-256color", "STORY_PTY_PROGRESS_GATE": str(gate)})
         try:
+            probe.wait_for_text("story[lobby]> ")
+            for width in (47, 100):
+                mark = probe.output_mark(); probe.resize(width, 24)
+                probe.wait_for_text("RESIZE_COMPLETE", after=mark, timeout=2)
+                probe.wait_for_text("story[lobby]> ", after=mark, timeout=2)
+            probe.send_line("continue")
             probe.wait_for_text("Working", readiness=gate.exists)
             mark = probe.output_mark()
             probe.resize(47, 12)

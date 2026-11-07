@@ -119,15 +119,17 @@ provider-call examples, visible states, and recovery behavior. The exact API
 contract remains in [Lead agent workflows and reviewed artifact proposals](docs/guides/lead-agent.md).
 
 Chat prose uses distinct colored message frames with Markdown presentation and
-a labeled metadata footer. Frames adapt to new writes and live redraws, with a
-40-column full layout, a 120-column maximum, and compact layouts for narrower
-terminals. Input/output token counters come from provider response usage;
-missing counters are displayed as unavailable. Capable terminals preserve
-completed messages and retained JSON previews in
-ordinary terminal scrollback. Each JSON frame stays beneath its own user
-message as later turns arrive, and long final answers remain readable in full.
-F6 opens conversation review for navigating older messages and JSON contents,
-then returns to the unchanged prompt or pending decision. See
+a labeled metadata footer. Frames adapt to terminal resizing and live redraws,
+with a 40-column full layout, a 120-column maximum, and compact layouts for
+narrower terminals. Input/output token counters come from provider response
+usage; missing counters are displayed as unavailable. Capable terminals keep
+completed messages and retained JSON previews in an application-managed
+conversation screen. Each JSON frame stays beneath its own user message as
+later turns arrive, and long final answers remain readable in full through F6
+conversation review. Leaving review returns to the unchanged prompt or pending
+decision. Resizing also reflows completed messages while input is idle. Leaving
+the shell restores the preceding terminal screen; redirected output remains
+linear. See
 [message frames and metadata](docs/reference/interactive-terminal.md#message-frames-markdown-and-response-metadata)
 for the layout, color fallback, and usage-attribution rules.
 
