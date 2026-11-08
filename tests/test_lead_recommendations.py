@@ -63,7 +63,7 @@ class LeadRecommendationTests(RecommendationCase):
         from tests.provider_wire_fixture import lead_fixture_response, lead_fixture_bound_scope
         def genuine_gap(call, _provider):
             return lead_fixture_response(call, {'response_type': 'clarification_question', 'response_text': 'Memoir or fiction?',
-                'response_details': {'task_scope': lead_fixture_bound_scope(call,
+                'response_details': {'planning_target': None, 'task_scope': lead_fixture_bound_scope(call,
                     lead._live_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)), record=True)}}, family=0)
         self.assertEqual(admission.assessment_from_dict(admission.assessment_to_dict(unresolved)), unresolved)
         self.backend.enqueue(genuine_gap, control_plan=selection_plan('question.authoring'))
@@ -190,6 +190,9 @@ class LeadRecommendationTests(RecommendationCase):
                 (('제안해준 절차대로 진행해줘.\n' if staged else '') + "Recommend Plot review of this complete supplied candidate: " + DRAFT + "\nYou may make bounded Plot review judgments and prepare a separate Plot review proposal; preserve the supplied candidate facts."))
             self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
             request = offered.recommendation_request
+            self.assertIsNone(request.document_node)
+            self.assertEqual(request.authoring_scope.target_paths, ())
+            self.assertEqual(request.authoring_scope.activity.value, "review")
             if staged:
                 self.assertEqual((request.authoring_scope.task_id, request.authoring_scope.task_revision), (task_id, 1))
                 self.assertEqual({source.source_id for source in request.basis.authoring_admission.sources if source.kind is admission.AdmissionSourceKind.USER},
@@ -283,6 +286,7 @@ class LeadRecommendationTests(RecommendationCase):
                 else: self.assertEqual(issues, (), (aliases, issues))
             self.assertEqual(len(self.backend.calls) - calls, 2 if omit_source else 1, prepared)
             self.assert_no_downstream(cid)
+            self.assertEqual(self.projection(cid).artifact_objectives, ())
             if omit_source:
                 self.assertIsNone(prepared.proposal)
                 self.assertTrue(prepared.validation_details)

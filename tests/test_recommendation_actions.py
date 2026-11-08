@@ -29,7 +29,7 @@ class RecommendationActionContractTests(RecommendationCase):
             "Purpose", "Instruction", "Expected result", ("current_response",), (OUTLINE,))
         expected = [
             (semantic, "kind purpose instruction expected_result source_ids target_paths specialist_ids objective_id"),
-            (request, "request_event_id request_id action_id action_revision kind purpose instruction expected_result target_paths specialist_ids objective_id source_recommendation_event_id source_recommendation_digest draft_sources basis source_fingerprint physical_calls_spent max_preparation_physical_calls tail_sequence user_impact source_proposal_id source_proposal_revision source_proposal_digest source_execution_attempt_id authoring_scope action_digest"),
+            (request, 'request_event_id request_id action_id action_revision kind purpose instruction expected_result target_paths specialist_ids objective_id source_recommendation_event_id source_recommendation_digest draft_sources basis source_fingerprint physical_calls_spent max_preparation_physical_calls tail_sequence user_impact source_proposal_id source_proposal_revision source_proposal_digest source_execution_attempt_id authoring_scope action_digest document_node'),
             (choice, "session_id conversation_id request_event_id request_tail_sequence request_id action_id action_revision action_digest kind revision_request"),
             (projection.current_recommendation_decision, "decision"),
             (projection.current_recommendation_start, "start_event_id request_event_id decision_event_id request_id action_id action_revision action_digest execution_attempt_id"),
@@ -330,7 +330,7 @@ class RecommendationActionContractTests(RecommendationCase):
         # Decisions/revision and running/terminal states have their own readable fields.
         self.backend.enqueue(lambda call, _: lead.lead_fixture_response(call, {
             'response_type': 'clarification_question', 'response_text': 'How do the four roles cooperate?',
-            'response_details': {'used_evidence_ids': {}}}, family=0))
+            'response_details': {'planning_target': None, 'used_evidence_ids': {}}}, family=0))
         revised = await self.runtime.decide_lead_recommendation(decision(turn, c.CollaborationConfirmationDecision.REVISE))
         self.assertIsNone(revised.proposal)
         self.assertIsNone(revised.artifact_proposal)

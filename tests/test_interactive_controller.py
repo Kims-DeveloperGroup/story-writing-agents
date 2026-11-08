@@ -1791,8 +1791,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 177)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 790)
+        self.assertEqual(len(modules), 178)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 800)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6036,6 +6036,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
     def test_literal_lead_turn_and_consultation_decisions_are_exact(self) -> None:
         from tests.recommendation_fixture import task_assessment
         session = RuntimeSession.__new__(RuntimeSession)
+        self.enterContext(mock.patch.object(RuntimeSession, "inspect_document_plans", return_value=()))
         from tests.test_collaboration_events import editorial, editorial_request
         record = editorial.build_editorial_revision(
             editorial_request("editorial_terminal"), session_id="session",
@@ -6301,8 +6302,10 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         projection = case.runtime.inspect_lead_collaboration(case.session_id, task_conversation)
         selected_task, material = projection.available_tasks[0], projection.selectable_materials[-1]
         decisions = []
-        async def decide_task(decision, *, action_progress_sink=None):
+        document_selections = []
+        async def decide_task(decision, *, document_selection=None, action_progress_sink=None):
             decisions.append(decision)
+            document_selections.append(document_selection)
             return collaboration.LeadTaskDecisionResult(
                 decision.session_id, decision.conversation_id, decision.action,
                 decision.task_ref, "shell_transition", None,
@@ -6336,6 +6339,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 self.assertEqual(inspection.call_count, 2 * len(decisions))
                 decision = decisions[-1]
                 self.assertEqual((decision.action, decision.task_ref), (action, selected_task.ref))
+                self.assertIsNone(document_selections[-1])
                 self.assertEqual(decision.material_refs, (material.ref,) if uses_material else ())
                 self.assertEqual(decision.text, "Explicit question or new writing intent." if uses_material else None)
                 self.assertEqual(tuple(item.label for item in adapter._picker.calls[0][1]),
@@ -6354,6 +6358,43 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 adapter._picker = self._Picker(self._commit("discuss"), ControlOutcome(outcome))
                 self.assertEqual(adapter.task(task_conversation), outcome is ControlOutcomeKind.EOF)
                 self.assertEqual(tuple(decisions), before)
+            from story_writing_agents import document_plan as documents
+            from tests import test_specialist_routing as document_fixtures
+            plan = document_fixtures.SpecialistRoutingTests._document_plan_fixture()
+            observed_candidate = documents.DocumentCandidateRef("ui_candidate_event", "ui_outline_candidate", 1, documents.document_value_digest("Displayed exact candidate"))
+            plan_rows = tuple(documents.DocumentNodeView(node.node_id,
+                documents.DocumentNodeState.COMPLETE if index == 0 else documents.DocumentNodeState.READY if index == 1 else documents.DocumentNodeState.BLOCKED,
+                () if index < 2 else ("Complete the part outline first.",), () if index < 2 else (plan.nodes[1].target_path,),
+                ("qualified_global",) if index == 0 else (), (),
+                documents.DocumentNodeNextAction.COMPLETE if index == 0 else documents.DocumentNodeNextAction.PREPARE_NODE if index == 1 else documents.DocumentNodeNextAction.REQUEST_INFORMATION,
+                candidate_refs=(observed_candidate,) if index == 0 else ()) for index, node in enumerate(plan.nodes))
+            observed_plan = documents.DocumentPlanView(plan, None, plan_rows, 4, 0, 4, 8, 2, goal_text="Retain the original chapter goal.")
+            picker = self._Picker(self._commit("new_task"), self._commit("task_0"), self._commit("none"), self._commit("document_1"), self._commit("candidate_0"))
+            adapter = self._adapter(case.runtime.session(case.session_id), runner, self._Progress(), picker,
+                self._Prompt(self._commit("Use this inspected provisional outline only for the selected Part task.")), self._Output())
+            decisions_before, provider_calls_before = len(decisions), len(case.backend.calls)
+            with mock.patch.object(RuntimeSession, "inspect_document_plans", return_value=(observed_plan,)):
+                self.assertFalse(adapter.task(task_conversation, material_choices=(material,)))
+            self.assertEqual(len(decisions), decisions_before + 1)
+            self.assertEqual(len(case.backend.calls), provider_calls_before)
+            self.assertEqual((decisions[-1].action, decisions[-1].task_ref), (task.LeadTaskAction.NEW_TASK, selected_task.ref))
+            self.assertEqual(decisions[-1].task_ref.task_revision, selected_task.ref.task_revision)
+            self.assertEqual(decisions[-1].material_refs, ())
+            self.assertEqual(decisions[-1].text, "Use this inspected provisional outline only for the selected Part task.")
+            selected_document = document_selections[-1]
+            self.assertIs(type(selected_document), documents.DocumentNodeSelection)
+            self.assertEqual((selected_document.plan_ref, selected_document.node_id, selected_document.target_path), (plan.ref, plan.nodes[1].node_id, None))
+            self.assertEqual(len(selected_document.candidate_uses), 1)
+            selected_candidate = selected_document.candidate_uses[0]
+            self.assertEqual((selected_candidate.predecessor_node_id, selected_candidate.candidate, selected_candidate.permitted_scope),
+                             (plan.nodes[0].node_id, observed_candidate, plan.nodes[0].coverage))
+            self.assertIn(plan.nodes[0].target_path, selected_candidate.purpose)
+            self.assertIn(plan.nodes[1].target_path, selected_candidate.purpose)
+            self.assertEqual(picker.calls[3][0].name, "Document work")
+            self.assertIn("Confirm", picker.calls[3][0].instruction)
+            self.assertEqual(picker.calls[4][0].name, "Provisional predecessor input")
+            self.assertIn("never marks a prerequisite complete", picker.calls[4][0].instruction)
+            self.assertIn(observed_candidate.candidate_digest, picker.calls[4][1][1].description)
 
     def test_ordinary_lead_progress_sink_finishes_before_lead_and_elapsed_output(self) -> None:
         session = RuntimeSession.__new__(RuntimeSession); runner = asyncio.Runner(); self.addCleanup(runner.close)
@@ -6764,7 +6805,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         calls_before = len(case.backend.calls)
         case.backend.enqueue(lambda call, _provider: wire.lead_fixture_response(call,
             {"response_type": "clarification_question", "response_text": "Preparation scope undecided.",
-             "response_details": {"task_scope": wire.lead_fixture_bound_scope(call,
+             "response_details": {"planning_target": None, "task_scope": wire.lead_fixture_bound_scope(call,
                  _live_scope(call, activity="review", domains=("plot_structure",), paths=(OUTLINE,),
                      contributions=[{"domain": "plot_structure", "role": "constraint_assessor"}]), record=True)}}, family=0),
             control_plan=wire.selection_plan("question.authoring"))

@@ -152,7 +152,7 @@ def _artifact_outcome(
             return indexed_response({'action_type': 'read_context', 'read_handles': finite_fixture_read_selection(
                     call.contract.offers.issued_handle_aliases, selected_handles)},
                 outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
-        material = _workflow_material(input_payload)
+        material = _live_material(call)
         if read_queries:
             reads = ([row for entry in input_payload['context_observations']
                       if entry['observation']['observation_type'] == 'context_read_results'
@@ -371,6 +371,11 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertFalse(reviewed.artifact_write_occurred)
         self.assertFalse(reviewed.git_action_occurred)
         self.assertEqual(self.artifact_snapshot(), before)
+        from story_writing_agents.core_document_readiness import AuthoringTarget, require_readiness
+        current_readiness = self.runtime.inspect_core_document_readiness(self.session_id)
+        self.assertNotIn(_RULES, current_readiness.complete_documents)
+        self.assertIn(_RULES, require_readiness(AuthoringTarget.MANUSCRIPT, current_readiness).required_documents)
+        self.assertFalse(self.workspace.path(_RULES).exists())
         from tests.provider_wire_fixture import artifact_candidate as wire_candidate
         from tests.test_agent_context_accounting import _expanded_context_payload
         materials = [(agent_id, (self.backend.callback_payload(call))["task_input"])
@@ -1392,7 +1397,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 activity="review", domains=("plot_structure",), paths=(_OUTLINE,)), record=True)
             return lead_fixture_response(call, {"response_type": "clarification_question",
                 "response_text": "The selected line is visible; what should change?",
-                "response_details": {"task_scope": scope}}, family=0)
+                "response_details": {"task_scope": scope, "planning_target": None}}, family=0)
         self.backend.enqueue(search, _read_history_hit, answer, control_plan=selection_plan('question.authoring', before_script_response=2))
         result = await self.runtime.lead_turn(self.session_id, conversation_id, "Search and read the needle line before deciding.")
         self.assertIs(result.kind, c.LeadOutcomeKind.QUESTION)

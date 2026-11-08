@@ -6,6 +6,15 @@ from .authoring_task_lifecycle import (TaskBindingContext, TaskBindingPlan,
     resolve_task_binding, bind_task_outcome, task_identity_for_origin)
 from .specialist_routing import scope_spec_from_dict
 from .provider_wire import project_agent_task_metadata
+from .document_plan import (DocumentPlan, DocumentNodeSpec, DocumentNodeBinding, DocumentPlanView,
+    DocumentNodeView, DocumentNodeState, DocumentNodeNextAction, DocumentPlanningGoalRef, document_value_digest,
+    document_node_binding_to_dict, DocumentNodeSelection, DocumentCandidateUseIntent, DocumentCandidateSelection,
+    document_node_selection_to_dict, document_plan_to_dict)
+from .conversations.context import document_lineage_cost, project_document_plan_views
+from .editorial_scope import EditorialScopeCoverage, EditorialScopeTarget
+from .core_document_readiness import DEPENDENCIES, require_readiness, CoreDocumentReadiness
+from .specialist_routing import authoring_scope_rules, AuthoringContribution, AuthoringContributionRole
+
 from .blocking_work import run_blocking
 
 import time
@@ -41,7 +50,7 @@ from .authoring_admission import (
 from .conversations.events import authoring_source_facts
 
 from .lead_task_transitions import (
-    task_value_to_dict,
+    task_value_to_dict, selected_task_materials_to_dict,
     LeadTaskAction, LeadTaskDecision, LeadTaskRef, LeadMaterialRef,
     LeadMaterialKind, LeadTaskTransitionReceipt, LeadMaterialCapture,
     LeadDiscussionReport, LeadPublicResponse, LeadPublicResponseAcceptance,
@@ -391,6 +400,7 @@ from .conversations import (
     LeadTurnResult,
     project_collaboration_history,
     select_bounded_collaboration_context,
+    is_new_task_recommendation_source,
 )
 from .git.story_commit_contracts import (
     StoryCommitApplicationEvidence,
@@ -755,6 +765,65 @@ def _lead_discussion_result_contract(
     )
 
 
+def _target_authoring_scope_prior(
+    scope: AuthoringScope,
+    source: AuthoringScope | None,
+    receipt: LeadTaskTransitionReceipt | None,
+) -> AuthoringScope | None:
+    """Separate a caller-verified NEW_TASK target from its retained source evidence."""
+    if (
+        source is not None
+        and type(receipt) is LeadTaskTransitionReceipt
+        and receipt.origin_kind == "task_decision"
+        and receipt.action is LeadTaskAction.NEW_TASK
+        and (scope.task_id, scope.task_revision)
+        == (receipt.target_task_id, receipt.target_task_revision)
+        and scope.task_id != source.task_id
+        and receipt.source_task_ref is not None
+        and (receipt.source_task_ref.task_id, receipt.source_task_ref.task_revision)
+        == (source.task_id, source.task_revision)
+    ):
+        return None
+    return source
+
+
+
+def _document_successor_selection(
+    binding: DocumentNodeBinding | None,
+    source_event: CollaborationEvent | None,
+    current_scope: AuthoringScope | None,
+    target_scope: AuthoringScope | None,
+    task_binding: TaskBindingPlan | None,
+) -> DocumentNodeSelection | None:
+    """Select an exact successor's input intent without carrying its authority."""
+    if (type(binding) is not DocumentNodeBinding or type(source_event) is not CollaborationEvent
+            or type(current_scope) is not AuthoringScope or type(target_scope) is not AuthoringScope
+            or type(task_binding) is not TaskBindingPlan
+            or task_binding.transition not in {"revise", "reserved"}):
+        return None
+    captured = getattr(source_event.payload, "authoring_scope", None)
+    if (type(captured) is not AuthoringScope
+            or (source_event.session_id, source_event.conversation_id, source_event.event_id)
+            != (binding.task_ref.session_id, binding.task_ref.conversation_id, binding.task_ref.scope_event_id)
+            or (captured.task_id, captured.task_revision, captured.target_paths)
+            != (binding.task_ref.task_id, binding.task_ref.task_revision, current_scope.target_paths)
+            or (current_scope.task_id, current_scope.task_revision)
+            != (binding.task_ref.task_id, binding.task_ref.task_revision)
+            or binding.task_ref.scope_digest != "sha256:" + hashlib.sha256(json.dumps(
+                asdict(captured), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+            or len(current_scope.target_paths) != 1
+            or target_scope.target_paths != current_scope.target_paths
+            or target_scope.intent is not current_scope.intent
+            or (target_scope.task_id, target_scope.task_revision)
+            != (current_scope.task_id, current_scope.task_revision + 1)
+            or (task_binding.task_id, task_binding.task_revision)
+            != (target_scope.task_id, target_scope.task_revision)):
+        return None
+    return DocumentNodeSelection(binding.plan_ref, node_id=binding.node_id,
+        candidate_uses=tuple(DocumentCandidateSelection(use.predecessor_node_id, use.candidate,
+            use.permitted_scope, use.purpose) for use in binding.candidate_uses))
+
+
 def _lead_revision_result_contract(
     expected_relation: LeadProposalRelation, input_ids: tuple[str, ...],
     task_revisions: tuple[tuple[str, int], ...],
@@ -762,7 +831,14 @@ def _lead_revision_result_contract(
     discussion_constraints: LeadDiscussionConstraints, *,
     fresh_revision_only: bool = False, source_scope: AuthoringScope | None = None,
     artifact_revision_only: bool = False,
+    selected_document_review_path: str | None = None,
 ) -> LeadResultRuleSeed:
+    if selected_document_review_path is not None and (
+        not fresh_revision_only
+        or constraints.document_node_digest is None
+        or constraints.document_target_paths != (selected_document_review_path,)
+    ):
+        raise ValueError("selected document review requires its frozen exact node policy")
     authoring = _lead_front_result_contract(
         expected_relation, input_ids, task_revisions, constraints,
         fresh_revision_only=False,
@@ -806,6 +882,28 @@ def _lead_revision_result_contract(
             artifact_variants.append(variant)
         variants = artifact_variants
     elif fresh_revision_only or (source_scope is not None and source_scope.intent is AuthoringIntent.AUTHORING):
+        selected_reviews = []
+        if selected_document_review_path is not None:
+            for variant in variants:
+                properties = variant.get("properties", {})
+                scope = properties.get("writing_task_scope", {})
+                intent = scope.get("properties", {}).get("writing_intent", {}).get("enum", [])
+                response = properties.get("response_type", {}).get("enum", [])
+                if (
+                    response == ["artifact_change_proposal"]
+                    and intent == [AuthoringIntent.AUTHORING.value]
+                    and "authoring_assessment" in properties
+                ) or (
+                    response == ["specialist_consultation_proposal"]
+                    and intent == [AuthoringIntent.REVIEW_ONLY.value]
+                ):
+                    scope_properties = scope["properties"]
+                    scope_properties["activity_type"]["enum"] = ["review_writing"]
+                    scope_properties["target_artifact_paths"] = {
+                        **scope_properties["target_artifact_paths"],
+                        **string_array((selected_document_review_path,), minimum=1, maximum=1),
+                    }
+                    selected_reviews.append(variant)
         variants = [variant for variant in variants
                     if variant.get("properties", {}).get("response_type", {}).get("enum", [])
                     in (["specialist_consultation_proposal"], ["proposal_drafting_recommendation"])
@@ -841,6 +939,7 @@ def _lead_revision_result_contract(
             ):
                 scope["activity_type"]["enum"].insert(0, "review_writing")
             scope["writing_intent"]["enum"] = ["authoring"]
+        variants.extend(selected_reviews)
     return LeadResultRuleSeed.declare(
         "lead-response-v9",
         mutable({
@@ -960,6 +1059,13 @@ def _lead_front_result_contract(
                 None if facts.allow_read_sources else facts.input_ids,
                 None if facts.allow_read_sources else (), facts.readiness_source_basis_ref),
         }, description="Assess the actual current whole-book basis and four core documents; readiness grants no authoring or write authority."))
+    for variant in variants:
+        if variant.get("properties", {}).get("kind", {}).get("enum") == ["question"]:
+            variant["properties"]["planning_target"] = alternatives([
+                {"type": "string", "enum": [target.value for target in AuthoringTarget],
+                         "description": 'Semantic document kind for a genuine formal-writing clarification; this is not an artifact path, task, readiness finding, or execution authority.'},
+                        {"type": "null", "description": 'No formal document-target classification is supplied; freeform, workflow, review, and already-targeted work retain their existing scope.'}])
+            variant["required"] = [*variant["required"], "planning_target"]
     qualified_variants = []
     for variant in variants:
         properties = variant.get("properties", {})
@@ -1718,6 +1824,8 @@ class _AccountingContextProvider:
         admission: PremiseFreshWorkAdmission | None = None,
         effective_language: str | None = None,
         task_revisions: tuple[tuple[str, int], ...] = (),
+        document_node: DocumentNodeBinding | None = None,
+        document_goal=None, document_budget_task_id=None,
     ) -> None:
         self.effective_language = effective_language
         self.task_revisions = task_revisions
@@ -1754,6 +1862,9 @@ class _AccountingContextProvider:
         self._group_observations: list[LeadGroupObservation] = []
         self._group_started_ns: int | None = None
         self._task_front_budget: int | None = None
+        self._document_node = document_node
+        self._document_goal = document_goal
+        self._document_budget_task_id = document_budget_task_id
 
 
     def renew_delegate(self, delegate: object) -> None:
@@ -2171,6 +2282,7 @@ class _AccountingContextProvider:
         ordinal = len(self._ordinals) + 1
         self._ordinals[call_id] = ordinal
         self._runtime._append_provider_call_fact(
+            document_node=self._document_node, document_goal=self._document_goal, document_budget_task_id=self._document_budget_task_id,
             session_id=self._session_id,
             conversation_id=self._conversation_id,
             turn_id=self._turn_id,
@@ -2232,6 +2344,7 @@ class _AccountingContextProvider:
             details = self._label_validation_details(call_id, details)
             self._validation_details[call_id] = details
         self._runtime._append_provider_call_fact(
+            document_node=self._document_node, document_goal=self._document_goal, document_budget_task_id=self._document_budget_task_id,
             session_id=self._session_id,
             conversation_id=self._conversation_id,
             turn_id=self._turn_id,
@@ -4487,11 +4600,19 @@ class StoryRuntime:
         previous: LeadRecommendationRequestPayload | None = None,
         preview_replies: tuple[CollaborationSpecialistReplyPayload, ...] = (),
         session_history: SessionHistorySnapshot | None = None,
+        document_selection: DocumentNodeSelection | None = None,
     ) -> CollaborationEventDraft:
         if type(artifact_binding) is not SessionArtifactBinding:
             raise TypeError(
                 "recommendation requires an exact session artifact binding"
             )
+        selected_node = None
+        if document_selection is not None:
+            selected_node, pending_window = self._bind_document_selection(source.session_id, document_selection,
+                source.payload.authoring_scope, projection, source)
+            if pending_window is not None:
+                raise _LeadOutcomeValidationError("For a replacement document window, propose the exact node for its own Confirm, or ask for missing inputs; a preparation-only recommendation cannot carry that window.")
+            source = replace(source, payload=replace(source.payload, document_node=selected_node))
         objective = next((item for item in projection.artifact_objectives
                           if item.facts.objective_id == action.objective_id), None)
         if action.objective_id is not None and (
@@ -4704,8 +4825,10 @@ class StoryRuntime:
         )
         prior_scope = self._authoring_tasks(prior_events).get(scope.task_id)
         fresh_pair = (
-            scope.task_id == task_identity_for_origin(source.step_id)
-            and scope.task_revision == 1
+            (
+                scope.task_id == task_identity_for_origin(source.step_id)
+                and scope.task_revision == 1
+            ) or is_new_task_recommendation_source(source, scope, events)
             if prior_scope is None
             else (
                 scope.task_revision == prior_scope.task_revision + 1
@@ -4918,7 +5041,7 @@ class StoryRuntime:
             source_proposal_revision=None if source_proposal is None else source_proposal.proposal_revision,
             source_proposal_digest=None if source_proposal is None else source_proposal.proposal_digest,
             source_execution_attempt_id=source_attempt,
-            authoring_scope=scope,
+            document_node=(selected_node if selected_node is not None else source_proposal.document_node if source_proposal is not None and source_proposal.document_node is not None else self._automatic_document_node(source.session_id, scope, projection, session_history=session_history)), authoring_scope=scope,
         )
         return self._draft_with_id(
             event_id=request_event_id, session_id=source.session_id,
@@ -5084,6 +5207,8 @@ class StoryRuntime:
                     if type(readiness) is CoreDocumentReadinessNeeded or readiness != request.basis.core_document_readiness:
                         raise ValueError(readiness.message if type(readiness) is CoreDocumentReadinessNeeded else "preparation readiness basis missing or changed")
                 try:
+                    if request.document_node is not None:
+                        self._validate_document_node(session_id, request.document_node, scope=request.authoring_scope)
                     self._validate_editorial_refs(session_id, request.basis.editorial_refs, request.basis.editorial_context_digest, scope=request.authoring_scope)
                     artifact_binding = (await run_blocking(self._session_artifact_binding, session_id)).transfer_to_current_thread()
                     scope = request.authoring_scope
@@ -5221,6 +5346,7 @@ class StoryRuntime:
                 turn_id=origin.turn_id, step_id=origin.step_id, text=command,
                 expected_relation=LeadProposalRelation.NEW_STEP, previous_proposal=None,
                 context_event_sink=context_event_sink, preparation=capability,
+                document_node=request.document_node,
                 action_progress_sink=action_progress_sink,
             )
         except BaseException as failure:
@@ -5778,6 +5904,7 @@ class StoryRuntime:
     async def _decide_lead_task_impl(
         self, decision: LeadTaskDecision, *,
         action_progress_sink: ContextActionProgressSink | None = None,
+    document_selection: DocumentNodeSelection | None = None,
     ) -> LeadTaskDecisionResult:
         if type(decision) is not LeadTaskDecision:
             raise TypeError("task control requires an exact LeadTaskDecision")
@@ -5793,7 +5920,7 @@ class StoryRuntime:
             prior_origin = next((event for event in events if event.event_id == decision.request_id), None)
             if prior_origin is not None:
                 if type(prior_origin.payload) is not CollaborationLeadTaskDecisionPayload or (
-                    prior_origin.payload.decision != decision
+                    (prior_origin.payload.decision != decision or prior_origin.payload.document_selection != document_selection)
                 ):
                     raise ValueError("same task request ID cannot change its arguments")
                 transition = next((event for event in events
@@ -5860,6 +5987,10 @@ class StoryRuntime:
                     selected_task.status in {"discarded", "completed", "protected"}
                 ):
                     raise ValueError("retired or protected work cannot resume old authority")
+            if document_selection is not None:
+                if decision.action not in {LeadTaskAction.NEW_TASK, LeadTaskAction.RESUME}:
+                    raise ValueError("document selection belongs only to explicit work preparation")
+                await run_blocking(self._prepare_document_selection, session_id, document_selection)
             snapshot = (await run_blocking(self._editorial_snapshot, session_id))
             materials = tuple(self._selected_task_material(snapshot, ref) for ref in decision.material_refs)
             turn_id = self._new_id("t")
@@ -5880,7 +6011,7 @@ class StoryRuntime:
                 session_id=session_id, conversation_id=conversation_id,
                 turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.LEAD_TASK_DECISION,
                 sender=_USER_ACTOR, recipient=_RUNTIME_ACTOR,
-                payload=CollaborationLeadTaskDecisionPayload(decision),
+                payload=CollaborationLeadTaskDecisionPayload(decision, document_selection=document_selection),
             ), event_id=decision.request_id)
             message = None if decision.text is None else self._draft(
                 session_id=session_id, conversation_id=conversation_id,
@@ -6005,10 +6136,11 @@ class StoryRuntime:
     async def decide_lead_task(
         self, decision: LeadTaskDecision, *,
         action_progress_sink: ContextActionProgressSink | None = None,
+    document_selection: DocumentNodeSelection | None = None,
     ) -> LeadTaskDecisionResult:
         """Apply an exact USER control returned by the current task choices."""
         return await self._decide_lead_task_impl(
-            decision, action_progress_sink=action_progress_sink,
+            decision, document_selection=document_selection, action_progress_sink=action_progress_sink,
         )
 
     def lead_group_reports(self, session_id: str, conversation_id: str) -> tuple[dict[str, object], ...]:
@@ -6028,7 +6160,549 @@ class StoryRuntime:
             and event.payload.state is CollaborationProviderCallState.PREPARED
             and event.payload.accounting is None)) for trace in traces)
 
-    async def lead_turn(
+    def _build_document_plan(self, facts, scope, inputs, basis=None, previous=None, planning_goal=None, selected_target_path=None) -> DocumentPlan:
+        goal_paths = (() if selected_target_path is None else (selected_target_path,)) if facts is None else facts.target_paths
+        selected = selected_target_path or next((p for p in goal_paths if targets_for_paths((p,)) == (AuthoringTarget.MANUSCRIPT,)), None)
+        paths = ({target.value for target in AuthoringTarget if target is not AuthoringTarget.MANUSCRIPT}
+                 if facts is None else {p for p in goal_paths if p in {x.value for x in AuthoringTarget}})
+        if selected is not None:
+            paths.add(selected)
+        required = set(targets_for_paths(tuple(paths)))
+        for target in tuple(required):
+            required.update(DEPENDENCIES[target])
+        if not required:
+            raise ValueError("a document plan requires an explicitly selected canonical target")
+        ordered = tuple(target for target in AuthoringTarget if target in required)
+        path_for = {target: selected if target is AuthoringTarget.MANUSCRIPT else target.value for target in ordered}
+        ids = {target: "dn_" + hashlib.sha256(path_for[target].encode()).hexdigest()[:24] for target in ordered}
+        units = () if basis is None else tuple(x.book_unit_id for x in basis.assessment.book_basis.whole_book_units)
+        known = tuple(dict.fromkeys(item if type(item) is str else item.input_id for item in inputs))
+        nodes = []
+        for target in ordered:
+            path = path_for[target]
+            retained = None if previous is None else next((item for item in previous.nodes if item.target_path == path), None)
+            if retained is not None:
+                nodes.append(retained)
+                continue
+            owner = artifact_domain(path)
+            affected = set(() if scope is None else scope.domains) | {owner}
+            if target is AuthoringTarget.MANUSCRIPT:
+                affected.update(ArtifactReviewDomain)
+            domains = tuple(domain for domain in ArtifactReviewDomain if domain in affected)
+            contributions = tuple(AuthoringContribution(domain, AuthoringContributionRole.DRAFT_OWNER
+                if domain is owner else AuthoringContributionRole.CONSTRAINT_ASSESSOR) for domain in domains)
+            rule = authoring_scope_rules(AuthoringActivity.DRAFT, AuthoringIntent.AUTHORING,
+                domains, contributions, target_paths=(path,))
+            nodes.append(DocumentNodeSpec(ids[target], target, path,
+                EditorialScopeCoverage(EditorialScope(EditorialScopeKind.KNOWN, (EditorialScopeTarget(path),))),
+                units, tuple(ids[x] for x in DEPENDENCIES[target]), rule, known, known,
+                tuple(dict.fromkeys((*known, *((planning_goal.user_event_id,) if planning_goal is not None else
+                    ((facts.origin_user_event_id,) if type(facts) is ArtifactObjectiveFacts else
+                     ((facts.origin_recommendation_decision_event_id,) if facts is not None else ())))))),
+                "Prepare the exact document under the captured USER goal and current prerequisites."))
+        plan_id = ("dp_" + (facts.objective_id if facts is not None else planning_goal.user_event_id)
+                   if previous is None else previous.ref.plan_id)
+        remaining = tuple(path for path in goal_paths if path not in path_for.values())
+        candidate = DocumentPlan.create(plan_id=plan_id,
+            plan_revision=1 if previous is None else previous.ref.plan_revision,
+            goal_objective_id=None if facts is None else facts.objective_id,
+            goal_facts_digest=None if facts is None else document_value_digest(asdict(facts)),
+            nodes=tuple(nodes), remaining_target_paths=remaining, planning_goal=planning_goal,
+            unresolved_target=facts is None)
+        if previous is not None and candidate != previous:
+            candidate = DocumentPlan.create(plan_id=plan_id, plan_revision=previous.ref.plan_revision + 1,
+                goal_objective_id=candidate.goal_objective_id, goal_facts_digest=candidate.goal_facts_digest,
+                nodes=tuple(nodes), remaining_target_paths=remaining, planning_goal=planning_goal,
+                unresolved_target=facts is None)
+        return candidate
+
+    def _planning_goal_plan(self, session_id, conversation_id, turn_id, outcome, inputs, events, authoring_target=None):
+        if authoring_target is not AuthoringTarget.MANUSCRIPT:
+            return None
+        scope = outcome.authoring_scope
+        if scope is None or scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} or scope.target_paths:
+            return None
+        prior = tuple(event.payload.document_plan for event in events
+            if type(event.payload) is CollaborationLeadJudgmentPayload
+            and event.payload.document_plan is not None and event.payload.authoring_scope is not None
+            and event.payload.authoring_scope.task_id == scope.task_id)
+        if prior:
+            return prior[0]
+        origins = tuple(event for event in events if event.turn_id == turn_id
+            and type(event.payload) is CollaborationMessagePayload and event.sender.kind is CollaborationActorKind.USER
+            and event.recipient.kind is CollaborationActorKind.LEAD)
+        if len(origins) != 1:
+            return None
+        origin = origins[0]
+        goal = DocumentPlanningGoalRef(session_id, conversation_id, origin.event_id,
+            "sha256:" + hashlib.sha256(origin.payload.content.encode("utf-8")).hexdigest())
+        return self._build_document_plan(None, scope, inputs, outcome.core_document_readiness, planning_goal=goal)
+
+    def _document_plan_views(self, session_id: str) -> tuple[DocumentPlanView, ...]:
+        snapshot = self._editorial_snapshot(session_id)
+        return snapshot.document_plans()
+
+    def _document_prior_confirmation(self, session_id, plan_id):
+        views = tuple(view for view in self._document_plan_views(session_id) if view.plan.ref.plan_id == plan_id)
+        if len(views) != 1 or views[0].cursor_ambiguous:
+            raise ValueError("document work requires one reconciled current causal head")
+        return views[0].current_confirmation_event_id
+
+    def _prepare_document_selection(self, session_id, selection):
+        if type(selection) is not DocumentNodeSelection:
+            raise TypeError("document selection must be an exact untrusted intent")
+        snapshot = self._editorial_snapshot(session_id)
+        matches = tuple(view for view in snapshot.document_plans() if view.plan.ref == selection.plan_ref)
+        if len(matches) != 1:
+            raise ValueError("document selection requires the current exact plan")
+        if matches[0].cursor_ambiguous:
+            raise ValueError("independent document confirmations require explicit reconciliation before new work")
+        plan = matches[0].plan
+        if selection.target_path is not None:
+            if selection.target_path not in plan.remaining_target_paths and not plan.unresolved_target:
+                raise ValueError("new window target is not an original remaining artifact")
+            if targets_for_paths((selection.target_path,)) != (AuthoringTarget.MANUSCRIPT,):
+                raise ValueError("the active window selects one exact manuscript")
+            facts = next((record.payload.facts for row in snapshot.conversations for record in row.records
+                if type(record.payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}
+                and record.payload.facts.objective_id == plan.goal_objective_id), None)
+            plan = self._build_document_plan(facts, None, (), previous=plan,
+                planning_goal=plan.planning_goal, selected_target_path=selection.target_path)
+            node = next(node for node in plan.nodes if node.target_path == selection.target_path)
+        else:
+            node = next((node for node in plan.nodes if node.node_id == selection.node_id), None)
+        if node is None:
+            raise ValueError("selected document node does not exist")
+        # Intent selection grants no drafting admission. Scoped review remains
+        # available while formal writing prerequisites are blocked.
+        events = snapshot.events()
+        by_id = {event.event_id: event for event in events}
+        for use in selection.candidate_uses:
+            predecessor = next((item for item in plan.nodes if item.node_id == use.predecessor_node_id), None)
+            event = by_id.get(use.candidate.candidate_event_id)
+            candidate = event.payload.candidate if event is not None and type(event.payload) is ArtifactReviewCandidatePayload else None
+            producer = next((item.payload for item in events if candidate is not None and type(item.payload) is CollaborationProposal
+                and (item.payload.proposal_id, item.payload.proposal_revision, item.payload.proposal_digest) ==
+                    (event.payload.consultation_proposal_id, event.payload.consultation_proposal_revision, event.payload.consultation_proposal_digest)), None)
+            if (predecessor is None or predecessor.node_id not in node.predecessor_node_ids or candidate is None
+                    or producer is None or producer.document_node is None
+                    or producer.document_node.plan_ref.plan_id != plan.ref.plan_id
+                    or producer.document_node.node_id != predecessor.node_id
+                    or (candidate.candidate_id, candidate.candidate_revision, candidate.candidate_digest) !=
+                       (use.candidate.candidate_id, use.candidate.candidate_revision, use.candidate.candidate_digest)
+                    or use.permitted_scope.exclusions or not use.permitted_scope.scope.targets
+                    or any(x.path != predecessor.target_path or x.start_line is not None
+                           for x in use.permitted_scope.scope.targets)
+                    or {path for op in candidate.change_set.operations for path in
+                        ((op.source_path, op.destination_path) if type(op) is ArtifactRenameOperation else (op.path,))} != {predecessor.target_path}):
+                raise ValueError("candidate selection is not exact same-plan predecessor material within its permitted scope")
+        return plan, node
+
+    def inspect_document_plans(self, session_id: str) -> tuple[DocumentPlanView, ...]:
+        """Inspect durable session-wide plans/cost without submitting provider work."""
+        snapshot = self._editorial_snapshot(session_id)
+        views = snapshot.document_plans()
+        if not views:
+            return ()
+        readiness = self.inspect_core_document_readiness(session_id)
+        facts = {record.payload.facts.objective_id: record.payload.facts for row in snapshot.conversations
+                 for record in row.records if type(record.payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}}
+        result = []
+        for view in views:
+            requested = set(() if view.plan.goal_objective_id not in facts else facts[view.plan.goal_objective_id].target_paths)
+            requested.update(path for owner in snapshot.conversations for record in owner.records
+                if type(record.payload) is CollaborationProposal and record.payload.document_node is not None
+                and record.payload.document_node.plan_ref.plan_id == view.plan.ref.plan_id
+                and record.payload.authoring_scope is not None
+                and record.payload.authoring_scope.intent is AuthoringIntent.AUTHORING
+                and record.payload.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE, AuthoringActivity.REVIEW}
+                for path in record.payload.authoring_scope.target_paths)
+            rows = []
+            for node, row in zip(view.plan.nodes, view.nodes):
+                needed = (None if node.target_kind is AuthoringTarget.GLOBAL_OUTLINE else readiness) if type(readiness) is CoreDocumentReadinessNeeded else require_readiness(node.target_kind, readiness)
+                basis = None if type(readiness) is CoreDocumentReadinessNeeded else readiness.basis
+                own = None if basis is None else next((item for item in basis.assessment.document_judgments
+                                                       if item.document_path == node.target_path), None)
+                prerequisite_paths = {target.value for target in DEPENDENCIES[node.target_kind]}
+                row = replace(row, prerequisite_sources=() if basis is None else tuple(source for source in basis.sources
+                    if source.document_path in prerequisite_paths and source.kind is AdmissionSourceKind.READ))
+                decision_ids = set() if own is None else (set(own.remaining_author_decision_ids) |
+                    {identity for finding in own.criteria_findings if finding.criterion_judgment != "criteria_satisfied"
+                     for identity in finding.depends_on_author_decision_ids})
+                missing = () if own is None else tuple(choice for choice in basis.assessment.book_basis.author_decisions
+                    if choice.author_decision_id in decision_ids
+                    and choice.author_decision_coverage not in {"supplied", "delegated"})
+                if needed is not None or missing:
+                    reasons = (() if needed is None else needed.reasons) + tuple(
+                        f"Author decision {choice.author_decision_id}: {choice.author_decision_text}. {choice.explanation}" for choice in missing)
+                    inputs = (() if needed is None else needed.required_documents) + tuple(choice.author_decision_id for choice in missing)
+                    row = replace(row, state=DocumentNodeState.BLOCKED, blocking_conditions=tuple(dict.fromkeys(reasons)),
+                        required_inputs=tuple(dict.fromkeys(inputs)), next_action=DocumentNodeNextAction.REQUEST_INFORMATION)
+                elif (node.target_path not in requested and row.state is not DocumentNodeState.IN_PROGRESS
+                        and type(readiness) is CoreDocumentReadiness and node.target_path in readiness.complete_documents):
+                    source_id = own.document_read_source_id if own is not None else None
+                    source = None if basis is None else next((item for item in basis.sources if item.source_id == source_id), None)
+                    if source is not None and source.acquisition_identity is not None:
+                        row = replace(row, state=DocumentNodeState.COMPLETE, blocking_conditions=(), required_inputs=(),
+                            completion_event_ids=(source.acquisition_identity,), next_action=DocumentNodeNextAction.COMPLETE)
+                elif row.state not in {DocumentNodeState.COMPLETE, DocumentNodeState.IN_PROGRESS, DocumentNodeState.FOLLOWUP_REQUIRED}:
+                    row = replace(row, state=DocumentNodeState.READY, blocking_conditions=(), required_inputs=(),
+                                  next_action=(DocumentNodeNextAction.CONFIRM_NODE if row.next_action is DocumentNodeNextAction.CONFIRM_NODE
+                                               else DocumentNodeNextAction.PREPARE_NODE))
+                if (not view.cursor_ambiguous and (view.remaining_physical_calls == 0 or view.remaining_rounds == 0)
+                        and row.state is not DocumentNodeState.COMPLETE
+                        and row.next_action not in {DocumentNodeNextAction.APPLY_CANDIDATE, DocumentNodeNextAction.PREPARE_COMMIT}):
+                    row = replace(row, state=DocumentNodeState.BLOCKED,
+                        blocking_conditions=(*row.blocking_conditions, "Existing task budget is exhausted; no node reset is permitted."),
+                        next_action=DocumentNodeNextAction.BUDGET_EXHAUSTED)
+                rows.append(row)
+            if view.cursor_ambiguous:
+                rows = [replace(row, state=DocumentNodeState.BLOCKED,
+                    blocking_conditions=tuple(dict.fromkeys((*row.blocking_conditions,
+                        "Independent confirmed document heads require explicit reconciliation; current budget is unavailable."))),
+                    next_action=DocumentNodeNextAction.REQUEST_INFORMATION)
+                    if row.state is not DocumentNodeState.COMPLETE else row for row in rows]
+            active = {node.target_path: row for node, row in zip(view.plan.nodes, rows)}
+            completed = tuple(path for path in view.completed_target_paths
+                if path not in active or active[path].state is DocumentNodeState.COMPLETE)
+            result.append(replace(view, nodes=tuple(rows), completed_target_paths=completed))
+        return tuple(result)
+
+    def _bind_document_selection(self, session_id, selection, scope, projection, scope_event):
+        plan, node = self._prepare_document_selection(session_id, selection)
+        if scope is None or scope.target_paths != (node.target_path,):
+            raise ValueError("selected document task must retain its exact disclosed target")
+        if scope.intent is AuthoringIntent.AUTHORING and scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
+            readiness = self.inspect_core_document_readiness(session_id)
+            needed = (None if node.target_kind is AuthoringTarget.GLOBAL_OUTLINE else readiness) if type(readiness) is CoreDocumentReadinessNeeded else require_readiness(node.target_kind, readiness)
+            if needed is not None:
+                raise ValueError(needed.message)
+        if plan.goal_objective_id is None and node.target_kind is AuthoringTarget.MANUSCRIPT:
+            facts = self._document_goal_facts(session_id, scope_event, (node.target_path,))
+            plan = DocumentPlan.create(plan_id=plan.ref.plan_id, plan_revision=plan.ref.plan_revision,
+                goal_objective_id=facts.objective_id, goal_facts_digest=document_value_digest(asdict(facts)),
+                nodes=plan.nodes, remaining_target_paths=plan.remaining_target_paths,
+                planning_goal=plan.planning_goal, unresolved_target=False)
+        scope_digest = "sha256:" + hashlib.sha256(json.dumps(asdict(scope),
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+        task = next((item.ref for item in projection.available_tasks
+            if (item.ref.task_id, item.ref.task_revision, item.ref.scope_digest) ==
+               (scope.task_id, scope.task_revision, scope_digest)), None)
+        if task is None:
+            if scope_event is None or scope_event.payload.authoring_scope != scope:
+                raise ValueError("a document binding needs its actual accepted scope event")
+            task = LeadTaskRef(session_id=session_id, conversation_id=scope_event.conversation_id, task_id=scope.task_id, task_revision=scope.task_revision,
+                scope_event_id=scope_event.event_id, scope_digest="sha256:" + hashlib.sha256(json.dumps(asdict(scope), sort_keys=True,
+                    separators=(",", ":"), ensure_ascii=False).encode()).hexdigest())
+        events = self._session_authoring_events(session_id)
+        prior = tuple(event.payload.document_node for event in events
+            if type(event.payload) in {CollaborationProposal, CollaborationProviderCallPayload}
+            and event.payload.document_node is not None
+            and event.payload.document_node.task_ref.task_id == task.task_id)
+        if prior:
+            budget, step = prior[0].budget_lineage_ref, prior[0].budget_origin_step_id
+        else:
+            source = next((event for event in events if event.event_id == task.scope_event_id), scope_event)
+            if source is None:
+                raise ValueError("document budget requires an actual source step")
+            budget, step = task, source.step_id
+        conditions = document_value_digest((plan.goal_facts_digest,
+            None if plan.planning_goal is None else plan.planning_goal.content_digest,
+            node.preservation_conditions, task.scope_digest))
+        uses = tuple(DocumentCandidateUseIntent(plan.ref, use.predecessor_node_id, node.node_id,
+            use.candidate, task, use.permitted_scope, use.purpose, conditions) for use in selection.candidate_uses)
+        return DocumentNodeBinding(plan.ref, node.node_id, task, budget, step, uses,
+            prior_confirmation_event_id=self._document_prior_confirmation(session_id, plan.ref.plan_id)), (plan if plan.ref != selection.plan_ref else None)
+
+    def _document_goal_facts(self, session_id, scope_event, target_paths, *, objective_id=None, preparation=None):
+        if scope_event is None:
+            raise ValueError("document goal requires its actual accepted Lead scope event")
+        events = self.conversation_storage_services.event_store.read(session_id, scope_event.conversation_id)
+        projected = project_collaboration_history(events)
+        if preparation is not None:
+            request = preparation.request_event.payload
+            return ArtifactObjectiveFactsV2(objective_id or self._new_id("obj"), scope_event.conversation_id,
+                request.request_event_id, preparation.decision_event.event_id, request.instruction,
+                request.objective_target_paths, projected.offered_draft_sources)
+        origins = tuple(event for event in events if event.turn_id == scope_event.turn_id
+            and type(event.payload) is CollaborationMessagePayload and event.sender.kind is CollaborationActorKind.USER
+            and event.recipient.kind is CollaborationActorKind.LEAD)
+        if len(origins) != 1:
+            raise ValueError("document goal requires one exact literal USER origin")
+        return ArtifactObjectiveFacts(objective_id or self._new_id("obj"), scope_event.conversation_id,
+            origins[0].event_id, origins[0].payload.content, target_paths, projected.offered_draft_sources)
+
+    def _validate_document_node(self, session_id: str, binding: DocumentNodeBinding, *, scope=None, proposed_plan=None) -> DocumentPlanView:
+        if type(binding) is not DocumentNodeBinding:
+            raise TypeError("document_node must be an exact untrusted node binding")
+        captured_views = self._document_plan_views(session_id)
+        causal = tuple(view for view in captured_views if view.plan.ref.plan_id == binding.plan_ref.plan_id)
+        if len(causal) != 1 or causal[0].cursor_ambiguous:
+            raise ValueError("document execution requires a reconciled exact causal head")
+        causal_view = causal[0]
+        views = tuple(view for view in captured_views if view.plan.ref == binding.plan_ref)
+        if not views and proposed_plan is not None:
+            current = tuple(view for view in self._document_plan_views(session_id)
+                            if view.plan.ref.plan_id == proposed_plan.ref.plan_id)
+            selected = next((node for node in proposed_plan.nodes if node.node_id == binding.node_id), None)
+            if len(current) != 1 or selected is None:
+                raise ValueError("proposed document window has no exact current predecessor")
+            expected, _ = self._prepare_document_selection(session_id,
+                DocumentNodeSelection(current[0].plan.ref, target_path=selected.target_path))
+            if expected.goal_objective_id is None and proposed_plan.goal_objective_id is not None:
+                facts = next((event.payload.facts for event in self._session_authoring_events(session_id)
+                    if type(event.payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}
+                    and event.payload.facts.objective_id == proposed_plan.goal_objective_id), None)
+                if facts is None or document_value_digest(asdict(facts)) != proposed_plan.goal_facts_digest:
+                    raise ValueError("resolved plan requires its exact durable original goal capture")
+                expected = DocumentPlan.create(plan_id=expected.ref.plan_id, plan_revision=expected.ref.plan_revision,
+                    goal_objective_id=facts.objective_id, goal_facts_digest=document_value_digest(asdict(facts)),
+                    nodes=expected.nodes, remaining_target_paths=expected.remaining_target_paths,
+                    planning_goal=expected.planning_goal, unresolved_target=False)
+            if expected != proposed_plan or binding.plan_ref != proposed_plan.ref:
+                raise ValueError("proposed window differs from the host's exact dependency/goal projection")
+            views = (replace(current[0], plan=proposed_plan, current_node_id=None, current_confirmation_event_id=None,
+                nodes=tuple(DocumentNodeView(node.node_id, DocumentNodeState.BLOCKED,
+                    ("Pending exact node confirmation.",), (), (), (), DocumentNodeNextAction.CONFIRM_NODE)
+                    for node in proposed_plan.nodes)),)
+        if len(views) != 1:
+            raise ValueError("document node requires its current exact plan revision")
+        view = views[0]
+        node = next((node for node in view.plan.nodes if node.node_id == binding.node_id), None)
+        events = self._session_authoring_events(session_id)
+        by_id = {event.event_id: event for event in events}
+        if binding.prior_confirmation_event_id != causal_view.current_confirmation_event_id:
+            head = by_id.get(causal_view.current_confirmation_event_id)
+            value = None if head is None else head.payload
+            own = next((event.payload for event in events if type(event.payload) is CollaborationProposal
+                and type(value) is CollaborationConfirmationPayload
+                and (event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest) ==
+                    (value.proposal_id, value.proposal_revision, value.proposal_digest)), None)
+            if own is None or own.document_node != binding:
+                raise ValueError("document prior confirmation changed; prepare a fresh exact disclosure")
+        if node is None or binding.task_ref.session_id != session_id:
+            raise ValueError("document node belongs to another plan/session")
+        source = by_id.get(binding.task_ref.scope_event_id)
+        current = self._authoring_tasks(events).get(binding.task_ref.task_id)
+        captured = None if source is None else getattr(source.payload, "authoring_scope", None)
+        if (captured is None or current is None or current.task_revision != binding.task_ref.task_revision
+                or (captured.task_id, captured.task_revision) != (binding.task_ref.task_id, binding.task_ref.task_revision)
+                or binding.task_ref.scope_digest != "sha256:" + hashlib.sha256(json.dumps(
+                    asdict(captured), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+                or current.target_paths != (node.target_path,)
+                or scope is not None and (scope.task_id, scope.task_revision, scope.target_paths) !=
+                   (current.task_id, current.task_revision, (node.target_path,))):
+            raise ValueError("document node requires exact current task/scope provenance")
+        prior = tuple(event.payload.document_node for event in events
+            if type(event.payload) in {CollaborationProposal, LeadRecommendationRequestPayload}
+            and event.payload.document_node is not None
+            and event.payload.document_node.plan_ref.plan_id == view.plan.ref.plan_id
+            and event.payload.document_node.task_ref.task_id == binding.task_ref.task_id)
+        if prior and any((old.budget_lineage_ref, old.budget_origin_step_id) !=
+                         (binding.budget_lineage_ref, binding.budget_origin_step_id) for old in prior):
+            raise ValueError("node/revision movement cannot reset its inherited budget")
+        origin = by_id.get(binding.budget_lineage_ref.scope_event_id)
+        origin_scope = None if origin is None else getattr(origin.payload, "authoring_scope", None)
+        if (origin_scope is None or origin.step_id != binding.budget_origin_step_id
+                or origin_scope.task_id != binding.budget_lineage_ref.task_id
+                or origin_scope.task_revision != binding.budget_lineage_ref.task_revision
+                or (origin.session_id, origin.conversation_id) !=
+                   (binding.budget_lineage_ref.session_id, binding.budget_lineage_ref.conversation_id)
+                or binding.budget_lineage_ref.scope_digest != "sha256:" + hashlib.sha256(json.dumps(
+                    asdict(origin_scope), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+                or binding.budget_lineage_ref.task_id != binding.task_ref.task_id):
+            raise ValueError("document budget requires its actual task source lineage")
+        admitted_scope = current if scope is None else scope
+        if admitted_scope.intent is AuthoringIntent.AUTHORING and admitted_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
+            readiness = self.inspect_core_document_readiness(session_id)
+            needed = (None if node.target_kind is AuthoringTarget.GLOBAL_OUTLINE else readiness) if type(readiness) is CoreDocumentReadinessNeeded else require_readiness(node.target_kind, readiness)
+            if needed is not None:
+                raise ValueError(needed.message)
+        for use in binding.candidate_uses:
+            predecessor = next((x for x in view.plan.nodes if x.node_id == use.predecessor_node_id), None)
+            event = by_id.get(use.candidate.candidate_event_id)
+            candidate = event.payload.candidate if event is not None and type(event.payload) is ArtifactReviewCandidatePayload else None
+            producer = next((x.payload for x in events if candidate is not None and type(x.payload) is CollaborationProposal
+                and (x.payload.proposal_id, x.payload.proposal_revision, x.payload.proposal_digest) ==
+                    (event.payload.consultation_proposal_id, event.payload.consultation_proposal_revision, event.payload.consultation_proposal_digest)), None)
+            if (predecessor is None or predecessor.node_id not in node.predecessor_node_ids or candidate is None
+                    or producer is None or producer.document_node is None
+                    or producer.document_node.plan_ref.plan_id != binding.plan_ref.plan_id
+                    or producer.document_node.node_id != predecessor.node_id
+                    or (candidate.candidate_id, candidate.candidate_revision, candidate.candidate_digest) !=
+                       (use.candidate.candidate_id, use.candidate.candidate_revision, use.candidate.candidate_digest)
+                    or use.permitted_scope.exclusions or not use.permitted_scope.scope.targets
+                    or any(x.path != predecessor.target_path or x.start_line is not None for x in use.permitted_scope.scope.targets)
+                    or {path for op in candidate.change_set.operations for path in
+                        ((op.source_path, op.destination_path) if type(op) is ArtifactRenameOperation else (op.path,))} != {predecessor.target_path}
+                    or use.user_conditions_digest != document_value_digest((view.plan.goal_facts_digest,
+                        None if view.plan.planning_goal is None else view.plan.planning_goal.content_digest,
+                        node.preservation_conditions, binding.task_ref.scope_digest))):
+                raise ValueError("candidate input differs from the exact same-plan predecessor/task/purpose")
+        return view
+
+    def _automatic_document_node(self, session_id, scope, projection, *, session_history=None):
+        if scope is None or len(scope.target_paths) != 1:
+            return None
+        plans = projection.document_plans
+        if not plans and session_history is not None:
+            plans = tuple(view for row in session_history.conversations
+                if any((type(e.payload) is CollaborationLeadJudgmentPayload and e.payload.document_plan is not None)
+                       or (type(e.payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2} and e.payload.document_plan is not None)
+                       for e in row.records)
+                for view in row.document_plans())
+        if not plans:
+            return None
+        history = self._session_authoring_events(session_id)
+        by_id = {event.event_id: event for event in history}
+        goal_tasks = {}
+        for event in history:
+            value = event.payload
+            if type(value) is CollaborationLeadJudgmentPayload and value.document_plan is not None and value.authoring_scope is not None:
+                goal_tasks[value.document_plan.ref.plan_id] = value.authoring_scope.task_id
+            if type(value) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2} and value.document_plan is not None:
+                judgment = by_id.get(value.lead_result_event_id)
+                if judgment is not None and judgment.payload.authoring_scope is not None:
+                    goal_tasks[value.document_plan.ref.plan_id] = judgment.payload.authoring_scope.task_id
+        allowed_goals = {key for key, task_id in goal_tasks.items() if task_id == scope.task_id or any(
+            type(event.payload) is CollaborationProposal and event.payload.document_node is not None
+            and event.payload.document_node.task_ref.task_id == scope.task_id
+            and event.payload.document_node.plan_ref.plan_id == key for event in history)}
+        choices = [(view, node) for view in plans for node in view.plan.nodes
+                   if node.target_path == scope.target_paths[0] and view.plan.ref.plan_id in allowed_goals]
+        if len(choices) != 1:
+            return None
+        view, node = choices[0]
+        task = next((item.ref for item in projection.available_tasks
+                     if (item.ref.task_id, item.ref.task_revision) == (scope.task_id, scope.task_revision)), None)
+        if task is None:
+            return None
+        prior = tuple(event.payload.document_node for event in history
+            if type(event.payload) is CollaborationProposal and event.payload.document_node is not None
+            and event.payload.document_node.plan_ref.plan_id == view.plan.ref.plan_id
+            and event.payload.document_node.task_ref.task_id == task.task_id)
+        if prior:
+            budget, step = prior[0].budget_lineage_ref, prior[0].budget_origin_step_id
+        else:
+            origin = next(event for event in history if event.event_id == task.scope_event_id)
+            budget, step = task, origin.step_id
+        return DocumentNodeBinding(view.plan.ref, node.node_id, task, budget, step,
+            prior_confirmation_event_id=self._document_prior_confirmation(session_id, view.plan.ref.plan_id))
+
+    def _document_candidate_inputs(self, session_id, binding, inputs):
+        if binding is None or not binding.candidate_uses:
+            return inputs
+        if type(binding) is DocumentNodeSelection:
+            self._prepare_document_selection(session_id, binding)
+        else:
+            self._validate_document_node(session_id, binding)
+        known = {item.input_id: item for item in inputs}
+        if len(known) != len(inputs):
+            raise ValueError("document candidate input IDs are ambiguous")
+        additions = []
+        for number, use in enumerate(binding.candidate_uses, 1):
+            alias = f"plan_candidate_{number}"
+            expected = CollaborationInputRevision(alias, CollaborationInputKind.ARTIFACT_CANDIDATE,
+                f"artifact-candidate/{use.candidate.candidate_id}", CollaborationInputState.PRESENT,
+                use.candidate.candidate_digest)
+            if alias in known:
+                if type(known[alias]) is not CollaborationInputRevision or known[alias] != expected:
+                    raise ValueError("document candidate alias collides with a current input")
+                continue
+            additions.append(expected)
+        return (*inputs, *additions)
+
+    @staticmethod
+    def _compact_document_plan_input(value: dict[str, object]) -> dict[str, object]:
+        """Reference only an identical full plan already supplied in this input."""
+        work = value.get("document_work_plan")
+        objectives = value.get("artifact_objectives")
+        if type(work) is not dict or type(objectives) is not dict:
+            return value
+        shared = work.get("plan")
+        rows = objectives.get("objectives")
+        if type(shared) is not dict or type(rows) is not list:
+            return value
+        reference = shared.get("ref")
+        if type(reference) is not dict or set(reference) != {"plan_id", "plan_revision", "plan_digest"}:
+            return value
+        shared_bytes = None
+        compacted = []
+        changed = False
+        for row in rows:
+            candidate = row.get("document_plan") if type(row) is dict else None
+            if (type(candidate) is dict and candidate.get("ref") == reference
+                    and "document_plan_ref" not in row):
+                if shared_bytes is None:
+                    shared_bytes = json.dumps(shared, ensure_ascii=False, sort_keys=True,
+                        allow_nan=False, separators=(",", ":")).encode("utf-8")
+                if json.dumps(candidate, ensure_ascii=False, sort_keys=True,
+                        allow_nan=False, separators=(",", ":")).encode("utf-8") == shared_bytes:
+                    row = {key: item for key, item in row.items() if key != "document_plan"}
+                    row["document_plan_ref"] = dict(reference)
+                    changed = True
+            compacted.append(row)
+        if not changed:
+            return value
+        return {**value, "artifact_objectives": {**objectives, "objectives": compacted}}
+
+    def _attach_document_plan(self, result: LeadTurnResult, events=None, projection=None) -> LeadTurnResult:
+        if result.document_plan is not None:
+            return result
+        views = self.inspect_document_plans(result.session_id)
+        if not views:
+            return result
+        proposal = result.proposal
+        if proposal is None and result.artifact_proposal is not None:
+            candidate = result.artifact_proposal.candidate
+            current = None if projection is None else projection.current_proposal
+            if current is None or (current.proposal_id, current.proposal_revision, current.proposal_digest) != (
+                    candidate.consultation_proposal_id, candidate.consultation_proposal_revision, candidate.consultation_proposal_digest):
+                return result
+            proposal = current
+        if proposal is not None and proposal.document_plan is not None:
+            active = next((view for view in views if view.plan.ref.plan_id == proposal.document_plan.ref.plan_id), None)
+            if active is not None and active.plan.ref != proposal.document_plan.ref:
+                calls, rounds, total = document_lineage_cost(self._session_authoring_events(result.session_id),
+                    proposal.document_node, current_step_id=proposal.step_id)
+                rows = tuple(DocumentNodeView(node.node_id, DocumentNodeState.READY, (), (), (), (),
+                    DocumentNodeNextAction.CONFIRM_NODE) for node in proposal.document_plan.nodes)
+                pending = DocumentPlanView(proposal.document_plan, None, rows, calls, rounds, total,
+                    max(0, COLLABORATION_PHYSICAL_CALL_LIMIT - calls), max(0, COLLABORATION_ROUND_LIMIT - rounds),
+                    goal_text=active.goal_text, pending=True,
+                    completed_target_paths=tuple(path for path in active.completed_target_paths
+                        if path in proposal.document_plan.remaining_target_paths))
+                return replace(result, document_plan=pending)
+        binding = (proposal.document_node if proposal is not None else
+                   None if result.recommendation_request is None else result.recommendation_request.document_node)
+        if binding is not None:
+            current = next((view for view in views if view.plan.ref == binding.plan_ref), None)
+        else:
+            owner_events = (self.conversation_storage_services.event_store.read(result.session_id, result.conversation_id)
+                if events is None else events)
+            declared_refs = {event.payload.document_plan.ref for event in owner_events
+                if (event.session_id, event.conversation_id, event.turn_id, event.step_id) ==
+                   (result.session_id, result.conversation_id, result.turn_id, result.step_id)
+                and type(event.payload) in {CollaborationLeadJudgmentPayload, ArtifactObjectivePayload, ArtifactObjectivePayloadV2}
+                and event.payload.document_plan is not None}
+            if declared_refs:
+                current = next((view for view in views if view.plan.ref in declared_refs), None) if len(declared_refs) == 1 else None
+            else:
+                current = views[0] if len(views) == 1 else None
+        return result if current is None else replace(result, document_plan=current)
+
+    async def lead_turn(self, session_id: str, conversation_id: str, text: str,
+            context_event_sink: Callable[[ContextExecutionEvent], None] | None = None, *,
+            action_progress_sink: ContextActionProgressSink | None = None,
+            interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION,
+            adoption: ExplorationAdoptionSelection | None = None, premise_selection: PremiseDecisionSelection | None = None,
+            document_selection: DocumentNodeSelection | None = None) -> LeadTurnResult:
+        result = await self._lead_turn_impl(session_id, conversation_id, text, context_event_sink,
+            action_progress_sink=action_progress_sink, interaction_mode=interaction_mode,
+            adoption=adoption, premise_selection=premise_selection, document_selection=document_selection)
+        return result
+
+    async def _lead_turn_impl(
         self,
         session_id: str,
         conversation_id: str,
@@ -6039,9 +6713,11 @@ class StoryRuntime:
         interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION,
         adoption: ExplorationAdoptionSelection | None = None,
         premise_selection: PremiseDecisionSelection | None = None,
+        document_selection: DocumentNodeSelection | None = None,
     ) -> LeadTurnResult:
         """Run one ordinary user turn through the canonical lead front channel."""
 
+        document_node = None
         if type(interaction_mode) is not LeadInteractionMode:
             raise TypeError("interaction_mode must be LeadInteractionMode")
         if adoption is not None and type(adoption) is not ExplorationAdoptionSelection:
@@ -6133,6 +6809,7 @@ class StoryRuntime:
                 )
                 self._append_drafts(projection.last_sequence, (message,))
                 return await self._run_lead_provider_locked(
+                    document_node=document_node, document_selection=document_selection, planning_projection=projection,
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
                     step_id=task_context.planning_step_id, text=text,
                     expected_relation=LeadProposalRelation.NEW_STEP,
@@ -6298,7 +6975,7 @@ class StoryRuntime:
 
             try:
                 result = await self._run_lead_provider_locked(
-                    session_id=session_id,
+                    document_node=document_node, document_selection=document_selection, planning_projection=projection, session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
                     step_id=provider_step_id,
@@ -8327,11 +9004,12 @@ class StoryRuntime:
                 dispatch_event_id=dispatch_event_id, events=events,
                 action_progress_sink=action_progress_sink,
             )
+        input_events = self._session_authoring_events(session_id) if proposal.document_node is not None else events
         self._validate_review_material(
             session_id,
             (assignment,),
             proposal.basis.inputs,
-            events,
+            input_events,
         )
         inputs_by_id = {item.input_id: item for item in proposal.basis.inputs}
         try:
@@ -8353,10 +9031,11 @@ class StoryRuntime:
                    if assignment.review_basis is not None else {}),
             },
             "inputs": [
-                self._collaboration_input_value(item, events, evidence=proposal.basis.evidence) for item in selected
+                self._collaboration_input_value(item, input_events, evidence=proposal.basis.evidence) for item in selected
             ],
             "authoring_scope": authoring_scope_to_dict(proposal.authoring_scope),
             **({"stage_plan": stage_plan_to_dict(proposal.stage_plan)} if proposal.stage_plan is not None else {}),
+            **({"document_node": document_node_binding_to_dict(proposal.document_node)} if proposal.document_node is not None else {}),
             **({"shared_premises": shared_premises_to_dict(tuple(
                 premise for premise in proposal.basis.shared_premises
                 if proposal.authoring_scope.activity is AuthoringActivity.REVIEW or any(
@@ -8476,16 +9155,18 @@ class StoryRuntime:
                 and item.facts.origin_conversation_id == conversation_id),
             scope=proposal.authoring_scope, continuation=True,
         )
+        input_events = self._session_authoring_events(session_id) if proposal.document_node is not None else events
         value = {
             "provider_constraints": constraints.prompt_facts(),
             "authoring_scope": authoring_scope_to_dict(proposal.authoring_scope),
             **({"stage_plan": stage_plan_to_dict(proposal.stage_plan)} if proposal.stage_plan is not None else {}),
+            **({"document_node": document_node_binding_to_dict(proposal.document_node)} if proposal.document_node is not None else {}),
             **({"shared_premises": shared_premises_to_dict(proposal.basis.shared_premises)}
                if proposal.authoring_scope.schema_version == 3 else {}),
             "conversation_id": conversation_id,
             "artifact_objectives": artifact_objective_context(project_collaboration_history(events)),
             "inputs": [
-                self._collaboration_input_value(item, events, evidence=proposal.basis.evidence)
+                self._collaboration_input_value(item, input_events, evidence=proposal.basis.evidence)
                 for item in proposal.basis.inputs
             ],
             "replies": [
@@ -10644,7 +11325,7 @@ class StoryRuntime:
                 ),
                 None,
             )
-        return LeadTurnResult(
+        turn = LeadTurnResult(
             events[-1].session_id,
             events[-1].conversation_id,
             turn_id,
@@ -10667,6 +11348,8 @@ class StoryRuntime:
             validation_details=validation_details,
             provider_invocation_id=None if artifact_synthesis is None else artifact_synthesis.provider_invocation_id,
         )
+        return (self._attach_document_plan(turn, events, projection)
+                if reviewed_proposal is not None and proposal.document_node is not None else turn)
 
     def _terminal_state_draft(
         self,
@@ -10751,7 +11434,7 @@ class StoryRuntime:
             session_id,
             next_intent.assignments,
             tuple(inputs),
-            events,
+            self._session_authoring_events(session_id) if proposal.document_node is not None and proposal.document_node.candidate_uses else events,
         )
         validate_stage_routing(next_intent.authoring_scope, tuple(item.agent_id for item in next_intent.assignments), next_intent.stage_plan,
                 source_input_ids=tuple(item.input_id for item in inputs),
@@ -10902,7 +11585,7 @@ class StoryRuntime:
                 shared_premises=proposal.basis.shared_premises,
                 editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
             ),
-         stage_plan=next_intent.stage_plan)
+         stage_plan=next_intent.stage_plan, document_node=proposal.document_node, document_plan=proposal.document_plan)
 
     @classmethod
     def _specialist_reply_digest(
@@ -11729,6 +12412,9 @@ class StoryRuntime:
             result = await self._run_lead_provider_guarded(artifact_binding=artifact_binding, **arguments)
             events = self.conversation_storage_services.event_store.read(arguments["session_id"], arguments["conversation_id"])
             projection = project_collaboration_history(events)
+            if (projection.document_plans or (result.proposal is not None and result.proposal.document_node is not None)
+                    or (result.recommendation_request is not None and result.recommendation_request.document_node is not None)):
+                result = await run_blocking(self._attach_document_plan, result, events, projection)
             return replace(result, public_responses=tuple(view for view in projection.public_responses
                 if next(event for event in events if event.event_id == view.ref.event_id).turn_id == result.turn_id))
         except (
@@ -11794,7 +12480,44 @@ class StoryRuntime:
         premise_event_id: str | None = None,
         task_transition_event_id: str | None = None,
         discussion_only: bool = False,
+        document_node: DocumentNodeBinding | None = None,
+        document_selection: DocumentNodeSelection | None = None,
+        planning_projection: CollaborationHistoryProjection | None = None,
     ) -> LeadTurnResult:
+        if document_selection is None and task_transition_event_id is not None:
+            controls = self._session_authoring_events(session_id)
+            transition = next((event for event in controls if event.event_id == task_transition_event_id), None)
+            if transition is not None and type(transition.payload) is CollaborationLeadTaskTransitionPayload:
+                origin = next((event for event in controls if event.event_id == transition.payload.receipt.origin_event_id), None)
+                if origin is not None and type(origin.payload) is CollaborationLeadTaskDecisionPayload:
+                    document_selection = origin.payload.document_selection
+        infer_document_context = adoption_capture is None and (
+            premise_capture is None or premise_capture.selection.authoring_task_id is not None)
+        retained_node = (None if planning_projection is None or planning_projection.current_proposal is None
+                         else planning_projection.current_proposal.document_node)
+        retained_scope = None
+        if (document_node is None and infer_document_context and retained_node is not None
+                and not discussion_only and task_transition_event_id is None):
+            retained_scope = self._authoring_tasks(
+                await run_blocking(self._session_authoring_events, session_id)).get(retained_node.task_ref.task_id)
+            infer_document_context = retained_scope is not None
+        selected_path = None
+        if document_selection is not None:
+            _, selected_node = await run_blocking(self._prepare_document_selection, session_id, document_selection)
+            selected_path = selected_node.target_path
+        if (document_node is None and infer_document_context and not discussion_only
+                and task_transition_event_id is None and planning_projection is not None):
+            retained = planning_projection
+            if (retained.current_proposal is not None
+                    and retained.confirmation_decision is CollaborationConfirmationDecision.CONFIRM
+                    and (retained.discussion_context is None or (retained.discussion_context.action in {LeadTaskAction.RESUME, LeadTaskAction.NEW_TASK}
+                        and retained.current_proposal.document_node is not None
+                        and retained.discussion_context.target_task_id == retained.current_proposal.document_node.task_ref.task_id))):
+                if retained_scope is not None and retained_scope.task_revision == retained_node.task_ref.task_revision:
+                    document_node = retained_node
+        if document_node is not None:
+            await run_blocking(self._validate_document_node, session_id, document_node)
+
         def _artifact_revision_source(receipt, original, history) -> bool:
             if (
                 receipt is None or original is None
@@ -11922,8 +12645,40 @@ class StoryRuntime:
                 raise BackendProtocolError("discussion cannot be provider-selected")
             if self.backend is None:
                 raise BackendProtocolError("lead collaboration requires an AgentBackend")
+            document_goal = document_node.plan_ref if document_node is not None else document_selection.plan_ref if document_selection is not None else None
+            document_budget_task_id = document_node.budget_lineage_ref.task_id if document_node is not None else None
+            if document_selection is not None and task_receipt is not None:
+                document_budget_task_id = task_receipt.target_task_id
+            if (document_goal is None and infer_document_context and not discussion_only and task_transition_event_id is None
+                    and planning_projection is not None and len(planning_projection.document_plans) == 1):
+                implicit_plan = planning_projection.document_plans[0].plan
+                implicit_events = session_history.events()
+                implicit_task_ids = {event.payload.document_node.task_ref.task_id for event in implicit_events
+                    if type(event.payload) in {CollaborationProposal, CollaborationLeadJudgmentPayload, LeadRecommendationRequestPayload}
+                    and event.payload.document_node is not None
+                    and event.payload.document_node.plan_ref.plan_id == implicit_plan.ref.plan_id}
+                active_conversation_ids = {history.metadata.conversation_id for history in session_history.conversations
+                    if history.metadata.status is ConversationStatus.ACTIVE}
+                if not implicit_task_ids or implicit_task_ids.intersection(self._authoring_tasks(tuple(
+                        event for event in implicit_events if event.conversation_id in active_conversation_ids))):
+                    document_goal = implicit_plan.ref
+                    if len(planning_projection.available_tasks) == 1:
+                        document_budget_task_id = planning_projection.available_tasks[0].ref.task_id
             ordinary_front_cap = None if task_receipt is not None or preparation is not None or interaction_mode is LeadInteractionMode.EXPLORATION or adoption_capture is not None or premise_capture is not None else self._ordinary_front_call_cap(session_id, conversation_id)
-            successor_only = (
+            if document_node is not None:
+                inherited_calls, inherited_rounds, _ = document_lineage_cost(
+                    self._session_authoring_events(session_id), document_node, current_step_id=step_id)
+                ordinary_front_cap = min(_CONTEXT_INVOCATION_CALL_LIMIT if ordinary_front_cap is None else ordinary_front_cap,
+                    max(0, COLLABORATION_PHYSICAL_CALL_LIMIT - inherited_calls))
+                if inherited_rounds >= COLLABORATION_ROUND_LIMIT:
+                    ordinary_front_cap = 0
+            if (document_node is None and document_goal is not None and task_receipt is None
+                    and planning_projection is not None):
+                current_view = next((view for view in planning_projection.document_plans if view.plan.ref.plan_id == document_goal.plan_id), None)
+                if current_view is not None:
+                    ordinary_front_cap = min(_CONTEXT_INVOCATION_CALL_LIMIT if ordinary_front_cap is None else ordinary_front_cap,
+                                             current_view.remaining_physical_calls)
+            successor_only = (document_node is None and document_goal is None and
                 ordinary_front_cap is not None and ordinary_front_cap < 1
                 and preparation is None and previous_proposal is None
                 and expected_relation is LeadProposalRelation.NEW_STEP
@@ -11934,6 +12689,11 @@ class StoryRuntime:
                 ordinary_front_cap = min(_CONTEXT_INVOCATION_CALL_LIMIT,
                                          COLLABORATION_PHYSICAL_CALL_LIMIT - (2 * len(SPECIALIST_IDS) + 4))
             elif ordinary_front_cap is not None and ordinary_front_cap < 1:
+                closed = self._lead_outcome_failure_result(
+                    session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
+                    invocation_id=None, call_id=None, failure_code=CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED)
+                if closed.next_action is not CollaborationNextAction.RETRY_LEAD_TURN:
+                    return closed
                 return self._structured_fallback_lead_result(
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
                     message="The offered current authoring task cannot fit preparation and full final review within its twelve-call lineage. Clarify or freshly propose a task revision.",
@@ -12061,6 +12821,26 @@ class StoryRuntime:
                     offered_tasks = {(task_receipt.target_task_id, task_receipt.target_task_revision): source_scope}
                 elif discussion_only:
                     offered_tasks = {}
+            selected_document_review_path = None
+            if (document_selection is not None and task_receipt is not None
+                    and task_receipt.origin_kind == "task_decision"
+                    and task_receipt.action in {LeadTaskAction.NEW_TASK, LeadTaskAction.RESUME}):
+                origin = next((event for event in task_events
+                               if event.event_id == task_receipt.origin_event_id), None)
+                if (origin is None or type(origin.payload) is not CollaborationLeadTaskDecisionPayload
+                        or origin.sender != _USER_ACTOR
+                        or (origin.session_id, origin.conversation_id, origin.step_id)
+                        != (session_id, conversation_id, step_id)
+                        or origin.payload.document_selection != document_selection
+                        or origin.payload.decision.action is not task_receipt.action
+                        or origin.payload.decision.task_ref != task_receipt.source_task_ref
+                        or task_receipt.planning_step_id != step_id
+                        or (task_receipt.target_task_id, task_receipt.target_task_revision)
+                        not in offered_tasks
+                        or selected_path is None):
+                    raise BackendProtocolError("document review requires its exact USER task selection")
+                selected_document_review_path = selected_path
+            inputs = self._document_candidate_inputs(session_id, document_selection or document_node, inputs)
             input_aliases = [
                 {
                     "input_id": item.input_id,
@@ -12192,7 +12972,7 @@ class StoryRuntime:
                 premise_question_id=premise_question_id,
                 adoption_intent=adoption_capture.selection.intent if adoption_capture is not None else None,
                 adoption_targets=adoption_capture.selection.target_paths if adoption_capture is not None else (),
-             preliminary_targets=_provided_review_targets(inputs))
+             preliminary_targets=_provided_review_targets(inputs), document_node_digest=(document_value_digest(document_node_selection_to_dict(document_selection)) if document_selection is not None else None if document_node is None else document_value_digest(document_node_binding_to_dict(document_node))), document_target_paths=(None if selected_path is None else (selected_path,)))
             if interaction_mode is LeadInteractionMode.EXPLORATION:
                 constraints = LeadExplorationConstraints(tuple(item.input_id for item in inputs))
             definition = self._build_guarded_contextual_definition(
@@ -12244,7 +13024,7 @@ class StoryRuntime:
                     session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
-                    step_id=step_id,
+                    step_id=step_id, document_node=document_node, document_goal=document_goal, document_budget_task_id=document_budget_task_id,
                     invocation_id=invocation_id,
                     role=LEAD_ORCHESTRATOR,
                     invocation_kind=(CollaborationInvocationKind.LEAD_DISCUSSION if discussion_only else CollaborationInvocationKind.LEAD_EXPLORATION if interaction_mode is LeadInteractionMode.EXPLORATION else CollaborationInvocationKind.LEAD),
@@ -12278,7 +13058,17 @@ class StoryRuntime:
                 reference_operation_id, reservations = self._reference_reservations(
                     reference_operation
                 )
+                document_input_intents = (document_selection.candidate_uses if document_selection is not None else
+                    () if document_node is None else document_node.candidate_uses)
+                candidate_aliases = {f"plan_candidate_{index}" for index, _ in enumerate(document_input_intents, 1)}
+                candidate_inputs = tuple(item for item in inputs if item.input_id in candidate_aliases)
+                candidate_events = self._session_authoring_events(session_id) if candidate_inputs else ()
+                candidate_material = [self._collaboration_input_value(item, candidate_events) for item in candidate_inputs]
+                candidate_material_by_input = dict(zip(candidate_inputs, candidate_material))
                 current_value: dict[str, object] = {
+                    **({"document_selection": document_node_selection_to_dict(document_selection)} if document_selection is not None else {}),
+                    **({"document_node": document_node_binding_to_dict(document_node)} if document_node is not None else {}),
+                    **({"plan_candidate_material": candidate_material} if candidate_material else {}),
                     "conversation_id": conversation_id,
                     "provider_constraints": constraints.prompt_facts(),
                     "authoring_user_sources": self._authoring_user_materials(historical_user_sources),
@@ -12311,6 +13101,25 @@ class StoryRuntime:
                         *(item.input_id for item in inputs),
                     ],
                 }
+                if document_goal is not None:
+                    plan_views = (() if planning_projection is None else planning_projection.document_plans)
+                    plan_view = next((view for view in plan_views if view.plan.ref.plan_id == document_goal.plan_id), None)
+                    if plan_view is None:
+                        plan_view = next((view for view in await run_blocking(self._document_plan_views, session_id)
+                                          if view.plan.ref.plan_id == document_goal.plan_id), None)
+                    if plan_view is not None:
+                        current_value["document_work_plan"] = {
+                            "plan": document_plan_to_dict(plan_view.plan), "original_goal": plan_view.goal_text,
+                            "current_confirmed_node_id": plan_view.current_node_id,
+                            "completed_target_paths": list(plan_view.completed_target_paths),
+                            "unfinished_inactive_targets": [path for path in plan_view.plan.remaining_target_paths
+                                if path not in plan_view.completed_target_paths],
+                            "physical_calls_spent": plan_view.physical_calls_spent,
+                            "cumulative_plan_physical_calls": plan_view.cumulative_plan_physical_calls,
+                            "authority": "Plan/input guidance only; each exact executed node requires its own disclosed Confirm, final review, Apply and Commit.",
+                            **({"replacement_window_guidance": "Propose the exact selected document node directly for its own Confirm, or ask for missing inputs. A preparation-only recommendation cannot carry a replacement window."}
+                               if document_selection is not None and document_selection.target_path is not None else {}),
+                        }
                 if premise_capture is not None:
                     current_value["premise_selection"] = premise_value_to_dict(premise_capture)
                 if admission is not None:
@@ -12330,7 +13139,8 @@ class StoryRuntime:
                         "request": asdict(preparation.request_event.payload),
                         "decision": asdict(preparation.decision_event.payload),
                         "start": asdict(preparation.start_event.payload),
-                        "selected_inputs": [self._collaboration_input_value(item, objective_events,
+                        "selected_inputs": [candidate_material_by_input[item] if item in candidate_material_by_input
+                                            else self._collaboration_input_value(item, objective_events,
                                                 evidence=preparation.request_event.payload.basis.evidence)
                                             for item in inputs],
                         "instruction": (
@@ -12346,14 +13156,12 @@ class StoryRuntime:
                     }
                 if task_receipt is not None:
                     current_value["task_transition"] = task_value_to_dict(task_receipt)
-                    current_value["selected_task_materials"] = [
-                        {"input_id": f"selected_material_{ordinal}",
-                         "capture_event_id": event.event_id,
-                         **task_value_to_dict(event.payload.capture)}
-                        for ordinal, event in enumerate(task_material_events, 1)
-                    ]
+                    current_value["selected_task_materials"] = selected_task_materials_to_dict(
+                        tuple((event.event_id, event.payload.capture) for event in task_material_events)
+                    )
                 if discussion_constraints is not None:
                     current_value["discussion_constraints"] = discussion_constraints.prompt_facts()
+                current_value = self._compact_document_plan_input(current_value)
                 current = self._context_material(
                     source_id="runtime_input:current",
                     semantic_channel=ContextSemanticChannel.CURRENT_INPUT,
@@ -12398,6 +13206,7 @@ class StoryRuntime:
                         fresh_revision_only=successor_only or (task_receipt is not None and task_receipt.target_task_id is not None),
                         source_scope=revision_source_scope,
                         artifact_revision_only=source_artifact_revision,
+                        selected_document_review_path=selected_document_review_path,
                     ) if discussion_constraints is not None else _lead_result_rule_seed("lead-exploration-response-v1", constraints.schema()) if interaction_mode is LeadInteractionMode.EXPLORATION else _lead_front_result_contract(
                             expected_relation,
                             tuple(item.input_id for item in inputs),
@@ -12425,6 +13234,7 @@ class StoryRuntime:
                 prepare_selected = False
                 read_ids: tuple[str, ...] = ()
                 read_reviewers: tuple[tuple[str, str], ...] = ()
+                resolved_document_selection = document_selection
                 host_binding_plan = None
 
 
@@ -12445,6 +13255,8 @@ class StoryRuntime:
                     authorization: ContextAnswerAuthorization,
                 ) -> None:
                     nonlocal decoded_discussion
+                    nonlocal resolved_document_selection
+                    resolved_document_selection = document_selection
                     if discussion_constraints is not None:
                         value = normalize_result(json.loads(answer), "lead-discussion-response-v1")
                         if "authoring_scope" not in value and "used_evidence_ids" in value:
@@ -12740,23 +13552,26 @@ class StoryRuntime:
                             '$.authoring_scope',
                             'selected authoring task changed while the Lead was interpreting the request',
                         )
+                    target_prior = _target_authoring_scope_prior(
+                        authoring_scope, selected_prior, task_receipt,
+                    )
                     provisional_brief_refinement = (
-                        selected_prior is not None
+                        target_prior is not None
                         and authoring_scope.schema_version >= 3
-                        and authoring_scope.task_revision == selected_prior.task_revision
+                        and authoring_scope.task_revision == target_prior.task_revision
                         and not binding_pinned
                         and host_binding_plan is not None
                         and host_binding_plan.transition == "refine"
                         and type(raw_spec) is dict
                         and "interpretation" in raw_spec
                     )
-                    if selected_prior is not None and not provisional_brief_refinement and (
+                    if target_prior is not None and not provisional_brief_refinement and (
                         authoring_scope.schema_version < 3
-                        or authoring_scope.task_revision == selected_prior.task_revision
+                        or authoring_scope.task_revision == target_prior.task_revision
                     ):
                         authoring_scope = replace(
                             authoring_scope,
-                            interpretation=selected_prior.interpretation,
+                            interpretation=target_prior.interpretation,
                         )
                     objective_intent = decoded.objective_intent
                     if objective_intent is not None and authoring_scope.activity is not AuthoringActivity.WORKFLOW:
@@ -12772,7 +13587,7 @@ class StoryRuntime:
                             authoring_scope = replace(authoring_scope, target_paths=tuple(dict.fromkeys(
                                 (*authoring_scope.target_paths, *objective_paths),
                             )))
-                    resolved_scope = self._resolve_authoring_scope(authoring_scope, inputs, decoded_evidence, selected_prior,
+                    resolved_scope = self._resolve_authoring_scope(authoring_scope, inputs, decoded_evidence, target_prior,
                         allow_provisional=not binding_pinned,
                         allow_view=(host_binding_plan is not None and authority_free))
                     if decoded.preliminary_review is not None:
@@ -12823,7 +13638,24 @@ class StoryRuntime:
                         resolved_intent = replace(decoded.proposal, authoring_scope=resolved_scope)
                     else:
                         resolved_intent = None
-                    decoded = replace(decoded, authoring_scope=resolved_scope, proposal=resolved_intent)
+                    if document_selection is not None:
+                        _, current_node = self._prepare_document_selection(session_id, document_selection)
+                        if resolved_scope.target_paths != (current_node.target_path,):
+                            raise _LeadOutcomeValidationError("document selection requires its exact disclosed target")
+                    successor_selection = None
+                    if document_node is not None and decoded.kind is LeadOutcomeKind.PROPOSAL:
+                        if document_selection is None:
+                            source_event = next((event for event in task_events
+                                if event.event_id == document_node.task_ref.scope_event_id), None)
+                            successor_selection = _document_successor_selection(document_node, source_event,
+                                binding_prior, resolved_scope, host_binding_plan)
+                        self._validate_document_node(session_id, document_node,
+                            scope=binding_prior if successor_selection is not None else resolved_scope)
+                    elif document_node is not None:
+                        self._validate_document_node(session_id, document_node)
+                    resolved_document_selection = successor_selection or document_selection
+                    decoded = replace(decoded, authoring_scope=resolved_scope, proposal=resolved_intent,
+                        document_node=None if successor_selection is not None else document_node)
                     self._validate_objective_routing(
                         decoded, objective_projection, objective_events, current_task_events,
                     )
@@ -12845,10 +13677,16 @@ class StoryRuntime:
                         ):
                             raise _LeadOutcomeValidationError("task planning changed the exact USER-selected task pair")
 
-                        if scope.intent is not AuthoringIntent.AUTHORING or (
+                        selected_review = bool(selected_document_review_path is not None
+                            and scope.activity is AuthoringActivity.REVIEW
+                            and scope.target_paths == (selected_document_review_path,)
+                            and decoded.kind is LeadOutcomeKind.PROPOSAL
+                            and ((scope.intent is AuthoringIntent.REVIEW_ONLY and decoded.proposal is not None)
+                                 or (scope.intent is AuthoringIntent.AUTHORING and decoded.artifact_intent is not None)))
+                        if not selected_review and (scope.intent is not AuthoringIntent.AUTHORING or (
                             scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
                             and not (scope.activity is AuthoringActivity.REVIEW and (source_review_revision or source_artifact_revision))
-                        ):
+                        )):
                             raise _LeadOutcomeValidationError("task selection requires fresh owner drafting before candidate review")
                         if source_artifact_revision and not (
                             (decoded.kind is LeadOutcomeKind.PROPOSAL and decoded.artifact_intent is not None)
@@ -13055,7 +13893,7 @@ class StoryRuntime:
                             ),
                         )
                         self._recommendation_request_draft(
-                            source=source, action=decoded.recommended_action, inputs=inputs,
+                            source=source, document_selection=document_selection, action=decoded.recommended_action, inputs=inputs,
                             evidence=decoded_evidence, events=recommendation_events,
                             projection=recommendation_projection,
                             artifact_binding=artifact_binding,
@@ -13611,12 +14449,27 @@ class StoryRuntime:
                     validation_details=provider.validation_details,
                     provider_invocation_id=None if provider is None else provider.invocation_id,
                 )
+            if (outcome.kind is LeadOutcomeKind.PROPOSAL and outcome.authoring_scope is not None
+                    and outcome.authoring_scope.intent is AuthoringIntent.AUTHORING
+                    and outcome.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
+                    and len(outcome.authoring_scope.target_paths) > 1
+                    and document_selection is None and document_node is None):
+                objective_intent = outcome.objective_intent
+                if objective_intent is not None:
+                    objective_intent = replace(objective_intent, next_step=ArtifactObjectiveNextStep.CLARIFY,
+                        **({"target_paths": outcome.authoring_scope.target_paths} if objective_intent.action is LeadObjectiveAction.START else {}))
+                outcome = replace(outcome, kind=LeadOutcomeKind.QUESTION, proposal=None, artifact_intent=None,
+                    objective_intent=objective_intent, message=(
+                        "All requested targets are retained in the document goal. Select one exact document node "
+                        "from the plan before drafting: prerequisites proceed in order, with separate Global and Part Plot work. "
+                        "The selected task, inputs, and inherited budget will be disclosed for a fresh Confirm. "
+                        "No specialist work or Apply has been authorized."))
             if outcome.kind is LeadOutcomeKind.PROPOSAL:
                 if outcome.artifact_intent is not None:
                     assert decoded_artifact_candidate is not None
                     try:
                         return replace(self._build_artifact_proposal_result(
-                            session_id=session_id,
+                            document_selection=resolved_document_selection, session_id=session_id,
                             conversation_id=conversation_id,
                             turn_id=turn_id,
                             step_id=step_id,
@@ -13672,13 +14525,32 @@ class StoryRuntime:
                         )
                 intent = outcome.proposal
                 assert intent is not None
+                judgment = self._draft(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=step_id,
+                    kind=CollaborationEventKind.MESSAGE,
+                    sender=_LEAD_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=CollaborationLeadJudgmentPayload(
+                        outcome.kind,
+                        outcome.message,
+                        evidence,
+                        outcome.authoring_scope,
+                        outcome.trace,
+                        planning_target=outcome.planning_target, core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
+                        authoring_admission=outcome.authoring_admission,
+                        provider_invocation_id=None if provider is None else provider.invocation_id,
+                     preliminary_review=outcome.preliminary_review, document_node=outcome.document_node, document_plan=self._planning_goal_plan(session_id, conversation_id, turn_id, outcome, inputs, objective_events, outcome.planning_target)),
+                )
                 refreshed = self.conversation_storage_services.event_store.read_context(
                     session_id,
                     conversation_id,
                 )
                 try:
                     proposal = self._build_lead_proposal(
-                        session_id=session_id,
+                        document_selection=resolved_document_selection, scope_event=judgment, preparation=preparation, document_node=outcome.document_node, session_id=session_id,
                         step_id=step_id,
                         intent=intent,
                         inputs=self._materialize_lead_evidence_inputs(inputs, evidence),
@@ -13689,6 +14561,7 @@ class StoryRuntime:
                         artifact_binding=artifact_binding,
                         session_history=session_history,
                     )
+                    outcome = replace(outcome, document_node=proposal.document_node)
                 except _LeadCallBudgetExceeded:
                     return self._structured_fallback_lead_result(
                         session_id=session_id,
@@ -13707,25 +14580,9 @@ class StoryRuntime:
                         provider_invocation_id=None if provider is None else provider.invocation_id,
                     )
                 request_id = self._new_id("c")
-                message_event = self._draft(
-                    session_id=session_id,
-                    conversation_id=conversation_id,
-                    turn_id=turn_id,
-                    step_id=step_id,
-                    kind=CollaborationEventKind.MESSAGE,
-                    sender=_LEAD_ACTOR,
-                    recipient=_USER_ACTOR,
-                    payload=CollaborationLeadJudgmentPayload(
-                        outcome.kind,
-                        self._proposal_disclosure(proposal, outcome.message),
-                        evidence,
-                        outcome.authoring_scope,
-                        outcome.trace,
-                        core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
-                        authoring_admission=outcome.authoring_admission,
-                        provider_invocation_id=None if provider is None else provider.invocation_id,
-                     preliminary_review=outcome.preliminary_review),
-                )
+                message_event = replace(judgment, payload=replace(judgment.payload,
+                    message=self._proposal_disclosure(proposal, outcome.message),
+                    authoring_scope=proposal.authoring_scope, document_node=proposal.document_node))
                 proposal_event = self._draft(
                     session_id=session_id,
                     conversation_id=conversation_id,
@@ -13761,7 +14618,8 @@ class StoryRuntime:
                         message_event, proposal_event,
                         *self._objective_drafts(
                             outcome, objective_projection, objective_events, message_event,
-                            preparation=preparation,
+                            plan_override=(proposal.document_plan if outcome.kind is LeadOutcomeKind.PROPOSAL else None), preparation=preparation,
+                            session_events=session_history.events(),
                         ),
                         *((self._recommendation_closure_draft(message_event, request_event=preparation.request_event,
                            decision_event=preparation.decision_event, start_event=preparation.start_event),)
@@ -13781,7 +14639,7 @@ class StoryRuntime:
                     request_id,
                     CollaborationNextAction.SUBMIT_CONFIRMATION,
                     evidence,
-                    trace=outcome.trace,
+                    planning_target=outcome.planning_target, trace=outcome.trace,
                     validation_details=provider.validation_details,
                     provider_invocation_id=None if provider is None else provider.invocation_id,
                  preliminary_review=outcome.preliminary_review)
@@ -13800,15 +14658,16 @@ class StoryRuntime:
                     evidence,
                     outcome.authoring_scope,
                     outcome.trace,
-                    authoring_admission=outcome.authoring_admission,
+                    planning_target=outcome.planning_target, authoring_admission=outcome.authoring_admission,
                     core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
                     provider_invocation_id=None if provider is None else provider.invocation_id,
-                 preliminary_review=outcome.preliminary_review),
+                 preliminary_review=outcome.preliminary_review, document_node=document_node, document_plan=self._planning_goal_plan(session_id, conversation_id, turn_id, outcome, inputs, objective_events, outcome.planning_target)),
             )
             final_drafts = (
                 judgment,
                 *self._objective_drafts(outcome, objective_projection, objective_events, judgment,
-                                       preparation=preparation),
+                                       plan_override=(proposal.document_plan if outcome.kind is LeadOutcomeKind.PROPOSAL else None), preparation=preparation,
+                                       session_events=session_history.events()),
                 *((self._recommendation_closure_draft(judgment, request_event=preparation.request_event,
                            decision_event=preparation.decision_event, start_event=preparation.start_event),)
                   if preparation is not None else ()),
@@ -13819,7 +14678,7 @@ class StoryRuntime:
                 )
                 refreshed = project_collaboration_history(recommendation_events)
                 request_draft = self._recommendation_request_draft(
-                    source=judgment, action=outcome.recommended_action, inputs=inputs,
+                    source=judgment, document_selection=document_selection, action=outcome.recommended_action, inputs=inputs,
                     evidence=evidence, events=recommendation_events, projection=refreshed,
                     artifact_binding=artifact_binding,
                     tail_sequence=refreshed.last_sequence + len(final_drafts) + 1,
@@ -13828,6 +14687,10 @@ class StoryRuntime:
                             and host_binding_plan.transition == "supersede") else preparation.request_event.payload,
                     session_history=session_history,
                 )
+                if request_draft.payload.document_node is not None:
+                    judgment = replace(judgment, payload=replace(judgment.payload,
+                        document_node=request_draft.payload.document_node))
+                    final_drafts = tuple(judgment if item.event_id == judgment.event_id else item for item in final_drafts)
                 provider._public_accepted_call_id = provider.last_submitted_call_id
                 provider.publish_public_responses()
                 refreshed = services.event_store.read_context(session_id, conversation_id)
@@ -13865,7 +14728,7 @@ class StoryRuntime:
                     else CollaborationNextAction.CONTINUE_WITH_LEAD
                 ),
                 evidence,
-                trace=outcome.trace,
+                planning_target=outcome.planning_target, trace=outcome.trace,
                 validation_details=provider.validation_details,
                 provider_invocation_id=None if provider is None else provider.invocation_id,
              preliminary_review=outcome.preliminary_review)
@@ -13897,6 +14760,7 @@ class StoryRuntime:
         artifact_binding: SessionArtifactBinding,
         preparation: _RecommendationCapability | None = None,
         session_history: SessionHistorySnapshot | None = None,
+        document_selection: DocumentNodeSelection | None = None,
         public_response_provider: _AccountingContextProvider | None = None,
     ) -> LeadTurnResult:
         """Construct and disclose one exact candidate without mutating artifacts."""
@@ -13998,19 +14862,6 @@ class StoryRuntime:
                 for reviewer in reviewers
             ),
         )
-        proposal = self._build_lead_proposal(
-            session_id=session_id,
-            step_id=step_id,
-            intent=proposal_intent,
-            inputs=tuple(materialized),
-            previous_proposal=previous_proposal,
-            projection=projection,
-            lead_definition=lead_definition,
-            evidence=evidence,
-            artifact_binding=artifact_binding,
-            session_history=session_history,
-        )
-        request_id = self._new_id("c")
         judgment = self._draft(
             session_id=session_id,
             conversation_id=conversation_id,
@@ -14021,9 +14872,9 @@ class StoryRuntime:
             recipient=_USER_ACTOR,
             payload=CollaborationLeadJudgmentPayload(
                 outcome.kind,
-                self._proposal_disclosure(proposal, outcome.message),
+                outcome.message,
                 evidence,
-                proposal.authoring_scope,
+                review_scope,
                 outcome.trace,
                 core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
                 authoring_admission=outcome.authoring_admission,
@@ -14031,6 +14882,23 @@ class StoryRuntime:
                 provider_invocation_id=None if public_response_provider is None else public_response_provider.invocation_id,
              preliminary_review=outcome.preliminary_review),
         )
+        proposal = self._build_lead_proposal(
+            document_selection=document_selection, scope_event=judgment, preparation=preparation, document_node=outcome.document_node, session_id=session_id,
+            step_id=step_id,
+            intent=proposal_intent,
+            inputs=tuple(materialized),
+            previous_proposal=previous_proposal,
+            projection=projection,
+            lead_definition=lead_definition,
+            evidence=evidence,
+            artifact_binding=artifact_binding,
+            session_history=session_history,
+        )
+        outcome = replace(outcome, document_node=proposal.document_node)
+        request_id = self._new_id("c")
+        judgment = replace(judgment, payload=replace(judgment.payload,
+            message=self._proposal_disclosure(proposal, outcome.message), authoring_scope=proposal.authoring_scope,
+            document_node=proposal.document_node))
         candidate_payload = ArtifactReviewCandidatePayload(
             candidate=candidate,
             lead_judgment_event_id=judgment.event_id,
@@ -14060,8 +14928,9 @@ class StoryRuntime:
                 candidate_event,
                 *self._objective_drafts(
                     outcome, objective_projection, objective_events, judgment,
-                    candidate_event=candidate_event,
+                    plan_override=(proposal.document_plan if outcome.kind is LeadOutcomeKind.PROPOSAL else None), candidate_event=candidate_event,
                     preparation=preparation,
+                    session_events=None if session_history is None else session_history.events(),
                 ),
                 self._draft(
                     session_id=session_id,
@@ -14439,8 +15308,55 @@ class StoryRuntime:
         *,
         candidate_event: CollaborationEventDraft | None = None,
         preparation: _RecommendationCapability | None = None,
+        plan_override: DocumentPlan | None = None,
+        session_events: tuple[CollaborationEvent, ...] | None = None,
     ) -> tuple[CollaborationEventDraft, ...]:
+        goal_exists = False
+        if plan_override is not None and plan_override.goal_objective_id is not None:
+            goals = tuple(event.payload.facts for event in (events if session_events is None else session_events)
+                if type(event.payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}
+                and event.payload.facts.objective_id == plan_override.goal_objective_id)
+            if goals:
+                if (any(facts != goals[0] for facts in goals)
+                        or document_value_digest(asdict(goals[0])) != plan_override.goal_facts_digest):
+                    raise ValueError("document plan differs from its existing exact session goal")
+                goal_exists = True
+        if plan_override is not None and plan_override.goal_objective_id is not None and not goal_exists:
+            facts = self._document_goal_facts(judgment.session_id, judgment, outcome.authoring_scope.target_paths,
+                objective_id=plan_override.goal_objective_id, preparation=preparation)
+            if document_value_digest(asdict(facts)) != plan_override.goal_facts_digest:
+                raise ValueError("prepared document goal differs from its exact source capture")
+            binding = None
+            if candidate_event is not None:
+                candidate = candidate_event.payload.candidate
+                paths = {path for operation in candidate.change_set.operations for path in
+                    ((operation.source_path, operation.destination_path) if type(operation) is ArtifactRenameOperation else (operation.path,))}
+                if paths == set(facts.target_paths):
+                    binding = ArtifactObjectiveCandidateBinding(candidate_event.event_id, candidate.candidate_id,
+                        candidate.candidate_revision, candidate.candidate_digest)
+            next_step = (ArtifactObjectiveNextStep.PREPARE if binding is not None else
+                ArtifactObjectiveNextStep.CONSULT if outcome.kind is LeadOutcomeKind.PROPOSAL else ArtifactObjectiveNextStep.CLARIFY)
+            selected_sources = () if preparation is None else preparation.request_event.payload.draft_sources
+            return (self._draft(session_id=judgment.session_id, conversation_id=judgment.conversation_id,
+                turn_id=judgment.turn_id, step_id=judgment.step_id, kind=CollaborationEventKind.ARTIFACT_OBJECTIVE,
+                sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+                payload=(ArtifactObjectivePayloadV2 if type(facts) is ArtifactObjectiveFactsV2 else ArtifactObjectivePayload)(
+                    facts, LeadObjectiveAction.START, None, judgment.event_id, next_step, selected_sources, binding,
+                    document_plan=plan_override, document_node=outcome.document_node)),)
         intent = outcome.objective_intent
+        scope = outcome.authoring_scope
+        if intent is None and scope is not None and scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} and scope.target_paths:
+            if outcome.document_node is not None and preparation is None:
+                return ()
+            prior = tuple(item for item in projection.artifact_objectives
+                if item.state is ArtifactObjectiveState.OPEN and item.facts.target_paths == scope.target_paths)
+            next_step = ArtifactObjectiveNextStep.CLARIFY if outcome.kind is LeadOutcomeKind.QUESTION else ArtifactObjectiveNextStep.CONSULT
+            if outcome.kind not in {LeadOutcomeKind.QUESTION, LeadOutcomeKind.PROPOSAL}:
+                return ()
+            intent = (LeadObjectiveIntent(LeadObjectiveAction.CONTINUE, objective_id=prior[0].facts.objective_id,
+                next_step=next_step) if len(prior) == 1 else LeadObjectiveIntent(LeadObjectiveAction.START,
+                request="Retain the exact original USER goal.", target_paths=scope.target_paths, next_step=next_step))
+            outcome = replace(outcome, objective_intent=intent)
         if intent is None:
             return ()
         candidate = None if candidate_event is None else candidate_event.payload.candidate
@@ -14463,7 +15379,7 @@ class StoryRuntime:
                     objective_id=self._new_id("obj"), origin_conversation_id=judgment.conversation_id,
                     origin_recommendation_request_event_id=request.request_event_id,
                     origin_recommendation_decision_event_id=preparation.decision_event.event_id,
-                    request=request.instruction, target_paths=request.target_paths,
+                    request=request.instruction, target_paths=request.objective_target_paths,
                     offered_draft_sources=projection.offered_draft_sources,
                 )
             elif origin is None:
@@ -14501,6 +15417,20 @@ class StoryRuntime:
                 candidate_event.event_id, candidate.candidate_id,
                 candidate.candidate_revision, candidate.candidate_digest,
             )
+        plan = None if previous is None else previous.document_plan
+        if plan_override is not None and plan_override.goal_objective_id == facts.objective_id:
+            plan = plan_override
+        elif plan is not None and outcome.document_node is not None and plan.ref != outcome.document_node.plan_ref:
+            current_plans = tuple(view.plan for view in self._document_plan_views(judgment.session_id)
+                if view.plan.ref == outcome.document_node.plan_ref and view.plan.goal_objective_id == facts.objective_id)
+            if len(current_plans) != 1:
+                raise ValueError("objective continuation requires its exact active document window")
+            plan = current_plans[0]
+        if (plan is None and outcome.authoring_scope is not None and outcome.document_node is None
+                and outcome.authoring_scope.intent is AuthoringIntent.AUTHORING
+                and outcome.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}):
+            plan = self._build_document_plan(facts, outcome.authoring_scope,
+                tuple(item.evidence_id for item in judgment.payload.evidence.receipts), outcome.core_document_readiness)
         return (self._draft(
             session_id=judgment.session_id, conversation_id=judgment.conversation_id,
             turn_id=judgment.turn_id, step_id=judgment.step_id,
@@ -14511,7 +15441,7 @@ class StoryRuntime:
                 facts=facts, action=intent.action,
                 previous_objective_event_id=None if previous is None else previous.latest_event_id,
                 lead_result_event_id=judgment.event_id, next_step=intent.next_step,
-                draft_sources=selected, candidate_binding=binding,
+                draft_sources=selected, candidate_binding=binding, document_plan=plan, document_node=outcome.document_node,
             ),
         ),)
 
@@ -15266,6 +16196,8 @@ class StoryRuntime:
                 object_pairs_hook=unique,
                 parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
             )
+            planning_value = value.pop("planning_target", None) if type(value) is dict else None
+            planning_target = None if planning_value is None else AuthoringTarget(planning_value)
             if type(value) is dict and "preliminary_review" in value:
                 if set(value) - {"kind"} != {"message", "authoring_scope", "preliminary_review"}:
                     raise ValueError("preliminary answer has no action or proposal fields")
@@ -15282,7 +16214,7 @@ class StoryRuntime:
                           LeadEvidenceStatus.INCOMPLETE if record.excluded_input_ids or record.missing_information
                           else LeadEvidenceStatus.VERIFIED)
                 return LeadProviderOutcome(LeadOutcomeKind.ANSWER, value["message"],
-                    LeadOutcomeScope.STORY_SPECIFIC, status, (), authoring_scope=scope,
+                    LeadOutcomeScope.STORY_SPECIFIC, status, (), planning_target=planning_target, authoring_scope=scope,
                     preliminary_review=record)
             assessment_present = type(value) is dict and "authoring_assessment" in value
             if type(value) is dict and "core_document_assessment" in value:
@@ -15292,7 +16224,7 @@ class StoryRuntime:
                     raise ValueError("readiness assessment is a distinct authority-free answer")
                 return LeadProviderOutcome(LeadOutcomeKind.ANSWER, value["message"],
                     LeadOutcomeScope.STORY_SPECIFIC, LeadEvidenceStatus.VERIFIED, (),
-                    core_document_assessment=core_assessment_from_dict(value["core_document_assessment"]))
+                    planning_target=planning_target, core_document_assessment=core_assessment_from_dict(value["core_document_assessment"]))
             raw_assessment = value.get("authoring_assessment") if type(value) is dict else None
             assessment = None if raw_assessment is None else assessment_from_dict(raw_assessment)
             if type(value) is dict:
@@ -15325,7 +16257,7 @@ class StoryRuntime:
                 intent = LeadProposalIntent(expected_relation, value["message"], assignments,
                     premise_decision=question)
                 return LeadProviderOutcome(LeadOutcomeKind.PROPOSAL, value["message"],
-                    LeadOutcomeScope.PREMISE_ANALYSIS, LeadEvidenceStatus.NOT_APPLICABLE, (), intent)
+                    LeadOutcomeScope.PREMISE_ANALYSIS, LeadEvidenceStatus.NOT_APPLICABLE, (), intent, planning_target=planning_target)
             raw_scope = canonical_scope(value.get("authoring_scope"))
             if type(raw_scope) is not dict:
                 raise validation_failure(ValueError(), '$.authoring_scope', 'expected an object')
@@ -15434,7 +16366,7 @@ class StoryRuntime:
                     None,
                     objective_intent,
                     recommended_action,
-                    authoring_scope=authoring_scope, authoring_assessment=assessment,
+                    planning_target=planning_target, authoring_scope=authoring_scope, authoring_assessment=assessment,
                 )
             if (proposal_value is None) is (artifact_value is None):
                 raise validation_failure(
@@ -15457,7 +16389,7 @@ class StoryRuntime:
                     None,
                     artifact_intent,
                     objective_intent,
-                    authoring_scope=authoring_scope, authoring_assessment=assessment,
+                    planning_target=planning_target, authoring_scope=authoring_scope, authoring_assessment=assessment,
                 )
             if type(proposal_value) is not dict or (frozenset(proposal_value) - {"stage_plan"}) not in {
                 frozenset({"assignments", *({"shared_premises"} if authoring_scope.schema_version == 3 else set())}),
@@ -15533,7 +16465,7 @@ class StoryRuntime:
                 proposal,
                 None,
                 objective_intent,
-                authoring_scope=authoring_scope, authoring_assessment=assessment,
+                planning_target=planning_target, authoring_scope=authoring_scope, authoring_assessment=assessment,
             )
         except (
             ArtifactProposalError,
@@ -16465,6 +17397,14 @@ class StoryRuntime:
             spent = sum(1 for item in prefix if item.step_id == source.step_id
                         and type(item.payload) is CollaborationProviderCallPayload
                         and item.payload.state is CollaborationProviderCallState.SUBMITTED)
+            if source.document_node is not None:
+                spent, _, _ = document_lineage_cost(prefix, source.document_node, current_step_id=source.step_id)
+                if source.document_node.budget_lineage_ref.conversation_id != event.conversation_id:
+                    declaration = next(item for item in prefix if item.payload is source)
+                    declared_calls, _, _ = document_lineage_cost(
+                        tuple(item for item in prefix if item.sequence <= declaration.sequence),
+                        source.document_node, current_step_id=source.step_id)
+                    spent += max(0, source.budget.physical_calls_spent - declared_calls)
             if rounds != 1 or authoring_capture_identity(scope, source.basis) != authoring_capture_identity(source.authoring_scope, source.basis):
                 raise BackendProtocolError("completed authoring source capture or round is not current")
             projected = replace(projected, current_step_id=source.step_id, current_proposal=source,
@@ -16616,6 +17556,13 @@ class StoryRuntime:
         if not events or any(event.session_id != session_id for event in events):
             raise ValueError("candidate review history has cross-session events")
         scope = proposal.authoring_scope
+        if proposal.document_node is not None:
+            view = self._validate_document_node(session_id, proposal.document_node, scope=scope, proposed_plan=proposal.document_plan)
+            node = next(item for item in view.plan.nodes if item.node_id == proposal.document_node.node_id)
+            paths = {path for op in candidate.change_set.operations for path in
+                     ((op.source_path, op.destination_path) if type(op) is ArtifactRenameOperation else (op.path,))}
+            if paths != {node.target_path}:
+                raise ValueError("document node Apply requires its exact artifact candidate")
         if scope is not None and scope.intent is AuthoringIntent.REVIEW_ONLY:
             raise ValueError("exclusive review cannot acquire artifact Apply authority")
         if scope is None or scope.activity is not AuthoringActivity.REVIEW:
@@ -17139,7 +18086,58 @@ class StoryRuntime:
         evidence: CollaborationLeadEvidence,
         artifact_binding: SessionArtifactBinding,
         session_history: SessionHistorySnapshot | None = None,
+        document_node: DocumentNodeBinding | None = None,
+        document_selection: DocumentNodeSelection | None = None,
+        scope_event=None,
+        preparation=None,
     ) -> CollaborationProposal:
+        proposed_plan = None
+        if (document_selection is None and document_node is None and intent.authoring_scope is not None
+                and len(intent.authoring_scope.target_paths) == 1
+                and targets_for_paths(intent.authoring_scope.target_paths) == (AuthoringTarget.MANUSCRIPT,)):
+            source_events = self._session_authoring_events(session_id)
+            eligible = tuple(view for view in projection.document_plans if view.plan.unresolved_target
+                and any(type(event.payload) is CollaborationLeadJudgmentPayload
+                    and event.payload.document_plan is not None
+                    and event.payload.document_plan.ref.plan_id == view.plan.ref.plan_id
+                    and event.payload.authoring_scope is not None
+                    and event.payload.authoring_scope.task_id == intent.authoring_scope.task_id for event in source_events))
+            if len(eligible) == 1:
+                document_selection = DocumentNodeSelection(eligible[0].plan.ref,
+                    target_path=intent.authoring_scope.target_paths[0])
+        if document_selection is not None:
+            document_node, proposed_plan = self._bind_document_selection(
+                session_id, document_selection, intent.authoring_scope, projection, scope_event)
+        else:
+            document_node = document_node or self._automatic_document_node(
+                session_id, intent.authoring_scope, projection, session_history=session_history)
+        if document_node is None and intent.authoring_scope is not None and scope_event is not None:
+            scope = intent.authoring_scope
+            if scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} and len(scope.target_paths) == 1:
+                facts = self._document_goal_facts(session_id, scope_event, scope.target_paths, preparation=preparation)
+                proposed_plan = self._build_document_plan(facts, scope, inputs, intent.core_document_readiness)
+                selected = next(node for node in proposed_plan.nodes if node.target_path == scope.target_paths[0])
+                task = LeadTaskRef(session_id=session_id, conversation_id=scope_event.conversation_id, task_id=scope.task_id, task_revision=scope.task_revision,
+                    scope_event_id=scope_event.event_id, scope_digest="sha256:" + hashlib.sha256(json.dumps(asdict(scope), sort_keys=True,
+                        separators=(",", ":"), ensure_ascii=False).encode()).hexdigest())
+                document_node = DocumentNodeBinding(proposed_plan.ref, selected.node_id, task, task, step_id)
+        if document_node is not None:
+            stored = self._session_authoring_events(session_id)
+            if any(event.event_id == document_node.task_ref.scope_event_id for event in stored):
+                qualified_plan = self._validate_document_node(
+                    session_id, document_node, scope=intent.authoring_scope, proposed_plan=proposed_plan).plan
+                if preparation is not None and proposed_plan is None:
+                    proposed_plan = qualified_plan
+            elif scope_event is None or scope_event.event_id != document_node.task_ref.scope_event_id:
+                raise ValueError("document binding source event is not this accepted scope")
+            calls, rounds, _ = document_lineage_cost(stored, document_node, current_step_id=step_id)
+            projection = replace(projection, physical_calls_spent=calls, rounds_spent=rounds)
+        if document_node is not None and document_node.candidate_uses:
+            aliases = tuple(f"plan_candidate_{index}" for index, _ in enumerate(document_node.candidate_uses, 1))
+            if not set(aliases).issubset(item.input_id for item in inputs):
+                raise ValueError("document predecessor material must be captured before disclosure")
+            intent = replace(intent, assignments=tuple(replace(item,
+                input_ids=tuple(dict.fromkeys((*item.input_ids, *aliases)))) for item in intent.assignments))
         if intent.authoring_scope is not None and (
             intent.authoring_scope.schema_version == 3
             and intent.authoring_scope.intent is AuthoringIntent.AUTHORING
@@ -17344,7 +18342,7 @@ class StoryRuntime:
             basis=basis,
             authoring_scope=intent.authoring_scope,
             premise_decision=spec,
-         stage_plan=intent.stage_plan)
+         stage_plan=intent.stage_plan, document_node=document_node, document_plan=proposed_plan)
         events = self._session_authoring_events(session_id)
         validate_authoring_capture_pin(proposal, events)
         if intent.authoring_scope is not None and intent.authoring_scope.schema_version == 3 and intent.authoring_scope.activity in {
@@ -17364,6 +18362,13 @@ class StoryRuntime:
         artifact_binding: SessionArtifactBinding | None = None,
     ) -> None:
         """Re-derive every mutable runtime fact before minting start authority."""
+        if proposal.document_node is not None:
+            self._validate_document_node(session_id, proposal.document_node, scope=proposal.authoring_scope, proposed_plan=proposal.document_plan)
+            calls, rounds, _ = document_lineage_cost(self._session_authoring_events(session_id),
+                proposal.document_node, current_step_id=proposal.step_id)
+            if (calls, rounds) != (proposal.budget.physical_calls_spent, proposal.budget.rounds_spent):
+                raise ValueError("document task budget changed; a fresh exact disclosure is required")
+            projection = replace(projection, physical_calls_spent=calls, rounds_spent=rounds)
         for event in events:
             if (type(event.payload) is CollaborationExplorationAdoptionPayload and proposal.authoring_scope is not None
                     and event.payload.capture.fresh_task_id == proposal.authoring_scope.task_id):
@@ -17437,7 +18442,7 @@ class StoryRuntime:
                 session_id,
                 proposal.assignments,
                 inputs,
-                events,
+                self._session_authoring_events(session_id) if proposal.document_node is not None and proposal.document_node.candidate_uses else events,
                 artifact_binding=artifact_binding,
             )
             self._validate_required_reviewers(inputs, proposal.assignments, stage_plan=proposal.stage_plan)
@@ -17550,7 +18555,7 @@ class StoryRuntime:
                 basis=basis,
                 authoring_scope=proposal.authoring_scope,
                 premise_decision=proposal.premise_decision,
-                stage_plan=proposal.stage_plan,
+                stage_plan=proposal.stage_plan, document_node=proposal.document_node, document_plan=proposal.document_plan,
             )
             all_events = self._session_authoring_events(session_id)
             validate_authoring_capture_pin(current, all_events)
@@ -17960,6 +18965,9 @@ class StoryRuntime:
         )
         if len(proposal_events) != 1:
             raise ValueError("proposal event identity is not unique")
+        plan_uses = {} if proposal.document_node is None else {
+            f"plan_candidate_{index}": use for index, use in enumerate(proposal.document_node.candidate_uses, 1)}
+        plan_events = self._editorial_snapshot(session_id).events() if plan_uses else ()
         references: dict[str, Any] = {}
         ordered_references: list[tuple[CollaborationInputRevision, Any]] = []
         material_snapshot = self._editorial_snapshot(session_id) if any(
@@ -18139,6 +19147,31 @@ class StoryRuntime:
                         revision_digest=self._recommendation_event_digest(reply_events[0]),
                     )
                 )
+                continue
+            if expected.input_id in plan_uses:
+                use = plan_uses[expected.input_id]
+                source = next((event for event in plan_events if event.event_id == use.candidate.candidate_event_id), None)
+                captured = source.payload if source is not None and type(source.payload) is ArtifactReviewCandidatePayload else None
+                candidate = None if captured is None else captured.candidate
+                producer = next((event.payload for event in plan_events if captured is not None
+                    and type(event.payload) is CollaborationProposal
+                    and (event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest) ==
+                        (captured.consultation_proposal_id, captured.consultation_proposal_revision, captured.consultation_proposal_digest)), None)
+                if (expected.kind is not CollaborationInputKind.ARTIFACT_CANDIDATE
+                        or expected.state is not CollaborationInputState.PRESENT
+                        or expected.start_line is not None or expected.end_line is not None
+                        or expected.locator != f"artifact-candidate/{use.candidate.candidate_id}"
+                        or expected.revision_digest != use.candidate.candidate_digest
+                        or candidate is None or (candidate.candidate_id, candidate.candidate_revision, candidate.candidate_digest) !=
+                            (use.candidate.candidate_id, use.candidate.candidate_revision, use.candidate.candidate_digest)
+                        or producer is None or producer.document_node is None
+                        or producer.document_node.plan_ref.plan_id != use.plan_ref.plan_id
+                        or producer.document_node.node_id != use.predecessor_node_id):
+                    raise ValueError("provisional document input differs from its exact captured source binding")
+                # Immutable predecessor bytes are input, not a presently
+                # applyable patch. Final-review/Apply candidates below retain
+                # their existing live canonical base-state validation.
+                current.append(expected)
                 continue
             if expected.kind is CollaborationInputKind.ARTIFACT_CANDIDATE:
                 prefix = "artifact-candidate/"
@@ -19025,6 +20058,8 @@ class StoryRuntime:
         validation_details: tuple[str, ...] = (),
         usage: ProviderUsage | None = None,
         accounting: ProviderCallAccounting | None = None,
+        document_node: DocumentNodeBinding | None = None,
+        document_goal=None, document_budget_task_id=None,
     ) -> None:
         projection = self.conversation_storage_services.event_store.read_context(
             session_id,
@@ -19042,6 +20077,7 @@ class StoryRuntime:
                     sender=_RUNTIME_ACTOR,
                     recipient=self._actor_for_agent(role),
                     payload=CollaborationProviderCallPayload(
+                        document_node=document_node, document_goal=document_goal, document_budget_task_id=document_budget_task_id,
                         invocation_id=invocation_id,
                         call_id=call_id,
                         ordinal=ordinal,
@@ -19934,6 +20970,9 @@ del _register_at_fork
 class RuntimeSession:
     """Session-bound management and lead front-channel/confirmation APIs."""
 
+    def inspect_document_plans(self) -> tuple[DocumentPlanView, ...]:
+        return self.runtime.inspect_document_plans(self.session_id)
+
     def __init__(self, runtime: StoryRuntime, session_id: str) -> None:
         self.runtime = runtime
         self.session_id = session_id
@@ -20116,12 +21155,13 @@ class RuntimeSession:
     async def decide_lead_task(
         self, decision: LeadTaskDecision, *,
         action_progress_sink: ContextActionProgressSink | None = None,
+    document_selection: DocumentNodeSelection | None = None,
     ) -> LeadTaskDecisionResult:
         """Apply an exact USER control returned by the current task choices."""
         if decision.session_id != self.session_id:
             raise ValueError("task decision belongs to a different bound session")
         return await self.runtime.decide_lead_task(
-            decision, action_progress_sink=action_progress_sink,
+            decision, document_selection=document_selection, action_progress_sink=action_progress_sink,
         )
 
     async def lead_turn(
@@ -20134,6 +21174,7 @@ class RuntimeSession:
         interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION,
         adoption: ExplorationAdoptionSelection | None = None,
         premise_selection: PremiseDecisionSelection | None = None,
+        document_selection: DocumentNodeSelection | None = None,
     ) -> LeadTurnResult:
         """Run one ordinary turn through this session's lead front channel."""
 
@@ -20146,6 +21187,7 @@ class RuntimeSession:
             interaction_mode=interaction_mode,
             adoption=adoption,
             premise_selection=premise_selection,
+            document_selection=document_selection,
         )
 
     async def propose_specialist_advisory(
