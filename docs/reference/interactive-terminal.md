@@ -527,6 +527,11 @@ Partial UTF-8 and buffered input survive these nonfatal polling pauses.
 
 ## Retained agent-output history
 
+Completed replies open at their beginning, ahead of any diagnostics below them. This view
+stays in place while editing the next prompt, resizing, or returning from F6 review. A new
+turn or current decision shows its own content; F6 still provides access to the complete
+reply and its metadata.
+
 Capable terminals preserve completed turns in an application-managed
 conversation screen that reflows at the current terminal width, including while
 input is idle. Leaving the shell restores the preceding terminal screen.

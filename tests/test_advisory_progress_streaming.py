@@ -2701,6 +2701,48 @@ print(json.dumps([data.hex(), stamps]), flush=True)
                 timeline.end_submission(origin)
                 with driver._input_latch.input_operation():
                     pass
+        from story_writing_agents.interactive_terminal._model import Field, Panel, Section
+        with recording_driver(width=120, height=57, response="none") as rig, rig.driver.input_session():
+            driver = rig.driver
+            for label in "AB":
+                rig.screen.resize(120, 57)
+                rig.incoming.characters.extend(f"REQUEST_{label}\r".encode())
+                self.assertEqual(driver.read_main_line("main> ", lambda _: ()), f"REQUEST_{label}")
+                with driver.submission("session", "conversation", Message("User", f"REQUEST_{label}", presentation=MessagePresentation.CHAT_BLOCK)):
+                    async def completed_reply():
+                        self.assertIn(f"CURRENT_PROGRESS_{label}", rig.text())
+                        return label
+                    self.assertEqual(asyncio.run(driver.run_advisory_progress(completed_reply(), lambda _: f"CURRENT_PROGRESS_{label}", keep_frame=False)), label)
+                    markers = {0: "START", 24: "MIDDLE", 48: "END"}
+                    body = "\n\n".join(f"COMPLETED_{label}_{markers.get(row, str(row))}" for row in range(49))
+                    panel = Panel("Lead", (Message("Lead", body, role=SemanticRole.AGENT, presentation=MessagePresentation.CHAT_BLOCK),
+                                           Section("Diagnostics", tuple(Field("Check", str(row)) for row in range(60)))))
+                    output_start = len(rig.output.records)
+                    driver.write_component(panel)
+                self.assertIn(f"COMPLETED_{label}_START", "".join(rig.output.records[output_start:]))
+                self.assertIn(f"COMPLETED_{label}_START", rig.text())
+                self.assertNotIn(f"CURRENT_PROGRESS_{label}", rig.text())
+                self.assertEqual(driver._output_history.entries[-1].component.items[0].content, body)
+                for width, height in ((120, 57), (80, 24)):
+                    rig.screen.resize(width, height)
+                    rig.phase = f"completed_{label}_{width}"
+                    rig.incoming.characters.extend(b"queued\r")
+                    self.assertEqual(driver.read_main_line("main> ", lambda _: ()), "queued")
+                    self.assertIn(f"COMPLETED_{label}_START", next(read.text for read in rig.reads if read.phase == rig.phase))
+                rig.phase = f"review_completed_{label}"
+                rig.incoming.characters.extend(b"draft\x1b[17~" + b"\x1b[6~" * 6 + b"\x1b[17~x\r")
+                self.assertEqual(driver.read_main_line("main> ", lambda _: ()), "draftx")
+                reviewed = "\n".join(read.text for read in rig.reads if read.phase == rig.phase)
+                self.assertIn(f"COMPLETED_{label}_MIDDLE", reviewed)
+                self.assertIn(f"COMPLETED_{label}_END", reviewed)
+                self.assertIn(f"COMPLETED_{label}_START", next(read.text for read in reversed(rig.reads) if read.character == "x"))
+                rig.phase = f"inline_completed_{label}"
+                rig.incoming.characters.extend(b"choice\r")
+                self.assertEqual(driver.read_line("Current decision> "), "choice")
+                current = next(read.text for read in rig.reads if read.phase == rig.phase)
+                self.assertIn("Current decision>", current)
+                self.assertNotIn(f"COMPLETED_{label}_START", current)
+                self.assertIn(f"COMPLETED_{label}_START", rig.text())
         for height, paragraphs, release in ((60, 2, "\r"), (24, 80, "\r"), (16, 80, "\x1b"), (16, 80, "\x1b[17~"), (24, 80, "")):
             with recording_driver(height=height, response="none") as rig, rig.driver.input_session():
                 driver, timeline = rig.driver, rig.driver._output_history
