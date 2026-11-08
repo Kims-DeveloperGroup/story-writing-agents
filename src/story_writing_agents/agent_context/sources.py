@@ -19,6 +19,7 @@ from ..conversations.session_context import (
 from ..conversations import (
     project_collaboration_readable_history,
     COLLABORATION_EVENT_SCHEMA_VERSION,
+    CollaborationContextBootstrap,
     CollaborationEvent,
     CollaborationEventStore,
     CollaborationReadableContext,
@@ -560,9 +561,23 @@ class ContextSourceSnapshot:
                 or type(values) is not list
                 or len(values) != len(self.records)
                 or bootstrap.get("retained_records") != len(values)
+                or any(
+                    type(bootstrap.get(name)) is not int or bootstrap[name] < 0
+                    for name in (
+                        "total_records", "requested_records", "retained_records",
+                        "omitted_records", "retained_utf8_bytes",
+                    )
+                )
+                or bootstrap["requested_records"] > bootstrap["total_records"]
+                or bootstrap["requested_records"] != (
+                    bootstrap["retained_records"] + bootstrap["omitted_records"]
+                )
+                or type(bootstrap.get("truncated")) is not bool
+                or bootstrap["truncated"] is not (bootstrap["omitted_records"] > 0)
             ):
                 raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
             previous_end = 0
+            retained_utf8_bytes = 0
             record_keys = {
                 "batch_digest",
                 "batch_id",
@@ -610,6 +625,7 @@ class ContextSourceSnapshot:
                         valid_fields = False
                         break
                     search_texts.append(field.text)
+                    retained_utf8_bytes += len(field.text.encode("utf-8"))
                 boundary = record.boundary
                 if (
                     not valid_fields
@@ -629,6 +645,8 @@ class ContextSourceSnapshot:
                     )
                 assert boundary.end is not None
                 previous_end = boundary.end
+            if bootstrap["retained_utf8_bytes"] != retained_utf8_bytes:
+                raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
             return
         if self.descriptor.source_kind is ContextSourceKind.ACTIVE_DEBATE:
             if type(parsed) is not dict or set(parsed) != {"messages", "state"}:
@@ -1539,14 +1557,26 @@ class FocusedConversationSourceAdapter:
             metadata = self._catalog.get(self.scope.session_id, conversation_id)
             if self._captured_context is None:
                 events = self._event_store.read(self.scope.session_id, conversation_id)
-                context = select_bounded_collaboration_context(
-                    events,
-                    event_ids=(
-                        tuple(event.event_id for event in events)
-                        if self._include_searchable_history
-                        else ()
-                    ),
-                )
+                if self._include_searchable_history:
+                    history = project_collaboration_readable_history(events)
+                    context = CollaborationReadableContext(
+                        bootstrap=CollaborationContextBootstrap(
+                            schema_version=COLLABORATION_EVENT_SCHEMA_VERSION,
+                            session_id=history[0].session_id if history else None,
+                            conversation_id=history[0].conversation_id if history else None,
+                            total_records=len(history),
+                            last_sequence=history[-1].sequence if history else 0,
+                            tail_batch_digest=history[-1].batch_digest if history else None,
+                        ),
+                        records=history,
+                        requested_records=len(history),
+                        retained_records=len(history),
+                        omitted_records=0,
+                        retained_utf8_bytes=sum(record.readable_utf8_bytes for record in history),
+                        truncated=False,
+                    )
+                else:
+                    context = select_bounded_collaboration_context(events)
             else:
                 context = self._captured_context
         except ConversationNotFoundError:
@@ -2106,6 +2136,11 @@ class ContextSourceRegistry:
             ):
                 raise _source_error(ContextSourceErrorCode.SOURCE_LIMIT_EXCEEDED)
             scanned += snapshot.descriptor.utf8_bytes
+            if (
+                entry.source_kind is ContextSourceKind.CONVERSATION
+                and json.loads(snapshot.content)["bootstrap"]["truncated"]
+            ):
+                truncated = True
             captured.append((entry, snapshot))
         emitted: set[tuple[str, str, ContextSourceBoundary]] = set()
         for query_index, query in enumerate(queries, start=1):

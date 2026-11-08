@@ -276,14 +276,20 @@ workflow failure. Orchestration can therefore close exact binding loss as
 typed recovery without provider replay or repository fallback.
 
 `FocusedConversationSourceAdapter` reads canonical v2 events from the active
-store and applies `select_bounded_collaboration_context()`. Its default mode is
-a content-free bootstrap with no provider-readable record body. The lead
-runtime explicitly enables bounded searchable history across active
-same-session conversations: it still sends zero eager bodies, then SEARCH and
-READ add only authorized selected records under the 24-record/32,768-byte
-bound. Private payload fields are excluded from this search adapter.
+store. Its default mode uses `select_bounded_collaboration_context()` for a
+content-free bootstrap with no provider-readable record body. The Lead opts
+into complete searchable readable history across active same-session
+conversations, within the source limits below. This search snapshot includes
+records after the first 24; it still sends zero eager bodies. Provider context
+selection retains its separate 24-record/32,768-byte bound, while SEARCH and
+READ use the action and observation limits below. Private payload fields are
+excluded from the readable projection. An oversized complete search source
+fails explicitly instead of becoming a silently shortened prefix. A captured
+context that omits requested records makes its search result truncated and
+cannot establish complete zero-hit evidence.
 `SessionHistorySourceAdapter` separately captures complete retained active and
-archived history for required Lead memory; the search bound does not limit it.
+archived history for required Lead memory; searchable-source limits do not
+limit that retained-history capture.
 
 The default action policy permits four nonterminal actions and five provider
 calls: at most two SEARCH, two READ, four queries per SEARCH/eight cumulative,
