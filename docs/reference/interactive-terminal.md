@@ -341,9 +341,11 @@ visible at that insertion position until the caret reaches the end or input
 finishes. The spacing is only for display and is absent from submitted text
 and recalled history.
 
-While a native input method is still composing a syllable, the terminal may use
-an arrow key to commit it instead of sending that key to the editor. Navigation
-through already committed text then follows the arrow keys the editor receives.
+iTerm2 3.7.7 forwards the arrow key that finishes native composition, allowing
+the same press to commit a syllable and move the caret. Older versions such as
+3.6.6 can consume that key without moving the editor caret. This terminal-side
+behavior is separate from the display-only insertion area; the editor cannot
+recover a key that the terminal does not send.
 
 Live input keeps a spare terminal column for stable caret placement. With
 unchanged terminal geometry, editing updates only changed display rows;
