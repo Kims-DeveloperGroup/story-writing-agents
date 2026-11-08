@@ -71,6 +71,7 @@ def load_base_budget(base_ref: str) -> dict[str, Any] | None:
 
 _FEEDBACK_BASE_CAP_DIGEST = 'e8d0ec716f086485451822317114c27efd70bd895fdcad012a9410ff406aff18'
 _FEEDBACK_NEW_CAPS = {
+    'tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task': 0,
     'tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart': 0,
     'tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation': 0,
     'tests.test_lead_orchestration.LeadSchemaFactoringTests.test_small_factoring_annotations_and_owner_refs_are_exact': 0,
@@ -98,7 +99,7 @@ def _feedback_migration(current: dict[str, Any], base: dict[str, Any]) -> bool:
             and base["schema_version"] == current["schema_version"] == 1
             and tuple(base[name] for name in ("max_sequential_wall_seconds", "max_shard_wall_seconds")) == (18000, 3600)
             and tuple(current[name] for name in ("max_sequential_wall_seconds", "max_shard_wall_seconds")) == (18000, 3600)
-            and (base["max_test_source_lines"], current["max_test_source_lines"]) in ((148783, 151312), (150770, 151312)))
+            and (base["max_test_source_lines"], current["max_test_source_lines"]) in ((148783, 151369), (150770, 151369)))
 
 
 def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:

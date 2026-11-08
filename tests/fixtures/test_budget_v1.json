@@ -1,7 +1,7 @@
 {
   "max_sequential_wall_seconds": 18000,
   "max_shard_wall_seconds": 3600,
-  "max_test_source_lines": 151312,
+  "max_test_source_lines": 151369,
   "schema_version": 1,
   "subtest_caps": {
     "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_extracts_status_and_error_from_legacy_terminal_shape": 0,
@@ -1415,6 +1415,7 @@
     "tests.test_git_story_commit_contracts.StoryCommitContractTests.test_projection_is_content_free_defensive_and_omits_runtime_binding": 0,
     "tests.test_git_story_commit_contracts.StoryCommitContractTests.test_runtime_authority_is_not_exposed_by_contracts_or_serializable_values": 0,
     "tests.test_git_story_commits.StoryCommitServiceTests.test_only_exact_commit_decision_authorizes_and_confirmation_cannot_replay": 2,
+    "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task": 0,
     "tests.test_interactive_auth.InteractiveAuthBoundaryTests.test_contract_is_private_clean_source_isolated_and_acyclic": 5,
     "tests.test_interactive_auth.InteractiveAuthContractTests.test_choices_render_every_state_without_color_dependence": 32,
     "tests.test_interactive_auth.InteractiveAuthContractTests.test_default_selection_matrix_is_exact": 22,

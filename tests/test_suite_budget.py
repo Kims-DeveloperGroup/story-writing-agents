@@ -243,6 +243,7 @@ class SuiteBudgetTests(unittest.TestCase):
 
         migrated = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
         expected_additions = {
+            'tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task': 0,
             'tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart': 0,
             'tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation': 0,
             'tests.test_lead_orchestration.LeadSchemaFactoringTests.test_small_factoring_annotations_and_owner_refs_are_exact': 0,
@@ -265,7 +266,7 @@ class SuiteBudgetTests(unittest.TestCase):
         prior_caps[recovery_id] = 12
         self.assertEqual(set(migrated["subtest_caps"]) - set(prior_caps), set(expected_additions))
         self.assertEqual({key: migrated["subtest_caps"][key] for key in expected_additions}, expected_additions)
-        self.assertEqual(migrated["max_test_source_lines"], 151312)
+        self.assertEqual(migrated["max_test_source_lines"], 151369)
         matrix_id = "tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_missing_before_correction_never_replays"
         untouched_id = "tests.test_specialist_routing.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership"
         zero_id = 'tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation'
@@ -273,7 +274,7 @@ class SuiteBudgetTests(unittest.TestCase):
         for old_limit in (148783, 150770):
             parent = dict(migrated, max_test_source_lines=old_limit, subtest_caps=prior_caps)
             self.assertIsNone(suite_budget.check_monotonic(migrated, parent))
-            for old, limit in ((old_limit - 1, 151312), (old_limit + 1, 151312), (old_limit, 151311), (old_limit, 151313)):
+            for old, limit in ((old_limit - 1, 151369), (old_limit + 1, 151369), (old_limit, 151368), (old_limit, 151370)):
                 self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
                     dict(migrated, max_test_source_lines=limit), dict(parent, max_test_source_lines=old))
             for caps in ({key: value for key, value in migrated["subtest_caps"].items() if key != matrix_id},
@@ -283,7 +284,8 @@ class SuiteBudgetTests(unittest.TestCase):
                          {key: value for key, value in migrated["subtest_caps"].items() if key != zero_id},
                          {**migrated["subtest_caps"], recovery_id: 1}, {**migrated["subtest_caps"], recovery_id: 3},
                          {**migrated["subtest_caps"], untouched_id: 4}, {**migrated["subtest_caps"], untouched_id: 6},
-                         {**migrated["subtest_caps"], 'tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order': 1}):
+                         {**migrated["subtest_caps"], 'tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order': 1},
+                         {**migrated["subtest_caps"], 'tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task': 1}):
                 self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(migrated, subtest_caps=caps), parent)
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, migrated,
                 dict(parent, subtest_caps={**prior_caps, untouched_id: 4}))
@@ -298,8 +300,8 @@ class SuiteBudgetTests(unittest.TestCase):
         import os, sys, time
         ids = runner._HOSTED_METHOD_IDS
         self.assertEqual(runner._manifest(ids)["digest"],
-                         "sha256:18fb999bf223a0b6fdc5ea9cb67ab6c873cc378c0c43e76755bfbf60457c78cf")
-        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (161, 20))
+                         'sha256:e8d09d1ef1495148a6a70dd327610265f6f206916423688144b4fb05e6863e4f')
+        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (162, 21))
         cases = tuple(Mock(id=Mock(return_value=value)) for value in (*ids, *runner._HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         canonical = runner.CanonicalCollection(cases, (*ids, *runner._HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         serial, scheduled = runner._hosted_partition(canonical, canonical)
@@ -308,7 +310,7 @@ class SuiteBudgetTests(unittest.TestCase):
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner._hosted_partition(canonical, isolated)
         self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
-        launch_digest = "sha256:b9315ccd7308138488cf399fecb697551f2406613ff5c31a855f6b425594040a"
+        launch_digest = 'sha256:8d41f4d50e3c1cb4d6d8ccf18dfdbdfe6c3ef2492bf3a6e1bbdf501ee14d7ff5'
         self.assertEqual(runner._manifest(runner._hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner._hosted_launch_order(ids[::-1]), runner._hosted_launch_order(ids))
         self.assertEqual(runner._hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
@@ -323,7 +325,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(len(runner._HOSTED_MIXED_SERIAL_IDS), 8)
         missing = runner.CanonicalCollection(cases, (*ids[:-1], *runner._HOSTED_MIXED_SERIAL_IDS))
         self.assertRaises(runner.RunnerError, runner._hosted_partition, missing, missing)
-        args = SimpleNamespace(command="run", hosted_methods="audited-161-v5", hosted_deadline_epoch=time.time()+3500,
+        args = SimpleNamespace(command="run", hosted_methods='audited-162-v6', hosted_deadline_epoch=time.time()+3500,
                                shard="1/5", id=[], module=[], tier=[], failfast=False, json="report.json")
         env = dict(GITHUB_ACTIONS="true", TEST_RUN_DEADLINE=str(time.time()+4500),
                    TEST_JOB_DEADLINE=str(time.time()+4500))
@@ -376,7 +378,7 @@ class SuiteBudgetTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             paths = self._reports(directory, (0, 0)); rows = self.report_data
-            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": "audited-161-v5",
+            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": 'audited-162-v6',
                         "profile_manifest": runner._manifest(runner._HOSTED_METHOD_IDS),
                         "capacity": 2, "peak_children": 0, "work_deadline_epoch": 10000.0,
                         "cleanup_deadline_epoch": 10030.0, "launch_manifest": runner._manifest(()),

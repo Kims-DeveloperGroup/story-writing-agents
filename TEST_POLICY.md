@@ -344,8 +344,8 @@ The mixed SpecialistRoutingTests class has two hosted contract methods and eight
 explicitly frozen serial methods. Eligibility requires exact coverage by these
 disjoint lists; a new or missing method still fails before execution.
 
-Only hosted full shards opt into the fixed `audited-161-v5` profile: 161
-fixture-audited methods across 20 classes. The profile includes the eight
+Only hosted full shards opt into the fixed `audited-162-v6` profile: 162
+fixture-audited methods across 21 classes. The profile includes the eight
 provider-timeout recovery, ten context-recovery and thirteen interactive Lead
 adapter methods audited after v40's measured serial bottlenecks. The #938 case split retains class-LPT and isolates whole-front, with the exact
 new inventory and estimated weights described below. Each shard retains
@@ -624,15 +624,15 @@ raw149462이고, 정책 helper2행 후 helper1308이며 전체 상한은 **15077
 
 ### #938 현재 독립 검증과 최종 통합 계약
 
-단계 C는 기존2542개에 순수 입력 계약1개를 추가해2543개 ID를 검증한다.
-원래2527개와 기존15개를 모두 유지한다. 복구 cap은 기존12에서 retained
+최종 A/B/C 편성은 기존2527개와 신규17개를 합쳐2544개 ID를 검증한다.
+원래2527개와 앞서 분리한16개를 모두 유지한다. 복구 cap은 기존12에서 retained
 core2와10개 조합의 각1로 이동하며, 전체 조합의 모의 제출40회를 보존한다.
-다른 기존 cap은 그대로이며 신규 C도 cap0이다. 원래 cap-map SHA256은
+다른 기존 cap은 그대로이며 신규 C와 B도 cap0이다. 원래 cap-map SHA256은
 `e8d0ec716f086485451822317114c27efd70bd895fdcad012a9410ff406aff18`이다.
-정확히 고정된16개 ID 이관과 결합한 **148783→151312 /150770→151312**만
+정확히 고정된17개 ID 이관과 결합한 **148783→151369 /150770→151369**만
 허용한다. 이전에 승인된 pre-938 전환도 보존한다.
 
-현재 소스 청구는 **raw149763 + 수동 helper1548 =151311**로 상한151312
+현재 소스 청구는 **raw149818 + 수동 helper1550 =151368**로 상한151369
 이내다. private workflow-context 검증181행도 수동 helper에 포함한다.
 budget 도구의 raw 검사와 이 추가 청구를 구분해 기록한다. 임의 ID·cap·상한
 증가나 알려진 실패의 삭제·skip을 허용하지 않는다.
@@ -656,14 +656,14 @@ readiness2회·Runtime1개는 실제 비용에 포함한다.
 새 task의 집필·artifact·검토·Apply를 실제 실행한다. 이전 task의 제출·예산은
 초기화하지 않는다. 기존 O의 ‘41+readiness2’를 전체 호출수라고 쓴 설명은
 잘못된 부분 집계다. 이후 A/B 분해의 계획은 A42회/B19회이며 아직 실측값이 아니다.
-B의 seedless 독립 fixture·신규 cap0 ID·최종2544개/hosted162개 편성은 별도 확정한다.
+B는 seedless 독립 fixture의 신규 cap0 ID로 분리한다. 필요한 실제 재시작은 유지한다.
 
 두 큰 fixture에만 이력 성분512KiB를 설정하고 종료 시 복원한다. production
 기본256KiB·schema/payload 각512KiB·합산1MiB는 유지한다. 실제 제출 accounting의
 크기를 검사하고 다중 session은 call ID multiset을 backend 기록과 대조한다.
 이는 실제 model 수용량의 증거는 아니다.
 
-Hosted profile은 `audited-161-v5`,161개/20클래스이고 serial2382개다. 원래147개
+Hosted profile은 `audited-162-v6`,162개/21클래스이고 serial2382개다. 기존161개와 원래147개
 소속·상대 순서, mixed serial8개, class-LPT·5shard·4worker·18000/3600초를 유지한다.
 완료·source/환경 확인을 마친 관측만 비용에 쓰고 실패 prefix는 완료 비용으로
 쓰지 않는다. 최종 같은 HEAD의 전체 CI·조정·정리·리뷰를 요구한다. 부분 선택·
@@ -671,6 +671,12 @@ Draft·metadata 결과는 전체 통과가 아니다. Whole Front가 실제 time
 
 아래 숫자 편성·진단 기록은 당시 source의 이력이다. 현재 편성은 이 절과 최종
 실제 보고서를 기준으로 하며, 변경별 선택 규칙은 계속 적용한다.
+
+단계 C 실측에서 Actions 등록→보고서 업로드는 corrected RED25초/GREEN29초,
+workflow 전체 종료는39초/69초였다. 기존 O 실패의 보고서까지는980초였다.
+첫 RED의 wire 필드명 기대값 오류를 수정한 뒤 corrected RED에서 행 수 오류만
+확인했고 GREEN은 assertion 한 줄만 바꿔 통과했다. source/환경 검증도 유효하다.
+이는 작은 계약 검사의 개선이며 전체 통합 작업량의 속도 비교는 아니다.
 
 ### #938 independent-case inventory and source allocation history
 

@@ -803,7 +803,7 @@ def _write_reconciliation_human(report: dict[str, object], stream: TextIO) -> No
 
 # This closed profile is audited for fresh whole-method processes. Adding a method
 # (even in one of these classes) requires another fixture/eligibility review.
-_HOSTED_PROFILE = 'audited-161-v5'
+_HOSTED_PROFILE = 'audited-162-v6'
 _HOSTED_CLEANUP_SECONDS = 30.0
 _HOSTED_LAUNCH_IDS = (
     'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict',
@@ -830,6 +830,7 @@ _HOSTED_LAUNCH_IDS = (
     'tests.test_specialist_routing.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned',
     'tests.test_specialist_routing.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current',
     'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_old_drafted_revision_cannot_authorize_revised_candidate',
+    'tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task',
     'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does',
     'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing',
     'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_rejected_returned_result_closes_and_next_turn_uses_one_fresh_call',
