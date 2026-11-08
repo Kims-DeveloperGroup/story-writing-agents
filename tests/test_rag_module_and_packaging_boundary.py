@@ -1313,7 +1313,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 assert len(story_writing_agents.__all__) == 106
-                assert len(conversations.__all__) == 208
+                assert len(conversations.__all__) == 235
                 assert len(conversation_events.__all__) == 134
                 assert len(conversation_context.__all__) == 37
                 assert conversations.CollaborationProposal is conversation_events.CollaborationProposal
@@ -1502,17 +1502,22 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 story_project,
                 distribution,
             )
+            # _copy_build_input already exported the exact pin before any URL rewrite.
+            mirror_environment = os.environ.copy()
+            for name in ("GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS"):
+                mirror_environment.pop(name, None)
+            mirror_environment.update({"GIT_ALLOW_PROTOCOL": "file", "GIT_CONFIG_COUNT": "0"})
             viewer_source = root / "viewer-upstream.git"
             viewer_git_directory = root / "viewer-pinned.git"
             def viewer_git(directory, *arguments, input=None):
                 prepared = subprocess.run(["git", "--git-dir", str(directory), *arguments],
-                    input=input, env={**os.environ, "GIT_ALLOW_PROTOCOL": "file"},
+                    input=input, env=mirror_environment,
                     text=True, capture_output=True, check=False)
                 self._assert_process_succeeded(prepared, f"offline source {arguments!r}")
                 return prepared.stdout.strip()
             for directory, source in ((viewer_source, _gitlink_git_directory("vendor/jsonl-viewer")),
                                       (viewer_git_directory, viewer_source)):
-                viewer_git(directory, "init", "--bare")
+                viewer_git(directory, "init", "--bare", "--template=")
                 viewer_git(directory, "fetch", "--depth=1", "--update-shallow", "--no-tags",
                            source.resolve().as_uri(), _JSONL_VIEWER_PIN)
                 if directory == viewer_source:
@@ -1529,14 +1534,21 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 else:
                     viewer_git(directory, "update-ref", "refs/heads/pinned", _JSONL_VIEWER_PIN)
                     viewer_git(directory, "symbolic-ref", "HEAD", "refs/heads/pinned")
-                    viewer_git(directory, "fsck", "--full", "--no-dangling")
+                    viewer_git(directory, "fsck", "--full", "--strict", "--no-dangling")
                     self.assertEqual(viewer_git(directory, "rev-parse", "HEAD"), _JSONL_VIEWER_PIN)
                     self.assertEqual((directory / "shallow").read_text().splitlines(), [_JSONL_VIEWER_PIN])
                     self.assertEqual(viewer_git(directory, "for-each-ref", "--format=%(objectname)"), _JSONL_VIEWER_PIN)
+            self.assertFalse(any((viewer_git_directory / "objects" / "info" / name).exists()
+                for name in ("alternates", "http-alternates")))
+            self.assertEqual(tuple((viewer_git_directory / "objects" / "pack").glob("*.promisor")), ())
+            mirror_config = (viewer_git_directory / "config").read_text(encoding="utf-8").lower()
+            self.assertNotIn("promisor", mirror_config)
+            self.assertNotIn("partialclone", mirror_config)
             build_support = root / "build-support"
             _copy_setuptools_build_support(build_support)
             install_environment = os.environ.copy()
-            for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
+            for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "GIT_OBJECT_DIRECTORY",
+                         "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS"):
                 install_environment.pop(name, None)
             install_environment.update(
                 {
@@ -1567,7 +1579,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversations.context as context
                 import story_writing_agents.conversations.events as events
                 assert len(story_writing_agents.__all__) == 106
-                assert len(conversations.__all__) == 208
+                assert len(conversations.__all__) == 235
                 assert len(events.__all__) == 134
                 assert len(context.__all__) == 37
                 assert catalog.ConversationCatalog is conversations.ConversationCatalog

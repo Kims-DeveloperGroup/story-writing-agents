@@ -326,6 +326,18 @@ def task_value_to_dict(value: object) -> dict[str, Any]:
     return {"schema_version": 1, **encode(value)}
 
 
+def selected_task_materials_to_dict(
+    captures: tuple[tuple[str, LeadMaterialCapture], ...],
+) -> list[dict[str, Any]]:
+    """Serialize ordered validated captures as current Lead input rows."""
+    return [
+        {"input_id": f"selected_material_{ordinal}",
+         "capture_event_id": event_id,
+         **task_value_to_dict(capture)}
+        for ordinal, (event_id, capture) in enumerate(captures, 1)
+    ]
+
+
 def task_value_from_dict(value_type: type, value: object) -> Any:
     """Decode only the exact current version and closed field inventory."""
     if value_type not in _VALUE_TYPES or type(value) is not dict:

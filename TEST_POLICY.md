@@ -1,5 +1,17 @@
 # Test suite cost policy
 
+## Scoped development feedback — Issue #938
+
+An edit/test iteration should run the smallest independent regression selection
+that covers the changed behavior. Keep complete integration verification as the
+delivery gate; a selected run certifies only its recorded IDs and source.
+
+Issue #938 records each coverage-preserving case split before changing the
+canonical inventory or subtest caps. Retain the original assertions, real host
+transitions, and full sequential workflows. Use fresh mutable fixtures for each
+independent case, and share only proven immutable preparation. The exact current
+migration below is the sole new allocation; no failing-test exception is granted.
+
 The canonical suite is a bounded regression sample. Its checked-in inventory is
 [`tests/fixtures/test_budget_v1.json`](tests/fixtures/test_budget_v1.json).
 The accepted ceilings are **18,000 seconds** of sequential-equivalent wall time
@@ -277,24 +289,21 @@ assertion은 유지한다. 승인된 hosted affected job은 기존 외부 timeou
 
 ### Canonical CI
 
-`pr-validation` runs the fast tier and all five full shards for any change under
-`src/`, `config/`, or `tests/`, or to the runtime dependency and test-policy
-files. It runs static validation for documentation-only changes. Local runtime
-work also runs affected exact test IDs or modules before the PR. CI reconciles
-complete, disjoint shards and checks their test outcomes, exact IDs, per-ID
-subtest counts, test source size, measured wall times, and the base-commit
-budget. A cancelled,
-incomplete, or failed run does not pass. A time overage also fails unless the
-maintainer-authorized exception below applies.
+For Ready PR runtime/test/dependency changes, run the fast tier and all five full
+shards. Draft pushes run static validation only; exact affected runtime evidence
+is requested explicitly through the existing manual route. `test:full` overrides
+Draft mode. A Draft notice is not runtime evidence or integration readiness.
 
-The timing-weight manifest balances shards; it is not evidence of actual run
-time. The budget gate uses the wall time in the current Python 3.11 runner
-reports. Report the observed full and shard times and any platform limitation
-when recalibrating weights.
+Pure documentation-only Ready or complete merge-group changes remain static.
+Ready base/unknown edits and test-policy label events expand conservatively.
+Body/title and unrelated-label events use isolated metadata notices; they neither
+cancel source validation nor overwrite the full runtime/reconciliation check names.
 
-All hosted test jobs use the exact patch in `RUNTIME_TEST_PYTHON_VERSION` for
-`setup-python` and `uv sync`; rolling runner images must not split a campaign
-between Python patches. Reconciliation still requires matching environments.
+Before Ready, runtime work requires its affected exact IDs/modules. Final delivery
+retains complete, disjoint full reports, source/environment identity, per-ID caps,
+source cost, timing, budget and cleanup gates. Failure, cancellation, interruption
+or an unexecuted selection is not pass. Historical timing weights are estimates.
+
 
 ### Actions의 지정 영향 검증
 
@@ -306,13 +315,13 @@ between Python patches. Reconciliation still requires matching environments.
 
 ## Dedicated whole-front shard
 
-The maintainer-approved partition has five selections: 577/554/704/691/1 tests.
-Run the original four-bin class-LPT assignment first, then extract only
-`tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict`
-into shard `5/5`. Other IDs keep their prior bin. This is the sole explicit
-whole-class grouping exception; the inventory, cases, assertions and per-ID caps
-remain frozen. Historical timing weights remain estimates, not measured proof of
-the new shard's duration. The combined 18,000-second ceiling is derived from five
+The current approved partition has five selections:595/715/582/649/1 tests.
+Class-LPT retains whole-front alone in5/5. The explicit938 coverage-preserving
+ID/class migration and estimated weights below account for the repartition;
+no old scenario/assertion is removed. Further inventory changes require their
+own accepted accounting rather than silently expanding an existing long method.
+
+The combined 18,000-second ceiling is derived from five
 3,600-second limits; the sole achievement target remains one hour per shard.
 
 Normal PR and merge-group validation run all five partitions. Manual dispatch
@@ -331,11 +340,16 @@ benchmark campaign is required.
 
 ## Hosted full-shard method scheduling
 
-Only hosted full shards opt into the fixed `audited-147-v3` profile: 147
-fixture-audited existing methods across 17 classes. The profile includes the eight
+The mixed SpecialistRoutingTests class has two hosted contract methods and eight
+explicitly frozen serial methods. Eligibility requires exact coverage by these
+disjoint lists; a new or missing method still fails before execution.
+
+Only hosted full shards opt into the fixed `audited-162-v6` profile: 162
+fixture-audited methods across 21 classes. The profile includes the eight
 provider-timeout recovery, ten context-recovery and thirteen interactive Lead
-adapter methods audited after v40's measured serial bottlenecks. The original four-bin class assignment stays fixed except for the extracted
-whole-front method, and every shard retains canonical selected-ID order. Noneligible tests run once
+adapter methods audited after v40's measured serial bottlenecks. The #938 case split retains class-LPT and isolates whole-front, with the exact
+new inventory and estimated weights described below. Each shard retains
+canonical selected-ID order. Noneligible tests run once
 in their original serial suite; then eligible whole methods run in fresh
 interpreters, with at most four active method processes. The frozen launch order
 starts whole-front, then seven other v40 failed or unexecuted methods in canonical
@@ -607,3 +621,206 @@ raw149462이고, 정책 helper2행 후 helper1308이며 전체 상한은 **15077
 각 base/target ±1은 거절한다. ID2527개·전체 subTest mapping·18000/3600초·
 제품12회/2라운드와 조건부22회 통합 시나리오는 변경하지 않는다.
 최종 전체 CI·Whole Front·재조정·기술 provider·리뷰·완료 조건을 대체하지 않는다.
+
+### #938 현재 독립 검증과 최종 통합 계약
+
+최종 A/B/C 편성은 기존2527개와 신규17개를 합쳐2544개 ID를 검증한다.
+원래2527개와 앞서 분리한16개를 모두 유지한다. 복구 cap은 기존12에서 retained
+core2와10개 조합의 각1로 이동하며, 전체 조합의 모의 제출40회를 보존한다.
+다른 기존 cap은 그대로이며 신규 C와 B도 cap0이다. 원래 cap-map SHA256은
+`e8d0ec716f086485451822317114c27efd70bd895fdcad012a9410ff406aff18`이다.
+정확히 고정된17개 ID 이관과 결합한 **148783→151369 /150770→151369**만
+허용한다. 이전에 승인된 pre-938 전환도 보존한다.
+
+현재 소스 청구는 **raw149819 + 수동 helper1550 =151369**로 상한151369
+이내다. private workflow-context 검증181행도 수동 helper에 포함한다.
+budget 도구의 raw 검사와 이 추가 청구를 구분해 기록한다. 임의 ID·cap·상한
+증가나 알려진 실패의 삭제·skip을 허용하지 않는다.
+
+`SelectedTaskMaterialCodecTests`는 불변 capture2개를 실제 생산 formatter와
+실제 provider wire projection에 통과시켜 독립적으로 적은 최종 두 행과 비교한다.
+Runtime·workspace·backend·schema 생성·provider를 준비하지 않는다. 기존 단일
+행 기대값은 RED로, 올바른 두 행은 GREEN으로 실제 선택 실행하고 결과까지의
+큐·setup·import/발견·검사·정리 시간을 구분한다. 임의120초 기준은 두지 않는다.
+작은 계약 수정에도 긴 Runtime prefix가 필요하면 이번 목표 미달을 유지한다.
+
+복구10조합은 각각 fresh fixture로 선택한다. 기존 순수 codec과 여섯 offer·세
+provider-fixture 경계, 실제 문서20회 순차 연쇄와 별도2회 목표, 작은27개
+assertion과 전체 census·catalogue·부정 검사를 유지한다. 문서 fixture의 추가
+readiness2회·Runtime1개는 실제 비용에 포함한다.
+
+현행 v3는 DRAFT1round 뒤 남은 round를 최종 검토용으로 보존한다. 역사 자료
+회귀는 이전 revision의 draft_sources 입력을 실제 pending 추천에서 검증하고
+공개 REJECT로 닫는다. 새 task에는 이전 DRAFT와 거절 답변을 material로만
+캡처하며 foreign draft_sources는 비운다. 원본 event·digest→capture→전달 입력과
+새 task의 집필·artifact·검토·Apply를 실제 실행한다. 이전 task의 제출·예산은
+초기화하지 않는다. 기존 O의 ‘41+readiness2’를 전체 호출수라고 쓴 설명은
+잘못된 부분 집계다. 분리한 A는 실제764.131초/42회, B는320.964초/19회로 통과했다.
+B는 seedless 독립 fixture의 신규 cap0 ID로 분리한다. 필요한 실제 재시작은 유지한다.
+
+큰 fixture에만 이력 성분512KiB를 설정하고 종료 시 복원한다. production
+기본256KiB·schema/payload 각512KiB·합산1MiB는 유지한다. 실제 제출 accounting의
+크기를 검사하고 다중 session은 call ID multiset을 backend 기록과 대조한다.
+이는 실제 model 수용량의 증거는 아니다.
+
+Hosted profile은 `audited-162-v6`,162개/21클래스이고 serial2382개다. 기존161개와 원래147개
+소속·상대 순서, mixed serial8개, class-LPT·5shard·4worker·18000/3600초를 유지한다.
+완료·source/환경 확인을 마친 관측만 비용에 쓰고 실패 prefix는 완료 비용으로
+쓰지 않는다. 최종 같은 HEAD의 전체 CI·조정·정리·리뷰를 요구한다. 부분 선택·
+Draft·metadata 결과는 전체 통과가 아니다. Whole Front가 실제 timeout이면 중단한다.
+
+아래 숫자 편성·진단 기록은 당시 source의 이력이다. 현재 편성은 이 절과 최종
+실제 보고서를 기준으로 하며, 변경별 선택 규칙은 계속 적용한다.
+
+단계 C 실측에서 Actions 등록→보고서 업로드는 corrected RED25초/GREEN29초,
+workflow 전체 종료는39초/69초였다. 기존 O 실패의 보고서까지는980초였다.
+첫 RED의 wire 필드명 기대값 오류를 수정한 뒤 corrected RED에서 행 수 오류만
+확인했고 GREEN은 assertion 한 줄만 바꿔 통과했다. source/환경 검증도 유효하다.
+이는 작은 계약 검사의 개선이며 전체 통합 작업량의 속도 비교는 아니다.
+
+최종389클래스 timing 편성은 실제 완료된 per-method 관측의 serial4배/hosted1배
+occupancy 휴리스틱을 사용한다. A/B/C와 N의 source·환경 확인을 마친 통과 보고서를
+이관하며 실패 prefix는 사용하지 않는다. 클래스 LPT·격리·고정 순서 FIFO는 유지한다.
+새 weight fixture SHA256은
+`279353794dae30ba8b1b3cba410af89cc40259e3a27986d7ea0c59ea55ed304c`다.
+혼합 source 관측의 모델에서 shard2 body는3690.454초, 과거 full residual을 더한
+시나리오는3725.151초로3600초를 넘는다. 이는 미래 실행의 상한이나 통과 증거가
+아니며 실제 초과 위험이다. 숫자를 맞추는 조정 없이 최종 전체 CI의 실제 완료·
+미실행·timeout으로 판정한다. 해당 위험은 PR에도 기록한다.
+
+계산된 현재 partition은686/624/656/577/1개이며 실제 CI 완료 여부와 구분한다.
+
+첫 최종 전체 실행은2544개를 모두 완료했고 timeout·미실행은 없었다. worker
+wall 최대3143.315초·순차 환산13485.739초로 고정 예산 안이었다. 세 assertion
+실패는 positive QUESTION의 nullable planning_target 누락2곳과 공개 함수의
+정확한 context.py 소유 기대값 누락1곳이었다. 이 세 fixture만 정합시켜 최소
+세 ID를 먼저 검증하고, 그 뒤 같은 최종 리비전의 전체 CI를 요구한다.
+
+### #938 independent-case inventory and source allocation history
+
+The current split retains all 2,527 original IDs and adds fifteen IDs: ten
+submitted-recovery combinations, two codec-contract cases, two document cases,
+and one small factoring/ref case. The recovery cap moves12→2+ten×1; other old
+caps stay exact, and all five nonmatrix new caps are0. Total caps are conserved.
+
+The exact original cap-map SHA256 is
+`e8d0ec716f086485451822317114c27efd70bd895fdcad012a9410ff406aff18`.
+Only the complete recorded mapping with source pairs **148783→151083** or
+**150770→151083** and unchanged18000/3600 limits is admitted. All pre938 approved
+branches remain unchanged. The intermediate twelve-ID iteration is retained in
+its immutable source/history; the current guard uses the final fifteen-ID map.
+
+After the main #939 integration, the current charge is **raw149526+helpers1535=151061**,
+within the allocated151083 ceiling with22 lines of slack. The upstream guidance
+adds18 assertion sites while folding other lines; all old assertions remain. This includes
+181 counted lines of the private, maintained workflow-context validation harness.
+It grants no unrelated ID/source expansion or failing-test waiver.
+
+The ten recovery combinations retain forty mocked submissions and use fresh
+mutable fixtures without the unused default Runtime. Pure codec stays serial;
+its six offer bindings and three fixture invocations remain in selected contracts.
+The real twenty-call document goal chain and two-call independent goal remain.
+The separated document fixture adds two honest baseline-readiness setup calls
+and a needed Runtime. Whole-suite speedup is not inferred from smaller selections.
+All twenty-seven small factoring assertions move together, with the later full
+catalogue/census/negative checks retained. Positive nullable QUESTION fixtures are
+explicitly corrected; negative cases and authority rules remain unchanged.
+
+Hosted profile is audited-161-v5:161IDs/20classes, at most4workers. The old147
+memberships and their relative launch order remain. Pure codec and small factoring
+stay serial. Historical weight transfers are source-responsibility estimates,
+not measured CPU/time shares; the codec estimate includes its observed baseline.
+The387-group partition is **595/715/582/649/1** and covers2542IDs exactly once.
+Actual source-bound execution and complete final reports establish passing gates.
+
+### Change-driven development selections
+
+Use repeated canonical `--id` selectors or the manual `affected` input; do not
+filter a parent method's subTests and report that parent as fully verified.
+
+| Changed responsibility | First selection | Expand when |
+| --- | --- | --- |
+| One fixture or assertion | Its exact method ID. | A shared helper changes: include every affected consumer. |
+| One submitted-failure combination | Its `LeadSubmittedFailureRecoveryTests` method, retaining real closure and restart. | Shared submission, correction, taint or accounting changes: run all ten combinations, the retained pre-submission core and affected context lifecycle checks. |
+| Scope/review codec | The retained pure codec ID and its direct typed consumer. | Encoded shape, current-offer or transport changes: add the separated QUESTION and selected-v9 contract IDs and relevant producer/decoder checks. |
+| Small schema factoring/ref rule | `LeadSchemaFactoringTests.test_small_factoring_annotations_and_owner_refs_are_exact`. | Shared rule owner, schema family, repair or wire vocabulary changes: include the full schema catalogue and affected Lead/specialist/synthesis producers. |
+| Apply or default-budget boundary | Its matching-Apply or default-budget method. | Document identity, candidate inputs, Confirm or chronology changes: include the real document workflow and affected public history/replay/restart checks. Binder spies cannot replace the actual host transition. |
+| Display of unchanged values | The affected view/controller checks. | Controls, DTOs, codecs or forwarded selections change: include their source and host boundaries. |
+
+For multiple responsibilities, deduplicate the conservative union. For unknown
+impact, widen the selection rather than infer safety from import neighbors.
+If no existing focused witness reaches a new host path, implement that witness
+through valid public setup; a pure helper pass cannot certify the missing path.
+Record selected/unselected IDs, relevant source changes, setup/queue/execution
+time and actual fixture submissions. Final full-CI requirements are unchanged.
+
+### #938 최신 main 통합 소스 편성 — 2026-11-07
+
+최신 main `5d8e5ab7`(#943)을 부모 #839 `a52321a3`와 자식 #938에 반영했다.
+이 통합은 기존 테스트 ID·subTest 상한을 바꾸지 않고 raw 소스만29행 늘린다.
+혼합 클래스의 정확한 직렬8개 선언과 실제 inventory 회귀를 포함한 현재 편성은
+raw149564+기존과 #938 helper 청구1547=151111행이다. 이전151083에서
+새 상한151112로29행만 늘려 기존1행 여유를 유지한다. #938 전용 전환은
+동일한 cap-map·18000/3600초에서 정확한148783→151112 또는150770→151112만
+허용한다. 앞 절의151083 편성은 이전 리비전의 기록이며 이 통합에서 대체한다.
+
+### #938 기준 결함 통합 검증의 정확한 소스 편성 — 2026-11-08
+
+현재 계약의 공개 목록·필드·정책 해시, 세션 이력의 소유자 정렬, 유효한
+생성 계약 baseline, 불변 목표의 생성/이력 거절, 합법적인 DISCUSS 검사를
+보완한 테스트 변경은 raw42행이다. raw149606+기존 청구 helper1547=151153행을
+기준으로 상한을151112에서151154로42행만 늘려1행 여유를 유지한다.
+#938 전용 전환은 정확한148783→151154 또는150770→151154에서 동일한
+cap-map과18000/3600초를 요구한다. 앞선151083·151112는 이전 리비전 기록이다.
+새 ID·subTest 상한·worker·호출/라운드 한도는 늘리지 않는다. Runtime의 기존
+두 메서드 결함 보정과 기본 정책 복사본 동기화는 테스트 소스 청구와 구분한다.
+
+첫 전체 실행에서 복구10개는1478.610초였고 기존 클래스 비용 추정은32.083초였다.
+shard3의18개 미완료는14개 미시작과4개 결과 미채택으로 구분한다. 기존 불변
+리비전7c593e22에서18개를8개 선택 작업으로 모두 통과시켜1577.339초의 메서드
+누적 시간을 확보했다. 배치 보정은 직렬 시간×4+호스트 병렬 시간×1의4worker
+점유 비용 추정과 실제 수정 사례의 완료 비용을 사용한다. 이는 실제 실행시간의
+보장이 아니며 최종 전체 CI를 대체하지 않는다. 비용 보정으로5shard·4worker·
+기존147개 상대 실행 순서·161개 병렬 대상과 기존 시간 제한을 변경하지 않는다.
+
+### #938 VCS 설치 fixture의 소스 편성 — 2026-11-08
+
+고정 VCS 소스를 원본 object store로 직접 재지정하던 설치 fixture는 동일 pin의
+지연 fetch를3641회 반복한 뒤 인자 길이 한도에 도달했다. 기존 pin export 후
+독립적인 depth-one·unfiltered bare mirror를 만들고 완전한 객체 연결 및
+promisor/alternates 비의존을 확인한다. 실제 pip VCS 설치·공개 URL·pin·세 설치
+방식은 유지한다. 이 보완의 raw22행으로 raw149628+helper1547=151175행이며,
+정확한 상한은151176으로1행 여유를 유지한다. #938 전용 전환의 현재 목표도
+151176이며 허용 기준148783/150770·cap-map·18000/3600초는 그대로다.
+이전151154는 수정본63e40f41의 기록이다. 진단 메시지 추가는 raw0행이다.
+
+### #938 이전 리비전 거절 fixture의 합법적 예산 편성 — 2026-11-08
+
+이미11회 호출·2라운드를 쓴 과업의 RESUME은 provider 제출 없이 거절한다.
+뒤의 양성 작성은 실제 NEW_TASK 결정·새 ID@1과 별도 예산으로 실행한다.
+이전 리비전 음성4회 호출은 이미 있던1라운드 과업의 실제 RESUME에 배치해
+같은 과업의 오래된 초안 거절을 유지한다. 원래40회 예정 호출·역할·출처·
+Apply 부정 검사를 보존한다. 이 정합성 보완의 raw40행으로 raw149668+
+helper1547=151215행이며 상한151216으로1행 여유를 유지한다. 전용 전환은
+정확한148783→151216/150770→151216와 기존 cap-map·18000/3600초만 허용한다.
+이전151176은88ce6405의 소스 편성 기록이다.
+
+#938 추가 원인 관측은 응답을 변경하지 않는8건 한정 forwarding observer를 두 실패 사례에 붙인다. 호출 전 쓰기 거절은 공급자 응답을 예약하지 않고 실제0회 제출을 검사하며, 독립 DISCUSS는 SINGLE 모드의 기존2회 응답을 사용한다. 도달 불가능했던 callback의2개 검사는 실행된 증거로 집계하지 않는다. raw149689+helper1547=151236이며 정확한 상한은151237이다. ID·subTest·전체 cap-map·18000/3600초 제한은 유지한다.
+
+#938의 공유 요청 생성 거절은 기존 traceback에서 한도·사용 호출 수·최소 필요 호출 수와 lineage 유무만 추가 관측한다. 상위 고정 실행 프레임은 cap·문서 노드 유무·typed projection의 호출/라운드 정수만 기록한다. 반환·예산 검사·provider 제출은 변경하지 않는다. 이 임시 관측20행을 포함한 raw149709+helper1547=151256의 상한은151257이다. 기존 ID·subTest·cap-map·18000/3600초 제한은 유지한다.
+
+#938의 이전 초안 검증은 초기 pending D@1 제안을 provider-free REJECT한 뒤 공개 RESUME D@2를 먼저 수락한다. 기존 specialist/synthesis4회는 그 제안의 Confirm으로 이동한다. 2front+4draft+6미래검토예약=12로 한도를 지키며, 실제 D@2 초안에 대한 D@3의4개 거절 검사를 유지한다. 기존 총40회와 동일한2개 준비 호출, 최종 task10회/1round는 변하지 않는다. 이 순서 보완1행으로 raw149710+helper1547=151257이며 현재 상한151257에 여유 없이 맞춘다. 시간·ID·subTest·cap-map은 유지한다.
+
+최신 main #931의 이전 USER 근거·준비 평가 정렬을 기준 #839에 통합한 뒤 #938에 반영했다. 기존938 독립27검증·복구40제출·패키징 완전 pin 검사는 보존한다. 병합 후 raw149680+helper1547=151227로 기존 상한151257 안에 들어오며, 최종 원인 관측 제거와 완료 비용 편성 시 정확한 최종 상한을 다시 고정한다. 원래147순서·161대상·5shard·4worker·시간 제한은 유지한다.
+
+#938 마지막 소유 관계 관측44행의 편성을 먼저 고정한다. 최신 통합raw149680에44행을 더한149724+helper1547=151271이며 임시 상한151272로1행 여유를 둔다. 기존cap-map/ID/subTest/시간과 원래147순서는 유지한다. 이 helper는 실제 한도·정확한Confirm 제안·unique budget anchor의 scalar 관계만 관측하고 진단 후 제거한다.
+
+#938의 취소된 Draft guard는 GitHub가 needs평가 전에 취소한 완료 job의 이름을 조건식 원문으로 남기는 경우도 exact일치로 식별한다. 알려진 완료 marker존재·completed·나머지 모든job종료 조건은 그대로 요구하며, 부분 job목록·누락/유사 marker·stale attempt·실행중 peer는 완료로 오인하지 않는다.75분 deadline·기존취소/force-cancel예약·check명·concurrency는 바꾸지 않는다. 실제 취소 실행42399269691에서 다른 job종료 후 약61분 잔류를 관측했고, 실제guard JavaScript의 가상시각8사례에서 기존3570초잔류가 해당완료입력에만 즉시종료로 바뀌는 것을 확인했다. 전체테스트통과 증거는 아니다.
+
+#938의 마지막 예산 원인은 과거 비용 오합산이 아니라 미래 준비1+최종검토4의 정상 예약이었다. 사용6인 B는 front1만 남아2-call 그룹을 시작하지 못한다. B2는 정확한0호출/REQUEST_NOT_SUBMITTED/기존scope유지를 검사하고, 원래혼합premise의긍정검증과실제6호출은새구조화선택C@1로옮긴다. 총provider모의호출은증가하지않는다. 임시observer90행제거와정정31행으로raw149665+helper1547=151212, 최종상한151213의1행여유를고정한다. 기존2542ID/전체cap-map/subTest/147상대순서/161병렬대상/5shard/4worker/18000·3600초를유지한다.
+
+main #947 통합 후 raw149666+helper1547=151213에 D06 한 곳의 history512KiB 설정과 기록된 payload 크기 검사19행을 더한다. 최종 raw149685+helper1547=151232, 상한151233이다. production의 history256KiB와 provider/schema/payload/전체 한도는 변경하지 않고, callback·40+2 provider 호출·ID·subTest·시간을 유지한다.
+
+#938 남은C Confirm의첫실패진단34행은반환/큐/provider호출을바꾸지않고정규화된최초실패와기록된validation label만제한적으로관측한다. raw149719+helper1547=151266, 임시상한151267이며진단후제거한다. product budget/counter·ID·subTest·cap-map·147순서·161대상·시간제한은유지한다.
+
+측정된N Confirm실패는세specialist정상/Lead0호출의history269133>262144였으므로응답을늘리지않고그사례도512KiB history allowance를사용한다. N진단제거·공통기록크기검사·D06완료prefix round1/current-step0분리·한정fixture첫bind진단을합친순증6행으로raw149725+helper1547=151272,상한151273이다. 기존ID/subTest/cap-map/provider호출/시간은유지한다.

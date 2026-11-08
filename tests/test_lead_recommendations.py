@@ -63,7 +63,7 @@ class LeadRecommendationTests(RecommendationCase):
         from tests.provider_wire_fixture import lead_fixture_response, lead_fixture_bound_scope
         def genuine_gap(call, _provider):
             return lead_fixture_response(call, {'response_type': 'clarification_question', 'response_text': 'Memoir or fiction?',
-                'response_details': {'task_scope': lead_fixture_bound_scope(call,
+                'response_details': {'planning_target': None, 'task_scope': lead_fixture_bound_scope(call,
                     lead._live_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)), record=True)}}, family=0)
         self.assertEqual(admission.assessment_from_dict(admission.assessment_to_dict(unresolved)), unresolved)
         self.backend.enqueue(genuine_gap, control_plan=selection_plan('question.authoring'))

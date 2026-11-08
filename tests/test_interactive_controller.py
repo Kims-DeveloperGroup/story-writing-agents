@@ -6805,7 +6805,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         calls_before = len(case.backend.calls)
         case.backend.enqueue(lambda call, _provider: wire.lead_fixture_response(call,
             {"response_type": "clarification_question", "response_text": "Preparation scope undecided.",
-             "response_details": {"task_scope": wire.lead_fixture_bound_scope(call,
+             "response_details": {"planning_target": None, "task_scope": wire.lead_fixture_bound_scope(call,
                  _live_scope(call, activity="review", domains=("plot_structure",), paths=(OUTLINE,),
                      contributions=[{"domain": "plot_structure", "role": "constraint_assessor"}]), record=True)}}, family=0),
             control_plan=wire.selection_plan("question.authoring"))

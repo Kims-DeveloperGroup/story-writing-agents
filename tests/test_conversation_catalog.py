@@ -94,6 +94,7 @@ _DOCUMENT_PLAN_EXPORTS = (
     "document_plan_to_dict", "document_plan_from_dict",
     "document_node_binding_to_dict", "document_node_binding_from_dict",
     "document_value_digest", "document_lineage_cost", "project_document_plan_views",
+    "is_new_task_recommendation_source",
     "DocumentNodeSelection", "DocumentCandidateSelection",
     "document_node_selection_to_dict", "document_node_selection_from_dict",
     "document_candidate_selection_to_dict", "document_candidate_selection_from_dict",
@@ -920,7 +921,8 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
             "__init__.py": set(),
             "catalog.py": _CATALOG_EXPORTS,
             "events.py": _EVENT_EXPORTS | {"build_final_review_evidence"},
-            "context.py": _CONTEXT_EXPORTS | {"document_lineage_cost", "project_document_plan_views"},
+            "context.py": _CONTEXT_EXPORTS | {
+                "document_lineage_cost", "project_document_plan_views", "is_new_task_recommendation_source"},
         }
         public_names = set(_CONVERSATION_FACADE_EXPORTS) | _OWNER_ONLY_EVENT_EXPORTS
 
