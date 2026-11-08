@@ -39,4 +39,4 @@ class SelectedTaskMaterialCodecTests(unittest.TestCase):
              "source": {"session_id": "material_session", "conversation_id": "c_drafted", "event_id": "e_drafted",
                         "record_type": "draft", "material_digest": "01642e593613379511bc45ffe533a08675699735b9db1f0543152fbd8a2e27b2"}},
         ]
-        self.assertEqual(actual, expected[:1])
+        self.assertEqual(actual, expected)
