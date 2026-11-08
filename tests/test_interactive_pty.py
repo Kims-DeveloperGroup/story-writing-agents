@@ -1651,7 +1651,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
         process.wait_for_text("Records: 7 total · 7 filtered")
         process.wait_for_text("Single ·")
         process.wait_for_text("Focus: Detail")
-        process.wait_for_text("record:1 · Full annotations")
+        process.wait_for_text("record:1 · a Full annotations")
         process.wait_for_text(" · / search")
         assert termios is not None
         self.assertFalse(termios.tcgetattr(process.master_fd)[3] & termios.ICANON)
