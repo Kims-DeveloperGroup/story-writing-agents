@@ -163,14 +163,16 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
 class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
 
     # Fake transport accounting verifies encoded guard sizes, not actual model capacity.
-    def _assert_recorded_provider_size_bounds(self, services):
+    def _assert_recorded_provider_size_bounds(self, services, *, session_ids=None):
         from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
         from story_writing_agents.agent_context.accounting import ProviderCallAccounting, ProviderPayloadAccounting
         from story_writing_agents.conversations import session_context as session_context_module
-        submitted = _submitted_calls(SessionHistorySourceAdapter(services.catalog,
-            services.event_store, self.session_id).capture().events())
+        submitted = tuple(
+            call for session_id in ((self.session_id,) if session_ids is None else session_ids)
+            for call in _submitted_calls(SessionHistorySourceAdapter(services.catalog, services.event_store, session_id).capture().events()))
         self.assertTrue(submitted)
         self.assertEqual(len(submitted), len(self.backend.calls))
+        self.assertCountEqual((call.call_id for call in submitted), (request.call_id for _agent, request in self.backend.call_records))
         recorded_sizes = []
         for call in submitted:
             self.assertIs(type(call.accounting), ProviderCallAccounting)
@@ -1685,6 +1687,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(self.history(archived),before)
 
     async def test_old_drafted_revision_cannot_authorize_revised_candidate(self):
+        writing_session_id = self.session_id
         from story_writing_agents.conversations import session_context as session_context_module
         self.enterContext(mock.patch.object(session_context_module, "MAX_SESSION_CONTEXT_UTF8_BYTES", 512 * 1024))
         from story_writing_agents import ReplyTraceOrigin
@@ -2107,6 +2110,40 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             if item.source_id == "selected_material_1")
         self.assertEqual((selected_admission.kind, selected_admission.original_authority),
             (admission.AdmissionSourceKind.MATERIAL, "rejected_public_response"))
+        prior_input = next(item for item in request.basis.inputs if (item.locator, item.revision_digest) == ("conversation/" + source.event_id, source.content_digest))
+        pending_history, pending_calls = self.history(prior), len(self.backend.calls)
+        pending_task = next(item for item in self.runtime.inspect_lead_collaboration(self.session_id, prior).available_tasks if item.ref.task_id == fresh_scope.task_id)
+        dismissed = await self.runtime.decide_lead_recommendation(recommendation_decision(suggested, c.CollaborationConfirmationDecision.REJECT))
+        self.assertEqual((len(self.backend.calls), dismissed.proposal, dismissed.recommendation_request), (pending_calls, None, None))
+        rejected_suffix = self.history(prior)[len(pending_history):]
+        self.assertEqual(_submitted_calls(rejected_suffix), ())
+        self.assertFalse(any(event.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH or (type(event.payload) is c.CollaborationStepStatePayload and event.payload.state is c.CollaborationStepState.RUNNING) for event in rejected_suffix))
+        self.assertIs(c.project_collaboration_history(self.history(prior)).current_recommendation_state, c.LeadRecommendationState.REJECTED)
+        material_view = self.runtime.inspect_lead_collaboration(self.session_id, prior)
+        historical_source_task = next(item for item in material_view.available_tasks if item.ref.task_id == fresh_scope.task_id)
+        self.assertEqual((historical_source_task.scope, historical_source_task.submitted_call_ids), (pending_task.scope, pending_task.submitted_call_ids))
+        old_material = next(item for item in material_view.selectable_materials if item.ref.event_id == source.event_id and item.ref.conversation_id == prior)
+        self.assertEqual((old_material.ref.kind, old_material.ref.material_digest, old_material.text),
+            (task.LeadMaterialKind.DRAFT, source.content_digest.removeprefix("sha256:"), next(event.payload.message for event in original_history if event.event_id == source.event_id)))
+        historical_task = task.LeadTaskDecision.from_task(historical_source_task.ref, task.LeadTaskAction.NEW_TASK,
+            text=_ADMISSION_BRIEF + "\nUse the selected material as historical input only.", material_refs=(rejected_text.ref, old_material.ref))
+        def historical_recommendation(call, provider):
+            receipt = transition_receipt(historical_task).payload.receipt
+            self.assertNotEqual(receipt.target_task_id, historical_source_task.ref.task_id)
+            self.assertEqual(receipt.target_task_revision, 1)
+            issued_scope = replace(first.proposal.authoring_scope, task_id=receipt.target_task_id, task_revision=receipt.target_task_revision)
+            selected_profile(call, (issued_scope.task_id, issued_scope.task_revision))
+            return recommendation(message=issued_scope.interpretation, recommended_action=action(kind="prepare_consultation", source_ids=("user_input", "selected_material_1", "selected_material_2")),
+                authoring_scope=c.authoring_scope_to_dict(issued_scope), authoring_assessment=_fixture_assessment(foundation_ids=("user_input", "selected_material_1", "selected_material_2")))(call, provider)
+        self.backend.enqueue(historical_recommendation)
+        selected = await self.runtime.decide_lead_task(historical_task)
+        suggested, request = selected.turn, selected.turn.recommendation_request
+        self.assertIsNotNone(request, suggested)
+        fresh_scope = request.authoring_scope
+        historical_receipt = transition_receipt(historical_task).payload.receipt
+        self.assertEqual((fresh_scope, request.draft_sources), (replace(first.proposal.authoring_scope, task_id=historical_receipt.target_task_id, task_revision=historical_receipt.target_task_revision), ()))
+        selected_admission = next(item for item in request.basis.authoring_admission.sources if item.source_id == "selected_material_1")
+        self.assertEqual((selected_admission.kind, selected_admission.original_authority), (admission.AdmissionSourceKind.MATERIAL, "rejected_public_response"))
         def prepare_historical(call, provider):
             material = _workflow_material(provider.callback_payload(call))
             self.assertEqual(material["structured_recommendation_execution"]["request"]["authoring_scope"],
@@ -2134,52 +2171,26 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             proposal.update(allocation)
             return lead_fixture_response(call, lead_fixture_result(native), family=0)
         self.backend.enqueue(prepare_historical)
-        import sys
-        preparation_results, preparation_closures, preparation_reads = [], [], []
-        original_preparation = self.runtime._run_lead_provider_locked
-        original_finalize = self.runtime._finalize_recommendation_failure_locked
-        original_read = self.runtime._read_lead_history
-        async def observe_preparation(*args, **kwargs):
-            result = await original_preparation(*args, **kwargs)
-            if len(preparation_results) < 2: preparation_results.append((result.kind, result.next_action, None if result.trace is None else result.trace.origin, result.message[:1200], result.validation_details[:6], result.proposal is not None, None if result.proposal is None else result.proposal.authoring_scope == fresh_scope))
-            return result
-        def observe_finalization(*args, **kwargs):
-            result = original_finalize(*args, **kwargs)
-            if len(preparation_closures) < 2: preparation_closures.append(None if result is None else (result.kind, result.state, result.next_action, result.message[:200]))
-            return result
-        def observe_preparation_read(*args, **kwargs):
-            value = original_read(*args, **kwargs)
-            if len(preparation_reads) < 2 and sys._getframe(1).f_code is original_finalize.__func__.__code__:
-                events, projection, failure = value
-                start = None if projection is None else projection.current_recommendation_start
-                current_request = None if projection is None else projection.current_recommendation_request
-                start_events = None if events is None or start is None else tuple(event for event in events if event.event_id == start.start_event_id)
-                exact_failures = None if start_events is None or len(start_events) != 1 else tuple(event for event in events if type(event.payload) is c.CollaborationLeadOutcomeFailurePayload and event.turn_id == start_events[0].turn_id and event.step_id == start_events[0].step_id and event.sequence >= start_events[0].sequence)
-                validation = getattr(failure, "validation_details", ())
-                preparation_reads.append((
-                    failure is not None, None if failure is None else type(failure).__name__, None if failure is None else str(failure)[:600], tuple(str(item)[:200] for item in validation[:3]) if isinstance(validation, (tuple, list)) else (),
-                    events is not None, projection is not None, None if projection is None or projection.current_recommendation_state is None else projection.current_recommendation_state.value, None if projection is None else start is not None,
-                    None if current_request is None else current_request.request_event_id == request.request_event_id, None if start is None else start.request_event_id == request.request_event_id, None if start_events is None else len(start_events),
-                    None if exact_failures is None else len(exact_failures), None if exact_failures is None else tuple(event.payload.code.value for event in exact_failures[:3])))
-            return value
-        with (
-            mock.patch.object(self.runtime, "_run_lead_provider_locked", new=observe_preparation),
-            mock.patch.object(self.runtime, "_finalize_recommendation_failure_locked", new=observe_finalization),
-            mock.patch.object(self.runtime, "_read_lead_history", new=observe_preparation_read),
-        ):
-            prepared = await self.runtime.decide_lead_recommendation(recommendation_decision(suggested))
-        self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, (prepared.message[:1200], prepared.state, prepared.validation_details[:6], tuple(preparation_results), tuple(preparation_closures), tuple(preparation_reads)))
+        prepared = await self.runtime.decide_lead_recommendation(recommendation_decision(suggested))
+        self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, (prepared.message[:1200], prepared.state, prepared.validation_details[:6]))
         self.assertEqual(prepared.proposal.authoring_scope, fresh_scope)
         self.assertEqual(prepared.proposal.budget.rounds_spent, 0)
         self.assertFalse(any(event.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for event in self.history(prior)[len(original_history):]))
-        self.assertEqual(prepared.proposal.budget.physical_calls_spent, len(_submitted_calls(self.history(prior)[len(original_history):])))
-        historical_input = next(item for item in prepared.proposal.basis.inputs
-                                if item.locator == "conversation/" + source.event_id
-                                and item.revision_digest == source.content_digest)
+        prepared_history = self.history(prior)
+        self.assertIsNotNone(prepared.proposal.document_node, prepared)
+        self.assertEqual((prepared.proposal.document_node.task_ref.task_id, prepared.proposal.document_node.task_ref.task_revision), (fresh_scope.task_id, fresh_scope.task_revision))
+        self.assertEqual((prepared.proposal.budget.physical_calls_spent, prepared.proposal.budget.rounds_spent), c.document_lineage_cost(prepared_history, prepared.proposal.document_node, current_step_id=prepared.proposal.step_id))
+        preserved_task = next(item for item in self.runtime.inspect_lead_collaboration(self.session_id, prior).available_tasks if item.ref == historical_source_task.ref)
+        self.assertEqual(preserved_task.submitted_call_ids, historical_source_task.submitted_call_ids)
+        self.assertEqual(len(_submitted_calls(prepared_history[len(original_history):])), 3)
+        self.assertEqual(len(_submitted_calls(prepared_history)), len(_submitted_calls(original_history)) + 3)
+        draft_capture = next(event for event in prepared_history if event.event_id in historical_receipt.material_capture_event_ids and event.payload.capture.source == old_material.ref)
+        historical_input = next(item for item in prepared.proposal.basis.inputs if item.locator == "conversation/" + draft_capture.event_id)
+        self.assertEqual((draft_capture.payload.capture.selected_text, historical_input.revision_digest), (old_material.text, prior_input.revision_digest))
         selected_input = next(item for item in prepared.proposal.basis.inputs if item.input_id == "selected_material_1")
         transition = next(event.payload.receipt for event in self.history(prior)
                           if event.event_id == selected.transition_event_id)
-        capture = next(event for event in self.history(prior) if event.event_id in transition.material_capture_event_ids)
+        capture = next(event for event in self.history(prior) if event.event_id in transition.material_capture_event_ids and event.payload.capture.source == rejected_text.ref)
         self.assertEqual((capture.payload.capture.source, capture.payload.capture.selected_text),
                          (rejected_text.ref, "Selected rejected whole explanation."))
         self.assertEqual((capture.payload.capture.target_task_id, capture.payload.capture.target_task_revision), (fresh_scope.task_id, fresh_scope.task_revision))
@@ -2196,12 +2207,13 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(next(item for item in prepared.proposal.basis.authoring_admission.sources
             if item.source_id == selected_input.input_id), selected_admission)
         self.assertIn(selected_input.input_id, prepared.proposal.assignments[0].input_ids)
-        self.assertEqual((historical_input.locator, historical_input.revision_digest), ("conversation/" + source.event_id, source.content_digest))
+        self.assertEqual((historical_input.kind, historical_input.locator, historical_input.revision_digest), (c.CollaborationInputKind.CONVERSATION_EVENT, "conversation/" + draft_capture.event_id, "sha256:" + old_material.ref.material_digest))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("drafted", "A fresh chronology follows the selected historical material."))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
         drafted = await self.runtime.decide_lead_step(_decision(prepared, c.CollaborationConfirmationDecision.CONFIRM))
         self.assertIs(drafted.turn.state, c.CollaborationStepState.COMPLETED)
-        self.assertEqual(next(item["conversation_event"] for agent, call in reversed(self.backend.call_records) if agent == PLOT_ARCHITECT for item in _workflow_material(call.payload)["inputs"] if (item["input_id"], item["locator"], item["revision_digest"]) == (historical_input.input_id, historical_input.locator, historical_input.revision_digest)), json.loads(json.dumps(asdict(next(event.payload for event in original_history if event.event_id == source.event_id)))))
+        delivered_historical = next(item for agent, call in reversed(self.backend.call_records) if agent == PLOT_ARCHITECT for item in _workflow_material(call.payload)["inputs"] if (item["input_id"], item["locator"], item["revision_digest"]) == (historical_input.input_id, historical_input.locator, historical_input.revision_digest))
+        self.assertEqual((delivered_historical["text"], delivered_historical["selected_material_source"]), (old_material.text, task.task_value_to_dict(old_material.ref)))
         delivered = next(item for agent, call in reversed(self.backend.call_records) if agent == PLOT_ARCHITECT
                          for item in _workflow_material(call.payload)["inputs"] if item["input_id"] == selected_input.input_id)
         self.assertEqual((delivered["text"], delivered["selected_material_source"]),
@@ -2296,7 +2308,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         restarted = StoryRuntime(self.control_workspace, backend=self.backend)
         self.assertEqual(restarted.conversation_storage_services.event_store.read(self.session_id, prior), captured)
         # Recorded fake-transport sizes verify guards, not actual model capacity.
-        self._assert_recorded_provider_size_bounds(restarted.conversation_storage_services)
+        self._assert_recorded_provider_size_bounds(restarted.conversation_storage_services, session_ids=(writing_session_id, self.session_id))
 
 
     async def test_legacy_pending_confirmation_requires_fresh_scoped_proposal_without_rewrite(self):
