@@ -3828,14 +3828,10 @@ def _task_user_origins(events: tuple[CollaborationEvent, ...], scope: AuthoringS
             if pair not in pairs:
                 pairs.add(pair)
                 todo.append(pair)
-    bindings = confirmation_task_bindings(events)
-    pinned: set[tuple[str, int]] = set()
     steps = set()
     for event in events:
-        if event.event_id in bindings:
-            pinned.add(bindings[event.event_id])
         scope_value = getattr(event.payload, "authoring_scope", None)
-        if (scope_value is not None and not authoring_scope_is_view(event.payload, pinned)
+        if (scope_value is not None
                 and (scope_value.task_id, scope_value.task_revision) in pairs):
             steps.add((event.session_id, event.conversation_id, event.turn_id, event.step_id))
     steps.update((event.session_id, event.conversation_id, event.turn_id, event.payload.receipt.planning_step_id)
