@@ -12,6 +12,11 @@ from typing import get_args
 from unittest import mock
 
 from tests.test_interactive_terminal_input_lifecycle import _input_sources
+from tests.test_interactive_line_editor import (
+    FakeTermios as _EditorTermios,
+    RecordingOutput,
+    _assert_raw_restoration,
+)
 
 import story_writing_agents
 from story_writing_agents import interactive_terminal as terminal_facade
@@ -140,60 +145,12 @@ class ScriptedInput:
         return bytes((self.reads.pop(0),)) if self.reads else b""
 
 
-class RecordingOutput:
-    """Record the exact live redraw and flush boundaries."""
-
-    def __init__(self, *, terminal: bool = True) -> None:
-        self.terminal = terminal
-        self.records: list[str] = []
-        self.flushes = 0
-
-    def isatty(self) -> bool:
-        return self.terminal
-
-    def fileno(self) -> int:
-        return 8
-
-    def write(self, text: str) -> int:
-        self.records.append(text)
-        return len(text)
-
-    def flush(self) -> None:
-        self.flushes += 1
-
-
-class FakeTermios:
-    """Model raw activation and exact restoration without a real TTY."""
-
-    ICANON = 2
-    ECHO = 8
-    VEOF = 0
-    VINTR = 1
-    VMIN = 4
-    VTIME = 5
-    TCSANOW = 10
-    TCSADRAIN = 11
+class FakeTermios(_EditorTermios):
+    """Reuse raw-mode recording with the completion fixture's original flags."""
 
     def __init__(self) -> None:
+        super().__init__()
         self.original = [0, 0, 0, 10, 0, 0, [b"\x04", b"\x03", 0, 0, 9, 9]]
-        self.set_calls: list[tuple[int, int, list[object]]] = []
-
-    def tcgetattr(self, descriptor: int) -> list[object]:
-        attributes = list(self.original)
-        attributes[6] = list(self.original[6])  # type: ignore[arg-type]
-        return attributes
-
-    def tcsetattr(self, descriptor: int, when: int, attributes: list[object]) -> None:
-        copied = list(attributes)
-        copied[6] = list(attributes[6])  # type: ignore[arg-type]
-        self.set_calls.append((descriptor, when, copied))
-
-
-def _assert_raw_restoration(test, termios) -> None:
-    test.assertEqual(
-        tuple(call[1] for call in termios.set_calls),
-        (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-    )
 
 
 def _recorded_frames(output: RecordingOutput, width: int = 160) -> list[SimpleNamespace]:
@@ -215,12 +172,6 @@ def _ready_select_patch():
     return mock.patch.object(_driver._select, 'select', side_effect=lambda r, w, x, _t: (r, w, x))
 
 
-def _ready_reference_select_patch():
-    return mock.patch.object(_driver._select, 'select', side_effect=lambda readable, writable, exceptional, _timeout: (readable, writable, exceptional))
-
-
-
-
 def make_driver(
     text: str,
     *,
@@ -236,7 +187,7 @@ def make_driver(
     """Build one driver with observable completion collaborators."""
 
     input_stream = ScriptedInput(text, terminal=terminal)
-    output_stream = RecordingOutput(terminal=terminal)
+    output_stream = RecordingOutput(is_terminal=terminal)
     fallback = mock.Mock(return_value="fallback")
     termios = FakeTermios()
     observed_widths: list[int] = []
@@ -1498,7 +1449,7 @@ class CompletionDriverTests(unittest.TestCase):
             observed_sources.append(adapter.current_source())
             return original_read(size)
         input_stream.read1 = read_with_source
-        with _ready_reference_select_patch() as readiness:
+        with _ready_select_patch() as readiness:
             self.assertEqual(self.read(driver), "/settings ")
 
         self.assertEqual(observed_sources, [baseline] + [english] * (len(observed_sources) - 1))
@@ -1586,7 +1537,7 @@ class CompletionDriverTests(unittest.TestCase):
                 )
                 text_reader = mock.Mock(return_value="one\ntwo\nthree")
                 failure_writer = mock.Mock()
-                with _ready_reference_select_patch():
+                with _ready_select_patch():
                     line = _core.read_main_command_line(
                         driver,
                         "main> ",
@@ -1667,7 +1618,7 @@ class CompletionDriverTests(unittest.TestCase):
                     side_effect=AssertionError("completion must not read text")
                 )
                 failure_writer = mock.Mock()
-                with _ready_reference_select_patch():
+                with _ready_select_patch():
                     with self.assertRaises(KeyboardInterrupt):
                         _core.read_main_command_line(
                             driver,
@@ -1680,10 +1631,12 @@ class CompletionDriverTests(unittest.TestCase):
                             reference_failure_writer=failure_writer,
                         )
 
+                # This ASCII fixture has one display-only wide slot and its filler cell.
+                frames = [frame.text.replace("\u3000 ", "", 1) for frame in _recorded_frames(output)]
                 active_frames = tuple(
-                    frame.text for frame in _recorded_frames(output)
-                    if f"main> {original}" in frame.text
-                    and "Writing artifact selection [open]" in frame.text
+                    frame for frame in frames
+                    if f"main> {original}" in frame
+                    and "Writing artifact selection [open]" in frame
                 )
                 self.assertTrue(active_frames)
                 active = active_frames[-1]
@@ -1704,7 +1657,7 @@ class CompletionDriverTests(unittest.TestCase):
                 self.assertIn("[highlighted]", suggestions)
                 self.assertIn(
                     f"main> {expected}".rstrip(),
-                    "\n".join(frame.text for frame in _recorded_frames(output)),
+                    "\n".join(frames),
                 )
                 history_append.assert_not_called()
                 self.assertEqual(driver._history_state, MainInputHistoryState())
@@ -1721,7 +1674,7 @@ class CompletionDriverTests(unittest.TestCase):
         )
         history_append = mock.Mock(wraps=append_main_input_history)
         driver._history_append = history_append
-        with _ready_reference_select_patch():
+        with _ready_select_patch():
             with self.assertRaises(KeyboardInterrupt):
                 _core.read_main_command_line(
                     driver,
@@ -1766,7 +1719,7 @@ class CompletionDriverTests(unittest.TestCase):
                     lines=24,
                 )
                 paths_provider = mock.Mock(return_value=(path, other))
-                with _ready_reference_select_patch():
+                with _ready_select_patch():
                     with self.assertRaises(KeyboardInterrupt):
                         _core.read_main_command_line(
                             driver,
@@ -1813,7 +1766,7 @@ class CompletionDriverTests(unittest.TestCase):
                 def write_failure(kind: ReferenceInputFailureKind) -> None:
                     failure_records.append((kind, len(output.records)))
 
-                with _ready_reference_select_patch():
+                with _ready_select_patch():
                     with self.assertRaises(KeyboardInterrupt):
                         _core.read_main_command_line(
                             driver,
@@ -2835,7 +2788,7 @@ class CompletionDriverTests(unittest.TestCase):
             ),
         )
         provider = mock.Mock(return_value=picker)
-        with _ready_reference_select_patch():
+        with _ready_select_patch():
             self.assertEqual(
                 _core.read_main_command_line(
                     driver,

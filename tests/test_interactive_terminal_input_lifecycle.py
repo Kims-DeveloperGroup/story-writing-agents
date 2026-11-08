@@ -687,7 +687,8 @@ class InputLatchAndDriverTests(unittest.TestCase):
                     if width != -7 and prefix + f6 + "\x1b[<0;" in scripted:
                         self.assertIn("second", rendered)
                         self.assertIn("third", rendered)
-                        self.assertLess(rendered.rfind(driver_module._MOUSE_DISABLE), rendered.rfind(expected))
+                        draft_output = "".join(call.args[0].replace("\u3000", "", 1) for call in output.write.call_args_list)
+                        self.assertLess(draft_output.rfind(driver_module._MOUSE_DISABLE), draft_output.rfind(expected))
                     self.assertGreater(rendered.rfind(driver_module._MOUSE_DISABLE), rendered.rfind(driver_module._MOUSE_ENABLE))
                 self.assertEqual(driver._history_state.entries, (expected,))
                 self.assertIsNone(driver._output_history.focused_id)
@@ -743,7 +744,8 @@ class InputLatchAndDriverTests(unittest.TestCase):
                 if not interleaved:
                     self.assertIn("second", rendered)
                     self.assertEqual(driver._output_history.frames[0].view.start_line, 2)
-                self.assertLess(rendered.rfind(driver_module._MOUSE_DISABLE), rendered.rfind(expected))
+                draft_output = "".join(call.args[0].replace("\u3000", "", 1) for call in output.write.call_args_list)
+                self.assertLess(draft_output.rfind(driver_module._MOUSE_DISABLE), draft_output.rfind(expected))
                 self.assertEqual(termios.attributes, original)
                 fallback.assert_not_called()
 

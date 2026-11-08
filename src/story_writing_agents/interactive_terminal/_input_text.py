@@ -85,8 +85,12 @@ def align_input_cursor(text: str, cursor: int) -> int:
     return boundaries[bisect_left(boundaries, cursor)]
 
 
-def project_input_text(text: str, cursor: int) -> tuple[str, int]:
-    """Map the original cursor to safe display text, aligning interior offsets."""
+def project_input_text(text: str, cursor: int, *, caret_slot: bool = False) -> tuple[str, int]:
+    """Map the original cursor, optionally reserving display-only insertion room.
+
+    The two-cell slot precedes a nonempty suffix and does not represent native
+    composition state or become part of the caller's text or cursor offsets.
+    """
 
     parts: list[str] = []
     offset = 0
@@ -98,4 +102,10 @@ def project_input_text(text: str, cursor: int) -> tuple[str, int]:
         offset += len(unit.display)
         if projected_cursor is None and cursor <= unit.end:
             projected_cursor = offset
-    return "".join(parts), offset if projected_cursor is None else projected_cursor
+    display = "".join(parts)
+    projected_cursor = offset if projected_cursor is None else projected_cursor
+    if caret_slot and projected_cursor < len(display):
+        # One atomic fullwidth blank keeps the next source glyph beyond a
+        # two-cell composition area without inventing characters in the buffer.
+        display = display[:projected_cursor] + "\u3000" + display[projected_cursor:]
+    return display, projected_cursor

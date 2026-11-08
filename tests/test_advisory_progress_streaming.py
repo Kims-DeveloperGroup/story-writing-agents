@@ -2742,13 +2742,13 @@ print(json.dumps([data.hex(), stamps]), flush=True)
                     if not rig.incoming.characters:
                         if widths:
                             if rig.screen.width == 43:
-                                self.assertIn("main> draft界", rig.text())
+                                self.assertIn("main> draft界", rig.text().replace("\u3000 ", "", 1))
                                 self.assertIn("╰", rig.text()); self.assertIn("╯", rig.text())
                             self.assertEqual(snapshot(), saved)
                             rig.screen.resize(widths.pop(0), height)
                             return (), write, error
                         self.assertEqual(rig.screen.width, 100)
-                        if paragraphs == 2: self.assertIn("main> draft界", rig.text())
+                        if paragraphs == 2: self.assertIn("main> draft界", rig.text().replace("\u3000 ", "", 1))
                         rig.incoming.characters.extend(b"\x1b[17~")
                     return read, write, error
                 rig.poll = poll
