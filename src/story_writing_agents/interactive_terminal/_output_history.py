@@ -8,8 +8,8 @@ from dataclasses import dataclass, replace
 from ._box import Box
 from ._controls import transition_nested_scroll
 from ._model import (
-    Component, KeyEvent, KeyKind, Message, MultiAgentScrollState,
-    NestedScrollViewport, TerminalCapabilities, display_character_width,
+    Component, KeyEvent, KeyKind, ListView, Message, MessagePresentation, MultiAgentScrollState,
+    NestedScrollViewport, Panel, Section, TerminalCapabilities, display_character_width,
 )
 from ._pointer import PointerEvent
 from ._render import render_component
@@ -83,6 +83,7 @@ class ConversationTimeline:
         self._entries: list[TimelineEntry] = []
         self._next_identity = 1
         self._origins: list[SubmissionOrigin] = []
+        self._completed_reply: int | None = None
         self._offset: int | None = None
         self._anchor: tuple[int, int] | None = None
         self._row_keys: tuple[tuple[int, int], ...] = ()
@@ -128,18 +129,23 @@ class ConversationTimeline:
         self._offset = None
         self._anchor = None
 
+    def begin_review(self) -> None:
+        """Start review at the displayed response, independently of its default position."""
+        self._set_offset(self._visible_offset)
+
     @contextmanager
     def review_context(self) -> Iterator[None]:
         """Reveal current disclosures temporarily without losing the reader's place."""
-        saved = self._offset, self._anchor, self.focused_id, self.timeline_focused
+        saved = self._offset, self._anchor, self.focused_id, self.timeline_focused, self._completed_reply
         self._offset = None
         self._anchor = None
         self.focused_id = None
         self.timeline_focused = False
+        self._completed_reply = None
         try:
             yield
         finally:
-            self._offset, self._anchor, self.focused_id, self.timeline_focused = saved
+            self._offset, self._anchor, self.focused_id, self.timeline_focused, self._completed_reply = saved
 
     def begin_submission(self, session_id: str, conversation_id: str, user: Message) -> SubmissionOrigin:
         """Start an explicit submission; never infer origin from rendered text."""
@@ -159,8 +165,13 @@ class ConversationTimeline:
         if not self._origins or self._origins[-1] is not origin:
             raise RuntimeError("submission scopes must close in order")
         self._origins.pop()
+        if not self._origins:
+            entries = [entry for entry in self._entries if entry.origin is origin]
+            self._completed_reply = next((entry.identity for entry in reversed(entries[1:])
+                                          if entry.component is not None and _has_chat_reply(entry.component)), None)
 
     def append_component(self, component: Component) -> int:
+        self._completed_reply = None
         identity = self._identity()
         self._entries.append(TimelineEntry(identity, self.origin, component=component))
         self._revision += 1
@@ -168,6 +179,7 @@ class ConversationTimeline:
 
     def append_lines(self, lines: tuple[str, ...]) -> int:
         """Keep already sanitized nonsemantic output in chronological order."""
+        self._completed_reply = None
         identity = self._identity()
         self._entries.append(TimelineEntry(identity, self.origin, lines=lines))
         self._revision += 1
@@ -175,6 +187,7 @@ class ConversationTimeline:
 
     def begin_operation(self) -> int:
         """Reserve an operation's location before its first progress update."""
+        self._completed_reply = None
         identity = self._identity()
         self._entries.append(TimelineEntry(identity, self.origin, pending=True))
         self._revision += 1
@@ -274,7 +287,7 @@ class ConversationTimeline:
 
     def render(self, capabilities: TerminalCapabilities, height: int, *, mouse_mode: bool = False,
                pointer_mode: bool | None = None, after_identity: int | None = None) -> HistoryLayout:
-        """Select cached visible rows; an unpublished suffix always follows its tail."""
+        """Show completed reply openings; active output follows its current tail."""
         if height <= 0 or capabilities.width < 8 or not self._entries:
             self.focused_id = None
             self.timeline_focused = False
@@ -297,6 +310,10 @@ class ConversationTimeline:
             first = next((self._entry_tops[entry.identity] for entry in self._entries
                           if entry.identity > after_identity), len(self._row_keys))
             offset = max(first, maximum)
+            if self._completed_reply is not None and self._completed_reply > after_identity:
+                top = self._entry_tops.get(self._completed_reply)
+                if top is not None:
+                    offset = max(first, min(top, maximum))
         elif self._offset is not None:
             self._offset = offset
             self._anchor = self._row_keys[offset] if self._row_keys else None
@@ -462,6 +479,12 @@ class ConversationTimeline:
                     self._revision += 1
                 return (state.views[0].start_line, state.views[0].h_offset) != (view.start_line, view.h_offset)
         return False
+
+
+def _has_chat_reply(component: Component) -> bool:
+    if type(component) is Message:
+        return component.presentation is MessagePresentation.CHAT_BLOCK
+    return type(component) in {Panel, Section, ListView} and any(_has_chat_reply(item) for item in component.items)
 
 
 def _wrap_cells(text: str, width: int) -> tuple[str, ...]:

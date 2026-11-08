@@ -5560,6 +5560,7 @@ class RawTerminalDriver:
             self._timeline_review_owner = state if active else None
             if active:
                 if entering:
+                    self._output_history.begin_review()
                     capabilities = _capabilities_with_width(self.capabilities(), max(1, width - 1))
                     state.history_layout = self._output_history.render(
                         capabilities, max(1, min(height, _MAX_VIEWER_HEIGHT) - 2),
