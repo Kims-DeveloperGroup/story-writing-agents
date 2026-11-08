@@ -215,7 +215,11 @@ class RawLiveComposerTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all("Z" in read.text for read in rig.reads))
             last = rig.reads[-1]
             self.assertEqual(last.cursor[1], 6)
-            self.assertEqual(last.data[last.cursor[0]][6:8], ("X", "Z"))
+            shadow = rig.screen.clone()
+            shadow.screen = [list(row) for row in last.data]
+            shadow.cursor = last.cursor
+            shadow.write("마")
+            self.assertEqual(shadow.screen[last.cursor[0]][6:10], ["마", " ", "X", "Z"])
 
         self.assertEqual(result.kind, LiveComposerDeliveryKind.REPLAN)
         self.assertEqual(result.state, LineInputState(prefix + "/statusXZ", 17))

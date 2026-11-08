@@ -11,6 +11,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import unittest
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -661,21 +662,45 @@ class LiveEditingTests(unittest.TestCase):
         self.assertNotIn("\u2028", rendered)
 
     def test_widths_wrap_at_one_reserved_column_with_fixed_redraw(self) -> None:
-        from tests._external_view_support import recording_driver
-        prompt, value = "story> ", "x" * 90 + "한한Z"
-        characters = value + "\x1b[D" * 2 + "X\x7f\x1b[3~\r"
+        from tests._external_view_support import PortableTerminalScreen, recording_driver
+        prompt, value = "story> ", "x" * 82 + "가나다라"
+        characters = value + "\x1b[D" * 2 + "마\x7f\x1b[3~\r"
+        def visible(screen):
+            return "".join(
+                "".join(cell for col, cell in enumerate(row)
+                        if not col or unicodedata.east_asian_width(row[col - 1]) not in "WF"
+                ).rstrip(" ")
+                for row in screen.screen
+            ).removeprefix(prompt)
+        control = PortableTerminalScreen(width=20, height=4)
+        control.write("\x1b[2J\x1b[H가나다라")
+        control.cursor = (0, 4)
+        control.write("마")
+        self.assertEqual(visible(control), "가나마라")
         for width in (20, 40, 80):
             with self.subTest(width=width), recording_driver(characters, width=width, response="none") as rig:
-                rig.observe = lambda: (tuple(tuple(row) for row in rig.screen.screen), "".join(rig.output.records).count("\x1b[2J"))
+                def observe():
+                    before = tuple(tuple(row) for row in rig.screen.screen)
+                    if rig.incoming.characters[:3] == list("마".encode("utf-8")):
+                        for mark in ("ㅁ", "마", "만"):
+                            shadow = rig.screen.clone()
+                            shadow.write(mark)
+                            shadow.cursor = rig.screen.cursor
+                            self.assertEqual(visible(shadow), "x" * 82 + "가나" + mark + "다라")
+                        self.assertEqual(before, tuple(tuple(row) for row in rig.screen.screen))
+                    return before, "".join(rig.output.records).count("\x1b[2J")
+                rig.observe = observe
                 with rig.driver.input_session():
-                    self.assertEqual(rig.driver.read_main_line(prompt, lambda _: ()), "x" * 90 + "한Z")
-                    edits = [read for read in rig.reads if read.character in {"\x7f", "~", "\r"}]
-                    self.assertEqual(len(edits), 3)
-                    for read, suffix in zip(edits, ("한X한Z", "한한Z", "한Z")):
-                        self.assertIn("x" * 90 + suffix, "".join(read.text.split()))
-                        target = "Z" if read.character == "\r" else "한"
-                        sentinel = max((r, c) for r, row in enumerate(read.data[0]) for c, cell in enumerate(row) if cell == target)
-                        self.assertEqual(read.cursor, sentinel)
+                    self.assertEqual(rig.driver.read_main_line(prompt, lambda _: ()), "x" * 82 + "가나라")
+                    self.assertEqual(rig.driver._history_state.entries, ("x" * 82 + "가나라",))
+                    edits = [read for read in rig.reads if read.character in {"마", "\x7f", "~", "\r"}]
+                    self.assertEqual(len(edits), 4)
+                    for read, left, right in zip(edits, ("가나", "가나마", "가나", "가나"), ("다라", "다라", "다라", "라")):
+                        shadow = rig.screen.clone()
+                        shadow.screen = [list(row) for row in read.data[0]]
+                        shadow.cursor = read.cursor
+                        shadow.write("마")
+                        self.assertEqual(visible(shadow), "x" * 82 + left + "마" + right)
                     committed = edits[-1]
                     self.assertTrue(all(row[-1] == " " for row in committed.data[0]))
                     self.assertGreater(sum(any(cell != " " for cell in row) for row in committed.data[0]), 1)

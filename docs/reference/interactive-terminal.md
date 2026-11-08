@@ -334,6 +334,13 @@ syllables for consistent cell width and wrapping; submitted text and recalled
 history retain the original Unicode sequence. Enter keeps its existing
 submission and completion behavior.
 
+In main message input and the active working draft, moving the caret before
+existing text reserves a temporary insertion area two cells wide. This area
+accommodates one composing Hangul syllable before the existing suffix. It stays
+visible at that insertion position until the caret reaches the end or input
+finishes. The spacing is only for display and is absent from submitted text
+and recalled history.
+
 Live input keeps a spare terminal column for stable caret placement. With
 unchanged terminal geometry, editing updates only changed display rows;
 cursor-only movement does not erase the draft. Resizing or returning from a

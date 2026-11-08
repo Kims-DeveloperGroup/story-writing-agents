@@ -182,7 +182,7 @@ class _PaintSnapshot:
 
 @dataclass(slots=True)
 class _LiveEditorState:
-    """Retain only call-local escape decoding and redraw position."""
+    """Retain call-local input presentation, escape decoding and redraw state."""
 
     escape_sequence: _EscapeSequenceState = None
     rendered_cursor_row: int = 0
@@ -197,6 +197,7 @@ class _LiveEditorState:
     inline_control_blocked: bool = False
     history_primary_surface: tuple[int, int, int | None, tuple[int, int] | None] | None = None
     paint: _PaintSnapshot | None = None
+    caret_slot: bool = False
 
 
 @dataclass(slots=True)
@@ -2400,7 +2401,7 @@ class RawTerminalDriver:
             _restore_terminal_or_raise(configuration, setup_failure)
             raise
 
-        display = _LiveEditorState()
+        display = _LiveEditorState(caret_slot=True)
         state = initial_state
         frame = 0
         active_failure: BaseException | None = None
@@ -3337,6 +3338,7 @@ class RawTerminalDriver:
                     transition,
                     configuration=configuration,
                     transient=True,
+                    caret_slot=True,
                 )
                 if configuration is not None
                 else self._read_fallback_line(prompt, capabilities)
@@ -3501,6 +3503,7 @@ class RawTerminalDriver:
                     reference_bindings=reference_bindings,
                     input_frame_provider=input_frame_provider,
                     transient=True,
+                    caret_slot=True,
                 )
                 if configuration is not None
                 else (
@@ -4474,6 +4477,7 @@ class RawTerminalDriver:
         reference_bindings: ReferenceInputBindings | None = None,
         input_frame_provider: _InputFrameProvider | None = None,
         transient: bool = False,
+        caret_slot: bool = False,
     ) -> str:
         """Read one exact buffer through one pure logical-state transition.
 
@@ -4556,7 +4560,7 @@ class RawTerminalDriver:
             _restore_terminal_or_raise(configuration, setup_failure)
             raise
 
-        display_state = _LiveEditorState()
+        display_state = _LiveEditorState(caret_slot=caret_slot)
         line: str | None = None
         line_state: LineInputState | None = None
         active_failure: BaseException | None = None
@@ -5680,6 +5684,7 @@ class RawTerminalDriver:
             line_state.buffer,
             line_state.cursor,
             render_width,
+            caret_slot=display_state.caret_slot,
         )
         panel_lines: list[str] = []
         alert_lines: list[str] = []
@@ -6883,11 +6888,12 @@ def _editor_input_lines(
     buffer: str,
     cursor: int,
     width: int,
+    *, caret_slot: bool = False,
 ) -> tuple[list[str], int, int]:
     """Render one legacy or trusted semantic prompt with an editable buffer."""
 
     if rendered_input is None:
-        return _wrapped_editor_input(prompt, buffer, cursor, width)
+        return _wrapped_editor_input(prompt, buffer, cursor, width, caret_slot=caret_slot)
     if rendered_input.width != width:
         raise ValueError("rendered input width changed during an active read")
     return _wrapped_rendered_input(
@@ -6895,6 +6901,7 @@ def _editor_input_lines(
         buffer,
         cursor,
         width,
+        caret_slot=caret_slot,
     )
 
 
@@ -6903,6 +6910,7 @@ def _wrapped_rendered_input(
     buffer: str,
     cursor: int,
     width: int,
+    *, caret_slot: bool = False,
 ) -> tuple[list[str], int, int]:
     """Append sanitized dynamic input to a trusted semantic prompt frame."""
 
@@ -6913,7 +6921,7 @@ def _wrapped_rendered_input(
     if len(styled_lines) != len(plain_lines):
         raise ValueError("rendered input projections must share line topology")
 
-    safe_buffer, projected_cursor = project_input_text(buffer, cursor)
+    safe_buffer, projected_cursor = project_input_text(buffer, cursor, caret_slot=caret_slot)
     plain_prompt = plain_lines[-1]
     dynamic_lines, cursor_row, cursor_column = _wrap_safe_text_with_cursor(
         f"{plain_prompt}{safe_buffer}",
@@ -6939,6 +6947,7 @@ def _wrapped_editor_input(
     buffer: str,
     cursor: int,
     width: int,
+    *, caret_slot: bool = False,
 ) -> tuple[list[str], int, int]:
     """Wrap sanitized prompt/input and locate the code-point cursor in cells.
 
@@ -6950,7 +6959,7 @@ def _wrapped_editor_input(
     if cursor < 0 or cursor > len(buffer):
         raise ValueError("cursor must identify a buffer boundary")
     safe_prompt = _editor_display_text(prompt)
-    safe_buffer, projected_cursor = project_input_text(buffer, cursor)
+    safe_buffer, projected_cursor = project_input_text(buffer, cursor, caret_slot=caret_slot)
     safe_text = safe_prompt + safe_buffer
     cursor_offset = len(safe_prompt) + projected_cursor
     return _wrap_safe_text_with_cursor(safe_text, cursor_offset, width)

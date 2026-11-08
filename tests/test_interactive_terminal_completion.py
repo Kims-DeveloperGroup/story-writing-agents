@@ -1680,10 +1680,12 @@ class CompletionDriverTests(unittest.TestCase):
                             reference_failure_writer=failure_writer,
                         )
 
+                # This ASCII fixture has one display-only wide slot and its filler cell.
+                frames = [frame.text.replace("\u3000 ", "", 1) for frame in _recorded_frames(output)]
                 active_frames = tuple(
-                    frame.text for frame in _recorded_frames(output)
-                    if f"main> {original}" in frame.text
-                    and "Writing artifact selection [open]" in frame.text
+                    frame for frame in frames
+                    if f"main> {original}" in frame
+                    and "Writing artifact selection [open]" in frame
                 )
                 self.assertTrue(active_frames)
                 active = active_frames[-1]
@@ -1704,7 +1706,7 @@ class CompletionDriverTests(unittest.TestCase):
                 self.assertIn("[highlighted]", suggestions)
                 self.assertIn(
                     f"main> {expected}".rstrip(),
-                    "\n".join(frame.text for frame in _recorded_frames(output)),
+                    "\n".join(frames),
                 )
                 history_append.assert_not_called()
                 self.assertEqual(driver._history_state, MainInputHistoryState())
