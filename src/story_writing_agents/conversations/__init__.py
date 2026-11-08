@@ -561,3 +561,24 @@ from ..specialist_routing import (ReviewStage, SpecialistWorkKind, SpecialistWor
     SpecialistStagePlan, stage_required_specialists, validate_stage_routing)
 
 from .events import build_final_review_evidence
+
+from ..document_plan import (DocumentPlanningGoalRef, DocumentPlanRef, DocumentNodeSpec, DocumentPlan,
+    DocumentCandidateRef, DocumentCandidateUseIntent, DocumentNodeBinding, DocumentNodeView, DocumentPlanView,
+    DocumentNodeState, DocumentNodeNextAction, document_plan_to_dict, document_plan_from_dict,
+    document_node_binding_to_dict, document_node_binding_from_dict, document_value_digest)
+from .context import document_lineage_cost, project_document_plan_views, is_new_task_recommendation_source
+
+__all__ += ("DocumentPlanningGoalRef", "DocumentPlanRef", "DocumentNodeSpec", "DocumentPlan",
+    "DocumentCandidateRef", "DocumentCandidateUseIntent", "DocumentNodeBinding", "DocumentNodeView",
+    "DocumentPlanView", "DocumentNodeState", "DocumentNodeNextAction", "document_plan_to_dict",
+    "document_plan_from_dict", "document_node_binding_to_dict", "document_node_binding_from_dict",
+    "document_value_digest", "document_lineage_cost", "project_document_plan_views", "is_new_task_recommendation_source")
+
+from ..document_plan import (DocumentNodeSelection, DocumentCandidateSelection,
+    document_node_selection_to_dict, document_node_selection_from_dict,
+    document_candidate_selection_to_dict, document_candidate_selection_from_dict,
+    planning_goal_to_dict, planning_goal_from_dict)
+__all__ += ("DocumentNodeSelection", "DocumentCandidateSelection",
+    "document_node_selection_to_dict", "document_node_selection_from_dict",
+    "document_candidate_selection_to_dict", "document_candidate_selection_from_dict",
+    "planning_goal_to_dict", "planning_goal_from_dict")

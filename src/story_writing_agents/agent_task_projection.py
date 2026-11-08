@@ -11,6 +11,7 @@ HOST_TASK_FIELDS = frozenset({
     "fresh_task_id", "offered_authoring_tasks", "selected_authoring_task",
     "source_authoring_task", "source_task_ref", "task_ref", "associated_task",
     "associated_task_ref", "authoring_tasks", "available_writing_tasks",
+    "budget_lineage_ref", "consumer_task_ref",
 })
 
 
@@ -22,7 +23,8 @@ confirmed_scope current_scope current_writing_scope stage_plan questions prelimi
 final_review_evidence authoring_admission task_context task_transition selected_task_materials
 exploration_adoption premise_selection premise_decision fresh_work_admission discussion_constraints admission capture
 selection spec request decision start started basis report response prior_authoring_source_ref editorial_record editorial_records editorial_state
-editorial_context records record_content details draft current_records selected_records revisions""".split())
+editorial_context records record_content details draft current_records selected_records revisions
+document_node candidate_uses""".split())
 
 
 def project_agent_task_metadata(value: object, shape: str = "") -> object:

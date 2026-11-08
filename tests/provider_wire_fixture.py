@@ -638,7 +638,7 @@ def lead_fixture_bound_scope(request, scope, *, record=False):
     constraints = request.contract.factory.constraints
     writer = lead_fixture_scope_record if record else lead_fixture_scope
     return writer(
-        scope, fixed_targets=(constraints.scope is not None
+        scope, fixed_targets=(constraints.document_target_paths is not None or constraints.scope is not None
                               or constraints.adoption_intent is not None),
         fixed_dependencies=constraints.scope is not None)
 

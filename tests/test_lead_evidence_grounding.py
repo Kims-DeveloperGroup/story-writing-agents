@@ -403,7 +403,7 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
         if factual:
             from tests.provider_wire_fixture import (
                 lead_fixture_bound_scope, lead_fixture_response, lead_fixture_assessment)
-            details = {"task_scope": lead_fixture_bound_scope(
+            details = {'planning_target': None, "task_scope": lead_fixture_bound_scope(
                 call, value["authoring_scope"], record=True)}
             if "authoring_assessment" in value:
                 choices = dict(call.contract.semantic_index.policy.choices)
@@ -709,8 +709,10 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
 
         self.assertEqual(collaboration_proposal_digest(result.proposal), result.proposal.proposal_digest,)
         self.workspace.path("manuscript/part-01/opening.md").write_text("Opening changed.\n", encoding="utf-8",)
+        submitted_before_drift = len(self.backend.calls)
         with self.assertRaises(BackendProtocolError):
             await self.runtime.decide_lead_step(_decision(result, self._confirm_decision()))
+        self.assertEqual(len(self.backend.calls), submitted_before_drift)
         path = self.workspace.path("manuscript/part-01/exploration.md")
         path.write_text("current-exploration-evidence\nSecond line.\n", encoding="utf-8")
         observed = []
@@ -1130,23 +1132,32 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             workflow_scope = lead_fixture_bound_scope(
                 call, _live_scope(call, activity='workflow'), record=True)
             stem = call.contract.factory.rule_seed.contract_id
-            baseline = SimpleNamespace(contract=replace(
-                call.contract.factory, schema_group_protocol=False).for_offer(offers))
+            origin = call.contract if call.contract.lineage is None else call.contract.lineage.origin
+            baseline = SimpleNamespace(contract=origin)
+            from tests.test_agent_context_execution import _group_control
+            selector = origin.factory.for_offer(origin.offers, request_basis=origin.request_basis,
+                prepared_compilation=origin.prepared_compilation)
+            selected = selector.decode_response(_group_control('question.authoring')(SimpleNamespace(contract=selector), None))
+            workflow = selector.group_workflow.accept(selector.record_group_control(selected), remaining_calls=1)
+            question_contract = origin.factory.for_offer(origin.offers, request_basis=origin.request_basis,
+                group_workflow=workflow, prepared_compilation=origin.prepared_compilation)
+            self.assertIs(question_contract.prepared_compilation, origin.prepared_compilation)
+            question_baseline = SimpleNamespace(contract=question_contract)
             seed = json.loads(lead_fixture_response(baseline, {
                 'response_type': 'answer', 'response_text': message,
                 'response_details': {'task_scope': workflow_scope}},
-                family=0, branch_key=stem + ':family:0'))
+                family=0, branch_key=stem + ':family:0:group:answer.workflow'))
             self.assertFalse(baseline.contract.rule_graph.findings(seed))
             self.assertTrue(baseline.contract.decode_response(
                 json.dumps(seed)).belongs_to(baseline.contract))
-            question = json.loads(lead_fixture_response(baseline, {
+            question = json.loads(lead_fixture_response(question_baseline, {
                 'response_type': 'clarification_question',
                 'response_text': 'Clarify the concrete review source.',
-                'response_details': {'task_scope': scope}},
-                family=0, branch_key=stem + ':family:1'))
-            self.assertFalse(baseline.contract.rule_graph.findings(question))
-            self.assertTrue(baseline.contract.decode_response(
-                json.dumps(question)).belongs_to(baseline.contract))
+                'response_details': {'planning_target': None, 'task_scope': scope}},
+                family=0, branch_key=stem + ':family:1:group:question.authoring'))
+            self.assertFalse(question_baseline.contract.rule_graph.findings(question))
+            self.assertTrue(question_baseline.contract.decode_response(
+                json.dumps(question)).belongs_to(question_baseline.contract))
             negative = json.loads(lead_fixture_response(call, {
                 'response_type': 'answer', 'response_text': message,
                 'response_details': {'task_scope': scope}}, family=0,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..lead_task_transitions import LeadTaskAction, LeadTaskDecision
+from ..document_plan import DocumentNodeSelection, DocumentCandidateSelection
 from ..conversations import LeadTaskDecisionResult, LeadMaterialChoice
 from ..conversations.session_context import SessionContextCapacityError
 
@@ -295,12 +296,55 @@ class InteractiveLeadAdapter:
             if entered.kind is not ControlOutcomeKind.COMMIT or not entered.text:
                 return False
             text = entered.text
+        document_selection = None
+        if action in {LeadTaskAction.NEW_TASK, LeadTaskAction.RESUME}:
+            plans = self._session.inspect_document_plans()
+            choices = [(view, node.node_id, None, node.target_path)
+                       for view in plans for node in view.plan.nodes]
+            choices += [(view, None, path, path) for view in plans
+                        for path in view.plan.remaining_target_paths]
+            if choices:
+                selected_plan = self._picker.read_picker(
+                    Prompt("Document work", instruction="Select input intent only. The exact task, inputs, and budget require the disclosed proposal's Confirm."),
+                    (Choice("none", "No document plan"), *(Choice(f"document_{index}", path,
+                     description=f"Plan {view.plan.ref.plan_id} revision {view.plan.ref.plan_revision}")
+                     for index, (view, _, _, path) in enumerate(choices))),
+                )
+                if selected_plan.kind is ControlOutcomeKind.EOF:
+                    return True
+                if selected_plan.kind is not ControlOutcomeKind.COMMIT or selected_plan.text is None:
+                    return False
+                if selected_plan.text != "none":
+                    view, node_id, target, _ = choices[int(selected_plan.text.removeprefix("document_"))]
+                    node = next((node for node in view.plan.nodes if node.node_id == node_id), None)
+                    uses = []
+                    for predecessor in (() if node is None else node.predecessor_node_ids):
+                        source = next(item for item in view.plan.nodes if item.node_id == predecessor)
+                        offered = next(item for item in view.nodes if item.node_id == predecessor).candidate_refs
+                        if not offered:
+                            continue
+                        picked = self._picker.read_picker(
+                            Prompt("Provisional predecessor input", instruction="Input only; this never marks a prerequisite complete or approves Apply."),
+                            (Choice("canonical", "Use qualified canonical inputs"), *(Choice(f"candidate_{index}", item.candidate_id,
+                             description=f"Revision {item.candidate_revision} | {item.candidate_digest}")
+                             for index, item in enumerate(offered))),
+                        )
+                        if picked.kind is ControlOutcomeKind.EOF:
+                            return True
+                        if picked.kind is not ControlOutcomeKind.COMMIT or picked.text is None:
+                            return False
+                        if picked.text != "canonical":
+                            candidate = offered[int(picked.text.removeprefix("candidate_"))]
+                            uses.append(DocumentCandidateSelection(predecessor, candidate, source.coverage,
+                                f"Use the disclosed {source.target_path} candidate as input for {node.target_path}."))
+                    document_selection = DocumentNodeSelection(view.plan.ref, node_id=node_id,
+                                                               target_path=target, candidate_uses=tuple(uses))
         decision = (chosen_task.decision(action, text=text, material_refs=materials) if chosen_task is not None else
                     LeadTaskDecision.for_conversation(self._session.session_id, conversation_id, action, text=text, material_refs=materials))
         self._progress.begin()
         try:
             result = self._run_operation(self._session.decide_lead_task(
-                decision, action_progress_sink=self._progress.observe,
+                decision, document_selection=document_selection, action_progress_sink=self._progress.observe,
             ))
         except (ValueError, TypeError, BackendProtocolError) as error:
             self._semantic_output.write_component(Notice(str(error), label="task control", role=SemanticRole.ERROR))
