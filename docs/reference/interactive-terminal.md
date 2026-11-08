@@ -341,6 +341,10 @@ visible at that insertion position until the caret reaches the end or input
 finishes. The spacing is only for display and is absent from submitted text
 and recalled history.
 
+While a native input method is still composing a syllable, the terminal may use
+an arrow key to commit it instead of sending that key to the editor. Navigation
+through already committed text then follows the arrow keys the editor receives.
+
 Live input keeps a spare terminal column for stable caret placement. With
 unchanged terminal geometry, editing updates only changed display rows;
 cursor-only movement does not erase the draft. Resizing or returning from a
