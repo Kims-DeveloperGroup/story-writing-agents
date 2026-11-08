@@ -2271,18 +2271,55 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
 
     def test_compact_search_read_evidence_retains_all_authoritative_facts(self) -> None:
         scope = replace( _SCOPE, subject_kind=ContextSubjectKind.DEBATE, subject_id="debate-one", )
+        canonical = lambda value: json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        conversation_text = "conversation needle"
+        conversation_record = {"schema_version": 2, "session_id": scope.session_id, "conversation_id": "conversation-one",
+            "turn_id": "turn", "step_id": "step", "event_id": "record-2", "batch_id": "batch", "batch_ordinal": 0,
+            "batch_size": 1, "batch_digest": _digest(b"batch"), "sequence": 25, "timestamp": "2026-11-09T00:00:00+00:00",
+            "sender": {"kind": "user", "agent_id": None}, "recipient": {"kind": "lead", "agent_id": scope.agent_id},
+            "direction": "user_to_lead", "kind": "message", "event_revision": _digest(b"event"),
+            "fields": [{"key": "message.content", "text": conversation_text, "assignment_ordinal": None, "input_ordinal": None}]}
+        conversation_records = [{**conversation_record, "event_id": f"earlier-{number}", "sequence": number,
+            "turn_id": f"earlier-turn-{number}", "step_id": f"earlier-step-{number}", "batch_id": f"earlier-batch-{number}",
+            "batch_digest": _digest(f"earlier-batch-{number}".encode()), "event_revision": _digest(f"earlier-{number}".encode()),
+            "fields": [{**conversation_record["fields"][0], "text": "Earlier supplied text."}]}
+            for number in range(1, 25)] + [conversation_record]
+        bootstrap = {"schema_version": 2, "session_id": scope.session_id, "conversation_id": "conversation-one",
+            "total_records": 25, "last_sequence": 25, "tail_batch_digest": _digest(b"batch"), "requested_records": 25,
+            "retained_records": 25, "omitted_records": 0,
+            "retained_utf8_bytes": sum(len(row["fields"][0]["text"].encode()) for row in conversation_records), "truncated": False}
+        debate_state = {"session_id": scope.session_id, "debate_id": "debate-one", "status": "active", "terminal": False}
+        debate_message = {"content": "active debate needle", "kind": "message", "phase": "review", "revision": 1,
+            "round": 1, "sender": scope.agent_id, "timestamp": "2026-11-09T00:00:00+00:00"}
+        state_entry = {"content": "own state needle", "agent_id": scope.agent_id, "session_id": scope.session_id,
+            "debate_id": "debate-one", "kind": "note", "phase": "review", "revision": 1, "round": 1,
+            "timestamp": "2026-11-09T00:00:00+00:00"}
+        source_values = {ContextSourceKind.CONVERSATION: {"bootstrap": bootstrap, "records": conversation_records},
+            ContextSourceKind.ACTIVE_DEBATE: {"state": debate_state, "messages": [debate_message]},
+            ContextSourceKind.OWN_AGENT_STATE: [state_entry]}
+        record_values = {ContextSourceKind.CONVERSATION: tuple((row["event_id"], row["sequence"], row, row["fields"][0]["text"])
+                for row in conversation_records),
+            ContextSourceKind.ACTIVE_DEBATE: (("state", 1, debate_state, canonical(debate_state)),
+                ("message_1", 2, debate_message, debate_message["content"])),
+            ContextSourceKind.OWN_AGENT_STATE: (("entry_1", 1, state_entry, state_entry["content"]),)}
         cases = ( ( ContextSourceKind.WRITING_ARTIFACT, ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY,
             "manuscript/part-01/chapter.md", ContextSourceBoundary.artifact_lines(1, 1), "artifact needle\n",),
             (ContextSourceKind.CONVERSATION, ContextAuthorityKind.CONVERSATION_STORAGE,
-            "conversation/conversation-one", ContextSourceBoundary.records(1, 1), "conversation needle",),
+            "conversation/conversation-one", ContextSourceBoundary.records(25, 25), canonical(conversation_record),),
             (ContextSourceKind.ACTIVE_DEBATE, ContextAuthorityKind.ACTIVE_DEBATE, "debate/debate-one",
-                ContextSourceBoundary.records(1, 1), "active debate needle",), (ContextSourceKind.OWN_AGENT_STATE,
+                ContextSourceBoundary.records(2, 2), canonical(debate_message),), (ContextSourceKind.OWN_AGENT_STATE,
                 ContextAuthorityKind.OWN_AGENT_STATE, "agent-state/lead_orchestrator",
-                ContextSourceBoundary.records(1, 1), '{"debate_id":"debate-one","note":"own state needle"}',),)
+                ContextSourceBoundary.records(1, 1), canonical(state_entry),),)
         snapshots_list: list[ContextSourceSnapshot] = []
         for index, (kind, authority, locator, boundary, content) in enumerate(cases, start=1, ):
             encoded = content.encode("utf-8")
             record = ContextSourceRecord(f'record-{index}', boundary, content, content, _digest(encoded), len(encoded))
+            records = (record,)
+            if kind in source_values:
+                records = tuple(ContextSourceRecord(identity, ContextSourceBoundary.records(number, number), canonical(value),
+                    search_text, _digest(canonical(value).encode()), len(canonical(value).encode()))
+                    for identity, number, value, search_text in record_values[kind])
+                encoded = canonical(source_values[kind]).encode()
             source_id = {ContextSourceKind.WRITING_ARTIFACT: _artifact_id(locator),
                 ContextSourceKind.CONVERSATION: "conversation:conversation-one",
                 ContextSourceKind.ACTIVE_DEBATE: "active_debate:debate-one", ContextSourceKind.OWN_AGENT_STATE: (
@@ -2290,10 +2327,8 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             content_digest = _digest(encoded)
             descriptor = ContextSourceDescriptor( scope, source_id, kind, ( _digest(f"revision-{index}".encode())
                     if kind is ContextSourceKind.WRITING_ARTIFACT else content_digest),
-                ContextProvenance(authority, locator), content_digest, len(encoded), 1,)
-            snapshot = object.__new__(ContextSourceSnapshot)
-            object.__setattr__(snapshot, "descriptor", descriptor); object.__setattr__(snapshot, "records", (record,))
-            object.__setattr__(snapshot, "content", encoded); snapshots_list.append(snapshot)
+                ContextProvenance(authority, locator), content_digest, len(encoded), len(records),)
+            snapshots_list.append(ContextSourceSnapshot(descriptor, records, encoded))
         manifest = ContextManifest( scope, tuple(
                 _entry(snapshot, index) for index, snapshot in enumerate(snapshots_list) ), )
         snapshots = {snapshot.descriptor.source_id: snapshot for snapshot in snapshots_list}
@@ -2344,6 +2379,25 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         self.assertNotIn("/Users/", framed); self.assertNotIn("character_custodian", framed)
         self.assertLessEqual( len(search_serialized.encode("utf-8")) + len(read_serialized.encode("utf-8")),
             CONTEXT_ACTION_POLICY.max_observation_utf8_bytes, )
+        complete_session = _session(_binding(manifest), registry)
+        absent_query = (ContextSearchQuery("genuinely absent", (ContextSourceKind.CONVERSATION,)),)
+        complete_miss = complete_session.search(ContextSearchAction(_correlation(complete_session.binding, 1), absent_query))
+        self.assertEqual(complete_miss.hits, ()); self.assertFalse(complete_miss.truncated)
+        self.assertIsNotNone(complete_miss.zero_hit_receipt)
+        partial_value = json.loads(snapshots_list[1].content)
+        partial_value["records"] = partial_value["records"][:24]
+        partial_value["bootstrap"].update(retained_records=24, omitted_records=1, truncated=True,
+            retained_utf8_bytes=sum(len(row["fields"][0]["text"].encode()) for row in partial_value["records"]))
+        partial_bytes = canonical(partial_value).encode(); partial_digest = _digest(partial_bytes)
+        partial = ContextSourceSnapshot(replace(snapshots_list[1].descriptor, revision=partial_digest,
+            content_digest=partial_digest, utf8_bytes=len(partial_bytes), record_count=24), snapshots_list[1].records[:24], partial_bytes)
+        partial_manifest = ContextManifest(scope, (_entry(partial, 0),))
+        partial_registry = _registry(scope, {partial.descriptor.source_id: partial})
+        partial_registry.search = ContextSourceRegistry.search.__get__(partial_registry)
+        partial_session = _session(_binding(partial_manifest), partial_registry)
+        partial_miss = partial_session.search(ContextSearchAction(_correlation(partial_session.binding, 1), absent_query))
+        self.assertEqual(partial_miss.hits, ()); self.assertTrue(partial_miss.truncated)
+        self.assertIsNone(partial_miss.zero_hit_receipt)
 
     def test_search_preflight_and_executed_failures_charge_differently(self) -> None:
         registry = _registry(_SCOPE, self.snapshots); session = _session(self.binding, registry)

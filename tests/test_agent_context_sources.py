@@ -606,13 +606,25 @@ class RealAuthorityAdapterTests(_SourceFixture):
         self.assertEqual(value["bootstrap"]["total_records"], 5)
 
     def test_searchable_history_is_opt_in_same_session_active_and_frozen(self) -> None:
+        from story_writing_agents import conversations as conversation
+        from tests.collaboration_contract_fixture import USER, LEAD, make_batch, make_draft
         services = compose_filesystem_conversation_storage(self.workspace)
         focused = services.catalog.create("session", "Focused")
         sibling = services.catalog.create("session", "Sibling")
         archived = services.catalog.create("session", "Archived")
         cross_session = services.catalog.create("other-session", "Other")
+        needle = "later USER retrospective 한🙂"
         for metadata in (focused, sibling, archived, cross_session):
             batch = contract_batches(metadata.conversation_id)["proposal"]
+            if metadata is focused:
+                messages = tuple(replace(make_draft(f"history_{number}", conversation.CollaborationEventKind.MESSAGE,
+                    USER, LEAD, conversation.CollaborationMessagePayload(needle if number == 25 else f"Earlier input {number}."),
+                    turn_id=f"history_turn_{number}", step_id=f"history_step_{number}"),
+                    session_id="session", conversation_id=metadata.conversation_id) for number in range(1, 34))
+                for message in messages:
+                    prefix = services.event_store.read("session", metadata.conversation_id)
+                    services.event_store.append_batch(make_batch(prefix, "batch_" + message.event_id, message))
+                batch = replace(batch, expected_last_sequence=33)
             services.event_store.append_batch(
                 replace(
                     batch,
@@ -644,7 +656,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
             f"conversation/{focused.conversation_id}", CONTEXT_SOURCE_POLICY)
         self.assertEqual(
             tuple(record.record_id for record in focused_snapshot.records),
-            (
+            tuple(f"history_{number}" for number in range(1, 34)) + (
                 "prepared_call_lead",
                 "submitted_call_lead",
                 "judgment_event",
@@ -652,6 +664,42 @@ class RealAuthorityAdapterTests(_SourceFixture):
                 "request_event",
             ),
         )
+        complete = json.loads(focused_snapshot.content)["bootstrap"]
+        self.assertEqual((complete["total_records"], complete["retained_records"], complete["omitted_records"], complete["truncated"]),
+            (38, 38, 0, False))
+        scope = adapter.scope
+        def registry_for(conversation_adapter):
+            return ContextSourceRegistry(WritingArtifactSourceAdapter(self.repository, scope), conversation_adapter,
+                ActiveDebateSourceAdapter(self.workspace, scope, None), OwnAgentStateSourceAdapter(self.workspace, scope))
+        registry = registry_for(adapter)
+        manifest = ContextManifest(scope, tuple(_entry(item, number) for number, item in enumerate(inventory)))
+        matches, truncated, scanned = registry.search(manifest, (ContextSearchQuery(needle, (ContextSourceKind.CONVERSATION,)),))
+        self.assertFalse(truncated); self.assertEqual(len(matches), 1)
+        self.assertEqual((matches[0].record.record_id, matches[0].record.boundary), ("history_25", ContextSourceBoundary.records(25, 25)))
+        self.assertIn(needle, matches[0].record.content)
+        self.assertEqual(scanned, sum(item.utf8_bytes for item in inventory))
+        events = services.event_store.read("session", focused.conversation_id)
+        partial = select_bounded_collaboration_context(events, event_ids=tuple(event.event_id for event in events))
+        self.assertEqual((partial.retained_records, partial.omitted_records, partial.truncated), (24, 14, True))
+        partial_adapter = FocusedConversationSourceAdapter(services.catalog, services.event_store, scope,
+            focused.conversation_id, captured_context=partial)
+        partial_snapshot = partial_adapter.capture(f"conversation/{focused.conversation_id}", CONTEXT_SOURCE_POLICY)
+        partial_registry = registry_for(partial_adapter)
+        partial_manifest = ContextManifest(scope, (_entry(partial_snapshot.descriptor),))
+        partial_hits, partial_truncated, _ = partial_registry.search(partial_manifest,
+            (ContextSearchQuery(needle, (ContextSourceKind.CONVERSATION,)),))
+        self.assertEqual(partial_hits, ()); self.assertTrue(partial_truncated)
+        with self.assertRaises(ContextSourceError) as limited:
+            adapter.capture(f"conversation/{focused.conversation_id}", replace(CONTEXT_SOURCE_POLICY, max_records_per_source=37))
+        self.assertIs(limited.exception.code, ContextSourceErrorCode.SOURCE_LIMIT_EXCEEDED)
+        for changes in ({"requested_records": True}, {"total_records": 37}, {"omitted_records": 1},
+                        {"truncated": 0}, {"retained_utf8_bytes": complete["retained_utf8_bytes"] + 1}):
+            malformed = json.loads(focused_snapshot.content); malformed["bootstrap"].update(changes)
+            encoded = json.dumps(malformed, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+            descriptor = replace(focused_snapshot.descriptor, revision=_digest(encoded), content_digest=_digest(encoded), utf8_bytes=len(encoded))
+            with self.assertRaises(ContextSourceError) as corrupt:
+                ContextSourceSnapshot(descriptor, focused_snapshot.records, encoded)
+            self.assertIs(corrupt.exception.code, ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
         self.assertIs(
             adapter.capture(
                 f"conversation/{focused.conversation_id}", CONTEXT_SOURCE_POLICY),

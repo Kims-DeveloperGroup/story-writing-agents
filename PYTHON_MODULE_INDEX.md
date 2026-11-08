@@ -111,7 +111,7 @@ source reads. `service` is the composition boundary; `ledger` owns durable accou
 - `agent_context.request_compaction`, `agent_context.sources`
 
 Dependencies flow from `service`, `sources`, and `progress` toward manifest/action/planning
-contracts. Filesystem source access is delegated to writing-artifact and workspace owners. Optional
+contracts. `sources` captures complete searchable conversation history under source limits separately from bounded provider delivery and propagates omitted capture coverage into search truncation. Filesystem source access is delegated to writing-artifact and workspace owners. Optional
 validation diagnostics preserve rejection, repair, checkpoint, and authority decisions.
 
 `service` retains factory declaration and host callbacks on its calling loop; the built-in Lead factory prepares immutable group compilation separately. `service` owns provider delivery, exact payload UTF-8 capacity diagnostics and verified native continuity; `backend` enforces native-schema and combined schema-plus-payload input budgets from `conversations.session_context`. Logical payload and member-schema preflights retain their limits. Host retains integrity receipts and complete-history coverage. `request_compaction` shares only when properties and bytes decrease before accounting; it owns no durable state or resources. Genuine mandatory-reference proofs enter current READ offers only through the typed prelude factory and reservation checks; their complete metadata is bound into the offer digest. `group_observation`은 순수 group/accounting에 의존하는 불변 DTO와 sink이며 service와 conversation event가 소비한다. `group_reporting`은 최종 native 준비값·동결 비교 조건·trace 회계의 읽기 전용 크기/종단 보고만 소유하며 실행·컴파일·저장 권한이 없다.
