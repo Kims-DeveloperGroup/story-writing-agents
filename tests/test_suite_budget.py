@@ -256,6 +256,7 @@ class SuiteBudgetTests(unittest.TestCase):
             'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_submission_uncertain_during_correction_never_replays': 1,
             'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_timed_out_before_correction_never_replays': 1,
             'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_timed_out_during_correction_never_replays': 1,
+            'tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order': 0,
             'tests.test_specialist_routing.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned': 0,
             'tests.test_specialist_routing.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current': 0,
         }
@@ -264,7 +265,7 @@ class SuiteBudgetTests(unittest.TestCase):
         prior_caps[recovery_id] = 12
         self.assertEqual(set(migrated["subtest_caps"]) - set(prior_caps), set(expected_additions))
         self.assertEqual({key: migrated["subtest_caps"][key] for key in expected_additions}, expected_additions)
-        self.assertEqual(migrated["max_test_source_lines"], 151273)
+        self.assertEqual(migrated["max_test_source_lines"], 151312)
         matrix_id = "tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_missing_before_correction_never_replays"
         untouched_id = "tests.test_specialist_routing.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership"
         zero_id = 'tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation'
@@ -272,7 +273,7 @@ class SuiteBudgetTests(unittest.TestCase):
         for old_limit in (148783, 150770):
             parent = dict(migrated, max_test_source_lines=old_limit, subtest_caps=prior_caps)
             self.assertIsNone(suite_budget.check_monotonic(migrated, parent))
-            for old, limit in ((old_limit - 1, 151273), (old_limit + 1, 151273), (old_limit, 151272), (old_limit, 151274)):
+            for old, limit in ((old_limit - 1, 151312), (old_limit + 1, 151312), (old_limit, 151311), (old_limit, 151313)):
                 self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
                     dict(migrated, max_test_source_lines=limit), dict(parent, max_test_source_lines=old))
             for caps in ({key: value for key, value in migrated["subtest_caps"].items() if key != matrix_id},
@@ -281,7 +282,8 @@ class SuiteBudgetTests(unittest.TestCase):
                          {**migrated["subtest_caps"], zero_id: 1},
                          {key: value for key, value in migrated["subtest_caps"].items() if key != zero_id},
                          {**migrated["subtest_caps"], recovery_id: 1}, {**migrated["subtest_caps"], recovery_id: 3},
-                         {**migrated["subtest_caps"], untouched_id: 4}, {**migrated["subtest_caps"], untouched_id: 6}):
+                         {**migrated["subtest_caps"], untouched_id: 4}, {**migrated["subtest_caps"], untouched_id: 6},
+                         {**migrated["subtest_caps"], 'tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order': 1}):
                 self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(migrated, subtest_caps=caps), parent)
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, migrated,
                 dict(parent, subtest_caps={**prior_caps, untouched_id: 4}))

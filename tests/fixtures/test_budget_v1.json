@@ -1,7 +1,7 @@
 {
   "max_sequential_wall_seconds": 18000,
   "max_shard_wall_seconds": 3600,
-  "max_test_source_lines": 151273,
+  "max_test_source_lines": 151312,
   "schema_version": 1,
   "subtest_caps": {
     "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_extracts_status_and_error_from_legacy_terminal_shape": 0,
@@ -2236,6 +2236,7 @@
     "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_management_directive_configuration_and_inspection_remain": 0,
     "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_runtime_methods_aliases_and_forwarding_are_absent": 8,
     "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_runtime_signatures_do_not_hide_removed_keyword_paths": 10,
+    "tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order": 0,
     "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only": 0,
     "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed": 0,
     "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed": 5,

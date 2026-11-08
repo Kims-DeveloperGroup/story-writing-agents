@@ -50,7 +50,7 @@ from .authoring_admission import (
 from .conversations.events import authoring_source_facts
 
 from .lead_task_transitions import (
-    task_value_to_dict,
+    task_value_to_dict, selected_task_materials_to_dict,
     LeadTaskAction, LeadTaskDecision, LeadTaskRef, LeadMaterialRef,
     LeadMaterialKind, LeadTaskTransitionReceipt, LeadMaterialCapture,
     LeadDiscussionReport, LeadPublicResponse, LeadPublicResponseAcceptance,
@@ -13120,12 +13120,9 @@ class StoryRuntime:
                     }
                 if task_receipt is not None:
                     current_value["task_transition"] = task_value_to_dict(task_receipt)
-                    current_value["selected_task_materials"] = [
-                        {"input_id": f"selected_material_{ordinal}",
-                         "capture_event_id": event.event_id,
-                         **task_value_to_dict(event.payload.capture)}
-                        for ordinal, event in enumerate(task_material_events, 1)
-                    ]
+                    current_value["selected_task_materials"] = selected_task_materials_to_dict(
+                        tuple((event.event_id, event.payload.capture) for event in task_material_events)
+                    )
                 if discussion_constraints is not None:
                     current_value["discussion_constraints"] = discussion_constraints.prompt_facts()
                 current_value = self._compact_document_plan_input(current_value)

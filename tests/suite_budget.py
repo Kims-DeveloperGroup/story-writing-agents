@@ -84,6 +84,7 @@ _FEEDBACK_NEW_CAPS = {
     'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_submission_uncertain_during_correction_never_replays': 1,
     'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_timed_out_before_correction_never_replays': 1,
     'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_timed_out_during_correction_never_replays': 1,
+    'tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order': 0,
     'tests.test_specialist_routing.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned': 0,
     'tests.test_specialist_routing.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current': 0,
 }
@@ -97,7 +98,7 @@ def _feedback_migration(current: dict[str, Any], base: dict[str, Any]) -> bool:
             and base["schema_version"] == current["schema_version"] == 1
             and tuple(base[name] for name in ("max_sequential_wall_seconds", "max_shard_wall_seconds")) == (18000, 3600)
             and tuple(current[name] for name in ("max_sequential_wall_seconds", "max_shard_wall_seconds")) == (18000, 3600)
-            and (base["max_test_source_lines"], current["max_test_source_lines"]) in ((148783, 151273), (150770, 151273)))
+            and (base["max_test_source_lines"], current["max_test_source_lines"]) in ((148783, 151312), (150770, 151312)))
 
 
 def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:

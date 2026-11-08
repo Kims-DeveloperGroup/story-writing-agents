@@ -622,7 +622,57 @@ raw149462이고, 정책 helper2행 후 helper1308이며 전체 상한은 **15077
 제품12회/2라운드와 조건부22회 통합 시나리오는 변경하지 않는다.
 최종 전체 CI·Whole Front·재조정·기술 provider·리뷰·완료 조건을 대체하지 않는다.
 
-### #938 independent-case inventory and source allocation
+### #938 현재 독립 검증과 최종 통합 계약
+
+단계 C는 기존2542개에 순수 입력 계약1개를 추가해2543개 ID를 검증한다.
+원래2527개와 기존15개를 모두 유지한다. 복구 cap은 기존12에서 retained
+core2와10개 조합의 각1로 이동하며, 전체 조합의 모의 제출40회를 보존한다.
+다른 기존 cap은 그대로이며 신규 C도 cap0이다. 원래 cap-map SHA256은
+`e8d0ec716f086485451822317114c27efd70bd895fdcad012a9410ff406aff18`이다.
+정확히 고정된16개 ID 이관과 결합한 **148783→151312 /150770→151312**만
+허용한다. 이전에 승인된 pre-938 전환도 보존한다.
+
+현재 소스 청구는 **raw149763 + 수동 helper1548 =151311**로 상한151312
+이내다. private workflow-context 검증181행도 수동 helper에 포함한다.
+budget 도구의 raw 검사와 이 추가 청구를 구분해 기록한다. 임의 ID·cap·상한
+증가나 알려진 실패의 삭제·skip을 허용하지 않는다.
+
+`SelectedTaskMaterialCodecTests`는 불변 capture2개를 실제 생산 formatter와
+실제 provider wire projection에 통과시켜 독립적으로 적은 최종 두 행과 비교한다.
+Runtime·workspace·backend·schema 생성·provider를 준비하지 않는다. 기존 단일
+행 기대값은 RED로, 올바른 두 행은 GREEN으로 실제 선택 실행하고 결과까지의
+큐·setup·import/발견·검사·정리 시간을 구분한다. 임의120초 기준은 두지 않는다.
+작은 계약 수정에도 긴 Runtime prefix가 필요하면 이번 목표 미달을 유지한다.
+
+복구10조합은 각각 fresh fixture로 선택한다. 기존 순수 codec과 여섯 offer·세
+provider-fixture 경계, 실제 문서20회 순차 연쇄와 별도2회 목표, 작은27개
+assertion과 전체 census·catalogue·부정 검사를 유지한다. 문서 fixture의 추가
+readiness2회·Runtime1개는 실제 비용에 포함한다.
+
+현행 v3는 DRAFT1round 뒤 남은 round를 최종 검토용으로 보존한다. 역사 자료
+회귀는 이전 revision의 draft_sources 입력을 실제 pending 추천에서 검증하고
+공개 REJECT로 닫는다. 새 task에는 이전 DRAFT와 거절 답변을 material로만
+캡처하며 foreign draft_sources는 비운다. 원본 event·digest→capture→전달 입력과
+새 task의 집필·artifact·검토·Apply를 실제 실행한다. 이전 task의 제출·예산은
+초기화하지 않는다. 기존 O의 ‘41+readiness2’를 전체 호출수라고 쓴 설명은
+잘못된 부분 집계다. 이후 A/B 분해의 계획은 A42회/B19회이며 아직 실측값이 아니다.
+B의 seedless 독립 fixture·신규 cap0 ID·최종2544개/hosted162개 편성은 별도 확정한다.
+
+두 큰 fixture에만 이력 성분512KiB를 설정하고 종료 시 복원한다. production
+기본256KiB·schema/payload 각512KiB·합산1MiB는 유지한다. 실제 제출 accounting의
+크기를 검사하고 다중 session은 call ID multiset을 backend 기록과 대조한다.
+이는 실제 model 수용량의 증거는 아니다.
+
+Hosted profile은 `audited-161-v5`,161개/20클래스이고 serial2382개다. 원래147개
+소속·상대 순서, mixed serial8개, class-LPT·5shard·4worker·18000/3600초를 유지한다.
+완료·source/환경 확인을 마친 관측만 비용에 쓰고 실패 prefix는 완료 비용으로
+쓰지 않는다. 최종 같은 HEAD의 전체 CI·조정·정리·리뷰를 요구한다. 부분 선택·
+Draft·metadata 결과는 전체 통과가 아니다. Whole Front가 실제 timeout이면 중단한다.
+
+아래 숫자 편성·진단 기록은 당시 source의 이력이다. 현재 편성은 이 절과 최종
+실제 보고서를 기준으로 하며, 변경별 선택 규칙은 계속 적용한다.
+
+### #938 independent-case inventory and source allocation history
 
 The current split retains all 2,527 original IDs and adds fifteen IDs: ten
 submitted-recovery combinations, two codec-contract cases, two document cases,
