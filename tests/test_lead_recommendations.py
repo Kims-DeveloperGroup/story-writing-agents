@@ -133,6 +133,7 @@ class LeadRecommendationTests(RecommendationCase):
         from tests.collaboration_contract_fixture import USER, LEAD, make_batch, store_batch, provider_call_drafts, make_lead_evidence
         from story_writing_agents.authoring_task_lifecycle import task_identity_for_origin
         from story_writing_agents.specialist_routing import AuthoringScope, ArtifactReviewDomain, AuthoringContribution, AuthoringContributionRole
+        from story_writing_agents import review_contracts as review
         from tests.provider_wire_fixture import finite_fixture_selection, lead_fixture_response
         for aliases, omit_source in (((), False), (("recommendation_request",), False),
                                      (("recommendation_decision",), False),
@@ -148,9 +149,21 @@ class LeadRecommendationTests(RecommendationCase):
                     scope = AuthoringScope(AuthoringActivity.DRAFT, (), (ArtifactReviewDomain.TONE_EXECUTION,),
                         'Preserve actual events; clarify the target separately.', task_id, 1, schema_version=3,
                         contributions=(AuthoringContribution(ArtifactReviewDomain.TONE_EXECUTION, AuthoringContributionRole.DRAFT_OWNER),))
+                    if ordinal == 0: original_scope = scope
                     evidence = make_lead_evidence()
                     evidence = replace(evidence, receipts=tuple(replace(row, operation_id='lead_' + turn_id,
                         result_correlation_id='outcome_' + turn_id) for row in evidence.receipts))
+                    preliminary = None
+                    if ordinal == 1:
+                        scope = replace(scope, activity=AuthoringActivity.REVIEW, contributions=(AuthoringContribution(
+                            ArtifactReviewDomain.TONE_EXECUTION, AuthoringContributionRole.CONSTRAINT_ASSESSOR),))
+                        source_digest = 'sha256:' + hashlib.sha256(raw.encode()).hexdigest()
+                        target = review.ReviewTarget('user_input', review.ReviewTargetKind.USER_PROVIDED,
+                            f'conversation/{turn_id}/user_input', source_digest, source_digest, source_digest, source_digest, True)
+                        preliminary = review.LeadPreliminaryReview(task_id, 1, (target,), ('user_input',), (),
+                            (review.ReviewFinding('Retain the supplied experience and retrospective.', ('user_input',)),),
+                            (), (), True, review.PreliminaryNextAction.PROPOSE_CHANGE_TASK)
+                        evidence = c.CollaborationLeadEvidence(c.LeadOutcomeScope.STORY_SPECIFIC, c.LeadEvidenceStatus.VERIFIED, ())
                     if ordinal == 2:
                         scope = replace(scope, activity=AuthoringActivity.WORKFLOW, domains=(), contributions=())
                         evidence = c.CollaborationLeadEvidence(c.LeadOutcomeScope.WORKFLOW_META, c.LeadEvidenceStatus.NOT_APPLICABLE, ())
@@ -160,12 +173,18 @@ class LeadRecommendationTests(RecommendationCase):
                     calls = tuple(replace(row, **headers) for row in provider_call_drafts(invocation_id='inv_' + source_id,
                         call_id='call_' + source_id, role=LEAD_ORCHESTRATOR, recipient=LEAD, invocation_kind=c.CollaborationInvocationKind.LEAD))
                     judgment = replace(user, event_id='scope_' + source_id, sender=LEAD, recipient=USER,
-                        payload=c.CollaborationLeadJudgmentPayload(c.LeadOutcomeKind.ANSWER if ordinal == 2 else c.LeadOutcomeKind.QUESTION,
-                            'Retrieve existing grounds before asking for missing information.', evidence, authoring_scope=scope))
+                        payload=c.CollaborationLeadJudgmentPayload(c.LeadOutcomeKind.ANSWER if ordinal else c.LeadOutcomeKind.QUESTION,
+                            'Retrieve existing grounds before asking for missing information.', evidence, authoring_scope=scope,
+                            preliminary_review=preliminary))
                     prefix = self.history(cid); batch = make_batch(prefix, 'batch_' + source_id, user, *calls, judgment)
                     store_batch(prefix, batch); self.runtime.conversation_storage_services.event_store.append_batch(batch)
                 seed_scope = self.projection(cid).available_tasks[0].scope
+                self.assertEqual(seed_scope, original_scope)
                 self.assertEqual((seed_scope.schema_version, seed_scope.activity, seed_scope.domains), (3, AuthoringActivity.DRAFT, (ArtifactReviewDomain.TONE_EXECUTION,)))
+                replayed = c.project_collaboration_history(tuple(c.decode_collaboration_event(c.encode_collaboration_event(event))
+                    for event in self.history(cid)))
+                self.assertEqual(replayed.available_tasks, self.projection(cid).available_tasks)
+                self.assertEqual(replayed.available_tasks[0].source_event_ids, tuple(source_id for source_id, _raw in origins))
                 captured_material = []
                 def historical_assessment(call):
                     material = lead._live_material(call); rows = material['authoring_user_sources']; captured_material[:] = rows
@@ -207,6 +226,8 @@ class LeadRecommendationTests(RecommendationCase):
                         if item.kind is c.CollaborationInputKind.USER_INPUT else item for item in request.basis.inputs)))
                 with self.assertRaises(ValueError):
                     c.project_collaboration_history(rewrite_history(before_events, origins[0][0], payload=c.CollaborationMessagePayload(origins[0][1] + ' changed')))
+                with self.assertRaises(ValueError):
+                    c.project_collaboration_history(rewrite_history(before_events, origins[1][0], payload=c.CollaborationMessagePayload(origins[1][1] + ' changed')))
             source_ids = [item.input_id for item in request.basis.inputs]
             self.assertTrue(source_ids)
             if staged:

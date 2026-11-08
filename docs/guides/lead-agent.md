@@ -1409,6 +1409,13 @@ new assignment or recommendation inputs. A procedural follow-up can therefore
 reuse an earlier factual brief and its creative limits without asking the user to
 repeat them. Source membership alone does not establish current creative permission.
 
+The runtime derives this source membership from the verified task/revision and
+the original USER message's conversation, turn and step. A Lead preliminary
+review in that step preserves the USER original for later assessment. Its
+read-only view still cannot replace the active writing scope, change its roles
+or revision, or supply execution authority. The same source rule is replayed
+from stored history; retaining the original does not depend on a SEARCH/READ.
+
 Preparation recommendations that require official authoring admission also require
 a sufficient assessment: named foundations, USER direction, a source-bound creative
 scope, permitted actions, covered decisions, and no missing information. Where the
