@@ -25,9 +25,9 @@ Or install the distribution normally:
 python -m pip install story-writing-agents
 ```
 
-Both forms install the required independent `jsonl-viewer` 0.8.3 from its exact
+Both forms install the required independent `jsonl-viewer` 0.9.0 from its exact
 HTTPS VCS requirement at
-`6619fd680efa730c520a0f93f7aaf5514bfabdec`. A first install normally needs
+`8b6ac65ad3c85bf8d331f6b94567e607ba0da1e4`. A first install normally needs
 Git, network access, and repository access. Installation does not invoke a
 story provider, open an exchange, or enable a service. The historical
 `story-writing-agents[viewer]` and editable `'.[viewer]'` forms remain accepted
@@ -41,7 +41,7 @@ pulling updated Story source, rerun the normal editable installation:
 python -m pip install --editable .
 ```
 
-That ordinary reinstall upgrades older viewer installations to required 0.8.3
+That ordinary reinstall upgrades older viewer installations to required 0.9.0
 without an uninstall, `--force-reinstall`, or `--ignore-installed`. Reserve a forced
 reinstall for a genuinely damaged same-version installation, as described in
 [Troubleshooting](troubleshooting.md#exchanges-does-not-open-the-expected-response).
@@ -141,6 +141,26 @@ changes sections. In detail, `h/j/k/l` moves the JSON cursor, Enter folds a
 container, Page Up/Down (`b`/Space) pages, and physical Left/Right pans long rows.
 `g` uses the original positive source-line number.
 
+### Compact group navigation
+
+The group list uses one row per captured call, with fixed number, name, and
+record-count columns. Alternating backgrounds separate rows; a full blue band
+and `▸` identify selection independently of the focused pane. Long names are
+cell-clipped; with list focus, `,`/`.` scroll the selected information area to
+read the full name, ID, and exact counts. No extra ID row reduces list capacity.
+
+In the list, `t` finds a literal name or ID within current results. This is
+separate from `/` source-text search and `f` filters. A selection hidden by name
+finding stays in detail until explicit navigation; empty name results do not
+change it. Escape clears name finding. Revisiting one of the 32 most recently
+visited groups restores its record, section, JSON cursor, folds, and scroll.
+Applied source-search/filter/scope changes invalidate this invocation-only cache.
+
+`p` cycles Dark, Light, and ANSI palettes in the main view. `NO_COLOR` and disabled
+color retain numbers, aligned columns, selection, and focus cues. These generic
+controls are owned by jsonl-viewer and also work with ordinary batch/sensor logs;
+Story supplies only inert data and the existing terminal transport.
+
 ### Filters and incomplete records
 
 Press `f` to edit a draft. Outcome, Provider and Stage allow multiple values:
@@ -215,7 +235,7 @@ folds and occurrence state are not saved by Story.
 
 ### Keyboard input language
 
-In the JSON record viewer, 0.8.3 automatically recovers English command input
+In the JSON record viewer, 0.9.0 automatically recovers English command input
 on supported local macOS/Linux desktops. After switching to Korean while the
 viewer is open, a non-ASCII command input selects and verifies English. That
 invalid input is consumed; press the command key again. Korean search drafts
@@ -262,9 +282,9 @@ items, fields and buttons as keyboard actions; wheel input scrolls its painted
 region. Modal outside clicks do not discard drafts.
 
 The external package owns exact rendering and input behavior. See its pinned
-[generic design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/6619fd680efa730c520a0f93f7aaf5514bfabdec/docs/design-system.md),
-[inspection contract](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/6619fd680efa730c520a0f93f7aaf5514bfabdec/docs/inspection.md),
-and [nineteen deterministic sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/6619fd680efa730c520a0f93f7aaf5514bfabdec/docs/samples).
+[generic design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/8b6ac65ad3c85bf8d331f6b94567e607ba0da1e4/docs/design-system.md),
+[inspection contract](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/8b6ac65ad3c85bf8d331f6b94567e607ba0da1e4/docs/inspection.md),
+and [deterministic sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/8b6ac65ad3c85bf8d331f6b94567e607ba0da1e4/docs/samples).
 Story's grouping and provenance rules live only in this repository.
 
 ## Interpret request, response, and outcome
@@ -402,9 +422,9 @@ Common bounded failures are:
 | --- | --- |
 | No attached session | Attach the intended session, then retry bare `/exchanges`. |
 | No records for the session | Run the intended provider work; do not invoke it merely to manufacture diagnostics. |
-| An older viewer through 0.7.1 remains after updating a checkout | Rerun the normal editable Story install to upgrade to required 0.8.3, then restart Story. |
+| An older viewer through 0.7.1 remains after updating a checkout | Rerun the normal editable Story install to upgrade to required 0.9.0, then restart Story. |
 | Required viewer unavailable | Rerun the normal Story installation, then retry. The compatibility extra is not a separate repair path. |
-| Viewer 0.8.3 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
+| Viewer 0.9.0 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
 | Store busy | Retry after the concurrent exchange write completes. |
 | Unsafe, corrupt, or uncorrelatable records | Preserve the workspace and inspect the content-safe runtime diagnostic before retrying. |
 | Selected stream disappeared | Rerun `/exchanges` to refresh retained inventory. |

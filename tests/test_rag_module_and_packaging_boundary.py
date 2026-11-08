@@ -37,8 +37,8 @@ _GENERIC_RAG_REPOSITORY = "https://github.com/Kims-DeveloperGroup/generic-rag.gi
 _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}")
 _OLD_JSONL_VIEWER_PIN = "a38a975eda4123df11c1fa4f796fd49ab88efcee"
-_JSONL_VIEWER_PIN = "6619fd680efa730c520a0f93f7aaf5514bfabdec"
-_JSONL_VIEWER_VERSION = "0.8.3"
+_JSONL_VIEWER_PIN = "8b6ac65ad3c85bf8d331f6b94567e607ba0da1e4"
+_JSONL_VIEWER_VERSION = "0.9.0"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
 _JSONL_VIEWER_REQUIREMENT = (
     f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}")
