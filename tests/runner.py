@@ -1031,7 +1031,7 @@ def _hosted_partition(canonical: CanonicalCollection, selection: CanonicalCollec
     mixed_serial = set(_HOSTED_MIXED_SERIAL_IDS)
     classes = {identifier.rsplit(".", 1)[0] for identifier in eligible}
     present = {identifier for identifier in canonical.ids if identifier.rsplit(".", 1)[0] in classes}
-    if (present != (eligible | mixed_serial) or len(eligible) != 161
+    if (present != (eligible | mixed_serial) or len(eligible) != 162
             or len(mixed_serial) != 8 or eligible & mixed_serial):
         raise RunnerError("audited whole-method eligibility changed")
     serial = tuple(test for test in selection.tests if test.id() not in eligible)
