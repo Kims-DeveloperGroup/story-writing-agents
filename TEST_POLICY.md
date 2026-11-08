@@ -655,10 +655,10 @@ readiness2회·Runtime1개는 실제 비용에 포함한다.
 캡처하며 foreign draft_sources는 비운다. 원본 event·digest→capture→전달 입력과
 새 task의 집필·artifact·검토·Apply를 실제 실행한다. 이전 task의 제출·예산은
 초기화하지 않는다. 기존 O의 ‘41+readiness2’를 전체 호출수라고 쓴 설명은
-잘못된 부분 집계다. 이후 A/B 분해의 계획은 A42회/B19회이며 아직 실측값이 아니다.
+잘못된 부분 집계다. 분리한 A는 실제764.131초/42회, B는320.964초/19회로 통과했다.
 B는 seedless 독립 fixture의 신규 cap0 ID로 분리한다. 필요한 실제 재시작은 유지한다.
 
-두 큰 fixture에만 이력 성분512KiB를 설정하고 종료 시 복원한다. production
+큰 fixture에만 이력 성분512KiB를 설정하고 종료 시 복원한다. production
 기본256KiB·schema/payload 각512KiB·합산1MiB는 유지한다. 실제 제출 accounting의
 크기를 검사하고 다중 session은 call ID multiset을 backend 기록과 대조한다.
 이는 실제 model 수용량의 증거는 아니다.
@@ -677,6 +677,18 @@ workflow 전체 종료는39초/69초였다. 기존 O 실패의 보고서까지�
 첫 RED의 wire 필드명 기대값 오류를 수정한 뒤 corrected RED에서 행 수 오류만
 확인했고 GREEN은 assertion 한 줄만 바꿔 통과했다. source/환경 검증도 유효하다.
 이는 작은 계약 검사의 개선이며 전체 통합 작업량의 속도 비교는 아니다.
+
+최종389클래스 timing 편성은 실제 완료된 per-method 관측의 serial4배/hosted1배
+occupancy 휴리스틱을 사용한다. A/B/C와 N의 source·환경 확인을 마친 통과 보고서를
+이관하며 실패 prefix는 사용하지 않는다. 클래스 LPT·격리·고정 순서 FIFO는 유지한다.
+새 weight fixture SHA256은
+`279353794dae30ba8b1b3cba410af89cc40259e3a27986d7ea0c59ea55ed304c`다.
+혼합 source 관측의 모델에서 shard2 body는3690.454초, 과거 full residual을 더한
+시나리오는3725.151초로3600초를 넘는다. 이는 미래 실행의 상한이나 통과 증거가
+아니며 실제 초과 위험이다. 숫자를 맞추는 조정 없이 최종 전체 CI의 실제 완료·
+미실행·timeout으로 판정한다. 해당 위험은 PR에도 기록한다.
+
+계산된 현재 partition은686/624/656/577/1개이며 실제 CI 완료 여부와 구분한다.
 
 ### #938 independent-case inventory and source allocation history
 
