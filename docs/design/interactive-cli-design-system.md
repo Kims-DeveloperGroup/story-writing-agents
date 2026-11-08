@@ -134,7 +134,7 @@ semantic model. It also governs the isolated package-internal ranged viewer
 where explicitly identified; the installed controller invokes it through
 provider-bound `$`/`$$` prompt editing without exporting it as a command. The
 separate `/exchanges` renderer contract lives in the pinned external
-[JSONL viewer design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/6619fd680efa730c520a0f93f7aaf5514bfabdec/docs/design-system.md);
+[JSONL viewer design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/8b6ac65ad3c85bf8d331f6b94567e607ba0da1e4/docs/design-system.md);
 this document governs only Story's picker and terminal-host integration.
 
 The words **must**, **must not**, and **may** below constrain the delivery
@@ -693,7 +693,7 @@ starts Single. No separate click-switch controls are added.
 
 After two Story-owned transient pickers, `/exchanges` copies one immutable
 exchange snapshot and validates the pinned four-name facade: `ViewerSpec`,
-`ViewerHost`, `ViewerTerminal`, and `view_jsonl`. The exact 0.8.3 contract
+`ViewerHost`, `ViewerTerminal`, and `view_jsonl`. The exact 0.9.0 contract
 checks include the terminal transport and owned-call keyword arguments.
 Earlier APIs are rejected before terminal acquisition.
 
@@ -716,8 +716,8 @@ transient display; unsupported terminals receive a content-free notice.
 The retained `open(operation)` route uses `ExternalViewerHost` for validated
 complete frames/events and borrowed line callbacks. That route's behavior
 is unchanged. Story discards picker/view capabilities on return. Exact
-renderer rules remain in the pinned external [design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/6619fd680efa730c520a0f93f7aaf5514bfabdec/docs/design-system.md)
-and [nineteen deterministic samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/6619fd680efa730c520a0f93f7aaf5514bfabdec/docs/samples).
+renderer rules remain in the pinned external [design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/8b6ac65ad3c85bf8d331f6b94567e607ba0da1e4/docs/design-system.md)
+and [nineteen deterministic samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/8b6ac65ad3c85bf8d331f6b94567e607ba0da1e4/docs/samples).
 
 Main-view `h/j/k/l` moves character focus, Enter folds the focused container,
 arrows retain record navigation, and `?` opens help. The external renderer owns
