@@ -529,6 +529,68 @@ class SpecialistRoutingTests(unittest.TestCase):
             with self.assertRaises(ValueError): replace(binding, **changes)
         with self.assertRaises(ValueError):
             replace(use, predecessor_node_id=use.consumer_node_id)
+        from story_writing_agents.orchestrator import _document_successor_selection
+        source_scope = self.scope(task_id=task.task_id, task_revision=task.task_revision,
+            target_paths=(plan.nodes[1].target_path,))
+        source_draft = fixture.make_draft("scope_2", c.CollaborationEventKind.MESSAGE, fixture.LEAD, fixture.USER,
+            c.CollaborationLeadJudgmentPayload(c.LeadOutcomeKind.PROPOSAL, "Prepare the exact Part draft.",
+                fixture.make_lead_evidence(), authoring_scope=source_scope))
+        source_batch = fixture.make_batch((), "successor_scope_batch", source_draft)
+        source_event = c.CollaborationEvent(**{item.name: getattr(source_draft, item.name) for item in fields(source_draft)},
+            sequence=1, timestamp="2026-11-08T00:00:00+00:00", batch_id=source_batch.batch_id,
+            batch_ordinal=0, batch_size=1, batch_digest=c.collaboration_batch_digest(source_batch))
+        source_ref = replace(task, session_id=fixture.SESSION_ID, conversation_id=fixture.CONVERSATION_ID,
+            scope_digest=documents.document_value_digest(asdict(source_scope)))
+        successor_node = replace(binding, task_ref=source_ref,
+            budget_lineage_ref=replace(origin, session_id=fixture.SESSION_ID, conversation_id=fixture.CONVERSATION_ID),
+            candidate_uses=(replace(use, consumer_task_ref=source_ref),), prior_confirmation_event_id="prior_node_confirm")
+        successor_spec = replace(routing.scope_spec_from_scope(source_scope), interpretation="Preserve the chosen ending.")
+        successor_plan = lifecycle.resolve_task_binding(successor_spec,
+            lifecycle.TaskBindingContext(source_scope, "unused_new_task", pinned=True))
+        successor_scope = successor_plan.bind(successor_spec)
+        before_successor = documents.document_node_binding_to_dict(successor_node)
+        def select_successor(**changes):
+            arguments = dict(binding=successor_node, source_event=source_event, current_scope=source_scope,
+                target_scope=successor_scope, task_binding=successor_plan)
+            return _document_successor_selection(**(arguments | changes))
+        selected = select_successor()
+        self.assertIs(type(selected), documents.DocumentNodeSelection)
+        self.assertEqual((successor_plan.transition, successor_scope.task_id, successor_scope.task_revision),
+            ("revise", "task_outline", 3))
+        self.assertEqual((selected.plan_ref, selected.node_id, selected.target_path), (plan.ref, plan.nodes[1].node_id, None))
+        selected_use, = selected.candidate_uses
+        self.assertEqual((selected_use.predecessor_node_id, selected_use.candidate.candidate_event_id,
+            selected_use.candidate.candidate_id, selected_use.candidate.candidate_revision, selected_use.candidate.candidate_digest,
+            selected_use.permitted_scope, selected_use.purpose), (plan.nodes[0].node_id, "candidate_event", "outline_candidate", 1,
+            documents.document_value_digest({"content": "Mina keeps her promise."}), plan.nodes[0].coverage,
+            "Use this outline solely to prepare the part outline."))
+        self.assertEqual(set(selected.__dataclass_fields__), {"plan_ref", "node_id", "target_path", "candidate_uses"})
+        self.assertEqual(set(selected_use.__dataclass_fields__), {"predecessor_node_id", "candidate", "permitted_scope", "purpose"})
+        self.assertEqual(select_successor(task_binding=replace(successor_plan, transition="reserved")), selected)
+        self.assertEqual(select_successor(current_scope=replace(source_scope, activity=Activity.REVIEW)), selected)
+        for changes in (
+            {"binding": None}, {"source_event": None}, {"current_scope": None}, {"target_scope": None}, {"task_binding": None},
+            {"target_scope": source_scope, "task_binding": replace(successor_plan, task_revision=2)},
+            {"target_scope": replace(successor_scope, task_revision=4), "task_binding": replace(successor_plan, task_revision=4)},
+            {"target_scope": replace(successor_scope, task_id="foreign"), "task_binding": replace(successor_plan, task_id="foreign")},
+            {"source_event": replace(source_event, session_id="foreign_session")},
+            {"source_event": replace(source_event, conversation_id="foreign_conversation")},
+            {"source_event": replace(source_event, event_id="foreign_scope")},
+            {"source_event": replace(source_event, payload=replace(source_event.payload,
+                authoring_scope=replace(source_scope, interpretation="Different captured source.")))},
+            {"current_scope": replace(source_scope, task_revision=1)},
+            {"current_scope": replace(source_scope, task_id="foreign")},
+            {"current_scope": replace(source_scope, target_paths=())},
+            {"target_scope": replace(successor_scope, target_paths=(plan.nodes[0].target_path,))},
+            {"target_scope": replace(successor_scope, activity=Activity.REVIEW, intent=Intent.REVIEW_ONLY)},
+            {"task_binding": replace(successor_plan, task_revision=4)},
+            {"task_binding": replace(successor_plan, transition="new")},
+            {"task_binding": replace(successor_plan, transition="continue")},
+        ):
+            self.assertIsNone(select_successor(**changes), changes)
+        self.assertEqual(documents.document_node_binding_to_dict(successor_node), before_successor)
+        self.assertEqual((successor_node.task_ref.task_revision, successor_node.budget_lineage_ref.task_revision,
+            successor_node.budget_origin_step_id, successor_node.prior_confirmation_event_id), (2, 1, "source_step", "prior_node_confirm"))
         from story_writing_agents import artifact_proposals as artifacts, writing_artifacts as applications
         from story_writing_agents.agents import EXECUTION_SPECIALIST
         history = []

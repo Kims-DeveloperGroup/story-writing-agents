@@ -8,7 +8,7 @@ from .specialist_routing import scope_spec_from_dict
 from .provider_wire import project_agent_task_metadata
 from .document_plan import (DocumentPlan, DocumentNodeSpec, DocumentNodeBinding, DocumentPlanView,
     DocumentNodeView, DocumentNodeState, DocumentNodeNextAction, DocumentPlanningGoalRef, document_value_digest,
-    document_node_binding_to_dict, DocumentNodeSelection, DocumentCandidateUseIntent,
+    document_node_binding_to_dict, DocumentNodeSelection, DocumentCandidateUseIntent, DocumentCandidateSelection,
     document_node_selection_to_dict, document_plan_to_dict)
 from .conversations.context import document_lineage_cost, project_document_plan_views
 from .editorial_scope import EditorialScopeCoverage, EditorialScopeTarget
@@ -786,6 +786,42 @@ def _target_authoring_scope_prior(
         return None
     return source
 
+
+
+def _document_successor_selection(
+    binding: DocumentNodeBinding | None,
+    source_event: CollaborationEvent | None,
+    current_scope: AuthoringScope | None,
+    target_scope: AuthoringScope | None,
+    task_binding: TaskBindingPlan | None,
+) -> DocumentNodeSelection | None:
+    """Select an exact successor's input intent without carrying its authority."""
+    if (type(binding) is not DocumentNodeBinding or type(source_event) is not CollaborationEvent
+            or type(current_scope) is not AuthoringScope or type(target_scope) is not AuthoringScope
+            or type(task_binding) is not TaskBindingPlan
+            or task_binding.transition not in {"revise", "reserved"}):
+        return None
+    captured = getattr(source_event.payload, "authoring_scope", None)
+    if (type(captured) is not AuthoringScope
+            or (source_event.session_id, source_event.conversation_id, source_event.event_id)
+            != (binding.task_ref.session_id, binding.task_ref.conversation_id, binding.task_ref.scope_event_id)
+            or (captured.task_id, captured.task_revision, captured.target_paths)
+            != (binding.task_ref.task_id, binding.task_ref.task_revision, current_scope.target_paths)
+            or (current_scope.task_id, current_scope.task_revision)
+            != (binding.task_ref.task_id, binding.task_ref.task_revision)
+            or binding.task_ref.scope_digest != "sha256:" + hashlib.sha256(json.dumps(
+                asdict(captured), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+            or len(current_scope.target_paths) != 1
+            or target_scope.target_paths != current_scope.target_paths
+            or target_scope.intent is not current_scope.intent
+            or (target_scope.task_id, target_scope.task_revision)
+            != (current_scope.task_id, current_scope.task_revision + 1)
+            or (task_binding.task_id, task_binding.task_revision)
+            != (target_scope.task_id, target_scope.task_revision)):
+        return None
+    return DocumentNodeSelection(binding.plan_ref, node_id=binding.node_id,
+        candidate_uses=tuple(DocumentCandidateSelection(use.predecessor_node_id, use.candidate,
+            use.permitted_scope, use.purpose) for use in binding.candidate_uses))
 
 
 def _lead_revision_result_contract(
@@ -13198,6 +13234,7 @@ class StoryRuntime:
                 prepare_selected = False
                 read_ids: tuple[str, ...] = ()
                 read_reviewers: tuple[tuple[str, str], ...] = ()
+                resolved_document_selection = document_selection
                 host_binding_plan = None
 
 
@@ -13218,6 +13255,8 @@ class StoryRuntime:
                     authorization: ContextAnswerAuthorization,
                 ) -> None:
                     nonlocal decoded_discussion
+                    nonlocal resolved_document_selection
+                    resolved_document_selection = document_selection
                     if discussion_constraints is not None:
                         value = normalize_result(json.loads(answer), "lead-discussion-response-v1")
                         if "authoring_scope" not in value and "used_evidence_ids" in value:
@@ -13603,9 +13642,20 @@ class StoryRuntime:
                         _, current_node = self._prepare_document_selection(session_id, document_selection)
                         if resolved_scope.target_paths != (current_node.target_path,):
                             raise _LeadOutcomeValidationError("document selection requires its exact disclosed target")
-                    if document_node is not None:
-                        self._validate_document_node(session_id, document_node, scope=resolved_scope if decoded.kind is LeadOutcomeKind.PROPOSAL else None)
-                    decoded = replace(decoded, authoring_scope=resolved_scope, proposal=resolved_intent, document_node=document_node)
+                    successor_selection = None
+                    if document_node is not None and decoded.kind is LeadOutcomeKind.PROPOSAL:
+                        if document_selection is None:
+                            source_event = next((event for event in task_events
+                                if event.event_id == document_node.task_ref.scope_event_id), None)
+                            successor_selection = _document_successor_selection(document_node, source_event,
+                                binding_prior, resolved_scope, host_binding_plan)
+                        self._validate_document_node(session_id, document_node,
+                            scope=binding_prior if successor_selection is not None else resolved_scope)
+                    elif document_node is not None:
+                        self._validate_document_node(session_id, document_node)
+                    resolved_document_selection = successor_selection or document_selection
+                    decoded = replace(decoded, authoring_scope=resolved_scope, proposal=resolved_intent,
+                        document_node=None if successor_selection is not None else document_node)
                     self._validate_objective_routing(
                         decoded, objective_projection, objective_events, current_task_events,
                     )
@@ -14419,7 +14469,7 @@ class StoryRuntime:
                     assert decoded_artifact_candidate is not None
                     try:
                         return replace(self._build_artifact_proposal_result(
-                            document_selection=document_selection, session_id=session_id,
+                            document_selection=resolved_document_selection, session_id=session_id,
                             conversation_id=conversation_id,
                             turn_id=turn_id,
                             step_id=step_id,
@@ -14500,7 +14550,7 @@ class StoryRuntime:
                 )
                 try:
                     proposal = self._build_lead_proposal(
-                        document_selection=document_selection, scope_event=judgment, preparation=preparation, document_node=outcome.document_node, session_id=session_id,
+                        document_selection=resolved_document_selection, scope_event=judgment, preparation=preparation, document_node=outcome.document_node, session_id=session_id,
                         step_id=step_id,
                         intent=intent,
                         inputs=self._materialize_lead_evidence_inputs(inputs, evidence),

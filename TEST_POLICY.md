@@ -824,3 +824,16 @@ main #947 통합 후 raw149666+helper1547=151213에 D06 한 곳의 history512KiB
 #938 남은C Confirm의첫실패진단34행은반환/큐/provider호출을바꾸지않고정규화된최초실패와기록된validation label만제한적으로관측한다. raw149719+helper1547=151266, 임시상한151267이며진단후제거한다. product budget/counter·ID·subTest·cap-map·147순서·161대상·시간제한은유지한다.
 
 측정된N Confirm실패는세specialist정상/Lead0호출의history269133>262144였으므로응답을늘리지않고그사례도512KiB history allowance를사용한다. N진단제거·공통기록크기검사·D06완료prefix round1/current-step0분리·한정fixture첫bind진단을합친순증6행으로raw149725+helper1547=151272,상한151273이다. 기존ID/subTest/cap-map/provider호출/시간은유지한다.
+
+
+## #839 후속 revision 연결의 순수 계약 소스 편성 — 2026-11-08
+
+확인한 같은 문서의 다음 revision을 이전 노드 연결과 비교해 거절하는 AC8 결함은
+기존 순수 계약 ID에서 먼저 검증한다. Runtime·workspace·schema·provider를 준비하지 않고,
+정상 revise/reserved·단계 전환과 정확한 후보 입력 보존, 오래된 출처·다른 과업·문서·
+건너뛴 revision의 거절을 검사한다. 최종 영향 검증과 전체 CI는 계속 요구한다.
+
+기존 #938 통합 소스 151369행에 순수 계약 62행만 더해 **raw149881 + helper1550 = 151431**로
+편성한다. fixture 상한은 정확히151431이며 기존 기준148783/150770에서 이 정확한 목표로의
+전환만 허용한다. 인접 상한·다른 기준·cap-map 변경은 여전히 거절한다. 기존2544개 ID,
+전체 subTest cap-map, K의10개 cap, timing fixture, 5shard·4worker·18000/3600초는 유지한다.
