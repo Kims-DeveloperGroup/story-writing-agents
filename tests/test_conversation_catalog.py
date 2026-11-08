@@ -921,7 +921,8 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
             "__init__.py": set(),
             "catalog.py": _CATALOG_EXPORTS,
             "events.py": _EVENT_EXPORTS | {"build_final_review_evidence"},
-            "context.py": _CONTEXT_EXPORTS | {"document_lineage_cost", "project_document_plan_views"},
+            "context.py": _CONTEXT_EXPORTS | {
+                "document_lineage_cost", "project_document_plan_views", "is_new_task_recommendation_source"},
         }
         public_names = set(_CONVERSATION_FACADE_EXPORTS) | _OWNER_ONLY_EVENT_EXPORTS
 

@@ -632,7 +632,7 @@ core2와10개 조합의 각1로 이동하며, 전체 조합의 모의 제출40�
 정확히 고정된17개 ID 이관과 결합한 **148783→151369 /150770→151369**만
 허용한다. 이전에 승인된 pre-938 전환도 보존한다.
 
-현재 소스 청구는 **raw149818 + 수동 helper1550 =151368**로 상한151369
+현재 소스 청구는 **raw149819 + 수동 helper1550 =151369**로 상한151369
 이내다. private workflow-context 검증181행도 수동 helper에 포함한다.
 budget 도구의 raw 검사와 이 추가 청구를 구분해 기록한다. 임의 ID·cap·상한
 증가나 알려진 실패의 삭제·skip을 허용하지 않는다.
@@ -689,6 +689,12 @@ occupancy 휴리스틱을 사용한다. A/B/C와 N의 source·환경 확인을 �
 미실행·timeout으로 판정한다. 해당 위험은 PR에도 기록한다.
 
 계산된 현재 partition은686/624/656/577/1개이며 실제 CI 완료 여부와 구분한다.
+
+첫 최종 전체 실행은2544개를 모두 완료했고 timeout·미실행은 없었다. worker
+wall 최대3143.315초·순차 환산13485.739초로 고정 예산 안이었다. 세 assertion
+실패는 positive QUESTION의 nullable planning_target 누락2곳과 공개 함수의
+정확한 context.py 소유 기대값 누락1곳이었다. 이 세 fixture만 정합시켜 최소
+세 ID를 먼저 검증하고, 그 뒤 같은 최종 리비전의 전체 CI를 요구한다.
 
 ### #938 independent-case inventory and source allocation history
 
