@@ -2179,7 +2179,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         prepared_history = self.history(prior)
         self.assertIsNotNone(prepared.proposal.document_node, prepared)
         self.assertEqual((prepared.proposal.document_node.task_ref.task_id, prepared.proposal.document_node.task_ref.task_revision), (fresh_scope.task_id, fresh_scope.task_revision))
-        self.assertEqual((prepared.proposal.budget.physical_calls_spent, prepared.proposal.budget.rounds_spent), c.document_lineage_cost(prepared_history, prepared.proposal.document_node, current_step_id=prepared.proposal.step_id))
+        self.assertEqual((prepared.proposal.budget.physical_calls_spent, prepared.proposal.budget.rounds_spent), c.document_lineage_cost(prepared_history, prepared.proposal.document_node, current_step_id=prepared.proposal.step_id)[:2])
         preserved_task = next(item for item in self.runtime.inspect_lead_collaboration(self.session_id, prior).available_tasks if item.ref == historical_source_task.ref)
         self.assertEqual(preserved_task.submitted_call_ids, historical_source_task.submitted_call_ids)
         self.assertEqual(len(_submitted_calls(prepared_history[len(original_history):])), 3)
