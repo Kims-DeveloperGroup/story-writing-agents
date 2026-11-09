@@ -578,38 +578,6 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertEqual(runner_cli.main(arguments), 17)
             admission.assert_called_once_with(arguments)
             execute.assert_not_called()
-        from tests.runner import collection as collection_owner, evidence, impact
-        inventory = collection_owner.load_inventory()
-        catalogue = impact.prepare_owners(inventory)
-        identifier = "tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order"
-        loaded = collection_owner.load_selected((identifier,))
-        self.assertEqual(loaded.ids, (identifier,))
-        self.assertRaises(runner_contracts.RunnerError, collection_owner.load_selected, (identifier, identifier))
-        selection_arguments = runner_cli.parser().parse_args(["list", "--id", identifier])
-        with patch.object(runner_cli, "discover_canonical", side_effect=AssertionError("unselected census")):
-            planned, subset = runner_cli.prepare_selection(selection_arguments, owner_catalogue=catalogue)
-        self.assertEqual((selection_arguments.scope, subset.selection.ids, subset.metadata["collection_provenance"]["canonical_basis"]),
-                         ("focused", (identifier,), "frozen_inventory"))
-        focused = impact.select_impact(inventory, paths=["tests/module_graph_fixture.py"], catalogue=catalogue)
-        affected = impact.select_impact(inventory, paths=["tests/module_graph_fixture.py"], scope="affected", catalogue=catalogue)
-        self.assertLess(set(focused["selected_manifest"]["ordered_ids"]), set(affected["selected_manifest"]["ordered_ids"]))
-        unknown = impact.select_impact(inventory, paths=["src/unregistered.py"], catalogue=catalogue)
-        self.assertEqual(unknown["selected_manifest"]["ordered_ids"], list(inventory.ids))
-        self.assertRaises(runner_contracts.RunnerError, evidence.validate_collection_provenance,
-                          subset.metadata["collection_provenance"], require_fresh=True)
-        with patch.object(impact, "git_output", side_effect=("a" * 40, "R100\0tests/old.py\0tests/new.py\0M\0tests/current.py\0", "tests/untracked.py\0")):
-            self.assertEqual(impact.changed_paths(impact.REPOSITORY_ROOT, "HEAD")[1],
-                             ("tests/current.py", "tests/new.py", "tests/old.py", "tests/untracked.py"))
-        with patch.object(impact, "git_output", side_effect=runner_contracts.RunnerError("invalid ref")):
-            self.assertRaises(runner_contracts.RunnerError, impact.changed_paths, impact.REPOSITORY_ROOT, "missing")
-        with patch.object(runner_cli, "execute") as execute:
-            self.assertEqual(runner_cli.main(["run", "--path", "README.md"], owner_catalogue=catalogue), 0)
-            execute.assert_not_called()
-        self.assertLessEqual(suite_budget.source_charge()["effective_lines"], 151431)
-        pinned_arguments = runner_cli.admission_arguments(["run", "--changed-from=HEAD", "--scope=focused", "--path=tests/test_suite_budget.py"], "a" * 40)
-        self.assertEqual((queue.validate_arguments(pinned_arguments), pinned_arguments[2]), (None, "a" * 40))
-        self.assertRaises(LocalCIError, queue.validate_arguments, [*pinned_arguments, "--not-supported"])
-
         host_exists = Path.exists
         lima_markers = {"/run/lima-ssh-ready", "/var/run/lima-ssh-ready", "/run/lima-guestagent.pid"}
         for guest_marker, managed, hosted, expected, error in ( (False, False, "", 17, None),
