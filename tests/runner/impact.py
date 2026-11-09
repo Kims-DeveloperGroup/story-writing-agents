@@ -49,16 +49,17 @@ def git_output(root: Path, *arguments: str) -> str:
 
 def changed_paths(root: Path, reference: str) -> tuple[str, tuple[str, ...]]:
     commit = git_output(root, "rev-parse", "--verify", "--end-of-options", reference + "^{commit}").strip()
-    fields = git_output(root, "diff", "--no-ext-diff", "--name-status", "-z",
-                        "--find-renames", commit, "--").split("\x00")
     paths = []
-    offset = 0
-    while offset < len(fields) and fields[offset]:
-        status = fields[offset]
-        offset += 1
-        count = 2 if status[0] in ("R", "C") else 1
-        paths.extend(fields[offset:offset + count])
-        offset += count
+    for revision_arguments in ((commit, "HEAD", "--"), ("--cached", "HEAD", "--"), ("--",)):
+        fields = git_output(root, "diff", "--no-ext-diff", "--name-status", "-z",
+                            "--find-renames", *revision_arguments).split("\x00")
+        offset = 0
+        while offset < len(fields) and fields[offset]:
+            status = fields[offset]
+            offset += 1
+            count = 2 if status[0] in ("R", "C") else 1
+            paths.extend(fields[offset:offset + count])
+            offset += count
     untracked = git_output(root, "ls-files", "--others", "--exclude-standard", "-z").split("\x00")
     paths.extend(path for path in untracked if path.startswith(MANAGED_NEW_ROOTS))
     return commit, tuple(sorted({normalized_path(path, root) for path in paths}))
