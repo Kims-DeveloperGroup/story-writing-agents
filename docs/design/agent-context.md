@@ -287,6 +287,14 @@ excluded from the readable projection. An oversized complete search source
 fails explicitly instead of becoming a silently shortened prefix. A captured
 context that omits requested records makes its search result truncated and
 cannot establish complete zero-hit evidence.
+
+Within each conversation source, SEARCH visits records by descending stored
+sequence before applying hit limits, so recent matches are included first.
+Query order and manifest source priority precede this per-source record order;
+other source kinds retain their canonical order. Snapshots and READ boundaries
+keep their original sequence and content. Observation frame trimming removes
+trailing hits, preserving recent conversation matches ahead of older ones.
+
 `SessionHistorySourceAdapter` separately captures complete retained active and
 archived history for required Lead memory; searchable-source limits do not
 limit that retained-history capture.

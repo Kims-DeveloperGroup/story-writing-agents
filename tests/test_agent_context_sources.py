@@ -618,7 +618,8 @@ class RealAuthorityAdapterTests(_SourceFixture):
             batch = contract_batches(metadata.conversation_id)["proposal"]
             if metadata is focused:
                 messages = tuple(replace(make_draft(f"history_{number}", conversation.CollaborationEventKind.MESSAGE,
-                    USER, LEAD, conversation.CollaborationMessagePayload(needle if number == 25 else f"Earlier input {number}."),
+                    USER, LEAD, conversation.CollaborationMessagePayload(needle if number == 25 else
+                        f"later USER retrospective {number}" if number in (27, 29, 33) else f"Earlier input {number}."),
                     turn_id=f"history_turn_{number}", step_id=f"history_step_{number}"),
                     session_id="session", conversation_id=metadata.conversation_id) for number in range(1, 34))
                 for message in messages:
@@ -678,6 +679,19 @@ class RealAuthorityAdapterTests(_SourceFixture):
         self.assertEqual((matches[0].record.record_id, matches[0].record.boundary), ("history_25", ContextSourceBoundary.records(25, 25)))
         self.assertIn(needle, matches[0].record.content)
         self.assertEqual(scanned, sum(item.utf8_bytes for item in inventory))
+        recent_query = ContextSearchQuery("later USER retrospective", (ContextSourceKind.CONVERSATION,))
+        for count, policy in ((3, CONTEXT_ACTION_POLICY),
+                (2, replace(CONTEXT_ACTION_POLICY, max_hits_per_source_query=2)),
+                (1, replace(CONTEXT_ACTION_POLICY, max_hits_per_source_query=1, max_hits_per_query=1)),
+                (1, replace(CONTEXT_ACTION_POLICY, max_hits_per_source_query=1, max_hits_per_query=1, max_hits_per_search=1))):
+            recent, omitted, _ = registry.search(manifest, (recent_query,), action_policy=policy)
+            self.assertEqual(tuple(hit.record.boundary.start for hit in recent), (33, 29, 27)[:count])
+            self.assertTrue(omitted)
+        prioritized, omitted, _ = registry.search(manifest,
+            (ContextSearchQuery(needle, (ContextSourceKind.CONVERSATION,)), recent_query))
+        self.assertEqual(tuple((hit.query_index, hit.record.boundary.start) for hit in prioritized),
+            ((1, 25), (2, 33), (2, 29), (2, 27)))
+        self.assertFalse(omitted)
         events = services.event_store.read("session", focused.conversation_id)
         partial = select_bounded_collaboration_context(events, event_ids=tuple(event.event_id for event in events))
         self.assertEqual((partial.retained_records, partial.omitted_records, partial.truncated), (24, 14, True))

@@ -2149,7 +2149,12 @@ class ContextSourceRegistry:
                 if entry.source_kind not in query.source_kinds:
                     continue
                 source_hits = 0
-                for record in snapshot.records:
+                records = (
+                    reversed(snapshot.records)
+                    if entry.source_kind is ContextSourceKind.CONVERSATION
+                    else iter(snapshot.records)
+                )
+                for record in records:
                     normalized = _normalize_source_text(record.search_text)
                     occurrence = normalized.find(query.normalized_text)
                     if occurrence < 0:
