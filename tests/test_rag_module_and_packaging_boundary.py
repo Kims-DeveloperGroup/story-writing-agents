@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.module_graph_fixture import module_inventory, internal_edges
+
 import ast
 import configparser
 from contextlib import nullcontext
@@ -97,70 +99,10 @@ def _extract_wheels(target: Path, wheels) -> None:
         with zipfile.ZipFile(wheel) as archive:
             archive.extractall(target)
 
-def _module_inventory() -> dict[str, Path]:
-    modules: dict[str, Path] = {}
-    for path in _SOURCE_ROOT.rglob("*.py"):
-        relative = path.relative_to(_SOURCE_ROOT)
-        if relative.name == "__init__.py":
-            parts = ("story_writing_agents", *relative.parts[:-1])
-        else:
-            parts = ("story_writing_agents", *relative.with_suffix("").parts)
-        modules[".".join(parts)] = path
-    return modules
 
 
-def _resolve_internal_module(
-    target: str,
-    modules: dict[str, Path],
-) -> str | None:
-    parts = target.split(".")
-    while parts and ".".join(parts) not in modules:
-        parts.pop()
-    resolved = ".".join(parts)
-    return resolved if resolved in modules else None
 
 
-def _internal_edges(modules: dict[str, Path]) -> set[tuple[str, str]]:
-    def runtime_nodes(node: ast.AST):
-        yield node
-        if isinstance(node, ast.If) and (
-            isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
-            or isinstance(node.test, ast.Attribute) and node.test.attr == "TYPE_CHECKING"
-        ):
-            for child in node.orelse:
-                yield from runtime_nodes(child)
-            return
-        for child in ast.iter_child_nodes(node):
-            yield from runtime_nodes(child)
-
-    edges: set[tuple[str, str]] = set()
-    for module, path in modules.items():
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        context = (
-            module.split(".") if path.name == "__init__.py" else module.split(".")[:-1])
-        for node in runtime_nodes(tree):
-            targets: list[str] = []
-            if isinstance(node, ast.Import):
-                targets.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom):
-                if node.level:
-                    retained = len(context) - (node.level - 1)
-                    base = context[:retained]
-                    if node.module:
-                        base.extend(node.module.split("."))
-                    target = ".".join(base)
-                else:
-                    target = node.module or ""
-                targets.append(target)
-                for alias in node.names:
-                    child = f"{target}.{alias.name}" if target else alias.name
-                    if child in modules:
-                        targets.append(child)
-            for target in targets:
-                resolved = _resolve_internal_module(target, modules)
-                if resolved is not None and resolved != module:
-                    edges.add((module, resolved))
-    return edges
 
 
 def _cycle_witness(
@@ -387,8 +329,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     def test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief(
         self,
     ) -> None:
-        modules = _module_inventory()
-        edges = _internal_edges(modules)
+        modules = module_inventory(_SOURCE_ROOT)
+        edges = internal_edges(modules)
         self.assertEqual(len(modules), 178)
         self.assertEqual(len(edges), 800)
         self.assertIn(("story_writing_agents.agent_context.service", "story_writing_agents.provider_adapter"), edges)

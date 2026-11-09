@@ -32,8 +32,23 @@ PYTHONPATH=src python -m tests.runner run \
 
 공유 fixture는 모든 소비자로, wire shape·offer는 관련 producer/decoder로, 상태·권한은
 실제 host·history/replay/restart 경계로 확대한다. 여러 책임은 중복을 제거한 합집합을
-선택하고 영향이 불명확하면 범위를 넓힌다. [S01 #963](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/963)은
-이 선택의 자동화와 선택된 모듈만 수집하는 실행 기반을 구현한다.
+선택하고 영향이 불명확하면 범위를 넓힌다. 변경 기반 선택은 다음과 같이 실행한다.
+
+```bash
+PYTHONPATH=src python -m tests.runner list --changed-from origin/main --json /tmp/focused-selection.json
+PYTHONPATH=src python -m tests.runner run --path tests/module_graph_fixture.py --json /tmp/focused-result.json
+PYTHONPATH=src python -m tests.runner run --changed-from origin/main --scope affected --json /tmp/affected-result.json
+```
+
+변경 기반 기본 범위는 `focused`다. `--path`는 반복할 수 있고 명시한 ID·module·fast
+선택은 합집합으로 처리한다. shard와는 혼용하지 않는다. 변경이 없으면 무실행으로
+기록하고 잘못된 ref는 오류로 처리한다. 미등록 책임은 전체 선택으로 확대한다.
+선택 결과에는 최소 사례·확장 집합·확대 사유와 실제 수집 방식을 남긴다. inventory
+선언에 따른 선택 실행을 실제 전체 discovery나 전체 통과로 해석하지 않는다.
+
+공유 테스트 helper의 정적 소비자 선언은 `python -m tests.runner.owner_map`으로
+읽기 전용 검증한다. import 관계를 바꾼 뒤에는 `--write`로 갱신하고 diff를 검토한다.
+생산 책임의 사례·소비자 경계는 해당 리팩토링 PR에서 명시적으로 등록한다.
 
 ## 실제 피드백 시간을 비교한다
 

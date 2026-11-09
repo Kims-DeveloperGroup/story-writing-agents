@@ -379,6 +379,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.RUNTIME_TEST_PYTHON_VERSION }}
+      - name: 공유 fixture의 선택 영향 선언 확인
+        run: PYTHONPATH=src python -m tests.runner.owner_map
       - name: Check patch whitespace
         env:
           BASE_SHA: ${{ needs.classify.outputs.base_sha }}
@@ -650,6 +652,14 @@ jobs:
           if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
           printf '%s\n' "$test_status" > "$RUNNER_TEMP/fast-exit-code.txt"
           exit "$test_status"
+      - name: 기존 순수 계약의 RED와 GREEN 피드백 확인
+        if: needs.classify.outputs.affected_only == 'true'
+        run: |
+          codec_id='tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order'
+          if grep -Fxq "$codec_id" <<< "$AFFECTED_IDS"; then
+            PYTHONPATH=src .venv/bin/python -m tests.feedback_probe \
+              --json "$RUNNER_TEMP/feedback-probe.json"
+          fi
       - uses: actions/upload-artifact@v4
         timeout-minutes: 1
         if: always()
@@ -659,6 +669,7 @@ jobs:
             ${{ runner.temp }}/fast.json
             ${{ runner.temp }}/fast.log
             ${{ runner.temp }}/fast-control.json
+            ${{ runner.temp }}/feedback-probe*
             ${{ runner.temp }}/fast-exit-code.txt
             ${{ runner.temp }}/fast-selection-argv.txt
             ${{ runner.temp }}/runner-hardware-fast.json
