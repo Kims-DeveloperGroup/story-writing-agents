@@ -596,6 +596,9 @@ authoring target.
 
 ## Development
 
+패키지 리팩토링의 사례 분해·선택 검증·시간 비교는
+[개발 피드백과 검증](docs/guides/refactoring-feedback.md)을 따른다.
+
 The Python package is under `src/story_writing_agents/`; tests are under
 `tests/`; role prompts are under `config/agents/`; and
 [PYTHON_MODULE_INDEX.md](PYTHON_MODULE_INDEX.md) is the production-module map.
