@@ -68,6 +68,7 @@ S01의 같은 오류 비교는 수동 `affected` 검증에 위 codec ID와
 `45cf084f`를 별도로 준비해 같은 외부 controller로 측정한다. 기준선에 테스트나
 helper를 추가하지 않는다. 같은 Python·locked dependency·vendor revision과
 controller hash를 확인하고, checkout 준비 시간과 RED/GREEN 명령 시간을 구분한다.
+지정한 영향 ID도 같은 호스트의 기준선에서 실행해 전체·메서드 시간을 짝지어 비교한다.
 이는 S01의 고정 기준선 비교이며 일반 개발 실행에 매번 추가하지 않는다.
 
 ## 전달 전에 전체 검증을 완료한다

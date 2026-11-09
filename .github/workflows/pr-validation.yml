@@ -23,7 +23,7 @@ on:
         type: boolean
         default: false
       compare_feedback_baseline:
-        description: 기존 codec 사례의 수정 전 RED와 GREEN 명령 시간을 같은 환경에서 측정
+        description: 기존 codec 피드백과 지정 영향 ID의 수정 전 시간을 같은 환경에서 측정
         required: false
         type: boolean
         default: false
@@ -706,6 +706,13 @@ jobs:
           cd .feedback-baseline
           PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$GITHUB_WORKSPACE/tests/feedback_probe.py" \
             --repository-root "$PWD" --json "$RUNNER_TEMP/feedback-probe-baseline.json"
+          baseline_ids=()
+          while IFS= read -r identifier; do
+            baseline_ids+=(--id "$identifier")
+          done <<< "$AFFECTED_IDS"
+          PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" -m tests.runner run "${baseline_ids[@]}" \
+            --json "$RUNNER_TEMP/feedback-probe-baseline-affected.json" \
+            > "$RUNNER_TEMP/feedback-probe-baseline-affected.log" 2>&1
       - uses: actions/upload-artifact@v4
         timeout-minutes: 1
         if: always()
