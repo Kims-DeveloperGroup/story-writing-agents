@@ -62,6 +62,14 @@ source SHA·환경·선택/미선택 ID·실제 호출 수·실행/미실행과 
 분해하면 원본별 합산과 중복 준비 비용도 포함한다. 수집 시간·historical weight·추정치만으로
 단축을 주장하지 않고 임의의 120초 기준을 두지 않는다.
 
+S01의 같은 오류 비교는 수동 `affected` 검증에 위 codec ID와
+`compare_feedback_baseline=true`를 지정해 재현할 수 있다. 기본값은 비활성이다.
+동일 CI 작업에서 현재 후보를 먼저 측정하고, 생산·기존 테스트 코드가 수정 전인
+`45cf084f`를 별도로 준비해 같은 외부 controller로 측정한다. 기준선에 테스트나
+helper를 추가하지 않는다. 같은 Python·locked dependency·vendor revision과
+controller hash를 확인하고, checkout 준비 시간과 RED/GREEN 명령 시간을 구분한다.
+이는 S01의 고정 기준선 비교이며 일반 개발 실행에 매번 추가하지 않는다.
+
 ## 전달 전에 전체 검증을 완료한다
 
 개발 중 선택 검증과 최종 통합 검증을 구분한다. 각 PR의 최종 동일 HEAD에서 fast,

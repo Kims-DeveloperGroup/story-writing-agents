@@ -22,6 +22,11 @@ on:
         required: false
         type: boolean
         default: false
+      compare_feedback_baseline:
+        description: 기존 codec 사례의 수정 전 RED와 GREEN 명령 시간을 같은 환경에서 측정
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -190,6 +195,7 @@ jobs:
           VALIDATION_SCOPE: ${{ inputs.validation_scope }}
           REQUESTED_TEST_IDS: ${{ inputs.test_ids }}
           OBSERVE_GC: ${{ inputs.observe_gc }}
+          COMPARE_FEEDBACK_BASELINE: ${{ inputs.compare_feedback_baseline }}
         with:
           script: |
             const {owner, repo} = context.repo;
@@ -216,6 +222,9 @@ jobs:
               core.setFailed("GC 관측은 수동 affected 선택에서만 허용합니다.");
               return;
             }
+            if (process.env.COMPARE_FEEDBACK_BASELINE === "true" && (!affectedOnly || process.env.OBSERVE_GC === "true")) {
+              core.setFailed("수정 전 피드백 비교는 GC 관측 없는 수동 affected 선택에서만 허용합니다."); return;
+            }
             core.setOutput("manual_mode", String(manualMode));
             core.setOutput("development_only", "false");
             core.setOutput("metadata_only", "false");
@@ -236,6 +245,9 @@ jobs:
                 if (ids.some(id => !canonicalId.test(id)) || new Set(ids).size !== ids.length) {
                   core.setFailed("영향 테스트 ID는 중복·빈 줄 없이 한 줄에 하나의 정규 ID여야 합니다.");
                   return;
+                }
+                if (process.env.COMPARE_FEEDBACK_BASELINE === "true" && !ids.includes("tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order")) {
+                  core.setFailed("피드백 비교에는 기존 codec 사례의 정확한 ID가 필요합니다."); return;
                 }
                 affectedIds = ids.join("\n");
               } else if (requestedIds !== "") {
@@ -676,6 +688,24 @@ jobs:
             PYTHONPATH=src .venv/bin/python -m tests.feedback_probe \
               --json "$RUNNER_TEMP/feedback-probe.json"
           fi
+      - name: 수정 전 피드백 소스 준비
+        if: inputs.compare_feedback_baseline == true && needs.classify.outputs.affected_only == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: 45cf084f0d28eb5926863e90509e5f14bbd3497e
+          submodules: recursive
+          path: .feedback-baseline
+      - name: 같은 환경에서 수정 전 RED와 GREEN 측정
+        if: inputs.compare_feedback_baseline == true && needs.classify.outputs.affected_only == 'true'
+        run: |
+          set -e
+          cmp pyproject.toml .feedback-baseline/pyproject.toml
+          cmp uv.lock .feedback-baseline/uv.lock
+          cmp .gitmodules .feedback-baseline/.gitmodules
+          test "$(git ls-tree HEAD vendor/)" = "$(git -C .feedback-baseline ls-tree HEAD vendor/)"
+          cd .feedback-baseline
+          PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$GITHUB_WORKSPACE/tests/feedback_probe.py" \
+            --repository-root "$PWD" --json "$RUNNER_TEMP/feedback-probe-baseline.json"
       - uses: actions/upload-artifact@v4
         timeout-minutes: 1
         if: always()

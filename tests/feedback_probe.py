@@ -15,8 +15,10 @@ SOURCE_HASH = "a9696b95cd08e9b6bd4eacf89bcd036738c4bf8823c3d8a313b79791d5c258a3"
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", required=True)
-    output = Path(parser.parse_args().json).resolve()
-    root = Path(__file__).resolve().parents[1]
+    parser.add_argument("--repository-root")
+    args = parser.parse_args()
+    output = Path(args.json).resolve()
+    root = Path(args.repository_root).resolve() if args.repository_root else Path(__file__).resolve().parents[1]
     source = root / "tests/test_selected_task_material_codec.py"
     original = source.read_bytes()
     digest = lambda data: hashlib.sha256(data).hexdigest()
@@ -28,7 +30,8 @@ def main():
                                  b"self.assertEqual(actual, expected[:1])")
     summary = {"canonical_id": CASE, "source_sha": subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
-        "original_sha256": digest(original), "temporary_sha256": digest(temporary), "runs": []}
+               "controller_sha256": digest(Path(__file__).read_bytes()),
+               "original_sha256": digest(original), "temporary_sha256": digest(temporary), "runs": []}
     try:
         for phase, content, code, status in (("red", temporary, 1, "failed"), ("green", original, 0, "passed")):
             source.write_bytes(content)
