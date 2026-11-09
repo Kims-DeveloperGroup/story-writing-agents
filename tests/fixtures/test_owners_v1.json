@@ -1,9 +1,6 @@
 {
   "schema_version": 1,
   "ignored_paths": [
-    "docs/",
-    "README.md",
-    "LICENSE",
     ".DS_Store"
   ],
   "owners": [
@@ -75,6 +72,43 @@
         "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
         "tests.test_artifact_relationship_policy.ArtifactRelationshipBoundaryTests.test_ast_graph_counts_and_cycles_match_accepted_brief",
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "editorial-evaluation-fixtures",
+      "boundary": "transport",
+      "paths": [
+        "docs/evaluations/lead-editorial-cases.json",
+        "docs/evaluations/lead-editorial-offline-example/"
+      ],
+      "focused_ids": [
+        "tests.test_smoke_cli.SmokeExplicitWorkspaceTests.test_explicit_cli_uses_the_same_read_only_contract",
+        "tests.test_smoke_cli.SmokeHelpAndTemporaryTests.test_real_temporary_cli_is_compact_json_and_provider_free",
+        "tests.test_smoke_cli.SmokeHelpAndTemporaryTests.test_temporary_smoke_report_is_exact_and_workspace_is_removed"
+      ],
+      "affected_ids": [
+        "tests.test_smoke_cli.SmokeExplicitWorkspaceTests.test_explicit_cli_uses_the_same_read_only_contract",
+        "tests.test_smoke_cli.SmokeHelpAndTemporaryTests.test_real_temporary_cli_is_compact_json_and_provider_free",
+        "tests.test_smoke_cli.SmokeHelpAndTemporaryTests.test_temporary_smoke_report_is_exact_and_workspace_is_removed"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "packaging-readme",
+      "boundary": "transport",
+      "paths": [
+        "README.md"
+      ],
+      "focused_ids": [
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_clean_base_wheel_editable_and_compatibility_extra_installs",
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_normal_story_install_upgrades_exact_old_viewer_and_renders_nested_json",
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_temporary_base_and_optional_artifacts_exclude_vendored_source"
+      ],
+      "affected_ids": [
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_clean_base_wheel_editable_and_compatibility_extra_installs",
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_normal_story_install_upgrades_exact_old_viewer_and_renders_nested_json",
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_temporary_base_and_optional_artifacts_exclude_vendored_source"
       ],
       "depends_on": []
     },
