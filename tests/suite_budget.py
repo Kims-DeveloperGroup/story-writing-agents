@@ -170,8 +170,8 @@ def source_charge() -> dict[str, int]:
             raise BudgetError(f"invalid counted support path: {name}")
         support_paths.add(path)
     def count(paths):
-        return sum(sum(bool(line.strip()) and not line.lstrip().startswith("#")
-                       for line in path.read_text(encoding="utf-8").splitlines())
+        return sum(sum(bool(line) and not line.startswith("#")
+                       for line in map(str.lstrip, path.read_text(encoding="utf-8").splitlines()))
                    for path in paths)
     raw = count(test_paths)
     support = count(support_paths - test_paths)

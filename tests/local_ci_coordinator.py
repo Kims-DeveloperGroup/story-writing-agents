@@ -15,7 +15,7 @@ import time
 import uuid
 from pathlib import Path
 
-from tests.local_ci_state import (ACTIVE, CAPACITY, TERMINAL, LocalCIError, environment,
+from tests.local_ci_state import (ARGUMENT_VALUE_OPTIONS, ACTIVE, CAPACITY, TERMINAL, LocalCIError, environment,
                                   group_members, owner_directory, process_identity,
                                   read_json, service_sources, snapshot, state_root, write_json)
 from tests.local_ci_state import boot_identity, live_owned, observed_descendants, prepare_service, signal_owned, verified_boot_change
@@ -105,12 +105,6 @@ def prepare_lima_control(job: dict) -> dict:
     if control.get("code_identity") != identity:
         raise LocalCIError("guest worker control revision differs from the host coordinator")
     return control
-
-
-ARGUMENT_VALUE_OPTIONS = frozenset({
-    "--id", "--module", "--tier", "--shard", "--json", "--slowest",
-    "--changed-from", "--path", "--scope",
-})
 
 
 def validate_arguments(arguments: list[str]) -> None:

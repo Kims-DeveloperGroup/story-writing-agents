@@ -105,7 +105,7 @@ def parser() -> argparse.ArgumentParser:
 
 def admission_arguments(arguments, resolved_changed_from=None):
     """Normalize the closed queue grammar and pin the parent's observed source."""
-    from tests.local_ci_coordinator import ARGUMENT_VALUE_OPTIONS
+    from tests.local_ci_state import ARGUMENT_VALUE_OPTIONS
 
     result = []
     tokens = iter(arguments)
