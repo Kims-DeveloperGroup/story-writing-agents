@@ -704,8 +704,6 @@ jobs:
           cmp .gitmodules .feedback-baseline/.gitmodules
           test "$(git ls-tree HEAD vendor/)" = "$(git -C .feedback-baseline ls-tree HEAD vendor/)"
           cd .feedback-baseline
-          PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$GITHUB_WORKSPACE/tests/feedback_probe.py" \
-            --repository-root "$PWD" --json "$RUNNER_TEMP/feedback-probe-baseline.json"
           baseline_ids=()
           while IFS= read -r identifier; do
             baseline_ids+=(--id "$identifier")
@@ -713,6 +711,8 @@ jobs:
           PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" -m tests.runner run "${baseline_ids[@]}" \
             --json "$RUNNER_TEMP/feedback-probe-baseline-affected.json" \
             > "$RUNNER_TEMP/feedback-probe-baseline-affected.log" 2>&1
+          PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$GITHUB_WORKSPACE/tests/feedback_probe.py" \
+            --repository-root "$PWD" --json "$RUNNER_TEMP/feedback-probe-baseline.json"
       - uses: actions/upload-artifact@v4
         timeout-minutes: 1
         if: always()
