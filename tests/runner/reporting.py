@@ -289,4 +289,3 @@ def write_reconciliation_human(report: dict[str, object], stream: TextIO) -> Non
             f"wall={float(durations['wall_seconds']):.3f}s",
             file=stream,
         )
-

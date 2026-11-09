@@ -318,4 +318,3 @@ def hosted_execute(canonical, selected, options, *, slowest, stream):
     report["environment_valid"] = environment_valid
     report["durations"]["wall_seconds"] = max(0, time.monotonic() - options["started"])
     return report
-

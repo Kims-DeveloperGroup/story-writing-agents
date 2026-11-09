@@ -236,4 +236,3 @@ def execution_metadata(report):
             or value["infrastructure_errors"] != [] or value["timing_basis"] != "observed-parent-wall-and-test-sum"):
         raise RunnerError("invalid hosted execution metadata or incomplete cleanup")
     return (value["mode"], value["profile"], "sum-observed-shard-walls")
-

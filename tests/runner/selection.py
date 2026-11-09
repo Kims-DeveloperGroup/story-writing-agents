@@ -138,4 +138,3 @@ def policy_select(
         "suite_policy": suite_policy_metadata(weights, plan if shard is not None else None),
     }
     return PolicySelection(selection, metadata)
-

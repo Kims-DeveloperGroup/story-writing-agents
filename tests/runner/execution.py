@@ -159,4 +159,3 @@ def execute(selection: CanonicalCollection, *, stream: TextIO, failfast: bool = 
     }
     return Execution(result, wall, interrupted, binding, environment,
                      environment == execution_environment())
-

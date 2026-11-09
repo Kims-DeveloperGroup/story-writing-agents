@@ -79,4 +79,3 @@ def load_selected(ids: Sequence[str], loader: unittest.TestLoader | None = None)
     if collection.ids != tuple(ids):
         raise RunnerError("targeted collection differs from selected frozen IDs")
     return collection
-

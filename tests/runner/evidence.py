@@ -183,4 +183,3 @@ def required_report_identity(report: dict[str, object]) -> tuple[dict[str, objec
         if len(value) != 64 or set(value) - set("0123456789abcdef"):
             raise RunnerError("shard environment fingerprint is invalid")
     return source, {key: environment[key] for key in common}
-

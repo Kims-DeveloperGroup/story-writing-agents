@@ -44,4 +44,3 @@ class CanonicalInventory:
     @property
     def modules(self) -> tuple[str, ...]:
         return tuple(sorted({identifier.rsplit(".", 2)[0] for identifier in self.ids}))
-

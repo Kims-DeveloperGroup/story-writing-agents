@@ -173,4 +173,3 @@ def method_receipt(config, process):
             or receipt["finished"] > config["deadline"] or not method_group_absent(receipt["worker_pid"])):
         raise RunnerError("method supervisor cleanup proof is incomplete")
     return receipt
-
