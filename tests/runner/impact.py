@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Sequence
 
 from .contracts import CanonicalInventory, RunnerError
@@ -12,6 +15,14 @@ from .evidence import manifest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 OWNER_MANIFEST_PATH = REPOSITORY_ROOT / "tests/fixtures/test_owners_v1.json"
 MANAGED_NEW_ROOTS = ("src/", "tests/", "config/", ".github/", "tools/")
+
+
+@dataclass(frozen=True)
+class OwnerCatalogue:
+    """Validated immutable declarations owned by one selection request."""
+
+    inventory_ids: tuple[str, ...]
+    payload: Mapping[str, object]
 
 
 def normalized_path(value: str, root: Path) -> str:
@@ -87,12 +98,29 @@ def matches(path: str, patterns: Sequence[str]) -> bool:
                for pattern in patterns)
 
 
+def prepare_owners(inventory: CanonicalInventory, path: Path = OWNER_MANIFEST_PATH) -> OwnerCatalogue:
+    payload = load_owners(inventory, path)
+
+    def freeze(value):
+        if isinstance(value, dict):
+            return MappingProxyType({key: freeze(item) for key, item in value.items()})
+        if isinstance(value, list):
+            return tuple(freeze(item) for item in value)
+        return value
+
+    return OwnerCatalogue(inventory.ids, freeze(payload))
+
+
 def select_impact(inventory: CanonicalInventory, *, paths: Sequence[str] = (),
                   changed_from: str | None = None, scope: str = "focused",
-                  root: Path = REPOSITORY_ROOT, owner_path: Path = OWNER_MANIFEST_PATH) -> dict:
+                  root: Path = REPOSITORY_ROOT, owner_path: Path = OWNER_MANIFEST_PATH,
+                  catalogue: OwnerCatalogue | None = None) -> dict:
     if scope not in ("focused", "affected"):
         raise RunnerError("unknown impact scope")
-    payload = load_owners(inventory, owner_path)
+    prepared = catalogue if catalogue is not None else prepare_owners(inventory, owner_path)
+    if prepared.inventory_ids != inventory.ids:
+        raise RunnerError("owner catalogue differs from the selected frozen inventory")
+    payload = prepared.payload
     commit, git_paths = changed_paths(root, changed_from) if changed_from is not None else (None, ())
     inputs = tuple(sorted({*git_paths, *(normalized_path(path, root) for path in paths)}))
     ignored = tuple(path for path in inputs if matches(path, payload.get("ignored_paths", ()))

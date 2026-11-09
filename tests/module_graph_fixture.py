@@ -15,28 +15,29 @@ def module_inventory(source_root: Path):
     return modules
 
 
-def resolve_internal_module(target: str, modules: dict[str, Path]) -> str | None:
-    parts = target.split(".")
-    while parts and ".".join(parts) not in modules:
-        parts.pop()
-    candidate = ".".join(parts)
-    return candidate if candidate in modules else None
 
 
-def walk_runtime_nodes(node: ast.AST):
-    yield node
-    if isinstance(node, ast.If) and (
-        isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
-        or isinstance(node.test, ast.Attribute) and node.test.attr == "TYPE_CHECKING"
-    ):
-        for child in node.orelse:
-            yield from walk_runtime_nodes(child)
-        return
-    for child in ast.iter_child_nodes(node):
-        yield from walk_runtime_nodes(child)
 
 
-def internal_edges(modules, runtime_nodes=walk_runtime_nodes):
+def internal_edges(modules, runtime_nodes=None):
+    def resolve(target: str) -> str | None:
+        parts = target.split(".")
+        while parts and ".".join(parts) not in modules:
+            parts.pop()
+        candidate = ".".join(parts)
+        return candidate if candidate in modules else None
+    if runtime_nodes is None:
+        def runtime_nodes(node: ast.AST):
+            yield node
+            if isinstance(node, ast.If) and (
+                isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
+                or isinstance(node.test, ast.Attribute) and node.test.attr == "TYPE_CHECKING"
+            ):
+                for child in node.orelse:
+                    yield from runtime_nodes(child)
+                return
+            for child in ast.iter_child_nodes(node):
+                yield from runtime_nodes(child)
     edges: set[tuple[str, str]] = set()
     for module, path in modules.items():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -59,13 +60,13 @@ def internal_edges(modules, runtime_nodes=walk_runtime_nodes):
                     for alias in node.names
                 )
             for target in targets:
-                resolved = resolve_internal_module(target, modules)
+                resolved = resolve(target)
                 if resolved is not None and resolved != module:
                     edges.add((module, resolved))
     return edges
 
 
-def module_graph(source_root, *, runtime_nodes=walk_runtime_nodes):
+def module_graph(source_root, *, runtime_nodes=None):
     modules = module_inventory(source_root)
     return modules, internal_edges(modules, runtime_nodes)
 

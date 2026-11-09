@@ -15,11 +15,11 @@ from .reporting import run_report, write_human_report, write_policy_human, write
 from .hosted import hosted_execute, hosted_options
 
 
-def prepare_selection(args):
+def prepare_selection(args, *, owner_catalogue=None):
     """Keep fresh census authority separate from manifest-first development runs."""
     from .collection import load_inventory, load_selected
     from .contracts import CanonicalInventory, PolicySelection
-    from .impact import load_owners, select_impact
+    from .impact import prepare_owners, select_impact
     from .selection import selected_ids, suite_policy_metadata, validated_values
 
     changed = args.changed_from is not None or bool(args.path)
@@ -35,24 +35,30 @@ def prepare_selection(args):
         canonical = discover_canonical()
         selected = policy_select(canonical, ids=args.id, modules=args.module, tiers=tiers, shard=args.shard)
         if changed:
+            inventory = load_inventory()
+            catalogue = owner_catalogue if owner_catalogue is not None else prepare_owners(inventory)
             selected.metadata["impact_selection"] = select_impact(
-                load_inventory(), paths=args.path, changed_from=args.changed_from, scope=args.scope)
+                inventory, paths=args.path, changed_from=args.changed_from,
+                scope=args.scope, catalogue=catalogue)
         selected.metadata["collection_provenance"] = {
             "kind": "fresh_discovery", "canonical_basis": "fresh_discovery", "fresh_full_discovery": True}
         return canonical, selected
     inventory = load_inventory()
+    catalogue = owner_catalogue if owner_catalogue is not None else prepare_owners(inventory)
+    if catalogue.inventory_ids != inventory.ids:
+        raise RunnerError("owner catalogue differs from the selected frozen inventory")
     chosen = set(selected_ids(inventory, ids=args.id, modules=args.module)) if args.id or args.module else set()
     if "fast" in tiers:
         chosen.update(suite_policy.select_fast(inventory.ids))
     metadata = {"selection": {"tiers": list(tiers), "shard": None},
                 "suite_policy": suite_policy_metadata(suite_policy.load_timing_weights())}
     impact = select_impact(inventory, paths=args.path, changed_from=args.changed_from,
-                           scope=args.scope) if changed else None
+                           scope=args.scope, catalogue=catalogue) if changed else None
     if impact is not None:
         chosen.update(impact["selected_manifest"]["ordered_ids"])
         metadata["impact_selection"] = impact
     ordered = tuple(identifier for identifier in inventory.ids if identifier in chosen)
-    prerequisites = set(load_owners(inventory).get("fresh_census_ids", ())) & chosen
+    prerequisites = set(catalogue.payload.get("fresh_census_ids", ())) & chosen
     fresh = (impact is not None and impact["fallback_reason"] is not None
              or args.command == "run" and bool(prerequisites))
     metadata["collection_provenance"] = {
@@ -97,7 +103,29 @@ def parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def admission_arguments(arguments, resolved_changed_from=None):
+    """Normalize the closed queue grammar and pin the parent's observed source."""
+    from tests.local_ci_coordinator import ARGUMENT_VALUE_OPTIONS
+
+    result = []
+    tokens = iter(arguments)
+    for token in tokens:
+        if "=" in token and token.split("=", 1)[0] in ARGUMENT_VALUE_OPTIONS:
+            option, value = token.split("=", 1)
+        elif token in ARGUMENT_VALUE_OPTIONS:
+            option, value = token, next(tokens)
+        else:
+            result.append(token)
+            continue
+        if option == "--changed-from":
+            if resolved_changed_from is None:
+                raise RunnerError("changed source was not resolved before queue admission")
+            value = resolved_changed_from
+        result.extend((option, value))
+    return result
+
+
+def main(argv: Sequence[str] | None = None, *, owner_catalogue=None) -> int:
     args = parser().parse_args(argv)
     try:
         if args.command == "reconcile":
@@ -109,7 +137,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "run" and args.slowest < 0:
             raise RunnerError("--slowest must be zero or greater")
         hosted = hosted_options(args) if args.command == "run" else None
-        canonical, selected = prepare_selection(args)
+        canonical, selected = prepare_selection(args, owner_catalogue=owner_catalogue)
         selection = selected.selection
         if args.command == "list":
             payload = {
@@ -143,7 +171,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         from tests.local_ci_state import LocalCIError
 
         try:
-            admitted = runner_admission(list(argv) if argv is not None else sys.argv[1:])
+            source = selected.metadata.get("impact_selection", {}).get("changed_from")
+            pinned_arguments = admission_arguments(list(argv) if argv is not None else sys.argv[1:], source)
+            admitted = runner_admission(pinned_arguments)
         except LocalCIError as error:
             raise RunnerError(str(error)) from error
         if admitted is not None:

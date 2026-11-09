@@ -44,8 +44,14 @@ def source_snapshot() -> dict[str, object]:
 
 
 def execution_environment() -> dict[str, str]:
-    distributions = sorted((str(item.metadata.get("Name", "")).lower(), item.version)
-                           for item in importlib.metadata.distributions())
+    records = []
+    for item in importlib.metadata.distributions():
+        if type(item) is importlib.metadata.PathDistribution:
+            metadata = item.metadata
+            records.append((str(metadata.get("Name", "")).lower(), metadata["Version"]))
+        else:
+            records.append((str(item.metadata.get("Name", "")).lower(), item.version))
+    distributions = sorted(records)
     encoded = json.dumps(distributions, separators=(",", ":")).encode()
     return {
         "python_version": platform.python_version(),

@@ -46,3 +46,21 @@ class FakeTermios:
             raise self.activation_failure
         if when == self.TCSADRAIN and self.restoration_failure is not None:
             raise self.restoration_failure
+
+
+class RecordingOutputOperations:
+    """Concrete fixtures retain ownership of every mutable output field."""
+
+    def fileno(self) -> int:
+        return 8
+
+    def write(self, text: str) -> int:
+        self.records.append(text)
+        if self.write_failure is not None:
+            raise self.write_failure
+        return len(text)
+
+    def flush(self) -> None:
+        self.flush_calls += 1
+        if self.flush_failure is not None:
+            raise self.flush_failure

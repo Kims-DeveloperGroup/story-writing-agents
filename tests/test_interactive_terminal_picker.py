@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from tests.terminal_input_fixture import FakeTermios as _FakeTermios
+from tests.terminal_input_fixture import RecordingOutputOperations
 
 import inspect
 import os
@@ -201,7 +202,7 @@ class _ScriptedInput:
         return bytes((self.characters.pop(0),)) if self.characters else b""
 
 
-class _RecordingOutput:
+class _RecordingOutput(RecordingOutputOperations):
     """Record exact picker redraw writes, flushes, and capability checks."""
 
     def __init__(self, *, terminal: bool = True) -> None:
@@ -214,19 +215,8 @@ class _RecordingOutput:
     def isatty(self) -> bool:
         return self.terminal
 
-    def fileno(self) -> int:
-        return 8
 
-    def write(self, text: str) -> int:
-        self.records.append(text)
-        if self.write_failure is not None:
-            raise self.write_failure
-        return len(text)
 
-    def flush(self) -> None:
-        self.flush_calls += 1
-        if self.flush_failure is not None:
-            raise self.flush_failure
 
 
 
