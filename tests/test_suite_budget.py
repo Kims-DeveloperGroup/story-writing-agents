@@ -584,10 +584,10 @@ class SuiteBudgetTests(unittest.TestCase):
         loaded = collection_owner.load_selected((identifier,))
         self.assertEqual(loaded.ids, (identifier,))
         self.assertRaises(runner_contracts.RunnerError, collection_owner.load_selected, (identifier, identifier))
-        arguments = runner_cli.parser().parse_args(["list", "--id", identifier])
+        selection_arguments = runner_cli.parser().parse_args(["list", "--id", identifier])
         with patch.object(runner_cli, "discover_canonical", side_effect=AssertionError("unselected census")):
-            planned, subset = runner_cli.prepare_selection(arguments)
-        self.assertEqual((arguments.scope, subset.selection.ids, subset.metadata["collection_provenance"]["canonical_basis"]),
+            planned, subset = runner_cli.prepare_selection(selection_arguments)
+        self.assertEqual((selection_arguments.scope, subset.selection.ids, subset.metadata["collection_provenance"]["canonical_basis"]),
                          ("focused", (identifier,), "frozen_inventory"))
         focused = impact.select_impact(inventory, paths=["tests/module_graph_fixture.py"])
         affected = impact.select_impact(inventory, paths=["tests/module_graph_fixture.py"], scope="affected")

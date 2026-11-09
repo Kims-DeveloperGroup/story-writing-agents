@@ -149,11 +149,11 @@ def required_durations(payload: dict[str, object]) -> dict[str, float]:
 
 
 def required_ids(payload: dict[str, object], key: str) -> tuple[str, ...]:
-    manifest = required_dict(payload, key)
-    ids = manifest.get("ordered_ids")
-    if (type(manifest.get("count")) is not int or type(manifest.get("digest")) is not str
+    recorded_manifest = required_dict(payload, key)
+    ids = recorded_manifest.get("ordered_ids")
+    if (type(recorded_manifest.get("count")) is not int or type(recorded_manifest.get("digest")) is not str
             or type(ids) is not list or not ids or any(type(item) is not str or not item for item in ids)
-            or len(set(ids)) != len(ids) or manifest != manifest(ids)):
+            or len(set(ids)) != len(ids) or recorded_manifest != manifest(ids)):
         raise RunnerError(f"shard {key} is invalid")
     return tuple(ids)
 
