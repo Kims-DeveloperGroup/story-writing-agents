@@ -1,0 +1,252 @@
+{
+  "schema": 1,
+  "issue": 983,
+  "parent": 968,
+  "root_parent": 962,
+  "state": "문서 전용 Draft 준비; 실제 코드·테스트·워크플로 변경 없음",
+  "observed_head": "9105b43f28720f8611de27ef656685fbafe7cf03",
+  "source_path": "src/story_writing_agents/orchestrator.py",
+  "source_sha256": "1f89e987d8ab75d14ecf96aa8f03c3c50e77b9a8afe43bea128cd5f38cef9fc9",
+  "target": "src/story_writing_agents/lead_preparation/outcome_decoding.py",
+  "definitions": [
+    {
+      "old": "_DuplicateJsonKey",
+      "proposed_name": "DuplicateJsonKey",
+      "lines": [
+        701,
+        702
+      ],
+      "before_ast_sha256": "7d69cfe72f7fb724fde456223a5fedfd59fc3ba5fc58651d7422afd5a78e7f27",
+      "before_decorators": [],
+      "references_outside_moved_definitions": [],
+      "planned_name": "_DuplicateJsonKey",
+      "public": false
+    },
+    {
+      "old": "StoryRuntime._decode_lead_outcome",
+      "proposed_name": "decode_lead_outcome",
+      "lines": [
+        13848,
+        14172
+      ],
+      "before_ast_sha256": "b0b7bc912abf0148723ee063b72c20032efe475ba989f0ac08f068526b7276a5",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [
+        [
+          "src/story_writing_agents/orchestrator.py",
+          11056
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          11871
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          11031
+        ],
+        [
+          "tests/test_lead_orchestration.py",
+          5884
+        ],
+        [
+          "tests/test_lead_orchestration.py",
+          6562
+        ],
+        [
+          "tests/agent_context/invocation/execution_fixture.py",
+          115
+        ],
+        [
+          "tests/agent_context/invocation/test_execution_lifecycle.py",
+          233
+        ]
+      ],
+      "planned_name": "decode_lead_outcome",
+      "public": true
+    },
+    {
+      "old": "StoryRuntime._decode_recommended_action",
+      "proposed_name": "decode_recommended_action",
+      "lines": [
+        14175,
+        14230
+      ],
+      "before_ast_sha256": "2a9aa6161e08d94990637c07aea58a6b463ad91f5d02db601f1b8d65a1ffbf6c",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [
+        [
+          "src/story_writing_agents/orchestrator.py",
+          9392
+        ]
+      ],
+      "planned_name": "decode_recommended_action",
+      "public": true
+    },
+    {
+      "old": "StoryRuntime._decode_objective_intent",
+      "proposed_name": "decode_objective_intent",
+      "lines": [
+        14233,
+        14276
+      ],
+      "before_ast_sha256": "5324d7f4669e91df37024d401b4c5d6078f2fd4141bc9c7424c7481996c9a02a",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [],
+      "planned_name": "_decode_objective_intent",
+      "public": false
+    },
+    {
+      "old": "StoryRuntime._decode_artifact_intent",
+      "proposed_name": "decode_artifact_intent",
+      "lines": [
+        14279,
+        14361
+      ],
+      "before_ast_sha256": "4d1fe2c832df0f944d92f9995a99ae48d167faf06219ed2f85169673840f0199",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [],
+      "planned_name": "_decode_artifact_intent",
+      "public": false
+    },
+    {
+      "old": "StoryRuntime._decode_shared_premise_intents",
+      "proposed_name": "decode_shared_premise_intents",
+      "lines": [
+        14389,
+        14400
+      ],
+      "before_ast_sha256": "84b69d8265591268cd3665e07f4ebf5929917f127e6564fd4948f126cd721279",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [],
+      "planned_name": "_decode_shared_premise_intents",
+      "public": false
+    },
+    {
+      "old": "StoryRuntime._strict_json_object",
+      "proposed_name": "strict_json_object",
+      "lines": [
+        9545,
+        9575
+      ],
+      "before_ast_sha256": "7de00023273830a7ec19277363db7c464a5214ae56614a2e27c22dcf24d0e375",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [
+        [
+          "src/story_writing_agents/orchestrator.py",
+          7259
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          9285
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          9339
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          7175
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          9273
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          10954
+        ]
+      ],
+      "planned_name": "strict_json_object",
+      "public": true
+    },
+    {
+      "old": "StoryRuntime._declares_artifact_intent",
+      "proposed_name": "declares_artifact_intent",
+      "lines": [
+        13783,
+        13817
+      ],
+      "before_ast_sha256": "5ef23e2b423d28436e8e0693d7cf516c8bc141bdcede67989e92f332b9064089",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [
+        [
+          "src/story_writing_agents/orchestrator.py",
+          10976
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          10977
+        ]
+      ],
+      "planned_name": "declares_artifact_intent",
+      "public": true
+    },
+    {
+      "old": "StoryRuntime._lead_outcome_validation_details",
+      "proposed_name": "lead_outcome_validation_details",
+      "lines": [
+        13821,
+        13845
+      ],
+      "before_ast_sha256": "e38d0bb5616867ee8918c786c5ea4d4e9b29d77a145a4d9b6751e68d30b9105f",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [
+        [
+          "src/story_writing_agents/orchestrator.py",
+          10910
+        ],
+        [
+          "tests/test_lead_orchestration.py",
+          6563
+        ]
+      ],
+      "planned_name": "lead_outcome_validation_details",
+      "public": true
+    }
+  ],
+  "source_budget_projection": {
+    "before": 151431,
+    "API": 1,
+    "graph": 1,
+    "unused": -2,
+    "after": 151431
+  },
+  "Draft_before_code": true,
+  "accepted_base": "648e5a4e5675001ed2d9aa91aaf400d485356568",
+  "accepted_tree": "0e9f90d272ef6f770d84efa7a24fcbe2a11ad6b5",
+  "github_planning_gate": "passed",
+  "native_plan_sha256": "b2ec7c0fa27a190c620806f21edfe451fc390e6e975de492814dd83196867296",
+  "draft_before_code_required": true,
+  "parent_reports": [
+    {
+      "issue": 962,
+      "body_sha256": "c1c4d3b758eac5a5aa2858494d431bbc92629ccd637c5fb79c5f8029e99cb578",
+      "body_lines": 92,
+      "body_chars": 5245,
+      "status": "In progress"
+    },
+    {
+      "issue": 968,
+      "body_sha256": "8b300d30f383a941335cb70c598b4e41eddb1968a2b2c34b18fb5764e203cd46",
+      "body_lines": 64,
+      "body_chars": 4028,
+      "status": "Backlog"
+    }
+  ]
+}
