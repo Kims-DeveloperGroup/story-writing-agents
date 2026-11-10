@@ -1,5 +1,8 @@
 """Issue 631 authentication evidence; all providers and login processes are synthetic."""
 from __future__ import annotations
+from story_writing_agents.agent_context.actions import CONTEXT_ACTION_POLICY
+from story_writing_agents.agent_context.accounting import ProviderCallKind
+from tests.test_agent_context_accounting import assert_phase_guide
 from story_writing_agents.agent_context.invocation import context_execution as owner_context_execution
 from tests.agent_context.invocation import execution_fixture as fixture_execution_fixture
 from story_writing_agents.agent_context.contracts import call_offers as owner_call_offers
@@ -403,7 +406,7 @@ class ContextRecoveryTests(fixture_execution_fixture.ContextExecutionTestCase):
             plain_request = self.request(
                 operation_id=label, result_correlation_id=label + "-result",
                 invocation_kind=owner_call_offers.ContextInvocationKind.LEAD, result_contract=fixture_execution_fixture.LEAD_CALL_FACTORY,
-                agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=cap)
+                agent_id=LEAD_ORCHESTRATOR, physical_call_limit=cap)
             grouped_request = fixture_execution_fixture.make_group_request(plain_request)
             pending = () if succeeds else (fixture_execution_fixture.make_group_control("answer.workflow"),)
             controls = ((0, LeadGroupPhase.SELECT, auth_failure()),)
@@ -464,9 +467,9 @@ class ContextRecoveryTests(fixture_execution_fixture.ContextExecutionTestCase):
             self.assertIn("search_context", offered)
             phases = (LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE) if succeeds else (LeadGroupPhase.SELECT,)
             for call, phase in zip(grouped_provider.calls, phases, strict=True):
-                context.assert_phase_guide(self, call, phase)
+                assert_phase_guide(self, call, phase)
         no_context_service = owner_context_execution.AgentContextService(
-            self.workspace, action_policy=replace(context.CONTEXT_ACTION_POLICY, max_search_actions=1))
+            self.workspace, action_policy=replace(CONTEXT_ACTION_POLICY, max_search_actions=1))
         def zero_hit_search(call, provider):
             packet = json.loads(fixture_execution_fixture.make_search(call, provider))
             packet["agent_action"]["queries"][0]["search_text"] = "GROUP_AUTH_ZERO_HIT_895"
@@ -480,7 +483,7 @@ class ContextRecoveryTests(fixture_execution_fixture.ContextExecutionTestCase):
             grouped_request = fixture_execution_fixture.make_group_request(self.request(
                 operation_id=label, result_correlation_id=label + "-result",
                 invocation_kind=owner_call_offers.ContextInvocationKind.LEAD, result_contract=fixture_execution_fixture.LEAD_CALL_FACTORY,
-                agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=cap))
+                agent_id=LEAD_ORCHESTRATOR, physical_call_limit=cap))
             grouped_provider = AuthContextProvider((zero_hit_search, auth_failure(), fixture_execution_fixture.make_group_answer),
                 control_plan=(*selection_plan("answer.workflow", before_script_response=1)[:-1],
                     (1, LeadGroupPhase.SELECT, select_after_empty_search)))
@@ -546,7 +549,7 @@ class ContextRecoveryTests(fixture_execution_fixture.ContextExecutionTestCase):
             if succeeds:
                 phases += (LeadGroupPhase.GENERATE,)
             for call, phase in zip(grouped_provider.calls, phases, strict=True):
-                context.assert_phase_guide(self, call, phase)
+                assert_phase_guide(self, call, phase)
 
     def reference_request(self, limit=5):
         reference_operation_id = f"reference-operation-{limit}"
@@ -580,7 +583,7 @@ class ContextRecoveryTests(fixture_execution_fixture.ContextExecutionTestCase):
         calls, bound_result, failed = await self._bound_replay(
             (search, lead._read_history_hit, auth_failure(), lead._answer_from_history),
             seed="Bound history evidence", before_script_response=2,
-            action_policy=replace(context.CONTEXT_ACTION_POLICY,
+            action_policy=replace(CONTEXT_ACTION_POLICY,
                                   max_search_actions=1, max_read_actions=1))
         self._require_bound_replay(calls, bound_result, failed, count=5, failure_index=3)
         self.assertEqual([call.contract.offers.action_index for call in calls], [1, 2, 3, 4, 4])
@@ -626,7 +629,7 @@ class ContextRecoveryTests(fixture_execution_fixture.ContextExecutionTestCase):
         grouped_request = fixture_execution_fixture.make_group_request(self.request(
             operation_id="group-auth-source", result_correlation_id="group-auth-source-result",
             invocation_kind=owner_call_offers.ContextInvocationKind.LEAD, result_contract=fixture_execution_fixture.LEAD_CALL_FACTORY,
-            agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=4))
+            agent_id=LEAD_ORCHESTRATOR, physical_call_limit=4))
         grouped_provider = AuthContextProvider((fixture_execution_fixture.make_group_control("answer.workflow"), fixture_execution_fixture.make_group_answer),
             control_plan=((0, LeadGroupPhase.SELECT, auth_failure()),))
         def change_group_source(_key):
@@ -654,7 +657,7 @@ class ContextRecoveryTests(fixture_execution_fixture.ContextExecutionTestCase):
         provider = bound._context_provider()
         scope = ContextScope("auth-workspace", "replay", ContextSubjectKind.CONVERSATION, "conversation", PLOT_ARCHITECT)
         request = ctx_provider.ContextProviderCallRequest(scope, "sha256:" + "1" * 64, "call-original",
-            context.ProviderCallKind.COLLABORATION_INITIAL, {"type": "object"}, {"synthetic": "held bytes"})
+            ProviderCallKind.COLLABORATION_INITIAL, {"type": "object"}, {"synthetic": "held bytes"})
         calls = []
         async def rejected(_binding, invocation):
             calls.append(invocation)
