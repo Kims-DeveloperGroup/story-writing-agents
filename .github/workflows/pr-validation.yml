@@ -27,6 +27,12 @@ on:
         required: false
         type: boolean
         default: false
+      feedback_witness:
+        description: 같은 오류의 RED/GREEN을 확인할 기존 순수 계약 사례
+        required: false
+        type: choice
+        default: codec
+        options: [codec, source-snapshot]
       profile_selection:
         description: 선택한 기존 사례를 cProfile로 진단하며 성능 통과 증거로 사용하지 않음
         required: false
@@ -577,6 +583,7 @@ jobs:
       AFFECTED_IDS: ${{ needs.classify.outputs.affected_ids }}
       OBSERVE_GC: ${{ inputs.observe_gc }}
       PROFILE_SELECTION: ${{ inputs.profile_selection }}
+      FEEDBACK_WITNESS: ${{ inputs.feedback_witness || 'codec' }}
     steps:
       - name: Record shared test deadline before setup
         run: |
@@ -697,11 +704,25 @@ jobs:
       - name: 기존 순수 계약의 RED와 GREEN 피드백 확인
         if: needs.classify.outputs.affected_only == 'true' && inputs.observe_gc != true && inputs.profile_selection != true
         run: |
-          codec_id='tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order'
-          if grep -Fxq "$codec_id" <<< "$AFFECTED_IDS"; then
-            PYTHONPATH=src .venv/bin/python -m tests.feedback_probe \
-              --json "$RUNNER_TEMP/feedback-probe.json"
-          fi
+          case "$FEEDBACK_WITNESS" in
+            codec)
+              witness_ids=('tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order')
+              ;;
+            source-snapshot)
+              witness_ids=(
+                'tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden'
+                'tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden'
+              )
+              ;;
+            *) exit 2 ;;
+          esac
+          for witness_id in "${witness_ids[@]}"; do
+            if grep -Fxq "$witness_id" <<< "$AFFECTED_IDS"; then
+              PYTHONPATH=src .venv/bin/python -m tests.feedback_probe \
+                --witness "$FEEDBACK_WITNESS" --json "$RUNNER_TEMP/feedback-probe.json"
+              break
+            fi
+          done
       - name: 수정 전 피드백 소스 준비
         if: inputs.compare_feedback_baseline == true && needs.classify.outputs.affected_only == 'true'
         uses: actions/checkout@v4
@@ -739,7 +760,7 @@ jobs:
           if (( baseline_status != 0 )); then exit "$baseline_status"; fi
           if [[ "$PROFILE_SELECTION" != "true" ]]; then
             PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$GITHUB_WORKSPACE/tests/feedback_probe.py" \
-              --repository-root "$PWD" --json "$RUNNER_TEMP/feedback-probe-baseline.json"
+              --repository-root "$PWD" --witness "$FEEDBACK_WITNESS" --json "$RUNNER_TEMP/feedback-probe-baseline.json"
           fi
       - uses: actions/upload-artifact@v4
         timeout-minutes: 1
