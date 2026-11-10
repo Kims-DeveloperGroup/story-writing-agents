@@ -3286,6 +3286,36 @@
       "correction": "three current literals only, same rows; reverse bijection reproduces old digests; historical938/negative/time/subtest/algorithms unchanged",
       "artifact_retained": true,
       "source_charge": 151431
+    },
+    {
+      "run": 42896291360,
+      "head": "84ff66b4d9f2e90bf367a2c205cd6a83e7b881d4",
+      "failed_shards": [
+        1,
+        4
+      ],
+      "failed_case_ids": [
+        "tests.test_interactive_collaboration_view.ArtifactAndGitCollaborationViewTests.test_runtime_artifact_and_local_commit_events_are_complete_and_safe",
+        "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_literal_lead_turn_and_consultation_decisions_are_exact",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_no_repair_capacity_preserves_validation_notice_without_authority"
+      ],
+      "detail_counts": {
+        "error": 3,
+        "failure": 1
+      },
+      "cause": "두 사례의 이동 전 fixture 모듈 import 및 한 사례의 이동 전 호출 한도 patch가 실행 중 실패했다. 같은 호출 한도 사례의 fixture 정리에서 사용되지 않은 계획이 추가 실패로 기록됐다.",
+      "correction": "기존 두 fixture import와 기존 patch를 실제 소유 경로에 연결했다. 실제 fixture 의존성 두 개를 소유권 목록에 반영했다. fixture 본문·입력·assertion·생산 소스는 그대로 유지했다.",
+      "focused_before_run": 42905602281,
+      "artifact_retained": true,
+      "artifact_proof_sha256": "dbdd4bc378ec1e3480785416abcb14d7d47506fabf8a3a55e2bed55c0c70c285",
+      "test_paths_sha256": {
+        "tests/test_interactive_controller.py": "71113eac7137fd05d57aa7d613986f90707d026f95be167d26fc2750fe6d5f3a",
+        "tests/test_interactive_collaboration_view.py": "8205c112687437ba06f3e6536bbebd721e69952334d727336f31578729996f47",
+        "tests/test_lead_orchestration.py": "031c3097ce686110562ecb00eaada4c80cca8d95a54941bf52c4dd89c785ab1b"
+      },
+      "owner_manifest_sha256": "41293b9c0b7e29a11f591ba0be82399b390141bfa8e9f8181bb73e7bd7c392d0",
+      "source_charge": 151431,
+      "new_Cases": 0
     }
   ]
 }

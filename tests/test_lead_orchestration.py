@@ -31,7 +31,7 @@ from typing import Awaitable, Callable
 from unittest import mock
 from story_writing_agents import ReplyTraceOrigin, RuntimeSession, StoryRuntime, Workspace
 from story_writing_agents import orchestrator as orchestrator_module
-from story_writing_agents.lead_preparation import call_rule_factory
+from story_writing_agents.lead_preparation import call_rule_factory, reply_contract_values
 from story_writing_agents.lead_preparation import response_rules
 from story_writing_agents.agent_context.accounting import ProviderCallAccounting, ProviderCallKind, ProviderCallState, account_provider_payload
 from story_writing_agents.agents import CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT, SPECIALIST_IDS, behavior_policy_files
@@ -6751,7 +6751,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
         self.backend.enqueue(malformed, control_plan=selection_plan("answer.workflow"))
         with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 2), \
-                mock.patch.object(orchestrator_module, "_CONTEXT_INVOCATION_CALL_LIMIT", 2):
+                mock.patch.object(reply_contract_values, "CONTEXT_INVOCATION_CALL_LIMIT", 2):
             result = await self._lead_turn(conversation_id, 'Reject an invalid result without another provider call.')
         self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
         self.assertEqual(len(self.backend.calls), 2)

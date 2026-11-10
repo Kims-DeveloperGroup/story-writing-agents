@@ -6343,7 +6343,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 self.assertEqual(adapter.task(task_conversation), outcome is ControlOutcomeKind.EOF)
                 self.assertEqual(tuple(decisions), before)
             from story_writing_agents import document_plan as documents
-            from tests import test_specialist_routing as document_fixtures
+            from tests.lead_preparation import test_response_rules as document_fixtures
             plan = document_fixtures.SpecialistRoutingTests._document_plan_fixture()
             observed_candidate = documents.DocumentCandidateRef("ui_candidate_event", "ui_outline_candidate", 1, documents.document_value_digest("Displayed exact candidate"))
             plan_rows = tuple(documents.DocumentNodeView(node.node_id,

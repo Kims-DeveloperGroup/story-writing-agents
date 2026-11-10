@@ -3950,6 +3950,7 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "tests.lead_preparation.test_response_rules",
         "tests.test_agent_context_accounting",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
@@ -4167,6 +4168,7 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "tests.lead_preparation.test_response_rules",
         "tests.test_agent_context_accounting",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
