@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from tests.provider_wire_fixture import response as wire_response, contract_id as wire_contract_id
 
 import asyncio
 import json
@@ -42,6 +41,7 @@ from tests.test_lead_orchestration import (
     _submitted_calls, _workflow_material,
 )
 from tests.recommendation_fixture import task_assessment
+from story_writing_agents.runtime_resources import collaboration_event_journal as event_journal
 
 
 _SYNCHRONIZATION_TIMEOUT_SECONDS = 60
@@ -664,7 +664,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         private = "PRIVATE_SPECIALIST_PROVIDER_FAILURE_한🙂"
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome(message=""))
         self.backend.enqueue_for(PLOT_ARCHITECT, _SubmittedFailure(RuntimeError(private)))
-        original_append = self.runtime._append_validation_messages
+        original_append = event_journal.append_validation_messages
         attempts = 0
 
         def fail_once(**kwargs) -> None:
@@ -674,7 +674,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 raise RuntimeError("injected diagnostic append conflict")
             original_append(**kwargs)
 
-        with (mock.patch.object(self.runtime, '_append_validation_messages', fail_once),
+        with (mock.patch.object(event_journal, 'append_validation_messages', fail_once),
             _stop_after_durable_result_patch(self.runtime)):
             with self.assertRaisesRegex(RuntimeError, "durable execution result"):
                 await self.runtime.decide_lead_step(
@@ -737,7 +737,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 self.backend.enqueue_for(
                     LEAD_ORCHESTRATOR, _synthesis_outcome(),
                 )
-                original_append = self.runtime._append_validation_messages
+                original_append = event_journal.append_validation_messages
                 attempts = 0
 
                 def fail_once(**kwargs) -> None:
@@ -747,7 +747,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                         raise RuntimeError("injected diagnostic append conflict")
                     original_append(**kwargs)
 
-                with (mock.patch.object(self.runtime, '_append_validation_messages', fail_once)):
+                with (mock.patch.object(event_journal, 'append_validation_messages', fail_once)):
                     decision = await self.runtime.decide_lead_step(_decision(proposed,
                         CollaborationConfirmationDecision.CONFIRM))
                 self.assertEqual(attempts, 2)
@@ -774,7 +774,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome(message=""))
         self.backend.enqueue_for(PLOT_ARCHITECT, _SubmittedFailure(RuntimeError( 'definite provider failure')))
-        with (mock.patch.object(self.runtime, '_append_validation_messages',
+        with (mock.patch.object(event_journal, 'append_validation_messages',
             side_effect=RuntimeError('persistent diagnostic append failure'))):
             with (self.assertRaisesRegex(RuntimeError, 'persistent diagnostic append failure')):
                 await self.runtime.decide_lead_step(

@@ -30,7 +30,6 @@ from story_writing_agents.models import AgentReplyKind, AgentReplyNextPhase
 from story_writing_agents.conversation_rag import ConversationRagDocumentIdentity, ConversationRagDocumentKey, ConversationRagOutcome, ConversationRagReason, ConversationRagSourceReference
 from story_writing_agents.conversation_search import CollaborationHistoryCitation
 from story_writing_agents.conversations import CollaborationReadableFieldKey, select_bounded_collaboration_context
-from story_writing_agents.cli import _parse_backend_overrides, build_parser, main
 from story_writing_agents.backend import backend_configuration_snapshot
 from story_writing_agents.structured_output_validation import diagnose_json_text, failure_issues
 from story_writing_agents.agent_context import ContextComponentKind, ProviderCallAccounting, ProviderCallKind, ProviderCallState, ProviderUsage, account_provider_payload, canonical_provider_json
@@ -41,7 +40,6 @@ from story_writing_agents.errors import BackendProtocolError, ConfigurationError
 from story_writing_agents.debug_log import DEBUG_LOG_RELATIVE_PATH, WorkspaceDebugLog
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.interactive_settings import ProviderRouteEntry, commit_prepared_settings_save, load_settings_state, prepare_settings_save, update_agent_backend
-from story_writing_agents.git.session_resources import GitSessionGenerationPin
 from story_writing_agents.orchestrator import StoryRuntime
 from story_writing_agents.provider_execution_workspace import ProviderExecutionWorkspace, mint_provider_execution_workspace
 from story_writing_agents.workspace.initialization import provision_session_resources
@@ -3662,7 +3660,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(self, "workspace", pristine_initialized_workspace(self)):
             from tests.provider_wire_fixture import ExplicitPhaseScript, selection_plan, lead_fixture_response, lead_fixture_bound_scope, finite_fixture_selection, CallbackContextViews
             from tests.test_lead_orchestration import _live_scope
-            from story_writing_agents import orchestrator as accounting_module
+            from story_writing_agents.runtime_resources import provider_call_accounting as accounting_module
             from story_writing_agents.agent_context.ledger.checkpoint_ledger import ContextLedger
             from story_writing_agents import conversations as c
             from story_writing_agents.agent_exchanges import AgentExchangeSelection, AgentExchangeScopeKind, WorkspaceAgentExchangeStore
@@ -3689,7 +3687,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             publication_error = RuntimeError("Synthetic post-validation ledger failure")
             caught_publication = None
             callback_provider = SimpleNamespace(callback_payload=callback_views.for_request)
-            original_task = accounting_module._AccountingContextProvider.record_validated_task
+            original_task = accounting_module.AccountingContextProvider.record_validated_task
             original_commit = ContextLedger.commit_attempt
 
             def record_task(owner, call_id, task_id, task_revision):
@@ -3724,7 +3722,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             runtime = StoryRuntime(self.workspace, native_backend)
             conversation = runtime.conversation_storage_services.catalog.create("preliminary_capture", "First preliminary").conversation_id
             with (mock.patch.object(backend_module._BoundContextProvider, "invoke_context", new=observed_invoke),
-                  mock.patch.object(accounting_module._AccountingContextProvider, "record_validated_task", new=record_task),
+                  mock.patch.object(accounting_module.AccountingContextProvider, "record_validated_task", new=record_task),
                   mock.patch.object(ContextLedger, "commit_attempt", new=commit)):
                 if seed:
                     from tests import test_specialist_routing_runtime as routing_fixtures
