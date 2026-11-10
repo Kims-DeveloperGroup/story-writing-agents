@@ -1,0 +1,198 @@
+{
+  "accepted_base": "648e5a4e5675001ed2d9aa91aaf400d485356568",
+  "source_path": "src/story_writing_agents/codex_adapter.py",
+  "source_sha256": "f7ec907ba1f9c1b1819b865bbd3de3ab847ce6d45bd693bb589fb3eb2316c370",
+  "new_owner": "src/story_writing_agents/codex_native_context.py",
+  "definition_body_rows": 516,
+  "definitions": [
+    {
+      "name": "_native_file_facts",
+      "lines": [
+        235,
+        240
+      ],
+      "ast_sha256": "b74bf763ff6d1dd1155f09d8f3338956b8a31612c5077cface5b3128a904f766"
+    },
+    {
+      "name": "_NativeContextUnavailable",
+      "lines": [
+        243,
+        246
+      ],
+      "ast_sha256": "15c46985d7b8ea4e3155c08902e653a6b0d0946a014fe4f8ec14823064a74d27"
+    },
+    {
+      "name": "_CodexNativeObservation",
+      "lines": [
+        250,
+        259
+      ],
+      "ast_sha256": "706f3623b2334b615ff727d6bb34b8a9845cebceb8387f7a1361adf6dad27201"
+    },
+    {
+      "name": "_native_observation_success",
+      "lines": [
+        262,
+        270
+      ],
+      "ast_sha256": "ee43675455e6c60c550ea2960f987565c2a0028443516483b0c0dc438c1ab7c3"
+    },
+    {
+      "name": "_native_observation_failure",
+      "lines": [
+        273,
+        283
+      ],
+      "ast_sha256": "3962b8157d3d2f6f605f40f574a6cf270baed9c4088c318bf65319f8fcf19671"
+    },
+    {
+      "name": "_codex_rollout_candidate",
+      "lines": [
+        286,
+        344
+      ],
+      "ast_sha256": "21650485078f3e6c7e9e9e2314ceb4c2164dad46f8f9d542ad3064b4addd6a12"
+    },
+    {
+      "name": "_CodexNativeInspectionInput",
+      "lines": [
+        348,
+        355
+      ],
+      "ast_sha256": "7423e0192e548d4e5a755621676a4ecc40b5f86828bfbc83caafb469fb25a932"
+    },
+    {
+      "name": "_native_environment_prelude",
+      "lines": [
+        358,
+        421
+      ],
+      "ast_sha256": "496b1934cfc1130250d50a4783868d9c46fdef25687af0798648b7b59b13cb7d"
+    },
+    {
+      "name": "_prepare_codex_native_inspection",
+      "lines": [
+        424,
+        454
+      ],
+      "ast_sha256": "804a8803b57046158f9c24abf3f7c76f82e7e08890ffead1866ba7982c610b85"
+    },
+    {
+      "name": "_read_codex_native_observation",
+      "lines": [
+        457,
+        662
+      ],
+      "ast_sha256": "b9360d29c541d8103423089f604412ee38eac6da9f232f23d0a081b5c7fca60c"
+    },
+    {
+      "name": "_finish_codex_native_inspection",
+      "lines": [
+        665,
+        683
+      ],
+      "ast_sha256": "a3724ae7207905cc8958c1150524c6214d9909aa34e56a5945f9c506fcced74f"
+    },
+    {
+      "name": "_inspect_codex_native_observation",
+      "lines": [
+        686,
+        699
+      ],
+      "ast_sha256": "e0f2e6cfe04658a83d71765d0d40a109f60e2e9e8e2a42c09b6c34a26a51994d"
+    },
+    {
+      "name": "_inspect_codex_native_observation_async",
+      "lines": [
+        702,
+        725
+      ],
+      "ast_sha256": "29f93dba7a61390beaf014f75b42177cb9c53f8c9fe3bbb33d540ab4f3d6b1b6"
+    },
+    {
+      "name": "_native_usage",
+      "lines": [
+        728,
+        734
+      ],
+      "ast_sha256": "4cd0d5337c723385d0d450092c7b8f61e2c4c814dc19bf455b0023ae200a4921"
+    },
+    {
+      "name": "_observe_completed_native_context",
+      "lines": [
+        753,
+        787
+      ],
+      "ast_sha256": "50bf14a3c5003a5d509d62704ef168d28a5a61cbf6777df2ac250d624dd15b91"
+    },
+    {
+      "name": "inspect_codex_context_witness",
+      "lines": [
+        790,
+        798
+      ],
+      "ast_sha256": "ef9428844866baf92c779266b866253dd9de9f44c8ff8cb27821080ec7e85e3e"
+    }
+  ],
+  "constants": [
+    {
+      "name": "_CONTEXT_WITNESS_BYTES",
+      "lines": [
+        231,
+        231
+      ],
+      "ast_sha256": "377711eddca22d89d670cc8bb9671909cce06d2356c009f94db75621894a6eb0"
+    },
+    {
+      "name": "_CONTEXT_WITNESS_LINES",
+      "lines": [
+        232,
+        232
+      ],
+      "ast_sha256": "7687928532dc734923c6524421aa31d04e5b8c74aef5a94d48d805933414dc21"
+    },
+    {
+      "name": "_POST_COMPLETE_TRANSIENT_REASONS",
+      "lines": [
+        737,
+        750
+      ],
+      "ast_sha256": "c4a6706871ad4bc761b531ca39624855c60b9e573f64a46609ec1a66d1a88913"
+    }
+  ],
+  "diagnostic_cause_line": 723,
+  "source_charge_projection": {
+    "before": 151431,
+    "new_source_scan_row": 1,
+    "unused_local_import": -1,
+    "after": 151431
+  },
+  "graph_projection_current_base": {
+    "modules": 230,
+    "full_edges": 1160,
+    "controller_edges": 1150
+  },
+  "new_cases": 0,
+  "local_Case_runs": 0,
+  "issue": 984,
+  "parent": 969,
+  "root_parent": 962,
+  "state": "문서 전용 Draft 준비; 실제 운영·테스트·워크플로 변경 없음",
+  "github_planning_gate": "passed",
+  "native_plan_sha256": "6cdee59efa375421df9e986832fbcbd3705ec330d1e4d3a618011de3b687f426",
+  "draft_before_code_required": true,
+  "parent_reports": [
+    {
+      "issue": 962,
+      "body_sha256": "c1c4d3b758eac5a5aa2858494d431bbc92629ccd637c5fb79c5f8029e99cb578",
+      "body_lines": 92,
+      "status": "In progress"
+    },
+    {
+      "issue": 969,
+      "body_sha256": "df316162e9c14c6c20ab2b8467860edf631ecc8a962584a6c76b5cfd658152b4",
+      "body_lines": 66,
+      "status": "Backlog"
+    }
+  ]
+}
