@@ -1740,14 +1740,16 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_both_native_backends_preserve_session_continuation_and_legacy_namespaces(self):
-        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService
+        from story_writing_agents.agent_context.invocation.context_execution import AgentContextService
         from story_writing_agents.agent_context.contracts.call_offers import ContextInvocationKind
         from story_writing_agents.agent_context.invocation.requests import ContextInvocationRequest
-        from story_writing_agents.agent_context.sources import (
-            ActiveDebateSourceAdapter, FocusedConversationSourceAdapter, OwnAgentStateSourceAdapter,
-            SessionHistorySourceAdapter, WritingArtifactSourceAdapter)
+        from story_writing_agents.agent_context.sources.active_debate import ActiveDebateSourceAdapter
+        from story_writing_agents.agent_context.sources.focused_conversation import FocusedConversationSourceAdapter
+        from story_writing_agents.agent_context.sources.own_agent_state import OwnAgentStateSourceAdapter
+        from story_writing_agents.agent_context.sources.session_history import SessionHistorySourceAdapter
+        from story_writing_agents.agent_context.sources.writing_artifact import WritingArtifactSourceAdapter
         from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
-        from tests.test_agent_context_execution import _LEAD_CALL_FACTORY, _lead_answer_frame, _materials
+        from tests.agent_context.invocation.execution_fixture import LEAD_CALL_FACTORY as _LEAD_CALL_FACTORY, make_lead_answer_frame as _lead_answer_frame, make_materials as _materials
         for provider_id in ("codex", "antigravity"):
             with self.subTest(provider=provider_id):
                 session = f"continuation_{provider_id}"
@@ -2624,24 +2626,25 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(details, ["Structured response\n$: malformed JSON"])
 
     async def _assert_grouped_reader_transport(self, backend, session_id, execution_workspace) -> None:
-        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService
+        from story_writing_agents.agent_context.invocation.context_execution import AgentContextService
         from story_writing_agents.agent_context.contracts.bound_call import BoundCallFactory
         from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers, ContextInvocationKind
         from story_writing_agents.agent_context.invocation.requests import ContextInvocationRequest
         from story_writing_agents.agent_context.contracts.errors import ContextExecutionError
         from story_writing_agents.agent_context.invocation.provider import context_provider_failure_facts
-        from story_writing_agents.agent_context.ledger import (ContextLedger, ContextLedgerKey,
-            ContextLedgerRecordState, ContextLedgerAttemptOutcome)
-        from story_writing_agents.agent_context.sources import (ActiveDebateSourceAdapter,
-            FocusedConversationSourceAdapter, OwnAgentStateSourceAdapter, WritingArtifactSourceAdapter)
+        from story_writing_agents.agent_context.ledger.checkpoint_ledger import ContextLedger
+        from story_writing_agents.agent_context.ledger.record_values import ContextLedgerKey, ContextLedgerRecordState, ContextLedgerAttemptOutcome
+        from story_writing_agents.agent_context.sources.active_debate import ActiveDebateSourceAdapter
+        from story_writing_agents.agent_context.sources.focused_conversation import FocusedConversationSourceAdapter
+        from story_writing_agents.agent_context.sources.own_agent_state import OwnAgentStateSourceAdapter
+        from story_writing_agents.agent_context.sources.writing_artifact import WritingArtifactSourceAdapter
         from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
         from story_writing_agents.lead_provider_contracts import LeadContractRejection, LeadGroupCompilation
         from story_writing_agents.agent_context.manifest import ContextAuthorityKind, ContextProvenance
         from story_writing_agents.agent_context.contracts.planning_inputs import MandatoryReferenceReservation
-        from story_writing_agents.agent_context.sources import writing_artifact_source_id
-        from tests.test_agent_context_execution import (_LEAD_CALL_FACTORY, _PRIVATE_INPUT, _materials,
-            _group_request, _group_control, _group_answer, _search)
+        from story_writing_agents.agent_context.sources.capture_values import writing_artifact_source_id
+        from tests.agent_context.invocation.execution_fixture import LEAD_CALL_FACTORY as _LEAD_CALL_FACTORY, PRIVATE_INPUT as _PRIVATE_INPUT, make_materials as _materials, make_group_request as _group_request, make_group_control as _group_control, make_group_answer as _group_answer, make_search as _search
         from story_writing_agents.provider_process import ProcessResult
         from tests.provider_wire_fixture import CallbackContextViews, FixturePhasePlanError, OwnedNativeHistory, assert_phase_guide
         service = AgentContextService(self.workspace)
@@ -3357,7 +3360,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             assert_done_ledger(observed_result)
 
         # 최신 accepted 선택보다 앞의 READ 입력도 최초 bootstrap 계보에 남아야 한다.
-        from tests.test_agent_context_execution import _read_search_hit
+        from tests.agent_context.invocation.execution_fixture import make_read_search_hit as _read_search_hit
         read_marker = "NATIVE_LINEAGE_READ_SOURCE_904"
         self.workspace.path("core_documents/global_outline.md").write_text(read_marker, encoding="utf-8")
         def search_lineage_source(call, _provider):
@@ -3660,7 +3663,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             from tests.provider_wire_fixture import ExplicitPhaseScript, selection_plan, lead_fixture_response, lead_fixture_bound_scope, finite_fixture_selection, CallbackContextViews
             from tests.test_lead_orchestration import _live_scope
             from story_writing_agents import orchestrator as accounting_module
-            from story_writing_agents.agent_context.ledger import ContextLedger
+            from story_writing_agents.agent_context.ledger.checkpoint_ledger import ContextLedger
             from story_writing_agents import conversations as c
             from story_writing_agents.agent_exchanges import AgentExchangeSelection, AgentExchangeScopeKind, WorkspaceAgentExchangeStore
             from tests.test_agent_exchange_viewer import _prepare_view, _transport
@@ -5329,12 +5332,13 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             (prior_user, prior_reply),
         )
         self.assertEqual(self.workspace.inspect_session(session_id)["debates"], [])
-        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService
+        from story_writing_agents.agent_context.invocation.context_execution import AgentContextService
         from story_writing_agents.agent_context.contracts.call_offers import ContextInvocationKind
         from story_writing_agents.agent_context.invocation.requests import ContextInvocationRequest
-        from story_writing_agents.agent_context.sources import (
-            ActiveDebateSourceAdapter, FocusedConversationSourceAdapter,
-            OwnAgentStateSourceAdapter, WritingArtifactSourceAdapter)
+        from story_writing_agents.agent_context.sources.active_debate import ActiveDebateSourceAdapter
+        from story_writing_agents.agent_context.sources.focused_conversation import FocusedConversationSourceAdapter
+        from story_writing_agents.agent_context.sources.own_agent_state import OwnAgentStateSourceAdapter
+        from story_writing_agents.agent_context.sources.writing_artifact import WritingArtifactSourceAdapter
         from story_writing_agents.conversation_storage import (
             compose_filesystem_conversation_storage)
         from story_writing_agents.lead_provider_contracts import (
@@ -5343,9 +5347,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.orchestrator import (
             LeadContractError, OrchestrationLeadCallFactory)
         from tests.provider_wire_fixture import lead_fixture_response, lead_fixture_result
-        from tests.test_agent_context_execution import (
-            ContextAuthorityKind, ContextPriority, ContextSemanticChannel, ContextSourceKind,
-            _material, _materials)
+        from story_writing_agents.agent_context.manifest import ContextAuthorityKind, ContextPriority, ContextSemanticChannel, ContextSourceKind
+        from tests.agent_context.invocation.execution_fixture import make_material as _material, make_materials as _materials
 
         service = AgentContextService(self.workspace)
         storage = compose_filesystem_conversation_storage(self.workspace)

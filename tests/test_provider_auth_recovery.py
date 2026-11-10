@@ -1,7 +1,8 @@
 """Issue 631 authentication evidence; all providers and login processes are synthetic."""
 from __future__ import annotations
+from story_writing_agents.agent_context.invocation import context_execution as owner_context_execution
+from tests.agent_context.invocation import execution_fixture as fixture_execution_fixture
 from story_writing_agents.agent_context.contracts import call_offers as owner_call_offers
-from story_writing_agents.agent_context.invocation import session_execution as owner_session_execution
 from tests.provider_wire_fixture import selection_plan
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
 import asyncio
@@ -34,7 +35,7 @@ from story_writing_agents.provider_auth import ProviderAuthService, ProviderAuth
 from story_writing_agents.provider_auth_recovery import ProviderAuthRecovery, authentication_replay, provider_activity, request_authentication, validate_provider_replay
 from story_writing_agents.provider_process import ProcessResult
 from story_writing_agents.workspace.initialization import compose_session_artifact_binding, provision_session_resources
-from tests import test_agent_context_execution as context
+
 from tests import test_interactive_controller as interactive_controller_tests
 from tests import test_lead_orchestration as lead
 from tests.test_specialist_orchestration import _assignments
@@ -271,7 +272,7 @@ class AuthClassificationTests(unittest.IsolatedAsyncioTestCase):
             failure.attach_replay_validator(lambda: True)
 
 
-class AuthContextProvider(context._ScriptedProvider):
+class AuthContextProvider(fixture_execution_fixture.ScriptedProvider):
     """Explicitly model provider-owned proof, accounting, admission, and veto."""
     def __init__(self, responses, **kwargs):
         super().__init__(responses, provider_id="antigravity", **kwargs)
@@ -296,9 +297,9 @@ class AuthContextProvider(context._ScriptedProvider):
             return await super().prepare_references(request)
 
 
-class ContextRecoveryTests(context.ContextExecutionTestCase):
+class ContextRecoveryTests(fixture_execution_fixture.ContextExecutionTestCase):
     async def _bound_replay(self, responses, *, seed, before_script_response, action_policy=None):
-        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService
+        from story_writing_agents.agent_context.invocation.context_execution import AgentContextService
         case = lead._task_fixture(self)
         if action_policy is not None:
             case.runtime._agent_context_service = AgentContextService(
@@ -380,7 +381,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
             replay.contract.require_current_offer(first.contract.offers)
 
     async def test_safe_replay_preserves_wire_and_counts_distinct_physical_calls(self):
-        provider = AuthContextProvider((auth_failure(), context._answer))
+        provider = AuthContextProvider((auth_failure(), fixture_execution_fixture.make_answer))
         result, keys = await drive_recovery(self.invoke(provider))
         self.assertEqual(keys, [('antigravity', 0)])
         self.assertEqual(len(result.provider_calls), 2)
@@ -401,14 +402,14 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
             label = f"group-auth-select-{cap}"
             plain_request = self.request(
                 operation_id=label, result_correlation_id=label + "-result",
-                invocation_kind=owner_call_offers.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
+                invocation_kind=owner_call_offers.ContextInvocationKind.LEAD, result_contract=fixture_execution_fixture.LEAD_CALL_FACTORY,
                 agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=cap)
-            grouped_request = context._group_request(plain_request)
-            pending = () if succeeds else (context._group_control("answer.workflow"),)
+            grouped_request = fixture_execution_fixture.make_group_request(plain_request)
+            pending = () if succeeds else (fixture_execution_fixture.make_group_control("answer.workflow"),)
             controls = ((0, LeadGroupPhase.SELECT, auth_failure()),)
             if succeeds:
-                controls += ((0, LeadGroupPhase.SELECT, context._group_control("answer.workflow")),)
-            grouped_provider = AuthContextProvider((*pending, context._group_answer), control_plan=controls)
+                controls += ((0, LeadGroupPhase.SELECT, fixture_execution_fixture.make_group_control("answer.workflow")),)
+            grouped_provider = AuthContextProvider((*pending, fixture_execution_fixture.make_group_answer), control_plan=controls)
             if succeeds:
                 auth_observations = []
                 grouped, keys = await drive_recovery(self.invoke(grouped_provider, grouped_request, group_observation_sink=auth_observations.append))
@@ -464,23 +465,23 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
             phases = (LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE) if succeeds else (LeadGroupPhase.SELECT,)
             for call, phase in zip(grouped_provider.calls, phases, strict=True):
                 context.assert_phase_guide(self, call, phase)
-        no_context_service = owner_session_execution.AgentContextService(
+        no_context_service = owner_context_execution.AgentContextService(
             self.workspace, action_policy=replace(context.CONTEXT_ACTION_POLICY, max_search_actions=1))
         def zero_hit_search(call, provider):
-            packet = json.loads(context._search(call, provider))
+            packet = json.loads(fixture_execution_fixture.make_search(call, provider))
             packet["agent_action"]["queries"][0]["search_text"] = "GROUP_AUTH_ZERO_HIT_895"
             return json.dumps(packet)
         def select_after_empty_search(call, provider):
             self.assertEqual(provider.callback_payload(call)["context_observation"]["search_results"], [])
             self.assertEqual(call.contract.offers.issued_handle_aliases, ())
-            return context._group_control("answer.workflow")(call, provider)
+            return fixture_execution_fixture.make_group_control("answer.workflow")(call, provider)
         for cap, succeeds, expected_limits in ((4, True, (2, 1, 1, 0)), (3, False, (1, 0, 0))):
             label = f"group-auth-generate-{cap}"
-            grouped_request = context._group_request(self.request(
+            grouped_request = fixture_execution_fixture.make_group_request(self.request(
                 operation_id=label, result_correlation_id=label + "-result",
-                invocation_kind=owner_call_offers.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
+                invocation_kind=owner_call_offers.ContextInvocationKind.LEAD, result_contract=fixture_execution_fixture.LEAD_CALL_FACTORY,
                 agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=cap))
-            grouped_provider = AuthContextProvider((zero_hit_search, auth_failure(), context._group_answer),
+            grouped_provider = AuthContextProvider((zero_hit_search, auth_failure(), fixture_execution_fixture.make_group_answer),
                 control_plan=(*selection_plan("answer.workflow", before_script_response=1)[:-1],
                     (1, LeadGroupPhase.SELECT, select_after_empty_search)))
             if succeeds:
@@ -555,21 +556,21 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
 
     async def test_local_reference_load_does_not_consume_provider_capacity(self):
         request = self.reference_request()
-        provider = AuthContextProvider((context._answer,), reference_operation_id=request.reference_operation_id)
+        provider = AuthContextProvider((fixture_execution_fixture.make_answer,), reference_operation_id=request.reference_operation_id)
         result = await self.invoke(provider, request)
         self.assertEqual(len(result.provider_calls), 1)
         self.assertEqual(len(provider.prelude_calls), 1)
         self.assertEqual(provider.completed_references, 1)
         constrained = self.reference_request(limit=1)
         constrained = replace(constrained, operation_id="limited", result_correlation_id="limited")
-        provider = AuthContextProvider((context._answer,), reference_operation_id=constrained.reference_operation_id)
+        provider = AuthContextProvider((fixture_execution_fixture.make_answer,), reference_operation_id=constrained.reference_operation_id)
         constrained_result = await self.invoke(provider, constrained)
         self.assertEqual(len(provider.prelude_calls), 1)
         self.assertEqual(len(provider.calls), 1)
         self.assertEqual(len(constrained_result.provider_calls), 1)
 
     async def test_later_action_recovery_preserves_prior_evidence_and_per_call_cap(self):
-        provider = AuthContextProvider((auth_failure(), context._search, auth_failure(), context._answer))
+        provider = AuthContextProvider((auth_failure(), fixture_execution_fixture.make_search, auth_failure(), fixture_execution_fixture.make_answer))
         result, keys = await drive_recovery(self.invoke(provider))
         self.assertEqual(keys, [("antigravity", 0), ("antigravity", 1)])
         self.assertEqual(len(result.provider_calls), 4)
@@ -598,7 +599,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
     async def test_unsafe_unconfirmed_and_repeated_auth_failure_never_replay(self):
         for index, (safe, approved, twice) in enumerate(((False, True, False), (True, False, False), (True, True, True))):
             failures = [auth_failure(safe=safe)] + ([auth_failure()] if twice else [])
-            provider = AuthContextProvider(tuple(failures) + (context._answer,))
+            provider = AuthContextProvider(tuple(failures) + (fixture_execution_fixture.make_answer,))
             request = self.request(operation_id=f"unsafe-{index}", result_correlation_id=f"unsafe-{index}")
             callbacks = []
             with self.assertRaises(ProviderAuthenticationRequiredError):
@@ -608,13 +609,13 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
 
     async def test_replay_requires_explicit_exact_true_validator(self):
         for index, validator in enumerate((None, lambda: False, lambda: 1, lambda: (_ for _ in ()).throw(OSError()))):
-            provider = AuthContextProvider((auth_failure(validator=validator), context._answer))
+            provider = AuthContextProvider((auth_failure(validator=validator), fixture_execution_fixture.make_answer))
             with self.assertRaises(ProviderAuthenticationRequiredError):
                 await drive_recovery(self.invoke(provider, self.request(operation_id=f"veto-{index}", result_correlation_id=f"veto-{index}")))
             self.assertEqual(len(provider.calls), 1)
 
     async def test_source_drift_vetoes_replay_before_submission(self):
-        provider = AuthContextProvider((auth_failure(), context._answer))
+        provider = AuthContextProvider((auth_failure(), fixture_execution_fixture.make_answer))
         def drift(_key):
             self.workspace.path("core_documents/global_outline.md").write_text("Changed synthetic outline.\n")
             return True
@@ -622,11 +623,11 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
             await drive_recovery(self.invoke(provider), drift)
         self.assertEqual(len(provider.calls), 1)
 
-        grouped_request = context._group_request(self.request(
+        grouped_request = fixture_execution_fixture.make_group_request(self.request(
             operation_id="group-auth-source", result_correlation_id="group-auth-source-result",
-            invocation_kind=owner_call_offers.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
+            invocation_kind=owner_call_offers.ContextInvocationKind.LEAD, result_contract=fixture_execution_fixture.LEAD_CALL_FACTORY,
             agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=4))
-        grouped_provider = AuthContextProvider((context._group_control("answer.workflow"), context._group_answer),
+        grouped_provider = AuthContextProvider((fixture_execution_fixture.make_group_control("answer.workflow"), fixture_execution_fixture.make_group_answer),
             control_plan=((0, LeadGroupPhase.SELECT, auth_failure()),))
         def change_group_source(_key):
             self.workspace.path("core_documents/global_outline.md").write_text("Changed typed group source.")
@@ -726,18 +727,18 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
 
     async def test_noninteractive_auth_errors_and_restart_never_replay(self):
         failure = auth_failure()
-        provider = AuthContextProvider((failure, context._answer))
+        provider = AuthContextProvider((failure, fixture_execution_fixture.make_answer))
         with self.assertRaises(ProviderAuthenticationRequiredError) as caught:
             await self.invoke(provider)
         self.assertIs(caught.exception, failure)
         self.assertFalse(failure.validate_replay())
         self.assertEqual(len(provider.calls), 1)
-        owner_session_execution.AgentContextService(self.workspace)
+        owner_context_execution.AgentContextService(self.workspace)
         self.assertEqual(len(provider.calls), 1)
 
     async def test_auth_cancel_cleans_validator_and_retains_prior_call_facts(self):
         failure = auth_failure()
-        provider = AuthContextProvider((failure, context._answer))
+        provider = AuthContextProvider((failure, fixture_execution_fixture.make_answer))
         def interrupted(_key): raise asyncio.CancelledError
         with self.assertRaises(asyncio.CancelledError):
             await drive_recovery(self.invoke(provider), interrupted)

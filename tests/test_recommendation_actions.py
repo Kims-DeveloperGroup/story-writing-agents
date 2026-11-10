@@ -304,7 +304,7 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertNotIn("capability", repr(c.project_collaboration_history(restored)))
 
     async def test_readable_and_session_context_expose_exact_origin_without_private_authority(self):
-        from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
+        from story_writing_agents.agent_context.sources.session_history import SessionHistorySourceAdapter
         conversation_id, turn = await self.recommend()
         request = turn.recommendation_request
         before = self.history(conversation_id)

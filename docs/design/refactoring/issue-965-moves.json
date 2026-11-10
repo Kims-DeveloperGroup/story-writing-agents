@@ -1499,12 +1499,6 @@
     },
     {
       "source": "src/story_writing_agents/agent_context/sources.py",
-      "old_name": "_SOURCE_KIND_ORDER",
-      "planned_name": "SOURCE_KIND_ORDER",
-      "planned_owner": "sources/capture_values.py"
-    },
-    {
-      "source": "src/story_writing_agents/agent_context/sources.py",
       "old_name": "_artifact_locator_is_lexically_safe",
       "planned_name": "artifact_locator_is_lexically_safe",
       "planned_owner": "sources/capture_values.py"
@@ -1573,6 +1567,13 @@
       "source": "src/story_writing_agents/agent_context/sources.py",
       "old_name": "_structured_source_id",
       "planned_name": "source_structured_source_id",
+      "planned_owner": "sources/capture_values.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/sources.py",
+      "old_name": "ContextSourceRegistry.inventory.<lambda>",
+      "origin_kind": "existing_lambda",
+      "planned_name": "source_snapshot_order_key",
       "planned_owner": "sources/capture_values.py"
     }
   ],
@@ -2205,5 +2206,20 @@
     "headroom": 10,
     "case_suite_executions": 0,
     "meaning": "적용전정적계획; actual after/CI 통과증거아님"
+  },
+  "private_owned_constants": [
+    {
+      "name": "_SOURCE_KIND_ORDER",
+      "owner": "sources/capture_values.py",
+      "rule": "같은owner의기존정렬key만접근;cross-private노출없음"
+    }
+  ],
+  "existing_lambda_extraction": {
+    "origin": "ContextSourceRegistry.inventory의기존key lambda",
+    "owner": "sources/capture_values.py",
+    "public_name": "source_snapshot_order_key",
+    "moved_top_level_definitions": 177,
+    "existing_definitions_preserved": 176,
+    "purpose": "imported tuple의추가bound-method임시생성을피하는동일callback코드이동"
   }
 }

@@ -29,7 +29,7 @@ from ..contracts.planning_inputs import (
     MandatoryReferenceReservation,
 )
 from ..contracts.projection_accounting import ContextProjectionAccounting
-from ..ledger import ContextLedgerProviderCall
+from ..ledger.record_values import ContextLedgerProviderCall
 from ..manifest import (
     ContextScope,
     ContextSourceKind,

@@ -1,78 +1,85 @@
 """Closed, source-qualified receipts for approved canonical owner moves."""
 from __future__ import annotations
-
 import hashlib
 import json
 from pathlib import Path
 
-
 RECEIPT_PATH = Path(__file__).parent / "fixtures" / "test_id_moves_v1.json"
+RECEIPT_SHA256 = "3a79d7da271e0061013a10e6615843d66cc0329b91713f25d77196b989333ed5"
 ORIGINAL_CAPS_SHA256 = "fc586b3eaa147b4ad4bc06e42e98378c50bd56a9fb09954219c20c45e882b99b"
-EXPECTED_CAPS_SHA256 = "b554b945803dd496796fd0bf7cad3201c7f729c37821a90231fc734074576c52"
-RECEIPT_SHA256 = "1712755b79983c58a7210d60e8c8788fcd12faa3d0503c67f1ff764d7a6e182a"
-ORIGIN_COMMIT = "d198abaf60edb1956acbd1f410ad3b1b9fbbedd8"
+S02_CAPS_SHA256 = "b554b945803dd496796fd0bf7cad3201c7f729c37821a90231fc734074576c52"
+EXPECTED_CAPS_SHA256 = "7f3bdd0982191c0adef51815ae3445fa4a55c11dfcb5d7574179e0c542b0310c"
 ORIGINAL_ID = "tests.test_agent_context_planning.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability"
-
+SECOND_ID = "tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden"
+STAGES = (
+    (964, "d198abaf60edb1956acbd1f410ad3b1b9fbbedd8", ORIGINAL_CAPS_SHA256, S02_CAPS_SHA256, 45),
+    (965, "a18dfc6b3faa8dc326668c77d0da12441be388f8", S02_CAPS_SHA256, EXPECTED_CAPS_SHA256, 117),
+)
 
 def caps_digest(caps: dict[str, int]) -> str:
     return hashlib.sha256(json.dumps(caps, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
-
-def load_receipt() -> dict:
-    """Read the one approved immutable receipt without caching observations."""
+def load_receipt() -> list[dict]:
+    """Read both immutable, individually qualified stages without a cache."""
     try:
         raw = RECEIPT_PATH.read_bytes()
         receipt = json.loads(raw)
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError("cannot read canonical move receipt") from error
-    if (hashlib.sha256(raw).hexdigest() != RECEIPT_SHA256
-            or receipt.get("schema_version") != 1 or receipt.get("issue") != 964
-            or receipt.get("origin_commit") != ORIGIN_COMMIT
-            or receipt.get("original_caps_sha256") != ORIGINAL_CAPS_SHA256
-            or receipt.get("expected_caps_sha256") != EXPECTED_CAPS_SHA256):
-        raise ValueError("canonical move receipt is not approved")
-    moves = receipt["moves"]
-    old_ids = {move["old_id"] for move in moves}
-    new_ids = {move["new_id"] for move in moves}
-    if len(moves) != 45 or len(old_ids) != 45 or len(new_ids) != 45:
-        raise ValueError("canonical move receipt is not bijective")
-    return receipt
-
+    if hashlib.sha256(raw).hexdigest() != RECEIPT_SHA256:
+        raise ValueError("canonical move receipt differs approved source")
+    stages = receipt.get("stages", [])
+    if receipt.get("schema_version") != 2 or len(stages) != len(STAGES):
+        raise ValueError("canonical move receipt differs approved stages")
+    for stage, expected in zip(stages, STAGES):
+        issue, origin, before, after, count = expected
+        actual = tuple(stage.get(key) for key in ("issue", "origin_commit", "original_caps_sha256", "expected_caps_sha256"))
+        moves = stage.get("moves", [])
+        if stage.get("schema_version") != 1 or actual != expected[:4] or len(moves) != count:
+            raise ValueError("canonical move stage differs approved metadata")
+        if len({move["old_id"] for move in moves}) != count or len({move["new_id"] for move in moves}) != count:
+            raise ValueError("canonical move receipt is not bijective")
+    return stages
 
 def remap_base_caps(current: dict[str, int], base: dict[str, int]) -> dict[str, int]:
-    """Rekey only the fixed Issue 964 bijection; never alias current IDs."""
-    if ORIGINAL_ID not in base or ORIGINAL_ID in current or current == base:
+    """Rekey only exact approved full inventories, never current case IDs."""
+    if ORIGINAL_ID in current or (ORIGINAL_ID not in base and SECOND_ID not in base) or current == base:
         return base
-    if caps_digest(base) != ORIGINAL_CAPS_SHA256:
+    base_digest = caps_digest(base)
+    before = [stage[2] for stage in STAGES]
+    if base_digest not in before:
         return base
-    if caps_digest(current) != EXPECTED_CAPS_SHA256:
-        raise ValueError("canonical move differs approved complete inventory")
-    moves = load_receipt()["moves"]
-    old_ids = {move["old_id"] for move in moves}
-    new_ids = {move["new_id"] for move in moves}
-    if not old_ids <= base.keys() or new_ids & (base.keys() - old_ids):
-        raise ValueError("canonical move receipt overlaps inventory")
-    relocated = {identifier: cap for identifier, cap in base.items()
-                 if identifier not in old_ids}
-    for move in moves:
-        if move["subtest_cap"] != base[move["old_id"]]:
-            raise ValueError("canonical move changed subtest cap")
-        relocated[move["new_id"]] = base[move["old_id"]]
-    if relocated != current:
-        raise ValueError("canonical move omitted or added IDs")
-    return relocated
-
+    start = before.index(base_digest)
+    ends = [stage[3] for stage in STAGES]
+    current_digest = caps_digest(current)
+    if current_digest not in ends or ends.index(current_digest) < start:
+        raise ValueError("canonical inventory differs approved move target")
+    result = dict(base)
+    for stage in load_receipt()[start:ends.index(current_digest) + 1]:
+        for move in stage["moves"]:
+            old, new, cap = move["old_id"], move["new_id"], move["subtest_cap"]
+            if old not in result or new in result or result[old] != cap:
+                raise ValueError("canonical move source or cap differs approved receipt")
+            result[new] = result.pop(old)
+        if caps_digest(result) != stage["expected_caps_sha256"]:
+            raise ValueError("canonical move differs approved intermediate inventory")
+    if result != current:
+        raise ValueError("canonical move adds, drops, or changes cases")
+    return result
 
 def historical_feedback_caps(current: dict[str, int]) -> dict[str, int]:
-    """Restore only the existing Issue 938 fixture's historical owner keys."""
-    if caps_digest(current) != EXPECTED_CAPS_SHA256:
+    """Restore only the existing Issue 938 fixture's original owner keys."""
+    digest = caps_digest(current)
+    ends = [stage[3] for stage in STAGES]
+    if digest not in ends:
         raise ValueError("historical fixture differs approved current inventory")
-    original = current.copy()
-    for move in load_receipt()["moves"]:
-        cap = original.pop(move["new_id"])
-        if cap != move["subtest_cap"] or move["old_id"] in original:
-            raise ValueError("historical fixture changed approved move")
-        original[move["old_id"]] = cap
-    if caps_digest(original) != ORIGINAL_CAPS_SHA256:
-        raise ValueError("historical fixture differs original inventory")
-    return original
+    result = dict(current)
+    for stage in reversed(load_receipt()[:ends.index(digest) + 1]):
+        for move in stage["moves"]:
+            old, new, cap = move["old_id"], move["new_id"], move["subtest_cap"]
+            if new not in result or old in result or result[new] != cap:
+                raise ValueError("historical move target or cap differs approved receipt")
+            result[old] = result.pop(new)
+        if caps_digest(result) != stage["original_caps_sha256"]:
+            raise ValueError("historical fixture differs original full inventory")
+    return result

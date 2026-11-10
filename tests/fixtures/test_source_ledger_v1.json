@@ -3,12 +3,16 @@
   "legacy_unresolved_lines": 1550,
   "origin_commit": "3b74dce89a2fffd726b94a739c87d4524c3deed7",
   "counted_support_files": [
-    "tests/feedback_probe.py",
-    "tests/module_graph_fixture.py",
-    "tests/terminal_input_fixture.py",
-    "tests/id_moves.py",
+    "tests/agent_context/invocation/execution_fixture.py",
+    "tests/agent_context/invocation/session_fixture.py",
+    "tests/agent_context/ledger/ledger_fixture.py",
     "tests/agent_context/planning/fixtures.py",
-    "tests/agent_context/contracts/fixtures.py"
+    "tests/agent_context/sources/authority_fixture.py",
+    "tests/agent_context/sources/value_inputs.py",
+    "tests/feedback_probe.py",
+    "tests/id_moves.py",
+    "tests/module_graph_fixture.py",
+    "tests/terminal_input_fixture.py"
   ],
   "origins": {
     "test_git_external_operation_inspection.py": {
@@ -284,5 +288,105 @@
       ],
       "destination": "tests/agent_context/contracts/fixtures.py"
     }
-  }
+  },
+  "refactor_stages": [
+    {
+      "issue": 965,
+      "origin_commit": "a18dfc6b3faa8dc326668c77d0da12441be388f8",
+      "origins": [
+        {
+          "source": "tests/agent_context/contracts/fixtures.py",
+          "sha256": "b3c7622cbdf6131a070a89128da91a6eef9d58b06f6e8f2ea069e015dea46fff",
+          "source_ranges": [
+            [
+              1,
+              154
+            ]
+          ],
+          "destinations": [
+            "tests/agent_context/invocation/session_fixture.py"
+          ],
+          "counting": "moved code counted once via recursive test paths or counted_support_files union"
+        },
+        {
+          "source": "tests/test_agent_context_execution.py",
+          "sha256": "b4635b6c29bd190ba689c693e0712bfb15e18de9ffaccf2ae3c1e5feca248278",
+          "source_ranges": [
+            [
+              1,
+              1877
+            ]
+          ],
+          "destinations": [
+            "tests/agent_context/invocation/execution_fixture.py",
+            "tests/agent_context/invocation/test_execution_events.py",
+            "tests/agent_context/invocation/test_execution_failures.py",
+            "tests/agent_context/invocation/test_execution_lifecycle.py",
+            "tests/agent_context/invocation/test_request_contracts.py",
+            "tests/agent_context/invocation/test_scope_serialization.py"
+          ],
+          "counting": "moved code counted once via recursive test paths or counted_support_files union"
+        },
+        {
+          "source": "tests/test_agent_context_ledger.py",
+          "sha256": "51ecac6b4baad7d8dd096935e876ae22eb4620b52cf502d0d64cb590122516d8",
+          "source_ranges": [
+            [
+              1,
+              1644
+            ]
+          ],
+          "destinations": [
+            "tests/agent_context/ledger/ledger_fixture.py",
+            "tests/agent_context/ledger/test_commit_authority.py",
+            "tests/agent_context/ledger/test_failure_usage.py",
+            "tests/agent_context/ledger/test_import_boundary.py",
+            "tests/agent_context/ledger/test_ledger_api.py",
+            "tests/agent_context/ledger/test_record_codec_limits.py",
+            "tests/agent_context/ledger/test_record_lifecycle.py",
+            "tests/agent_context/ledger/test_scope_checkpoints.py",
+            "tests/agent_context/ledger/test_scope_locks.py",
+            "tests/agent_context/ledger/test_storage_atomicity.py"
+          ],
+          "counting": "moved code counted once via recursive test paths or counted_support_files union"
+        },
+        {
+          "source": "tests/test_agent_context_service.py",
+          "sha256": "efc69fd8aeb70872ae7a3f52b1de5b497a05b95ea5b3547fc1b238f7c0c8adca",
+          "source_ranges": [
+            [
+              1,
+              2261
+            ]
+          ],
+          "destinations": [
+            "tests/agent_context/contracts/test_result_validation.py",
+            "tests/agent_context/invocation/test_bound_action_frames.py",
+            "tests/agent_context/invocation/test_handle_reads.py",
+            "tests/agent_context/invocation/test_search_answer_authority.py"
+          ],
+          "counting": "moved code counted once via recursive test paths or counted_support_files union"
+        },
+        {
+          "source": "tests/test_agent_context_sources.py",
+          "sha256": "859b5a1177981d7492f62a78b16ed55ef5c2574d3cc08346ce11fb7c46256dbb",
+          "source_ranges": [
+            [
+              1,
+              919
+            ]
+          ],
+          "destinations": [
+            "tests/agent_context/sources/authority_fixture.py",
+            "tests/agent_context/sources/test_authority_adapters.py",
+            "tests/agent_context/sources/test_registry_search.py",
+            "tests/agent_context/sources/test_source_contracts.py",
+            "tests/agent_context/sources/value_inputs.py"
+          ],
+          "counting": "moved code counted once via recursive test paths or counted_support_files union"
+        }
+      ],
+      "legacy_unresolved_lines": 1550
+    }
+  ]
 }

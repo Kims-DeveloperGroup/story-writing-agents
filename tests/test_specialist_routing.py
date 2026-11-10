@@ -857,7 +857,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
         from story_writing_agents.lead_schema_groups import LeadGroupRequestBasis
         from story_writing_agents.orchestrator import OrchestrationLeadCallFactory, _lead_front_result_contract
-        from tests.test_agent_context_execution import _group_control
+        from tests.agent_context.invocation.execution_fixture import make_group_control as _group_control
         from tests.test_provider_schema_spec import check_schema
         from tests import test_lead_artifact_objectives as document_fixture
         facts = LeadProviderConstraints(input_ids=("user_input",), task_revisions=((task.task_id, task.task_revision),))
@@ -961,7 +961,7 @@ class SpecialistRoutingTests(unittest.TestCase):
                 payload=value)
         native_frames = []
         import asyncio
-        from story_writing_agents.agent_context.invocation import session_execution as context_service
+        from story_writing_agents.agent_context.contracts import session as context_service
         from story_writing_agents.agent_context.manifest import ContextManifest
         from story_writing_agents.provider_wire import project_context_payload
         binding = context_service.ContextInvocationBinding(offers.scope, "selected-v9-operation", "selected-v9-result",

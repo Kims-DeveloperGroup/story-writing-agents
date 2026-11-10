@@ -1,5 +1,6 @@
 """Independent replay of provider-visible candidate references and text splices."""
 from __future__ import annotations
+from story_writing_agents.agent_context.invocation import context_execution as owner_context_execution
 import hashlib
 import unittest
 from types import SimpleNamespace
@@ -7,7 +8,6 @@ from unittest import mock
 from story_writing_agents.agent_context import canonical_provider_json
 from story_writing_agents.agent_context.accounting import account_provider_payload
 from story_writing_agents.conversations.session_context import MAX_PROVIDER_INPUT_UTF8_BYTES, MAX_PROVIDER_PAYLOAD_UTF8_BYTES, MAX_PROVIDER_SCHEMA_UTF8_BYTES, MAX_SESSION_CONTEXT_UTF8_BYTES
-from story_writing_agents.agent_context.invocation import session_execution as service_module
 from story_writing_agents.provider_wire import add_contract_guidance, project_context_payload
 from story_writing_agents.agent_context.manifest import ContextAuthorityKind, ContextProvenance
 from story_writing_agents.agent_context.request_compaction import compact_context_payload
@@ -265,21 +265,21 @@ class CandidateWireContractTests(unittest.TestCase):
                         selected, full, compact, _ = projected(short_target, duplicate=index, padding=padding, diagnostics=True)
                     self.assertEqual(size(selected), MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
                     self.assertGreater(size(compact), MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
-                    service_module._require_context_capacity(schema, selected[0], stage="provider_payload")
+                    owner_context_execution._require_context_capacity(schema, selected[0], stage="provider_payload")
                     escaped = '한\n\\"'
                     with mock.patch.object(ctx_candidates, "_latest_debate_candidate_record",
                         side_effect=(record(1, short_base), record(index, short_target))):
                         below, _, _, _ = projected(short_target, duplicate=index,
                             padding=escaped + padding[10:], diagnostics=True)
                     self.assertEqual(size(below), MAX_PROVIDER_PAYLOAD_UTF8_BYTES - 1)
-                    service_module._require_context_capacity(schema, below[0], stage="provider_payload")
+                    owner_context_execution._require_context_capacity(schema, below[0], stage="provider_payload")
                     with mock.patch.object(ctx_candidates, "_latest_debate_candidate_record",
                         side_effect=(record(1, short_base), record(index, short_target))):
                         over, _, _, _ = projected(short_target, duplicate=index,
                             padding=escaped + padding[8:], diagnostics=True)
                     self.assertEqual(size(over), MAX_PROVIDER_PAYLOAD_UTF8_BYTES + 1)
                     with self.assertRaises(ctx_session_context.SessionContextCapacityError) as caught:
-                        service_module._require_context_capacity(schema, over[0], stage="provider_payload")
+                        owner_context_execution._require_context_capacity(schema, over[0], stage="provider_payload")
                     self.assertEqual(caught.exception.stage, "provider_payload")
                     self.assertEqual(caught.exception.actual_utf8_bytes, size(over))
                     self.assertEqual(caught.exception.maximum_utf8_bytes,

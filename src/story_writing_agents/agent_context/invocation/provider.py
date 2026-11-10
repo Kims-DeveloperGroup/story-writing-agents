@@ -38,7 +38,7 @@ from ..manifest import (
     ContextScope,
     ContextSourceKind,
 )
-from ..sources import writing_artifact_source_id
+from ..sources.capture_values import writing_artifact_source_id
 from .delivery import ContextGroupInvocationState
 from collections.abc import Mapping
 from dataclasses import (
@@ -54,6 +54,11 @@ from typing import (
     runtime_checkable,
 )
 
+
+from ..contracts.planning_inputs import MandatoryReferenceReservation
+from ..contracts.context_values import canonical_bytes
+from ..contracts.context_values import digest
+from ..contracts.context_values import scope_value
 
 class ContextContinuationRejection(StrEnum):
     """Transport-proven rejection before execution, never inferred from text."""
@@ -481,6 +486,83 @@ class ContextReferencePreludeResult:
             ) for proof in result.authorized_references)
             object.__setattr__(prelude, "read_facts", facts)
         return prelude
+
+    @staticmethod
+    def validate_reference_binding(
+        value: ContextReferencePreludeResult | None,
+        *,
+        reference_request: ContextReferencePreludeRequest | None,
+        scope: ContextScope,
+        operation_id: str,
+        result_correlation_id: str,
+        reference_operation_id: str | None,
+        mandatory_references: tuple[MandatoryReferenceReservation, ...],
+    ) -> tuple[tuple[ContextCallReadFact, ...], str]:
+        """Validate the original delivered proofs for one immutable call binding."""
+        if (type(value) is not ContextReferencePreludeResult
+                or type(reference_request) is not ContextReferencePreludeRequest
+                or value._prelude_request is not reference_request
+                or reference_request.scope != scope
+                or reference_request.reference_operation_id
+                != reference_operation_id
+                or type(value._read_request) is not ReferenceReadRequest):
+            raise execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+        read_request = value._read_request
+        correlation = read_request.correlation
+        proofs = value._authorized_references
+        reference_facts = value.read_facts
+        reservations = mandatory_references
+        if (correlation.operation_id != reference_operation_id
+                or correlation.agent_id != scope.agent_id
+                or len(proofs) != len(reservations)
+                or len(reference_facts) != len(reservations)
+                or len(read_request.references) != len(reservations)):
+            raise execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+        snapshots = []
+        for proof, fact, reservation, reference in zip(
+            proofs, reference_facts, reservations, read_request.references, strict=True,
+        ):
+            if (type(proof) is not AuthorizedArtifactReference
+                    or type(fact) is not ContextCallReadFact
+                    or proof.ordinal != reservation.ordinal
+                    or proof.reference != reference
+                    or proof.source.path != reference.path
+                    or reference.token != reservation.provenance.locator
+                    or f"sha256:{proof.source.source_sha256}" != reservation.revision
+                    or f"sha256:{proof.selected_sha256}" != reservation.content_digest
+                    or proof.selected_utf8_bytes != reservation.utf8_bytes
+                    or fact.evidence_id != reservation.reference_id
+                    or fact.source_id != reservation.source_id
+                    or fact.source_kind is not ContextSourceKind.WRITING_ARTIFACT
+                    or fact.revision != reservation.revision
+                    or fact.source_digest != reservation.revision
+                    or fact.boundary_digest != reservation.content_digest
+                    or fact.whole_source is not (reference.line_range is None)
+                    or fact.artifact_locator != reference.path
+                or fact.boundary_kind != ("whole" if reference.line_range is None else "artifact_lines")
+                or fact.boundary_start != (None if reference.line_range is None else reference.line_range.start)
+                or fact.boundary_end != (None if reference.line_range is None else reference.line_range.end)):
+                raise execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+            source = proof.source
+            bounds = (None if reference.line_range is None else
+                      (reference.line_range.start, reference.line_range.end))
+            snapshots.append((
+                proof.ordinal, reference.path, bounds,
+                (source.path, source.kind.value, source.source_sha256,
+                 source.source_utf8_bytes, source.device_id, source.inode,
+                 source.modified_ns, source.changed_ns),
+                proof.selected_sha256, proof.selected_utf8_bytes, proof.source_line_count,
+            ))
+        reference_digest = digest(canonical_bytes((
+            "context-reference-read-v1", scope_value(scope),
+            operation_id, result_correlation_id,
+            reference_request.policy_fingerprint, reference_request.call_id,
+            (correlation.operation_id, correlation.invocation_id,
+             correlation.invocation_ordinal, correlation.agent_id, correlation.phase,
+             correlation.round_number, correlation.attempt),
+            snapshots,
+        )))
+        return reference_facts, reference_digest
 
 
 @runtime_checkable

@@ -1,5 +1,6 @@
 """Live lead-review workflows for exact artifact proposals."""
 from __future__ import annotations
+from story_writing_agents.agent_context.sources import session_history as owner_session_history
 from tests.provider_wire_fixture import selection_plan
 from tests.provider_wire_fixture import lead_fixture_bound_scope, lead_fixture_response
 import json
@@ -9,7 +10,6 @@ from unittest import mock
 from story_writing_agents import ReplyTraceOrigin, StoryRuntime
 from story_writing_agents.agent_context.accounting import ProviderCallKind
 from story_writing_agents.lead_provider_contracts import LeadResultContractOwner
-from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
 from story_writing_agents.conversations import session_context as session_context_module
 from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.artifact_proposals import serialize_artifact_review_candidate
@@ -318,7 +318,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             LEAD_ORCHESTRATOR,
             _artifact_synthesis_outcome("propose"), )
         storage = self.runtime.conversation_storage_services
-        context = SessionHistorySourceAdapter(storage.catalog, storage.event_store, self.session_id)
+        context = owner_session_history.SessionHistorySourceAdapter(storage.catalog, storage.event_store, self.session_id)
         prior = context.capture().coverage
         decision = await self.runtime.decide_lead_step(
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
@@ -1338,7 +1338,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     async def test_read_evidence_translates_whole_content_and_range_boundary_digests(self):
         from dataclasses import replace
         from story_writing_agents import conversations as c
-        from story_writing_agents.agent_context.sources import WritingArtifactSourceAdapter
+        from story_writing_agents.agent_context.sources.writing_artifact import WritingArtifactSourceAdapter
         from story_writing_agents.agent_context.manifest import ContextSubjectKind
         from story_writing_agents.orchestrator import CONTEXT_SOURCE_POLICY
         from tests import test_artifact_objectives as objectives
