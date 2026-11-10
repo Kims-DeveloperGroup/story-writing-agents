@@ -341,9 +341,14 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = module_inventory(_SOURCE_ROOT)
         edges = internal_edges(modules)
-        self.assertEqual(len(modules), 203)
-        self.assertEqual(len(edges), 970)
-        self.assertIn(('story_writing_agents.agent_context.invocation.session_execution', 'story_writing_agents.provider_adapter'), edges)
+        ledger_owner_modules = {name for name in modules if name == "story_writing_agents.agent_context.ledger" or name.startswith("story_writing_agents.agent_context.ledger.")}
+        source_owner_modules = {name for name in modules if name == "story_writing_agents.agent_context.sources" or name.startswith("story_writing_agents.agent_context.sources.")}
+        invocation_owner_modules = {
+            "story_writing_agents.agent_context.invocation.context_execution",
+            "story_writing_agents.agent_context.invocation.invocation_session"}
+        self.assertEqual(len(modules), 218)
+        self.assertEqual(len(edges), 1065)
+        self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._core', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -684,7 +689,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {
                 target
                 for source, target in edges
-                if source == "story_writing_agents.agent_context.ledger"
+                if source in ledger_owner_modules and target not in ledger_owner_modules
             },
             {
                 'story_writing_agents.agent_context.accounting',
@@ -714,7 +719,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {
                 target
                 for source, target in edges
-                if source == "story_writing_agents.agent_context.sources"
+                if source in source_owner_modules and target not in source_owner_modules
             },
             {
                 "story_writing_agents.agent_context.actions",
@@ -734,7 +739,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {
                 target
                 for source, target in edges
-                if source == "story_writing_agents.agent_context.invocation.session_execution"
+                if source in invocation_owner_modules and target not in invocation_owner_modules
             },
             {
                 'story_writing_agents.agent_context.accounting',
@@ -754,14 +759,22 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.agent_context.invocation.group_payload',
                 'story_writing_agents.agent_context.invocation.provider',
                 'story_writing_agents.agent_context.invocation.requests',
-                'story_writing_agents.agent_context.ledger',
+                'story_writing_agents.agent_context.ledger.checkpoint_ledger',
+                'story_writing_agents.agent_context.ledger.checkpoint_wire',
+                'story_writing_agents.agent_context.ledger.record_validation',
+                'story_writing_agents.agent_context.ledger.record_values',
                 'story_writing_agents.agent_context.manifest',
                 'story_writing_agents.agent_context.payload.actions',
                 'story_writing_agents.agent_context.payload.context',
                 'story_writing_agents.agent_context.payload.history',
                 'story_writing_agents.agent_context.planning',
                 'story_writing_agents.agent_context.progress',
-                'story_writing_agents.agent_context.sources',
+                'story_writing_agents.agent_context.sources.active_debate',
+                'story_writing_agents.agent_context.sources.capture_values',
+                'story_writing_agents.agent_context.sources.focused_conversation',
+                'story_writing_agents.agent_context.sources.own_agent_state',
+                'story_writing_agents.agent_context.sources.registry',
+                'story_writing_agents.agent_context.sources.writing_artifact',
                 'story_writing_agents.agents',
                 'story_writing_agents.conversations.session_context',
                 'story_writing_agents.errors',
@@ -771,7 +784,6 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.provider_wire',
                 'story_writing_agents.structured_output_validation',
                 'story_writing_agents.workspace',
-                'story_writing_agents.writing_artifacts.read_actions',
             },
         )
         self.assertIn(('story_writing_agents.backend', 'story_writing_agents.agent_context.invocation.provider'), edges)
@@ -780,7 +792,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {
                 source
                 for source, target in edges
-                if target == "story_writing_agents.agent_context.invocation.session_execution"
+                if target in invocation_owner_modules and source not in invocation_owner_modules
                 and source.startswith("story_writing_agents.interactive_controller.")
             },
             set(),
@@ -877,7 +889,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertEqual(
             {source for source, target in edges
              if target == "story_writing_agents.agent_context.group_observation"},
-            {"story_writing_agents.agent_context.group_reporting", "story_writing_agents.agent_context.invocation.session_execution",
+            {"story_writing_agents.agent_context.group_reporting", 'story_writing_agents.agent_context.invocation.context_execution',
              "story_writing_agents.conversations.context", "story_writing_agents.conversations.events",
              "story_writing_agents.orchestrator"},
         )

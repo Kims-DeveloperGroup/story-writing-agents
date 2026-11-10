@@ -971,7 +971,7 @@ class CallbackContextViews:
 def selection_plan(group_id, *, before_script_response=0):
     """사례가 선언한 원래 script 위치와 유효한 SELECT 국면만 연결한다."""
     from story_writing_agents.lead_schema_groups import LeadGroupPhase, SchemaGroupControlOwner
-    from tests.test_agent_context_execution import _group_control
+    from tests.agent_context.invocation.execution_fixture import make_group_control as _group_control
     if type(before_script_response) is not int or before_script_response < 0:
         raise FixturePhasePlanError("fixture-phase-plan:invalid_cursor")
     def select(call, provider):

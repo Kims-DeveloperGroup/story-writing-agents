@@ -99,3 +99,10 @@ helper를 외부 공개 이름으로 옮길 때는 원본 global 참조의 심�
 검증 순서는 실제 메서드 수집·원본 대응과 정적 import 점검 뒤, 기존 최소 사례·영향 사례·최종 전체 실행으로 이어진다. 확대 실행에서 발견한 이동 오류는 같은 시나리오·assertion·부정 입력을 유지하며 한 묶음으로 교정한다. 실패로 작업량이 줄어든 실행 시간은 성능 비교에서 제외한다.
 
 선언 이동은 decorator와 module docstring까지 원본 의미를 보존한다. 원본 소스 범위는 decorator의 시작 행을 포함하며, 클래스의 기반 타입·필드·기본값·생성자·frozen/slots와 static/class method·property 형태를 함께 대조한다. 모듈 docstring은 첫 문장으로 유지하고 그 뒤 future import를 둔다.
+
+## S03 검증 준비
+
+S03 #965는 실행·원장·소스 어댑터의 소유 경계를 분리한다. [동결 이동 계획](../design/refactoring/issue-965-moves.json)은 기존176개 정의·53개 공개명·117개 기존 테스트의 대응과 cap을 담는다.
+승인 기반은 `a18dfc6b3faa8dc326668c77d0da12441be388f8`이며 이 문서 전용 checkpoint의 runtime·테스트·의존 파일은 그 기반과 같다.
+이슈의 상세 계획과 native Ready 확인 뒤 Draft PR을 먼저 생성하고, runtime/test 편집은 그 다음에 시작한다.
+Draft 이후 검증 지원을 준비하면 생산·기존 Case/fixture·runner 실행의 동등성과 controller/source hash를 별도로 고정한다. 실제 source privacy의 RED/복구 GREEN과 최소/영향/최종 전체 검증은 아직 수행하지 않았다.

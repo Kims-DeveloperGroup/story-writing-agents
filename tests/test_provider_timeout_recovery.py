@@ -1,5 +1,6 @@
 """Read-only Lead failures preserve history and admit explicit same-chat retry."""
 from __future__ import annotations
+from story_writing_agents.agent_context.ledger import record_values as owner_record_values
 from tests.provider_wire_fixture import selection_plan, offered_fixture_bindings, indexed_response, lead_fixture_result, finite_fixture_selection
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
 import asyncio
@@ -7,7 +8,6 @@ import json
 from dataclasses import asdict, replace
 from unittest import mock
 from story_writing_agents import StoryRuntime
-from story_writing_agents.agent_context.ledger import ContextLedgerKey, ContextLedgerRecordState
 from story_writing_agents.agent_context.manifest import ContextSourceKind
 from story_writing_agents.agents import LEAD_ORCHESTRATOR
 from story_writing_agents.conversations import CollaborationConfirmationDecision, CollaborationEventKind, CollaborationInvocationKind, CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload, CollaborationMessagePayload, CollaborationNextAction, CollaborationProviderCallPayload, CollaborationProviderCallState, CollaborationStepState, LeadOutcomeKind, project_collaboration_history
@@ -32,7 +32,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
     def checkpoint(self):
         service = self.runtime._agent_context_service
         identity = service.session_continuation(self.session_id, LEAD_ORCHESTRATOR).identity
-        key = ContextLedgerKey(identity.checkpoint_scope(), "codex")
+        key = owner_record_values.ContextLedgerKey(identity.checkpoint_scope(), "codex")
         return key, service._ledger.inspect(key)
 
     async def answer(self, conversation, text, *, runtime=None, backend=None):
@@ -92,7 +92,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
                 self.assertEqual(len(closure), 1)
                 self.assertIs(closure[0].payload.code, CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT)
                 prefix = self.history(conversation)
-                self.assertIs(self.checkpoint()[1].record.state, ContextLedgerRecordState.TAINTED)
+                self.assertIs(self.checkpoint()[1].record.state, owner_record_values.ContextLedgerRecordState.TAINTED)
 
                 backend = lead._LeadBackend(persist_context_threads=True, test_case=self)
                 backend.context_threads.update(self.backend.context_threads)
@@ -203,7 +203,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(len(self.failures(conversation)), 1)
         self.assertIs(self.failures(conversation)[0].payload.code,
                       CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT)
-        self.assertIs(self.checkpoint()[1].record.state, ContextLedgerRecordState.TAINTED)
+        self.assertIs(self.checkpoint()[1].record.state, owner_record_values.ContextLedgerRecordState.TAINTED)
         before = len(self.backend.calls)
         restarted = StoryRuntime(self.workspace, self.backend)
         with self.assertRaisesRegex(ValueError, "no authoritative pending request"):

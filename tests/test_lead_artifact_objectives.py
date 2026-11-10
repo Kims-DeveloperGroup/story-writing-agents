@@ -154,7 +154,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
 
 
     def _observe_context_budget(self):
-        from story_writing_agents.agent_context.invocation import session_execution as context_service
+        from story_writing_agents.agent_context.invocation import context_execution as context_service
         from story_writing_agents.agent_context.contracts.planning_inputs import ContextPlanningError
         planning_measurements = []
         original_plan = context_service.plan_context_projection
@@ -425,7 +425,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertFalse(
             any(item.record_ref == direction.record_ref for item in current.application_attempts))
         from story_writing_agents import RuntimeSession
-        from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
+        from story_writing_agents.agent_context.sources.session_history import SessionHistorySourceAdapter
         calls_before_inspection = len(self.backend.calls)
         session_plans = self.runtime.inspect_document_plans(self.session_id)
         other_conversation = self.conversation("Unrelated provider-free plan inspection")
@@ -449,7 +449,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         # Independent current baseline assessment; the goal below retains all of its own funded calls.
         await self.record_book_readiness(seed_before_capture=True)
         from story_writing_agents import RuntimeSession
-        from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
+        from story_writing_agents.agent_context.sources.session_history import SessionHistorySourceAdapter
         preparation_failures = []
         planning_measurements = self._observe_context_budget()
         planning_conversation = self.conversation("Chapter three goal before an exact manuscript target")

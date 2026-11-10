@@ -1,0 +1,2225 @@
+{
+  "schema_version": 1,
+  "status": "구현 전 계획; 실행·완료 증거 아님",
+  "accepted_base": "a18dfc6b3faa8dc326668c77d0da12441be388f8",
+  "source_snapshot_head": "006fa97119fa0f5f55144e7e08c00193cfacb1b4",
+  "source_tree": "f92aef468bd2216b6494e81e4ea8e9a932cae5b4",
+  "production_definition_plan": [
+    {
+      "path": "src/story_writing_agents/agent_context/invocation/session_execution.py",
+      "before_sha256": "6025da11a71464b8d037b84d004b954dc4b9a76f8ba2bdd59df4bda0f16af3d7",
+      "definitions": [
+        {
+          "name": "_require_context_capacity",
+          "kind": "FunctionDef",
+          "from_line": 268,
+          "to_line": 280,
+          "planned_owner": "invocation/context_execution.py"
+        },
+        {
+          "name": "_execution_policy_fingerprint",
+          "kind": "FunctionDef",
+          "from_line": 283,
+          "to_line": 304,
+          "planned_owner": "invocation/context_execution.py"
+        },
+        {
+          "name": "_validate_sync_callback",
+          "kind": "FunctionDef",
+          "from_line": 307,
+          "to_line": 319,
+          "planned_owner": "invocation/context_execution.py"
+        },
+        {
+          "name": "_require_sync_none",
+          "kind": "FunctionDef",
+          "from_line": 322,
+          "to_line": 328,
+          "planned_owner": "invocation/context_execution.py"
+        },
+        {
+          "name": "_emit_context_event",
+          "kind": "FunctionDef",
+          "from_line": 331,
+          "to_line": 338,
+          "planned_owner": "invocation/context_execution.py"
+        },
+        {
+          "name": "_emit_action_progress",
+          "kind": "FunctionDef",
+          "from_line": 341,
+          "to_line": 346,
+          "planned_owner": "invocation/context_execution.py"
+        },
+        {
+          "name": "_emit_context_event_without_replacing",
+          "kind": "FunctionDef",
+          "from_line": 349,
+          "to_line": 358,
+          "planned_owner": "invocation/context_execution.py"
+        },
+        {
+          "name": "_accept_provider_call_without_replacing",
+          "kind": "FunctionDef",
+          "from_line": 361,
+          "to_line": 368,
+          "planned_owner": "invocation/context_execution.py"
+        },
+        {
+          "name": "_reject_provider_call_without_replacing",
+          "kind": "FunctionDef",
+          "from_line": 371,
+          "to_line": 384,
+          "planned_owner": "invocation/context_execution.py"
+        },
+        {
+          "name": "_cancel_provider_call_without_replacing",
+          "kind": "FunctionDef",
+          "from_line": 387,
+          "to_line": 396,
+          "planned_owner": "invocation/context_execution.py"
+        },
+        {
+          "name": "_fail_provider_call_without_replacing",
+          "kind": "FunctionDef",
+          "from_line": 399,
+          "to_line": 412,
+          "planned_owner": "invocation/context_execution.py"
+        },
+        {
+          "name": "_provider_input_token_total",
+          "kind": "FunctionDef",
+          "from_line": 415,
+          "to_line": 435,
+          "planned_owner": "invocation/context_execution.py"
+        },
+        {
+          "name": "_HandleBinding",
+          "kind": "ClassDef",
+          "from_line": 439,
+          "to_line": 444,
+          "planned_owner": "invocation/invocation_session.py"
+        },
+        {
+          "name": "ContextInvocationSession",
+          "kind": "ClassDef",
+          "from_line": 447,
+          "to_line": 1604,
+          "planned_owner": "invocation/invocation_session.py"
+        },
+        {
+          "name": "_workspace_context_id",
+          "kind": "FunctionDef",
+          "from_line": 1607,
+          "to_line": 1617,
+          "planned_owner": "invocation/context_execution.py"
+        },
+        {
+          "name": "_descriptor_entry",
+          "kind": "FunctionDef",
+          "from_line": 1620,
+          "to_line": 1637,
+          "planned_owner": "invocation/context_execution.py"
+        },
+        {
+          "name": "_attempt_identifier",
+          "kind": "FunctionDef",
+          "from_line": 1640,
+          "to_line": 1648,
+          "planned_owner": "invocation/context_execution.py"
+        },
+        {
+          "name": "AgentContextService",
+          "kind": "ClassDef",
+          "from_line": 1651,
+          "to_line": 3817,
+          "planned_owner": "invocation/context_execution.py"
+        }
+      ]
+    },
+    {
+      "path": "src/story_writing_agents/agent_context/ledger.py",
+      "before_sha256": "45f109be47250b095fddc7982e835c5928d67bd21bcfef710c45b226b1e952e7",
+      "definitions": [
+        {
+          "name": "ContextLedgerRecordState",
+          "kind": "ClassDef",
+          "from_line": 119,
+          "to_line": 125,
+          "planned_owner": "ledger/record_values.py"
+        },
+        {
+          "name": "ContextLedgerAttemptOutcome",
+          "kind": "ClassDef",
+          "from_line": 128,
+          "to_line": 141,
+          "planned_owner": "ledger/record_values.py"
+        },
+        {
+          "name": "ContextLedgerErrorCode",
+          "kind": "ClassDef",
+          "from_line": 144,
+          "to_line": 155,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "ContextLedgerError",
+          "kind": "ClassDef",
+          "from_line": 177,
+          "to_line": 184,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_invalid",
+          "kind": "FunctionDef",
+          "from_line": 187,
+          "to_line": 190,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_exact_nonnegative_integer",
+          "kind": "FunctionDef",
+          "from_line": 193,
+          "to_line": 199,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_positive_generation",
+          "kind": "FunctionDef",
+          "from_line": 202,
+          "to_line": 208,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_safe_identity",
+          "kind": "FunctionDef",
+          "from_line": 211,
+          "to_line": 221,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_safe_digest",
+          "kind": "FunctionDef",
+          "from_line": 224,
+          "to_line": 234,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_parse_timestamp",
+          "kind": "FunctionDef",
+          "from_line": 237,
+          "to_line": 248,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_format_timestamp",
+          "kind": "FunctionDef",
+          "from_line": 251,
+          "to_line": 256,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_canonical_json",
+          "kind": "FunctionDef",
+          "from_line": 259,
+          "to_line": 275,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "ContextLedgerKey",
+          "kind": "ClassDef",
+          "from_line": 279,
+          "to_line": 288,
+          "planned_owner": "ledger/record_values.py"
+        },
+        {
+          "name": "_scope_key_value",
+          "kind": "FunctionDef",
+          "from_line": 291,
+          "to_line": 302,
+          "planned_owner": "ledger/record_values.py"
+        },
+        {
+          "name": "context_ledger_scope_key",
+          "kind": "FunctionDef",
+          "from_line": 305,
+          "to_line": 311,
+          "planned_owner": "ledger/record_values.py"
+        },
+        {
+          "name": "ContextLedgerProviderCall",
+          "kind": "ClassDef",
+          "from_line": 315,
+          "to_line": 328,
+          "planned_owner": "ledger/record_values.py"
+        },
+        {
+          "name": "ContextLedgerAttemptPlan",
+          "kind": "ClassDef",
+          "from_line": 332,
+          "to_line": 388,
+          "planned_owner": "ledger/record_values.py"
+        },
+        {
+          "name": "ContextLedgerAttempt",
+          "kind": "ClassDef",
+          "from_line": 392,
+          "to_line": 447,
+          "planned_owner": "ledger/record_values.py"
+        },
+        {
+          "name": "ContextLedgerReadyCheckpoint",
+          "kind": "ClassDef",
+          "from_line": 451,
+          "to_line": 510,
+          "planned_owner": "ledger/record_values.py"
+        },
+        {
+          "name": "ContextLedgerRecord",
+          "kind": "ClassDef",
+          "from_line": 514,
+          "to_line": 584,
+          "planned_owner": "ledger/record_values.py"
+        },
+        {
+          "name": "ContextLedgerInspection",
+          "kind": "ClassDef",
+          "from_line": 588,
+          "to_line": 635,
+          "planned_owner": "ledger/record_values.py"
+        },
+        {
+          "name": "ContextLedgerCommitAuthorization",
+          "kind": "ClassDef",
+          "from_line": 639,
+          "to_line": 663,
+          "planned_owner": "ledger/record_values.py"
+        },
+        {
+          "name": "_DecodeError",
+          "kind": "ClassDef",
+          "from_line": 677,
+          "to_line": 678,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_decoded_dict",
+          "kind": "FunctionDef",
+          "from_line": 685,
+          "to_line": 691,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_decoded_list",
+          "kind": "FunctionDef",
+          "from_line": 694,
+          "to_line": 700,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_decoded_string",
+          "kind": "FunctionDef",
+          "from_line": 703,
+          "to_line": 709,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_decoded_integer",
+          "kind": "FunctionDef",
+          "from_line": 712,
+          "to_line": 718,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_decoded_optional_integer",
+          "kind": "FunctionDef",
+          "from_line": 721,
+          "to_line": 726,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_decoded_optional_string",
+          "kind": "FunctionDef",
+          "from_line": 729,
+          "to_line": 734,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_decoded_boolean",
+          "kind": "FunctionDef",
+          "from_line": 737,
+          "to_line": 743,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_decoded_enum",
+          "kind": "FunctionDef",
+          "from_line": 746,
+          "to_line": 757,
+          "planned_owner": "ledger/record_validation.py"
+        },
+        {
+          "name": "_scope_value",
+          "kind": "FunctionDef",
+          "from_line": 760,
+          "to_line": 767,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_decode_scope",
+          "kind": "FunctionDef",
+          "from_line": 770,
+          "to_line": 783,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_provenance_value",
+          "kind": "FunctionDef",
+          "from_line": 786,
+          "to_line": 790,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_decode_provenance",
+          "kind": "FunctionDef",
+          "from_line": 793,
+          "to_line": 801,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_entry_value",
+          "kind": "FunctionDef",
+          "from_line": 804,
+          "to_line": 816,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_decode_entry",
+          "kind": "FunctionDef",
+          "from_line": 819,
+          "to_line": 851,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_conditions_value",
+          "kind": "FunctionDef",
+          "from_line": 854,
+          "to_line": 861,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_decode_conditions",
+          "kind": "FunctionDef",
+          "from_line": 864,
+          "to_line": 883,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_record_cursor_value",
+          "kind": "FunctionDef",
+          "from_line": 886,
+          "to_line": 892,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_decode_record_cursor",
+          "kind": "FunctionDef",
+          "from_line": 895,
+          "to_line": 912,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_checkpoint_record_value",
+          "kind": "FunctionDef",
+          "from_line": 915,
+          "to_line": 919,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_decode_checkpoint_record",
+          "kind": "FunctionDef",
+          "from_line": 922,
+          "to_line": 945,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_checkpoint_source_value",
+          "kind": "FunctionDef",
+          "from_line": 948,
+          "to_line": 954,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_decode_checkpoint_source",
+          "kind": "FunctionDef",
+          "from_line": 957,
+          "to_line": 969,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_catalog_cursor_value",
+          "kind": "FunctionDef",
+          "from_line": 972,
+          "to_line": 977,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_decode_catalog_cursor",
+          "kind": "FunctionDef",
+          "from_line": 980,
+          "to_line": 991,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_proposal_value",
+          "kind": "FunctionDef",
+          "from_line": 994,
+          "to_line": 1005,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "context_checkpoint_proposal_digest",
+          "kind": "FunctionDef",
+          "from_line": 1008,
+          "to_line": 1020,
+          "planned_owner": "ledger/checkpoint_wire.py"
+        },
+        {
+          "name": "_component_value",
+          "kind": "FunctionDef",
+          "from_line": 1023,
+          "to_line": 1031,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_decode_component",
+          "kind": "FunctionDef",
+          "from_line": 1034,
+          "to_line": 1053,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_payload_accounting_value",
+          "kind": "FunctionDef",
+          "from_line": 1056,
+          "to_line": 1064,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_decode_payload_accounting",
+          "kind": "FunctionDef",
+          "from_line": 1067,
+          "to_line": 1083,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_usage_value",
+          "kind": "FunctionDef",
+          "from_line": 1086,
+          "to_line": 1091,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_decode_usage",
+          "kind": "FunctionDef",
+          "from_line": 1094,
+          "to_line": 1105,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_call_accounting_value",
+          "kind": "FunctionDef",
+          "from_line": 1108,
+          "to_line": 1109,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_decode_call_accounting",
+          "kind": "FunctionDef",
+          "from_line": 1112,
+          "to_line": 1113,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_decision_accounting_value",
+          "kind": "FunctionDef",
+          "from_line": 1116,
+          "to_line": 1125,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_decode_decision_accounting",
+          "kind": "FunctionDef",
+          "from_line": 1128,
+          "to_line": 1150,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_searchable_value",
+          "kind": "FunctionDef",
+          "from_line": 1173,
+          "to_line": 1174,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_decode_searchable",
+          "kind": "FunctionDef",
+          "from_line": 1177,
+          "to_line": 1181,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_source_budget_value",
+          "kind": "FunctionDef",
+          "from_line": 1184,
+          "to_line": 1189,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_decode_source_budget",
+          "kind": "FunctionDef",
+          "from_line": 1192,
+          "to_line": 1209,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_reference_budget_value",
+          "kind": "FunctionDef",
+          "from_line": 1212,
+          "to_line": 1219,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_decode_reference_budget",
+          "kind": "FunctionDef",
+          "from_line": 1222,
+          "to_line": 1231,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_budget_accounting_value",
+          "kind": "FunctionDef",
+          "from_line": 1234,
+          "to_line": 1242,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_decode_budget_accounting",
+          "kind": "FunctionDef",
+          "from_line": 1245,
+          "to_line": 1257,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_projection_accounting_value",
+          "kind": "FunctionDef",
+          "from_line": 1276,
+          "to_line": 1291,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_decode_projection_accounting",
+          "kind": "FunctionDef",
+          "from_line": 1294,
+          "to_line": 1324,
+          "planned_owner": "ledger/accounting_wire.py"
+        },
+        {
+          "name": "_key_value",
+          "kind": "FunctionDef",
+          "from_line": 1327,
+          "to_line": 1332,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_decode_key",
+          "kind": "FunctionDef",
+          "from_line": 1335,
+          "to_line": 1343,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_provider_call_value",
+          "kind": "FunctionDef",
+          "from_line": 1346,
+          "to_line": 1351,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_decode_provider_call",
+          "kind": "FunctionDef",
+          "from_line": 1354,
+          "to_line": 1360,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_attempt_plan_value",
+          "kind": "FunctionDef",
+          "from_line": 1363,
+          "to_line": 1380,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_decode_attempt_plan",
+          "kind": "FunctionDef",
+          "from_line": 1383,
+          "to_line": 1427,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_attempt_value",
+          "kind": "FunctionDef",
+          "from_line": 1430,
+          "to_line": 1441,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_decode_attempt",
+          "kind": "FunctionDef",
+          "from_line": 1444,
+          "to_line": 1472,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_ready_checkpoint_value",
+          "kind": "FunctionDef",
+          "from_line": 1475,
+          "to_line": 1493,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_decode_ready_checkpoint",
+          "kind": "FunctionDef",
+          "from_line": 1496,
+          "to_line": 1549,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_record_value",
+          "kind": "FunctionDef",
+          "from_line": 1552,
+          "to_line": 1566,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_record_bytes",
+          "kind": "FunctionDef",
+          "from_line": 1569,
+          "to_line": 1573,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_reject_constant",
+          "kind": "FunctionDef",
+          "from_line": 1576,
+          "to_line": 1577,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_unique_object",
+          "kind": "FunctionDef",
+          "from_line": 1580,
+          "to_line": 1586,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_decode_record",
+          "kind": "FunctionDef",
+          "from_line": 1589,
+          "to_line": 1654,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_authorization_digest",
+          "kind": "FunctionDef",
+          "from_line": 1657,
+          "to_line": 1669,
+          "planned_owner": "ledger/record_wire.py"
+        },
+        {
+          "name": "_StorageFault",
+          "kind": "ClassDef",
+          "from_line": 1672,
+          "to_line": 1676,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_storage_fault",
+          "kind": "FunctionDef",
+          "from_line": 1679,
+          "to_line": 1680,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_storage_error_for",
+          "kind": "FunctionDef",
+          "from_line": 1683,
+          "to_line": 1691,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_require_storage_features",
+          "kind": "FunctionDef",
+          "from_line": 1694,
+          "to_line": 1702,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_identity",
+          "kind": "FunctionDef",
+          "from_line": 1705,
+          "to_line": 1709,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_directory_flags",
+          "kind": "FunctionDef",
+          "from_line": 1712,
+          "to_line": 1716,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_file_flags",
+          "kind": "FunctionDef",
+          "from_line": 1719,
+          "to_line": 1723,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_set_noninheritable",
+          "kind": "FunctionDef",
+          "from_line": 1726,
+          "to_line": 1730,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_verify_directory",
+          "kind": "FunctionDef",
+          "from_line": 1733,
+          "to_line": 1755,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_open_child_directory",
+          "kind": "FunctionDef",
+          "from_line": 1758,
+          "to_line": 1804,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_ledger_directory",
+          "kind": "FunctionDef",
+          "from_line": 1808,
+          "to_line": 1859,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_verify_regular",
+          "kind": "FunctionDef",
+          "from_line": 1862,
+          "to_line": 1882,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_open_regular",
+          "kind": "FunctionDef",
+          "from_line": 1885,
+          "to_line": 1933,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_open_existing_regular",
+          "kind": "FunctionDef",
+          "from_line": 1936,
+          "to_line": 1959,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_read_descriptor_metadata",
+          "kind": "FunctionDef",
+          "from_line": 1962,
+          "to_line": 1975,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_read_named_metadata",
+          "kind": "FunctionDef",
+          "from_line": 1978,
+          "to_line": 1991,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_open_read_candidate",
+          "kind": "FunctionDef",
+          "from_line": 1994,
+          "to_line": 2019,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_same_read_content",
+          "kind": "FunctionDef",
+          "from_line": 2022,
+          "to_line": 2032,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_read_payload_once",
+          "kind": "FunctionDef",
+          "from_line": 2035,
+          "to_line": 2096,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_record_name",
+          "kind": "FunctionDef",
+          "from_line": 2099,
+          "to_line": 2100,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_lock_name",
+          "kind": "FunctionDef",
+          "from_line": 2103,
+          "to_line": 2104,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_read_payload",
+          "kind": "FunctionDef",
+          "from_line": 2107,
+          "to_line": 2117,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_write_all",
+          "kind": "FunctionDef",
+          "from_line": 2120,
+          "to_line": 2129,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_existing_target_is_safe",
+          "kind": "FunctionDef",
+          "from_line": 2132,
+          "to_line": 2142,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_replace_record",
+          "kind": "FunctionDef",
+          "from_line": 2145,
+          "to_line": 2214,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_WriterState",
+          "kind": "ClassDef",
+          "from_line": 2217,
+          "to_line": 2223,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_writer_state",
+          "kind": "FunctionDef",
+          "from_line": 2232,
+          "to_line": 2239,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_acquire_advisory_lock",
+          "kind": "FunctionDef",
+          "from_line": 2242,
+          "to_line": 2259,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_writer_directory",
+          "kind": "FunctionDef",
+          "from_line": 2263,
+          "to_line": 2313,
+          "planned_owner": "ledger/atomic_files.py"
+        },
+        {
+          "name": "_inspection_for_record",
+          "kind": "FunctionDef",
+          "from_line": 2316,
+          "to_line": 2339,
+          "planned_owner": "ledger/checkpoint_ledger.py"
+        },
+        {
+          "name": "_inspect_in_directory",
+          "kind": "FunctionDef",
+          "from_line": 2342,
+          "to_line": 2369,
+          "planned_owner": "ledger/checkpoint_ledger.py"
+        },
+        {
+          "name": "_expected_generation",
+          "kind": "FunctionDef",
+          "from_line": 2372,
+          "to_line": 2376,
+          "planned_owner": "ledger/checkpoint_ledger.py"
+        },
+        {
+          "name": "_next_generation",
+          "kind": "FunctionDef",
+          "from_line": 2379,
+          "to_line": 2382,
+          "planned_owner": "ledger/checkpoint_ledger.py"
+        },
+        {
+          "name": "_require_generation",
+          "kind": "FunctionDef",
+          "from_line": 2385,
+          "to_line": 2390,
+          "planned_owner": "ledger/checkpoint_ledger.py"
+        },
+        {
+          "name": "_commit_is_authorized",
+          "kind": "FunctionDef",
+          "from_line": 2393,
+          "to_line": 2437,
+          "planned_owner": "ledger/checkpoint_ledger.py"
+        },
+        {
+          "name": "ContextLedger",
+          "kind": "ClassDef",
+          "from_line": 2440,
+          "to_line": 2817,
+          "planned_owner": "ledger/checkpoint_ledger.py"
+        }
+      ]
+    },
+    {
+      "path": "src/story_writing_agents/agent_context/sources.py",
+      "before_sha256": "b3601d981f314cc00ef22285bd8d13fca8a6855c061d0a75515bd9476b73965c",
+      "definitions": [
+        {
+          "name": "ContextSourceErrorCode",
+          "kind": "ClassDef",
+          "from_line": 105,
+          "to_line": 119,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "ContextSourceError",
+          "kind": "ClassDef",
+          "from_line": 144,
+          "to_line": 151,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "_source_error",
+          "kind": "FunctionDef",
+          "from_line": 154,
+          "to_line": 155,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "_positive",
+          "kind": "FunctionDef",
+          "from_line": 158,
+          "to_line": 162,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "_nonnegative",
+          "kind": "FunctionDef",
+          "from_line": 165,
+          "to_line": 169,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "_require_source_policy",
+          "kind": "FunctionDef",
+          "from_line": 172,
+          "to_line": 178,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "_safe_identity",
+          "kind": "FunctionDef",
+          "from_line": 181,
+          "to_line": 189,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "_safe_digest",
+          "kind": "FunctionDef",
+          "from_line": 192,
+          "to_line": 200,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "_strict_text",
+          "kind": "FunctionDef",
+          "from_line": 203,
+          "to_line": 216,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "_canonical_json_bytes",
+          "kind": "FunctionDef",
+          "from_line": 219,
+          "to_line": 238,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "_contains_nul",
+          "kind": "FunctionDef",
+          "from_line": 241,
+          "to_line": 250,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "_digest",
+          "kind": "FunctionDef",
+          "from_line": 253,
+          "to_line": 254,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "_identity_digest",
+          "kind": "FunctionDef",
+          "from_line": 257,
+          "to_line": 258,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "_structured_source_id",
+          "kind": "FunctionDef",
+          "from_line": 261,
+          "to_line": 262,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "writing_artifact_source_id",
+          "kind": "FunctionDef",
+          "from_line": 265,
+          "to_line": 271,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "_physical_lines",
+          "kind": "FunctionDef",
+          "from_line": 274,
+          "to_line": 297,
+          "planned_owner": "sources/writing_artifact.py"
+        },
+        {
+          "name": "_artifact_locator_is_lexically_safe",
+          "kind": "FunctionDef",
+          "from_line": 300,
+          "to_line": 320,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "ContextSourcePolicy",
+          "kind": "ClassDef",
+          "from_line": 324,
+          "to_line": 355,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "ContextSourceDescriptor",
+          "kind": "ClassDef",
+          "from_line": 372,
+          "to_line": 441,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "ContextSourceRecord",
+          "kind": "ClassDef",
+          "from_line": 445,
+          "to_line": 463,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "ContextSourceSnapshot",
+          "kind": "ClassDef",
+          "from_line": 467,
+          "to_line": 741,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "ContextSourceSearchMatch",
+          "kind": "ClassDef",
+          "from_line": 745,
+          "to_line": 781,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "_record",
+          "kind": "FunctionDef",
+          "from_line": 784,
+          "to_line": 800,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "_descriptor",
+          "kind": "FunctionDef",
+          "from_line": 803,
+          "to_line": 822,
+          "planned_owner": "sources/capture_values.py"
+        },
+        {
+          "name": "WritingArtifactSourceAdapter",
+          "kind": "ClassDef",
+          "from_line": 825,
+          "to_line": 1290,
+          "planned_owner": "sources/writing_artifact.py"
+        },
+        {
+          "name": "create_guarded_writing_artifact_source_adapter",
+          "kind": "FunctionDef",
+          "from_line": 1293,
+          "to_line": 1311,
+          "planned_owner": "sources/writing_artifact.py"
+        },
+        {
+          "name": "_readable_record_value",
+          "kind": "FunctionDef",
+          "from_line": 1314,
+          "to_line": 1372,
+          "planned_owner": "sources/focused_conversation.py"
+        },
+        {
+          "name": "_readable_context_bootstrap",
+          "kind": "FunctionDef",
+          "from_line": 1375,
+          "to_line": 1394,
+          "planned_owner": "sources/focused_conversation.py"
+        },
+        {
+          "name": "SessionHistorySourceAdapter",
+          "kind": "ClassDef",
+          "from_line": 1397,
+          "to_line": 1420,
+          "planned_owner": "sources/session_history.py"
+        },
+        {
+          "name": "FocusedConversationSourceAdapter",
+          "kind": "ClassDef",
+          "from_line": 1423,
+          "to_line": 1657,
+          "planned_owner": "sources/focused_conversation.py"
+        },
+        {
+          "name": "ActiveDebateSourceAdapter",
+          "kind": "ClassDef",
+          "from_line": 1660,
+          "to_line": 1791,
+          "planned_owner": "sources/active_debate.py"
+        },
+        {
+          "name": "OwnAgentStateSourceAdapter",
+          "kind": "ClassDef",
+          "from_line": 1794,
+          "to_line": 1886,
+          "planned_owner": "sources/own_agent_state.py"
+        },
+        {
+          "name": "_descriptor_matches_entry",
+          "kind": "FunctionDef",
+          "from_line": 1889,
+          "to_line": 1900,
+          "planned_owner": "sources/registry.py"
+        },
+        {
+          "name": "_normalize_source_text",
+          "kind": "FunctionDef",
+          "from_line": 1903,
+          "to_line": 1908,
+          "planned_owner": "sources/registry.py"
+        },
+        {
+          "name": "_snippet",
+          "kind": "FunctionDef",
+          "from_line": 1911,
+          "to_line": 1935,
+          "planned_owner": "sources/registry.py"
+        },
+        {
+          "name": "_expanded_artifact_record",
+          "kind": "FunctionDef",
+          "from_line": 1938,
+          "to_line": 1975,
+          "planned_owner": "sources/registry.py"
+        },
+        {
+          "name": "ContextSourceRegistry",
+          "kind": "ClassDef",
+          "from_line": 1978,
+          "to_line": 2210,
+          "planned_owner": "sources/registry.py"
+        }
+      ]
+    }
+  ],
+  "public_name_plan": [
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_DecodeError",
+      "planned_name": "LedgerDecodeError",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_MAX_GENERATION",
+      "planned_name": "MAX_LEDGER_GENERATION",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_StorageFault",
+      "planned_name": "LedgerStorageFault",
+      "planned_owner": "ledger/atomic_files.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_UNSAFE_OUTCOMES",
+      "planned_name": "UNSAFE_LEDGER_OUTCOMES",
+      "planned_owner": "ledger/record_values.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_authorization_digest",
+      "planned_name": "ledger_authorization_digest",
+      "planned_owner": "ledger/record_wire.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_call_accounting_value",
+      "planned_name": "ledger_call_accounting_value",
+      "planned_owner": "ledger/accounting_wire.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_canonical_json",
+      "planned_name": "ledger_canonical_json",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_catalog_cursor_value",
+      "planned_name": "ledger_catalog_cursor_value",
+      "planned_owner": "ledger/checkpoint_wire.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_checkpoint_source_value",
+      "planned_name": "ledger_checkpoint_source_value",
+      "planned_owner": "ledger/checkpoint_wire.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_conditions_value",
+      "planned_name": "ledger_conditions_value",
+      "planned_owner": "ledger/checkpoint_wire.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_decode_call_accounting",
+      "planned_name": "ledger_decode_call_accounting",
+      "planned_owner": "ledger/accounting_wire.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_decode_catalog_cursor",
+      "planned_name": "ledger_decode_catalog_cursor",
+      "planned_owner": "ledger/checkpoint_wire.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_decode_checkpoint_source",
+      "planned_name": "ledger_decode_checkpoint_source",
+      "planned_owner": "ledger/checkpoint_wire.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_decode_conditions",
+      "planned_name": "ledger_decode_conditions",
+      "planned_owner": "ledger/checkpoint_wire.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_decode_projection_accounting",
+      "planned_name": "ledger_decode_projection_accounting",
+      "planned_owner": "ledger/accounting_wire.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_decode_record",
+      "planned_name": "ledger_decode_record",
+      "planned_owner": "ledger/record_wire.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_decode_scope",
+      "planned_name": "ledger_decode_scope",
+      "planned_owner": "ledger/checkpoint_wire.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_decoded_boolean",
+      "planned_name": "ledger_decoded_boolean",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_decoded_dict",
+      "planned_name": "ledger_decoded_dict",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_decoded_enum",
+      "planned_name": "ledger_decoded_enum",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_decoded_integer",
+      "planned_name": "ledger_decoded_integer",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_decoded_list",
+      "planned_name": "ledger_decoded_list",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_decoded_optional_integer",
+      "planned_name": "ledger_decoded_optional_integer",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_decoded_optional_string",
+      "planned_name": "ledger_decoded_optional_string",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_decoded_string",
+      "planned_name": "ledger_decoded_string",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_exact_nonnegative_integer",
+      "planned_name": "ledger_exact_nonnegative_integer",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_format_timestamp",
+      "planned_name": "ledger_format_timestamp",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_invalid",
+      "planned_name": "ledger_invalid_value",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_ledger_directory",
+      "planned_name": "ledger_directory",
+      "planned_owner": "ledger/atomic_files.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_parse_timestamp",
+      "planned_name": "ledger_parse_timestamp",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_positive_generation",
+      "planned_name": "ledger_positive_generation",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_projection_accounting_value",
+      "planned_name": "ledger_projection_accounting_value",
+      "planned_owner": "ledger/accounting_wire.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_read_payload",
+      "planned_name": "ledger_read_payload",
+      "planned_owner": "ledger/atomic_files.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_record_bytes",
+      "planned_name": "ledger_record_bytes",
+      "planned_owner": "ledger/record_wire.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_record_name",
+      "planned_name": "ledger_record_name",
+      "planned_owner": "ledger/atomic_files.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_replace_record",
+      "planned_name": "ledger_replace_record",
+      "planned_owner": "ledger/atomic_files.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_safe_digest",
+      "planned_name": "ledger_safe_digest",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_safe_identity",
+      "planned_name": "ledger_safe_identity",
+      "planned_owner": "ledger/record_validation.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_scope_value",
+      "planned_name": "ledger_scope_value",
+      "planned_owner": "ledger/checkpoint_wire.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/ledger.py",
+      "old_name": "_writer_directory",
+      "planned_name": "ledger_writer_directory",
+      "planned_owner": "ledger/atomic_files.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/sources.py",
+      "old_name": "_artifact_locator_is_lexically_safe",
+      "planned_name": "artifact_locator_is_lexically_safe",
+      "planned_owner": "sources/capture_values.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/sources.py",
+      "old_name": "_canonical_json_bytes",
+      "planned_name": "source_canonical_json_bytes",
+      "planned_owner": "sources/capture_values.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/sources.py",
+      "old_name": "_descriptor",
+      "planned_name": "source_descriptor",
+      "planned_owner": "sources/capture_values.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/sources.py",
+      "old_name": "_digest",
+      "planned_name": "source_digest",
+      "planned_owner": "sources/capture_values.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/sources.py",
+      "old_name": "_identity_digest",
+      "planned_name": "source_identity_digest",
+      "planned_owner": "sources/capture_values.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/sources.py",
+      "old_name": "_nonnegative",
+      "planned_name": "source_nonnegative",
+      "planned_owner": "sources/capture_values.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/sources.py",
+      "old_name": "_record",
+      "planned_name": "source_record",
+      "planned_owner": "sources/capture_values.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/sources.py",
+      "old_name": "_require_source_policy",
+      "planned_name": "require_source_policy",
+      "planned_owner": "sources/capture_values.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/sources.py",
+      "old_name": "_safe_digest",
+      "planned_name": "source_safe_digest",
+      "planned_owner": "sources/capture_values.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/sources.py",
+      "old_name": "_safe_identity",
+      "planned_name": "source_safe_identity",
+      "planned_owner": "sources/capture_values.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/sources.py",
+      "old_name": "_source_error",
+      "planned_name": "source_error",
+      "planned_owner": "sources/capture_values.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/sources.py",
+      "old_name": "_structured_source_id",
+      "planned_name": "source_structured_source_id",
+      "planned_owner": "sources/capture_values.py"
+    },
+    {
+      "source": "src/story_writing_agents/agent_context/sources.py",
+      "old_name": "ContextSourceRegistry.inventory.<lambda>",
+      "origin_kind": "existing_lambda",
+      "planned_name": "source_snapshot_order_key",
+      "planned_owner": "sources/capture_values.py"
+    }
+  ],
+  "test_move_plan": [
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionValueTests.test_composite_policy_fingerprint_covers_wire_planning_and_every_limit",
+      "planned_id": "tests.agent_context.invocation.test_request_contracts.ContextExecutionValueTests.test_composite_policy_fingerprint_covers_wire_planning_and_every_limit",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionValueTests.test_conditional_source_classification_is_exact",
+      "planned_id": "tests.agent_context.invocation.test_request_contracts.ContextExecutionValueTests.test_conditional_source_classification_is_exact",
+      "subtest_cap": 3
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionValueTests.test_lead_contract_pair_and_physical_call_limit_are_strict",
+      "planned_id": "tests.agent_context.invocation.test_request_contracts.ContextExecutionValueTests.test_lead_contract_pair_and_physical_call_limit_are_strict",
+      "subtest_cap": 6
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionValueTests.test_provider_failure_facts_are_exact_optional_and_chainless",
+      "planned_id": "tests.agent_context.invocation.test_request_contracts.ContextExecutionValueTests.test_provider_failure_facts_are_exact_optional_and_chainless",
+      "subtest_cap": 3
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionValueTests.test_workspace_identity_values_errors_and_reprs_are_content_free",
+      "planned_id": "tests.agent_context.invocation.test_request_contracts.ContextExecutionValueTests.test_workspace_identity_values_errors_and_reprs_are_content_free",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
+      "planned_id": "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_delta_wire_distinguishes_record_delivery_and_source_tombstones",
+      "planned_id": "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_delta_wire_distinguishes_record_delivery_and_source_tombstones",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_explicit_bootstrap_retires_reinspects_and_replaces_active_thread",
+      "planned_id": "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_explicit_bootstrap_retires_reinspects_and_replaces_active_thread",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit",
+      "planned_id": "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_local_reference_load_does_not_consume_lead_physical_limit",
+      "planned_id": "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_local_reference_load_does_not_consume_lead_physical_limit",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_no_action_reserves_before_provider_and_commits_exact_call",
+      "planned_id": "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_no_action_reserves_before_provider_and_commits_exact_call",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_reference_load_is_local_and_preserves_authorization",
+      "planned_id": "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_reference_load_is_local_and_preserves_authorization",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_scope_provider_definition_and_policy_dimensions_bootstrap",
+      "planned_id": "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_scope_provider_definition_and_policy_dimensions_bootstrap",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_search_and_read_emit_exact_content_free_transient_progress",
+      "planned_id": "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_search_and_read_emit_exact_content_free_transient_progress",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_search_batch_read_answer_is_correlated_ordered_and_bounded",
+      "planned_id": "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_search_batch_read_answer_is_correlated_ordered_and_bounded",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionFailureTests.test_final_provider_call_is_answer_only_and_rejects_nonterminal",
+      "planned_id": "tests.agent_context.invocation.test_execution_failures.ContextExecutionFailureTests.test_final_provider_call_is_answer_only_and_rejects_nonterminal",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionFailureTests.test_frozen_failure_mapping_covers_all_service_boundaries",
+      "planned_id": "tests.agent_context.invocation.test_execution_failures.ContextExecutionFailureTests.test_frozen_failure_mapping_covers_all_service_boundaries",
+      "subtest_cap": 8
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionFailureTests.test_invalid_read_response_rejects_taints_and_never_advances",
+      "planned_id": "tests.agent_context.invocation.test_execution_failures.ContextExecutionFailureTests.test_invalid_read_response_rejects_taints_and_never_advances",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionFailureTests.test_output_and_source_failures_never_advance_ready",
+      "planned_id": "tests.agent_context.invocation.test_execution_failures.ContextExecutionFailureTests.test_output_and_source_failures_never_advance_ready",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionFailureTests.test_prepared_submitted_timeout_cancel_and_malformed_outcomes_are_exact",
+      "planned_id": "tests.agent_context.invocation.test_execution_failures.ContextExecutionFailureTests.test_prepared_submitted_timeout_cancel_and_malformed_outcomes_are_exact",
+      "subtest_cap": 2
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionFailureTests.test_removed_correlation_field_is_rejected_without_disclosure",
+      "planned_id": "tests.agent_context.invocation.test_execution_failures.ContextExecutionFailureTests.test_removed_correlation_field_is_rejected_without_disclosure",
+      "subtest_cap": 2
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionFailureTests.test_unmatched_strict_classification_fails_before_provider",
+      "planned_id": "tests.agent_context.invocation.test_execution_failures.ContextExecutionFailureTests.test_unmatched_strict_classification_fails_before_provider",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionObserverTests.test_authoritative_failure_remains_primary_when_terminal_sink_fails",
+      "planned_id": "tests.agent_context.invocation.test_execution_events.ContextExecutionObserverTests.test_authoritative_failure_remains_primary_when_terminal_sink_fails",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionObserverTests.test_bootstrap_delta_and_no_search_emit_exact_plan_and_usage_facts",
+      "planned_id": "tests.agent_context.invocation.test_execution_events.ContextExecutionObserverTests.test_bootstrap_delta_and_no_search_emit_exact_plan_and_usage_facts",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionObserverTests.test_checkpoint_observer_failure_occurs_after_authoritative_commit",
+      "planned_id": "tests.agent_context.invocation.test_execution_events.ContextExecutionObserverTests.test_checkpoint_observer_failure_occurs_after_authoritative_commit",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionObserverTests.test_debate_observation_requires_and_preserves_phase_and_round",
+      "planned_id": "tests.agent_context.invocation.test_execution_events.ContextExecutionObserverTests.test_debate_observation_requires_and_preserves_phase_and_round",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionObserverTests.test_direct_event_surface_and_strict_content_free_fact_contract",
+      "planned_id": "tests.agent_context.invocation.test_execution_events.ContextExecutionObserverTests.test_direct_event_surface_and_strict_content_free_fact_contract",
+      "subtest_cap": 5
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionObserverTests.test_failure_markers_cover_budget_action_source_answer_and_cancel",
+      "planned_id": "tests.agent_context.invocation.test_execution_events.ContextExecutionObserverTests.test_failure_markers_cover_budget_action_source_answer_and_cancel",
+      "subtest_cap": 3
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionObserverTests.test_local_reference_load_does_not_change_provider_usage",
+      "planned_id": "tests.agent_context.invocation.test_execution_events.ContextExecutionObserverTests.test_local_reference_load_does_not_change_provider_usage",
+      "subtest_cap": 2
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionObserverTests.test_observer_forms_are_rejected_before_provider_or_ledger_effects",
+      "planned_id": "tests.agent_context.invocation.test_execution_events.ContextExecutionObserverTests.test_observer_forms_are_rejected_before_provider_or_ledger_effects",
+      "subtest_cap": 7
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionObserverTests.test_omission_search_read_and_answer_emit_paired_monotonic_facts",
+      "planned_id": "tests.agent_context.invocation.test_execution_events.ContextExecutionObserverTests.test_omission_search_read_and_answer_emit_paired_monotonic_facts",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionObserverTests.test_pre_authority_observer_failure_is_primary_and_never_commits",
+      "planned_id": "tests.agent_context.invocation.test_execution_events.ContextExecutionObserverTests.test_pre_authority_observer_failure_is_primary_and_never_commits",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionObserverTests.test_reference_observer_failure_aborts_and_taints_before_authority",
+      "planned_id": "tests.agent_context.invocation.test_execution_events.ContextExecutionObserverTests.test_reference_observer_failure_aborts_and_taints_before_authority",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_execution.ContextExecutionConcurrencyTests.test_same_scope_calls_serialize_and_second_observes_committed_delta",
+      "planned_id": "tests.agent_context.invocation.test_scope_serialization.ContextExecutionConcurrencyTests.test_same_scope_calls_serialize_and_second_observes_committed_delta",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerSurfaceTests.test_exact_surface_constants_enums_signatures_and_fixed_errors",
+      "planned_id": "tests.agent_context.ledger.test_ledger_api.LedgerSurfaceTests.test_exact_surface_constants_enums_signatures_and_fixed_errors",
+      "subtest_cap": 9
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerSurfaceTests.test_import_construction_and_missing_inspection_are_mutation_free",
+      "planned_id": "tests.agent_context.ledger.test_ledger_api.LedgerSurfaceTests.test_import_construction_and_missing_inspection_are_mutation_free",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerSurfaceTests.test_scope_and_proposal_digests_are_domain_separated_and_canonical",
+      "planned_id": "tests.agent_context.ledger.test_ledger_api.LedgerSurfaceTests.test_scope_and_proposal_digests_are_domain_separated_and_canonical",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerSurfaceTests.test_unpublished_v1_directory_is_never_read_rewritten_or_migrated",
+      "planned_id": "tests.agent_context.ledger.test_ledger_api.LedgerSurfaceTests.test_unpublished_v1_directory_is_never_read_rewritten_or_migrated",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerSurfaceTests.test_values_are_frozen_slotted_exact_and_reject_invalid_shapes",
+      "planned_id": "tests.agent_context.ledger.test_ledger_api.LedgerSurfaceTests.test_values_are_frozen_slotted_exact_and_reject_invalid_shapes",
+      "subtest_cap": 13
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerLifecycleTests.test_complete_lifecycle_restart_idempotency_invalidation_and_modes",
+      "planned_id": "tests.agent_context.ledger.test_record_lifecycle.LedgerLifecycleTests.test_complete_lifecycle_restart_idempotency_invalidation_and_modes",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerLifecycleTests.test_old_ready_is_removed_before_new_provider_work_and_delta_thread_is_exact",
+      "planned_id": "tests.agent_context.ledger.test_record_lifecycle.LedgerLifecycleTests.test_old_ready_is_removed_before_new_provider_work_and_delta_thread_is_exact",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerLifecycleTests.test_optimistic_generations_ordered_calls_and_conflicting_replays",
+      "planned_id": "tests.agent_context.ledger.test_record_lifecycle.LedgerLifecycleTests.test_optimistic_generations_ordered_calls_and_conflicting_replays",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerLifecycleTests.test_persisted_values_have_exact_fields_are_frozen_and_self_validate",
+      "planned_id": "tests.agent_context.ledger.test_record_lifecycle.LedgerLifecycleTests.test_persisted_values_have_exact_fields_are_frozen_and_self_validate",
+      "subtest_cap": 8
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerAuthorizationTests.test_commit_rejects_every_uncorrelated_or_unverified_dimension",
+      "planned_id": "tests.agent_context.ledger.test_commit_authority.LedgerAuthorizationTests.test_commit_rejects_every_uncorrelated_or_unverified_dimension",
+      "subtest_cap": 9
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerAuthorizationTests.test_only_submitted_substantive_terminal_call_can_commit",
+      "planned_id": "tests.agent_context.ledger.test_commit_authority.LedgerAuthorizationTests.test_only_submitted_substantive_terminal_call_can_commit",
+      "subtest_cap": 3
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerUnsafeOutcomeAndUsageTests.test_every_unsafe_outcome_is_restart_safe_tainted_and_idempotent",
+      "planned_id": "tests.agent_context.ledger.test_failure_usage.LedgerUnsafeOutcomeAndUsageTests.test_every_unsafe_outcome_is_restart_safe_tainted_and_idempotent",
+      "subtest_cap": 9
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerUnsafeOutcomeAndUsageTests.test_incomplete_restart_maps_to_tainted_and_never_authorizes_delta",
+      "planned_id": "tests.agent_context.ledger.test_failure_usage.LedgerUnsafeOutcomeAndUsageTests.test_incomplete_restart_maps_to_tainted_and_never_authorizes_delta",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerUnsafeOutcomeAndUsageTests.test_usage_unavailable_zero_partial_and_full_remains_exact_per_call",
+      "planned_id": "tests.agent_context.ledger.test_failure_usage.LedgerUnsafeOutcomeAndUsageTests.test_usage_unavailable_zero_partial_and_full_remains_exact_per_call",
+      "subtest_cap": 4
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerScopeAndBootstrapTests.test_exact_scope_key_dimensions_are_isolated_without_cross_scope_reads",
+      "planned_id": "tests.agent_context.ledger.test_scope_checkpoints.LedgerScopeAndBootstrapTests.test_exact_scope_key_dimensions_are_isolated_without_cross_scope_reads",
+      "subtest_cap": 6
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerScopeAndBootstrapTests.test_persisted_maximum_delta_depth_forces_bootstrap",
+      "planned_id": "tests.agent_context.ledger.test_scope_checkpoints.LedgerScopeAndBootstrapTests.test_persisted_maximum_delta_depth_forces_bootstrap",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerScopeAndBootstrapTests.test_persisted_ready_checkpoint_requests_exact_bootstrap_reasons",
+      "planned_id": "tests.agent_context.ledger.test_scope_checkpoints.LedgerScopeAndBootstrapTests.test_persisted_ready_checkpoint_requests_exact_bootstrap_reasons",
+      "subtest_cap": 7
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerCodecPrivacyAndLimitTests.test_canonical_record_is_content_free_and_retains_exact_numeric_evidence",
+      "planned_id": "tests.agent_context.ledger.test_record_codec_limits.LedgerCodecPrivacyAndLimitTests.test_canonical_record_is_content_free_and_retains_exact_numeric_evidence",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerCodecPrivacyAndLimitTests.test_exact_provider_call_limit_and_max_generation_do_not_partially_advance",
+      "planned_id": "tests.agent_context.ledger.test_record_codec_limits.LedgerCodecPrivacyAndLimitTests.test_exact_provider_call_limit_and_max_generation_do_not_partially_advance",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerCodecPrivacyAndLimitTests.test_record_source_call_generation_and_size_limits_fail_closed",
+      "planned_id": "tests.agent_context.ledger.test_record_codec_limits.LedgerCodecPrivacyAndLimitTests.test_record_source_call_generation_and_size_limits_fail_closed",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerCodecPrivacyAndLimitTests.test_strict_corruption_matrix_is_nonmutating_and_maps_to_corrupt",
+      "planned_id": "tests.agent_context.ledger.test_record_codec_limits.LedgerCodecPrivacyAndLimitTests.test_strict_corruption_matrix_is_nonmutating_and_maps_to_corrupt",
+      "subtest_cap": 21
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerStorageSecurityAndAtomicityTests.test_control_exceptions_cleanup_temporary_and_writer_lock_for_retry",
+      "planned_id": "tests.agent_context.ledger.test_storage_atomicity.LedgerStorageSecurityAndAtomicityTests.test_control_exceptions_cleanup_temporary_and_writer_lock_for_retry",
+      "subtest_cap": 2
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerStorageSecurityAndAtomicityTests.test_post_replace_durability_failure_leaves_complete_idempotent_record",
+      "planned_id": "tests.agent_context.ledger.test_storage_atomicity.LedgerStorageSecurityAndAtomicityTests.test_post_replace_durability_failure_leaves_complete_idempotent_record",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerStorageSecurityAndAtomicityTests.test_precommit_write_fsync_and_replace_failures_preserve_old_record_and_retry",
+      "planned_id": "tests.agent_context.ledger.test_storage_atomicity.LedgerStorageSecurityAndAtomicityTests.test_precommit_write_fsync_and_replace_failures_preserve_old_record_and_retry",
+      "subtest_cap": 3
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerStorageSecurityAndAtomicityTests.test_real_ledger_is_excluded_from_canonical_artifact_discovery",
+      "planned_id": "tests.agent_context.ledger.test_storage_atomicity.LedgerStorageSecurityAndAtomicityTests.test_real_ledger_is_excluded_from_canonical_artifact_discovery",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerStorageSecurityAndAtomicityTests.test_symlink_hardlink_nonregular_and_unsafe_modes_fail_without_outside_mutation",
+      "planned_id": "tests.agent_context.ledger.test_storage_atomicity.LedgerStorageSecurityAndAtomicityTests.test_symlink_hardlink_nonregular_and_unsafe_modes_fail_without_outside_mutation",
+      "subtest_cap": 7
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerStorageSecurityAndAtomicityTests.test_unsupported_storage_primitives_fail_before_mutation",
+      "planned_id": "tests.agent_context.ledger.test_storage_atomicity.LedgerStorageSecurityAndAtomicityTests.test_unsupported_storage_primitives_fail_before_mutation",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerStorageSecurityAndAtomicityTests.test_workspace_root_identity_replacement_is_rejected_without_new_state",
+      "planned_id": "tests.agent_context.ledger.test_storage_atomicity.LedgerStorageSecurityAndAtomicityTests.test_workspace_root_identity_replacement_is_rejected_without_new_state",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerConcurrencyTests.test_cross_process_lock_contention_times_out_then_recovers",
+      "planned_id": "tests.agent_context.ledger.test_scope_locks.LedgerConcurrencyTests.test_cross_process_lock_contention_times_out_then_recovers",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerConcurrencyTests.test_in_place_mutation_during_read_is_storage_unsafe",
+      "planned_id": "tests.agent_context.ledger.test_scope_locks.LedgerConcurrencyTests.test_in_place_mutation_during_read_is_storage_unsafe",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerConcurrencyTests.test_lock_free_reader_over_atomic_replace_returns_complete_successor",
+      "planned_id": "tests.agent_context.ledger.test_scope_locks.LedgerConcurrencyTests.test_lock_free_reader_over_atomic_replace_returns_complete_successor",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerConcurrencyTests.test_repeated_atomic_replacement_retries_are_bounded_at_eight",
+      "planned_id": "tests.agent_context.ledger.test_scope_locks.LedgerConcurrencyTests.test_repeated_atomic_replacement_retries_are_bounded_at_eight",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerConcurrencyTests.test_two_independent_writers_serialize_without_lost_update_or_deadlock",
+      "planned_id": "tests.agent_context.ledger.test_scope_locks.LedgerConcurrencyTests.test_two_independent_writers_serialize_without_lost_update_or_deadlock",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_ledger.LedgerBoundaryTests.test_facades_import_direction_compile_and_graph_contract_are_exact",
+      "planned_id": "tests.agent_context.ledger.test_import_boundary.LedgerBoundaryTests.test_facades_import_direction_compile_and_graph_contract_are_exact",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden",
+      "planned_id": "tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_each_policy_cap_rejects_n_plus_one_and_custom_relationships",
+      "planned_id": "tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests.test_each_policy_cap_rejects_n_plus_one_and_custom_relationships",
+      "subtest_cap": 15
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_exact_surface_error_vocabulary_and_defaults",
+      "planned_id": "tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests.test_exact_surface_error_vocabulary_and_defaults",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.RealAuthorityAdapterTests.test_active_debate_and_all_four_owner_states_are_public_exact_and_isolated",
+      "planned_id": "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_active_debate_and_all_four_owner_states_are_public_exact_and_isolated",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.RealAuthorityAdapterTests.test_artifact_capture_preserves_crlf_lf_cr_and_classifies_paths",
+      "planned_id": "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_artifact_capture_preserves_crlf_lf_cr_and_classifies_paths",
+      "subtest_cap": 4
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.RealAuthorityAdapterTests.test_artifact_capture_retries_once_then_reports_persistent_drift",
+      "planned_id": "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_artifact_capture_retries_once_then_reports_persistent_drift",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.RealAuthorityAdapterTests.test_artifact_inventory_is_complete_or_fails_custom_traversal_and_eligible_caps",
+      "planned_id": "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_artifact_inventory_is_complete_or_fails_custom_traversal_and_eligible_caps",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.RealAuthorityAdapterTests.test_artifact_inventory_relist_drift_and_nonregular_sources_fail_completely",
+      "planned_id": "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_artifact_inventory_relist_drift_and_nonregular_sources_fail_completely",
+      "subtest_cap": 3
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.RealAuthorityAdapterTests.test_assignment_local_artifact_allowlist_filters_inventory_and_capture",
+      "planned_id": "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_assignment_local_artifact_allowlist_filters_inventory_and_capture",
+      "subtest_cap": 2
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.RealAuthorityAdapterTests.test_focused_conversation_exposes_bounded_readable_v2_records",
+      "planned_id": "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_focused_conversation_exposes_bounded_readable_v2_records",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.RealAuthorityAdapterTests.test_searchable_history_is_opt_in_same_session_active_and_frozen",
+      "planned_id": "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_searchable_history_is_opt_in_same_session_active_and_frozen",
+      "subtest_cap": 2
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.RealAuthorityAdapterTests.test_zero_record_focused_conversation_exists_with_explicit_bootstrap",
+      "planned_id": "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_zero_record_focused_conversation_exists_with_explicit_bootstrap",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.RegistrySearchTests.test_registry_requires_exact_four_same_scope_adapters",
+      "planned_id": "tests.agent_context.sources.test_registry_search.RegistrySearchTests.test_registry_requires_exact_four_same_scope_adapters",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.RegistrySearchTests.test_scan_preflight_skips_oversized_without_io_and_post_search_drift_fails",
+      "planned_id": "tests.agent_context.sources.test_registry_search.RegistrySearchTests.test_scan_preflight_skips_oversized_without_io_and_post_search_drift_fails",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.RegistrySearchTests.test_search_expands_artifact_at_most_twelve_lines_and_shrinks_for_multibyte_cap",
+      "planned_id": "tests.agent_context.sources.test_registry_search.RegistrySearchTests.test_search_expands_artifact_at_most_twelve_lines_and_shrinks_for_multibyte_cap",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_sources.RegistrySearchTests.test_search_normalizes_source_controls_orders_and_deduplicates_by_first_query",
+      "planned_id": "tests.agent_context.sources.test_registry_search.RegistrySearchTests.test_search_normalizes_source_controls_orders_and_deduplicates_by_first_query",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.StructuredOutputValidationTests.test_bounded_chunks_preserve_order_and_over_32k_content",
+      "planned_id": "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_bounded_chunks_preserve_order_and_over_32k_content",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues",
+      "planned_id": "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.StructuredOutputValidationTests.test_malformed_and_duplicate_json_have_value_free_diagnostics",
+      "planned_id": "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_malformed_and_duplicate_json_have_value_free_diagnostics",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.StructuredOutputValidationTests.test_properties_omitted_from_required_remain_optional",
+      "planned_id": "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_properties_omitted_from_required_remain_optional",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise",
+      "planned_id": "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.CompactWireDecoderTests.test_artifact_prefix_validation_is_exact_and_one_scope_per_search",
+      "planned_id": "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_artifact_prefix_validation_is_exact_and_one_scope_per_search",
+      "subtest_cap": 24
+    },
+    {
+      "old_id": "tests.test_agent_context_service.CompactWireDecoderTests.test_double_encoded_or_invalid_structured_results_reject",
+      "planned_id": "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_double_encoded_or_invalid_structured_results_reject",
+      "subtest_cap": 7
+    },
+    {
+      "old_id": "tests.test_agent_context_service.CompactWireDecoderTests.test_invalid_read_values_report_only_fixed_source_handle_guidance",
+      "planned_id": "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_invalid_read_values_report_only_fixed_source_handle_guidance",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.CompactWireDecoderTests.test_malformed_exact_shape_types_routes_duplicates_and_limits_reject",
+      "planned_id": "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_malformed_exact_shape_types_routes_duplicates_and_limits_reject",
+      "subtest_cap": 21
+    },
+    {
+      "old_id": "tests.test_agent_context_service.CompactWireDecoderTests.test_provider_correlation_echo_is_rejected_as_an_extra_field",
+      "planned_id": "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_provider_correlation_echo_is_rejected_as_an_extra_field",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact",
+      "planned_id": "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.CompactWireDecoderTests.test_search_wire_supports_shared_artifact_prefix_and_kind_matrix",
+      "planned_id": "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_search_wire_supports_shared_artifact_prefix_and_kind_matrix",
+      "subtest_cap": 6
+    },
+    {
+      "old_id": "tests.test_agent_context_service.CompactWireDecoderTests.test_unrelated_malformed_actions_keep_generic_diagnostic",
+      "planned_id": "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_unrelated_malformed_actions_keep_generic_diagnostic",
+      "subtest_cap": 3
+    },
+    {
+      "old_id": "tests.test_agent_context_service.CompactWireDecoderTests.test_valid_search_read_and_natural_result_shapes_decode_exactly",
+      "planned_id": "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_valid_search_read_and_natural_result_shapes_decode_exactly",
+      "subtest_cap": 5
+    },
+    {
+      "old_id": "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_handles_are_invocation_bound_unforgeable_and_terminal_on_reuse",
+      "planned_id": "tests.agent_context.invocation.test_handle_reads.HandleAndReadLifecycleTests.test_handles_are_invocation_bound_unforgeable_and_terminal_on_reuse",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_initial_read_is_impossible_and_search_handles_are_canonical_opaque",
+      "planned_id": "tests.agent_context.invocation.test_handle_reads.HandleAndReadLifecycleTests.test_initial_read_is_impossible_and_search_handles_are_canonical_opaque",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_outstanding_read_requires_exact_receipt_and_blocks_answer",
+      "planned_id": "tests.agent_context.invocation.test_handle_reads.HandleAndReadLifecycleTests.test_outstanding_read_requires_exact_receipt_and_blocks_answer",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_post_selection_drift_and_reentrant_failure_cannot_resurrect_session",
+      "planned_id": "tests.agent_context.invocation.test_handle_reads.HandleAndReadLifecycleTests.test_post_selection_drift_and_reentrant_failure_cannot_resurrect_session",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_preflight_failure_is_not_charged_but_executed_byte_failure_is_charged",
+      "planned_id": "tests.agent_context.invocation.test_handle_reads.HandleAndReadLifecycleTests.test_preflight_failure_is_not_charged_but_executed_byte_failure_is_charged",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_read_captures_canonical_sources_twice_but_returns_requested_order",
+      "planned_id": "tests.agent_context.invocation.test_handle_reads.HandleAndReadLifecycleTests.test_read_captures_canonical_sources_twice_but_returns_requested_order",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_release_handle_matrix_preserves_failure_order_and_privacy",
+      "planned_id": "tests.agent_context.invocation.test_handle_reads.HandleAndReadLifecycleTests.test_release_handle_matrix_preserves_failure_order_and_privacy",
+      "subtest_cap": 5
+    },
+    {
+      "old_id": "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_second_source_failure_is_atomic_executed_and_clears_every_handle",
+      "planned_id": "tests.agent_context.invocation.test_handle_reads.HandleAndReadLifecycleTests.test_second_source_failure_is_atomic_executed_and_clears_every_handle",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_compact_search_read_evidence_retains_all_authoritative_facts",
+      "planned_id": "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_compact_search_read_evidence_retains_all_authoritative_facts",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_every_correlation_dimension_is_exact_and_preflight_noncharging",
+      "planned_id": "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_every_correlation_dimension_is_exact_and_preflight_noncharging",
+      "subtest_cap": 4
+    },
+    {
+      "old_id": "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_immediate_answer_has_fresh_bound_content_free_authorization_and_cleans_session",
+      "planned_id": "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_immediate_answer_has_fresh_bound_content_free_authorization_and_cleans_session",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_nonterminal_and_provider_call_caps_leave_the_terminal_slot_exact",
+      "planned_id": "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_nonterminal_and_provider_call_caps_leave_the_terminal_slot_exact",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_part_prefix_matrix_scans_nested_before_hit_limits_and_excludes_decoys",
+      "planned_id": "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_part_prefix_matrix_scans_nested_before_hit_limits_and_excludes_decoys",
+      "subtest_cap": 4
+    },
+    {
+      "old_id": "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_prefixed_search_filters_before_one_capture_revalidation_pair",
+      "planned_id": "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_prefixed_search_filters_before_one_capture_revalidation_pair",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_read_backed_answer_binds_all_completed_used_subset_and_final_canonical_revalidation",
+      "planned_id": "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_read_backed_answer_binds_all_completed_used_subset_and_final_canonical_revalidation",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_preflight_and_executed_failures_charge_differently",
+      "planned_id": "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_search_preflight_and_executed_failures_charge_differently",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_preserves_query_match_order_mints_handles_and_rejects_reuse",
+      "planned_id": "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_search_preserves_query_match_order_mints_handles_and_rejects_reuse",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_trims_tail_to_frame_budget_and_empty_frame_failure_is_terminal",
+      "planned_id": "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_search_trims_tail_to_frame_budget_and_empty_frame_failure_is_terminal",
+      "subtest_cap": 0
+    },
+    {
+      "old_id": "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_unused_or_substituted_handle_cannot_authorize_and_baseexception_cleans",
+      "planned_id": "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_unused_or_substituted_handle_cannot_authorize_and_baseexception_cleans",
+      "subtest_cap": 2
+    }
+  ],
+  "before_budget_file_sha256": "2c540feff15da08c7e64a5e8a49a1a14e83962dc8fe13d6b6b3f01333c489b4d",
+  "before_weight_file_sha256": "56a486651e70ae1fadf59f81b68baa5a48c60aa75171dcfcb7f933065d7b49a8",
+  "expected_canonical_count": 2544,
+  "expected_case_class_count": 389,
+  "source_cap": 151431,
+  "legacy_helper_charge_retained": 1550,
+  "proof_owner_api": {
+    "owner": "story_writing_agents.agent_context.invocation.provider.ContextReferencePreludeResult",
+    "name": "validate_reference_binding",
+    "source_block": {
+      "file": "src/story_writing_agents/agent_context/invocation/session_execution.py",
+      "method": "ContextInvocationSession.contract_offers",
+      "outer_branch_line": 591,
+      "move_first_line": 592,
+      "move_last_line": 654,
+      "stay_in_caller": [
+        "Existing RLock and delivery_read/pending_receipt guard",
+        "reference_facts=() / reference_digest=None initialization",
+        "nonempty mandatory-reference condition and malformed no-reference elif",
+        "limits/call-read facts/ContextCallOffers creation/reference_read_digest stamping/post-init"
+      ]
+    },
+    "private_reads_preserved": 4,
+    "additional_call": 1,
+    "additional_return_pair": 1
+  },
+  "test_source_preservation": {
+    "scope": "기존21개클래스·117개메서드의직접이동; 새scenario없음",
+    "required_before_apply": [
+      "decorator/전체statement/UTF8span보존",
+      "전체선언·field/default/frozen/slots/descriptor·중첩decorator대조",
+      "recursive symtable·globalowner·source/data path·mock/getattr/local-importcensus",
+      "기존ledger본문전체가새7owner+facade의compile/AST검사에포함",
+      "source cap151431·기존1550·2544개전체·numericweights/shards보존"
+    ]
+  },
+  "planning_preview": {
+    "test_source_charge": 151421,
+    "source_cap": 151431,
+    "headroom": 10,
+    "case_suite_executions": 0,
+    "meaning": "적용전정적계획; actual after/CI 통과증거아님"
+  },
+  "private_owned_constants": [
+    {
+      "name": "_SOURCE_KIND_ORDER",
+      "owner": "sources/capture_values.py",
+      "rule": "같은owner의기존정렬key만접근;cross-private노출없음"
+    }
+  ],
+  "existing_lambda_extraction": {
+    "origin": "ContextSourceRegistry.inventory의기존key lambda",
+    "owner": "sources/capture_values.py",
+    "public_name": "source_snapshot_order_key",
+    "moved_top_level_definitions": 177,
+    "existing_definitions_preserved": 176,
+    "purpose": "imported tuple의추가bound-method임시생성을피하는동일callback코드이동"
+  }
+}

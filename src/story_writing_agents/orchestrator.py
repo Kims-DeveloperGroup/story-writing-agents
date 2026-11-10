@@ -180,7 +180,7 @@ from .structured_output_validation import (
     diagnose_json_text,
 )
 from .conversations.session_context import SessionContextCapacityError, SessionHistorySnapshot
-from .agent_context.invocation.session_execution import AgentContextService
+from .agent_context.invocation.context_execution import AgentContextService
 from .agent_context.invocation.delivery import ContextGroupInvocationState
 from .agent_context.actions import (
     ContextAnswerAuthorization,
@@ -219,17 +219,19 @@ from .agent_context.contracts.bound_call import (
     BoundCallLineage,
     AuthorizedAnswerHostContext,
 )
-from .agent_context.sources import (
+from .agent_context.actions import ContextSourceStatusKind
+from .agent_context.sources.active_debate import ActiveDebateSourceAdapter
+from .agent_context.sources.capture_values import (
     CONTEXT_SOURCE_POLICY,
-    ActiveDebateSourceAdapter,
     ContextSourceSnapshot,
-    ContextSourceStatusKind,
-    FocusedConversationSourceAdapter,
-    SessionHistorySourceAdapter,
-    OwnAgentStateSourceAdapter,
+    writing_artifact_source_id,
+)
+from .agent_context.sources.focused_conversation import FocusedConversationSourceAdapter
+from .agent_context.sources.own_agent_state import OwnAgentStateSourceAdapter
+from .agent_context.sources.session_history import SessionHistorySourceAdapter
+from .agent_context.sources.writing_artifact import (
     WritingArtifactSourceAdapter,
     create_guarded_writing_artifact_source_adapter,
-    writing_artifact_source_id,
 )
 from .agent_context.actions import normalized_search_text, SEARCH_NORMALIZATION_REVISION
 from .agent_context.progress import ContextActionProgressSink

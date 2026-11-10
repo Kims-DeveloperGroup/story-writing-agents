@@ -717,7 +717,7 @@ def _visible_outcome(kind: str, message: str = "Visible lead response.", *, reco
             if kind == "question":
                 native["planning_target"] = None
             if grouped:
-                from tests.test_agent_context_execution import _group_result
+                from tests.agent_context.invocation.execution_fixture import make_group_result as _group_result
                 return _group_result(call, lead_fixture_result(native))
             response_type = {'answer': 'answer', 'question': 'clarification_question', 'critique': 'critique'}[kind]
             outer, inner = offered_fixture_bindings(
@@ -1646,7 +1646,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertEqual(self.workspace.path(path).read_text(encoding="utf-8"), content)
         user = next(source for source in basis.sources if source.source_id == "user_input")
         self.assertGreater(user.utf8_bytes, 0)
-        from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
+        from story_writing_agents.agent_context.sources.session_history import SessionHistorySourceAdapter
         from story_writing_agents.conversation_storage import (
             ConversationStorageBackend, ConversationStorageCapability, WorkspaceConversationStorageMutationCoordinator)
         from story_writing_agents.conversation_storage.migration import (
@@ -1924,7 +1924,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         from story_writing_agents.structured_output_validation import SchemaRules
 
         conversation_id = self.conversation("Minimal schema"); self.backend.enqueue(_visible_outcome("answer"), control_plan=selection_plan("answer.workflow"))
-        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService
+        from story_writing_agents.agent_context.invocation.context_execution import AgentContextService
         from unittest import mock; front_results = []; original_invoke = AgentContextService.invoke; front_failures = []
         async def retain_front_authority(service, *args, **kwargs):
             try:
@@ -4808,7 +4808,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
     async def test_front_schema_rejection_is_repaired_once(self) -> None:
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
-        from tests.test_agent_context_execution import _group_control
+        from tests.agent_context.invocation.execution_fixture import make_group_control as _group_control
         def select(group):
             return ((0, LeadGroupPhase.SELECT, _group_control(group)),)
         conversation_id = self.conversation("Repair schema")
@@ -4992,8 +4992,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             'dependency slot IDs must be unique within one authoring scope' in item for item in original.validation_details))
 
         from dataclasses import replace
-        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService
-        from tests.test_agent_context_execution import _group_control
+        from story_writing_agents.agent_context.invocation.context_execution import AgentContextService
+        from tests.agent_context.invocation.execution_fixture import make_group_control as _group_control
         original_factory = orchestrator_module._lead_call_contract_factory
         def grouped_factory(*args, **kwargs):
             return replace(original_factory(*args, **kwargs), schema_group_protocol=True)
@@ -5137,7 +5137,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
-        from tests.test_agent_context_execution import _group_control
+        from tests.agent_context.invocation.execution_fixture import make_group_control as _group_control
         defaults = json.loads(self.control_workspace.path("config/system_defaults.json").read_text(encoding="utf-8"))
         overrides = json.loads(self.control_workspace.path("config/agent_configs.json").read_text(encoding="utf-8"))
         self.assertEqual(defaults["language"], "KO")
@@ -6771,10 +6771,10 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertNotIn(private, repr(history))
 
         from dataclasses import replace
-        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService
+        from story_writing_agents.agent_context.invocation.context_execution import AgentContextService
         from story_writing_agents.agent_context.invocation.provider import context_provider_failure_facts
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
-        from tests.test_agent_context_execution import _group_control
+        from tests.agent_context.invocation.execution_fixture import make_group_control as _group_control
         original_factory = orchestrator_module._lead_call_contract_factory
         def grouped_factory(*args, **kwargs):
             return replace(original_factory(*args, **kwargs), schema_group_protocol=True)

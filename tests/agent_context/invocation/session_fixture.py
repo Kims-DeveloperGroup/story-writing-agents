@@ -1,14 +1,14 @@
+'Owned session_fixture.py declarations; mutable objects remain fresh per original call.'
 from __future__ import annotations
 import hashlib
 import json
-from story_writing_agents.agent_context.invocation import session_execution as service_module
 from story_writing_agents.agent_context.actions import CONTEXT_ACTION_POLICY, ContextActionCorrelation, ContextActionPolicy, ContextSearchAction, ContextSearchQuery, ContextSourceBoundary, ContextSourceHandle
 from story_writing_agents.agent_context.manifest import ContextAuthorityKind, ContextManifest, ContextManifestEntry, ContextPriority, ContextProvenance, ContextScope, ContextSemanticChannel, ContextSourceKind, ContextSubjectKind
-from story_writing_agents.agent_context.sources import CONTEXT_SOURCE_POLICY, ContextSourceDescriptor, ContextSourcePolicy, ContextSourceRecord, ContextSourceRegistry, ContextSourceSearchMatch, ContextSourceSnapshot
 from unittest import mock
-from story_writing_agents.agent_context.contracts import context_values as ctx_context_values
-from story_writing_agents.agent_context.contracts import planning_inputs as ctx_planning_inputs
-from story_writing_agents.agent_context.contracts import session as ctx_session
+from story_writing_agents.agent_context.contracts import context_values as ctx_context_values, planning_inputs as ctx_planning_inputs, session as ctx_session
+from story_writing_agents.agent_context.invocation import invocation_session as owner_invocation_session
+from story_writing_agents.agent_context.sources import capture_values as owner_capture_values
+from story_writing_agents.agent_context.sources import registry as owner_registry
 
 
 PRIVATE_ANSWER = "PRIVATE_FINAL_ANSWER_한🙂"; PRIVATE_BODY_A = "PRIVATE_SOURCE_A needle 한🙂\n"
@@ -52,45 +52,45 @@ def read_wire(correlation: str, handles: list[object]) -> dict[str, object]:
 
 
 def snapshot(scope: ContextScope, path: str, body: str, *,
-    revision_seed: bytes | None = None,) -> ContextSourceSnapshot:
+    revision_seed: bytes | None = None,) -> owner_capture_values.ContextSourceSnapshot:
     encoded = body.encode("utf-8")
-    record = ContextSourceRecord("line_1", ContextSourceBoundary.artifact_lines(1, 1), body,
+    record = owner_capture_values.ContextSourceRecord("line_1", ContextSourceBoundary.artifact_lines(1, 1), body,
         body, digest_bytes(encoded), len(encoded), )
-    descriptor = ContextSourceDescriptor(scope, artifact_id(path), ContextSourceKind.WRITING_ARTIFACT,
+    descriptor = owner_capture_values.ContextSourceDescriptor(scope, artifact_id(path), ContextSourceKind.WRITING_ARTIFACT,
         digest_bytes(revision_seed or (path + "-revision").encode()), ContextProvenance(
             ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY, path, ), digest_bytes(encoded), len(encoded), 1, )
-    return ContextSourceSnapshot(descriptor, (record,), encoded)
+    return owner_capture_values.ContextSourceSnapshot(descriptor, (record,), encoded)
 
 
-def entry(snapshot: ContextSourceSnapshot, ordinal: int) -> ContextManifestEntry:
+def entry(snapshot: owner_capture_values.ContextSourceSnapshot, ordinal: int) -> ContextManifestEntry:
     descriptor = snapshot.descriptor
     return ContextManifestEntry(descriptor.source_id, descriptor.source_kind, ContextSemanticChannel.FOCUSED_EVIDENCE,
         ContextPriority.P2_WORKING, ordinal, descriptor.revision, descriptor.content_digest,
         descriptor.provenance, descriptor.utf8_bytes, searchable=True, )
 
 
-def manifest_fixture(scope: ContextScope = SCOPE, ) -> tuple[ContextManifest, dict[str, ContextSourceSnapshot]]:
+def manifest_fixture(scope: ContextScope = SCOPE, ) -> tuple[ContextManifest, dict[str, owner_capture_values.ContextSourceSnapshot]]:
     snapshots = (snapshot(scope, "core_documents/global_outline.md", PRIVATE_BODY_A),
         snapshot(scope, "core_documents/character_sheets.md", PRIVATE_BODY_B), )
     manifest = ContextManifest(scope, tuple(entry(snapshot, index) for index, snapshot in enumerate(snapshots)), )
     return manifest, {snapshot.descriptor.source_id: snapshot for snapshot in snapshots}
 
 
-def registry(scope: ContextScope, snapshots: dict[str, ContextSourceSnapshot],) -> ContextSourceRegistry:
-    registry = object.__new__(ContextSourceRegistry); registry.scope = scope
+def registry(scope: ContextScope, snapshots: dict[str, owner_capture_values.ContextSourceSnapshot],) -> owner_registry.ContextSourceRegistry:
+    registry = object.__new__(owner_registry.ContextSourceRegistry); registry.scope = scope
     registry.capture = mock.Mock( side_effect=lambda _manifest, entry, _policy: snapshots[entry.source_id] )
     registry.search = mock.Mock(return_value=((), False, 0)); return registry
 
 
 def search_matches(manifest: ContextManifest,
-    snapshots: dict[str, ContextSourceSnapshot],) -> tuple[ContextSourceSearchMatch, ...]:
-    return tuple(ContextSourceSearchMatch( 1, snapshots[entry.source_id].descriptor,
+    snapshots: dict[str, owner_capture_values.ContextSourceSnapshot],) -> tuple[owner_capture_values.ContextSourceSearchMatch, ...]:
+    return tuple(owner_capture_values.ContextSourceSearchMatch( 1, snapshots[entry.source_id].descriptor,
             snapshots[entry.source_id].records[0], "needle", len(b"needle"), ) for entry in manifest.entries
         if entry.source_id in snapshots )
 
 
-def mint_handles(session: service_module.ContextInvocationSession, registry: ContextSourceRegistry, snapshots: dict[str,
-    ContextSourceSnapshot], ) -> tuple[tuple[ContextManifestEntry, ContextSourceHandle], ...]:
+def mint_handles(session: owner_invocation_session.ContextInvocationSession, registry: owner_registry.ContextSourceRegistry, snapshots: dict[str,
+    owner_capture_values.ContextSourceSnapshot], ) -> tuple[tuple[ContextManifestEntry, ContextSourceHandle], ...]:
     matches = search_matches(session.binding.manifest, snapshots)
     registry.search = mock.Mock(return_value=(matches, False, sum((match.descriptor.utf8_bytes for match in matches))))
     observation = session.search(ContextSearchAction( correlation(session.binding, session.next_action_index), (
@@ -121,18 +121,18 @@ def reference( ordinal: int, *, reference_id: str | None = None,
         "sha256:" + digest_character * 64, ordinal * 7, )
 
 
-def session(binding: ctx_session.ContextInvocationBinding, registry: ContextSourceRegistry, *,
+def session(binding: ctx_session.ContextInvocationBinding, registry: owner_registry.ContextSourceRegistry, *,
     secret: bytes = b"k" * 32, action_policy: ContextActionPolicy = CONTEXT_ACTION_POLICY,
-    source_policy: ContextSourcePolicy = CONTEXT_SOURCE_POLICY, source_aliases: dict[str, str] | None = None,
+    source_policy: owner_capture_values.ContextSourcePolicy = owner_capture_values.CONTEXT_SOURCE_POLICY, source_aliases: dict[str, str] | None = None,
     allowed_search_source_kinds: tuple[ContextSourceKind, ...] = (
-        ctx_context_values.SEARCH_SOURCE_KIND_ORDER ),) -> service_module.ContextInvocationSession:
-    with mock.patch("story_writing_agents.agent_context.invocation.session_execution.secrets.token_bytes", return_value=secret,):
-        return service_module.ContextInvocationSession(binding, registry, action_policy=action_policy,
+        ctx_context_values.SEARCH_SOURCE_KIND_ORDER ),) -> owner_invocation_session.ContextInvocationSession:
+    with mock.patch('story_writing_agents.agent_context.invocation.invocation_session.secrets.token_bytes', return_value=secret,):
+        return owner_invocation_session.ContextInvocationSession(binding, registry, action_policy=action_policy,
             source_policy=source_policy, source_aliases=source_aliases,
             allowed_search_source_kinds=allowed_search_source_kinds, )
 
 
-def conversation_snapshot(scope: ContextScope, texts: tuple[str, ...]) -> ContextSourceSnapshot:
+def conversation_snapshot(scope: ContextScope, texts: tuple[str, ...]) -> owner_capture_values.ContextSourceSnapshot:
     canonical = lambda value: json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     values = [{"schema_version": 2, "session_id": scope.session_id, "conversation_id": "conversation-one",
         "turn_id": f"turn_{number}", "step_id": f"step_{number}", "event_id": f"conversation_{number}",
@@ -142,13 +142,13 @@ def conversation_snapshot(scope: ContextScope, texts: tuple[str, ...]) -> Contex
         "direction": "user_to_lead", "kind": "message", "event_revision": digest_bytes(text.encode()),
         "fields": [{"key": "message.content", "text": text, "assignment_ordinal": None, "input_ordinal": None}]}
         for number, text in enumerate(texts, start=1)]
-    records = tuple(ContextSourceRecord(row["event_id"], ContextSourceBoundary.records(row["sequence"], row["sequence"]),
+    records = tuple(owner_capture_values.ContextSourceRecord(row["event_id"], ContextSourceBoundary.records(row["sequence"], row["sequence"]),
         canonical(row), row["fields"][0]["text"], digest_bytes(canonical(row).encode()), len(canonical(row).encode())) for row in values)
     bootstrap = {"schema_version": 2, "session_id": scope.session_id, "conversation_id": "conversation-one",
         "total_records": len(values), "last_sequence": len(values), "tail_batch_digest": values[-1]["batch_digest"],
         "requested_records": len(values), "retained_records": len(values), "omitted_records": 0,
         "retained_utf8_bytes": sum(len(text.encode()) for text in texts), "truncated": False}
     encoded = canonical({"bootstrap": bootstrap, "records": values}).encode(); digest = digest_bytes(encoded)
-    descriptor = ContextSourceDescriptor(scope, "conversation:conversation-one", ContextSourceKind.CONVERSATION, digest,
+    descriptor = owner_capture_values.ContextSourceDescriptor(scope, "conversation:conversation-one", ContextSourceKind.CONVERSATION, digest,
         ContextProvenance(ContextAuthorityKind.CONVERSATION_STORAGE, "conversation/conversation-one"), digest, len(encoded), len(records))
-    return ContextSourceSnapshot(descriptor, records, encoded)
+    return owner_capture_values.ContextSourceSnapshot(descriptor, records, encoded)

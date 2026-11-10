@@ -1125,7 +1125,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             stem = call.contract.factory.rule_seed.contract_id
             origin = call.contract if call.contract.lineage is None else call.contract.lineage.origin
             baseline = SimpleNamespace(contract=origin)
-            from tests.test_agent_context_execution import _group_control
+            from tests.agent_context.invocation.execution_fixture import make_group_control as _group_control
             selector = origin.factory.for_offer(origin.offers, request_basis=origin.request_basis,
                 prepared_compilation=origin.prepared_compilation)
             selected = selector.decode_response(_group_control('question.authoring')(SimpleNamespace(contract=selector), None))

@@ -17,10 +17,6 @@ from story_writing_agents.agent_context.manifest import (
     ContextScope,
     ContextSubjectKind,
 )
-from story_writing_agents.agent_context.sources import (
-    CONTEXT_SOURCE_POLICY,
-    create_guarded_writing_artifact_source_adapter,
-)
 from story_writing_agents.agents import PLOT_ARCHITECT
 from story_writing_agents import orchestrator as orchestrator_module
 from story_writing_agents.errors import WorkspaceSecurityError

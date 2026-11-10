@@ -1,5 +1,8 @@
 """Exact session memory, recovery, and publication safety using synthetic providers."""
 from __future__ import annotations
+from story_writing_agents.agent_context.invocation import context_execution as owner_context_execution
+from story_writing_agents.agent_context.ledger import record_values as owner_record_values
+from story_writing_agents.agent_context.sources import session_history as owner_session_history
 from tests.provider_wire_fixture import selection_plan
 from story_writing_agents.provider_wire import project_context_payload
 import hashlib
@@ -14,11 +17,8 @@ from dataclasses import asdict, replace
 from unittest import mock
 from story_writing_agents import ReplyTraceOrigin, StoryRuntime
 from story_writing_agents.agent_context import canonical_provider_json
-from story_writing_agents.agent_context.invocation import session_execution as service_module
 from story_writing_agents.agent_context.continuation import ContextContinuationTransaction
-from story_writing_agents.agent_context.ledger import ContextLedgerKey, ContextLedgerRecordState
 from story_writing_agents.agent_context.manifest import ContextContinuationIdentity, ContextScope, ContextSubjectKind
-from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.conversations import ArtifactApplicationDecisionKind, ArtifactApplicationDecisionPayload, CollaborationActor, CollaborationActorKind, CollaborationDirection, CollaborationEventKind, CollaborationConfirmationDecision, CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload, CollaborationMessagePayload, CollaborationProviderCallPayload, CollaborationProviderCallState, CollaborationStepStatePayload, LeadOutcomeKind, StoryCommitDecisionPayload
 from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
@@ -35,7 +35,6 @@ from tests.collaboration_contract_fixture import contract_batches
 from tests.sqlite_conversation_storage_fixture import provision, initialized_workspace
 from tests.test_agent_context_accounting import _property_count
 from story_writing_agents.agent_context.contracts import planning_inputs as ctx_planning_inputs
-from story_writing_agents.agent_context.invocation import session_execution as service_module
 
 
 
@@ -63,11 +62,11 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         call_start = len(backend.calls)
         backend.enqueue(lead._visible_outcome("answer", answer), control_plan=selection_plan('answer.workflow'))
         histories = []
-        invoke = service_module.AgentContextService.invoke
+        invoke = owner_context_execution.AgentContextService.invoke
         async def observe_history(service, request, provider, **keywords):
             histories.append(keywords.get("session_history"))
             return await invoke(service, request, provider, **keywords)
-        with mock.patch.object(service_module.AgentContextService, "invoke", new=observe_history):
+        with mock.patch.object(owner_context_execution.AgentContextService, "invoke", new=observe_history):
             result = await (runtime or self.runtime).lead_turn(self.session_id, conversation, text)
         self.assertEqual(tuple(call.contract.schema_group_phase.value for call in backend.calls[call_start:]), ("select", "generate"))
         first = backend.calls[call_start]
@@ -87,12 +86,12 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
 
     def snapshot(self):
         storage = self.runtime.conversation_storage_services
-        return SessionHistorySourceAdapter(storage.catalog, storage.event_store, self.session_id).capture()
+        return owner_session_history.SessionHistorySourceAdapter(storage.catalog, storage.event_store, self.session_id).capture()
 
     def checkpoint(self):
         service = self.runtime._agent_context_service
         identity = service.session_continuation(self.session_id, LEAD_ORCHESTRATOR).identity
-        return service._ledger.inspect(ContextLedgerKey(identity.checkpoint_scope(), "codex"))
+        return service._ledger.inspect(owner_record_values.ContextLedgerKey(identity.checkpoint_scope(), "codex"))
 
     async def test_confirmed_plan_survives_three_followups_and_conversation_switch(self):
         from tests.recommendation_fixture import task_assessment
@@ -301,7 +300,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         with mock.patch.object(ContextContinuationTransaction, "stage", new=unverified_publication):
             await self.say(second, "Synthetic publication verification failure.", runtime=restarted)
         failed = self.checkpoint()
-        self.assertIs(failed.record.state, ContextLedgerRecordState.TAINTED)
+        self.assertIs(failed.record.state, owner_record_values.ContextLedgerRecordState.TAINTED)
         self.assertNotEqual(failed.checkpoint_view.session_history_coverage, known_coverage)
         await self.say(second, "Retry after publication verification failure.", runtime=restarted)
         retry = self.backend.calls[-2]
@@ -356,7 +355,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertLessEqual(len(second_source_text.encode("utf-8")), 131_072)
         self.assertLessEqual( len(source_text.encode("utf-8")) + len(second_source_text.encode("utf-8")), ctx_planning_inputs.MAX_MANDATORY_REFERENCE_RESERVATION_UTF8_BYTES)
         capacity_observations = []
-        capacity_check = service_module._require_context_capacity
+        capacity_check = owner_context_execution._require_context_capacity
         def observe_capacity(schema, payload, *, stage):
             capacity_observations.append((stage, canonical_provider_json(payload)))
             return capacity_check(schema, payload, stage=stage)
@@ -364,7 +363,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         preserved_approval = self.runtime.inspect_editorial_state(self.session_id)
         submitted_before = tuple(self.backend.call_records)
         self.backend.enqueue(control_plan=())
-        with mock.patch.object(service_module, "_require_context_capacity", new=observe_capacity):
+        with mock.patch.object(owner_context_execution, '_require_context_capacity', new=observe_capacity):
             with self.assertRaises(SessionContextCapacityError) as initial_capacity:
                 await self.runtime.lead_turn(self.session_id, capacity_conversation,
                     "Review ${core_documents/global_outline.md} and ${core_documents/character_sheets.md} before answering.")
@@ -396,13 +395,13 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         capacity_restart = StoryRuntime(self.workspace, self.backend)
         restart_conversation = self.conversation("Overflow after restart")
         restart_storage = capacity_restart.conversation_storage_services
-        retained_capacity = SessionHistorySourceAdapter( restart_storage.catalog, restart_storage.event_store, self.session_id).capture()
+        retained_capacity = owner_session_history.SessionHistorySourceAdapter( restart_storage.catalog, restart_storage.event_store, self.session_id).capture()
         archived_row = next(row for row in retained_capacity.conversations if row.metadata.conversation_id == capacity_conversation)
         self.assertEqual(archived_row.metadata.status.value, "archived")
         self.assertEqual(restart_storage.event_store.read(self.session_id, capacity_conversation), capacity_history)
         self.backend.enqueue(control_plan=())
         capacity_observations.clear()
-        with mock.patch.object(service_module, "_require_context_capacity", new=observe_capacity):
+        with mock.patch.object(owner_context_execution, '_require_context_capacity', new=observe_capacity):
             with self.assertRaises(SessionContextCapacityError) as restarted_capacity:
                 await capacity_restart.lead_turn(self.session_id, restart_conversation,
                     "Review ${core_documents/global_outline.md} and ${core_documents/character_sheets.md} before answering.")

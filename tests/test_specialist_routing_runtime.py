@@ -162,7 +162,7 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
 
 class _SpecialistRoutingRuntimeCase(LeadOrchestrationTestCase):
     def _assert_recorded_provider_size_bounds(self, services, *, session_ids=None):
-        from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
+        from story_writing_agents.agent_context.sources.session_history import SessionHistorySourceAdapter
         from story_writing_agents.agent_context.accounting import ProviderCallAccounting, ProviderPayloadAccounting
         from story_writing_agents.conversations import session_context as session_context_module
         submitted = tuple(
@@ -477,7 +477,7 @@ class SpecialistRoutingRuntimeTests(_SpecialistRoutingRuntimeCase):
         single = await self.proposal_for(self.conversation())
         self.assertEqual(single.proposal.participants, (PLOT_ARCHITECT,))
         readiness = await self.record_book_readiness()
-        from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
+        from story_writing_agents.agent_context.sources.session_history import SessionHistorySourceAdapter
         expected_snapshots = []
         def mixed_with_snapshot(call, provider):
             services = self.runtime.conversation_storage_services
@@ -1714,7 +1714,7 @@ class SpecialistRoutingRuntimeTests(_SpecialistRoutingRuntimeCase):
         self.enterContext(mock.patch.object(session_context_module, "MAX_SESSION_CONTEXT_UTF8_BYTES", 512 * 1024))
         from story_writing_agents import ReplyTraceOrigin
         readiness = await self.record_book_readiness()
-        from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
+        from story_writing_agents.agent_context.sources.session_history import SessionHistorySourceAdapter
         services = self.runtime.conversation_storage_services
         readiness_snapshot = SessionHistorySourceAdapter(services.catalog, services.event_store, self.session_id).capture()
         expected_readiness_refs = tuple(readiness_snapshot.readiness_ref(row) for row in readiness_snapshot.readiness_heads())

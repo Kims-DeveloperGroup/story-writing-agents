@@ -489,7 +489,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.assertEqual(c.project_collaboration_history(after).document_plans, plans_before)
 
     async def test_readable_and_session_context_include_objectives_without_new_records(self):
-        from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
+        from story_writing_agents.agent_context.sources.session_history import SessionHistorySourceAdapter
         conversation_id, _ = await self.start()
         before = self.history(conversation_id)
         readable = c.project_collaboration_readable_history(before)
