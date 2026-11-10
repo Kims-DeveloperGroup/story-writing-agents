@@ -4,7 +4,6 @@ from tests.test_provider_schema_spec import check_schema
 from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome, _premise_native_contract
 import asyncio
 import contextlib
-import gc
 import hashlib
 import inspect
 import io
@@ -15,8 +14,6 @@ import sys
 import tempfile
 import threading
 import unittest
-import warnings
-import weakref
 from dataclasses import MISSING, FrozenInstanceError, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -5343,7 +5340,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             LeadExplorationConstraints, LeadProviderConstraints, LeadResultRuleSeed,
             PremiseDecisionConstraints)
         from story_writing_agents.orchestrator import (
-            LeadContractError, OrchestrationLeadCallFactory)
+            LeadContractError)
+        from story_writing_agents.lead_preparation.call_rule_factory import (
+            OrchestrationLeadCallFactory)
         from tests.provider_wire_fixture import lead_fixture_response, lead_fixture_result
         from story_writing_agents.agent_context.manifest import ContextAuthorityKind, ContextPriority, ContextSemanticChannel, ContextSourceKind
         from tests.agent_context.invocation.execution_fixture import make_material as _material, make_materials as _materials

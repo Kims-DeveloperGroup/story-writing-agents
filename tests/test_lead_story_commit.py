@@ -17,7 +17,6 @@ from dataclasses import asdict, replace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime, Workspace
-from story_writing_agents import orchestrator as orchestrator_module
 from story_writing_agents.conversations import context as context_module
 from story_writing_agents.agents import LEAD_ORCHESTRATOR
 from story_writing_agents.conversations import (

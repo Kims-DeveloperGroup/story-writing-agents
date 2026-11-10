@@ -12,7 +12,8 @@ from story_writing_agents.agent_context.progress import ContextActionProgressEve
 from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
 from story_writing_agents.conversations import LeadProposalRelation
 from story_writing_agents.lead_provider_contracts import LeadContractError
-from story_writing_agents.orchestrator import StoryRuntime, _lead_front_result_contract
+from story_writing_agents.orchestrator import StoryRuntime
+from story_writing_agents.lead_preparation.response_rules import lead_front_result_contract
 from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringScope
 from tests.test_agent_context_accounting import _expanded_context_payload, _shared_context_payload
 from story_writing_agents.agent_context.contracts import bound_call as ctx_bound_call, call_offers as ctx_call_offers, errors as ctx_errors, events as ctx_events, planning_inputs as ctx_planning_inputs
@@ -233,7 +234,7 @@ class ContextExecutionLifecycleTests(fixture_execution_fixture.ContextExecutionT
                 TaskBindingPlan(revised_scope.task_id, revised_scope.task_revision, 'reserved'))))
             self.assertEqual((bound.authoring_scope.task_id, bound.authoring_scope.task_revision), ('context-task', 2))
         revised_factory = replace(fixture_execution_fixture.LEAD_CALL_FACTORY, constraints=revised_constraints,
-            rule_seed=_lead_front_result_contract(
+            rule_seed=lead_front_result_contract(
                 LeadProposalRelation.NEW_STEP, revised_constraints.input_ids,
                 revised_constraints.task_revisions, constraints=revised_constraints),
             authorized_validator=validate_revision)
@@ -272,7 +273,7 @@ class ContextExecutionLifecycleTests(fixture_execution_fixture.ContextExecutionT
         def no_review_business(_answer, _authorization):
             raise AssertionError("This fixture permits only context/control before handoff")
         review_factory = replace(fixture_execution_fixture.LEAD_CALL_FACTORY, constraints=review_facts,
-            rule_seed=_lead_front_result_contract(
+            rule_seed=lead_front_result_contract(
                 LeadProposalRelation.NEW_STEP, review_facts.input_ids,
                 review_facts.task_revisions, constraints=review_facts),
             authorized_validator=no_review_business)

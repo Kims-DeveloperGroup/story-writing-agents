@@ -19,7 +19,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import asdict, FrozenInstanceError, fields, replace
 from pathlib import Path
@@ -157,25 +156,10 @@ from story_writing_agents.session_lifecycle import (
     SessionDurableState,
     SessionLifecycleState,
 )
-from story_writing_agents.session_recovery import (
-    SessionRecoveryFailureCode,
-    SessionRecoveryOwner,
-)
-from story_writing_agents.session_recovery.transition_assessment import (
-    SessionTransitionAssessment,
-    SessionTransitionAssessmentState,
-    SessionTransitionNextAction,
-    SessionTransitionOperation,
-    SessionTransitionScope,
-)
 from story_writing_agents.editorial_state import EditorialStateProjection
 from story_writing_agents.orchestrator import RuntimeSession
 from story_writing_agents.workspace import (
     Workspace,
-)
-from story_writing_agents.workspace.initialization import (
-    SessionArtifactBindingError,
-    require_ready_session_resources,
 )
 
 from tests.collaboration_contract_fixture import STEP_ID, contract_batches, make_proposal, measured_batch, make_batch, make_draft, store_batch, RUNTIME, USER, LEAD
@@ -1791,8 +1775,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 225)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 1106)
+        self.assertEqual(len(modules), 229)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 1147)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6359,7 +6343,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 self.assertEqual(adapter.task(task_conversation), outcome is ControlOutcomeKind.EOF)
                 self.assertEqual(tuple(decisions), before)
             from story_writing_agents import document_plan as documents
-            from tests import test_specialist_routing as document_fixtures
+            from tests.lead_preparation import test_response_rules as document_fixtures
             plan = document_fixtures.SpecialistRoutingTests._document_plan_fixture()
             observed_candidate = documents.DocumentCandidateRef("ui_candidate_event", "ui_outline_candidate", 1, documents.document_value_digest("Displayed exact candidate"))
             plan_rows = tuple(documents.DocumentNodeView(node.node_id,

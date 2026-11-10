@@ -94,7 +94,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assertIsInstance(self.decode( fixture_session_fixture.answer_wire(self.token, {"kind": "answer", "message": "answer",
             "proposal": None}, ), allowed=("answer",), ), ContextAnswerAction, )
         from story_writing_agents.lead_provider_contracts import LeadProviderConstraints, LeadResultRuleSeed
-        from story_writing_agents.orchestrator import OrchestrationLeadCallFactory
+        from story_writing_agents.lead_preparation.call_rule_factory import OrchestrationLeadCallFactory
         from story_writing_agents.structured_output_validation import SchemaRules
         from tests.provider_wire_fixture import finite_fixture_selection
 
@@ -176,14 +176,14 @@ class CompactWireDecoderTests(unittest.TestCase):
         from story_writing_agents.lead_schema_groups import (
             LeadGroupRequestBasis, LeadGroupPhase, SchemaGroupControlOwner, SchemaGroupSelection,
             SchemaGroupReselection)
-        from story_writing_agents.orchestrator import _lead_front_result_contract, _lead_revision_result_contract
+        from story_writing_agents.lead_preparation.response_rules import lead_front_result_contract, lead_revision_result_contract
         from story_writing_agents.lead_provider_contracts import LeadDiscussionConstraints
         from story_writing_agents.specialist_routing import AuthoringScope, AuthoringActivity
         from story_writing_agents.structured_output_validation import BoundContract
         from tests.provider_wire_fixture import lead_fixture_response, lead_fixture_scope_record
         scope = AuthoringScope(AuthoringActivity.WORKFLOW, (), (), "Explain workflow.", "group-task", 1, schema_version=3)
         facts = LeadProviderConstraints(scope=scope, task_revisions=(("group-task", 1),), input_ids=("user_input",))
-        seed = _lead_front_result_contract(LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=facts)
+        seed = lead_front_result_contract(LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=facts)
         denied = []
         def deny_business(raw, authorization):
             denied.append(raw)
@@ -351,7 +351,7 @@ class CompactWireDecoderTests(unittest.TestCase):
             fixture_session_fixture.correlation(session.binding, session.next_action_index), answer.answer_json, ()))
         self.assertRaises(ValueError, generated.require_authorized_answer, answer, authority)
         self.assertEqual(denied, [answer.answer_json])
-        revision_seed = _lead_revision_result_contract(LeadProposalRelation.NEW_STEP, facts.input_ids,
+        revision_seed = lead_revision_result_contract(LeadProposalRelation.NEW_STEP, facts.input_ids,
             facts.task_revisions, facts, LeadDiscussionConstraints("group-discussion", 1))
         ordinary = replace(grouped_factory, schema_group_protocol=False, rule_seed=revision_seed).for_offer(offers)
         self.assertIsNone(ordinary.schema_group_phase)

@@ -343,7 +343,7 @@ def _current_policy_failure_note(
     from story_writing_agents.agent_context.actions import ContextCallReadFact
     from story_writing_agents.agent_context.manifest import ContextSourceKind
     from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
-    from story_writing_agents.orchestrator import OrchestrationLeadCallFactory
+    from story_writing_agents.lead_preparation.call_rule_factory import OrchestrationLeadCallFactory
     from story_writing_agents.specialist_routing import (
         AuthoringScope, AuthoringIntent, AuthoringActivity)
     dto, policy = ('dto', 'not-retained'), ('policy', 'unsupported')

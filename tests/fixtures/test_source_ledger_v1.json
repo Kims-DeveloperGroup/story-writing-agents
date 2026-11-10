@@ -387,6 +387,27 @@
         }
       ],
       "legacy_unresolved_lines": 1550
+    },
+    {
+      "issue": 967,
+      "origin_commit": "ef8093f49dbab2b2fea619acef40a1c7572bc439",
+      "origins": [
+        {
+          "source": "tests/test_specialist_routing.py",
+          "sha256": "e6b388ebddd886032f862e6b2e622129a990b0cc26f4e01d4262c788ea9b386e",
+          "source_ranges": [
+            [
+              1,
+              1173
+            ]
+          ],
+          "destinations": [
+            "tests/lead_preparation/test_response_rules.py"
+          ],
+          "counting": "wholefile moved code counted once via recursive test paths; no extra support file or hidden exclusion"
+        }
+      ],
+      "legacy_unresolved_lines": 1550
     }
   ]
 }

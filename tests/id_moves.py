@@ -5,22 +5,25 @@ import json
 from pathlib import Path
 
 RECEIPT_PATH = Path(__file__).parent / "fixtures" / "test_id_moves_v1.json"
-RECEIPT_SHA256 = "3a79d7da271e0061013a10e6615843d66cc0329b91713f25d77196b989333ed5"
+RECEIPT_SHA256 = "91375b3932eff2287c43fc0a73c9484cab19b803ea3783a0b7727854d09918d9"
 ORIGINAL_CAPS_SHA256 = "fc586b3eaa147b4ad4bc06e42e98378c50bd56a9fb09954219c20c45e882b99b"
 S02_CAPS_SHA256 = "b554b945803dd496796fd0bf7cad3201c7f729c37821a90231fc734074576c52"
-EXPECTED_CAPS_SHA256 = "7f3bdd0982191c0adef51815ae3445fa4a55c11dfcb5d7574179e0c542b0310c"
+S03_CAPS_SHA256 = "7f3bdd0982191c0adef51815ae3445fa4a55c11dfcb5d7574179e0c542b0310c"
+EXPECTED_CAPS_SHA256 = "8371eef31044fa33e0ee7e34af17bb3fb03e47556ac1b0f601124d13650b5298"
 ORIGINAL_ID = "tests.test_agent_context_planning.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability"
 SECOND_ID = "tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden"
+THIRD_ID = "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip"
 STAGES = (
     (964, "d198abaf60edb1956acbd1f410ad3b1b9fbbedd8", ORIGINAL_CAPS_SHA256, S02_CAPS_SHA256, 45),
-    (965, "a18dfc6b3faa8dc326668c77d0da12441be388f8", S02_CAPS_SHA256, EXPECTED_CAPS_SHA256, 117),
+    (965, "a18dfc6b3faa8dc326668c77d0da12441be388f8", S02_CAPS_SHA256, S03_CAPS_SHA256, 117),
+    (967, "ef8093f49dbab2b2fea619acef40a1c7572bc439", S03_CAPS_SHA256, EXPECTED_CAPS_SHA256, 10),
 )
 
 def caps_digest(caps: dict[str, int]) -> str:
     return hashlib.sha256(json.dumps(caps, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 def load_receipt() -> list[dict]:
-    """Read both immutable, individually qualified stages without a cache."""
+    """Read all immutable, individually qualified stages without a cache."""
     try:
         raw = RECEIPT_PATH.read_bytes()
         receipt = json.loads(raw)
@@ -43,7 +46,7 @@ def load_receipt() -> list[dict]:
 
 def remap_base_caps(current: dict[str, int], base: dict[str, int]) -> dict[str, int]:
     """Rekey only exact approved full inventories, never current case IDs."""
-    if ORIGINAL_ID in current or (ORIGINAL_ID not in base and SECOND_ID not in base) or current == base:
+    if ORIGINAL_ID in current or (ORIGINAL_ID not in base and SECOND_ID not in base and THIRD_ID not in base) or current == base:
         return base
     base_digest = caps_digest(base)
     before = [stage[2] for stage in STAGES]

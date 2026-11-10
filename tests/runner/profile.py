@@ -34,8 +34,8 @@ HOSTED_LAUNCH_IDS = (
     'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_timed_out_during_correction_never_replays',
     'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_crashed_during_correction_never_replays',
     'tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_submission_uncertain_during_correction_never_replays',
-    'tests.test_specialist_routing.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned',
-    'tests.test_specialist_routing.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current',
+    'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned',
+    'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current',
     'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_old_drafted_revision_cannot_authorize_revised_candidate',
     'tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task',
     'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does',
@@ -182,14 +182,14 @@ HOSTED_METHOD_IDS = tuple(sorted(HOSTED_LAUNCH_IDS))
 
 
 HOSTED_MIXED_SERIAL_IDS = (
-    'tests.test_specialist_routing.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership',
-    'tests.test_specialist_routing.SpecialistRoutingTests.test_drafted_is_neither_supports_nor_legacy_review_assessment',
-    'tests.test_specialist_routing.SpecialistRoutingTests.test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest',
-    'tests.test_specialist_routing.SpecialistRoutingTests.test_mixed_paths_and_semantics_union_without_inventory_inference',
-    'tests.test_specialist_routing.SpecialistRoutingTests.test_published_recommended_action_position_and_keyword_only_scope_are_preserved',
-    'tests.test_specialist_routing.SpecialistRoutingTests.test_review_requires_disclosed_concrete_basis_while_draft_forbids_it',
-    'tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip',
-    'tests.test_specialist_routing.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe',
+    'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership',
+    'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_drafted_is_neither_supports_nor_legacy_review_assessment',
+    'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest',
+    'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_mixed_paths_and_semantics_union_without_inventory_inference',
+    'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_published_recommended_action_position_and_keyword_only_scope_are_preserved',
+    'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_review_requires_disclosed_concrete_basis_while_draft_forbids_it',
+    'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip',
+    'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe',
 )
 
 

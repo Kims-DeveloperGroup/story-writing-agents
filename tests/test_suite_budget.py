@@ -312,7 +312,7 @@ class SuiteBudgetTests(unittest.TestCase):
         import os, sys, time
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
-                         'sha256:e8d09d1ef1495148a6a70dd327610265f6f206916423688144b4fb05e6863e4f')
+                         'sha256:bae2cbeecf8adb390fef035f2be3d51df511033d4046691b988cfb6283ddf912')
         self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (162, 21))
         cases = tuple(Mock(id=Mock(return_value=value)) for value in (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         canonical = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
@@ -322,7 +322,7 @@ class SuiteBudgetTests(unittest.TestCase):
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner_hosted.hosted_partition(canonical, isolated)
         self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
-        launch_digest = 'sha256:8d41f4d50e3c1cb4d6d8ccf18dfdbdfe6c3ef2492bf3a6e1bbdf501ee14d7ff5'
+        launch_digest = 'sha256:4f5188035e3d25c9126afba6dd90dab3a93a1c45ccfdaa9b2ffe026516e96a1d'
         self.assertEqual(runner_evidence.manifest(runner_profile.hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner_profile.hosted_launch_order(ids[::-1]), runner_profile.hosted_launch_order(ids))
         self.assertEqual(runner_profile.hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
@@ -333,7 +333,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(real_scheduled, ids)
         self.assertEqual(set(real_serial.ids) & set(runner_profile.HOSTED_MIXED_SERIAL_IDS), set(runner_profile.HOSTED_MIXED_SERIAL_IDS))
         self.assertFalse(set(real_scheduled) & set(runner_profile.HOSTED_MIXED_SERIAL_IDS))
-        self.assertIn("tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip", real_serial.ids)
+        self.assertIn("tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip", real_serial.ids)
         self.assertEqual(len(runner_profile.HOSTED_MIXED_SERIAL_IDS), 8)
         missing = runner_contracts.CanonicalCollection(cases, (*ids[:-1], *runner_profile.HOSTED_MIXED_SERIAL_IDS))
         self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_partition, missing, missing)

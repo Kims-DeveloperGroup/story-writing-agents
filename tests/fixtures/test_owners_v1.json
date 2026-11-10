@@ -3950,14 +3950,14 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "tests.lead_preparation.test_response_rules",
         "tests.test_agent_context_accounting",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_interactive_terminal_composer",
         "tests.test_lead_artifact_application",
         "tests.test_lead_orchestration",
-        "tests.test_lead_story_commit",
-        "tests.test_specialist_routing"
+        "tests.test_lead_story_commit"
       ]
     },
     {
@@ -4168,12 +4168,12 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "tests.lead_preparation.test_response_rules",
         "tests.test_agent_context_accounting",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_collaboration_events",
         "tests.test_lead_orchestration",
-        "tests.test_specialist_routing",
         "tests.test_specialist_routing_runtime"
       ]
     },
@@ -5557,9 +5557,7 @@
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_collaboration_events",
-        "tests.test_lead_artifact_application",
-        "tests.test_lead_orchestration",
-        "tests.test_lead_story_commit"
+        "tests.test_lead_orchestration"
       ]
     },
     {
@@ -6454,34 +6452,36 @@
       ]
     },
     {
-      "name": "tests.test_specialist_routing",
+      "name": "tests.lead_preparation.test_response_rules",
       "boundary": "existing-cases",
       "paths": [
-        "tests/test_specialist_routing.py"
+        "tests/lead_preparation/test_response_rules.py",
+        "tests/lead_preparation",
+        "tests/lead_preparation/__init__.py"
       ],
       "focused_ids": [
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_drafted_is_neither_supports_nor_legacy_review_assessment",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_mixed_paths_and_semantics_union_without_inventory_inference",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_published_recommended_action_position_and_keyword_only_scope_are_preserved",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_review_requires_disclosed_concrete_basis_while_draft_forbids_it",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current"
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_drafted_is_neither_supports_nor_legacy_review_assessment",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_mixed_paths_and_semantics_union_without_inventory_inference",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_published_recommended_action_position_and_keyword_only_scope_are_preserved",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_review_requires_disclosed_concrete_basis_while_draft_forbids_it",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current"
       ],
       "affected_ids": [
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_drafted_is_neither_supports_nor_legacy_review_assessment",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_mixed_paths_and_semantics_union_without_inventory_inference",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_published_recommended_action_position_and_keyword_only_scope_are_preserved",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_review_requires_disclosed_concrete_basis_while_draft_forbids_it",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
-        "tests.test_specialist_routing.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current"
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_drafted_is_neither_supports_nor_legacy_review_assessment",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_mixed_paths_and_semantics_union_without_inventory_inference",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_published_recommended_action_position_and_keyword_only_scope_are_preserved",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_review_requires_disclosed_concrete_basis_while_draft_forbids_it",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current"
       ],
       "depends_on": [
         "context-execution-fixture",
@@ -13520,6 +13520,87 @@
       ],
       "affected_full": true,
       "depends_on": []
+    },
+    {
+      "name": "lead-preparation.call_rule_factory",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/call_rule_factory.py",
+        "src/story_writing_agents/lead_preparation",
+        "src/story_writing_agents/lead_preparation/__init__.py"
+      ],
+      "depends_on": [
+        "agent-context.contracts.bound_call",
+        "agent-context.contracts.call_offers",
+        "agent-context.invocation.delivery",
+        "agent-context.invocation.requests"
+      ],
+      "focused_ids": [
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current"
+      ],
+      "affected_ids": [
+        "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current",
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_empty_continuation_retains_selection_and_cancel_is_terminal",
+        "tests.test_codex_backend.CodexBackendTestCase.test_conversation_projects_exact_payload_schema_and_no_artifacts",
+        "tests.test_interactive_controller.ControllerConversationCommandTests.test_bare_create_prompts_once_and_duplicate_subjects_stay_distinct",
+        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_only_matching_successful_apply_satisfies_objective",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_rejection_is_repaired_once",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_no_repair_capacity_preserves_validation_notice_without_authority",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_response_correction_requires_capacity",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_target_adequate_brief_produces_draft_without_writes"
+      ],
+      "affected_full": true
+    },
+    {
+      "name": "lead-preparation.reply_contract_values",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/reply_contract_values.py",
+        "src/story_writing_agents/lead_preparation",
+        "src/story_writing_agents/lead_preparation/__init__.py"
+      ],
+      "depends_on": [
+        "agent-context.contracts.call_offers",
+        "agent-context.invocation.requests",
+        "runtime-resources",
+        "runtime-resources.collaboration_event_journal"
+      ],
+      "focused_ids": [
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned"
+      ],
+      "affected_ids": [
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict"
+      ],
+      "affected_full": true
+    },
+    {
+      "name": "lead-preparation.response_rules",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/response_rules.py",
+        "src/story_writing_agents/lead_preparation",
+        "src/story_writing_agents/lead_preparation/__init__.py"
+      ],
+      "depends_on": [
+        "lead-preparation.reply_contract_values"
+      ],
+      "focused_ids": [
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip"
+      ],
+      "affected_ids": [
+        "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact",
+        "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict"
+      ],
+      "affected_full": true
     }
   ],
   "ignored_names": [

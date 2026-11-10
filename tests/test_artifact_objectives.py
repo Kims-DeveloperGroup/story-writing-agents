@@ -369,9 +369,9 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.assertNotIn(prepared.turn_id, source_by_id)
 
     async def test_empty_continuation_retains_selection_and_cancel_is_terminal(self):
-        from story_writing_agents import orchestrator as orchestration
+        from story_writing_agents.lead_preparation import call_rule_factory
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
-        factory, enqueue = orchestration._lead_call_contract_factory, self.backend.enqueue
+        factory, enqueue = call_rule_factory.lead_call_contract_factory, self.backend.enqueue
         source_front_flags, source_enqueues = [], []
         def source_factory(**values):
             if values["stage"] == "lead.front":
@@ -395,7 +395,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
                 self.assertNotIn("control_plan", values)
             return enqueue(*responses, **values)
         source_call_start = len(self.backend.calls)
-        with (mock.patch.object(orchestration, "_lead_call_contract_factory", new=source_factory),
+        with (mock.patch.object(call_rule_factory, "lead_call_contract_factory", new=source_factory),
               mock.patch.object(self.backend, "enqueue", new=source_enqueue)):
             conversation_id, _ = await self.start()
             self.assertEqual(len(self.backend.calls) - source_call_start, 3)
@@ -406,7 +406,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
             second = await self.prepare(conversation_id, select=False)
             self.assertEqual(len(self.backend.calls) - source_call_start, 7)
             self.assertEqual(self.objective(conversation_id).draft_sources, selected)
-        self.assertIs(orchestration._lead_call_contract_factory, factory)
+        self.assertIs(call_rule_factory.lead_call_contract_factory, factory)
         self.assertEqual(self.backend.enqueue, enqueue)
         self.assertEqual(source_front_flags, [True, True, False, True, False])
         self.assertEqual(source_enqueues, [0, 1, 2, 3, 4])

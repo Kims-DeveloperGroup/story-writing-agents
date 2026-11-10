@@ -13408,6 +13408,708 @@
           "change": "remove fully-unused deleted fixture/source imports; actual required owners already imported"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 967,
+      "origin_commit": "ef8093f49dbab2b2fea619acef40a1c7572bc439",
+      "original_caps_sha256": "7f3bdd0982191c0adef51815ae3445fa4a55c11dfcb5d7574179e0c542b0310c",
+      "expected_caps_sha256": "8371eef31044fa33e0ee7e34af17bb3fb03e47556ac1b0f601124d13650b5298",
+      "class_moves": [
+        {
+          "source": "tests/test_specialist_routing.py",
+          "class": "SpecialistRoutingTests",
+          "destination": "tests/lead_preparation/test_response_rules.py"
+        }
+      ],
+      "moves": [
+        {
+          "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
+          "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
+          "subtest_cap": 5,
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "original_file_sha256": "e6b388ebddd886032f862e6b2e622129a990b0cc26f4e01d4262c788ea9b386e",
+          "original_method_ast_sha256": "97df30ca208cf498a56089485b15b5f4005dd36a6e0f0ed2638808a728ac2110",
+          "expected_method_ast_sha256": "97df30ca208cf498a56089485b15b5f4005dd36a6e0f0ed2638808a728ac2110"
+        },
+        {
+          "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_drafted_is_neither_supports_nor_legacy_review_assessment",
+          "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_drafted_is_neither_supports_nor_legacy_review_assessment",
+          "subtest_cap": 3,
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "original_file_sha256": "e6b388ebddd886032f862e6b2e622129a990b0cc26f4e01d4262c788ea9b386e",
+          "original_method_ast_sha256": "3b1e311e30f817b064f05b0cc8b779e94992192c8b48fe5a41b8e0a47768dfd1",
+          "expected_method_ast_sha256": "3b1e311e30f817b064f05b0cc8b779e94992192c8b48fe5a41b8e0a47768dfd1"
+        },
+        {
+          "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
+          "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "original_file_sha256": "e6b388ebddd886032f862e6b2e622129a990b0cc26f4e01d4262c788ea9b386e",
+          "original_method_ast_sha256": "9656a9d094facaee504be2cd80970361a51ac3acbaa992a1d7a7ff744038ec80",
+          "expected_method_ast_sha256": "095b066f372c3f5135f54efa4b12590a9047b40a3bbe55be90ebf0714c754899"
+        },
+        {
+          "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest",
+          "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "original_file_sha256": "e6b388ebddd886032f862e6b2e622129a990b0cc26f4e01d4262c788ea9b386e",
+          "original_method_ast_sha256": "33935de6f8caac9956c2c3f1c46073fdadb99dba0fa5a835c6e195badc27c4e2",
+          "expected_method_ast_sha256": "5112b7763e092efd8074fd5f9215829e627d9a2febc92c3f8b32a2f6f97a3119"
+        },
+        {
+          "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_mixed_paths_and_semantics_union_without_inventory_inference",
+          "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_mixed_paths_and_semantics_union_without_inventory_inference",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "original_file_sha256": "e6b388ebddd886032f862e6b2e622129a990b0cc26f4e01d4262c788ea9b386e",
+          "original_method_ast_sha256": "ac8bd17bf2a582f7882daaecdf3f4a0d048fc1d17709dd9c647006965597deaf",
+          "expected_method_ast_sha256": "ac8bd17bf2a582f7882daaecdf3f4a0d048fc1d17709dd9c647006965597deaf"
+        },
+        {
+          "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_published_recommended_action_position_and_keyword_only_scope_are_preserved",
+          "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_published_recommended_action_position_and_keyword_only_scope_are_preserved",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "original_file_sha256": "e6b388ebddd886032f862e6b2e622129a990b0cc26f4e01d4262c788ea9b386e",
+          "original_method_ast_sha256": "3a052438b64360ac86228a47d78fbf2385570bf3bb7d1e8d56f4b53e88bb081b",
+          "expected_method_ast_sha256": "3a052438b64360ac86228a47d78fbf2385570bf3bb7d1e8d56f4b53e88bb081b"
+        },
+        {
+          "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_review_requires_disclosed_concrete_basis_while_draft_forbids_it",
+          "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_review_requires_disclosed_concrete_basis_while_draft_forbids_it",
+          "subtest_cap": 3,
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "original_file_sha256": "e6b388ebddd886032f862e6b2e622129a990b0cc26f4e01d4262c788ea9b386e",
+          "original_method_ast_sha256": "33fe02cd9c7e6d301c60d901c80c6cbdc636c9d596112bd8c1ba6a5bc7e35fee",
+          "expected_method_ast_sha256": "33fe02cd9c7e6d301c60d901c80c6cbdc636c9d596112bd8c1ba6a5bc7e35fee"
+        },
+        {
+          "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
+          "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
+          "subtest_cap": 10,
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "original_file_sha256": "e6b388ebddd886032f862e6b2e622129a990b0cc26f4e01d4262c788ea9b386e",
+          "original_method_ast_sha256": "779b75115e4b5e60c2fd446a60746773efcd8d7d4b7fa5cc4ccac6ccae6368bc",
+          "expected_method_ast_sha256": "ca097d1ad639e3f0b4d3434788a2ba440f3f7991c0ecbc6c71d851fa7b101200"
+        },
+        {
+          "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
+          "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
+          "subtest_cap": 14,
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "original_file_sha256": "e6b388ebddd886032f862e6b2e622129a990b0cc26f4e01d4262c788ea9b386e",
+          "original_method_ast_sha256": "99d8396a8df9a80d84e12cc583387159ffdd639792a8235aec42bc4b2ed9661d",
+          "expected_method_ast_sha256": "99d8396a8df9a80d84e12cc583387159ffdd639792a8235aec42bc4b2ed9661d"
+        },
+        {
+          "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current",
+          "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "original_file_sha256": "e6b388ebddd886032f862e6b2e622129a990b0cc26f4e01d4262c788ea9b386e",
+          "original_method_ast_sha256": "63b79e5259d23902d046262ec5ea9dd18da39d12ba1dc74d36a2af542db71ad8",
+          "expected_method_ast_sha256": "2e5341cc0d30ed93abd2aef1d0fdece9555d3ba4fac6322fc3714356651d7e7d"
+        }
+      ],
+      "api_rewrites": [
+        {
+          "source": "tests/agent_context/invocation/execution_fixture.py",
+          "destination": "tests/agent_context/invocation/execution_fixture.py",
+          "line": 19,
+          "kind": "true_owner_import",
+          "old": "from story_writing_agents.orchestrator import OrchestrationLeadCallFactory, StoryRuntime, _lead_front_result_contract",
+          "new": "from story_writing_agents.lead_preparation.call_rule_factory import OrchestrationLeadCallFactory\nfrom story_writing_agents.orchestrator import StoryRuntime\nfrom story_writing_agents.lead_preparation.response_rules import lead_front_result_contract"
+        },
+        {
+          "source": "tests/agent_context/invocation/execution_fixture.py",
+          "destination": "tests/agent_context/invocation/execution_fixture.py",
+          "line": 117,
+          "kind": "public_imported_helper_reference",
+          "old": "_lead_front_result_contract",
+          "new": "lead_front_result_contract"
+        },
+        {
+          "source": "tests/agent_context/invocation/test_bound_action_frames.py",
+          "destination": "tests/agent_context/invocation/test_bound_action_frames.py",
+          "line": 97,
+          "kind": "true_owner_import",
+          "old": "from story_writing_agents.orchestrator import OrchestrationLeadCallFactory",
+          "new": "from story_writing_agents.lead_preparation.call_rule_factory import OrchestrationLeadCallFactory"
+        },
+        {
+          "source": "tests/agent_context/invocation/test_bound_action_frames.py",
+          "destination": "tests/agent_context/invocation/test_bound_action_frames.py",
+          "line": 179,
+          "kind": "true_owner_import",
+          "old": "from story_writing_agents.orchestrator import _lead_front_result_contract, _lead_revision_result_contract",
+          "new": "from story_writing_agents.lead_preparation.response_rules import lead_front_result_contract, lead_revision_result_contract"
+        },
+        {
+          "source": "tests/agent_context/invocation/test_bound_action_frames.py",
+          "destination": "tests/agent_context/invocation/test_bound_action_frames.py",
+          "line": 186,
+          "kind": "public_imported_helper_reference",
+          "old": "_lead_front_result_contract",
+          "new": "lead_front_result_contract"
+        },
+        {
+          "source": "tests/agent_context/invocation/test_bound_action_frames.py",
+          "destination": "tests/agent_context/invocation/test_bound_action_frames.py",
+          "line": 354,
+          "kind": "public_imported_helper_reference",
+          "old": "_lead_revision_result_contract",
+          "new": "lead_revision_result_contract"
+        },
+        {
+          "source": "tests/agent_context/invocation/test_execution_lifecycle.py",
+          "destination": "tests/agent_context/invocation/test_execution_lifecycle.py",
+          "line": 15,
+          "kind": "true_owner_import",
+          "old": "from story_writing_agents.orchestrator import StoryRuntime, _lead_front_result_contract",
+          "new": "from story_writing_agents.orchestrator import StoryRuntime\nfrom story_writing_agents.lead_preparation.response_rules import lead_front_result_contract"
+        },
+        {
+          "source": "tests/agent_context/invocation/test_execution_lifecycle.py",
+          "destination": "tests/agent_context/invocation/test_execution_lifecycle.py",
+          "line": 236,
+          "kind": "public_imported_helper_reference",
+          "old": "_lead_front_result_contract",
+          "new": "lead_front_result_contract"
+        },
+        {
+          "source": "tests/agent_context/invocation/test_execution_lifecycle.py",
+          "destination": "tests/agent_context/invocation/test_execution_lifecycle.py",
+          "line": 275,
+          "kind": "public_imported_helper_reference",
+          "old": "_lead_front_result_contract",
+          "new": "lead_front_result_contract"
+        },
+        {
+          "source": "tests/recommendation_fixture.py",
+          "destination": "tests/recommendation_fixture.py",
+          "line": 346,
+          "kind": "true_owner_import",
+          "old": "from story_writing_agents.orchestrator import OrchestrationLeadCallFactory",
+          "new": "from story_writing_agents.lead_preparation.call_rule_factory import OrchestrationLeadCallFactory"
+        },
+        {
+          "source": "tests/test_artifact_objectives.py",
+          "destination": "tests/test_artifact_objectives.py",
+          "line": 372,
+          "kind": "reuse_actual_owner_module_import",
+          "old": "from story_writing_agents import orchestrator as orchestration",
+          "new": "from story_writing_agents.lead_preparation import call_rule_factory"
+        },
+        {
+          "source": "tests/test_artifact_objectives.py",
+          "destination": "tests/test_artifact_objectives.py",
+          "line": 374,
+          "kind": "true_owner_attribute",
+          "old": "orchestration._lead_call_contract_factory",
+          "new": "call_rule_factory.lead_call_contract_factory"
+        },
+        {
+          "source": "tests/test_artifact_objectives.py",
+          "destination": "tests/test_artifact_objectives.py",
+          "line": 398,
+          "kind": "true_owner_patch_receiver",
+          "old": "orchestration",
+          "new": "call_rule_factory"
+        },
+        {
+          "source": "tests/test_artifact_objectives.py",
+          "destination": "tests/test_artifact_objectives.py",
+          "line": 398,
+          "kind": "true_owner_patch_member",
+          "old": "\"_lead_call_contract_factory\"",
+          "new": "\"lead_call_contract_factory\""
+        },
+        {
+          "source": "tests/test_artifact_objectives.py",
+          "destination": "tests/test_artifact_objectives.py",
+          "line": 409,
+          "kind": "true_owner_attribute",
+          "old": "orchestration._lead_call_contract_factory",
+          "new": "call_rule_factory.lead_call_contract_factory"
+        },
+        {
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_backend.py",
+          "line": 5342,
+          "kind": "true_owner_import",
+          "old": "from story_writing_agents.orchestrator import (\n            LeadContractError, OrchestrationLeadCallFactory)",
+          "new": "from story_writing_agents.orchestrator import (\n            LeadContractError)\n        from story_writing_agents.lead_preparation.call_rule_factory import (\n            OrchestrationLeadCallFactory)"
+        },
+        {
+          "source": "tests/test_lead_artifact_objectives.py",
+          "destination": "tests/test_lead_artifact_objectives.py",
+          "line": 10,
+          "kind": "reuse_actual_owner_module_import",
+          "old": "from story_writing_agents import StoryRuntime, orchestrator as orchestration, editorial_scope as scopes",
+          "new": "from story_writing_agents import StoryRuntime, editorial_scope as scopes\nfrom story_writing_agents.lead_preparation import call_rule_factory"
+        },
+        {
+          "source": "tests/test_lead_artifact_objectives.py",
+          "destination": "tests/test_lead_artifact_objectives.py",
+          "line": 127,
+          "kind": "true_owner_attribute",
+          "old": "orchestration._lead_call_contract_factory",
+          "new": "call_rule_factory.lead_call_contract_factory"
+        },
+        {
+          "source": "tests/test_lead_artifact_objectives.py",
+          "destination": "tests/test_lead_artifact_objectives.py",
+          "line": 142,
+          "kind": "true_owner_patch_receiver",
+          "old": "orchestration",
+          "new": "call_rule_factory"
+        },
+        {
+          "source": "tests/test_lead_artifact_objectives.py",
+          "destination": "tests/test_lead_artifact_objectives.py",
+          "line": 142,
+          "kind": "true_owner_patch_member",
+          "old": "\"_lead_call_contract_factory\"",
+          "new": "\"lead_call_contract_factory\""
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 34,
+          "kind": "new_actual_owner_module_import",
+          "old": "",
+          "new": "from story_writing_agents.lead_preparation import call_rule_factory\nfrom story_writing_agents.lead_preparation import response_rules\n"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 3034,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 3064,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 3096,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 3193,
+          "kind": "true_owner_import",
+          "old": "from story_writing_agents.orchestrator import ( _lead_discussion_result_contract, _lead_result_rule_seed, _lead_synthesis_result_contract,)",
+          "new": "from story_writing_agents.lead_preparation.reply_contract_values import lead_discussion_result_contract, lead_result_rule_seed\n        from story_writing_agents.orchestrator import _lead_synthesis_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 3300,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 3307,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 3367,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 3418,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 3463,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 3534,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 3841,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 3941,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 3952,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 3981,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 4006,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 4027,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 4082,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 4188,
+          "kind": "public_imported_helper_reference",
+          "old": "_lead_discussion_result_contract",
+          "new": "lead_discussion_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 4196,
+          "kind": "public_imported_helper_reference",
+          "old": "_lead_result_rule_seed",
+          "new": "lead_result_rule_seed"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 4225,
+          "kind": "public_imported_helper_reference",
+          "old": "_lead_result_rule_seed",
+          "new": "lead_result_rule_seed"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 4247,
+          "kind": "public_imported_helper_reference",
+          "old": "_lead_result_rule_seed",
+          "new": "lead_result_rule_seed"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 4637,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 4727,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_front_result_contract",
+          "new": "response_rules.lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 4997,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_call_contract_factory",
+          "new": "call_rule_factory.lead_call_contract_factory"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 5026,
+          "kind": "true_owner_patch_receiver",
+          "old": "orchestrator_module",
+          "new": "call_rule_factory"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 5026,
+          "kind": "true_owner_patch_member",
+          "old": "\"_lead_call_contract_factory\"",
+          "new": "\"lead_call_contract_factory\""
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 5067,
+          "kind": "true_owner_attribute",
+          "old": "self.runtime._lead_group_invocation_state",
+          "new": "call_rule_factory.lead_group_invocation_state"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 5102,
+          "kind": "true_owner_patch_receiver",
+          "old": "orchestrator_module",
+          "new": "call_rule_factory"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 5102,
+          "kind": "true_owner_patch_member",
+          "old": "\"_lead_call_contract_factory\"",
+          "new": "\"lead_call_contract_factory\""
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 6698,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_call_contract_factory",
+          "new": "call_rule_factory.lead_call_contract_factory"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 6718,
+          "kind": "true_owner_patch_receiver",
+          "old": "orchestrator_module",
+          "new": "call_rule_factory"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 6718,
+          "kind": "true_owner_patch_member",
+          "old": "'_lead_call_contract_factory'",
+          "new": "\"lead_call_contract_factory\""
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 6726,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_call_contract_factory",
+          "new": "call_rule_factory.lead_call_contract_factory"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 6778,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_call_contract_factory",
+          "new": "call_rule_factory.lead_call_contract_factory"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 6815,
+          "kind": "true_owner_patch_receiver",
+          "old": "orchestrator_module",
+          "new": "call_rule_factory"
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_lead_orchestration.py",
+          "line": 6815,
+          "kind": "true_owner_patch_member",
+          "old": "\"_lead_call_contract_factory\"",
+          "new": "\"lead_call_contract_factory\""
+        },
+        {
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "line": 529,
+          "kind": "true_owner_import",
+          "old": "from story_writing_agents.orchestrator import _document_successor_selection",
+          "new": "from story_writing_agents.lead_preparation.response_rules import document_successor_selection"
+        },
+        {
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "line": 552,
+          "kind": "public_imported_helper_reference",
+          "old": "_document_successor_selection",
+          "new": "document_successor_selection"
+        },
+        {
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "line": 762,
+          "kind": "true_owner_import",
+          "old": "from story_writing_agents.orchestrator import _target_authoring_scope_prior",
+          "new": "from story_writing_agents.lead_preparation.response_rules import target_authoring_scope_prior"
+        },
+        {
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "line": 772,
+          "kind": "public_imported_helper_reference",
+          "old": "_target_authoring_scope_prior",
+          "new": "target_authoring_scope_prior"
+        },
+        {
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "line": 786,
+          "kind": "public_imported_helper_reference",
+          "old": "_target_authoring_scope_prior",
+          "new": "target_authoring_scope_prior"
+        },
+        {
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "line": 859,
+          "kind": "true_owner_import",
+          "old": "from story_writing_agents.orchestrator import OrchestrationLeadCallFactory, _lead_front_result_contract",
+          "new": "from story_writing_agents.lead_preparation.call_rule_factory import OrchestrationLeadCallFactory\n        from story_writing_agents.lead_preparation.response_rules import lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "line": 864,
+          "kind": "public_imported_helper_reference",
+          "old": "_lead_front_result_contract",
+          "new": "lead_front_result_contract"
+        },
+        {
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "line": 901,
+          "kind": "true_owner_import",
+          "old": "from story_writing_agents.orchestrator import OrchestrationLeadCallFactory",
+          "new": "from story_writing_agents.lead_preparation.call_rule_factory import OrchestrationLeadCallFactory"
+        },
+        {
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "line": 915,
+          "kind": "true_owner_import",
+          "old": "from story_writing_agents.orchestrator import _lead_revision_result_contract",
+          "new": "from story_writing_agents.lead_preparation.response_rules import lead_revision_result_contract"
+        },
+        {
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "line": 924,
+          "kind": "public_imported_helper_reference",
+          "old": "_lead_revision_result_contract",
+          "new": "lead_revision_result_contract"
+        },
+        {
+          "source": "tests/test_specialist_routing.py",
+          "destination": "tests/lead_preparation/test_response_rules.py",
+          "line": 1081,
+          "kind": "same_repository_fixture_path",
+          "old": "Path(__file__).parent",
+          "new": "Path(__file__).parents[1]"
+        },
+        {
+          "source": "tests/test_specialist_routing_runtime.py",
+          "destination": "tests/test_specialist_routing_runtime.py",
+          "line": 356,
+          "kind": "reuse_actual_owner_module_import",
+          "old": "import story_writing_agents.orchestrator as orchestrator_module",
+          "new": "from story_writing_agents.lead_preparation import call_rule_factory"
+        },
+        {
+          "source": "tests/test_specialist_routing_runtime.py",
+          "destination": "tests/test_specialist_routing_runtime.py",
+          "line": 357,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_call_contract_factory",
+          "new": "call_rule_factory.lead_call_contract_factory"
+        },
+        {
+          "source": "tests/test_specialist_routing_runtime.py",
+          "destination": "tests/test_specialist_routing_runtime.py",
+          "line": 386,
+          "kind": "true_owner_patch_receiver",
+          "old": "orchestrator_module",
+          "new": "call_rule_factory"
+        },
+        {
+          "source": "tests/test_specialist_routing_runtime.py",
+          "destination": "tests/test_specialist_routing_runtime.py",
+          "line": 386,
+          "kind": "true_owner_patch_member",
+          "old": "\"_lead_call_contract_factory\"",
+          "new": "\"lead_call_contract_factory\""
+        },
+        {
+          "source": "tests/test_specialist_routing_runtime.py",
+          "destination": "tests/test_specialist_routing_runtime.py",
+          "line": 391,
+          "kind": "true_owner_attribute",
+          "old": "orchestrator_module._lead_call_contract_factory",
+          "new": "call_rule_factory.lead_call_contract_factory"
+        }
+      ]
     }
   ]
 }

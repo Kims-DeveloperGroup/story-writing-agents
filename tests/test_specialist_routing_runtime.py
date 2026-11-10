@@ -353,8 +353,8 @@ class SpecialistRoutingRuntimeTests(_SpecialistRoutingRuntimeCase):
                          (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
         self.assertEqual(tuple(call.contract.factory.schema_group_protocol for call in self.backend.calls[:2]),
                          (True, True))
-        import story_writing_agents.orchestrator as orchestrator_module
-        original_factory = orchestrator_module._lead_call_contract_factory
+        from story_writing_agents.lead_preparation import call_rule_factory
+        original_factory = call_rule_factory.lead_call_contract_factory
         def bounded_history_factory(*args, **kwargs):
             self.assertEqual(kwargs["stage"], "lead.front")
             self.assertIs(kwargs["schema_group_protocol"], False)
@@ -383,12 +383,12 @@ class SpecialistRoutingRuntimeTests(_SpecialistRoutingRuntimeCase):
             request_inspection_source,
             _visible_outcome("answer", "A third submission is not invoked."), control_plan=None)
         # USER-selected discussion inspects the same completed history without writing authority.
-        with mock.patch.object(orchestrator_module, "_lead_call_contract_factory",
+        with mock.patch.object(call_rule_factory, "lead_call_contract_factory",
                                side_effect=bounded_history_factory) as boundary_factory:
             discussed = await self.runtime.decide_lead_task(discussion_decision)
             bounded = discussed.turn
         self.assertEqual(boundary_factory.call_count, 1)
-        self.assertIs(orchestrator_module._lead_call_contract_factory, original_factory)
+        self.assertIs(call_rule_factory.lead_call_contract_factory, original_factory)
         self.assertEqual(tuple(call.contract.factory.schema_group_protocol for call in self.backend.calls[late_call_start:]),
                          (False, False))
         self.assertEqual(tuple(call.contract.schema_group_phase for call in self.backend.calls[late_call_start:]),

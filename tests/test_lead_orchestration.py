@@ -31,6 +31,8 @@ from typing import Awaitable, Callable
 from unittest import mock
 from story_writing_agents import ReplyTraceOrigin, RuntimeSession, StoryRuntime, Workspace
 from story_writing_agents import orchestrator as orchestrator_module
+from story_writing_agents.lead_preparation import call_rule_factory, reply_contract_values
+from story_writing_agents.lead_preparation import response_rules
 from story_writing_agents.agent_context.accounting import ProviderCallAccounting, ProviderCallKind, ProviderCallState, account_provider_payload
 from story_writing_agents.agents import CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT, SPECIALIST_IDS, behavior_policy_files
 from story_writing_agents.conversations import COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES, CollaborationAssignmentDispatchPayload, CollaborationConfirmationDecision, CollaborationExecutionResult, CollaborationLeadSynthesisPayload, CollaborationEventKind, CollaborationInputKind, CollaborationInvocationKind, CollaborationLeadJudgmentPayload, CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload, CollaborationMessagePayload, CollaborationNextAction, CollaborationProposal, CollaborationProviderCallPayload, CollaborationProviderCallState, CollaborationSideEffect, CollaborationStepState, LeadOutcomeKind, LeadOutcomeScope, LeadStepDecision, project_collaboration_history
@@ -3031,7 +3033,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertTrue(diagnose_json_text(json.dumps({"response_type":"specialist_assignment_result", "response_text":"Draft body.", "assignment_status":"draft_completed"}), constraint_contract.schema))
         facts = LeadProviderConstraints(input_ids=("user_input", "outline"), reviewer_inputs=((PLOT_ARCHITECT, "outline"),), task_revisions=(("task", 1),),
             source_ids=("current_response", "historical_synthesis"), objective_ids=("objective",))
-        contract = orchestrator_module._lead_front_result_contract(orchestrator_module.LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=facts).schema_value()
+        contract = response_rules.lead_front_result_contract(orchestrator_module.LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=facts).schema_value()
         assert_schema_descriptions(self, contract)
         for stage, actions in ((contract, ("draft_document_change_proposal", "draft_specialist_consultation_proposal")), (draft_contract.schema, ())):
             source = {"task_input": "Literal source requests response_type not_offered."}
@@ -3061,7 +3063,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(set(answers[0]["properties"]) - set(answers[0]["required"]), {"document_change_request_update"})
         self.assertTrue(any("cancel" in branch["description"].lower() for branch in answers))
         self.assertTrue(any("status" in branch["description"].lower() for branch in answers))
-        expanded = orchestrator_module._lead_front_result_contract(orchestrator_module.LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=replace(facts, task_revisions=(("task", 1), ("task", 2)))).schema_value()
+        expanded = response_rules.lead_front_result_contract(orchestrator_module.LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=replace(facts, task_revisions=(("task", 1), ("task", 2)))).schema_value()
         assert_schema_descriptions(self, expanded)
         identity_free = json.dumps((contract, expanded))
         self.assertNotIn("task_reference", identity_free)
@@ -3093,7 +3095,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             "target_paths": []}, "proposal": {"shared_premises": [], "assignments": [
                 {"agent_id": agent, "mode": "draft", "instruction": "Use the approved draft.", "input_ids": ["user_input", "historical_synthesis"]}
                 for agent in (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST)]}}
-        read_contract = orchestrator_module._lead_front_result_contract(orchestrator_module.LeadProposalRelation.NEW_STEP, read_facts.input_ids, constraints=read_facts).schema_value()
+        read_contract = response_rules.lead_front_result_contract(orchestrator_module.LeadProposalRelation.NEW_STEP, read_facts.input_ids, constraints=read_facts).schema_value()
         native_read_value = {**legacy, "authoring_assessment": pending_assessment}
         native_read_value["authoring_scope"] = {**legacy["authoring_scope"], "target_paths": [docs[0]]}
         self.assertEqual(diagnose_json_text(json.dumps(wire_result(native_read_value, 'lead-response-v7')), read_contract), ())
@@ -3190,7 +3192,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         from types import SimpleNamespace
         from story_writing_agents.conversations import ( CollaborationLeadEvidence, LeadEvidenceStatus, LeadOutcomeScope, authoring_scope_from_dict,)
         from story_writing_agents.lead_provider_contracts import ( LeadDiscussionConstraints, LeadExplorationConstraints, PremiseDecisionConstraints,)
-        from story_writing_agents.orchestrator import ( _lead_discussion_result_contract, _lead_result_rule_seed, _lead_synthesis_result_contract,)
+        from story_writing_agents.lead_preparation.reply_contract_values import lead_discussion_result_contract, lead_result_rule_seed
+        from story_writing_agents.orchestrator import _lead_synthesis_result_contract
         from tests.provider_wire_fixture import lead_fixture_result, lead_fixture_assessment, finite_fixture_selection
         factory = call.contract.factory
         host_task = _live_task(call, 0)
@@ -3297,14 +3300,14 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(unspecified['paths'], [])
         self.assertEqual(unspecified['slots'], [])
         recommendation_facts = replace(profile_facts, recommendation_only=True)
-        recommendation_seed = orchestrator_module._lead_front_result_contract(
+        recommendation_seed = response_rules.lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=recommendation_facts)
         with self.assertRaises(LeadContractRejection):
             current_group(replace(factory, rule_seed=recommendation_seed, constraints=recommendation_facts), call.contract.offers, 'prepare.artifact')
         recommendation_record = {**profile_record, 'target_paths': [future_path]}
         recommendation_expected_scope = {**expected_profile_scope, 'target_paths': [future_path]}
         recommendation_facts = replace(recommendation_facts, scope=authoring_scope_from_dict(recommendation_record))
-        recommendation_seed = orchestrator_module._lead_front_result_contract(
+        recommendation_seed = response_rules.lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=recommendation_facts)
         complete_assessment = json.loads(json.dumps(asdict(_fixture_assessment())))
         complete_native_assessment = lead_fixture_assessment(complete_assessment, source_choices=('user_input',))
@@ -3364,7 +3367,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 maximum_result = json.loads(selected_bound.decode_response(json.dumps(maximum)).answer_json)
                 self.assertEqual(maximum_result['recommended_action']['specialist_ids'], list(SPECIALIST_IDS))
             linked_facts = replace(recommendation_facts, objective_ids=('fixture-objective',))
-            linked_seed = orchestrator_module._lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=linked_facts)
+            linked_seed = response_rules.lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=linked_facts)
             require_final_case(linked_seed, {'response_type': 'proposal_drafting_recommendation',
                  'response_text': 'Continue this exact pending request.',
                  'response_details': {'task_scope': lead_fixture_scope_record(
@@ -3415,7 +3418,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         workflow_value = authoring_scope_from_dict(workflow_record)
         workflow_facts = replace(profile_facts, scope=workflow_value)
         from story_writing_agents import specialist_routing as routing_module
-        objective_seed = orchestrator_module._lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=workflow_facts)
+        objective_seed = response_rules.lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=workflow_facts)
         for kind in ('answer', 'critique'):
             require_final_case(objective_seed, {'response_type': kind, 'response_text': 'Cancel this request only.',
                  'response_details': { 'task_scope': lead_fixture_scope_record(
@@ -3460,7 +3463,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual({item.logical_root for item in profile_binding.prepared_compilation.semantic_variants}, set(range(3)))
         self.assertTrue({'prepare.artifact', 'prepare.consultation.authoring'}.isdisjoint(profile_binding.group_workflow.catalog.group_ids))
         free_facts = replace(workflow_facts, scope=None, scope_rule=None)
-        free_seed = orchestrator_module._lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=free_facts)
+        free_seed = response_rules.lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=free_facts)
         profile_owner = replace(factory, rule_seed=free_seed, constraints=free_facts)
         profile_binding = current_group(profile_owner, call.contract.offers, "question.workflow")
         profile_native_cache, plain_scope_members = {}, []
@@ -3531,7 +3534,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             'contributions': [{'domain': domain, 'role': role} for domain, role in zip(
                 domain_order, ('draft_owner', 'draft_owner', 'constraint_assessor'))],
             'dependency_slots': [{'slot_id': 'shared', 'dependent_domains': ['plot_structure', 'character_world']}]}
-        free_seed = orchestrator_module._lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=declared)
+        free_seed = response_rules.lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=declared)
         free_bound = current_group(replace(factory, rule_seed=free_seed, constraints=declared), call.contract.offers, "question.authoring")
         free_packet = json.loads(lead_fixture_response(SimpleNamespace(contract=free_bound), {
             'response_type': 'clarification_question', 'response_text': 'Retain the declared dependency subset.',
@@ -3838,7 +3841,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 'task_revision': 1, 'contributions': [{'domain': domain, 'role': 'draft_owner'}],
                 'dependency_slots': []}
             unit_constraints = replace(declared, scope=authoring_scope_from_dict(unit_record), recommendation_only=False, readiness_source_basis_ref=None)
-            unit_seed = orchestrator_module._lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=unit_constraints)
+            unit_seed = response_rules.lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=unit_constraints)
             unit_offers = replace(call.contract.offers, completed_read_facts=facts, delivery_read_facts=())
             unit_owner = replace(factory, rule_seed=unit_seed, constraints=unit_constraints)
             unit_bound = current_group(unit_owner, unit_offers, "question.authoring")
@@ -3938,7 +3941,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         read_plan.require_provenance()
         review_record = {**unit_record, "intent": "review_only", "target_paths": []}
         review_facts = replace(unit_constraints, scope=authoring_scope_from_dict(review_record))
-        review_seed = orchestrator_module._lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, review_facts.input_ids, constraints=review_facts)
+        review_seed = response_rules.lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, review_facts.input_ids, constraints=review_facts)
         require_group_case(replace(factory, constraints=review_facts, rule_seed=review_seed), unit_offers,
             {"response_type": "answer", "response_text": "Report this supplied fact only.", "response_details": {
                 "task_scope": lead_fixture_scope_record(review_record, fixed_targets=True, fixed_dependencies=True)}},
@@ -3949,7 +3952,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
         operation_record = copy.deepcopy(profile_record); operation_record['target_paths'] = [future_path]
         operation_facts = replace(declared, scope=authoring_scope_from_dict(operation_record))
-        operation_seed = orchestrator_module._lead_front_result_contract(
+        operation_seed = response_rules.lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, operation_facts.input_ids, constraints=operation_facts)
         operation_reads = tuple(replace(unit_writing, evidence_id="operation-" + kind, source_id="source-" + kind,
             artifact_locator="manuscript/part-01/" + kind + ".md") for _, kind, *_ in receipt_operations)
@@ -3978,7 +3981,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         preparation_record = {**profile_record, 'activity': 'draft', 'target_paths': [future_path], 'contributions': [ {'domain': 'tone_execution', 'role': 'draft_owner'}]}
         preparation_scope = authoring_scope_from_dict(preparation_record)
         preparation_facts = replace(profile_facts, scope=preparation_scope, preparation_kind='prepare_artifact', preparation_targets=(future_path,), objective_ids=())
-        preparation_seed = orchestrator_module._lead_front_result_contract(
+        preparation_seed = response_rules.lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=preparation_facts)
         preparation_native = lead_fixture_scope_record(preparation_record, fixed_targets=True, fixed_dependencies=True)
         expected_preparation_scope = {**expected_profile_scope, 'activity': 'draft', 'target_paths': [future_path],
@@ -4003,7 +4006,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 'target_paths': [future_path], 'next_step': 'prepare'}}}, branch='lead-response-v7:family:1',
             constraints=preparation_facts)
         consultation_facts = replace(profile_facts, preparation_kind='prepare_consultation', preparation_specialists=(EXECUTION_SPECIALIST,))
-        consultation_seed = orchestrator_module._lead_front_result_contract(
+        consultation_seed = response_rules.lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=consultation_facts)
         consultation = lead_fixture_assignments([{
             'agent_id': EXECUTION_SPECIALIST, 'task_instructions': 'Assess supplied constraint.',
@@ -4024,7 +4027,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             'dependency_slots': [ {'slot_id': 'setting', 'dependent_domains': ['tone_execution']}]}
         mixed_scope = authoring_scope_from_dict(mixed_record)
         mixed_facts = replace(consultation_facts, scope=mixed_scope, scope_rule=None)
-        mixed_seed = orchestrator_module._lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=mixed_facts)
+        mixed_seed = response_rules.lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=mixed_facts)
         evidence_values = {'justification': 'The user supplied the bounded material.', 'requirement': 'Supplied brief'}
         wire_evidence = {**evidence_values, 'source_ids': {'user_input': True}}
         typed_evidence = {**evidence_values, 'source_ids': ['user_input']}
@@ -4079,7 +4082,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertTrue(mixed_selected.rule_graph.findings(bad))
             with self.assertRaises(ValueError): mixed_selected.decode_response(json.dumps(bad, ensure_ascii=False))
         readiness_facts = replace(declared, readiness_source_basis_ref='fixture-readiness-basis')
-        readiness_seed = orchestrator_module._lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=readiness_facts)
+        readiness_seed = response_rules.lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=readiness_facts)
         criterion_groups = ( ('core_documents/global_outline.md',
              ('plot_progression', 'conflict', 'ending', 'required_setup')),
             ('core_documents/part_outlines.md', ('all_units', 'transitions', 'late_progression')),
@@ -4185,7 +4188,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             for part in relative_path[:-1]: node = node[part]
             node[relative_path[-1]] = replacement
             self.assertTrue(free_ready_bound.rule_graph.findings(bad), relative_path)
-        discussion_seed = _lead_discussion_result_contract( LeadDiscussionConstraints('test-discussion-control', host_task['task_id'], 1))
+        discussion_seed = lead_discussion_result_contract( LeadDiscussionConstraints('test-discussion-control', host_task['task_id'], 1))
         for kind, response_type in (('answer', 'answer'), ('question', 'clarification_question')):
             message = 'Literal discussion with no task, candidate, or dispatch authority.'
             require_final_case(discussion_seed, {'response_type': response_type,
@@ -4193,7 +4196,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 {'message': message, 'used_evidence_ids': [],
                  **({'kind': kind} if kind == 'question' else {})},
                 branch='lead-discussion-response-v1:family:0')
-        exploration_seed = _lead_result_rule_seed('lead-exploration-response-v1', LeadExplorationConstraints(input_ids=('user_input',)).schema())
+        exploration_seed = lead_result_rule_seed('lead-exploration-response-v1', LeadExplorationConstraints(input_ids=('user_input',)).schema())
         for idea_kind in ('hypothesis', 'alternative', 'short_example'):
             message, material = 'Provisional only.', 'A deliberately supplied tentative example.'
             require_final_case(exploration_seed, {'response_type': 'lead_exploration', 'response_text': message,
@@ -4222,7 +4225,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         empty_observation['agent_action']['task_result']['response_details'][ 'grounded_observations'] = []
         self.assertTrue(observation_packet_binding.rule_graph.findings(empty_observation))
         with self.assertRaises(ValueError): observation_packet_binding.decode_response(json.dumps(empty_observation))
-        premise_seed = _lead_result_rule_seed('lead-response-v8', premise.front_schema())
+        premise_seed = lead_result_rule_seed('lead-response-v8', premise.front_schema())
         premise_rows = [{'agent_id': PLOT_ARCHITECT, 'task_instructions': 'Assess this premise only.',
                          'assignment_type': 'analyze_premise', 'input_source_ids': ['user_input'],
                          'review_basis': None}]
@@ -4244,7 +4247,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         premise_summary = PremiseDecisionConstraints(question_id='fixture-question',
             reply_alternatives=(('reply-A', ('first', 'second')), ('reply-B', ()),
                                 ('reply-C', ('support',))), unavailable_reply_ids=('reply-B',))
-        summary_seed = _lead_result_rule_seed('premise-decision-summary-v1', premise_summary.summary_schema())
+        summary_seed = lead_result_rule_seed('premise-decision-summary-v1', premise_summary.summary_schema())
         require_final_case(summary_seed, {'response_type': 'premise_decision_summary',
             'response_text': 'Ask USER; retain choice authority.', 'response_details': {
                 'status': 'clarification', 'options': [], 'recommended_option_key': None}},
@@ -4634,7 +4637,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         target_ids = tuple(item['input_id'] for item in target_records)
         excluded_id = read_facts[-1].evidence_id
         preliminary_facts = replace(declared, scope=profile_scope, preliminary_targets=provided)
-        preliminary_seed = orchestrator_module._lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=preliminary_facts)
+        preliminary_seed = response_rules.lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=preliminary_facts)
         preliminary_bound = current_group(replace(factory, rule_seed=preliminary_seed, constraints=preliminary_facts), preliminary_offers, "answer.observed_facts")
         preliminary_roots = set()
         for candidate_member in preliminary_bound.semantic_index.contracts:
@@ -4724,7 +4727,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                              'tone_execution')]}
         staged_scope = authoring_scope_from_dict(staged_record)
         staged_facts = replace(declared, scope=staged_scope)
-        staged_seed = orchestrator_module._lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=staged_facts)
+        staged_seed = response_rules.lead_front_result_contract( orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=staged_facts)
         staged_bound = current_group(replace(factory, rule_seed=staged_seed, constraints=staged_facts), call.contract.offers, "consultation.review_only")
         stage_roots = set()
         for candidate_member in staged_bound.semantic_index.contracts:
@@ -4994,7 +4997,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         from dataclasses import replace
         from story_writing_agents.agent_context.invocation.context_execution import AgentContextService
         from tests.agent_context.invocation.execution_fixture import make_group_control as _group_control
-        original_factory = orchestrator_module._lead_call_contract_factory
+        original_factory = call_rule_factory.lead_call_contract_factory
         def grouped_factory(*args, **kwargs):
             return replace(original_factory(*args, **kwargs), schema_group_protocol=True)
         def invalid_selection(call, provider):
@@ -5023,7 +5026,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             else:
                 self.backend.enqueue(responses[1], control_plan=select("answer.workflow"))
                 self.backend.enqueue(responses[2], control_plan=())
-            with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory), \
+            with mock.patch.object(call_rule_factory, "lead_call_contract_factory", side_effect=grouped_factory), \
                     mock.patch.object(AgentContextService, "invoke", capture_grouped):
                 repaired_group = await self.runtime.lead_turn(self.session_id, conversation, "Explain group workflow.")
             calls = self.backend.calls[start:]
@@ -5064,7 +5067,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                           task_revisions=tuple((task, revision + 1) for task, revision in constraints.task_revisions))
         revised_factory = replace(real_request.result_contract, constraints=revised)
         revised_request = replace(real_request, result_contract=revised_factory)
-        minted = self.runtime._lead_group_invocation_state(
+        minted = call_rule_factory.lead_group_invocation_state(
             revised_request, original_text="Explain group workflow.", constraints=revised)
         self.assertNotEqual(minted.request_basis.scope_ref, real_request.group_state.request_basis.scope_ref)
         self.assertIs(minted.workflow, real_request.group_state.workflow)
@@ -5099,7 +5102,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         start = len(self.backend.calls)
         self.backend.enqueue(reject_with_snapshot, control_plan=select("prepare.consultation.authoring"))
         self.backend.enqueue(_search_history, _read_history_hit, refined_recommendation)
-        with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory):
+        with mock.patch.object(call_rule_factory, "lead_call_contract_factory", side_effect=grouped_factory):
             refreshed = await self.runtime.lead_turn(self.session_id, reading, "Use the global outline as the first target.\n" + _ADMISSION_BRIEF)
         self.assertIs(refreshed.kind, LeadOutcomeKind.RECOMMENDATION, (refreshed.message, refreshed.validation_details, refreshed.public_responses))
         calls = self.backend.calls[start:]
@@ -6695,7 +6698,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         from contextlib import nullcontext
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
         from tests.provider_wire_fixture import FixedBusinessFactory
-        original_factory = orchestrator_module._lead_call_contract_factory
+        original_factory = call_rule_factory.lead_call_contract_factory
         def fixed_business_factory(*args, **kwargs):
             original = original_factory(*args, **kwargs)
             return FixedBusinessFactory(original, 'answer.workflow') if original.schema_group_protocol else original
@@ -6715,7 +6718,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 else:
                     backend.enqueue(response, control_plan=selection_plan("answer.workflow"))
                 # Fixed-owner unit boundary; the other row exercises ordinary SELECT to GENERATE.
-                boundary = (mock.patch.object(orchestrator_module, '_lead_call_contract_factory',
+                boundary = (mock.patch.object(call_rule_factory, "lead_call_contract_factory",
                     side_effect=fixed_business_factory) if label == 'action_exhausted' else nullcontext())
                 with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 2), boundary:
                     result = await runtime.lead_turn(self.session_id, conversation_id,
@@ -6723,7 +6726,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN,)
                 self.assertEqual(len(backend.calls), 2)
                 self.assertEqual(len(backend.providers), 2 if label == "action_exhausted" else 1)
-                self.assertIs(orchestrator_module._lead_call_contract_factory, original_factory)
+                self.assertIs(call_rule_factory.lead_call_contract_factory, original_factory)
                 self.assertEqual(tuple(call.contract.schema_group_phase for call in backend.calls),
                     (None, None) if label == "action_exhausted" else (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
                 finalized = [[("rejected", expected_code)]]
@@ -6748,7 +6751,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
         self.backend.enqueue(malformed, control_plan=selection_plan("answer.workflow"))
         with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 2), \
-                mock.patch.object(orchestrator_module, "_CONTEXT_INVOCATION_CALL_LIMIT", 2):
+                mock.patch.object(reply_contract_values, "CONTEXT_INVOCATION_CALL_LIMIT", 2):
             result = await self._lead_turn(conversation_id, 'Reject an invalid result without another provider call.')
         self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
         self.assertEqual(len(self.backend.calls), 2)
@@ -6775,7 +6778,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         from story_writing_agents.agent_context.invocation.provider import context_provider_failure_facts
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
         from tests.agent_context.invocation.execution_fixture import make_group_control as _group_control
-        original_factory = orchestrator_module._lead_call_contract_factory
+        original_factory = call_rule_factory.lead_call_contract_factory
         def grouped_factory(*args, **kwargs):
             return replace(original_factory(*args, **kwargs), schema_group_protocol=True)
         private_group = "PRIVATE_GROUP_REJECTION_한🙂"
@@ -6812,7 +6815,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, responses[0]),))
             if label == "select-frozen-context":
                 self.backend.enqueue()
-            with mock.patch.object(orchestrator_module, "_lead_call_contract_factory", side_effect=grouped_factory), \
+            with mock.patch.object(call_rule_factory, "lead_call_contract_factory", side_effect=grouped_factory), \
                     mock.patch.object(AgentContextService, "invoke", retain_failure), \
                     mock.patch.object(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", limit):
                 exhausted = await self.runtime.lead_turn(self.session_id, conversation, "Explain bounded group workflow.")

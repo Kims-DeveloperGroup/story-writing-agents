@@ -519,7 +519,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Outcome: " + (response_kind or "unavailable"), public_frame.metadata)
 
         from story_writing_agents import document_plan as documents
-        from tests import test_specialist_routing as document_fixtures
+        from tests.lead_preparation import test_response_rules as document_fixtures
         plan = document_fixtures.SpecialistRoutingTests._document_plan_fixture()
         rows = tuple(documents.DocumentNodeView(node.node_id,
             documents.DocumentNodeState.COMPLETE if index == 0 else documents.DocumentNodeState.BLOCKED,
