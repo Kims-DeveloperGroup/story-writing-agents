@@ -180,8 +180,8 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
         # Line 1 should not be in the 5-line preview
         self.assertNotIn("Line 1: The cold wind howled.", rendered)
 
-        from story_writing_agents.agent_context.invocation.session_execution import (ContextExecutionEvent,
-            ContextExecutionEventKind, ContextNativeDisposition, ContextScope, ContextSubjectKind)
+        from story_writing_agents.agent_context.contracts.events import ContextExecutionEvent, ContextExecutionEventKind, ContextNativeDisposition
+        from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
         from story_writing_agents.provider_adapter import (NativeContextCheck, NativeContextObservation,
             NativeContextCheckStage, NativeContextSourceStage, NativeContextCheckReason)

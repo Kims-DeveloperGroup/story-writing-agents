@@ -14,7 +14,7 @@ class PlanningValueTests(planning_fixtures.PlanningTestCase):
 
     def test_material_is_strict_utf8_exact_and_hidden_from_repr(self) -> None:
         body = "문맥🙂".encode("utf-8")
-        entry = planning_fixtures.entry("unicode", body)
+        entry = planning_fixtures.make_entry("unicode", body)
         material = ctx_planning_inputs.ContextMaterial(entry, body)
         self.assertEqual(material.body_utf8, body)
         self.assertNotIn("문맥", repr(material))
@@ -22,13 +22,13 @@ class PlanningValueTests(planning_fixtures.PlanningTestCase):
             material.body_utf8 = b"changed"  # type: ignore[misc]
 
         invalid_body = b"PRIVATE\xffBODY"
-        invalid_entry = planning_fixtures.entry("invalid", invalid_body)
+        invalid_entry = planning_fixtures.make_entry("invalid", invalid_body)
         error = self.assert_planning_error(lambda: ctx_planning_inputs.ContextMaterial(invalid_entry, invalid_body),
             ctx_planning_inputs.ContextPlanningErrorCode.INVALID_MATERIAL,)
         self.assertNotIn("PRIVATE", str(error))
         self.assertNotIn("PRIVATE", repr(error))
 
-        valid = planning_fixtures.entry("valid", b"abc")
+        valid = planning_fixtures.make_entry("valid", b"abc")
         self.assert_planning_error(lambda: ctx_planning_inputs.ContextMaterial(replace(valid, utf8_bytes=4), b"abc"),
             ctx_planning_inputs.ContextPlanningErrorCode.MATERIAL_LENGTH_MISMATCH,)
         self.assert_planning_error(
@@ -41,18 +41,18 @@ class PlanningValueTests(planning_fixtures.PlanningTestCase):
                     ctx_planning_inputs.ContextPlanningErrorCode.INVALID_MATERIAL,)
 
     def test_projected_unit_validates_exact_body_channel_and_priority(self) -> None:
-        first = planning_fixtures.entry("first", b"same")
-        second = planning_fixtures.entry("second", b"same", ordinal=1)
+        first = planning_fixtures.make_entry("first", b"same")
+        second = planning_fixtures.make_entry("second", b"same", ordinal=1)
         unit = ctx_projection.ContextProjectedUnit((second, first), b"same")
         self.assertEqual( tuple(entry.source_id for entry in unit.entries), ("first", "second") )
         self.assertNotIn("same", repr(unit))
-        different_channel = planning_fixtures.entry("history", b"same", semantic_channel=ContextSemanticChannel.HISTORY)
+        different_channel = planning_fixtures.make_entry("history", b"same", semantic_channel=ContextSemanticChannel.HISTORY)
         self.assert_planning_error(
             lambda: ctx_projection.ContextProjectedUnit((first, different_channel), b"same"),
             ctx_planning_inputs.ContextPlanningErrorCode.INVALID_VALUE,
         )
-        p0_first = planning_fixtures.entry("p0-first", b"same", source_kind=ContextSourceKind.RUNTIME_INPUT)
-        p0_second = planning_fixtures.entry("p0-second",
+        p0_first = planning_fixtures.make_entry("p0-first", b"same", source_kind=ContextSourceKind.RUNTIME_INPUT)
+        p0_second = planning_fixtures.make_entry("p0-second",
             b"same", source_kind=ContextSourceKind.RUNTIME_INPUT,
             semantic_channel=ContextSemanticChannel.CANDIDATE,
         )
@@ -61,8 +61,8 @@ class PlanningValueTests(planning_fixtures.PlanningTestCase):
         )
 
     def test_checkpoint_shapes_and_source_constraints_are_strict(self) -> None:
-        policy = planning_fixtures.policy()
-        conditions = planning_fixtures.conditions(policy)
+        policy = planning_fixtures.make_policy()
+        conditions = planning_fixtures.make_conditions(policy)
         p1, _ = planning_fixtures.source( "definition", source_kind=ContextSourceKind.AGENT_DEFINITION, )
         p0, _ = planning_fixtures.source( "input", source_kind=ContextSourceKind.RUNTIME_INPUT, )
         for state in (ctx_planning_inputs.ContextCheckpointState.MISSING,
@@ -100,8 +100,8 @@ class PlanningValueTests(planning_fixtures.PlanningTestCase):
 
     def test_catalog_aliases_are_unique_exact_integers_and_high_water_bounded(self,
     ) -> None:
-        policy = planning_fixtures.policy()
-        conditions = planning_fixtures.conditions(policy)
+        policy = planning_fixtures.make_policy()
+        conditions = planning_fixtures.make_conditions(policy)
         entry, _material = planning_fixtures.source("catalog-source")
         cursor = planning_fixtures.record("record-one", b"record", 1).cursor
 
@@ -177,17 +177,17 @@ class PlanningValueTests(planning_fixtures.PlanningTestCase):
         )
 
     def test_decision_priority_channel_matrix_is_exhaustive(self) -> None:
-        valid_entries = (planning_fixtures.entry("current", b"x", source_kind=ContextSourceKind.RUNTIME_INPUT),
-            planning_fixtures.entry("candidate",
+        valid_entries = (planning_fixtures.make_entry("current", b"x", source_kind=ContextSourceKind.RUNTIME_INPUT),
+            planning_fixtures.make_entry("candidate",
                 b"x", source_kind=ContextSourceKind.RUNTIME_INPUT,
                 semantic_channel=ContextSemanticChannel.CANDIDATE,),
-            planning_fixtures.entry("stable", b"x", source_kind=ContextSourceKind.AGENT_DEFINITION), *(
-                planning_fixtures.entry(f"p2-{channel.value}", b"x", semantic_channel=channel) for channel in (
+            planning_fixtures.make_entry("stable", b"x", source_kind=ContextSourceKind.AGENT_DEFINITION), *(
+                planning_fixtures.make_entry(f"p2-{channel.value}", b"x", semantic_channel=channel) for channel in (
                     ContextSemanticChannel.HARD_CONSTRAINT, ContextSemanticChannel.FOCUSED_EVIDENCE,
                     ContextSemanticChannel.RETRIEVED_EVIDENCE,
                     ContextSemanticChannel.HISTORY,)
             ),
-            planning_fixtures.entry("optional", b"x", source_kind=ContextSourceKind.OWN_AGENT_STATE),)
+            planning_fixtures.make_entry("optional", b"x", source_kind=ContextSourceKind.OWN_AGENT_STATE),)
         for entry, decision in itertools.product(valid_entries, ctx_planning_inputs.ContextDecisionKind):
             represented = ("representative"
                 if decision is ctx_planning_inputs.ContextDecisionKind.DEDUPLICATED

@@ -1740,8 +1740,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_both_native_backends_preserve_session_continuation_and_legacy_namespaces(self):
-        from story_writing_agents.agent_context.invocation.session_execution import (
-            AgentContextService, ContextInvocationKind, ContextInvocationRequest,)
+        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService
+        from story_writing_agents.agent_context.contracts.call_offers import ContextInvocationKind
+        from story_writing_agents.agent_context.invocation.requests import ContextInvocationRequest
         from story_writing_agents.agent_context.sources import (
             ActiveDebateSourceAdapter, FocusedConversationSourceAdapter, OwnAgentStateSourceAdapter,
             SessionHistorySourceAdapter, WritingArtifactSourceAdapter)
@@ -2623,9 +2624,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(details, ["Structured response\n$: malformed JSON"])
 
     async def _assert_grouped_reader_transport(self, backend, session_id, execution_workspace) -> None:
-        from story_writing_agents.agent_context.invocation.session_execution import (AgentContextService, BoundCallFactory,
-            ContextCallOffers, ContextInvocationKind, ContextInvocationRequest, ContextExecutionError,
-            context_provider_failure_facts)
+        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService
+        from story_writing_agents.agent_context.contracts.bound_call import BoundCallFactory
+        from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers, ContextInvocationKind
+        from story_writing_agents.agent_context.invocation.requests import ContextInvocationRequest
+        from story_writing_agents.agent_context.contracts.errors import ContextExecutionError
+        from story_writing_agents.agent_context.invocation.provider import context_provider_failure_facts
         from story_writing_agents.agent_context.ledger import (ContextLedger, ContextLedgerKey,
             ContextLedgerRecordState, ContextLedgerAttemptOutcome)
         from story_writing_agents.agent_context.sources import (ActiveDebateSourceAdapter,
@@ -2634,7 +2638,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
         from story_writing_agents.lead_provider_contracts import LeadContractRejection, LeadGroupCompilation
         from story_writing_agents.agent_context.manifest import ContextAuthorityKind, ContextProvenance
-        from story_writing_agents.agent_context.planning import MandatoryReferenceReservation
+        from story_writing_agents.agent_context.contracts.planning_inputs import MandatoryReferenceReservation
         from story_writing_agents.agent_context.sources import writing_artifact_source_id
         from tests.test_agent_context_execution import (_LEAD_CALL_FACTORY, _PRIVATE_INPUT, _materials,
             _group_request, _group_control, _group_answer, _search)
@@ -5325,8 +5329,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             (prior_user, prior_reply),
         )
         self.assertEqual(self.workspace.inspect_session(session_id)["debates"], [])
-        from story_writing_agents.agent_context.invocation.session_execution import (
-            AgentContextService, ContextInvocationKind, ContextInvocationRequest)
+        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService
+        from story_writing_agents.agent_context.contracts.call_offers import ContextInvocationKind
+        from story_writing_agents.agent_context.invocation.requests import ContextInvocationRequest
         from story_writing_agents.agent_context.sources import (
             ActiveDebateSourceAdapter, FocusedConversationSourceAdapter,
             OwnAgentStateSourceAdapter, WritingArtifactSourceAdapter)

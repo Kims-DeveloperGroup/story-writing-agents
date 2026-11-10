@@ -13,8 +13,8 @@ class BootstrapPlanningTests(planning_fixtures.PlanningTestCase):
     ) -> tuple[ctx_planning_inputs.ContextPlanningPolicy,
         ctx_planning_inputs.ContextPlanningConditions, ContextManifestEntry,
         ctx_planning_inputs.ContextMaterial,]:
-        policy = planning_fixtures.policy()
-        conditions = planning_fixtures.conditions(policy)
+        policy = planning_fixtures.make_policy()
+        conditions = planning_fixtures.make_conditions(policy)
         stable, material = planning_fixtures.source("definition",
             b"role",
             source_kind=ContextSourceKind.AGENT_DEFINITION,
@@ -44,17 +44,17 @@ class BootstrapPlanningTests(planning_fixtures.PlanningTestCase):
 
     def test_ready_mismatch_matrix_and_thread_none_semantics(self) -> None:
         policy, conditions, stable, material = self._stable_fixture()
-        other_scope = planning_fixtures.scope(workspace_id="other")
+        other_scope = planning_fixtures.make_scope(workspace_id="other")
         cases = (
             (
-                planning_fixtures.ready_checkpoint(planning_fixtures.conditions(policy, scope=other_scope),
+                planning_fixtures.ready_checkpoint(planning_fixtures.make_conditions(policy, scope=other_scope),
                     (stable,),
                 ),
                 "thread",
                 ctx_planning_inputs.ContextBootstrapReason.SCOPE_MISMATCH,
             ),
             (
-                planning_fixtures.ready_checkpoint(planning_fixtures.conditions(policy, provider_id="other-provider"),
+                planning_fixtures.ready_checkpoint(planning_fixtures.make_conditions(policy, provider_id="other-provider"),
                     (stable,),
                 ),
                 "thread",
@@ -78,7 +78,7 @@ class BootstrapPlanningTests(planning_fixtures.PlanningTestCase):
             ),
             (
                 planning_fixtures.ready_checkpoint(
-                    planning_fixtures.conditions(
+                    planning_fixtures.make_conditions(
                         policy,
                         definition_fingerprint=planning_fixtures.digest(b"old-definition"),),
                     (stable,),
@@ -88,7 +88,7 @@ class BootstrapPlanningTests(planning_fixtures.PlanningTestCase):
             ),
             (
                 planning_fixtures.ready_checkpoint(
-                    planning_fixtures.conditions(
+                    planning_fixtures.make_conditions(
                         policy,
                         policy_fingerprint=planning_fixtures.digest(b"old-policy"),),
                     (stable,),
@@ -98,7 +98,7 @@ class BootstrapPlanningTests(planning_fixtures.PlanningTestCase):
             ),
             (
                 planning_fixtures.ready_checkpoint(
-                    planning_fixtures.conditions(policy, schema_version=2),
+                    planning_fixtures.make_conditions(policy, schema_version=2),
                     (stable,),
                 ),
                 "thread",
@@ -140,7 +140,7 @@ class BootstrapPlanningTests(planning_fixtures.PlanningTestCase):
             (material,),
             policy=policy,
             conditions=conditions,
-            checkpoint=planning_fixtures.ready_checkpoint(planning_fixtures.conditions(
+            checkpoint=planning_fixtures.ready_checkpoint(planning_fixtures.make_conditions(
                     policy,
                     definition_fingerprint=planning_fixtures.digest(b"old-definition"),),
                 (old_stable,),),
@@ -153,7 +153,7 @@ class BootstrapPlanningTests(planning_fixtures.PlanningTestCase):
             policy=policy,
             conditions=conditions,
             checkpoint=planning_fixtures.ready_checkpoint(
-                planning_fixtures.conditions( policy, policy_fingerprint=planning_fixtures.digest(b"old-policy"), schema_version=2, ),
+                planning_fixtures.make_conditions( policy, policy_fingerprint=planning_fixtures.digest(b"old-policy"), schema_version=2, ),
                 (old_stable,),
                 delta_depth=16,),
             active_provider_thread_id="thread",
@@ -171,8 +171,8 @@ class BootstrapPlanningTests(planning_fixtures.PlanningTestCase):
         cases = (
             (
                 planning_fixtures.ready_checkpoint(
-                    planning_fixtures.conditions(
-                        policy, scope=planning_fixtures.scope(workspace_id="other"),
+                    planning_fixtures.make_conditions(
+                        policy, scope=planning_fixtures.make_scope(workspace_id="other"),
                         **lower_mismatches,),
                     (stable,),
                     provider_thread_id="old-thread",
@@ -182,7 +182,7 @@ class BootstrapPlanningTests(planning_fixtures.PlanningTestCase):
                 ctx_planning_inputs.ContextBootstrapReason.SCOPE_MISMATCH,
             ),
             (
-                planning_fixtures.ready_checkpoint(planning_fixtures.conditions(policy, **lower_mismatches),
+                planning_fixtures.ready_checkpoint(planning_fixtures.make_conditions(policy, **lower_mismatches),
                     (stable,),
                     provider_thread_id="old-thread",
                     delta_depth=16,
@@ -192,7 +192,7 @@ class BootstrapPlanningTests(planning_fixtures.PlanningTestCase):
             ),
             (
                 planning_fixtures.ready_checkpoint(
-                    planning_fixtures.conditions(
+                    planning_fixtures.make_conditions(
                         policy,
                         definition_fingerprint=planning_fixtures.digest(b"old-definition"),
                         policy_fingerprint=planning_fixtures.digest(b"old-policy"),
@@ -205,7 +205,7 @@ class BootstrapPlanningTests(planning_fixtures.PlanningTestCase):
             ),
             (
                 planning_fixtures.ready_checkpoint(
-                    planning_fixtures.conditions(
+                    planning_fixtures.make_conditions(
                         policy,
                         definition_fingerprint=planning_fixtures.digest(b"old-definition"),
                         policy_fingerprint=planning_fixtures.digest(b"old-policy"),
@@ -220,7 +220,7 @@ class BootstrapPlanningTests(planning_fixtures.PlanningTestCase):
             ),
             (
                 planning_fixtures.ready_checkpoint(
-                    planning_fixtures.conditions(
+                    planning_fixtures.make_conditions(
                         policy, policy_fingerprint=planning_fixtures.digest(b"old-policy"),
                         schema_version=2,
                     ),
@@ -232,7 +232,7 @@ class BootstrapPlanningTests(planning_fixtures.PlanningTestCase):
             ),
             (
                 planning_fixtures.ready_checkpoint(
-                    planning_fixtures.conditions(policy, schema_version=2),
+                    planning_fixtures.make_conditions(policy, schema_version=2),
                     (stable,),
                     delta_depth=16,
                 ),

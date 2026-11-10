@@ -85,7 +85,7 @@ class RequiredAndStableSelectionTests(planning_fixtures.PlanningTestCase):
 
     def test_compatible_delta_always_selects_p0_and_suppresses_p1(self) -> None:
         policy = ctx_planning_inputs.ContextPlanningPolicy(4, 1, 3, 0, 0, 0, 16)
-        conditions = planning_fixtures.conditions(policy)
+        conditions = planning_fixtures.make_conditions(policy)
         required, required_material = planning_fixtures.source(
             "input",
             b"q",
@@ -113,8 +113,8 @@ class RequiredAndStableSelectionTests(planning_fixtures.PlanningTestCase):
         self.assertEqual( tuple(unit.entries for unit in projection.units), ((required,),) )
 
     def test_every_valid_p1_set_or_metadata_change_bootstraps(self) -> None:
-        policy = planning_fixtures.policy()
-        conditions = planning_fixtures.conditions(policy)
+        policy = planning_fixtures.make_policy()
+        conditions = planning_fixtures.make_conditions(policy)
         current, material = planning_fixtures.source("definition",
             b"role",
             source_kind=ContextSourceKind.AGENT_DEFINITION,

@@ -20,7 +20,7 @@ PRIVATE_BODY_B = "PRIVATE_SOURCE_B needle\n"
 SCOPE = ContextScope("workspace", "session", ContextSubjectKind.CONVERSATION, "conversation", "lead_orchestrator", )
 
 
-def digest(body: bytes) -> str: return f"sha256:{hashlib.sha256(body).hexdigest()}"
+def digest_bytes(body: bytes) -> str: return f"sha256:{hashlib.sha256(body).hexdigest()}"
 
 
 def artifact_id(path: str) -> str: return "writing_artifact:sha256:" + hashlib.sha256(path.encode()).hexdigest()
@@ -55,10 +55,10 @@ def snapshot(scope: ContextScope, path: str, body: str, *,
     revision_seed: bytes | None = None,) -> ContextSourceSnapshot:
     encoded = body.encode("utf-8")
     record = ContextSourceRecord("line_1", ContextSourceBoundary.artifact_lines(1, 1), body,
-        body, digest(encoded), len(encoded), )
+        body, digest_bytes(encoded), len(encoded), )
     descriptor = ContextSourceDescriptor(scope, artifact_id(path), ContextSourceKind.WRITING_ARTIFACT,
-        digest(revision_seed or (path + "-revision").encode()), ContextProvenance(
-            ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY, path, ), digest(encoded), len(encoded), 1, )
+        digest_bytes(revision_seed or (path + "-revision").encode()), ContextProvenance(
+            ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY, path, ), digest_bytes(encoded), len(encoded), 1, )
     return ContextSourceSnapshot(descriptor, (record,), encoded)
 
 
@@ -137,18 +137,18 @@ def conversation_snapshot(scope: ContextScope, texts: tuple[str, ...]) -> Contex
     values = [{"schema_version": 2, "session_id": scope.session_id, "conversation_id": "conversation-one",
         "turn_id": f"turn_{number}", "step_id": f"step_{number}", "event_id": f"conversation_{number}",
         "batch_id": f"batch_{number}", "batch_ordinal": 0, "batch_size": 1,
-        "batch_digest": digest(f"batch_{number}".encode()), "sequence": number, "timestamp": "2026-11-09T00:00:00+00:00",
+        "batch_digest": digest_bytes(f"batch_{number}".encode()), "sequence": number, "timestamp": "2026-11-09T00:00:00+00:00",
         "sender": {"kind": "user", "agent_id": None}, "recipient": {"kind": "lead", "agent_id": scope.agent_id},
-        "direction": "user_to_lead", "kind": "message", "event_revision": digest(text.encode()),
+        "direction": "user_to_lead", "kind": "message", "event_revision": digest_bytes(text.encode()),
         "fields": [{"key": "message.content", "text": text, "assignment_ordinal": None, "input_ordinal": None}]}
         for number, text in enumerate(texts, start=1)]
     records = tuple(ContextSourceRecord(row["event_id"], ContextSourceBoundary.records(row["sequence"], row["sequence"]),
-        canonical(row), row["fields"][0]["text"], digest(canonical(row).encode()), len(canonical(row).encode())) for row in values)
+        canonical(row), row["fields"][0]["text"], digest_bytes(canonical(row).encode()), len(canonical(row).encode())) for row in values)
     bootstrap = {"schema_version": 2, "session_id": scope.session_id, "conversation_id": "conversation-one",
         "total_records": len(values), "last_sequence": len(values), "tail_batch_digest": values[-1]["batch_digest"],
         "requested_records": len(values), "retained_records": len(values), "omitted_records": 0,
         "retained_utf8_bytes": sum(len(text.encode()) for text in texts), "truncated": False}
-    encoded = canonical({"bootstrap": bootstrap, "records": values}).encode(); digest = digest(encoded)
+    encoded = canonical({"bootstrap": bootstrap, "records": values}).encode(); digest = digest_bytes(encoded)
     descriptor = ContextSourceDescriptor(scope, "conversation:conversation-one", ContextSourceKind.CONVERSATION, digest,
         ContextProvenance(ContextAuthorityKind.CONVERSATION_STORAGE, "conversation/conversation-one"), digest, len(encoded), len(records))
     return ContextSourceSnapshot(descriptor, records, encoded)

@@ -41,7 +41,7 @@ class WorkingAndOptionalSelectionTests(planning_fixtures.PlanningTestCase):
         retrieved, retrieved_material = planning_fixtures.source("retrieved-fits",
             b"rrr", semantic_channel=ContextSemanticChannel.RETRIEVED_EVIDENCE,
         )
-        missing = planning_fixtures.entry("history-missing",
+        missing = planning_fixtures.make_entry("history-missing",
             b"mmm", semantic_channel=ContextSemanticChannel.HISTORY,
         )
         optional_large, optional_large_material = planning_fixtures.source("optional-large",

@@ -1013,7 +1013,7 @@ class ExplicitPhaseScript:
         self.fail_fixture("callback_exception")
 
     def next_response(self, request, *, missing_message="unexpected provider call"):
-        from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
         from story_writing_agents.lead_schema_groups import LeadGroupPhase, SchemaGroupControlOwner
         grouped = isinstance(request, BoundContextProviderCallRequest) and request.contract.schema_group_phase is not None
         if grouped and request.contract.schema_group_phase is LeadGroupPhase.SELECT:

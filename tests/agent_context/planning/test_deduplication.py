@@ -48,8 +48,8 @@ class DeduplicationPlanningTests(planning_fixtures.PlanningTestCase):
         forced = "sha256:" + ("f" * 64)
         with (mock.patch.object(ctx_planning_inputs, "body_digest", return_value=forced),
               mock.patch.object(ctx_projection, "body_digest", return_value=forced)):
-            first = planning_fixtures.entry("first", b"alpha", content_digest=forced)
-            second = planning_fixtures.entry("second", b"bravo", content_digest=forced, ordinal=1)
+            first = planning_fixtures.make_entry("first", b"alpha", content_digest=forced)
+            second = planning_fixtures.make_entry("second", b"bravo", content_digest=forced, ordinal=1)
             first_material = ctx_planning_inputs.ContextMaterial(first, b"alpha")
             second_material = ctx_planning_inputs.ContextMaterial(second, b"bravo")
             projection = planning_fixtures.project((second, first),

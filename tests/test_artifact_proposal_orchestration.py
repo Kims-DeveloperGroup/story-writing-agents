@@ -158,7 +158,7 @@ def _artifact_outcome(
             ) )
         scope = authoring_scope(call) if callable(authoring_scope) else authoring_scope
         from copy import deepcopy
-        from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
         if isinstance(call, BoundContextProviderCallRequest):
             from tests.provider_wire_fixture import (
                 result, lead_fixture_scope, lead_fixture_result, lead_fixture_response, lead_fixture_assessment)

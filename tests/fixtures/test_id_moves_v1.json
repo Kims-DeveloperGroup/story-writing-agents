@@ -85,7 +85,7 @@
       "destination": "tests/agent_context/planning/test_bootstrap.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "970367d8628e9fe8e999280c6df97ff8a13eeb1a4fa54706261a6f06b6b99cfe",
-      "expected_method_ast_sha256": "651087b7e66f60d87562c6b1ab2480e970662f6ccafcf14616278da164562d17"
+      "expected_method_ast_sha256": "1f96abc8eca9444ad12073fd111e4fbbcda0690516926c8d66fc22a5b7218366"
     },
     {
       "old_id": "tests.test_agent_context_planning.BootstrapPlanningTests.test_compatible_depth_15_delta_advances_to_16",
@@ -105,7 +105,7 @@
       "destination": "tests/agent_context/planning/test_bootstrap.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "106c2a70dd96251d5ae8b9443b7a30a0fccc12145ef770806717f50247b9e1e3",
-      "expected_method_ast_sha256": "718198ffcf82431c8977d1f60e81b9dcb32fb6b4e68269af9147086f7250ec46"
+      "expected_method_ast_sha256": "658c14f612b8b0406ebf221d5ad24e71d01d4dc974755310513832f99a3ab96b"
     },
     {
       "old_id": "tests.test_agent_context_planning.BootstrapPlanningTests.test_stable_change_reason_and_precedence_are_exact",
@@ -115,7 +115,7 @@
       "destination": "tests/agent_context/planning/test_bootstrap.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "131125ac39e05482a5e3a476b913cfc6383ab61a521bff2d57adeb4ce5603911",
-      "expected_method_ast_sha256": "4ead878be6e5a75a76319725ce5ba6ffdb67a5d5dda0d567820d22bf5b650c23"
+      "expected_method_ast_sha256": "936343f631c5aac167c9916967ce201e8acaa088cca77597533e3489cd0ed3b8"
     },
     {
       "old_id": "tests.test_agent_context_planning.DeduplicationPlanningTests.test_cross_channel_bodies_never_deduplicate",
@@ -135,7 +135,7 @@
       "destination": "tests/agent_context/planning/test_deduplication.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "1e2524308fcccbfe1d78a4490ce1f847ebcea1d031eb1144a1c9df5f9c7e2731",
-      "expected_method_ast_sha256": "048ed9bc8c7437bd345ab11fd150c48beca6cb129f03846e1ebca45f5576e7b8"
+      "expected_method_ast_sha256": "00415dea09693b6e7e47fdd74ed737399b663f3964cf6395dfccd6b950d94220"
     },
     {
       "old_id": "tests.test_agent_context_planning.DeduplicationPlanningTests.test_same_channel_exact_bodies_serialize_once_with_all_pointers",
@@ -155,7 +155,7 @@
       "destination": "tests/agent_context/planning/test_delta_references.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "1bd551120b0cd8cfe4eb2198ff910e6046b32348dd76917863fba7b929545802",
-      "expected_method_ast_sha256": "62a8891323e29a71a4a2d4a1ecb77c9960b2ace3168570633e26e2ff7a2eacbb"
+      "expected_method_ast_sha256": "a987558b92f3d729fe70e886ae6f19ea61d0b6580e73b43dc57d300b1a8743b9"
     },
     {
       "old_id": "tests.test_agent_context_planning.DeltaAndReferencePlanningTests.test_catalog_alias_and_record_epochs_cover_add_change_remove_reappear",
@@ -165,7 +165,7 @@
       "destination": "tests/agent_context/planning/test_delta_references.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "ac858b67d850d012a088db6f4fec4e48222ca263dafc63e21ffd92675531f80e",
-      "expected_method_ast_sha256": "04a31dc08b43d85fd64b049cf2b081264cf245bdebc623975f0dca10af64cd29"
+      "expected_method_ast_sha256": "41d3e3810420fc707b0ed14b100c911069082652cc49af0d22bfd50aef8c2cc7"
     },
     {
       "old_id": "tests.test_agent_context_planning.DeltaAndReferencePlanningTests.test_reference_constructor_sequence_identity_and_budget_failures",
@@ -195,7 +195,7 @@
       "destination": "tests/agent_context/planning/test_delta_references.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "45a922abe16fc53fb5d219536b162bc41d0900108a81eff9622deef4d4021df5",
-      "expected_method_ast_sha256": "b988d031ccf76038fae7e91d3996dee0e3ad8a8bed28a237a276af65b73f3532"
+      "expected_method_ast_sha256": "f6a029397377459fe46657af00e5cf274af6e6dd6538ae96d39ec2a5461cc87a"
     },
     {
       "old_id": "tests.test_agent_context_planning.DeltaAndReferencePlanningTests.test_unchanged_sources_suppress_while_p2_p3_changes_select",
@@ -205,7 +205,7 @@
       "destination": "tests/agent_context/planning/test_delta_references.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "72762955e661be1b76e18fc2fd14be2642651cd029df43bcc1dbe132aff81878",
-      "expected_method_ast_sha256": "9400fb31961bfb6a3d0db5c9225fd3703897afacf20b6327d33ed29b36eaa255"
+      "expected_method_ast_sha256": "cd5a154ea43a9e28e2b1535d6921b9677e4bfc50212e165aed5e254f0909f5b2"
     },
     {
       "old_id": "tests.test_agent_context_planning.PlanningBoundaryAndPurityTests.test_facades_remain_exact_and_clean_direct_import_works",
@@ -225,7 +225,7 @@
       "destination": "tests/agent_context/planning/test_purity.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "baf2edc9f0f13501ccd24d1ca5d557c0eae5aa7f9520fe5ff5b3ee8f36ab07b8",
-      "expected_method_ast_sha256": "5e17a2bb14d61a2d5e162e213fd24ad922e20fd0590fe17208431739b2aa1b2d"
+      "expected_method_ast_sha256": "9fa1e4306e71677dd87435324875e56fa60364346a1e211f3506177e0aa3fa22"
     },
     {
       "old_id": "tests.test_agent_context_planning.PlanningBoundaryAndPurityTests.test_planning_performs_no_filesystem_network_process_clock_or_state_io",
@@ -315,7 +315,7 @@
       "destination": "tests/agent_context/planning/test_values.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "64b99859a9c8fc86f8e08769e05babcf5c05035957f33873f80ff670b402435d",
-      "expected_method_ast_sha256": "4f7013ad950ef63b5050a399460b7ed06acfa006c2a9cfcaa16e120a0a06f140"
+      "expected_method_ast_sha256": "89c287b1b63a6c37182c1f66de75a0289209d3aae18cc3ba41c760ad43330c92"
     },
     {
       "old_id": "tests.test_agent_context_planning.PlanningValueTests.test_checkpoint_shapes_and_source_constraints_are_strict",
@@ -325,7 +325,7 @@
       "destination": "tests/agent_context/planning/test_values.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "718685705f572a50cc8c80940104a8383370eca305ab0e603ab7ce47235ab61b",
-      "expected_method_ast_sha256": "534ab78cfc0a1b7fb1a21fda39884a89aae6ba0847ae0c371189f1cfc6b6a666"
+      "expected_method_ast_sha256": "c7ab6c095d8f7939271747b20902de6be778c1f242b5902602432ebf4b3f995f"
     },
     {
       "old_id": "tests.test_agent_context_planning.PlanningValueTests.test_decision_priority_channel_matrix_is_exhaustive",
@@ -335,7 +335,7 @@
       "destination": "tests/agent_context/planning/test_values.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "1fe0e141c74c9255655f7c873724da96930a26cbdd893d28c66e5f25c24703cc",
-      "expected_method_ast_sha256": "e1c3af4ceae3a52f9a094d6424ab44956e8cde777ae5ee8fbad2231fccb5d19b"
+      "expected_method_ast_sha256": "898c7f34b715ddd53db78c34a95c50b1bfc74648e052b6993de4dac35b4750f7"
     },
     {
       "old_id": "tests.test_agent_context_planning.PlanningValueTests.test_material_is_strict_utf8_exact_and_hidden_from_repr",
@@ -345,7 +345,7 @@
       "destination": "tests/agent_context/planning/test_values.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "e4e8c35ce2b8cbf3a632c3ad9abfa78a6eaf31fbd5a358c790d4c896a66c37a4",
-      "expected_method_ast_sha256": "1b6f8a94a10de45e6f376e55e9445c21e940d0f2065827be9e762ee6b4bbbcbf"
+      "expected_method_ast_sha256": "151665b9c8dcc6fd09075ce43908bfe72ee9fa8aa93c0368f1d104f6b9ec179c"
     },
     {
       "old_id": "tests.test_agent_context_planning.PlanningValueTests.test_projected_unit_validates_exact_body_channel_and_priority",
@@ -355,7 +355,7 @@
       "destination": "tests/agent_context/planning/test_values.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "a0490868750080a9713a10dd510de22f09ee95f4d76990f1dbcc6e180720e8fa",
-      "expected_method_ast_sha256": "d716e41af07ff897e8a6c147c61c7f5a930eb946368bd6c11baa8c8cddbe84eb"
+      "expected_method_ast_sha256": "4610171b71d48df8896deb70dd6038e384894ea7658916035fede7970774ee7b"
     },
     {
       "old_id": "tests.test_agent_context_planning.ProjectionAccountingTests.test_every_decision_searchable_and_budget_partition_is_exact",
@@ -385,7 +385,7 @@
       "destination": "tests/agent_context/planning/test_projection_invariants.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "d1e9940659b7545425ddfb02eac467e5df1925a6ae8ff9100ff5d60aefa190a6",
-      "expected_method_ast_sha256": "b7ca691f46e7aaee2371288d09ecddaa552b9d7c7b64389aa0dfdf564eb07323"
+      "expected_method_ast_sha256": "369fd78acf46aac5ddd9e934a27995427c77703f49ec5e83d7b2d51a1fa6b367"
     },
     {
       "old_id": "tests.test_agent_context_planning.ProjectionInvariantTests.test_proposal_removed_reference_and_budget_cross_checks",
@@ -395,7 +395,7 @@
       "destination": "tests/agent_context/planning/test_projection_invariants.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "730503c7d3ac307cdb0dfa47132b673364abff5c14c301d9140095cac892b923",
-      "expected_method_ast_sha256": "a6703b130daae15fef80e3b082f03fcea9e73e4a5eb2c6937ef6af5b98a49086"
+      "expected_method_ast_sha256": "d01818f7f907f50b62023c6fbc0fa8baf449b063c930eafab1488d76604951cd"
     },
     {
       "old_id": "tests.test_agent_context_planning.ProjectionInvariantTests.test_unit_decision_mapping_and_same_id_metadata_substitutions_fail",
@@ -415,7 +415,7 @@
       "destination": "tests/agent_context/planning/test_required_stable.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "9b78e0bd5a81758643dfbe17eb7c06f3924f989cbf657059f1c487159d17d3cc",
-      "expected_method_ast_sha256": "b6284aa908d29afcb46992d00324a76aa74f5b2681b3c222d301798c4e2590a2"
+      "expected_method_ast_sha256": "afe3a8336d3ddd3575446e2ebeee19d475421b1c65a16fa04c0ed5ae2d174fee"
     },
     {
       "old_id": "tests.test_agent_context_planning.RequiredAndStableSelectionTests.test_every_valid_p1_set_or_metadata_change_bootstraps",
@@ -425,7 +425,7 @@
       "destination": "tests/agent_context/planning/test_required_stable.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "1453c8c6629e5e02cb00187988f5fe438f2dc284d9269382262a99515adcd1ee",
-      "expected_method_ast_sha256": "ec6327bdeda33c907330588f0884c8e8f5d956a1db5ad280863347855fa98d93"
+      "expected_method_ast_sha256": "be8975182cc94ed9e0d77ab637e00ca8441823e199d5c76ccb6a4966d7e9185e"
     },
     {
       "old_id": "tests.test_agent_context_planning.RequiredAndStableSelectionTests.test_p0_exact_fit_plus_one_missing_and_no_deduplication",
@@ -465,7 +465,7 @@
       "destination": "tests/agent_context/planning/test_working_optional.py",
       "original_file_sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
       "original_method_ast_sha256": "8fd06f20493eb4b698601fb331bd4eca08d753d3ca7d6c8f02f9b5371e492adb",
-      "expected_method_ast_sha256": "1a70b8ec0a957eb8ce94469aa50a3ec3c27127a7d9105d41e39be12003c58815"
+      "expected_method_ast_sha256": "c0f76cf50e228514c3ccf3f4d07a2efc5e5a8af5107885ab1baa3c405b2a3ed8"
     },
     {
       "old_id": "tests.test_agent_context_planning.WorkingAndOptionalSelectionTests.test_unused_other_class_and_total_headroom_is_not_borrowed",
@@ -3108,6 +3108,826 @@
       "kind": "stateful_owner_import_binding",
       "old": "from story_writing_agents.agent_context import canonical_provider_json, service as service_module",
       "new": "from story_writing_agents.agent_context import canonical_provider_json\nfrom story_writing_agents.agent_context.invocation import session_execution as service_module"
+    },
+    {
+      "source": "tests/test_agent_context_planning.py",
+      "destination": "tests/agent_context/planning/fixtures.py",
+      "kind": "collision_free_helper_definition",
+      "old": "scope",
+      "new": "make_scope"
+    },
+    {
+      "source": "tests/test_agent_context_planning.py",
+      "destination": "tests/agent_context/planning/fixtures.py",
+      "kind": "collision_free_helper_definition",
+      "old": "entry",
+      "new": "make_entry"
+    },
+    {
+      "source": "tests/test_agent_context_planning.py",
+      "destination": "tests/agent_context/planning/fixtures.py",
+      "kind": "original_global_load_binding",
+      "old": "entry",
+      "new": "make_entry"
+    },
+    {
+      "source": "tests/test_agent_context_planning.py",
+      "destination": "tests/agent_context/planning/fixtures.py",
+      "kind": "collision_free_helper_definition",
+      "old": "policy",
+      "new": "make_policy"
+    },
+    {
+      "source": "tests/test_agent_context_planning.py",
+      "destination": "tests/agent_context/planning/fixtures.py",
+      "kind": "original_global_load_binding",
+      "old": "scope",
+      "new": "make_scope"
+    },
+    {
+      "source": "tests/test_agent_context_planning.py",
+      "destination": "tests/agent_context/planning/fixtures.py",
+      "kind": "collision_free_helper_definition",
+      "old": "conditions",
+      "new": "make_conditions"
+    },
+    {
+      "source": "tests/test_agent_context_planning.py",
+      "destination": "tests/agent_context/planning/fixtures.py",
+      "kind": "original_global_load_binding",
+      "old": "policy",
+      "new": "make_policy"
+    },
+    {
+      "source": "tests/test_agent_context_planning.py",
+      "destination": "tests/agent_context/planning/fixtures.py",
+      "kind": "original_global_load_binding",
+      "old": "conditions",
+      "new": "make_conditions"
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/agent_context/contracts/fixtures.py",
+      "kind": "collision_free_helper_definition",
+      "old": "digest",
+      "new": "digest_bytes"
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/agent_context/contracts/fixtures.py",
+      "kind": "original_global_load_binding",
+      "old": "digest",
+      "new": "digest_bytes"
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/agent_context/contracts/fixtures.py",
+      "kind": "original_global_load_binding",
+      "old": "digest",
+      "new": "digest_bytes"
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/agent_context/contracts/fixtures.py",
+      "kind": "original_global_load_binding",
+      "old": "digest",
+      "new": "digest_bytes"
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/agent_context/contracts/fixtures.py",
+      "kind": "original_global_load_binding",
+      "old": "digest",
+      "new": "digest_bytes"
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/agent_context/contracts/fixtures.py",
+      "kind": "original_global_load_binding",
+      "old": "digest",
+      "new": "digest_bytes"
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/agent_context/contracts/fixtures.py",
+      "kind": "original_global_load_binding",
+      "old": "digest",
+      "new": "digest_bytes"
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/agent_context/contracts/fixtures.py",
+      "kind": "original_global_load_binding",
+      "old": "digest",
+      "new": "digest_bytes"
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/test_agent_context_service.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "contract_fixtures.digest",
+      "new": "contract_fixtures.digest_bytes"
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/test_agent_context_service.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "contract_fixtures.digest",
+      "new": "contract_fixtures.digest_bytes"
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/test_agent_context_service.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "contract_fixtures.digest",
+      "new": "contract_fixtures.digest_bytes"
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/test_agent_context_service.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "contract_fixtures.digest",
+      "new": "contract_fixtures.digest_bytes"
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/test_agent_context_service.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "contract_fixtures.digest",
+      "new": "contract_fixtures.digest_bytes"
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/test_agent_context_service.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "contract_fixtures.digest",
+      "new": "contract_fixtures.digest_bytes"
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/test_agent_context_service.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "contract_fixtures.digest",
+      "new": "contract_fixtures.digest_bytes"
+    },
+    {
+      "source": "tests/agent_context/planning/test_deduplication.py",
+      "destination": "tests/agent_context/planning/test_deduplication.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_deduplication.py",
+      "destination": "tests/agent_context/planning/test_deduplication.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_projection_invariants.py",
+      "destination": "tests/agent_context/planning/test_projection_invariants.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.policy",
+      "new": "planning_fixtures.make_policy"
+    },
+    {
+      "source": "tests/agent_context/planning/test_projection_invariants.py",
+      "destination": "tests/agent_context/planning/test_projection_invariants.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_projection_invariants.py",
+      "destination": "tests/agent_context/planning/test_projection_invariants.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.policy",
+      "new": "planning_fixtures.make_policy"
+    },
+    {
+      "source": "tests/agent_context/planning/test_projection_invariants.py",
+      "destination": "tests/agent_context/planning/test_projection_invariants.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_projection_invariants.py",
+      "destination": "tests/agent_context/planning/test_projection_invariants.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_required_stable.py",
+      "destination": "tests/agent_context/planning/test_required_stable.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_required_stable.py",
+      "destination": "tests/agent_context/planning/test_required_stable.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.policy",
+      "new": "planning_fixtures.make_policy"
+    },
+    {
+      "source": "tests/agent_context/planning/test_required_stable.py",
+      "destination": "tests/agent_context/planning/test_required_stable.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.policy",
+      "new": "planning_fixtures.make_policy"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.policy",
+      "new": "planning_fixtures.make_policy"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_values.py",
+      "destination": "tests/agent_context/planning/test_values.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_projection_accounting.py",
+      "destination": "tests/agent_context/planning/test_projection_accounting.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_projection_accounting.py",
+      "destination": "tests/agent_context/planning/test_projection_accounting.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_projection_accounting.py",
+      "destination": "tests/agent_context/planning/test_projection_accounting.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.policy",
+      "new": "planning_fixtures.make_policy"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.scope",
+      "new": "planning_fixtures.make_scope"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_bootstrap.py",
+      "destination": "tests/agent_context/planning/test_bootstrap.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.scope",
+      "new": "planning_fixtures.make_scope"
+    },
+    {
+      "source": "tests/agent_context/planning/test_working_optional.py",
+      "destination": "tests/agent_context/planning/test_working_optional.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.policy",
+      "new": "planning_fixtures.make_policy"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.policy",
+      "new": "planning_fixtures.make_policy"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.policy",
+      "new": "planning_fixtures.make_policy"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.policy",
+      "new": "planning_fixtures.make_policy"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.conditions",
+      "new": "planning_fixtures.make_conditions"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/agent_context/planning/test_delta_references.py",
+      "destination": "tests/agent_context/planning/test_delta_references.py",
+      "kind": "fixture_public_owner_reference",
+      "old": "planning_fixtures.entry",
+      "new": "planning_fixtures.make_entry"
+    },
+    {
+      "source": "tests/test_antigravity_parity.py",
+      "destination": "tests/test_antigravity_parity.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest",
+      "new": "from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest",
+      "line": 890
+    },
+    {
+      "source": "tests/test_antigravity_parity.py",
+      "destination": "tests/test_antigravity_parity.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest",
+      "new": "from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest",
+      "line": 1098
+    },
+    {
+      "source": "tests/test_specialist_routing.py",
+      "destination": "tests/test_specialist_routing.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import ContextCallOffers, BoundContextProviderCallRequest",
+      "new": "from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers\n        from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest",
+      "line": 852
+    },
+    {
+      "source": "tests/test_specialist_routing.py",
+      "destination": "tests/test_specialist_routing.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import ContextCallOffers, BoundContextProviderCallRequest",
+      "new": "from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers\n        from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest",
+      "line": 894
+    },
+    {
+      "source": "tests/test_advisory_progress_streaming.py",
+      "destination": "tests/test_advisory_progress_streaming.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import (ContextExecutionEvent,\n            ContextExecutionEventKind, ContextNativeDisposition, ContextScope, ContextSubjectKind)",
+      "new": "from story_writing_agents.agent_context.contracts.events import ContextExecutionEvent, ContextExecutionEventKind, ContextNativeDisposition\n        from story_writing_agents.agent_context.invocation.session_execution import ContextScope, ContextSubjectKind",
+      "line": 183
+    },
+    {
+      "source": "tests/test_provider_auth_recovery.py",
+      "destination": "tests/test_provider_auth_recovery.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest",
+      "new": "from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest",
+      "line": 355
+    },
+    {
+      "source": "tests/test_provider_auth_recovery.py",
+      "destination": "tests/test_provider_auth_recovery.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import context_provider_failure_facts",
+      "new": "from story_writing_agents.agent_context.invocation.provider import context_provider_failure_facts",
+      "line": 397
+    },
+    {
+      "source": "tests/provider_wire_fixture.py",
+      "destination": "tests/provider_wire_fixture.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest",
+      "new": "from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest",
+      "line": 1016
+    },
+    {
+      "source": "tests/test_lead_artifact_objectives.py",
+      "destination": "tests/test_lead_artifact_objectives.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.planning import ContextPlanningError",
+      "new": "from story_writing_agents.agent_context.contracts.planning_inputs import ContextPlanningError",
+      "line": 158
+    },
+    {
+      "source": "tests/test_artifact_proposal_orchestration.py",
+      "destination": "tests/test_artifact_proposal_orchestration.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest",
+      "new": "from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest",
+      "line": 161
+    },
+    {
+      "source": "tests/recommendation_fixture.py",
+      "destination": "tests/recommendation_fixture.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import (\n        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers,\n        ContextProviderTerminalCode as Code)",
+      "new": "from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract\n    from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest, ContextProviderTerminalCode as Code\n    from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers",
+      "line": 77
+    },
+    {
+      "source": "tests/recommendation_fixture.py",
+      "destination": "tests/recommendation_fixture.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import (\n        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers,\n        ContextProviderTerminalCode as Code)",
+      "new": "from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract\n    from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest, ContextProviderTerminalCode as Code\n    from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers",
+      "line": 184
+    },
+    {
+      "source": "tests/recommendation_fixture.py",
+      "destination": "tests/recommendation_fixture.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import (\n        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers)",
+      "new": "from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract\n    from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest\n    from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers",
+      "line": 272
+    },
+    {
+      "source": "tests/recommendation_fixture.py",
+      "destination": "tests/recommendation_fixture.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import (\n        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers)",
+      "new": "from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract\n    from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest\n    from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers",
+      "line": 339
+    },
+    {
+      "source": "tests/test_codex_backend.py",
+      "destination": "tests/test_codex_backend.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import (\n            AgentContextService, ContextInvocationKind, ContextInvocationRequest,)",
+      "new": "from story_writing_agents.agent_context.invocation.session_execution import AgentContextService\n        from story_writing_agents.agent_context.contracts.call_offers import ContextInvocationKind\n        from story_writing_agents.agent_context.invocation.requests import ContextInvocationRequest",
+      "line": 1743
+    },
+    {
+      "source": "tests/test_codex_backend.py",
+      "destination": "tests/test_codex_backend.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import (AgentContextService, BoundCallFactory,\n            ContextCallOffers, ContextInvocationKind, ContextInvocationRequest, ContextExecutionError,\n            context_provider_failure_facts)",
+      "new": "from story_writing_agents.agent_context.invocation.session_execution import AgentContextService\n        from story_writing_agents.agent_context.contracts.bound_call import BoundCallFactory\n        from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers, ContextInvocationKind\n        from story_writing_agents.agent_context.invocation.requests import ContextInvocationRequest\n        from story_writing_agents.agent_context.contracts.errors import ContextExecutionError\n        from story_writing_agents.agent_context.invocation.provider import context_provider_failure_facts",
+      "line": 2626
+    },
+    {
+      "source": "tests/test_codex_backend.py",
+      "destination": "tests/test_codex_backend.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.planning import MandatoryReferenceReservation",
+      "new": "from story_writing_agents.agent_context.contracts.planning_inputs import MandatoryReferenceReservation",
+      "line": 2637
+    },
+    {
+      "source": "tests/test_codex_backend.py",
+      "destination": "tests/test_codex_backend.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import (\n            AgentContextService, ContextInvocationKind, ContextInvocationRequest)",
+      "new": "from story_writing_agents.agent_context.invocation.session_execution import AgentContextService\n        from story_writing_agents.agent_context.contracts.call_offers import ContextInvocationKind\n        from story_writing_agents.agent_context.invocation.requests import ContextInvocationRequest",
+      "line": 5328
+    },
+    {
+      "source": "tests/test_lead_orchestration.py",
+      "destination": "tests/test_lead_orchestration.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest",
+      "new": "from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest",
+      "line": 1567
+    },
+    {
+      "source": "tests/test_lead_orchestration.py",
+      "destination": "tests/test_lead_orchestration.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import BoundCallContract",
+      "new": "from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract",
+      "line": 2279
+    },
+    {
+      "source": "tests/test_lead_orchestration.py",
+      "destination": "tests/test_lead_orchestration.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import AgentContextService, context_provider_failure_facts",
+      "new": "from story_writing_agents.agent_context.invocation.session_execution import AgentContextService\n        from story_writing_agents.agent_context.invocation.provider import context_provider_failure_facts",
+      "line": 6773
+    },
+    {
+      "source": "tests/test_lead_orchestration.py",
+      "destination": "tests/test_lead_orchestration.py",
+      "kind": "nested_import_actual_definition_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import BoundCallContract",
+      "new": "from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract",
+      "line": 7163
+    },
+    {
+      "source": "tests/test_advisory_progress_streaming.py",
+      "destination": "tests/test_advisory_progress_streaming.py",
+      "kind": "nested_import_actual_manifest_owner",
+      "old": "from story_writing_agents.agent_context.invocation.session_execution import ContextScope, ContextSubjectKind",
+      "new": "from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind"
+    },
+    {
+      "source": "tests/agent_context/planning/test_purity.py",
+      "destination": "tests/agent_context/planning/test_purity.py",
+      "kind": "exact_extracted_pure_owner_import_expectation",
+      "old": "self.assertEqual(absolute_imports, {\"hashlib\", \"dataclasses\", \"enum\"})",
+      "new": "self.assertEqual(absolute_imports, set())"
+    },
+    {
+      "source": "tests/test_agent_context_ledger.py",
+      "destination": "tests/test_agent_context_ledger.py",
+      "kind": "exact_extracted_pure_owner_import_expectation",
+      "old": "self.assertEqual(relative_dependencies,\n            {(1, \"accounting\"),\n                (1, \"manifest\"), (1, \"planning\"),\n                (2, \"runtime_state_paths\"),\n                (2, \"workspace\"),},\n        )",
+      "new": "self.assertEqual(relative_dependencies,\n            {(1, \"accounting\"),\n                (1, \"manifest\"),\n                (1, \"contracts.checkpoints\"), (1, \"contracts.planning_inputs\"),\n                (1, \"contracts.projection\"), (1, \"contracts.projection_accounting\"),\n                (2, \"runtime_state_paths\"),\n                (2, \"workspace\"),},\n        )"
     }
   ]
 }

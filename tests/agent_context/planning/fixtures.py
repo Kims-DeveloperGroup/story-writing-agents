@@ -44,7 +44,7 @@ def digest(body_utf8: bytes) -> str:
     return f"sha256:{hashlib.sha256(body_utf8).hexdigest()}"
 
 
-def scope(
+def make_scope(
     workspace_id: str = "workspace",
     session_id: str = "session",
     subject_kind: ContextSubjectKind = ContextSubjectKind.CONVERSATION, subject_id: str = "c_main",
@@ -59,7 +59,7 @@ def scope(
     )
 
 
-def entry(
+def make_entry(
     source_id: str,
     body_utf8: bytes, *,
     source_kind: ContextSourceKind = ContextSourceKind.WRITING_ARTIFACT,
@@ -87,7 +87,7 @@ def entry(
 def source(source_id: str,
     body_utf8: bytes = b"x", **entry_overrides: object,
 ) -> tuple[ContextManifestEntry, ctx_planning_inputs.ContextMaterial]:
-    entry = entry(source_id, body_utf8, **entry_overrides)  # type: ignore[arg-type]
+    entry = make_entry(source_id, body_utf8, **entry_overrides)  # type: ignore[arg-type]
     return entry, ctx_planning_inputs.ContextMaterial(entry, body_utf8)
 
 
@@ -114,7 +114,7 @@ def checkpoint_from_projection(projection: ctx_projection.ContextProjection,
         proposal.source_alias_high_watermark,)
 
 
-def policy(**overrides: int) -> ctx_planning_inputs.ContextPlanningPolicy:
+def make_policy(**overrides: int) -> ctx_planning_inputs.ContextPlanningPolicy:
     values = {"total_source_utf8_bytes": 64,
         "p0_source_utf8_bytes": 16, "p1_source_utf8_bytes": 8,
         "p2_source_utf8_bytes": 24, "p3_source_utf8_bytes": 16,
@@ -124,12 +124,12 @@ def policy(**overrides: int) -> ctx_planning_inputs.ContextPlanningPolicy:
     return ctx_planning_inputs.ContextPlanningPolicy(**values)
 
 
-def conditions(policy: ctx_planning_inputs.ContextPlanningPolicy,
+def make_conditions(policy: ctx_planning_inputs.ContextPlanningPolicy,
     *, scope: ContextScope | None = None,
     provider_id: str = "provider", definition_fingerprint: str | None = None,
     policy_fingerprint: str | None = None, schema_version: int = ctx_planning_inputs.CONTEXT_CHECKPOINT_SCHEMA_VERSION,
 ) -> ctx_planning_inputs.ContextPlanningConditions:
-    return ctx_planning_inputs.ContextPlanningConditions(scope or scope(),
+    return ctx_planning_inputs.ContextPlanningConditions(scope or make_scope(),
         provider_id,
         definition_fingerprint or digest(b"definition"),
         policy_fingerprint or policy.fingerprint,
@@ -163,8 +163,8 @@ def project(entries: tuple[ContextManifestEntry, ...],
     active_provider_thread_id: str | None = None,
     mandatory_references: tuple[ctx_planning_inputs.MandatoryReferenceReservation, ...] = (), fresh: bool = False,
 ) -> ctx_projection.ContextProjection:
-    selected_policy = policy or policy()
-    selected_conditions = conditions or conditions(selected_policy)
+    selected_policy = policy or make_policy()
+    selected_conditions = conditions or make_conditions(selected_policy)
     return planning_module.plan_context_projection(ContextManifest(selected_conditions.scope, entries),
         materials, policy=selected_policy,
         conditions=selected_conditions,

@@ -155,7 +155,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
 
     def _observe_context_budget(self):
         from story_writing_agents.agent_context.invocation import session_execution as context_service
-        from story_writing_agents.agent_context.planning import ContextPlanningError
+        from story_writing_agents.agent_context.contracts.planning_inputs import ContextPlanningError
         planning_measurements = []
         original_plan = context_service.plan_context_projection
         def measured_plan(manifest, materials, *, policy, conditions, checkpoint,

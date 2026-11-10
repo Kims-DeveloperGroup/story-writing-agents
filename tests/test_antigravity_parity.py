@@ -887,7 +887,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         from tests import test_lead_orchestration as lead
         from story_writing_agents.antigravity_adapter import AntigravityAdapter
         from story_writing_agents.provider_wire import WireShapeError
-        from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
         case = lead._task_fixture(self)
         raw_frames, wire_responses = [], []
         invoke_context = lead._LeadContextProvider.invoke_context
@@ -1095,7 +1095,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         from tests import test_lead_orchestration as lead
         from contextlib import ExitStack
         from story_writing_agents.antigravity_adapter import AntigravityAdapter as AG
-        from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
         invocations, setup_calls, front_call_kinds = [], [], []
         front_provider_results = []
         original = lead._LeadContextProvider.invoke_context

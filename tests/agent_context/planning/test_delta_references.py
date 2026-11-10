@@ -8,8 +8,8 @@ class DeltaAndReferencePlanningTests(planning_fixtures.PlanningTestCase):
     """Verify delta metadata, removed sources, and separate references."""
 
     def test_unchanged_sources_suppress_while_p2_p3_changes_select(self) -> None:
-        policy = planning_fixtures.policy()
-        conditions = planning_fixtures.conditions(policy)
+        policy = planning_fixtures.make_policy()
+        conditions = planning_fixtures.make_conditions(policy)
         stable, stable_material = planning_fixtures.source(
             "definition",
             b"role",
@@ -19,7 +19,7 @@ class DeltaAndReferencePlanningTests(planning_fixtures.PlanningTestCase):
         changed, changed_material = planning_fixtures.source("changed",
             b"new", revision="revision-2",
         )
-        previous_changed = planning_fixtures.entry("changed", b"old", revision="revision-1")
+        previous_changed = planning_fixtures.make_entry("changed", b"old", revision="revision-1")
         optional, optional_material = planning_fixtures.source(
             "optional",
             b"z",
@@ -56,11 +56,11 @@ class DeltaAndReferencePlanningTests(planning_fixtures.PlanningTestCase):
 
     def test_catalog_alias_and_record_epochs_cover_add_change_remove_reappear(self,
     ) -> None:
-        policy = planning_fixtures.policy(p3_source_utf8_bytes=0)
-        conditions = planning_fixtures.conditions(policy)
+        policy = planning_fixtures.make_policy(p3_source_utf8_bytes=0)
+        conditions = planning_fixtures.make_conditions(policy)
 
         first_record = planning_fixtures.record("record-one", b"one", 1)
-        first_entry = planning_fixtures.entry("artifact", b"[one]", revision="revision-1")
+        first_entry = planning_fixtures.make_entry("artifact", b"[one]", revision="revision-1")
         first_material = ctx_planning_inputs.ContextMaterial(first_entry,
             b"[one]", (first_record,),
         )
@@ -82,7 +82,7 @@ class DeltaAndReferencePlanningTests(planning_fixtures.PlanningTestCase):
 
         changed_record = planning_fixtures.record("record-one", b"one-v2", 1)
         new_record = planning_fixtures.record("record-two", b"two", 2)
-        changed_entry = planning_fixtures.entry("artifact",
+        changed_entry = planning_fixtures.make_entry("artifact",
             b"[one-v2,two]", revision="revision-2",
         )
         changed_material = ctx_planning_inputs.ContextMaterial(changed_entry,
@@ -109,7 +109,7 @@ class DeltaAndReferencePlanningTests(planning_fixtures.PlanningTestCase):
             2,
         )
 
-        retained_entry = planning_fixtures.entry("artifact",
+        retained_entry = planning_fixtures.make_entry("artifact",
             b"[two]", revision="revision-3",
         )
         retained_material = ctx_planning_inputs.ContextMaterial(retained_entry,
@@ -145,7 +145,7 @@ class DeltaAndReferencePlanningTests(planning_fixtures.PlanningTestCase):
         )
 
         reappeared_record = planning_fixtures.record("record-three", b"three", 1)
-        reappeared_entry = planning_fixtures.entry("artifact",
+        reappeared_entry = planning_fixtures.make_entry("artifact",
             b"[three]", revision="revision-4",
         )
         reappeared_material = ctx_planning_inputs.ContextMaterial(reappeared_entry,
@@ -168,13 +168,13 @@ class DeltaAndReferencePlanningTests(planning_fixtures.PlanningTestCase):
 
     def test_accepted_source_omission_retains_epoch_and_emits_delivery_removal(self,
     ) -> None:
-        policy = planning_fixtures.policy(p2_source_utf8_bytes=4, p3_source_utf8_bytes=0)
-        conditions = planning_fixtures.conditions(policy)
-        accepted_entry = planning_fixtures.entry("bounded", b"four", revision="revision-1")
+        policy = planning_fixtures.make_policy(p2_source_utf8_bytes=4, p3_source_utf8_bytes=0)
+        conditions = planning_fixtures.make_conditions(policy)
+        accepted_entry = planning_fixtures.make_entry("bounded", b"four", revision="revision-1")
         accepted = planning_fixtures.project((accepted_entry,),
             (ctx_planning_inputs.ContextMaterial(accepted_entry, b"four"),), policy=policy,
             conditions=conditions,)
-        omitted_entry = planning_fixtures.entry("bounded", b"fives", revision="revision-2")
+        omitted_entry = planning_fixtures.make_entry("bounded", b"fives", revision="revision-2")
         omitted = planning_fixtures.project((omitted_entry,),
             (ctx_planning_inputs.ContextMaterial(omitted_entry, b"fives"),), policy=policy,
             conditions=conditions, checkpoint=planning_fixtures.checkpoint_from_projection(accepted),
@@ -199,11 +199,11 @@ class DeltaAndReferencePlanningTests(planning_fixtures.PlanningTestCase):
 
     def test_same_scope_revision_content_conflict_fails_even_when_thread_changes(self,
     ) -> None:
-        policy = planning_fixtures.policy()
-        conditions = planning_fixtures.conditions(policy)
-        previous = planning_fixtures.entry("same", b"old", revision="shared-revision")
-        variants = (planning_fixtures.entry("same", b"new", revision="shared-revision"),
-            planning_fixtures.entry("same", b"longer", revision="shared-revision"),)
+        policy = planning_fixtures.make_policy()
+        conditions = planning_fixtures.make_conditions(policy)
+        previous = planning_fixtures.make_entry("same", b"old", revision="shared-revision")
+        variants = (planning_fixtures.make_entry("same", b"new", revision="shared-revision"),
+            planning_fixtures.make_entry("same", b"longer", revision="shared-revision"),)
         for current in variants:
             with self.subTest(bytes=current.utf8_bytes):
                 material = ctx_planning_inputs.ContextMaterial(current,

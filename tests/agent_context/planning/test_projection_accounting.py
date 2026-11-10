@@ -11,7 +11,7 @@ class ProjectionAccountingTests(planning_fixtures.PlanningTestCase):
     @staticmethod
     def _mixed_projection() -> ctx_projection.ContextProjection:
         policy = ctx_planning_inputs.ContextPlanningPolicy(6, 1, 1, 3, 1, 5, 16)
-        conditions = planning_fixtures.conditions(policy)
+        conditions = planning_fixtures.make_conditions(policy)
         required, required_material = planning_fixtures.source(
             "input",
             b"q",
@@ -22,7 +22,7 @@ class ProjectionAccountingTests(planning_fixtures.PlanningTestCase):
             b"r",
             source_kind=ContextSourceKind.AGENT_DEFINITION,
         )
-        hard = planning_fixtures.entry("hard-suppressed",
+        hard = planning_fixtures.make_entry("hard-suppressed",
             b"h", source_kind=ContextSourceKind.ACTIVE_DEBATE,
         )
         focused, focused_material = planning_fixtures.source("focused", b"aa", ordinal=0)
@@ -30,7 +30,7 @@ class ProjectionAccountingTests(planning_fixtures.PlanningTestCase):
         retrieved, retrieved_material = planning_fixtures.source("retrieved-omitted",
             b"bbbb", semantic_channel=ContextSemanticChannel.RETRIEVED_EVIDENCE,
         )
-        history = planning_fixtures.entry("history-missing",
+        history = planning_fixtures.make_entry("history-missing",
             b"ccc", semantic_channel=ContextSemanticChannel.HISTORY,
         )
         optional, optional_material = planning_fixtures.source(

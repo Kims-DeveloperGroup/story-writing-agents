@@ -53,8 +53,8 @@ class ProjectionInvariantTests(planning_fixtures.PlanningTestCase):
             ctx_planning_inputs.ContextPlanningErrorCode.INVALID_VALUE,
         )
 
-        policy = planning_fixtures.policy()
-        conditions = planning_fixtures.conditions(policy)
+        policy = planning_fixtures.make_policy()
+        conditions = planning_fixtures.make_conditions(policy)
         stable, stable_material = planning_fixtures.source(
             "definition",
             b"r",
@@ -151,9 +151,9 @@ class ProjectionInvariantTests(planning_fixtures.PlanningTestCase):
             ctx_planning_inputs.ContextPlanningErrorCode.INVALID_VALUE,
         )
 
-        policy = planning_fixtures.policy()
-        conditions = planning_fixtures.conditions(policy)
-        removed = planning_fixtures.entry("removed", b"old")
+        policy = planning_fixtures.make_policy()
+        conditions = planning_fixtures.make_conditions(policy)
+        removed = planning_fixtures.make_entry("removed", b"old")
         required, required_material = planning_fixtures.source(
             "input",
             b"q",

@@ -1564,7 +1564,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
         self.assertEqual(tuple(item.contract.schema_group_phase for item in calls),
             (LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
-        from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
         for physical in calls:
             self.assertIs(type(physical), BoundContextProviderCallRequest)
             current = physical.contract
@@ -2276,7 +2276,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         mismatched = copy.deepcopy(action_packet); mismatched['agent_action']['schema_id'] = search_id
         self.assertTrue(action_projection.findings(mismatched))
         from story_writing_agents.structured_output_validation import BoundContract, ContractOwner
-        from story_writing_agents.agent_context.invocation.session_execution import BoundCallContract
+        from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract
         for method in ('schema', 'schema_value', 'validate', 'validate_authorized', 'repair',
                        'repair_input', 'corrective_input', 'decode_and_validate'):
             with self.assertRaises(TypeError): type('SeparatelyComposedOwner', (ContractOwner,), {method: lambda self: None})
@@ -6770,7 +6770,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertNotIn(private, repr(history))
 
         from dataclasses import replace
-        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService, context_provider_failure_facts
+        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService
+        from story_writing_agents.agent_context.invocation.provider import context_provider_failure_facts
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
         from tests.test_agent_context_execution import _group_control
         original_factory = orchestrator_module._lead_call_contract_factory
@@ -7160,7 +7161,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             return response
 
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, synthesis)
-        from story_writing_agents.agent_context.invocation.session_execution import BoundCallContract
+        from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract
         native_synthesis, checking = {}, set()
         original_final = BoundCallContract.require_authorized_answer
         def retain_authorized_phase(binding, decoded, authorization):

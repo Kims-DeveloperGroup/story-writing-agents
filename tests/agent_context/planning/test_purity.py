@@ -51,7 +51,7 @@ class PlanningBoundaryAndPurityTests(planning_fixtures.PlanningTestCase):
         absolute_imports.update(alias.name
             for node in ast.walk(tree) if isinstance(node, ast.Import)
             for alias in node.names)
-        self.assertEqual(absolute_imports, {"hashlib", "dataclasses", "enum"})
+        self.assertEqual(absolute_imports, set())
         compile(manifest_path.read_text(encoding="utf-8"), str(manifest_path), "exec")
 
     def test_facades_remain_exact_and_clean_direct_import_works(self) -> None:

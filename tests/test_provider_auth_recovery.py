@@ -352,7 +352,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         return case.backend.calls[start:], captured[0], failed
 
     def _require_bound_replay(self, calls, result, failed, *, count, failure_index):
-        from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
         self.assertEqual(len(calls), count)
         self.assertTrue(all(type(call) is BoundContextProviderCallRequest for call in calls))
         self.assertEqual([call.call_id for call in result.provider_calls], [call.call_id for call in calls])
@@ -394,7 +394,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertEqual(calls[0].contract.eligibility_offers.delivery_read_facts, ())
 
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
-        from story_writing_agents.agent_context.invocation.session_execution import context_provider_failure_facts
+        from story_writing_agents.agent_context.invocation.provider import context_provider_failure_facts
         for cap, succeeds in ((4, True), (3, False)):
             label = f"group-auth-select-{cap}"
             plain_request = self.request(

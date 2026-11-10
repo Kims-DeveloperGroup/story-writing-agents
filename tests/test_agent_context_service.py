@@ -2045,19 +2045,19 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             if kind is ContextSourceKind.CONVERSATION:
                 snapshots_list.append(conversation_snapshot); continue
             encoded = content.encode("utf-8")
-            record = ContextSourceRecord(f'record-{index}', boundary, content, content, contract_fixtures.digest(encoded), len(encoded))
+            record = ContextSourceRecord(f'record-{index}', boundary, content, content, contract_fixtures.digest_bytes(encoded), len(encoded))
             records = (record,)
             if kind in source_values:
                 records = tuple(ContextSourceRecord(identity, ContextSourceBoundary.records(number, number), canonical(value),
-                    search_text, contract_fixtures.digest(canonical(value).encode()), len(canonical(value).encode()))
+                    search_text, contract_fixtures.digest_bytes(canonical(value).encode()), len(canonical(value).encode()))
                     for identity, number, value, search_text in record_values[kind])
                 encoded = canonical(source_values[kind]).encode()
             source_id = {ContextSourceKind.WRITING_ARTIFACT: contract_fixtures.artifact_id(locator),
                 ContextSourceKind.CONVERSATION: "conversation:conversation-one",
                 ContextSourceKind.ACTIVE_DEBATE: "active_debate:debate-one", ContextSourceKind.OWN_AGENT_STATE: (
                     "own_agent_state:lead_orchestrator"), }[kind]
-            content_digest = contract_fixtures.digest(encoded)
-            descriptor = ContextSourceDescriptor( scope, source_id, kind, ( contract_fixtures.digest(f"revision-{index}".encode())
+            content_digest = contract_fixtures.digest_bytes(encoded)
+            descriptor = ContextSourceDescriptor( scope, source_id, kind, ( contract_fixtures.digest_bytes(f"revision-{index}".encode())
                     if kind is ContextSourceKind.WRITING_ARTIFACT else content_digest),
                 ContextProvenance(authority, locator), content_digest, len(encoded), len(records),)
             snapshots_list.append(ContextSourceSnapshot(descriptor, records, encoded))
@@ -2086,7 +2086,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 "first_record_id": boundary.first_id, "last_record_id": boundary.last_id})
             self.assertEqual(hit["source_range"], {
                 "range_type": "line_range" if kind is ContextSourceKind.WRITING_ARTIFACT else "record_range",
-                "range_digest": contract_fixtures.digest(content.encode("utf-8")), "range_utf8_bytes": len(content.encode("utf-8")), **bounds})
+                "range_digest": contract_fixtures.digest_bytes(content.encode("utf-8")), "range_utf8_bytes": len(content.encode("utf-8")), **bounds})
             safe_locator = (f"{locator}/debate-one" if kind is ContextSourceKind.OWN_AGENT_STATE
                             else locator.removeprefix("manuscript/") if kind is ContextSourceKind.WRITING_ARTIFACT else locator)
             self.assertEqual(hit["provenance"], {"authority_type": authority.value, "source_locator": safe_locator})
@@ -2120,7 +2120,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         partial_value["records"] = partial_value["records"][:24]
         partial_value["bootstrap"].update(retained_records=24, omitted_records=1, truncated=True,
             retained_utf8_bytes=sum(len(row["fields"][0]["text"].encode()) for row in partial_value["records"]))
-        partial_bytes = canonical(partial_value).encode(); partial_digest = contract_fixtures.digest(partial_bytes)
+        partial_bytes = canonical(partial_value).encode(); partial_digest = contract_fixtures.digest_bytes(partial_bytes)
         partial = ContextSourceSnapshot(replace(snapshots_list[1].descriptor, revision=partial_digest,
             content_digest=partial_digest, utf8_bytes=len(partial_bytes), record_count=24), snapshots_list[1].records[:24], partial_bytes)
         partial_manifest = ContextManifest(scope, (contract_fixtures.entry(partial, 0),))
@@ -2201,7 +2201,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         registry = contract_fixtures.registry(contract_fixtures.SCOPE, self.snapshots); session = contract_fixtures.session(binding, registry)
         authorization = session.authorize_answer(ContextAnswerAction(contract_fixtures.correlation(binding, 1), contract_fixtures.PRIVATE_ANSWER))
         self.assertRegex(authorization.authorization_id, r"\Actxa_v1_[0-9a-f]{64}\Z")
-        self.assertEqual(authorization.answer_digest, contract_fixtures.digest(contract_fixtures.PRIVATE_ANSWER.encode('utf-8')))
+        self.assertEqual(authorization.answer_digest, contract_fixtures.digest_bytes(contract_fixtures.PRIVATE_ANSWER.encode('utf-8')))
         self.assertRegex(authorization.manifest_digest, r"\Asha256:[0-9a-f]{64}\Z")
         self.assertRegex(authorization.completed_read_digest, '\\Asha256:[0-9a-f]{64}\\Z')
         self.assertEqual(authorization.completed_evidence, ()); self.assertEqual(authorization.used_evidence, ())

@@ -849,7 +849,8 @@ class SpecialistRoutingTests(unittest.TestCase):
     def test_formal_planning_question_selected_gen_is_closed_and_owned(self):
         task = self._document_task_ref_fixture()
         from types import SimpleNamespace
-        from story_writing_agents.agent_context.invocation.session_execution import ContextCallOffers, BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers
+        from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
         from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
         from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
         from story_writing_agents.lead_schema_groups import LeadGroupRequestBasis
@@ -891,7 +892,8 @@ class SpecialistRoutingTests(unittest.TestCase):
         task = self._document_task_ref_fixture()
         baseline = {node.target_path: b"Core baseline for constructed projection.\n" for node in plan.nodes[:-1]}
         from types import SimpleNamespace
-        from story_writing_agents.agent_context.invocation.session_execution import ContextCallOffers, BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers
+        from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
         from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
         from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
         from story_writing_agents.orchestrator import OrchestrationLeadCallFactory

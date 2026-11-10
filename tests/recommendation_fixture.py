@@ -74,9 +74,9 @@ def _scoped_failure_snapshots(backend, scoped, result):
     from story_writing_agents.agent_context.actions import ContextCallReadFact
     from story_writing_agents.agent_context.manifest import (
         ContextScope, ContextSourceKind, ContextSubjectKind)
-    from story_writing_agents.agent_context.invocation.session_execution import (
-        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers,
-        ContextProviderTerminalCode as Code)
+    from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract
+    from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest, ContextProviderTerminalCode as Code
+    from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers
     unsupported = (('scoped', 'unsupported'),)
     if type(backend) is not lead._LeadBackend or type(scoped) is not tuple or len(scoped) != 6:
         return unsupported
@@ -181,9 +181,9 @@ def _stored_failure_snapshots(backend, *, scoped=None, result=None):
     if scoped is not None:
         return _scoped_failure_snapshots(backend, scoped, result)
     from types import MappingProxyType
-    from story_writing_agents.agent_context.invocation.session_execution import (
-        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers,
-        ContextProviderTerminalCode as Code)
+    from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract
+    from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest, ContextProviderTerminalCode as Code
+    from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers
     unsupported = ('unsupported',)
     if type(backend) is not lead._LeadBackend:
         return unsupported, unsupported
@@ -269,8 +269,9 @@ def _stored_failure_snapshots(backend, *, scoped=None, result=None):
 
 def _zero_hit_failure_snapshots(call, targets):
     from types import MappingProxyType
-    from story_writing_agents.agent_context.invocation.session_execution import (
-        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers)
+    from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract
+    from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
+    from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers
     from story_writing_agents.agent_context.actions import (
         ContextSourceStatusKind as Status, ContextSourceStatusReceipt)
     from story_writing_agents.agent_context.manifest import ContextSourceKind
@@ -336,8 +337,9 @@ def _current_policy_failure_note(
         return _bounded_failure_note(
             *_stored_failure_snapshots(backend, scoped=scoped, result=result))
     from types import MappingProxyType
-    from story_writing_agents.agent_context.invocation.session_execution import (
-        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers)
+    from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract
+    from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
+    from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers
     from story_writing_agents.agent_context.actions import ContextCallReadFact
     from story_writing_agents.agent_context.manifest import ContextSourceKind
     from story_writing_agents.lead_provider_contracts import LeadProviderConstraints

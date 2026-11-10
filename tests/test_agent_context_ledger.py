@@ -1626,7 +1626,9 @@ class LedgerBoundaryTests(LedgerTestCase):
             if isinstance(node, ast.ImportFrom) and node.level}
         self.assertEqual(relative_dependencies,
             {(1, "accounting"),
-                (1, "manifest"), (1, "planning"),
+                (1, "manifest"),
+                (1, "contracts.checkpoints"), (1, "contracts.planning_inputs"),
+                (1, "contracts.projection"), (1, "contracts.projection_accounting"),
                 (2, "runtime_state_paths"),
                 (2, "workspace"),},
         )
