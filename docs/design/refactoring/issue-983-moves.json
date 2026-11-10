@@ -3,7 +3,7 @@
   "issue": 983,
   "parent": 968,
   "root_parent": 962,
-  "state": "문서 전용 Draft 준비; 실제 코드·테스트·워크플로 변경 없음",
+  "state": "생산 및 테스트 변경 동결; 현재 후보의 호스팅 검증 예정",
   "observed_head": "9105b43f28720f8611de27ef656685fbafe7cf03",
   "source_path": "src/story_writing_agents/orchestrator.py",
   "source_sha256": "1f89e987d8ab75d14ecf96aa8f03c3c50e77b9a8afe43bea128cd5f38cef9fc9",
@@ -248,5 +248,96 @@
       "body_chars": 4028,
       "status": "Backlog"
     }
-  ]
+  ],
+  "before_validation": {
+    "red_run": 42920582453,
+    "red_sha": "ac7b123d3d6c91cc19970e201e018b8f051aec39",
+    "red_failures": 1,
+    "red_errors": 0,
+    "red_fingerprint_sha256": "366e9495a83d00e75f3f8d9826b2f04b9b190fb1c2d6aaa590d668017b776f44",
+    "normal_run": 42921253874,
+    "normal_attempts": [
+      1,
+      2,
+      3
+    ],
+    "normal_production_test_workflow_equal_to_base": true,
+    "normal_wall_samples": [
+      63.578959972999996,
+      61.54520701500002,
+      61.326430482999996
+    ],
+    "normal_median": 61.54520701500002,
+    "initial_no_case_classification_failure_run": 42920582394,
+    "expanded_before_run": 42922337403
+  },
+  "production_implementation": {
+    "moved_definitions": 9,
+    "moved_body_rows": 613,
+    "public_definitions": 5,
+    "private_definitions": 4,
+    "external_references": 13,
+    "internal_references": 4,
+    "callback_positions": 4,
+    "recursive_code_pairs": 962,
+    "original_import_binding_checks": 44,
+    "graph": {
+      "modules": 230,
+      "full_edges": 1172,
+      "controller_edges": 1160,
+      "SCC": 0
+    },
+    "new_runtime_capabilities": 0,
+    "new_forward_frames": 0,
+    "changed_files": {
+      "src/story_writing_agents/orchestrator.py": {
+        "sha256": "3012a32bc0fc06ceff6b04e8dcbc36bc2038a8c17bef68be48f4f9ae7355f715",
+        "rows": 17796
+      },
+      "src/story_writing_agents/lead_preparation/outcome_decoding.py": {
+        "sha256": "0be4b903411515412a5ac5f14894fe71f23b1fe86e85709918fc20f3e03690fb",
+        "rows": 692
+      },
+      "PYTHON_MODULE_INDEX.md": {
+        "sha256": "39a759d78c4d8c04f6339cdddb0e9e7712d8ca6814c2ce56dc1381fd1fda2e31",
+        "rows": 300
+      }
+    },
+    "local_Case_runs": 0,
+    "local_Suite_runs": 0
+  },
+  "test_implementation": {
+    "test_file_sha256": {
+      "tests/agent_context/invocation/execution_fixture.py": "f4c1742312b6b6151b71bca5b0be3f1d2cef9edf2472b9ecab95d4bef853cb87",
+      "tests/agent_context/invocation/test_execution_lifecycle.py": "d426d71c7df1e84d70d6c8fe86449b99f82ac0cbfa302a4aa669343edc5199f4",
+      "tests/fixtures/test_owners_v1.json": "902430288d652748c1a10ec24423c7f91a9e365eea237ad47860ed621fd967b7",
+      "tests/test_artifact_application_contracts.py": "ab7acb5fb5f3f865a35e4ab006e6dc41adceb0230491ad416655c13e9ed4e939",
+      "tests/test_artifact_application_store_recovery.py": "316680c5afc13418fcf03f75a67dd326b6f020ee29ff4e01bfbd4a56c50bcc22",
+      "tests/test_artifact_relationship_policy.py": "52155fe271e1d9e14d18b1219c5ef2b8956cbd4eeca49bde37cce3b4a5d08462",
+      "tests/test_git_external_operation_inspection.py": "d59dad271ffeaa17882147d89a473c0f7bc99cab70d3009216d8a5ed9653d1ac",
+      "tests/test_interactive_controller.py": "db9ab6f9ee6c46d3c025aa788b16bcfbaf2945f2b2d3573717495927a9333e44",
+      "tests/test_lead_orchestration.py": "b68e3c86146ae0d1a0743aba18a688c896a638374784c6bf98e372e86da09cc6",
+      "tests/test_rag_module_and_packaging_boundary.py": "2119f53f976e08f3335c0a5b5c65a0933afb73748b933c57bb4eef38df991866",
+      "tests/test_session_lifecycle.py": "b0584fbbd1267fb9a40232e1979590bd0b9ad35b09310c3c929b5a321cec4d70",
+      "tests/test_session_recovery_contracts.py": "c5b3e75629f580e408959fcdebe2f49eba350e0c0fb2f15c97f070101068cad4",
+      "tests/test_workspace_session_history.py": "31bc6ae8269a05a847b1c537790e47fb6311bbcf4d400282e0e07a92a9b7cf8d"
+    },
+    "freeze_manifest_sha256": "1d58e7b27f5595d8bc04ec29149fc80432decfda15016d3d7b85a70611a4d5c5",
+    "source_charge": 151431,
+    "existing_case_count": 2544,
+    "class_count": 389,
+    "existing_cap_and_weights_unchanged": true,
+    "focused_file_ids": 2,
+    "focused_package_ids": 5,
+    "affected": 2544,
+    "actual_graph": {
+      "complete_modules": 230,
+      "complete_edges": 1172,
+      "controller_edges": 1160,
+      "Rag_review_contracts_importer_members": 9
+    },
+    "new_cases": 0,
+    "local_Case_runs": 0,
+    "local_Suite_runs": 0
+  }
 }
