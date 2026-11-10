@@ -1,0 +1,568 @@
+{
+  "schema_version": 1,
+  "issue": 966,
+  "parent_issue": 962,
+  "stage": "S04",
+  "status": "구현 전 문서 전용 Draft 체크포인트",
+  "accepted_base": "020a9b18d1dbb1e08c803d5dbe0bae1fc672cbd3",
+  "detailed_plan_url": "https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/966",
+  "detailed_plan_body_sha256": "9ca159c426c13221243bddb729ee4c384dea554c8c5e72040e0fe8102e0140cc",
+  "production_method_move_map": {
+    "runtime_resources/reference_operation_registry.py": [
+      {
+        "method": "_register_reference_operation",
+        "line": 4188,
+        "end_line": 4218
+      },
+      {
+        "method": "_unregister_terminal_reference_operation",
+        "line": 4220,
+        "end_line": 4239
+      },
+      {
+        "method": "_registered_reference_operation_ids",
+        "line": 4241,
+        "end_line": 4266
+      },
+      {
+        "method": "_has_cleanup_pending_reference_operation",
+        "line": 4268,
+        "end_line": 4284
+      },
+      {
+        "method": "_reconcile_reference_operations_at_boundary",
+        "line": 4286,
+        "end_line": 4337
+      },
+      {
+        "method": "_require_current_reference_registry",
+        "line": 4340,
+        "end_line": 4346
+      },
+      {
+        "method": "_reset_reference_registry_after_fork",
+        "line": 4349,
+        "end_line": 4354
+      },
+      {
+        "method": "_prepare_session_reference_operation",
+        "line": 4356,
+        "end_line": 4383
+      },
+      {
+        "method": "_finish_reference_operation",
+        "line": 4385,
+        "end_line": 4392
+      },
+      {
+        "method": "_fail_reference_operation",
+        "line": 4394,
+        "end_line": 4406
+      }
+    ],
+    "runtime_resources/provider_binding_leases.py": [
+      {
+        "method": "_acquire_bound_agent",
+        "line": 20702,
+        "end_line": 20708
+      },
+      {
+        "method": "_select_bound_agent",
+        "line": 20710,
+        "end_line": 20809
+      },
+      {
+        "method": "_install_current_binding_locked",
+        "line": 20811,
+        "end_line": 20827
+      },
+      {
+        "method": "_mark_binding_retiring_locked",
+        "line": 20829,
+        "end_line": 20841
+      },
+      {
+        "method": "_retain_bound_agent_use_locked",
+        "line": 20843,
+        "end_line": 20851
+      },
+      {
+        "method": "_release_bound_agent_use",
+        "line": 20853,
+        "end_line": 20897
+      },
+      {
+        "method": "_release_bound_agent_use_once",
+        "line": 20899,
+        "end_line": 20922
+      },
+      {
+        "method": "_binding_is_tracked_locked",
+        "line": 20924,
+        "end_line": 20935
+      },
+      {
+        "method": "_release_provider_bindings",
+        "line": 20965,
+        "end_line": 20974
+      }
+    ],
+    "runtime_resources/session_execution_scopes.py": [
+      {
+        "method": "_lead_session_lifecycle",
+        "line": 20613,
+        "end_line": 20622
+      },
+      {
+        "method": "_conversation_lock",
+        "line": 20670,
+        "end_line": 20680
+      },
+      {
+        "method": "interrupt_provider",
+        "line": 3578,
+        "end_line": 3596
+      }
+    ],
+    "runtime_resources/collaboration_event_journal.py": [
+      {
+        "method": "_append_provider_call_fact",
+        "line": 20059,
+        "end_line": 20109
+      },
+      {
+        "method": "_append_validation_messages",
+        "line": 20111,
+        "end_line": 20165
+      },
+      {
+        "method": "_append_drafts",
+        "line": 20175,
+        "end_line": 20187
+      },
+      {
+        "method": "_draft",
+        "line": 20190,
+        "end_line": 20212
+      },
+      {
+        "method": "_draft_with_id",
+        "line": 20215,
+        "end_line": 20238
+      },
+      {
+        "method": "_new_id",
+        "line": 20241,
+        "end_line": 20242
+      },
+      {
+        "method": "_deterministic_id",
+        "line": 20245,
+        "end_line": 20247
+      },
+      {
+        "method": "_actor_for_agent",
+        "line": 20168,
+        "end_line": 20173
+      }
+    ]
+  },
+  "callback_boundary_plan": {
+    "outcome": "analysis_complete; proposed boundaries only; implementation not authorised",
+    "mode": "analysis",
+    "modularity_gate": "required",
+    "github_planning_gate": "pending (#965 OPEN)",
+    "identity": {
+      "worktree": "/Users/anonymousanonym/Documents/story-writing-agents-issue-965",
+      "branch": "issue-965-context-state-owners",
+      "head": "de84b47caa24f52b487086ca4e0161e700164c06 (root certificate; no Git command)",
+      "accepted_base": "a18dfc6b3faa8dc326668c77d0da12441be388f8",
+      "source_manifest_digest": "sha256:aa588e76e2e64c2522682f76e8a27ab5095247d2c0d11855984187e31c1b46f6",
+      "orchestrator_sha256": "04d95ae7e30485b94eaf1570e3f2e482ab18cb486828deb64a571e86fec1a26c",
+      "orchestrator_matches_frozen_manifest": true
+    },
+    "original_locations": {
+      "prepare_runtime_configuration": [
+        4015,
+        4047
+      ],
+      "commit_runtime_configuration": [
+        4049,
+        4075
+      ],
+      "_acquire_bound_agent": [
+        20702,
+        20708
+      ],
+      "_select_bound_agent": [
+        20710,
+        20809
+      ],
+      "_release_bound_agent_use": [
+        20853,
+        20897
+      ],
+      "_release_bound_agent_use_once": [
+        20899,
+        20922
+      ],
+      "_bind_definition": [
+        20937,
+        20954
+      ],
+      "_append_provider_call_fact": [
+        20059,
+        20109
+      ],
+      "_append_validation_messages": [
+        20111,
+        20165
+      ],
+      "_append_drafts": [
+        20175,
+        20187
+      ],
+      "_draft": [
+        20190,
+        20212
+      ],
+      "_draft_with_id": [
+        20215,
+        20238
+      ],
+      "_actor_for_agent": [
+        20168,
+        20173
+      ],
+      "_new_id": [
+        20241,
+        20242
+      ],
+      "_deterministic_id": [
+        20245,
+        20247
+      ]
+    },
+    "binding": {
+      "owner": "runtime_resources/provider_binding_leases.py:ProviderBindingLeases; exactly the six existing maps and one asyncio.Lock; no stored Runtime/callback/activation candidate",
+      "public_api_proposal": [
+        "async acquire(definition, *, bind_definition: Callable[[object], Coroutine[Any, Any, BoundAgent]]) -> BoundAgent",
+        "async select(definition, *, retain_use: bool, bind_definition: Callable[[object], Coroutine[Any, Any, BoundAgent]]) -> BoundAgent",
+        "async release_use(bound_agent, *, finish_use: Callable[[BoundAgent], Coroutine[Any, Any, None]]) -> None",
+        "async decrement_retained_use(bound_agent) -> BoundAgent | None",
+        "async prepare_configuration() -> None",
+        "async commit_configuration(*, activate: Callable[[], None]) -> None"
+      ],
+      "acquire_flow": "Runtime workflows -> leases.acquire(definition, bind_definition=self.bind_definition) -> moved select -> create_task(bind_definition(definition), original task name). Runtime.bind_definition is the existing _bind_definition body, public rename only; _verify_definition_files remains local to that body owner.",
+      "release_flow": "Runtime workflows -> leases.release_use(bound, finish_use=self.finish_bound_agent_use) -> existing shield/cancellation loop creates task from finish_use(bound). Runtime.finish_bound_agent_use is the existing _release_bound_agent_use_once operation boundary: release = await leases.decrement_retained_use(bound); if release is not None: release_bound_agent(release). The original initial release=None plus locked mutation block moves to decrement_retained_use, which returns that existing value; the actual physical release stays at the original Runtime coroutine boundary.",
+      "prepare_flow": "Existing public Runtime.prepare_runtime_configuration backend/type guards and PromptAssembler construction stay before await. await leases.prepare_configuration() moves original lock guard/map extraction/clear and outside-lock release unchanged. Existing RuntimeConfigurationCandidate(self, configuration, prompts) construction stays after that await.",
+      "commit_flow": "Existing public Runtime.commit_runtime_configuration candidate type/owner guard stays before await. Pass only an ephemeral partial(self.activate_configuration_snapshots, candidate, backend_candidate) to leases.commit_configuration(activate=...). The owner takes the same lock, performs the exact original five-map guard, then calls activate() synchronously once under that lock. Runtime.activate_configuration_snapshots contains exactly the original commit-tail statements: backend assert, backend commit, snapshot assignment, prompts assignment. No lower-owner Runtime/candidate import or inspection; no callback stored.",
+      "guards": {
+        "prepare_exact": "self._bound_agent_uses or self._binding_tasks or self._binding_waiters",
+        "commit_exact": "self._bound_agents or self._retiring_bound_agents or self._bound_agent_uses or self._binding_tasks or self._binding_waiters",
+        "prepare_error_literals": [
+          "runtime configuration requires a quiescent provider boundary"
+        ],
+        "commit_error_literals": [
+          "runtime configuration activation lost quiescence"
+        ]
+      },
+      "activation_source": "assert self.backend is not None\nself.backend.commit_runtime_configuration(backend_candidate)\nself._configuration_snapshot = candidate.configuration\nself.prompts = candidate.prompts",
+      "decrement_source": "async with self._binding_lock:\n            identity = id(bound_agent)\n            current = self._bound_agent_uses.get(identity)\n            if current is None or current[0] is not bound_agent:\n                raise BackendProtocolError(\"bound agent operation use is absent\")\n            remaining = current[1] - 1\n            if remaining > 0:\n                self._bound_agent_uses[identity] = (bound_agent, remaining)\n            else:\n                self._bound_agent_uses.pop(identity)\n                for key, retiring in tuple(self._retiring_bound_agents.items()):\n                    if retiring is bound_agent:\n                        self._retiring_bound_agents.pop(key)\n                        release = bound_agent\n                        break",
+      "retention": [
+        "Bind Task still executes the same Runtime coroutine; its frame self retains Runtime until that coroutine finishes, including cleanup on failed validation. The transient callback local also retains Runtime through each acquisition, replacing the former Runtime select frame self. A cached selection still drops this local when acquisition returns.",
+        "Release Task still executes the Runtime finish-use coroutine, retaining Runtime through locked decrement and the physical release. The moved shield loop holds its transient finish_use callback through the same task/result/cancellation handling interval previously held by its Runtime self. Nothing is stored in the long-lived lease owner.",
+        "Configuration partial retains Runtime/candidates only while the existing Runtime commit call is active; owner does not persist it. No permanent Runtime -> leases -> stored callback -> Runtime cycle is introduced. The original Task-mediated transient Runtime retention now passes through the lease owner Task map and ends at the same task/waiter cleanup boundary."
+      ],
+      "unacceptable_shortcuts": [
+        "Move bind/release Task coroutine receiver to leases and claim lifetime unchanged.",
+        "Store Runtime/bound callbacks in the lease owner.",
+        "Expose a raw lock/map or implement a private mixin/property.",
+        "Create a second configuration lock or strengthen commit guard with the desired-fingerprint map."
+      ]
+    },
+    "accounting": {
+      "owner": "runtime_resources/provider_call_accounting.py; cohesive provider class, no upward Runtime import/annotation",
+      "journal_owner": "runtime_resources/collaboration_event_journal.py; cohesive ordinary functions, no new journal state/instance required",
+      "private_calls": [
+        {
+          "method": "_draft",
+          "line": 2070
+        },
+        {
+          "method": "_draft",
+          "line": 2140
+        },
+        {
+          "method": "_draft",
+          "line": 2153
+        },
+        {
+          "method": "_append_drafts",
+          "line": 2164
+        },
+        {
+          "method": "_append_validation_messages",
+          "line": 2176
+        },
+        {
+          "method": "_append_provider_call_fact",
+          "line": 2299
+        },
+        {
+          "method": "_append_provider_call_fact",
+          "line": 2361
+        }
+      ],
+      "additional_late_storage_read_sites": [
+        2049,
+        2100,
+        2274,
+        2289
+      ],
+      "public_runtime_io_callbacks": [
+        "read_collaboration_events(session_id: str, conversation_id: str) -> tuple[CollaborationEventV2, ...]: return self.conversation_storage_services.event_store.read(session_id, conversation_id)",
+        "read_collaboration_context(session_id: str, conversation_id: str) -> CollaborationHistoryProjection: return self.conversation_storage_services.event_store.read_context(session_id, conversation_id)",
+        "append_collaboration_event_batch(batch: CollaborationEventBatch) -> CollaborationAppendReceipt: return self.conversation_storage_services.event_store.append_batch(batch)"
+      ],
+      "provider_constructor_proposal": "Replace the raw runtime argument with three required read_events/read_context/append_batch callable inputs, assigned to provider fields. Runtime passes its three public bound I/O methods at the two existing provider-construction sites (9676,13036). Keep delegate/admission/metadata validation and all provider fields/order unchanged; do not add callback validation or I/O.",
+      "helper_mapping": {
+        "draft (three sites)": "move original _draft/_draft_with_id/_new_id to owning journal functions; no additional forwarding frame",
+        "append_drafts (one site)": "journal.append_drafts(existing args, append_batch=self._append_batch); batch creation remains once at the same point",
+        "append_validation_messages (one site)": "journal.append_validation_messages(existing args, read_events=self._read_events, append_batch=self._append_batch); original deterministic/idempotence/validation and failure order preserved",
+        "append_provider_call_fact (two sites)": "journal.append_provider_call_fact(existing args, read_context=self._read_context, append_batch=self._append_batch); original read projection -> draft/payload -> append order preserved",
+        "four direct event reads": "call self._read_events(session_id,conversation_id) at the original source positions, including separate budget/admission reads; do not combine/collapse reads"
+      },
+      "retention": "Each provider now holds three needed bound Runtime I/O methods instead of the _runtime field. Their __self__ is the same Runtime. They are assigned and retained for the provider lifetime; renew_delegate does not replace/clear them. This preserves the provider -> Runtime strong edge until provider retirement. Runtime does not store these callbacks or a journal object containing them, so no new permanent cycle is formed. The callbacks are used for actual existing I/O, not inert keepalive state.",
+      "late_lookup": "Each callback resolves self.conversation_storage_services.event_store and its concrete method at the original I/O execution point. Capturing an EventStore or its bound read/append method at provider construction would freeze the former late lookup and would not itself retain Runtime; reject that shortcut.",
+      "patch_boundary": "Existing Runtime private helper patches must move mechanically to the true journal public function owner, using qualified journal module calls so the provider and Runtime workflow share that patch boundary. Tests/test_specialist_orchestration.py:667,677,740,750,777 patch validation publication and are concrete witnesses for preserving the retry/publication boundary. This proposal intentionally changes helper owner paths; it does not promise old Runtime/private/subclass dispatch after the allowed owner migration.",
+      "no_new_behavior": "Read/append counts, batch/UUID/deterministic digest creation, exception text/priority, event ordering, await positions and existing receipt/tuple/projection identities stay unchanged. No new lock, Task, DTO, store, storage scope, flush, queue or I/O."
+    },
+    "added_source_level_costs_not_measurements": {
+      "setup": "One ProviderBindingLeases instance; original six dictionaries and lock move without duplication. No accounting journal instance is required.",
+      "acquire": "One additional transient Runtime bind-definition bound-method callback per acquisition (including cache hits); no additional Task/coroutine layer on the bind Task itself.",
+      "release": "One transient Runtime finish-use bound-method callback per release; one added awaited owner coroutine frame for the locked decrement. Existing outer release loop and Task counts are unchanged; the returned value is the existing BoundAgent or None.",
+      "prepare": "One added owner async call/frame; original release helper calls remain.",
+      "commit": "One added owner async frame and one extracted synchronous activation frame, once per commit. One transient bound-method plus one functools.partial (holding the two existing positional candidate references in its argument tuple); no new candidate/DTO/task/lock.",
+      "accounting_provider": "Three bound-method objects per provider, replacing one raw Runtime reference field with three callback fields. One added Runtime I/O callback frame for each original storage read/read_context/append_batch; no extra journal forwarding class/frame and no lambda/partial per provider journal call.",
+      "other_runtime_journal_consumers": "Direct Runtime workflow calls migrated to the same journal functions must pass the corresponding bound I/O callbacks at the real callsites; those callback creations and added I/O frames also count. Absolute dynamic counts/heap bytes/timing are not established by this read-only plan."
+    },
+    "dependency_and_index": "Runtime composition -> provider accounting/journal/lease owner -> existing backend and conversation contracts. No owner imports Runtime or reaches private Runtime state. Future compact runtime-resources index entry must distinguish lease lock/map ownership from retained Runtime bind/release/activation and I/O composition callbacks; no tracked index edit now.",
+    "verification": "Static AST, targeted source/consumer/test declaration reads only. Orchestrator hash matches S03 frozen manifest. Case/Suite/production import/measurement/tracked edit/Git/GitHub mutation0. Root-reported current HEAD accepted without Git command.",
+    "limitations": "Proposal not implemented/benchmarked. Source-level retention proof and cost accounting are provided; exact VM allocation bytes/GC phase and timing require the later authorised CI evidence. Root must accept the new narrow APIs/partial and guard/block mapping before S04 implementation.",
+    "next_action": "Use only to complete #966 detailed plan; #965 integration and #966 Draft/planning gate remain prerequisites."
+  },
+  "preserve_S06": {
+    "definitions": [
+      "RuntimeSession public delegation facade",
+      "_PendingStoryCommit2442-2478",
+      "_add_story_commit_cleanup_note",
+      "_install_pending_story_commit4413-4423",
+      "_retire_pending_story_commit4425-4441",
+      "retire_archived_conversation4443-4465",
+      "_close_story_commit_generation_pin4468-4479"
+    ],
+    "reason": "Pending map exact owner replacement/close/primary-failure notes/destructor and durable publication/archive form one transaction; leave capability/live-execution maps with workflow. RuntimeConfigurationCandidate/prompt composition also stays Runtime."
+  },
+  "minimum_existing_ids": [
+    "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
+    "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
+    "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_management_construction_and_inspection_do_not_bind_or_call_provider",
+    "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_runtime_methods_aliases_and_forwarding_are_absent"
+  ],
+  "expanded_existing_ids": [
+    "tests.test_codex_backend.CodexBackendDefaultsTests.test_backend_runtime_and_prompts_share_one_snapshot_until_next_lifecycle",
+    "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
+    "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+    "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
+    "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+    "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility",
+    "tests.test_lead_story_commit.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+    "tests.test_lead_story_commit.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+    "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_attached_reference_cancellation_closes_and_releases_for_explicit_retry",
+    "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
+    "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_legacy_bare_prepared_and_submitted_tails_close_only_on_new_input",
+    "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_matching_unfinished_legacy_operation_retires_native_context",
+    "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_management_construction_and_inspection_do_not_bind_or_call_provider",
+    "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_management_directive_configuration_and_inspection_remain",
+    "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_runtime_methods_aliases_and_forwarding_are_absent",
+    "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
+    "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+    "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
+    "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned"
+  ],
+  "witness_plan": {
+    "mode": "analysis",
+    "github_planning_gate": "pending",
+    "source_commit": "020a9b18d1dbb1e08c803d5dbe0bae1fc672cbd3",
+    "role": "test_engineer",
+    "outcome": "정적 witness/미실행 controller 예산 preview. 실제 RED와 assertion 위치는 hosted CI 확인 전이다.",
+    "canonical_id": "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
+    "test_path": "tests/test_provider_timeout_recovery.py",
+    "test_source_sha256": "ef0f2dfbc3d65263946ee3d12ad84f36ea9a71e92d86b110ed33f65ef3bb7dc4",
+    "before": {
+      "source_path": "src/story_writing_agents/orchestrator.py",
+      "source_sha256": "04d95ae7e30485b94eaf1570e3f2e482ab18cb486828deb64a571e86fec1a26c",
+      "class": "_AccountingContextProvider",
+      "method": "_prepare",
+      "statement": "ordinal = len(self._ordinals) + 1",
+      "line": 2297,
+      "column_byte_offset": 40,
+      "token": "1"
+    },
+    "after": {
+      "source_path": "src/story_writing_agents/runtime_resources/provider_call_accounting.py",
+      "class": "AccountingContextProvider",
+      "method": "_prepare",
+      "statement": "ordinal = len(self._ordinals) + 1",
+      "must_revalidate_exact_moved_body": true
+    },
+    "mutation": {
+      "kind": "positive call-fact ordinal base 1→0",
+      "ast_target": "Assign(Name ordinal).value BinOp(Add, Call len(self._ordinals), Constant(int1)).right",
+      "expected_before": 1,
+      "fault": 0,
+      "one_token_in_memory_only": true,
+      "mutated_sha256": "ef619e15e0d3e433faf66b72781f969e29f61529e4efd4e6198ebeb681c5d704",
+      "restored_sha256": "04d95ae7e30485b94eaf1570e3f2e482ab18cb486828deb64a571e86fec1a26c",
+      "bytewise_restored": true,
+      "syntax_parse_valid": true
+    },
+    "expected_fingerprint": {
+      "family": "S04-PROVIDER-CALL-ORDINAL-ZERO-GATED-HISTORY",
+      "status": "정적 예상이며 실제 실행 증거 아님",
+      "report": "동일 canonical_id 1개, failed/AssertionError, failures1/errors0/skip0",
+      "expected_assertion": "self.assertEqual(len(self.backend.calls), 1): 0 != 1",
+      "boundary_trace": "_prepare의 PREPARED fact가 positive ordinal 검증에서 거부되어 provider 제출 전에 실패. failure closure는 기존 append_batch OSError gate를 거쳐 RECOVERY_REQUIRED로 막힘.",
+      "not_accepted": [
+        "ImportError",
+        "NameError",
+        "missing selector/source hash pin failure",
+        "mutation/restore error",
+        "case reported ERROR rather than existing assertion FAILURE"
+      ],
+      "must_confirm_hosted": "초기 result/blocked state와 실제 실패 assertion 위치·0!=1은 docs-only Draft 후 수정전 hosted RED에서 확인. 다르면 예상과 실제를 구분하고 controller에서 성공으로 받아들이지 않음."
+    },
+    "restoration": {
+      "head_blob_pin": "exact production source + existing Case file must equal own HEAD:path bytes in each layout",
+      "finally_original_bytes": true,
+      "restore_sha256_equal_original": true,
+      "green": "동일 Case/input/fixture/expected와 원본 source 복원 뒤 passed1/errors0/source_valid",
+      "controller_same_bytes_before_after": true
+    },
+    "controller_budget_preview": {
+      "path": "/tmp/story-refactor-delivery-20261109/S04-feedback-controller.preview.py",
+      "charged_before": 105,
+      "charged_preview": 139,
+      "delta": 34,
+      "source_current": 151425,
+      "cap": 151431,
+      "headroom": 6,
+      "before_recovery_total": 151459,
+      "recovery_required": 28,
+      "known_static_unused_import_candidate_rows": 45,
+      "candidate_only": "tests/test_runtime_reference_integration.py의 기존 불필요 import 후보. 실제 제거 전 consumer/side-effect 검토 및 전체 source 재계상 필요. 지원 소스 미계상이나1550 축소로 맞추지 않음.",
+      "unresolved": "예산은 preview로 상한 초과 상태다. 최소 recovery_required 행을 실제 안전 회수하기 전 Ready/구현완료로 주장하지 않음.",
+      "default_codec_and_source_snapshot_preserved_by_design": true,
+      "executed": false
+    },
+    "coverage_gaps_unchanged": [
+      {
+        "invariant": "real reference-registry fork/PID reset",
+        "status": "직접관측 canonical witness 미발견",
+        "evidence": "현재 runtime_reference_integration은RuntimeExecutionRetirementTests4개뿐. fork/registry/mutex/PID 상태assertion 없음.",
+        "related": "AgentBackendLifecycleTests.test_concurrent_dead_reclaim_has_exactly_one_owner의POSIX fork2개는backend access claim만관측"
+      },
+      {
+        "invariant": "two live StoryRuntime instances share one registry/RLock",
+        "status": "동시공유/entry visibility/동일operation 중복거절을직접assert하는기존witness 미발견",
+        "related": "reference cancel/restartCase는후속Runtime retry만관측"
+      },
+      {
+        "invariant": "reference registry workspace replacement uses physical inode identity",
+        "status": "직접registry reconcile/key 불변·교체를관측하는witness 미발견",
+        "related": "ledger/debug-log/workspace recovery의다른owner replacementCase는대체아님"
+      },
+      {
+        "invariant": "last bind waiter cancellation joins one shared bind task",
+        "status": "StoryRuntime._binding_waiters/_binding_tasks의직접관측witness 미발견",
+        "related": "provider-auth waiter와Codex close는각각다른owner"
+      },
+      {
+        "invariant": "old retained-use drains once before provider binding release",
+        "status": "StoryRuntime._bound_agent_uses/_retiring_bound_agents의direct use/release/priority witness 미발견",
+        "related": "CodexBackend resource releaseOnceCase는backend수명만검증"
+      }
+    ],
+    "Case_Suite_runs": 0,
+    "tracked_edits": 0,
+    "Git_GitHub_mutations": 0,
+    "root_workspace": "HEAD/user dirty sources were not read as the production oracle or modified; all repository contents came from git show 020a9b18:path."
+  },
+  "coverage_gaps": [
+    {
+      "invariant": "real reference-registry fork/PID reset",
+      "status": "직접관측 canonical witness 미발견",
+      "evidence": "현재 runtime_reference_integration은RuntimeExecutionRetirementTests4개뿐. fork/registry/mutex/PID 상태assertion 없음.",
+      "related": "AgentBackendLifecycleTests.test_concurrent_dead_reclaim_has_exactly_one_owner의POSIX fork2개는backend access claim만관측"
+    },
+    {
+      "invariant": "two live StoryRuntime instances share one registry/RLock",
+      "status": "동시공유/entry visibility/동일operation 중복거절을직접assert하는기존witness 미발견",
+      "related": "reference cancel/restartCase는후속Runtime retry만관측"
+    },
+    {
+      "invariant": "reference registry workspace replacement uses physical inode identity",
+      "status": "직접registry reconcile/key 불변·교체를관측하는witness 미발견",
+      "related": "ledger/debug-log/workspace recovery의다른owner replacementCase는대체아님"
+    },
+    {
+      "invariant": "last bind waiter cancellation joins one shared bind task",
+      "status": "StoryRuntime._binding_waiters/_binding_tasks의직접관측witness 미발견",
+      "related": "provider-auth waiter와Codex close는각각다른owner"
+    },
+    {
+      "invariant": "old retained-use drains once before provider binding release",
+      "status": "StoryRuntime._bound_agent_uses/_retiring_bound_agents의direct use/release/priority witness 미발견",
+      "related": "CodexBackend resource releaseOnceCase는backend수명만검증"
+    }
+  ],
+  "budget_recovery": {
+    "mode": "planning",
+    "source": "020a9b18d1dbb1e08c803d5dbe0bae1fc672cbd3",
+    "file": "tests/test_runtime_reference_integration.py",
+    "approved_scope": "whole unused import statements only;15 statements45 charged rows; keep StoryRuntime/RuntimeSession/orchestrator and all methods/assertions",
+    "evidence": [
+      "whole module AST unused-name census",
+      "root full source read",
+      "no direct consumer import/alias references found",
+      "fresh full collection after actual import change required"
+    ],
+    "current": 151425,
+    "controller_preview_delta": 34,
+    "recover_rows": 45,
+    "projected_total_before_API_imports": 151414,
+    "cap": 151431,
+    "projected_headroom": 17,
+    "tracked_edits": 0
+  },
+  "constraints": {
+    "new_cases": false,
+    "new_scenarios": false,
+    "feature_algorithm_storage_changes": false,
+    "old_path_shims": false,
+    "runtime_whole_injection": false,
+    "source_cap": 151431,
+    "legacy_reserved": 1550,
+    "whole_seconds": 18000,
+    "shard_seconds": 3600
+  },
+  "runtime_test_workflow_edits_before_draft": false,
+  "case_suite_execution_before_draft": 0
+}
