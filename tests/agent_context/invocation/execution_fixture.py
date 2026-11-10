@@ -16,7 +16,9 @@ from story_writing_agents.agent_context.progress import ContextActionProgressEve
 from story_writing_agents.agents import EXECUTION_SPECIALIST
 from story_writing_agents.conversations import LeadProposalRelation
 from story_writing_agents.lead_provider_contracts import LeadContractError, LeadProviderConstraints
-from story_writing_agents.orchestrator import OrchestrationLeadCallFactory, StoryRuntime, _lead_front_result_contract
+from story_writing_agents.lead_preparation.call_rule_factory import OrchestrationLeadCallFactory
+from story_writing_agents.orchestrator import StoryRuntime
+from story_writing_agents.lead_preparation.response_rules import lead_front_result_contract
 from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringScope
 from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
 from story_writing_agents.writing_artifacts import ArtifactReference, ArtifactReferenceBatch, ReferenceAuthorizationErrorCode, ReferenceInvocationCorrelation, ReferenceReadAction, ReferenceReadActionKind
@@ -114,7 +116,7 @@ def make_validate_lead_result(answer: str, _authorization: object) -> None:
         TaskBindingPlan(LEAD_SCOPE.task_id, LEAD_SCOPE.task_revision, 'reserved'))))
 
 
-LEAD_CALL_FACTORY = OrchestrationLeadCallFactory(LEAD_CONSTRAINTS, _lead_front_result_contract(
+LEAD_CALL_FACTORY = OrchestrationLeadCallFactory(LEAD_CONSTRAINTS, lead_front_result_contract(
     LeadProposalRelation.NEW_STEP, (), constraints=LEAD_CONSTRAINTS), ctx_call_offers.ContextInvocationKind.LEAD.
     value, 'KO', make_validate_lead_result, StoryRuntime._core_reviewer)
 

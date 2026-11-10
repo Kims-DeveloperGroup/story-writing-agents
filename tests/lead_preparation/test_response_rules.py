@@ -526,7 +526,7 @@ class SpecialistRoutingTests(unittest.TestCase):
             with self.assertRaises(ValueError): replace(binding, **changes)
         with self.assertRaises(ValueError):
             replace(use, predecessor_node_id=use.consumer_node_id)
-        from story_writing_agents.orchestrator import _document_successor_selection
+        from story_writing_agents.lead_preparation.response_rules import document_successor_selection
         source_scope = self.scope(task_id=task.task_id, task_revision=task.task_revision,
             target_paths=(plan.nodes[1].target_path,))
         source_draft = fixture.make_draft("scope_2", c.CollaborationEventKind.MESSAGE, fixture.LEAD, fixture.USER,
@@ -549,7 +549,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         def select_successor(**changes):
             arguments = dict(binding=successor_node, source_event=source_event, current_scope=source_scope,
                 target_scope=successor_scope, task_binding=successor_plan)
-            return _document_successor_selection(**(arguments | changes))
+            return document_successor_selection(**(arguments | changes))
         selected = select_successor()
         self.assertIs(type(selected), documents.DocumentNodeSelection)
         self.assertEqual((successor_plan.transition, successor_scope.task_id, successor_scope.task_revision),
@@ -759,7 +759,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertEqual({key: value for key, value in guided_document.items() if key != "contract_guidance"}, wire_document)
         self.assertTrue(guided_document["contract_guidance"]["input_fields"])
         global_path = plan.nodes[0].target_path
-        from story_writing_agents.orchestrator import _target_authoring_scope_prior
+        from story_writing_agents.lead_preparation.response_rules import target_authoring_scope_prior
         from story_writing_agents.lead_task_transitions import LeadTaskAction, LeadTaskTransitionReceipt
         artifact_scope, readonly_scope = (self.scope(activity=Activity.REVIEW, intent=intent) for intent in (Intent.AUTHORING, Intent.REVIEW_ONLY))
         for source_scope, next_scope in ((artifact_scope, readonly_scope), (readonly_scope, artifact_scope)):
@@ -769,7 +769,7 @@ class SpecialistRoutingTests(unittest.TestCase):
             receipt = LeadTaskTransitionReceipt(origin_event_id="scope_task_decision", origin_kind="task_decision",
                 action=LeadTaskAction.NEW_TASK, source_task_ref=source_ref, target_task_id=fresh_scope.task_id,
                 target_task_revision=fresh_scope.task_revision, planning_step_id="scope_planning_step")
-            self.assertIsNone(_target_authoring_scope_prior(fresh_scope, source_scope, receipt))
+            self.assertIsNone(target_authoring_scope_prior(fresh_scope, source_scope, receipt))
             same_task_scope = replace(fresh_scope, task_id=source_scope.task_id, task_revision=source_scope.task_revision)
             same_task_receipt = replace(receipt, target_task_id=same_task_scope.task_id, target_task_revision=same_task_scope.task_revision)
             foreign_scope = replace(source_scope, task_id="foreign_scope_task")
@@ -783,7 +783,7 @@ class SpecialistRoutingTests(unittest.TestCase):
                 (fresh_scope, replace(receipt, target_task_revision=fresh_scope.task_revision + 1)),
                 (fresh_scope, replace(receipt, source_task_ref=foreign_ref)),
             ):
-                self.assertIs(_target_authoring_scope_prior(retained_scope, source_scope, retained_receipt), source_scope)
+                self.assertIs(target_authoring_scope_prior(retained_scope, source_scope, retained_receipt), source_scope)
         from story_writing_agents.lead_task_transitions import LeadTaskDecision
         selector_scope = self.scope(schema_version=3, activity=Activity.DRAFT, target_paths=(global_path,),
             task_id="fresh_recommendation_target", task_revision=1,
@@ -856,12 +856,13 @@ class SpecialistRoutingTests(unittest.TestCase):
         from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
         from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
         from story_writing_agents.lead_schema_groups import LeadGroupRequestBasis
-        from story_writing_agents.orchestrator import OrchestrationLeadCallFactory, _lead_front_result_contract
+        from story_writing_agents.lead_preparation.call_rule_factory import OrchestrationLeadCallFactory
+        from story_writing_agents.lead_preparation.response_rules import lead_front_result_contract
         from tests.agent_context.invocation.execution_fixture import make_group_control as _group_control
         from tests.test_provider_schema_spec import check_schema
         from tests import test_lead_artifact_objectives as document_fixture
         facts = LeadProviderConstraints(input_ids=("user_input",), task_revisions=((task.task_id, task.task_revision),))
-        seed = _lead_front_result_contract(c.LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=facts)
+        seed = lead_front_result_contract(c.LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=facts)
         def deny_authority(_result, _authorization):
             raise ValueError("Pure fixture contract check grants no host authority")
         factory = OrchestrationLeadCallFactory(facts, seed, "lead.front", "EN", deny_authority,
@@ -898,7 +899,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
         from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
         from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
-        from story_writing_agents.orchestrator import OrchestrationLeadCallFactory
+        from story_writing_agents.lead_preparation.call_rule_factory import OrchestrationLeadCallFactory
         from tests.test_provider_schema_spec import check_schema
         from tests import test_lead_artifact_objectives as document_fixture
         facts = LeadProviderConstraints(input_ids=("user_input",), task_revisions=((task.task_id, task.task_revision),))
@@ -912,7 +913,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         from story_writing_agents.agent_context.accounting import ProviderCallKind
         from story_writing_agents.agent_context.manifest import ContextSourceKind
         from story_writing_agents.lead_provider_contracts import LeadDiscussionConstraints
-        from story_writing_agents.orchestrator import _lead_revision_result_contract
+        from story_writing_agents.lead_preparation.response_rules import lead_revision_result_contract
         global_path = plan.nodes[0].target_path
         global_selection = documents.DocumentNodeSelection(plan.ref, node_id=plan.nodes[0].node_id)
         selected_facts = replace(facts, input_ids=("user_input", "reference_1"),
@@ -921,7 +922,7 @@ class SpecialistRoutingTests(unittest.TestCase):
             document_node_digest=documents.document_value_digest(documents.document_node_selection_to_dict(global_selection)),
             document_target_paths=(global_path,))
         def revision_factory(capability_path):
-            revision_seed = _lead_revision_result_contract(c.LeadProposalRelation.NEW_STEP, selected_facts.input_ids, selected_facts.task_revisions, selected_facts, LeadDiscussionConstraints(task.task_id, task.task_revision), fresh_revision_only=True, source_scope=None, artifact_revision_only=False, selected_document_review_path=capability_path)
+            revision_seed = lead_revision_result_contract(c.LeadProposalRelation.NEW_STEP, selected_facts.input_ids, selected_facts.task_revisions, selected_facts, LeadDiscussionConstraints(task.task_id, task.task_revision), fresh_revision_only=True, source_scope=None, artifact_revision_only=False, selected_document_review_path=capability_path)
             return OrchestrationLeadCallFactory(selected_facts, revision_seed, 'lead.front', 'EN', deny_authority, lambda _path: document_fixture.PLOT_ARCHITECT, schema_group_protocol=False)
         selected_factory = revision_factory(global_path)
         ordinary_factory = revision_factory(None)
@@ -1078,7 +1079,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         wire = c.encode_collaboration_proposal(scoped)
         self.assertEqual(c.decode_collaboration_proposal(wire), scoped)
         self.assertNotEqual(scoped.proposal_digest, legacy.proposal_digest)
-        frozen = json.loads((Path(__file__).parent / "fixtures/authoring_scope_compatibility/scope_v2_basis_v1_76a80f7.json").read_bytes())
+        frozen = json.loads((Path(__file__).parents[1] / "fixtures/authoring_scope_compatibility/scope_v2_basis_v1_76a80f7.json").read_bytes())
         self.assertEqual(frozen["source_commit"], "76a80f72be711d927fff7eee4ee455d3b37802c4")
         for case in frozen["cases"].values():
             raw = case["proposal_utf8"].encode()

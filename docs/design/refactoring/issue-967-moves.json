@@ -3054,68 +3054,208 @@
       {
         "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_published_recommended_action_position_and_keyword_only_scope_are_preserved",
         "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_published_recommended_action_position_and_keyword_only_scope_are_preserved",
-        "before_case_AST_sha256": "44e1a6d4dfa22b6860440c3471603c78c04208b5e8824850831ea7fc3acef1f5",
-        "assertion_call_count": 8
+        "before_case_AST_sha256": "3a052438b64360ac86228a47d78fbf2385570bf3bb7d1e8d56f4b53e88bb081b",
+        "assertion_call_count": 8,
+        "planning_python314_before_case_AST_sha256": "44e1a6d4dfa22b6860440c3471603c78c04208b5e8824850831ea7fc3acef1f5"
       },
       {
         "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
         "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
-        "before_case_AST_sha256": "883e4486ee541d3494c5c687724113f85335a4133cd48742ccc84fe93c9b020e",
-        "assertion_call_count": 24
+        "before_case_AST_sha256": "97df30ca208cf498a56089485b15b5f4005dd36a6e0f0ed2638808a728ac2110",
+        "assertion_call_count": 24,
+        "planning_python314_before_case_AST_sha256": "883e4486ee541d3494c5c687724113f85335a4133cd48742ccc84fe93c9b020e"
       },
       {
         "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_mixed_paths_and_semantics_union_without_inventory_inference",
         "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_mixed_paths_and_semantics_union_without_inventory_inference",
-        "before_case_AST_sha256": "e81251b6f535636ef43914830f808d36020c3dd9b3319be8b2a19fac397ad0d0",
-        "assertion_call_count": 38
+        "before_case_AST_sha256": "ac8bd17bf2a582f7882daaecdf3f4a0d048fc1d17709dd9c647006965597deaf",
+        "assertion_call_count": 38,
+        "planning_python314_before_case_AST_sha256": "e81251b6f535636ef43914830f808d36020c3dd9b3319be8b2a19fac397ad0d0"
       },
       {
         "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
         "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
-        "before_case_AST_sha256": "079b1c79ad97ea9293c7647520503b6a7997aa4b67564ed73286475679d89fb7",
-        "assertion_call_count": 16
+        "before_case_AST_sha256": "99d8396a8df9a80d84e12cc583387159ffdd639792a8235aec42bc4b2ed9661d",
+        "assertion_call_count": 16,
+        "planning_python314_before_case_AST_sha256": "079b1c79ad97ea9293c7647520503b6a7997aa4b67564ed73286475679d89fb7"
       },
       {
         "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_review_requires_disclosed_concrete_basis_while_draft_forbids_it",
         "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_review_requires_disclosed_concrete_basis_while_draft_forbids_it",
-        "before_case_AST_sha256": "243a431b8a42a41dc7206880fb6b22569ba4329c2e1c3122fe71d802da7bc4c2",
-        "assertion_call_count": 3
+        "before_case_AST_sha256": "33fe02cd9c7e6d301c60d901c80c6cbdc636c9d596112bd8c1ba6a5bc7e35fee",
+        "assertion_call_count": 3,
+        "planning_python314_before_case_AST_sha256": "243a431b8a42a41dc7206880fb6b22569ba4329c2e1c3122fe71d802da7bc4c2"
       },
       {
         "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
         "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
-        "before_case_AST_sha256": "2de220e3d5515f3141aac648677d163d03199ca58e55b9ec1f8daeb38d7cbd7f",
-        "assertion_call_count": 100
+        "before_case_AST_sha256": "779b75115e4b5e60c2fd446a60746773efcd8d7d4b7fa5cc4ccac6ccae6368bc",
+        "assertion_call_count": 100,
+        "planning_python314_before_case_AST_sha256": "2de220e3d5515f3141aac648677d163d03199ca58e55b9ec1f8daeb38d7cbd7f"
       },
       {
         "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
         "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
-        "before_case_AST_sha256": "94544511c0191c35208e17ca33cd4298b0d4593f095571b3f5412d3c3073f637",
-        "assertion_call_count": 6
+        "before_case_AST_sha256": "9656a9d094facaee504be2cd80970361a51ac3acbaa992a1d7a7ff744038ec80",
+        "assertion_call_count": 6,
+        "planning_python314_before_case_AST_sha256": "94544511c0191c35208e17ca33cd4298b0d4593f095571b3f5412d3c3073f637"
       },
       {
         "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current",
         "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current",
-        "before_case_AST_sha256": "390e103a351b6917b35abe36974f06346a303b026918f1761e8a32cca043bb35",
-        "assertion_call_count": 27
+        "before_case_AST_sha256": "63b79e5259d23902d046262ec5ea9dd18da39d12ba1dc74d36a2af542db71ad8",
+        "assertion_call_count": 27,
+        "planning_python314_before_case_AST_sha256": "390e103a351b6917b35abe36974f06346a303b026918f1761e8a32cca043bb35"
       },
       {
         "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest",
         "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest",
-        "before_case_AST_sha256": "ec283952666f9747b1f41cb771de91d5bad1a61fb5c953e52585fb2ada95c60b",
-        "assertion_call_count": 29
+        "before_case_AST_sha256": "33935de6f8caac9956c2c3f1c46073fdadb99dba0fa5a835c6e195badc27c4e2",
+        "assertion_call_count": 29,
+        "planning_python314_before_case_AST_sha256": "ec283952666f9747b1f41cb771de91d5bad1a61fb5c953e52585fb2ada95c60b"
       },
       {
         "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_drafted_is_neither_supports_nor_legacy_review_assessment",
         "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_drafted_is_neither_supports_nor_legacy_review_assessment",
-        "before_case_AST_sha256": "a1ed7336e35834d42c9198461338527839df5a03f4360639d070b57e4ebe7478",
-        "assertion_call_count": 9
+        "before_case_AST_sha256": "3b1e311e30f817b064f05b0cc8b779e94992192c8b48fe5a41b8e0a47768dfd1",
+        "assertion_call_count": 9,
+        "planning_python314_before_case_AST_sha256": "a1ed7336e35834d42c9198461338527839df5a03f4360639d070b57e4ebe7478"
       }
     ],
     "old_count": 10,
     "new_count": 10,
     "new_scenarios": 0,
-    "status": "테스트 이동 전 정확한 대응표; 실제 after 동등성은 구현 후 검증"
+    "status": "테스트 이동 전 정확한 대응표; 실제 after 동등성은 구현 후 검증",
+    "AST_serializer": {
+      "authoritative_python": "3.11.18",
+      "form": "entire FunctionDef ast.dump(include_attributes=False), UTF-8 SHA256",
+      "planning_prior_python": "3.14.2",
+      "prior_values_preserved": true,
+      "source_content_changed": false
+    }
   },
-  "test_budget_evidence_sha256": "abdd59fe3ba78bb7cf5efda0a37c9a031e4374322b38595b14218e5c4a3441ae"
+  "test_budget_evidence_sha256": "abdd59fe3ba78bb7cf5efda0a37c9a031e4374322b38595b14218e5c4a3441ae",
+  "implementation_state": "생산·테스트·인덱스 동결 및 정적 gate 완료. hosted after 실행 전 후보.",
+  "source_implementation_evidence": {
+    "source_count": 229,
+    "source_digest": "1132fd6cea6bb73460de61b392789b1fdc7991f6b9362be82a418e538d54447d",
+    "changed_file_hashes": [
+      {
+        "path": "src/story_writing_agents/orchestrator.py",
+        "sha256": "1f89e987d8ab75d14ecf96aa8f03c3c50e77b9a8afe43bea128cd5f38cef9fc9",
+        "bytes": 1010823,
+        "lines": 18437
+      },
+      {
+        "path": "src/story_writing_agents/lead_preparation/__init__.py",
+        "sha256": "02b3cdd7dfc705ff6055f1f4129937330b4424c08fbeab0105a034d03357fb7e",
+        "bytes": 64,
+        "lines": 1
+      },
+      {
+        "path": "src/story_writing_agents/lead_preparation/call_rule_factory.py",
+        "sha256": "1c2bd95d04bc0d02e0021594a122547d2ee34e21b37c1dce8b315c5cd94f955f",
+        "bytes": 23727,
+        "lines": 399
+      },
+      {
+        "path": "src/story_writing_agents/lead_preparation/reply_contract_values.py",
+        "sha256": "a90fcfbb7971d810c4530fd322570836a34a55553f51cce8068c9e1d144adaef",
+        "bytes": 25098,
+        "lines": 575
+      },
+      {
+        "path": "src/story_writing_agents/lead_preparation/response_rules.py",
+        "sha256": "e71ffad0ce09544f90ba6bcc7f900e8d3a285d25142220d57dbb3d608cfe7197",
+        "bytes": 94545,
+        "lines": 803
+      },
+      {
+        "path": "PYTHON_MODULE_INDEX.md",
+        "sha256": "85bca6c3795f2de6096119bd68ebd888a48b1af42934eace1c591663f146287c",
+        "bytes": 38095,
+        "lines": 300
+      }
+    ],
+    "definitions_moved": 36,
+    "constants_moved": 3,
+    "references_rewritten": 211,
+    "recursive_code_pairs": 989,
+    "call_argument_shapes": 4972,
+    "import_identity_checks": 560,
+    "new_typehint_errors": 0,
+    "baseline_typehint_errors": 3,
+    "closure_deltas_immediately_consumed": 14,
+    "escaping_callback_changes": 0,
+    "new_namespaces": 4,
+    "new_peer_attribute_static_sites": 15,
+    "new_host_forward_frames": 0,
+    "complete_source_graph": {
+      "modules": 229,
+      "edges": 1157,
+      "SCC": 0
+    },
+    "existing_controller_graph_edges": 1147,
+    "controller_alias_blindspot_edges": 10,
+    "performance_certified": false,
+    "source_packet_sha256": "08c46c16f58ed9215d6ceeb56b67a908d7b17da51edcfeeb9cfcca257744a060"
+  },
+  "before_validation": {
+    "support_head": "d48a4a8ad879c2e4196ff6938c5d1571e59c103b",
+    "production_exact_accepted_base": true,
+    "focus_run": 42883035478,
+    "focus_RED_failure_count": 1,
+    "focus_GREEN_pass_count": 1,
+    "restored_original_exact": true,
+    "contracts10_run": 42883040720,
+    "normal_attempts": [
+      1,
+      2,
+      3
+    ],
+    "before_contracts10_normal_walls": [
+      278.787897688,
+      275.922534907,
+      280.009038318
+    ],
+    "minimum4_run": 42883045902,
+    "minimum4_wall": 1032.565301099,
+    "graph9_run": 42885111944
+  },
+  "test_implementation_evidence": {
+    "cases": 2544,
+    "classes": 389,
+    "new_cases": 0,
+    "new_scenarios": 0,
+    "moved_cases": 10,
+    "moved_assertion_calls": 260,
+    "source_charge": 151430,
+    "source_cap": 151431,
+    "headroom": 1,
+    "legacy_charge_retained": 1550,
+    "caps_rekeyed": 10,
+    "timing_class_group_rekeyed": 1,
+    "timing_group_value_unchanged": 612719301,
+    "shard_membership_equal": true,
+    "shard_weights_equal": true,
+    "natural_shard_order_equal": [
+      true,
+      false,
+      true,
+      true,
+      true
+    ],
+    "order_difference": "Case module ID 경로 변경에 따른 shard2 자연 정렬. 반복 비교 cohort는 동일 ID bijection/순서를 사용하며 full의 원본 순서 차이를 숨기지 않음.",
+    "focused_path_counts": [
+      2,
+      1,
+      2
+    ],
+    "focused_package_count": 3,
+    "affected_all_three_full_fallback": 2544,
+    "complete_impact_census_claimed": false,
+    "local_Case_runs": 0,
+    "local_Suite_runs": 0,
+    "actual_after_performance_certified": false
+  }
 }

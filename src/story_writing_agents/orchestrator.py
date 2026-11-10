@@ -515,21 +515,19 @@ from .runtime_resources.provider_call_accounting import AccountingContextProvide
 from .conversations import CollaborationAppendReceipt
 from .conversations import CollaborationEvent as CollaborationEventV2
 
-
-
-
-
-
-
-
-_BUDGET_POLICY_FINGERPRINT = (
-    "sha256:"
-    + hashlib.sha256(
-        b"lead-confirmed-collaboration-budget-v1;rounds=2;calls=12;"
-        b"context=5;references=runtime-local;allocation=specialist-round-robin"
-    ).hexdigest()
+from .lead_preparation import (
+    call_rule_factory,
+    reply_contract_values,
+    response_rules,
 )
-_CONTEXT_INVOCATION_CALL_LIMIT = 5
+
+
+
+
+
+
+
+
 _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES = frozenset(
     {
         ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
@@ -545,985 +543,11 @@ _LEAD_RESPONSE_CORRECTION_INSTRUCTION = (
     "task constraints, and do not invent completion or authority."
 )
 _SAFE_STRUCTURED_FALLBACK_MESSAGE = "LEAD_CONTRACT_REJECTED"
-_LEAD_PROPOSAL_USER_IMPACT = (
-    "Specialist advice and durable collaboration records only. "
-    "This step cannot change writing artifacts, the Git index, commits, "
-    "remotes, or merges."
-)
 _ADVISORY_USER_IMPACT = (
     "The selected specialist provides visible advice only. No lead synthesis, "
     "chaining, artifact mutation, or Git operation occurs."
 )
 
-
-def _closed_result_object(
-    properties: dict[str, object],
-    *,
-    description: str | None = None,
-    required: tuple[str, ...] | None = None,
-) -> dict[str, object]:
-    schema: dict[str, object] = {
-        "additionalProperties": False,
-        "properties": properties,
-        "required": list(properties if required is None else required),
-        "type": "object",
-    }
-    if description is not None:
-        schema["description"] = description
-    return schema
-
-
-def _string_array_result_schema(
-    *,
-    allowed_values: tuple[str, ...] = (),
-    min_items: int = 0,
-    max_items: int | None = None,
-) -> dict[str, object]:
-    item_schema: dict[str, object] = {"type": "string"}
-    if allowed_values:
-        item_schema["enum"] = list(allowed_values)
-    schema: dict[str, object] = {
-        "items": item_schema, "type": "array", "minItems": min_items,
-    }
-    if max_items is not None:
-        schema["maxItems"] = max_items
-    return schema
-
-
-def _authoring_scope_result_schema(
-    task_revisions: tuple[tuple[str, int], ...] = (),
-) -> dict[str, object]:
-    return LeadProviderConstraints(task_revisions=task_revisions).scope_schema()
-
-
-def _assignment_result_schema(
-    input_ids: tuple[str, ...],
-    constraints: LeadProviderConstraints | None = None,
-) -> dict[str, object]:
-    return (constraints or LeadProviderConstraints(input_ids=input_ids)).assignment_schema()
-
-
-def _proposal_result_schema(
-    relation: LeadProposalRelation,
-    input_ids: tuple[str, ...],
-    constraints: LeadProviderConstraints | None = None,
-) -> dict[str, object]:
-    facts = constraints or LeadProviderConstraints(input_ids=input_ids)
-    assignments = {"assignments": {
-        "items": facts.assignment_schema(), "type": "array",
-        "minItems": len(facts.preparation_specialists) or 1,
-        "maxItems": len(facts.preparation_specialists) or len(SPECIALIST_IDS),
-    }}
-    if facts.scope is None or facts.scope.schema_version == 3:
-        assignments["shared_premises"] = {"type": "array", "minItems": 0, "items": _closed_result_object({
-            "slot_id": nonempty_text_schema(),
-            "selected_premise": {"anyOf": [
-                {**nonempty_text_schema(), "description": "Exact disclosed shared-premise choice supported by the selected sources."},
-                {"type": "null", "description": "No premise is selected; clarify before a confirmable proposal."},
-            ]},
-            "basis_input_ids": string_array(None if facts.allow_read_sources else facts.input_ids),
-        }), "description": "Bind each declared dependency slot to a disclosed choice and currently available sources; unresolved choices require clarification."}
-    if facts.scope and facts.scope.intent is AuthoringIntent.REVIEW_ONLY:
-        return _closed_result_object({**assignments, "objective_intent": {"type": "string", "enum": []}},
-            required=tuple(assignments), description="Confirm only this exact supplied-material review; no drafting or artifact objective.")
-    if facts.preparation_kind and facts.preparation_objective_id is None:
-        return _closed_result_object({**assignments, "objective_intent": {"type": "string", "enum": []}},
-            required=tuple(assignments), description=(
-            "Propose specialist work when no document change request update is needed; "
-            "confirmation authorizes only these disclosed assignments."
-        ))
-    return _closed_result_object({**assignments, "objective_intent": facts.objective_schema("consult")},
-        required=None if facts.preparation_kind else tuple(assignments),
-        description=(
-            "Propose the disclosed specialist assignments, optionally starting or advancing "
-            "a document change request; confirmation does not authorize document changes."
-        ),
-    )
-
-
-def _artifact_intent_result_schema(
-    constraints: LeadProviderConstraints | None = None,
-) -> dict[str, object]:
-    operation_schemas = [
-        _closed_result_object(
-            {
-                "kind": {"enum": ["create"], "type": "string"},
-                "suggested_path": {"type": "string"},
-                "new_text": {"type": "string"},
-            },
-            description=(
-                "Create a document when the canonical destination is new; provide its complete "
-                "UTF-8 text and proposed workspace-relative path."
-            ),
-        ),
-        _closed_result_object(
-            {
-                "kind": {"enum": ["patch"], "type": "string"},
-                "evidence_id": {"type": "string"},
-                "replacement_text": {"type": "string"},
-            },
-            description=(
-                "Patch only the exact span identified by completed READ evidence when a local "
-                "edit suffices; provide its replacement text."
-            ),
-        ),
-        _closed_result_object(
-            {
-                "kind": {"enum": ["replace"], "type": "string"},
-                "evidence_id": {"type": "string"},
-                "new_text": {"type": "string"},
-            },
-            description=(
-                "Replace all text when a whole-document rewrite is needed; select completed "
-                "whole-file READ evidence and provide complete new text."
-            ),
-        ),
-        _closed_result_object(
-            {
-                "kind": {"enum": ["rename"], "type": "string"},
-                "evidence_id": {"type": "string"},
-                "suggested_destination": {"type": "string"},
-            },
-            description=(
-                "Rename the document identified by completed READ evidence when only its location"
-                " changes; propose a new canonical workspace-relative destination."
-            ),
-        ),
-        _closed_result_object(
-            {
-                "kind": {"enum": ["delete"], "type": "string"},
-                "evidence_id": {"type": "string"},
-            },
-            description=(
-                "Delete the document identified by completed READ evidence when its removal is "
-                "intended; this proposes deletion without executing it."
-            ),
-        ),
-    ]
-    operations = {
-        "operations": {
-            "items": {"anyOf": operation_schemas},
-            "minItems": 1,
-            "type": "array",
-        },
-    }
-    facts = constraints or LeadProviderConstraints()
-    return _closed_result_object({**operations, "objective_intent": facts.objective_schema("prepare")},
-        required=None if facts.preparation_kind else tuple(operations),
-        description=(
-            "Prepare exact changes, optionally starting or advancing a document change request; "
-            "review and Apply still require separate confirmation."
-        ),
-    )
-
-
-def _recommended_action_result_schema(
-    constraints: LeadProviderConstraints | None = None,
-) -> dict[str, object]:
-    return (constraints or LeadProviderConstraints()).recommendation_schema()
-
-
-def _objective_intent_result_schema() -> dict[str, object]:
-    return {"anyOf": [
-        {"type": "null", "description": "Leave document change request tracking unchanged when no lifecycle update is needed."},
-        {**LeadProviderConstraints().objective_schema("clarify", cancel=True),
-         "description": (
-             "Update request tracking when the user starts, continues, or explicitly cancels "
-             "a document change request."
-         )},
-    ]}
-
-
-def _provider_result_contract(contract_id: str, schema: dict[str, object]) -> ContextJsonObjectResultContract:
-    return ContextJsonObjectResultContract(contract_id, project_result_schema(schema, contract_id))
-
-def _lead_result_rule_seed(contract_id: str, schema: dict[str, object]) -> LeadResultRuleSeed:
-    """Capture a pure planning declaration; only bound current rules are offered."""
-    return LeadResultRuleSeed.declare(contract_id, project_result_schema(schema, contract_id))
-
-
-def _lead_discussion_result_contract(
-    constraints: LeadDiscussionConstraints,
-) -> LeadResultRuleSeed:
-    return _lead_result_rule_seed(
-        "lead-discussion-response-v1", constraints.schema(),
-    )
-
-
-def _target_authoring_scope_prior(
-    scope: AuthoringScope,
-    source: AuthoringScope | None,
-    receipt: LeadTaskTransitionReceipt | None,
-) -> AuthoringScope | None:
-    """Separate a caller-verified NEW_TASK target from its retained source evidence."""
-    if (
-        source is not None
-        and type(receipt) is LeadTaskTransitionReceipt
-        and receipt.origin_kind == "task_decision"
-        and receipt.action is LeadTaskAction.NEW_TASK
-        and (scope.task_id, scope.task_revision)
-        == (receipt.target_task_id, receipt.target_task_revision)
-        and scope.task_id != source.task_id
-        and receipt.source_task_ref is not None
-        and (receipt.source_task_ref.task_id, receipt.source_task_ref.task_revision)
-        == (source.task_id, source.task_revision)
-    ):
-        return None
-    return source
-
-
-
-def _document_successor_selection(
-    binding: DocumentNodeBinding | None,
-    source_event: CollaborationEvent | None,
-    current_scope: AuthoringScope | None,
-    target_scope: AuthoringScope | None,
-    task_binding: TaskBindingPlan | None,
-) -> DocumentNodeSelection | None:
-    """Select an exact successor's input intent without carrying its authority."""
-    if (type(binding) is not DocumentNodeBinding or type(source_event) is not CollaborationEvent
-            or type(current_scope) is not AuthoringScope or type(target_scope) is not AuthoringScope
-            or type(task_binding) is not TaskBindingPlan
-            or task_binding.transition not in {"revise", "reserved"}):
-        return None
-    captured = getattr(source_event.payload, "authoring_scope", None)
-    if (type(captured) is not AuthoringScope
-            or (source_event.session_id, source_event.conversation_id, source_event.event_id)
-            != (binding.task_ref.session_id, binding.task_ref.conversation_id, binding.task_ref.scope_event_id)
-            or (captured.task_id, captured.task_revision, captured.target_paths)
-            != (binding.task_ref.task_id, binding.task_ref.task_revision, current_scope.target_paths)
-            or (current_scope.task_id, current_scope.task_revision)
-            != (binding.task_ref.task_id, binding.task_ref.task_revision)
-            or binding.task_ref.scope_digest != "sha256:" + hashlib.sha256(json.dumps(
-                asdict(captured), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
-            or len(current_scope.target_paths) != 1
-            or target_scope.target_paths != current_scope.target_paths
-            or target_scope.intent is not current_scope.intent
-            or (target_scope.task_id, target_scope.task_revision)
-            != (current_scope.task_id, current_scope.task_revision + 1)
-            or (task_binding.task_id, task_binding.task_revision)
-            != (target_scope.task_id, target_scope.task_revision)):
-        return None
-    return DocumentNodeSelection(binding.plan_ref, node_id=binding.node_id,
-        candidate_uses=tuple(DocumentCandidateSelection(use.predecessor_node_id, use.candidate,
-            use.permitted_scope, use.purpose) for use in binding.candidate_uses))
-
-
-def _lead_revision_result_contract(
-    expected_relation: LeadProposalRelation, input_ids: tuple[str, ...],
-    task_revisions: tuple[tuple[str, int], ...],
-    constraints: LeadProviderConstraints,
-    discussion_constraints: LeadDiscussionConstraints, *,
-    fresh_revision_only: bool = False, source_scope: AuthoringScope | None = None,
-    artifact_revision_only: bool = False,
-    selected_document_review_path: str | None = None,
-) -> LeadResultRuleSeed:
-    if selected_document_review_path is not None and (
-        not fresh_revision_only
-        or constraints.document_node_digest is None
-        or constraints.document_target_paths != (selected_document_review_path,)
-    ):
-        raise ValueError("selected document review requires its frozen exact node policy")
-    authoring = _lead_front_result_contract(
-        expected_relation, input_ids, task_revisions, constraints,
-        fresh_revision_only=False,
-    )
-    discussion = _lead_discussion_result_contract(discussion_constraints)
-    def mutable(value: object) -> object:
-        if isinstance(value, Mapping):
-            return {key: mutable(member) for key, member in value.items()}
-        if isinstance(value, (tuple, list)):
-            return [mutable(member) for member in value]
-        return value
-    variants = mutable(list(authoring.schema_value()["anyOf"]))
-    if artifact_revision_only:
-        variants = [
-            variant for variant in variants
-            if variant.get("properties", {}).get("response_type", {}).get("enum", [])
-            in (["artifact_change_proposal"], ["proposal_drafting_recommendation"])
-            and variant.get("properties", {}).get("writing_task_scope", {}).get("type") == "object"
-            and variant["properties"]["writing_task_scope"].get("properties", {}).get(
-                "writing_intent", {}).get("enum", []) == [AuthoringIntent.AUTHORING.value]
-        ]
-        artifact_variants = []
-        for variant in variants:
-            properties = variant["properties"]
-            if properties["response_type"]["enum"] == ["proposal_drafting_recommendation"]:
-                request = properties["proposal_drafting_request"]
-                options = request.get("anyOf", [request])
-                permitted = [
-                    option for option in options
-                    if option["properties"]["action_type"]["enum"] == ["draft_document_change_proposal"]
-                ]
-                if not permitted:
-                    continue
-                if len(permitted) == 1:
-                    properties["proposal_drafting_request"] = permitted[0]
-                elif "anyOf" in request:
-                    request["anyOf"] = permitted
-            scope = properties["writing_task_scope"]["properties"]
-            scope["activity_type"]["enum"] = ["review_writing"]
-            scope["writing_intent"]["enum"] = ["authoring"]
-            artifact_variants.append(variant)
-        variants = artifact_variants
-    elif fresh_revision_only or (source_scope is not None and source_scope.intent is AuthoringIntent.AUTHORING):
-        selected_reviews = []
-        if selected_document_review_path is not None:
-            for variant in variants:
-                properties = variant.get("properties", {})
-                scope = properties.get("writing_task_scope", {})
-                intent = scope.get("properties", {}).get("writing_intent", {}).get("enum", [])
-                response = properties.get("response_type", {}).get("enum", [])
-                if (
-                    response == ["artifact_change_proposal"]
-                    and intent == [AuthoringIntent.AUTHORING.value]
-                    and "authoring_assessment" in properties
-                ) or (
-                    response == ["specialist_consultation_proposal"]
-                    and intent == [AuthoringIntent.REVIEW_ONLY.value]
-                ):
-                    scope_properties = scope["properties"]
-                    scope_properties["activity_type"]["enum"] = ["review_writing"]
-                    scope_properties["target_artifact_paths"] = {
-                        **scope_properties["target_artifact_paths"],
-                        **string_array((selected_document_review_path,), minimum=1, maximum=1),
-                    }
-                    selected_reviews.append(variant)
-        variants = [variant for variant in variants
-                    if variant.get("properties", {}).get("response_type", {}).get("enum", [])
-                    in (["specialist_consultation_proposal"], ["proposal_drafting_recommendation"])
-                    and variant.get("properties", {}).get("writing_task_scope", {}).get("type") == "object"
-                    and variant["properties"]["writing_task_scope"].get("properties", {}).get(
-                        "writing_intent", {}).get("enum", []) == [AuthoringIntent.AUTHORING.value]]
-        consultations = []
-        for variant in variants:
-            properties = variant["properties"]
-            if properties["response_type"]["enum"] == ["proposal_drafting_recommendation"]:
-                request = properties["proposal_drafting_request"]
-                options = request.get("anyOf", [request])
-                permitted = [
-                    option for option in options
-                    if option["properties"]["action_type"]["enum"]
-                    == ["draft_specialist_consultation_proposal"]
-                ]
-                if not permitted:
-                    continue
-                if len(permitted) == 1:
-                    properties["proposal_drafting_request"] = permitted[0]
-                elif "anyOf" in request:
-                    request["anyOf"] = permitted
-            consultations.append(variant)
-        variants = consultations
-        for variant in variants:
-            scope = variant["properties"]["writing_task_scope"]["properties"]
-            scope["activity_type"]["enum"] = ["draft_writing", "revise_writing"]
-            if (
-                expected_relation is LeadProposalRelation.REVISE_PENDING
-                and source_scope is not None
-                and source_scope.activity is AuthoringActivity.REVIEW
-            ):
-                scope["activity_type"]["enum"].insert(0, "review_writing")
-            scope["writing_intent"]["enum"] = ["authoring"]
-        variants.extend(selected_reviews)
-    return LeadResultRuleSeed.declare(
-        "lead-response-v9",
-        mutable({
-            "anyOf": [*variants, discussion.schema_value()],
-            "description": (
-                "Discuss the revision or propose fresh authoring under "
-                "the host-bound work scope."
-            ),
-        }),
-    )
-
-
-def _lead_front_result_contract(
-    expected_relation: LeadProposalRelation,
-    input_ids: tuple[str, ...],
-    task_revisions: tuple[tuple[str, int], ...] = (),
-    constraints: LeadProviderConstraints | None = None,
-    *, fresh_revision_only: bool = False,
-) -> LeadResultRuleSeed:
-    facts = constraints or LeadProviderConstraints(input_ids=input_ids, task_revisions=task_revisions)
-    scoped = {"message": nonempty_text_schema(), "authoring_scope": facts.scope_schema()}
-    if fresh_revision_only:
-        scope_properties = scoped["authoring_scope"]["properties"]
-        scope_properties["activity"]["enum"] = [AuthoringActivity.DRAFT.value, AuthoringActivity.REVISE.value]
-        scope_properties["intent"]["enum"] = [AuthoringIntent.AUTHORING.value]
-    proposal_meanings = {
-        "proposal": (
-            "Propose specialist consultation when the affected domains need drafting or "
-            "review; disclose the assignments for separate confirmation."
-        ),
-        "artifact_intent": (
-            "Propose exact artifact changes when content and READ evidence are ready for "
-            "specialist review; separate review, Apply, and Commit confirmations remain "
-            "required."
-        ),
-    }
-    recommendation = _closed_result_object({**scoped,
-        "kind": {"enum": ["recommendation"], "type": "string"},
-        "recommended_action": facts.recommendation_schema()},
-        description=(
-            "Recommend one proposal-drafting step when preparation should be confirmed before "
-            "forming the full specialist or document-change proposal."
-        ),
-    )
-    if facts.recommendation_only:
-        variants = [recommendation]
-    elif facts.preparation_kind:
-        field = "artifact_intent" if facts.preparation_kind == "prepare_artifact" else "proposal"
-        intent = (_artifact_intent_result_schema(facts) if field == "artifact_intent" else
-                  _proposal_result_schema(expected_relation, input_ids, facts))
-        variants = [
-            _closed_result_object({**scoped, "kind": {"enum": ["question"], "type": "string"}},
-                description=(
-                    "Ask a clarification question when required information is missing from the "
-                    "confirmed preparation; preserve its scope."
-                ),
-            ),
-            _closed_result_object({**scoped, "kind": {"enum": ["proposal"], "type": "string"}, field: intent},
-                description=proposal_meanings[field],
-            ),
-        ]
-    else:
-        can_track = not (facts.scope and facts.scope.intent is AuthoringIntent.REVIEW_ONLY)
-        cancellation = {"objective_intent": {"type": "string", "enum": []}}
-        if can_track and (facts.objective_ids is None or facts.objective_ids):
-            identity: dict[str, object] = {"type": "string"}
-            if facts.objective_ids:
-                identity["enum"] = list(facts.objective_ids)
-            cancellation = {"objective_intent": _closed_result_object({
-                "action": {"enum": ["cancel"], "type": "string"}, "objective_id": identity,
-            }, description="Close only the selected request explicitly cancelled by the user; no document change.")}
-        variants = [
-            _closed_result_object({**scoped, **cancellation}, required=tuple(scoped),
-                description=(
-                    "Answer workflow or status questions or report current READ-supported facts in REVIEW "
-                    "scope. Optionally acknowledge an explicitly cancelled document change request."
-                )),
-            _closed_result_object({**scoped, "kind": {"enum": ["question"], "type": "string"},
-                "objective_intent": facts.objective_schema("clarify") if can_track else {"type": "string", "enum": []}},
-                required=(*scoped, "kind"), description=(
-                    "Ask for missing information, optionally starting or continuing the associated "
-                    "document change request; keep that request pending."
-                )),
-            _closed_result_object({**scoped, "kind": {"enum": ["critique"], "type": "string"}, **cancellation},
-                required=(*scoped, "kind"), description=(
-                    "Explain a scoped concern, optionally acknowledging an explicitly cancelled "
-                    "document change request; this performs no document change."
-                )),
-            recommendation,
-        ]
-        for field, intent in (("proposal", _proposal_result_schema(expected_relation, input_ids, facts)),
-                              ("artifact_intent", _artifact_intent_result_schema(facts))):
-            variants.append(_closed_result_object({**scoped,
-                "kind": {"enum": ["proposal"], "type": "string"}, field: intent},
-                description=proposal_meanings[field],
-            ))
-    if fresh_revision_only:
-        variants = [variant for variant in variants
-                    if not {"artifact_intent", "recommended_action"}.intersection(variant.get("properties", {}))]
-    if facts.scope and facts.scope.intent is AuthoringIntent.REVIEW_ONLY:
-        variants = [
-            variant for variant in variants
-            if "artifact_intent" not in variant.get("properties", {})
-        ]
-    if facts.adoption_intent is not None:
-        variants = [variant for variant in variants if "proposal" in variant.get("properties", {})]
-    if facts.premise_question_id is not None:
-        variants.append(PremiseDecisionConstraints(facts.premise_question_id,
-            facts.input_ids, allow_read_sources=facts.allow_read_sources).front_schema())
-    if (facts.readiness_source_basis_ref is not None and not fresh_revision_only
-            and not facts.preparation_kind and not facts.recommendation_only
-            and facts.adoption_intent is None and facts.scope is None):
-        variants.append(_closed_result_object({
-            "kind": {"type": "string", "enum": ["answer"]},
-            "message": nonempty_text_schema(), "authoring_scope": {"type": "null"},
-            "core_document_assessment": core_assessment_schema(
-                None if facts.allow_read_sources else facts.input_ids,
-                None if facts.allow_read_sources else (), facts.readiness_source_basis_ref),
-        }, description="Assess the actual current whole-book basis and four core documents; readiness grants no authoring or write authority."))
-    for variant in variants:
-        if variant.get("properties", {}).get("kind", {}).get("enum") == ["question"]:
-            variant["properties"]["planning_target"] = alternatives([
-                {"type": "string", "enum": [target.value for target in AuthoringTarget],
-                         "description": 'Semantic document kind for a genuine formal-writing clarification; this is not an artifact path, task, readiness finding, or execution authority.'},
-                        {"type": "null", "description": 'No formal document-target classification is supplied; freeform, workflow, review, and already-targeted work retain their existing scope.'}])
-            variant["required"] = [*variant["required"], "planning_target"]
-    qualified_variants = []
-    for variant in variants:
-        properties = variant.get("properties", {})
-        authoring_capable = (
-            bool({"proposal", "artifact_intent", "recommended_action"}.intersection(properties))
-            and properties.get("authoring_scope", {}).get("type") == "object"
-            and facts.adoption_intent is not AuthoringIntent.REVIEW_ONLY
-            and not (facts.scope is not None and facts.scope.intent is AuthoringIntent.REVIEW_ONLY)
-        )
-        if not authoring_capable:
-            qualified_variants.append(variant)
-            continue
-        intent_schema = properties["authoring_scope"]["properties"].get("intent")
-        offered_intents = () if intent_schema is None else tuple(intent_schema.get("enum", ()))
-        if AuthoringIntent.REVIEW_ONLY.value in offered_intents and len(offered_intents) > 1:
-            for intent in offered_intents:
-                scoped_variant = json.loads(json.dumps(variant))
-                scoped_variant["properties"]["authoring_scope"]["properties"]["intent"]["enum"] = [intent]
-                if intent == AuthoringIntent.AUTHORING.value:
-                    scoped_variant["properties"]["authoring_assessment"] = assessment_schema(
-                        None if facts.allow_read_sources else facts.assessment_source_ids)
-                    scoped_variant["required"].append("authoring_assessment")
-                qualified_variants.append(scoped_variant)
-        else:
-            properties["authoring_assessment"] = assessment_schema(
-                None if facts.allow_read_sources else facts.assessment_source_ids)
-            variant["required"].append("authoring_assessment")
-            qualified_variants.append(variant)
-    variants = qualified_variants
-    schema = alternatives(variants)
-    schema["description"] = (
-        (
-            "Respond as Lead within the current writing scope. Choose the permitted result "
-            "that advances the user's request; proposals and recommendations grant no "
-            "execution or write authority. "
-        )
-        + schema.get("description", "")
-    ).rstrip()
-    concise_descriptions = {
-        'Classify the current work and include every affected specialist domain and canonical workspace-relative target. Preserve the bound scope and work scope when supplied.':
-            'Declare affected specialists and canonical targets; preserve work scope.',
-        'Disclose review_only only for an explicit request to evaluate the supplied original without authoring or artifact authority. Activity review alone does not imply this intent. Preserve bound intent; requested revisions need fresh authoring work.':
-            'review_only evaluates an explicitly supplied original; activity review is not intent. Preserve bound intent. Revisions need fresh authoring authority.',
-        "Nonempty UTF-8 task instructions specifying this specialist's concrete deliverable and success criteria against the shared writing-task brief. Preserve its protected elements, change boundaries, and exact offered source identities.":
-            'State the concrete deliverable and success criteria; preserve protected elements, change boundaries, and exact source IDs.',
-        "Preparation recommendation sources are not assignment inputs unless confirmed preparation has materialized and offered them here. Preserve all required inputs and each reviewer's own source.":
-            'Use every required/reviewer input. Recommendation sources become inputs only when preparation offers them.',
-        ' USER instruction input is host-wired separately from the exact adopted_idea supplied candidate; preserve every other declared source role.':
-            'Review-only adoption: USER instructions are host-wired; adopted_idea is the exact candidate. Keep other source roles.',
-        'Assign Plot when plot, causality, pacing, or outline structure is affected; request its scoped draft or review.':
-            'Plot: draft or review plot, causality, pacing and outline.',
-        'Assign Character when characterization, motivation, or relationships are affected; request its scoped draft or review.':
-            'Character: draft or review characterization, motivation and relationships.',
-        'Assign Execution when scene prose, narrative voice, or narrative rules are affected; request its scoped draft or review.':
-            'Execution: draft or review prose, voice and narrative rules.',
-    }
-
-    concise_descriptions.update({'Answer workflow or status questions directly when no clarification, request update, or specialist proposal is needed.': 'Answer '
-                                                                                                                              'workflow/status '
-                                                                                                                              'only '
-                                                                                                                              'when '
-                                                                                                                              'no '
-                                                                                                                              'clarification, '
-                                                                                                                              'request '
-                                                                                                                              'update '
-                                                                                                                              'or '
-                                                                                                                              'specialist '
-                                                                                                                              'proposal '
-                                                                                                                              'is '
-                                                                                                                              'needed.',
-     'Ask for missing information while starting or continuing the associated document change request; keep that request pending.': 'Ask '
-                                                                                                                                    'missing '
-                                                                                                                                    'information '
-                                                                                                                                    'while '
-                                                                                                                                    'starting/continuing '
-                                                                                                                                    'the '
-                                                                                                                                    'document-change '
-                                                                                                                                    'request; '
-                                                                                                                                    'keep '
-                                                                                                                                    'it '
-                                                                                                                                    'pending.',
-     'Ask for missing information with clarification_question, or explain a scoped concern with critique, when no document request update or proposal is needed.': 'Ask '
-                                                                                                                                                                   'clarification_question '
-                                                                                                                                                                   'or '
-                                                                                                                                                                   'give '
-                                                                                                                                                                   'scoped '
-                                                                                                                                                                   'critique '
-                                                                                                                                                                   'only '
-                                                                                                                                                                   'when '
-                                                                                                                                                                   'no '
-                                                                                                                                                                   'document-request '
-                                                                                                                                                                   'update '
-                                                                                                                                                                   'or '
-                                                                                                                                                                   'proposal '
-                                                                                                                                                                   'is '
-                                                                                                                                                                   'needed.',
-     'Assess supplied foundations and USER-bounded creative work; host qualification remains separate.': 'Assess '
-                                                                                                         'supplied '
-                                                                                                         'foundations/USER-bounded '
-                                                                                                         'creative '
-                                                                                                         'work; '
-                                                                                                         'host '
-                                                                                                         'qualification '
-                                                                                                         'is '
-                                                                                                         'separate.',
-     "Assignment sources use only offered assignment inputs or evidence IDs from completed authorized READs. Preparation recommendation sources are not assignment inputs unless confirmed preparation has materialized and offered them here. Preserve all required inputs and each reviewer's own source.": 'Only '
-                                                                                                                                                                                                                                                                                                              'offered '
-                                                                                                                                                                                                                                                                                                              'inputs '
-                                                                                                                                                                                                                                                                                                              'or '
-                                                                                                                                                                                                                                                                                                              'completed '
-                                                                                                                                                                                                                                                                                                              'authorized '
-                                                                                                                                                                                                                                                                                                              'READ '
-                                                                                                                                                                                                                                                                                                              'IDs; '
-                                                                                                                                                                                                                                                                                                              'recommendation '
-                                                                                                                                                                                                                                                                                                              'sources '
-                                                                                                                                                                                                                                                                                                              'need '
-                                                                                                                                                                                                                                                                                                              'confirmed '
-                                                                                                                                                                                                                                                                                                              'materialization/offering. '
-                                                                                                                                                                                                                                                                                                              'Keep '
-                                                                                                                                                                                                                                                                                                              'all '
-                                                                                                                                                                                                                                                                                                              'required '
-                                                                                                                                                                                                                                                                                                              'inputs '
-                                                                                                                                                                                                                                                                                                              'and '
-                                                                                                                                                                                                                                                                                                              'each '
-                                                                                                                                                                                                                                                                                                              "reviewer's "
-                                                                                                                                                                                                                                                                                                              'own '
-                                                                                                                                                                                                                                                                                                              'source.',
-     'Bind each declared dependency slot to a disclosed choice and currently available sources; unresolved choices require clarification.': 'Bind '
-                                                                                                                                            'every '
-                                                                                                                                            'declared '
-                                                                                                                                            'slot '
-                                                                                                                                            'to '
-                                                                                                                                            'a '
-                                                                                                                                            'disclosed '
-                                                                                                                                            'choice/current '
-                                                                                                                                            'sources; '
-                                                                                                                                            'clarify '
-                                                                                                                                            'unresolved '
-                                                                                                                                            'choices.',
-     'Create a document when the canonical destination is new; provide its complete UTF-8 text and proposed workspace-relative path.': 'Create '
-                                                                                                                                       'only '
-                                                                                                                                       'at '
-                                                                                                                                       'a '
-                                                                                                                                       'new '
-                                                                                                                                       'canonical '
-                                                                                                                                       'destination; '
-                                                                                                                                       'supply '
-                                                                                                                                       'complete '
-                                                                                                                                       'UTF-8 '
-                                                                                                                                       'text '
-                                                                                                                                       'and '
-                                                                                                                                       'proposed '
-                                                                                                                                       'workspace-relative '
-                                                                                                                                       'path.',
-     'Declare affected specialists and canonical targets; preserve work scope.': 'Declare affected '
-                                                                                    'specialists/canonical '
-                                                                                    'targets; preserve '
-                                                                                    'work scope.',
-     'Delete the document identified by completed READ evidence when its removal is intended; this proposes deletion without executing it.': 'Propose '
-                                                                                                                                             'intended '
-                                                                                                                                             'document '
-                                                                                                                                             'deletion '
-                                                                                                                                             'using '
-                                                                                                                                             'completed '
-                                                                                                                                             'READ '
-                                                                                                                                             'evidence; '
-                                                                                                                                             'do '
-                                                                                                                                             'not '
-                                                                                                                                             'execute '
-                                                                                                                                             'it.',
-     'Draft a document-change proposal when the selected sources already support exact changes to these targets. Use this variant when no existing document change request is being continued.': 'Prepare '
-                                                                                                                                                                                                 'exact '
-                                                                                                                                                                                                 'target '
-                                                                                                                                                                                                 'changes '
-                                                                                                                                                                                                 'from '
-                                                                                                                                                                                                 'selected '
-                                                                                                                                                                                                 'supporting '
-                                                                                                                                                                                                 'sources; '
-                                                                                                                                                                                                 'use '
-                                                                                                                                                                                                 'only '
-                                                                                                                                                                                                 'when '
-                                                                                                                                                                                                 'no '
-                                                                                                                                                                                                 'document-change '
-                                                                                                                                                                                                 'request '
-                                                                                                                                                                                                 'is '
-                                                                                                                                                                                                 'continued.',
-     'Draft a specialist consultation proposal when further drafting or review is needed; include every affected specialist. Use this variant when no existing document change request is being continued.': 'Further '
-                                                                                                                                                                                                             'draft/review: '
-                                                                                                                                                                                                             'prepare '
-                                                                                                                                                                                                             'consultation '
-                                                                                                                                                                                                             'with '
-                                                                                                                                                                                                             'every '
-                                                                                                                                                                                                             'affected '
-                                                                                                                                                                                                             'specialist; '
-                                                                                                                                                                                                             'use '
-                                                                                                                                                                                                             'only '
-                                                                                                                                                                                                             'when '
-                                                                                                                                                                                                             'no '
-                                                                                                                                                                                                             'document-change '
-                                                                                                                                                                                                             'request '
-                                                                                                                                                                                                             'is '
-                                                                                                                                                                                                             'continued.',
-     'Exact disclosed shared-premise choice supported by the selected sources.': 'Exact disclosed '
-                                                                                 'shared-premise '
-                                                                                 'choice, supported by '
-                                                                                 'selected sources.',
-     'Justify this requirement with exact offered sources.': 'Justify using exact offered sources.',
-     'Nonempty UTF-8 text.': 'Nonempty UTF-8.',
-     'One explicit contribution role for a declared story domain.': 'Explicit contribution role for a '
-                                                                    'declared domain.',
-     'One explicit shared-premise dependency for declared draft-owner domains.': 'Explicit '
-                                                                                 'shared-premise '
-                                                                                 'dependency for '
-                                                                                 'declared draft '
-                                                                                 'owners.',
-     'Patch only the exact span identified by completed READ evidence when a local edit suffices; provide its replacement text.': 'Local '
-                                                                                                                                  'patch: '
-                                                                                                                                  'replace '
-                                                                                                                                  'only '
-                                                                                                                                  'the '
-                                                                                                                                  'exact '
-                                                                                                                                  'completed-READ '
-                                                                                                                                  'span; '
-                                                                                                                                  'supply '
-                                                                                                                                  'replacement '
-                                                                                                                                  'text.',
-     'Prepare exact changes while starting or advancing a document change request; review and Apply still require separate confirmation.': 'Start/advance '
-                                                                                                                                           'the '
-                                                                                                                                           'document-change '
-                                                                                                                                           'request '
-                                                                                                                                           'with '
-                                                                                                                                           'exact '
-                                                                                                                                           'proposals; '
-                                                                                                                                           'separately '
-                                                                                                                                           'confirm '
-                                                                                                                                           'review '
-                                                                                                                                           'and '
-                                                                                                                                           'Apply.',
-     'Prepare exact changes without a document change request update when none is needed; review and Apply still require separate confirmation.': 'Prepare '
-                                                                                                                                                  'exact '
-                                                                                                                                                  'changes '
-                                                                                                                                                  'only '
-                                                                                                                                                  'when '
-                                                                                                                                                  'no '
-                                                                                                                                                  'request '
-                                                                                                                                                  'update '
-                                                                                                                                                  'is '
-                                                                                                                                                  'needed; '
-                                                                                                                                                  'separately '
-                                                                                                                                                  'confirm '
-                                                                                                                                                  'review '
-                                                                                                                                                  'and '
-                                                                                                                                                  'Apply.',
-     'Propose exact artifact changes when content and READ evidence are ready for specialist review; separate review, Apply, and Commit confirmations remain required.': 'Exact '
-                                                                                                                                                                         'changes '
-                                                                                                                                                                         'need '
-                                                                                                                                                                         'ready '
-                                                                                                                                                                         'content/READ '
-                                                                                                                                                                         'evidence '
-                                                                                                                                                                         'for '
-                                                                                                                                                                         'specialist '
-                                                                                                                                                                         'review. '
-                                                                                                                                                                         'Review, '
-                                                                                                                                                                         'Apply '
-                                                                                                                                                                         'and '
-                                                                                                                                                                         'Commit '
-                                                                                                                                                                         'each '
-                                                                                                                                                                         'require '
-                                                                                                                                                                         'separate '
-                                                                                                                                                                         'confirmation.',
-     'Propose specialist consultation when the affected domains need drafting or review; disclose the assignments for separate confirmation.': 'Affected '
-                                                                                                                                               'domains '
-                                                                                                                                               'need '
-                                                                                                                                               'draft/review: '
-                                                                                                                                               'disclose '
-                                                                                                                                               'specialist '
-                                                                                                                                               'assignments '
-                                                                                                                                               'for '
-                                                                                                                                               'separate '
-                                                                                                                                               'confirmation.',
-     'Propose specialist work that starts or advances a document change request; confirmation authorizes the assignments, not document changes.': 'Propose '
-                                                                                                                                                  'specialist '
-                                                                                                                                                  'work '
-                                                                                                                                                  'to '
-                                                                                                                                                  'start/advance '
-                                                                                                                                                  'its '
-                                                                                                                                                  'document-change '
-                                                                                                                                                  'request; '
-                                                                                                                                                  'Confirm '
-                                                                                                                                                  'authorizes '
-                                                                                                                                                  'assignments '
-                                                                                                                                                  'only.',
-     'Propose specialist work when no document change request update is needed; confirmation authorizes only these disclosed assignments.': 'No '
-                                                                                                                                            'request '
-                                                                                                                                            'update '
-                                                                                                                                            'needed: '
-                                                                                                                                            'Confirm '
-                                                                                                                                            'authorizes '
-                                                                                                                                            'only '
-                                                                                                                                            'the '
-                                                                                                                                            'disclosed '
-                                                                                                                                            'specialist '
-                                                                                                                                            'assignments.',
-     'Recommend one proposal-drafting step when preparation should be confirmed before forming the full specialist or document-change proposal.': 'Recommend '
-                                                                                                                                                  'one '
-                                                                                                                                                  'confirmed '
-                                                                                                                                                  'preparation '
-                                                                                                                                                  'before '
-                                                                                                                                                  'forming '
-                                                                                                                                                  'the '
-                                                                                                                                                  'full '
-                                                                                                                                                  'specialist/document-change '
-                                                                                                                                                  'proposal.',
-     'Recommendation source_ids select only offered preparation recommendation sources or evidence IDs from completed authorized READs. Select the exact approved historical draft to prepare its document; preserve its task and provenance. This selection does not make it an ordinary assignment input or authorize a write.': 'Select '
-                                                                                                                                                                                                                                                                                                                                   'only '
-                                                                                                                                                                                                                                                                                                                                   'offered '
-                                                                                                                                                                                                                                                                                                                                   'preparation '
-                                                                                                                                                                                                                                                                                                                                   'sources '
-                                                                                                                                                                                                                                                                                                                                   'or '
-                                                                                                                                                                                                                                                                                                                                   'completed '
-                                                                                                                                                                                                                                                                                                                                   'authorized '
-                                                                                                                                                                                                                                                                                                                                   'READ '
-                                                                                                                                                                                                                                                                                                                                   'IDs. '
-                                                                                                                                                                                                                                                                                                                                   'Use '
-                                                                                                                                                                                                                                                                                                                                   'the '
-                                                                                                                                                                                                                                                                                                                                   'exact '
-                                                                                                                                                                                                                                                                                                                                   'approved '
-                                                                                                                                                                                                                                                                                                                                   'historical '
-                                                                                                                                                                                                                                                                                                                                   'draft '
-                                                                                                                                                                                                                                                                                                                                   'to '
-                                                                                                                                                                                                                                                                                                                                   'prepare '
-                                                                                                                                                                                                                                                                                                                                   'its '
-                                                                                                                                                                                                                                                                                                                                   'document, '
-                                                                                                                                                                                                                                                                                                                                   'preserving '
-                                                                                                                                                                                                                                                                                                                                   'task/provenance. '
-                                                                                                                                                                                                                                                                                                                                   'Selection '
-                                                                                                                                                                                                                                                                                                                                   'is '
-                                                                                                                                                                                                                                                                                                                                   'not '
-                                                                                                                                                                                                                                                                                                                                   'an '
-                                                                                                                                                                                                                                                                                                                                   'assignment '
-                                                                                                                                                                                                                                                                                                                                   'input '
-                                                                                                                                                                                                                                                                                                                                   'or '
-                                                                                                                                                                                                                                                                                                                                   'write '
-                                                                                                                                                                                                                                                                                                                                   'authority.',
-     'Rename the document identified by completed READ evidence when only its location changes; propose a new canonical workspace-relative destination.': 'Rename '
-                                                                                                                                                          'only '
-                                                                                                                                                          'its '
-                                                                                                                                                          'location '
-                                                                                                                                                          'using '
-                                                                                                                                                          'completed '
-                                                                                                                                                          'READ; '
-                                                                                                                                                          'propose '
-                                                                                                                                                          'a '
-                                                                                                                                                          'canonical '
-                                                                                                                                                          'workspace-relative '
-                                                                                                                                                          'destination.',
-     'Replace all text when a whole-document rewrite is needed; select completed whole-file READ evidence and provide complete new text.': 'Whole-document '
-                                                                                                                                           'rewrite: '
-                                                                                                                                           'completed '
-                                                                                                                                           'whole-file '
-                                                                                                                                           'READ '
-                                                                                                                                           'evidence '
-                                                                                                                                           'and '
-                                                                                                                                           'complete '
-                                                                                                                                           'new '
-                                                                                                                                           'text '
-                                                                                                                                           'are '
-                                                                                                                                           'required.',
-     "Respond as Lead within the current writing scope. Choose the permitted result that advances the user's request; proposals and recommendations grant no execution or write authority.": 'Choose '
-                                                                                                                                                                                             "Lead's "
-                                                                                                                                                                                             'permitted '
-                                                                                                                                                                                             'in-scope '
-                                                                                                                                                                                             'result '
-                                                                                                                                                                                             'to '
-                                                                                                                                                                                             'advance '
-                                                                                                                                                                                             'the '
-                                                                                                                                                                                             'USER '
-                                                                                                                                                                                             'request. '
-                                                                                                                                                                                             'Proposals/recommendations '
-                                                                                                                                                                                             'grant '
-                                                                                                                                                                                             'no '
-                                                                                                                                                                                             'execution/write '
-                                                                                                                                                                                             'authority.',
-     'Start a document change request when no matching request exists; track the selected targets without treating preparation as Apply.': 'Start '
-                                                                                                                                           'a '
-                                                                                                                                           'document-change '
-                                                                                                                                           'request '
-                                                                                                                                           'only '
-                                                                                                                                           'if '
-                                                                                                                                           'none '
-                                                                                                                                           'matches; '
-                                                                                                                                           'track '
-                                                                                                                                           'selected '
-                                                                                                                                           'targets. '
-                                                                                                                                           'Preparation '
-                                                                                                                                           'is '
-                                                                                                                                           'not '
-                                                                                                                                           'Apply.',
-     'State the concrete deliverable and success criteria; preserve protected elements, change boundaries, and exact source IDs.': 'Concrete '
-                                                                                                                                        'deliverable '
-                                                                                                                                        'and '
-                                                                                                                                        'success '
-                                                                                                                                        'criteria; '
-                                                                                                                                        'preserve '
-                                                                                                                                        'protected '
-                                                                                                                                        'elements, '
-                                                                                                                                        'change '
-                                                                                                                                        'boundaries, '
-                                                                                                                                        'exact '
-                                                                                                                                        'task/source '
-                                                                                                                                        'IDs.',
-     'This required USER decision is unavailable.': 'Required USER decision unavailable.',
-     'review_only evaluates an explicitly supplied original; activity review is not intent. Preserve bound intent. Revisions need fresh authoring authority.': 'review_only '
-                                                                                                                                                               'evaluates '
-                                                                                                                                                               'the '
-                                                                                                                                                               'explicit '
-                                                                                                                                                               'supplied '
-                                                                                                                                                               'original; '
-                                                                                                                                                               'review '
-                                                                                                                                                               'activity '
-                                                                                                                                                               'is '
-                                                                                                                                                               'not '
-                                                                                                                                                               'intent. '
-                                                                                                                                                               'Keep '
-                                                                                                                                                               'bound '
-                                                                                                                                                               'intent; '
-                                                                                                                                                               'revisions '
-                                                                                                                                                               'need '
-                                                                                                                                                               'fresh '
-                                                                                                                                                               'authoring '
-                                                                                                                                                               'authority.'})
-    def compact_metadata(node):
-        if type(node) is dict:
-            description = node.get("description")
-            if type(description) is str:
-                if description in concise_descriptions:
-                    description = concise_descriptions[description]
-                if description.startswith("Continue task ") and " at revision " in description:
-                    description = description.replace("Continue task ", "Task ", 1).replace(" at revision ", "@", 1).replace(
-                        " when this is the task being addressed; copy this exact pair together.",
-                        " when addressed; copy the exact ID/revision pair.")
-                if description.startswith("Assignment sources use only offered assignment inputs") or description.startswith("Only offered inputs or completed authorized READ IDs;"):
-                    description = "Assignment source rule; keep every required/own-reviewer input."
-                elif description.startswith("Select only offered preparation sources or completed authorized READ IDs.") or description.startswith("Recommendation source_ids select only offered preparation recommendation sources"):
-                    description = "Recommendation source rule; selection grants no input/write authority."
-                elif description.startswith("Concrete deliverable and success criteria;") or description.startswith("State the concrete deliverable and success criteria;"):
-                    description = "Specialist instruction rule; exact deliverable/success criteria."
-                elif description.startswith("review_only evaluates the explicit supplied original;"):
-                    description = "Writing intent rule; preserve explicit bound intent."
-                node["description"] = description
-            for child in node.values():
-                compact_metadata(child)
-        elif type(node) is list:
-            for child in node:
-                compact_metadata(child)
-
-    compact_metadata(schema)
-    shared_rules = (
-        "Shared rules apply only to the named native fields; all offered schema choices remain binding. "
-        "Assignment source rule (specialist_consultation_proposal.assignments[*].input_source_ids): "
-        "use offered assignment inputs" + (" or completed authorized READ IDs" if facts.allow_read_sources else "") +
-        "; recommendation sources need confirmed materialization/offering. Keep all required inputs and each reviewer's own source. "
-        "Recommendation source rule (proposal_drafting_request.source_ids): select offered preparation sources" +
-        (" or completed authorized READ IDs" if facts.allow_read_sources else "") +
-        ". Use the exact approved historical draft to prepare its document, preserving task/provenance; selection is not an assignment input or write authority. "
-        "Specialist instruction rule (specialist_consultation_proposal.assignments[*].task_instructions): "
-        "state the concrete deliverable and success criteria; preserve protected elements, change boundaries, exact source IDs. "
-        "Writing intent rule (writing_task_scope.writing_intent): review_only evaluates the explicit supplied original; "
-        "review activity is not intent. Keep bound intent; revisions need fresh authoring authority."
-    )
-    schema["description"] += " " + shared_rules
-
-    return _lead_result_rule_seed("lead-response-v8" if facts.premise_question_id is not None else "lead-response-v6" if facts.scope is not None and facts.scope.schema_version < 3 else "lead-response-v7", schema)
 
 
 def _specialist_result_contract(
@@ -1531,25 +555,25 @@ def _specialist_result_contract(
     *, premise_dependencies: tuple[tuple[str, str], ...] = (),
 ) -> ContextJsonObjectResultContract:
     if assignment.mode is SpecialistAssignmentMode.DRAFT and premise_dependencies:
-        conflicts = [_closed_result_object({
+        conflicts = [reply_contract_values.closed_result_object({
             "slot_id": {"type": "string", "enum": [slot]},
             "capture_digest": {"type": "string", "enum": [digest]},
             "reason": nonempty_text_schema(),
         }, description="Hold this dependent draft for a conflict with the exact USER-selected whole premise; do not alter USER direction.") for slot, digest in premise_dependencies]
-        return _provider_result_contract("specialist-assignment-response-v5", _closed_result_object({
+        return reply_contract_values.provider_result_contract("specialist-assignment-response-v5", reply_contract_values.closed_result_object({
             "assessment": {"type": "string", "enum": ["drafted", "conflict", "insufficient_evidence"]},
             "message": nonempty_text_schema(),
             "premise_conflicts": {"type": "array", "minItems": 0, "maxItems": len(premise_dependencies),
                 "items": conflicts[0] if len(conflicts) == 1 else {"anyOf": conflicts}},
         }, description="Draft under the unchanged exact USER premise. Report a typed conflict instead of draft proof if that dependency cannot be honored; only a fresh USER choice/revision may change it."))
     if assignment.mode is SpecialistAssignmentMode.PREMISE_ANALYSIS:
-        return _provider_result_contract("premise-analysis-response-v1",
+        return reply_contract_values.provider_result_contract("premise-analysis-response-v1",
             PremiseDecisionConstraints("analyst", assignment.input_ids).analysis_schema())
     if assignment.mode is None:
         raise BackendProtocolError("live specialist contract requires an explicit mode")
-    return _provider_result_contract(
+    return reply_contract_values.provider_result_contract(
         "specialist-assignment-response-v4" if assignment.mode is SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT else "specialist-assignment-response-v3",
-        _closed_result_object(
+        reply_contract_values.closed_result_object(
             {
                 "assessment": {
                     "enum": [item.value for item in specialist_assessments_for_mode(assignment.mode)],
@@ -1606,16 +630,16 @@ def _lead_synthesis_result_contract(
     )
     contract_id = "consultation-summary-v4"
     if not artifact_review:
-        variants = [_closed_result_object(message,
+        variants = [reply_contract_values.closed_result_object(message,
             description=(
                 "Conclude this consultation when the replies support a complete synthesis and no "
                 "additional specialist round or proposal-drafting recommendation is needed."
             ),
         )]
         if allow_next_intent:
-            variants.append(_closed_result_object({
+            variants.append(reply_contract_values.closed_result_object({
                 **message,
-                "next_intent": _closed_result_object({
+                "next_intent": reply_contract_values.closed_result_object({
                     "purpose": nonempty_text_schema(),
                     "assignments": {
                         "items": facts.assignment_schema(),
@@ -1636,7 +660,7 @@ def _lead_synthesis_result_contract(
                     "lineage."
                 ),
             ))
-        variants.append(_closed_result_object({
+        variants.append(reply_contract_values.closed_result_object({
             **message,
             "recommended_action": facts.recommendation_schema(),
         },
@@ -1645,7 +669,7 @@ def _lead_synthesis_result_contract(
                 "has established what should be prepared next."
             ),
         ))
-        return _lead_result_rule_seed(contract_id, {
+        return reply_contract_values.lead_result_rule_seed(contract_id, {
             "anyOf": variants,
             "description": (
                 "Synthesize the specialist replies independently, retaining every material "
@@ -1654,9 +678,9 @@ def _lead_synthesis_result_contract(
             ),
         })
     contract_id = "artifact-review-summary-v4"
-    return _lead_result_rule_seed(
+    return reply_contract_values.lead_result_rule_seed(
         contract_id,
-        _closed_result_object({
+        reply_contract_values.closed_result_object({
             "decision": {
                 "enum": [item.value for item in ArtifactReviewDecision],
                 "type": "string",
@@ -1676,26 +700,6 @@ def _lead_synthesis_result_contract(
 
 class _DuplicateJsonKey(ValueError):
     pass
-
-
-def _provider_review_basis(value: object) -> ReviewBasis:
-    """Preserve explicit candidate inputs and independent review criteria."""
-    if type(value) is not dict or set(value) != {"candidate_input_ids", "criteria"}:
-        raise validation_failure(
-            ValueError("review basis must be a closed object"),
-            "$", "expected a closed review basis with candidate_input_ids and criteria",
-        )
-    candidate_ids = value["candidate_input_ids"]
-    if type(candidate_ids) is not list:
-        raise validation_failure(
-            TypeError("review candidate inputs must be an array"),
-            "$.candidate_input_ids", "expected an array of current input identifiers",
-        )
-    return ReviewBasis(tuple(candidate_ids), value["criteria"])
-
-
-class _LeadOutcomeValidationError(BackendProtocolError):
-    """Reject one submitted lead result without treating prose as evidence."""
 
 
 
@@ -1781,10 +785,6 @@ class _ArtifactApplicationCapability:
         self._consumed = True
         for index in range(len(self._secret)):
             self._secret[index] = 0
-
-
-def _with_group_trace(provider, drafts, terminal_code):
-    return tuple(drafts) if provider is None else provider.with_group_trace(drafts, terminal_code)
 
 
 
@@ -1940,342 +940,6 @@ class ConsensusArtifactReviewHandoff:
             or self.reviewed_proposal.git_action_occurred
         ):
             raise ValueError("consensus artifact-review handoff is invalid")
-
-
-def _lead_terminal_notice(language: str | None, tasks: tuple[tuple[str, int], ...],
-                          state: object, requirements: tuple[str, ...] = (),
-                          code: str = "LEAD_CONTRACT_REJECTED") -> str:
-    """Language-neutral trusted control notice; literal provider answers stay separate."""
-    paths = []
-    for requirement in requirements:
-        if requirement.startswith("$"):
-            paths.append(requirement.split(": ", 1)[0])
-            continue
-        lines = requirement.splitlines()
-        if not lines:
-            continue
-        label, separator, first_line = lines[0].partition(": ")
-        if label in ("Original response", "Repair response") and separator:
-            lines[0] = first_line
-        elif lines[0] not in (
-            "Original response", "Repair response", "Structured reply validation",
-        ):
-            continue
-        paths.extend(line.split(": ", 1)[0] for line in lines if line.startswith("$"))
-    return json.dumps({"code": code, "language": language,
-                       "state": state, "paths": tuple(dict.fromkeys(paths))},
-                      ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-
-
-def _lead_source_owner_rejection(failure: BaseException) -> BaseException:
-    failure.lead_source_owner_rejected = True
-    return failure
-
-
-def _lead_is_source_owner_rejection(failure: BaseException) -> bool:
-    seen = set()
-    while id(failure) not in seen:
-        seen.add(id(failure))
-        if getattr(failure, "lead_source_owner_rejected", False):
-            return True
-        nested = getattr(failure, "bound_contract_failure", None) or failure.__cause__
-        if not isinstance(nested, BaseException):
-            break
-        failure = nested
-    return False
-
-
-def _provided_review_targets(inputs: tuple[CollaborationInputRevision, ...]) -> tuple[ReviewTarget, ...]:
-    targets = []
-    for item in inputs:
-        if item.state is not CollaborationInputState.PRESENT:
-            continue
-        if item.kind is CollaborationInputKind.USER_INPUT:
-            kind, target = ReviewTargetKind.USER_PROVIDED, item.locator
-        elif item.kind is CollaborationInputKind.ARTIFACT_CANDIDATE:
-            kind, target = ReviewTargetKind.CANDIDATE, item.locator
-        elif item.kind in {CollaborationInputKind.WRITING_ARTIFACT, CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT}:
-            kind, target = ReviewTargetKind.WRITING_ARTIFACT, item.locator
-            if item.locator.startswith("${"):
-                batch = parse_artifact_references(item.locator)
-                if len(batch.references) != 1 or batch.references[0].token != item.locator:
-                    raise ValueError("preliminary target requires exact captured artifact locator")
-                target = batch.references[0].path
-        else:
-            continue
-        whole = item.start_line is None
-        targets.append(ReviewTarget(
-            input_id=item.input_id, kind=kind, target_id=target,
-            revision=item.revision_digest, content_digest=item.revision_digest,
-            source_digest=item.revision_digest, boundary_digest=item.revision_digest,
-            whole_source=whole, boundary_kind="whole" if whole else "artifact_lines",
-            boundary_start=item.start_line, boundary_end=item.end_line))
-    return tuple(targets)
-
-
-def _read_review_targets(facts: tuple[ContextCallReadFact, ...]) -> tuple[ReviewTarget, ...]:
-    return tuple(ReviewTarget(
-        input_id=item.evidence_id,
-        kind=ReviewTargetKind.WRITING_ARTIFACT if item.source_kind is ContextSourceKind.WRITING_ARTIFACT else ReviewTargetKind.READ_SOURCE,
-        target_id=item.artifact_locator or item.source_id, revision=item.revision,
-        content_digest=item.boundary_digest, source_digest=item.source_digest,
-        boundary_digest=item.boundary_digest, whole_source=item.whole_source and item.boundary_kind == "whole",
-        boundary_kind=item.boundary_kind, boundary_start=item.boundary_start,
-        boundary_end=item.boundary_end, availability=ReviewTargetAvailability.COMPLETED_READ)
-        for item in facts)
-
-
-def _coverage_review_targets(
-    provided: tuple[ReviewTarget, ...], facts: tuple[ContextCallReadFact, ...],
-    statuses: tuple[ContextSourceStatusReceipt, ...],
-) -> tuple[ReviewTarget, ...]:
-    """Use existing authorized inputs/READs and status-only uncovered core paths."""
-    targets = {item.input_id: item for item in provided
-               if item.availability is not ReviewTargetAvailability.UNREAD}
-    targets.update((item.input_id, item) for item in _read_review_targets(facts))
-    whole_paths = {item.target_id for item in targets.values()
-                   if item.kind is ReviewTargetKind.WRITING_ARTIFACT and item.whole_source and item.boundary_kind == "whole"}
-    for item in statuses:
-        if item.locator not in whole_paths:
-            targets[item.evidence_id] = ReviewTarget(
-                input_id=item.evidence_id, kind=ReviewTargetKind.WRITING_ARTIFACT,
-                target_id=item.locator, revision=item.revision,
-                content_digest=None, source_digest=item.source_digest,
-                boundary_digest=None, whole_source=False, boundary_kind="unread",
-                availability=ReviewTargetAvailability.UNREAD,
-                source_status=item.status.value, source_manifest_digest=item.manifest_digest)
-    return tuple(targets.values())
-
-
-def _authorized_preliminary_targets(inputs, authorization) -> tuple[ReviewTarget, ...]:
-    targets = {item.input_id: item for item in _coverage_review_targets(
-        _provided_review_targets(inputs), tuple(ContextCallReadFact.from_evidence(item)
-            for item in authorization.completed_evidence), authorization.core_statuses)}
-    by_id = {item.input_id: item for item in inputs}
-    for reference in authorization.mandatory_references:
-        if reference.reference_id not in targets:
-            continue
-        captured = by_id[reference.reference_id]
-        targets[reference.reference_id] = ReviewTarget(reference.reference_id,
-            ReviewTargetKind.WRITING_ARTIFACT, targets[reference.reference_id].target_id,
-            reference.revision, reference.content_digest, reference.revision, reference.content_digest,
-            captured.start_line is None, "whole" if captured.start_line is None else "artifact_lines",
-            captured.start_line, captured.end_line, availability=ReviewTargetAvailability.COMPLETED_READ)
-    return tuple(targets.values())
-
-
-@dataclass(frozen=True, slots=True)
-class OrchestrationLeadCallFactory(BoundCallFactory):
-    """Existing orchestration owns stage eligibility and genuine final-owner hooks."""
-    constraints: LeadProviderConstraints
-    rule_seed: LeadResultRuleSeed
-    stage: str
-    language: str
-    authorized_validator: Callable[[str, object], object] = field(repr=False, compare=False)
-    reviewer_for_locator: Callable[[str], str] = field(repr=False, compare=False)
-    schema_group_protocol: bool = field(default=False, kw_only=True)
-    _factory_profile: tuple = field(init=False, repr=False, compare=False)
-    _factory_sources: tuple = field(init=False, repr=False, compare=False)
-    _declared_authorization_check: Callable[[LeadDecodedResult, HostCheckContext], None] = field(init=False, repr=False, compare=False)
-    _authorization_declaration: NamedHostCheck[LeadDecodedResult] = field(init=False, repr=False, compare=False)
-    _status_rule: tuple[object, object] = field(
-        default=(empty_core_status_evidence, empty_core_status_evidence.__code__),
-        init=False, repr=False, compare=False,
-    )
-
-    _outcome_scope_rule: tuple[object, object] = field(
-        default=(lead_outcome_scope_paths, lead_outcome_scope_paths.__code__),
-        init=False, repr=False, compare=False,
-    )
-
-    def __init_subclass__(cls, **kwargs):
-        raise TypeError("orchestration Lead factory declaration cannot be overridden")
-
-    def __post_init__(self) -> None:
-        if (type(self.constraints) is not LeadProviderConstraints or type(self.rule_seed) is not LeadResultRuleSeed
-                or any(type(value) is not str or not value for value in (self.stage, self.language))
-                or not callable(self.authorized_validator) or inspect.iscoroutinefunction(self.authorized_validator)
-                or not callable(self.reviewer_for_locator) or inspect.iscoroutinefunction(self.reviewer_for_locator)):
-            raise TypeError("Lead factory requires its exact current owner declaration")
-        if (type(self.schema_group_protocol) is not bool
-                or self.schema_group_protocol and (
-                    self.stage != "lead.front" or self.constraints.preparation_kind is not None
-                    or self.constraints.continuation
-                    or self.rule_seed.contract_id not in {
-                        "lead-response-v6", "lead-response-v7", "lead-response-v8"})):
-            raise ValueError("두 국면 선택은 ordinary Lead front에만 적용합니다")
-        object.__setattr__(self, "_factory_profile", (
-            self.constraints, self.rule_seed, self.stage, self.language,
-            self.schema_group_protocol, self.reviewer_for_locator))
-        object.__setattr__(self, "_factory_sources", tuple(
-            (method, method.__code__) for method in (
-                type(self)._current_owner_declaration, type(self).declare_result_owners,
-                type(self).declare_schema_groups, type(self).prepare_schema_compilation)))
-        TypedDecoder.require_hook_shape(self.authorized_validator, 2)
-        TypedDecoder.require_hook_shape(self.reviewer_for_locator, 1)
-        validator = self.authorized_validator
-        guard = type(self).require_declaration
-
-        def authorized_check(result: LeadDecodedResult, context: HostCheckContext, *, validator=validator) -> None:
-            if type(result) is not LeadDecodedResult or type(context) is not AuthorizedAnswerHostContext:
-                raise TypeError("final Lead owner requires the actual selected result/authorization")
-            if validator(result.domain_json, context.authorization) is not None:
-                raise TypeError("final Lead owner check must return None")
-
-        object.__setattr__(self, "_declared_authorization_check", authorized_check)
-        object.__setattr__(self, "_authorization_declaration", NamedHostCheck(
-            "owner.authorized_final", "848-v3:actual-service-authorization", "authorized",
-            AuthorizedAnswerHostContext,
-            b'{"requirements":[{"expected":{"authorization":"ACTUAL_CURRENT_OWNER"},"path":"$","rule":"ACTUAL_CURRENT_OWNER_AUTHORIZATION"}]}',
-            authorized_check,
-            dependencies=(validator, guard, self._require_status_rule,
-                          self._status_rule[0], self._outcome_scope_rule[0], parse_artifact_references),
-        ))
-
-    def require_declaration(self) -> None:
-        profile = self._factory_profile
-        if (self.constraints is not profile[0] or self.rule_seed is not profile[1]
-                or (self.stage, self.language, self.schema_group_protocol) != profile[2:5]
-                or self.reviewer_for_locator is not profile[5]
-                or self._factory_sources != tuple((method, method.__code__) for method in (
-                    type(self)._current_owner_declaration, type(self).declare_result_owners,
-                    type(self).declare_schema_groups, type(self).prepare_schema_compilation))):
-            raise ValueError("동결된 Lead 호출 프로필이 변경됐습니다")
-        declaration = self._authorization_declaration
-        declaration.require_provenance()
-        if (self._declared_authorization_check is not declaration.check
-                or type(self).require_declaration is not declaration.dependencies[1]):
-            raise ValueError("frozen Lead authorization declaration changed")
-        self._require_status_rule()
-
-    @property
-    def contract_id(self) -> str:
-        return self.rule_seed.contract_id
-
-    def _current_owner_declaration(self, offers: ContextCallOffers):
-        self._authorization_declaration.require_provenance()
-        self._authorization_declaration.dependencies[1](self)
-        if type(offers) is not ContextCallOffers:
-            raise TypeError("Lead declaration requires actual service-owned physical offers")
-        if self.constraints.continuation and self.constraints.review_candidate_ids is None:
-            raise ValueError("physical continuation requires frozen review candidates")
-        facts = tuple(dict.fromkeys(offers.completed_read_facts + offers.delivery_read_facts))
-        read_ids = tuple(dict.fromkeys(item.evidence_id for item in facts))
-        writing_ids = tuple(dict.fromkeys(item.evidence_id for item in facts
-                                        if item.source_kind is ContextSourceKind.WRITING_ARTIFACT))
-        inputs = tuple(dict.fromkeys(self.constraints.input_ids + read_ids))
-        sources = None if self.constraints.source_ids is None else tuple(dict.fromkeys(self.constraints.source_ids + read_ids))
-        reviewers = tuple(dict.fromkeys(self.constraints.reviewer_inputs + tuple(
-            (self.reviewer_for_locator("${" + item.artifact_locator + "}"), item.evidence_id)
-            for item in facts if item.source_kind is ContextSourceKind.WRITING_ARTIFACT)))
-        current = replace(self.constraints, input_ids=inputs, source_ids=sources, reviewer_inputs=reviewers,
-                          allow_read_sources=False,
-            preliminary_targets=_coverage_review_targets(
-                self.constraints.preliminary_targets, facts, offers.core_status_facts), required_input_ids=self.constraints.required_assignment_input_ids())
-        writing_reads = tuple(
-            (item.evidence_id, item.artifact_locator, item.whole_source)
-            for item in facts if item.source_kind is ContextSourceKind.WRITING_ARTIFACT
-        )
-        facts_bytes = json.dumps({"requirements": [{"path": "$", "rule": "ACTUAL_CURRENT_OWNER_AUTHORIZATION",
-            "expected": {"physical_call_id": offers.call_id, "input_ids": current.input_ids,
-                "review_candidate_ids": current.review_candidate_ids,
-                "factual_answer_writing_read_facts": writing_reads,
-                "read_evidence": "DELIVERED_AND_COMPLETED_CURRENT_OWNER_READ", "rejected_answer_authority": "INPUT_ONLY",
-                "new_target_path": "ACTUAL_CURRENT_PHYSICAL_ROOT_POLICY",
-                "admission": "EXISTING_OWNER_STATE_AND_FINAL_ADMISSION"}}]},
-            sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
-        check = replace(self._authorization_declaration, corrective_facts=facts_bytes)
-        return current, read_ids, writing_ids, writing_reads, check
-
-    def declare_result_owners(self, offers: ContextCallOffers) -> LeadStagePolicy:
-        current, read_ids, writing_ids, writing_reads, check = self._current_owner_declaration(offers)
-        variants = current.current_wire_variants(
-            self.rule_seed, read_ids=read_ids, writing_read_ids=writing_ids,
-            writing_read_facts=writing_reads, core_status_facts=offers.core_status_facts,
-        )
-        tasks = current.task_revisions or (() if current.scope is None else ((current.scope.task_id, current.scope.task_revision),))
-        owners = tuple(LeadResultContractOwner(variant, tasks, (check,)) for variant in variants)
-        return LeadStagePolicy(self.stage, offers.call_id, tasks, self.language, offers.offer_digest,
-                               current.choice_snapshot(), offers.offer_digest, offers.call_id,
-                               owner_declarations=owners)
-
-    async def prepare_schema_compilation(
-        self, offers: ContextCallOffers, lineage: BoundCallLineage | None = None, *,
-        request_basis: LeadGroupRequestBasis | None = None,
-        group_workflow: LeadGroupWorkflow | None = None,
-        prepared_compilation: LeadGroupCompilation | None = None,
-    ) -> LeadGroupCompilation | None:
-        """Prepare pure compiler data while declaration and host callbacks stay local."""
-        self.require_declaration()
-        if lineage is not None or not self.schema_group_protocol:
-            return prepared_compilation
-        if type(request_basis) is not LeadGroupRequestBasis:
-            raise TypeError("그룹 선택에는 서비스의 정확한 논리 요청 참조가 필요합니다")
-        current, read_ids, writing_ids, writing_reads, _check = self._current_owner_declaration(offers)
-        read_facts = tuple(dict.fromkeys(offers.completed_read_facts + offers.delivery_read_facts))
-        if prepared_compilation is not None and type(prepared_compilation) is not LeadGroupCompilation:
-            raise TypeError("재사용할 의미 계획은 정확한 현재 compiler여야 합니다")
-        if prepared_compilation is None or not prepared_compilation.matches_current(
-            current, self.rule_seed, read_facts=read_facts, core_status_facts=offers.core_status_facts,
-        ):
-            prepared_compilation = await run_blocking(
-                LeadGroupCompilation, current, self.rule_seed, read_ids, writing_ids,
-                writing_reads, offers.core_status_facts, read_facts=read_facts,
-            )
-        self.require_declaration()
-        return prepared_compilation
-
-    def declare_schema_groups(self, offers: ContextCallOffers,
-                              request_basis: LeadGroupRequestBasis, *,
-                              prepared_compilation: LeadGroupCompilation | None = None) -> LeadGroupedStage | None:
-        self.require_declaration()
-        if not self.schema_group_protocol:
-            return None
-        if type(request_basis) is not LeadGroupRequestBasis:
-            raise TypeError("그룹 선택에는 서비스의 정확한 논리 요청 참조가 필요합니다")
-        current, read_ids, writing_ids, writing_reads, check = self._current_owner_declaration(offers)
-        read_facts = tuple(dict.fromkeys(offers.completed_read_facts + offers.delivery_read_facts))
-        if prepared_compilation is not None and type(prepared_compilation) is not LeadGroupCompilation:
-            raise TypeError("재사용할 의미 계획은 정확한 현재 compiler여야 합니다")
-        compilation = prepared_compilation
-        if compilation is None or not compilation.matches_current(
-                current, self.rule_seed, read_facts=read_facts,
-                core_status_facts=offers.core_status_facts):
-            compilation = LeadGroupCompilation(
-                current, self.rule_seed, read_ids, writing_ids, writing_reads, offers.core_status_facts,
-                read_facts=read_facts)
-        catalog = LeadGroupedStage.catalog_for(
-            compilation, request_basis, stage=self.stage, language=self.language,
-            authorization_check=check)
-        tasks = current.task_revisions or (() if current.scope is None else (
-            (current.scope.task_id, current.scope.task_revision),))
-        policy = LeadStagePolicy(
-            self.stage, offers.call_id, tasks, self.language, offers.offer_digest,
-            current.choice_snapshot(), offers.offer_digest, offers.call_id,
-            owner_declarations=(SchemaGroupControlOwner(catalog),))
-        return LeadGroupedStage(compilation, request_basis, policy, check)
-
-    def _require_status_rule(self) -> None:
-        function, code = self._status_rule
-        if (
-            empty_core_status_evidence is not function
-            or function.__code__ is not code
-        ):
-            raise ValueError("frozen empty-core evidence rule changed")
-        function, code = self._outcome_scope_rule
-        if lead_outcome_scope_paths is not function or function.__code__ is not code:
-            raise ValueError("frozen Lead outcome scope rule changed")
-
-
-def _lead_call_contract_factory(*, constraints: LeadProviderConstraints, contract: LeadResultRuleSeed,
-                                stage: str, language: str, authorized_validator: Callable[[str, object], object],
-                                reviewer_for_locator: Callable[[str], str],
-                                schema_group_protocol: bool = False) -> OrchestrationLeadCallFactory:
-    if type(contract) is not LeadResultRuleSeed:
-        raise TypeError("Lead planning requires the exact pure source-owned rule seed")
-    return OrchestrationLeadCallFactory(constraints, contract,
-                                       stage, language, authorized_validator, reviewer_for_locator,
-                                       schema_group_protocol=schema_group_protocol)
 
 
 class StoryRuntime:
@@ -3623,25 +2287,6 @@ class StoryRuntime:
                 policy_snapshot=policy_snapshot,
             )
 
-    @classmethod
-    def _recommendation_event_digest(cls, event: CollaborationEvent | CollaborationEventDraft) -> str:
-        payload = event.payload
-        if type(payload) is CollaborationLeadMaterialCapturePayload:
-            return "sha256:" + payload.capture.material_digest
-        if type(payload) is CollaborationPremiseSelectionPayload:
-            return "sha256:" + payload.capture.material_digest
-        if (type(payload) is CollaborationSpecialistReplyPayload and payload.premise_analysis is not None) or (type(payload) is CollaborationLeadSynthesisPayload and payload.premise_report is not None):
-            raise ValueError("provisional premise analysis is not an authoring source")
-        if type(payload) is CollaborationExplorationAdoptionPayload:
-            return "sha256:" + payload.capture.selected_material_digest
-        if type(payload) is CollaborationSpecialistReplyPayload:
-            return cls._specialist_reply_digest(payload)
-        if type(payload) in {CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload}:
-            return "sha256:" + hashlib.sha256(payload.message.encode("utf-8")).hexdigest()
-        if type(payload) in {LeadRecommendationRequestPayload, LeadRecommendationDecisionPayload}:
-            return cls._canonical_digest(asdict(payload))
-        raise ValueError("conversation source is not an offered recommendation input")
-
     def _recommendation_source_fingerprint(
         self, session_id: str, conversation_id: str,
         inputs: tuple[CollaborationInputRevision, ...], targets: tuple[str, ...],
@@ -3683,7 +2328,7 @@ class StoryRuntime:
             for path in selected_paths
             if path in present_paths
         }
-        return self._canonical_digest([
+        return reply_contract_values.canonical_digest([
             "lead-recommendation-sources-v1", [asdict(item) for item in inputs],
             [[path, None if path not in descriptors else asdict(descriptors[path])]
              for path in selected_paths],
@@ -3717,7 +2362,7 @@ class StoryRuntime:
             core_document_readiness=core_document_readiness,
             authoring_admission=authoring_admission,
             route=route,
-            route_fingerprint=self._canonical_digest([route, specialist_ids, [asdict(p) for p in profiles]]),
+            route_fingerprint=reply_contract_values.canonical_digest([route, specialist_ids, [asdict(p) for p in profiles]]),
             agent_profiles=profiles,
             context_policy_fingerprint=self._agent_context_service.policy_fingerprint,
             budget_policy_fingerprint=self._basis_budget_fingerprint(authoring_scope),
@@ -3747,7 +2392,7 @@ class StoryRuntime:
             selected_node, pending_window = self._bind_document_selection(source.session_id, document_selection,
                 source.payload.authoring_scope, projection, source)
             if pending_window is not None:
-                raise _LeadOutcomeValidationError("For a replacement document window, propose the exact node for its own Confirm, or ask for missing inputs; a preparation-only recommendation cannot carry that window.")
+                raise reply_contract_values.LeadOutcomeValidationError("For a replacement document window, propose the exact node for its own Confirm, or ask for missing inputs; a preparation-only recommendation cannot carry that window.")
             source = replace(source, payload=replace(source.payload, document_node=selected_node))
         objective = next((item for item in projection.artifact_objectives
                           if item.facts.objective_id == action.objective_id), None)
@@ -3758,14 +2403,14 @@ class StoryRuntime:
                 and objective.facts.target_paths != action.target_paths)
         ):
             raise validation_failure(
-                _LeadOutcomeValidationError(
+                reply_contract_values.LeadOutcomeValidationError(
                     'recommended objective scope is not an offered OPEN owner objective',
                 ),
                 '$.recommended_action.objective_id',
                 'recommended objective scope is not an offered OPEN owner objective',
             )
         offered = {item.event_id: item for item in projection.offered_draft_sources}
-        current = ArtifactDraftSource(source.conversation_id, source.event_id, self._recommendation_event_digest(source))
+        current = ArtifactDraftSource(source.conversation_id, source.event_id, reply_contract_values.recommendation_event_digest(source))
         aliases = {item.input_id: item for item in self._materialize_lead_evidence_inputs(
             inputs, evidence, validation_path='$.recommended_action.source_ids',
         )}
@@ -3784,7 +2429,7 @@ class StoryRuntime:
                 selected.append(aliases[alias])
             else:
                 raise validation_failure(
-                    _LeadOutcomeValidationError('recommended source alias is not runtime offered'),
+                    reply_contract_values.LeadOutcomeValidationError('recommended source alias is not runtime offered'),
                     '$.recommended_action.source_ids',
                     'recommended source alias is not runtime offered',
                 )
@@ -3792,7 +2437,7 @@ class StoryRuntime:
             for draft in objective.draft_sources:
                 if offered.get(draft.event_id) != draft:
                     raise validation_failure(
-                        _LeadOutcomeValidationError('objective draft lineage is no longer offered'),
+                        reply_contract_values.LeadOutcomeValidationError('objective draft lineage is no longer offered'),
                         '$.recommended_action.source_ids',
                         'objective draft lineage is no longer offered',
                     )
@@ -3821,18 +2466,18 @@ class StoryRuntime:
             for fact in admission.sources:
                 if fact.source_id in historical_by_id:
                     if historical_by_id[fact.source_id] != fact:
-                        raise _LeadOutcomeValidationError("recommendation historical USER source changed")
+                        raise reply_contract_values.LeadOutcomeValidationError("recommendation historical USER source changed")
                     continue
                 actual = aliases.get(fact.source_id)
                 if actual is None:
-                    raise _LeadOutcomeValidationError("recommendation admission source is not offered")
+                    raise reply_contract_values.LeadOutcomeValidationError("recommendation admission source is not offered")
                 if all(item.input_id != actual.input_id for item in selected):
                     selected.append(actual)
         selected_inputs = tuple(selected)
         scope = source.payload.authoring_scope
         if scope is None or scope.activity is AuthoringActivity.WORKFLOW:
             raise validation_failure(
-                _LeadOutcomeValidationError(
+                reply_contract_values.LeadOutcomeValidationError(
                     'recommended preparation requires substantive authoring scope',
                 ),
                 '$.authoring_scope.activity',
@@ -3891,7 +2536,7 @@ class StoryRuntime:
                     or origin.payload.decision.action is not receipt.action
                     or len(origin.payload.decision.material_refs) != len(captured_aliases)
                 ):
-                    raise _LeadOutcomeValidationError("selected task inputs require their exact USER control")
+                    raise reply_contract_values.LeadOutcomeValidationError("selected task inputs require their exact USER control")
                 for ordinal, (alias, identity) in enumerate(captured_aliases):
                     capture_event = capture_events.get(identity)
                     item = aliases.get(alias)
@@ -3899,7 +2544,7 @@ class StoryRuntime:
                         capture_event is None
                         or type(capture_event.payload) is not CollaborationLeadMaterialCapturePayload
                     ):
-                        raise _LeadOutcomeValidationError("selected task input capture is unavailable")
+                        raise reply_contract_values.LeadOutcomeValidationError("selected task input capture is unavailable")
                     captured = capture_event.payload.capture
                     if (
                         capture_event.sender != event_journal.RUNTIME_ACTOR
@@ -3921,12 +2566,12 @@ class StoryRuntime:
                         or item.start_line is not None or item.end_line is not None
                         or (bound_capture_basis is not None and bound_capture_basis.get(alias) != item)
                     ):
-                        raise _LeadOutcomeValidationError(
+                        raise reply_contract_values.LeadOutcomeValidationError(
                             "selected task input must retain its exact whole capture"
                         )
                     matching = tuple(value for value in selected if value.input_id == alias)
                     if matching and matching != (item,):
-                        raise _LeadOutcomeValidationError(
+                        raise reply_contract_values.LeadOutcomeValidationError(
                             "selected task input changed in recommendation sources"
                         )
                     if not matching:
@@ -3934,14 +2579,14 @@ class StoryRuntime:
             selected_inputs = tuple(selected)
         if previous is not None and previous.authoring_scope is None:
             raise validation_failure(
-                _LeadOutcomeValidationError('legacy recommendation requires fresh scoped planning'),
+                reply_contract_values.LeadOutcomeValidationError('legacy recommendation requires fresh scoped planning'),
                 '$.authoring_scope',
                 'legacy recommendation requires fresh scoped planning',
             )
         if scope.schema_version == 3:
             if any(artifact_domain(path) not in required_authoring_domains(scope)
                    for path in action.target_paths):
-                raise _LeadOutcomeValidationError("new destination domains require a fresh task revision")
+                raise reply_contract_values.LeadOutcomeValidationError("new destination domains require a fresh task revision")
         else:
             scope = replace(scope, target_paths=tuple(dict.fromkeys((*scope.target_paths, *action.target_paths))))
         scope = self._resolve_authoring_scope(
@@ -3950,7 +2595,7 @@ class StoryRuntime:
         )
         if previous is not None and scope.task_id != previous.authoring_scope.task_id:
             raise validation_failure(
-                _LeadOutcomeValidationError('recommendation revision cannot replace its authoring task'),
+                reply_contract_values.LeadOutcomeValidationError('recommendation revision cannot replace its authoring task'),
                 '$.authoring_scope.task',
                 'recommendation revision cannot replace its authoring task',
             )
@@ -3997,7 +2642,7 @@ class StoryRuntime:
                 selected_scope, scope, allow_prior_revision_input=fresh_consultation,
             )):
                 raise validation_failure(
-                    _LeadOutcomeValidationError(
+                    reply_contract_values.LeadOutcomeValidationError(
                         'recommendation draft sources require their existing authoring task',
                     ),
                     '$.recommended_action',
@@ -4014,7 +2659,7 @@ class StoryRuntime:
             except (TypeError, ValueError) as validation_cause:
                 raise carry_validation(
                     validation_failure(
-                        _LeadOutcomeValidationError('recommended route omits required specialists'),
+                        reply_contract_values.LeadOutcomeValidationError('recommended route omits required specialists'),
                         '$.recommended_action.specialist_ids',
                         'recommended route omits required specialists',
                     ),
@@ -4024,7 +2669,7 @@ class StoryRuntime:
         mandatory = 1
         if remaining < mandatory:
             raise validation_failure(
-                _LeadOutcomeValidationError(
+                reply_contract_values.LeadOutcomeValidationError(
                     'recommended preparation cannot fit its source-lineage budget',
                 ),
                 '$.recommended_action.source_ids',
@@ -4062,14 +2707,14 @@ class StoryRuntime:
                     projection.current_proposal.proposal_digest, projection.execution_attempt_id
                 ) != (source.payload.proposal_id, source.payload.proposal_revision,
                       source.payload.proposal_digest, source.payload.execution_attempt_id):
-                    raise _LeadOutcomeValidationError("synthesis preview must bind the current confirmed execution")
+                    raise reply_contract_values.LeadOutcomeValidationError("synthesis preview must bind the current confirmed execution")
                 bound_source = projection.current_proposal
                 completed_synthesis = source
                 source_projection = projection
             else:
                 bound_source, completed_synthesis, source_projection = self._completed_authoring_source(scope, events)
             if source_proposal is not None and source_proposal != bound_source:
-                raise _LeadOutcomeValidationError("recommendation source is not the current confirmed draft")
+                raise reply_contract_values.LeadOutcomeValidationError("recommendation source is not the current confirmed draft")
             source_proposal = bound_source
             source_attempt = completed_synthesis.payload.execution_attempt_id
             source_rounds = source_projection.rounds_spent
@@ -4091,32 +2736,32 @@ class StoryRuntime:
             )
         remaining = COLLABORATION_PHYSICAL_CALL_LIMIT - lineage_spent
         inherited_capture = ()
-        preparation_cap = min(_CONTEXT_INVOCATION_CALL_LIMIT, remaining)
+        preparation_cap = min(reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT, remaining)
         if scope.schema_version == 3:
             if fresh_consultation:
                 read = int(self._has_present_references(selected_inputs))
                 draft_floor = (len(action.specialist_ids) + 1) * (1 + read)
                 floor = self._future_authoring_floor(scope, selected_inputs) + draft_floor
                 if remaining < floor + 1 + read:
-                    raise _LeadOutcomeValidationError(
+                    raise reply_contract_values.LeadOutcomeValidationError(
                         "fresh drafting preparation and full review are infeasible; clarify and freshly propose"
                     )
                 preparation_cap = min(preparation_cap, remaining - floor)
             elif scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
                 if action.kind is not LeadRecommendationActionKind.PREPARE_ARTIFACT or source_proposal is None or source_attempt is None:
-                    raise _LeadOutcomeValidationError("v3 authoring requires completed draft synthesis and artifact preparation; clarify or freshly propose")
+                    raise reply_contract_values.LeadOutcomeValidationError("v3 authoring requires completed draft synthesis and artifact preparation; clarify or freshly propose")
                 if source_rounds != 1 or source_proposal.authoring_scope is None:
-                    raise _LeadOutcomeValidationError("final review cannot reset rounds or add round three; clarify or freshly propose")
+                    raise reply_contract_values.LeadOutcomeValidationError("final review cannot reset rounds or add round three; clarify or freshly propose")
                 self._validate_draft_provenance(scope, self._session_authoring_events(source.session_id),
                     pending_attempt_id=source_attempt if preview else None,
                     pending_replies=preview_replies if preview else ())
                 inherited_capture = self._remap_shared_premises(source_proposal.basis, selected_inputs)
                 if authoring_capture_identity(scope, source_proposal.basis) != authoring_capture_identity(source_proposal.authoring_scope, source_proposal.basis):
-                    raise _LeadOutcomeValidationError("preparation cannot change the confirmed authoring task")
+                    raise reply_contract_values.LeadOutcomeValidationError("preparation cannot change the confirmed authoring task")
                 floor = self._final_review_floor(scope, selected_inputs, preparation=False)
                 minimum_preparation = 1 + int(self._has_present_references(selected_inputs))
                 if remaining < floor + minimum_preparation:
-                    raise _LeadOutcomeValidationError("declared preparation and full final review are infeasible; clarify or freshly propose")
+                    raise reply_contract_values.LeadOutcomeValidationError("declared preparation and full final review are infeasible; clarify or freshly propose")
                 preparation_cap = min(preparation_cap, remaining - floor)
             elif source_proposal is not None and source_proposal.basis.schema_version == 2:
                 inherited_capture = self._remap_shared_premises(source_proposal.basis, selected_inputs)
@@ -4128,18 +2773,18 @@ class StoryRuntime:
                 events=events, pending_material=source, pending_replies=preview_replies,
                 admission=admission)
             if type(qualified_admission) is not AuthoringAdmissionBasis:
-                raise _LeadOutcomeValidationError("recommendation lost its current authoring admission")
+                raise reply_contract_values.LeadOutcomeValidationError("recommendation lost its current authoring admission")
         requires_admission, target_required = LeadProviderConstraints.authoring_requirements(
             intent=None if scope is None else scope.intent, activity=None if scope is None else scope.activity,
             preparation_kind=action.kind.value)
         if requires_admission and qualified_admission is None:
-            raise _LeadOutcomeValidationError("official preparation requires qualified authoring admission")
+            raise reply_contract_values.LeadOutcomeValidationError("official preparation requires qualified authoring admission")
         qualified_readiness = None
         if target_required:
             qualified_readiness = self._qualify_readiness_targets(source.session_id,
                 action.target_paths or (() if scope is None else scope.target_paths))
             if type(qualified_readiness) is CoreDocumentReadinessNeeded:
-                raise _LeadOutcomeValidationError(qualified_readiness.message)
+                raise reply_contract_values.LeadOutcomeValidationError(qualified_readiness.message)
         request = LeadRecommendationRequestPayload(
             request_event_id=request_event_id, request_id=event_journal.new_id("rc"),
             action_id=event_journal.new_id("ra") if previous is None else previous.action_id,
@@ -4192,10 +2837,10 @@ class StoryRuntime:
         events = self.conversation_storage_services.event_store.read(event.session_id, event.conversation_id)
         project_collaboration_history(events)
         source = next(item for item in events if item.event_id == request.source_recommendation_event_id)
-        if self._recommendation_event_digest(source) != request.source_recommendation_digest:
+        if reply_contract_values.recommendation_event_digest(source) != request.source_recommendation_digest:
             raise BackendProtocolError("recommendation source no longer matches its disclosure")
         validation_details = (
-            self._execution_validation_details(
+            reply_contract_values.execution_validation_details(
                 events, request.source_execution_attempt_id, source.step_id,
             )
             if request.source_execution_attempt_id is not None else ()
@@ -6337,12 +4982,12 @@ class StoryRuntime:
                     core_document_readiness=core_document_readiness,
                     authoring_admission=authoring_admission,
                     route="specialist_advisory",
-                    route_fingerprint=self._canonical_digest(route),
+                    route_fingerprint=reply_contract_values.canonical_digest(route),
                     agent_profiles=(profile,),
                     context_policy_fingerprint=(
                         self._agent_context_service.policy_fingerprint
                     ),
-                    budget_policy_fingerprint=_BUDGET_POLICY_FINGERPRINT,
+                    budget_policy_fingerprint=reply_contract_values.BUDGET_POLICY_FINGERPRINT,
                     inputs=inputs,
                     evidence=None,
                 ),
@@ -6750,7 +5395,7 @@ class StoryRuntime:
                     proposal_id=proposal.proposal_id,
                     proposal_revision=proposal.proposal_revision,
                     proposal_digest=proposal.proposal_digest,
-                    basis_digest=self._proposal_basis_digest(proposal),
+                    basis_digest=reply_contract_values.proposal_basis_digest(proposal),
                     tail_event_id=tail.event_id,
                     tail_sequence=tail.sequence,
                 )
@@ -8218,7 +6863,7 @@ class StoryRuntime:
                    if assignment.review_basis is not None else {}),
             },
             "inputs": [
-                self._collaboration_input_value(item, input_events, evidence=proposal.basis.evidence) for item in selected
+                reply_contract_values.collaboration_input_value(item, input_events, evidence=proposal.basis.evidence) for item in selected
             ],
             "authoring_scope": authoring_scope_to_dict(proposal.authoring_scope),
             **({"stage_plan": stage_plan_to_dict(proposal.stage_plan)} if proposal.stage_plan is not None else {}),
@@ -8353,7 +6998,7 @@ class StoryRuntime:
             "conversation_id": conversation_id,
             "artifact_objectives": artifact_objective_context(project_collaboration_history(events)),
             "inputs": [
-                self._collaboration_input_value(item, input_events, evidence=proposal.basis.evidence)
+                reply_contract_values.collaboration_input_value(item, input_events, evidence=proposal.basis.evidence)
                 for item in proposal.basis.inputs
             ],
             "replies": [
@@ -8407,7 +7052,7 @@ class StoryRuntime:
                 reply_inputs = tuple(CollaborationInputRevision(
                     input_id=event_id, kind=CollaborationInputKind.CONVERSATION_EVENT,
                     locator=f"conversation/{event_id}", state=CollaborationInputState.PRESENT,
-                    revision_digest=self._specialist_reply_digest(reply),
+                    revision_digest=reply_contract_values.specialist_reply_digest(reply),
                 ) for event_id, reply in zip(reply_event_ids, replies, strict=True))
                 self._recommendation_request_draft(
                     source=source, action=decoded.recommended_action,
@@ -8482,7 +7127,7 @@ class StoryRuntime:
             "assignment": {"assignment_id": assignment.assignment_id,
                 "mode": assignment.mode.value, "instruction": assignment.instruction,
                 "input_ids": list(assignment.input_ids), "round": assignment.round},
-            "inputs": [self._collaboration_input_value(item, events,
+            "inputs": [reply_contract_values.collaboration_input_value(item, events,
                 evidence=proposal.basis.evidence) for item in selected],
         }
         return await self._run_collaboration_invocation(
@@ -8519,7 +7164,7 @@ class StoryRuntime:
         value = {
             "workflow": "premise_decision_summary", "provisional": True,
             "premise_decision": premise_value_to_dict(proposal.premise_decision),
-            "inputs": [self._collaboration_input_value(item, events,
+            "inputs": [reply_contract_values.collaboration_input_value(item, events,
                 evidence=proposal.basis.evidence) for item in proposal.basis.inputs],
             "replies": [{"reply_event_id": event_id, "agent_id": assignment.specialist_id,
                 "premise_analysis": premise_value_to_dict(reply.premise_analysis)}
@@ -8547,7 +7192,7 @@ class StoryRuntime:
             report = PremiseDecisionReport(
                 proposal.premise_decision, conversation_id, proposal.proposal_id,
                 proposal.proposal_revision, proposal.proposal_digest, proposal.step_id, attempt_id,
-                tuple(PremiseReplyRef(event_id, assignment.specialist_id, self._specialist_reply_digest(reply))
+                tuple(PremiseReplyRef(event_id, assignment.specialist_id, reply_contract_values.specialist_reply_digest(reply))
                     for event_id, reply, assignment in zip(ids, replies, proposal.assignments, strict=True)),
                 summary, tuple(PremiseOption(event_journal.new_id("opt"), material_digest(option.premise_text),
                     option.option_key, option.premise_text, option.rationale, option.reply_dispositions)
@@ -8571,7 +7216,7 @@ class StoryRuntime:
                 CollaborationInputKind.WRITING_ARTIFACT}), material_value=value,
             invocation_kind=CollaborationInvocationKind.LEAD_SYNTHESIS,
             context_invocation_kind=ContextInvocationKind.LEAD_SYNTHESIS,
-            result_contract=_lead_result_rule_seed("premise-decision-summary-v1", facts.summary_schema()),
+            result_contract=reply_contract_values.lead_result_rule_seed("premise-decision-summary-v1", facts.summary_schema()),
             physical_call_limit=proposal.budget.synthesis_max_physical_calls, round_number=1,
             decoder=decode, fallback_answer=json.dumps({"status": "clarification",
                 "message": _SAFE_STRUCTURED_FALLBACK_MESSAGE, "options": [], "recommended_option_key": None}),
@@ -8644,7 +7289,7 @@ class StoryRuntime:
                 decision=validation_call('$.decision', ArtifactReviewDecision, value['decision']),
                 message=message,
                 rationale=message,
-                user_impact=_LEAD_PROPOSAL_USER_IMPACT,
+                user_impact=reply_contract_values.LEAD_PROPOSAL_USER_IMPACT,
                 limitations=(
                     "No additional limitations were reported."
                     if not unresolved
@@ -8661,42 +7306,6 @@ class StoryRuntime:
                 BackendProtocolError('lead returned a noncanonical artifact review synthesis'),
                 exc,
             ) from exc
-
-    @staticmethod
-    def _collaboration_reply_trace(
-        *,
-        role: str,
-        action: str,
-        request: ContextInvocationRequest,
-        result: ContextInvocationResult | None,
-        origin: ReplyTraceOrigin,
-    ) -> ReplyTrace:
-        """Describe delivered context classes without retaining their content."""
-
-        labels: list[str] = ["current_input"]
-        if request.session_state_json is not None:
-            labels.append("session_state")
-        if result is not None:
-            authorization = result.authorization
-            if authorization.core_statuses:
-                labels.append("core_status")
-            if authorization.zero_hit_searches:
-                labels.append("search_results")
-            labels.extend(
-                f"read:{receipt.source_kind.value}"
-                for receipt in authorization.used_evidence
-            )
-        return ReplyTrace(
-            role=role,
-            action=("none" if origin is ReplyTraceOrigin.RUNTIME_FALLBACK else action),
-            context_sources=tuple(dict.fromkeys(labels)),
-            recovered_fields=(
-                ()
-                if origin is ReplyTraceOrigin.PROVIDER
-                else ("structured_reply",)
-            ),
-            origin=origin,
-        )
 
     @staticmethod
     def _collaboration_trace_action(value: object) -> str:
@@ -8842,7 +7451,7 @@ class StoryRuntime:
                 phase=context_invocation_kind.value,
                 round_number=round_number,
             )
-            factory = self._validated_context_provider_factory(bound_agent)
+            factory = call_rule_factory.validated_context_provider_factory(bound_agent)
             delegate = factory(reference_read)
             if inspect.isawaitable(delegate):
                 raise BackendProtocolError(
@@ -8978,7 +7587,7 @@ class StoryRuntime:
                     ),
                     artifact_binding=artifact_binding,
                     generation_pin=transferred_pin,
-                    trace=self._collaboration_reply_trace(
+                    trace=reply_contract_values.collaboration_reply_trace(
                         role=agent_id,
                         action=self._collaboration_trace_action(value),
                         request=request,
@@ -8991,7 +7600,7 @@ class StoryRuntime:
 
             def neutral_fallback_answer():
                 fallback_value = strict_json_object(fallback_answer)
-                fallback_value["message"] = _lead_terminal_notice(provider.effective_language,
+                fallback_value["message"] = reply_contract_values.lead_terminal_notice(provider.effective_language,
                     provider.task_revisions, "rejected", provider.validation_details)
                 return json.dumps(fallback_value, ensure_ascii=False, separators=(",", ":"))
             decoded: object | None = None
@@ -9037,7 +7646,7 @@ class StoryRuntime:
 
             lead_factory = None
             if agent_id == LEAD_ORCHESTRATOR:
-                lead_factory = _lead_call_contract_factory(
+                lead_factory = call_rule_factory.lead_call_contract_factory(
                     constraints=(constraints if constraints is not None else
                                  LeadProviderConstraints(input_ids=tuple(item.input_id for item in inputs),
                                                          source_ids=tuple(item.input_id for item in inputs))),
@@ -9322,96 +7931,6 @@ class StoryRuntime:
                 raise BackendProtocolError(
                     "assignment reference proof changed before provider submission"
                 )
-
-    def _collaboration_input_value(
-        self,
-        item: CollaborationInputRevision,
-        events: tuple[CollaborationEvent, ...],
-        *, evidence: CollaborationLeadEvidence | None = None,
-    ) -> dict[str, object]:
-        value: dict[str, object] = {
-            "input_id": item.input_id,
-            "kind": item.kind.value,
-            "locator": item.locator,
-            "revision_digest": item.revision_digest,
-        }
-        if item.start_line is not None:
-            value["start_line"] = item.start_line
-            value["end_line"] = item.end_line
-        if item.kind is CollaborationInputKind.USER_INPUT:
-            turn_id = item.locator.removeprefix("conversation/").removesuffix(
-                "/user_input"
-            )
-            matches = tuple(
-                event
-                for event in events
-                if event.turn_id == turn_id
-                and event.sender == event_journal.USER_ACTOR
-                and type(event.payload) is CollaborationMessagePayload
-            )
-            if len(matches) != 1:
-                raise BackendProtocolError("assignment user input is not authoritative")
-            message_payload = cast(CollaborationMessagePayload, matches[0].payload)
-            value["text"] = message_payload.content
-        elif item.kind is CollaborationInputKind.CONVERSATION_EVENT:
-            event_id = item.locator.removeprefix("conversation/")
-            matches = tuple(event for event in events if event.event_id == event_id)
-            read_receipts = () if evidence is None else tuple(receipt for receipt in evidence.receipts
-                if receipt.acquisition is CollaborationEvidenceAcquisition.READ
-                and receipt.evidence_id == item.input_id and receipt.source_kind is item.kind
-                and receipt.locator == item.locator and receipt.content_digest == item.revision_digest
-                and receipt.start_line == item.start_line and receipt.end_line == item.end_line)
-            if not matches and len(read_receipts) == 1:
-                value["source_id"] = read_receipts[0].source_id
-                value["boundary"] = {
-                    "kind": read_receipts[0].boundary_kind,
-                    "start": read_receipts[0].boundary_start, "end": read_receipts[0].boundary_end,
-                }
-                value["instruction"] = "This is a selected context boundary; acquire current READ evidence before citing its content."
-                return value
-            if len(matches) != 1 or self._recommendation_event_digest(matches[0]) != item.revision_digest:
-                raise BackendProtocolError(
-                    "assignment conversation input is not an authoritative reply"
-                )
-            payload = matches[0].payload
-            if type(payload) is CollaborationLeadMaterialCapturePayload:
-                if item.start_line is not None or item.end_line is not None:
-                    raise BackendProtocolError("selected task material must remain whole input")
-                value["text"] = payload.capture.selected_text
-                value["selected_material_source"] = task_value_to_dict(payload.capture.source)
-                return value
-            if type(payload) is CollaborationPremiseSelectionPayload:
-                if item.input_id != "selected_premise" or item.start_line is not None or item.end_line is not None:
-                    raise BackendProtocolError("chosen premise requires its exact whole input alias")
-                value["text"] = payload.capture.selected_text
-                value["premise_selection"] = premise_value_to_dict(payload.capture)
-                return value
-            if type(payload) is CollaborationSpecialistReplyPayload:
-                value["reply"] = {
-                    "mode": None if payload.mode is None else payload.mode.value,
-                    "assessment": payload.assessment.value, "assignment_id": payload.assignment_id,
-                    "input_ids": list(payload.input_ids), "message": payload.message,
-                }
-            else:
-                value["conversation_event"] = asdict(payload)
-        elif item.kind is CollaborationInputKind.ARTIFACT_CANDIDATE:
-            candidate_id = item.locator.removeprefix("artifact-candidate/")
-            matches = tuple(
-                event
-                for event in events
-                if type(event.payload) is ArtifactReviewCandidatePayload
-                and event.payload.candidate.candidate_id == candidate_id
-                and event.payload.candidate.candidate_digest == item.revision_digest
-            )
-            if len(matches) != 1:
-                raise BackendProtocolError(
-                    "assignment artifact candidate is not authoritative"
-                )
-            candidate = cast(ArtifactReviewCandidatePayload, matches[0].payload)
-            value["candidate"] = json.loads(
-                serialize_artifact_review_candidate(candidate.candidate)
-            )
-        return value
 
     def _persist_collaboration_results_locked(
         self,
@@ -9794,7 +8313,7 @@ class StoryRuntime:
             reply_inputs = tuple(CollaborationInputRevision(
                 input_id=item.event_id, kind=CollaborationInputKind.CONVERSATION_EVENT,
                 locator=f"conversation/{item.event_id}", state=CollaborationInputState.PRESENT,
-                revision_digest=self._specialist_reply_digest(item.payload),
+                revision_digest=reply_contract_values.specialist_reply_digest(item.payload),
             ) for item in replies)
             recommendation = self._recommendation_request_draft(
                 source=synthesis_draft, action=recommended_action,
@@ -9867,7 +8386,7 @@ class StoryRuntime:
         if proposal is None or result is None or result_event_id is None:
             raise BackendProtocolError("known result finalization lacks authority")
         turn_id = event_journal.deterministic_id("t", result_event_id, "finalize")
-        validation_details = self._execution_validation_details(
+        validation_details = reply_contract_values.execution_validation_details(
             events, result.execution_attempt_id, proposal.step_id,
         )
         synthesis_event = next(
@@ -10123,66 +8642,6 @@ class StoryRuntime:
             CollaborationNextAction.CONTINUE_WITH_LEAD,
             validation_details=validation_details,
             provider_invocation_id=None if synthesis_payload is None else synthesis_payload.provider_invocation_id,
-        )
-
-    def _execution_validation_details(
-        self,
-        events: tuple[CollaborationEvent, ...],
-        execution_attempt_id: str,
-        step_id: str,
-    ) -> tuple[str, ...]:
-        """Recover safe call diagnostics from this execution's durable facts."""
-
-        execution_turn_id = event_journal.deterministic_id(
-            "t", execution_attempt_id, "execution",
-        )
-        running_event_id = event_journal.deterministic_id(
-            "e", execution_attempt_id, "running",
-        )
-        result_event_id = event_journal.deterministic_id(
-            "e", execution_attempt_id, "result",
-        )
-        boundaries = {
-            event.event_id: event.sequence
-            for event in events
-            if event.event_id in {running_event_id, result_event_id}
-            and event.turn_id == execution_turn_id
-            and event.step_id == step_id
-        }
-        if len(boundaries) != 2:
-            return ()
-        execution_events = tuple(
-            event for event in events
-            if boundaries[running_event_id] < event.sequence < boundaries[result_event_id]
-            and event.turn_id == execution_turn_id
-            and event.step_id == step_id
-        )
-        messages_by_call: dict[tuple[str, str], list[str]] = {}
-        submitted_calls: set[tuple[str, str]] = set()
-        for event in execution_events:
-            payload = event.payload
-            if (type(payload) is CollaborationProviderCallPayload
-                and payload.state is CollaborationProviderCallState.SUBMITTED):
-                submitted_calls.add((payload.invocation_id, payload.call_id))
-            elif (type(payload) is CollaborationMessagePayload
-                and event.sender == event_journal.RUNTIME_ACTOR
-                and event.recipient == event_journal.USER_ACTOR
-                and payload.validation_invocation_id is not None
-                and payload.validation_call_id is not None
-                and len(payload.validation_details) == 1
-                and payload.content == payload.validation_details[0]):
-                key = (payload.validation_invocation_id, payload.validation_call_id)
-                if key in submitted_calls:
-                    messages_by_call.setdefault(key, []).append(payload.content)
-        return tuple(
-            detail
-            for event in execution_events
-            if type(event.payload) is CollaborationProviderCallPayload
-            and event.payload.state is CollaborationProviderCallState.SUBMITTED
-            for detail in messages_by_call.get(
-                (event.payload.invocation_id, event.payload.call_id),
-                event.payload.validation_details,
-            )
         )
 
     def _finalize_artifact_result_locked(
@@ -10632,7 +9091,7 @@ class StoryRuntime:
                 kind=CollaborationInputKind.CONVERSATION_EVENT,
                 locator=f"conversation/{event.event_id}",
                 state=CollaborationInputState.PRESENT,
-                revision_digest=self._specialist_reply_digest(
+                revision_digest=reply_contract_values.specialist_reply_digest(
                     cast(CollaborationSpecialistReplyPayload, event.payload)
                 ),
             )
@@ -10767,7 +9226,7 @@ class StoryRuntime:
             purpose=next_intent.purpose,
             authoring_scope=next_intent.authoring_scope,
             assignments=runtime_assignments,
-            user_impact=_LEAD_PROPOSAL_USER_IMPACT,
+            user_impact=reply_contract_values.LEAD_PROPOSAL_USER_IMPACT,
             side_effects=(CollaborationSideEffect.PROVIDER_INVOCATION,),
             budget=CollaborationBudget(
                 round_limit=COLLABORATION_ROUND_LIMIT,
@@ -10782,7 +9241,7 @@ class StoryRuntime:
                 core_document_readiness=core_document_readiness,
                 authoring_admission=authoring_admission,
                 route="lead_specialist_consultation",
-                route_fingerprint=self._canonical_digest(route_value),
+                route_fingerprint=reply_contract_values.canonical_digest(route_value),
                 agent_profiles=profiles,
                 context_policy_fingerprint=(
                     self._agent_context_service.policy_fingerprint
@@ -10795,23 +9254,6 @@ class StoryRuntime:
                 editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
             ),
          stage_plan=next_intent.stage_plan, document_node=proposal.document_node, document_plan=proposal.document_plan)
-
-    @classmethod
-    def _specialist_reply_digest(
-        cls,
-        payload: CollaborationSpecialistReplyPayload,
-    ) -> str:
-        return cls._canonical_digest(
-            {
-                **({"premise_analysis": premise_value_to_dict(payload.premise_analysis)} if payload.premise_analysis is not None else {}),
-                **({"premise_conflicts": premise_value_to_dict(payload.premise_conflicts)} if payload.premise_conflicts else {}),
-                **({"mode": payload.mode.value} if payload.mode is not None else {}),
-                "assessment": payload.assessment.value,
-                "assignment_id": payload.assignment_id,
-                "input_ids": list(payload.input_ids),
-                "message": payload.message,
-            }
-        )
 
     @classmethod
     def _decode_specialist_reply(
@@ -11060,7 +9502,7 @@ class StoryRuntime:
             review_basis = (
                 validation_call(
                     f'$.assignments[{assignment_index}].review_basis',
-                    _provider_review_basis, item["review_basis"],
+                    reply_contract_values.provider_review_basis, item["review_basis"],
                 )
                 if mode is SpecialistAssignmentMode.REVIEW else None
             )
@@ -11881,7 +10323,7 @@ class StoryRuntime:
             if document_node is not None:
                 inherited_calls, inherited_rounds, _ = document_lineage_cost(
                     self._session_authoring_events(session_id), document_node, current_step_id=step_id)
-                ordinary_front_cap = min(_CONTEXT_INVOCATION_CALL_LIMIT if ordinary_front_cap is None else ordinary_front_cap,
+                ordinary_front_cap = min(reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT if ordinary_front_cap is None else ordinary_front_cap,
                     max(0, COLLABORATION_PHYSICAL_CALL_LIMIT - inherited_calls))
                 if inherited_rounds >= COLLABORATION_ROUND_LIMIT:
                     ordinary_front_cap = 0
@@ -11889,7 +10331,7 @@ class StoryRuntime:
                     and planning_projection is not None):
                 current_view = next((view for view in planning_projection.document_plans if view.plan.ref.plan_id == document_goal.plan_id), None)
                 if current_view is not None:
-                    ordinary_front_cap = min(_CONTEXT_INVOCATION_CALL_LIMIT if ordinary_front_cap is None else ordinary_front_cap,
+                    ordinary_front_cap = min(reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT if ordinary_front_cap is None else ordinary_front_cap,
                                              current_view.remaining_physical_calls)
             successor_only = (document_node is None and document_goal is None and
                 ordinary_front_cap is not None and ordinary_front_cap < 1
@@ -11899,7 +10341,7 @@ class StoryRuntime:
             if successor_only:
                 # A fresh revision owns new finite accounting, never the exhausted source's calls.
                 # Reserve full three-role draft/synthesis plus two preparation and four final calls.
-                ordinary_front_cap = min(_CONTEXT_INVOCATION_CALL_LIMIT,
+                ordinary_front_cap = min(reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT,
                                          COLLABORATION_PHYSICAL_CALL_LIMIT - (2 * len(SPECIALIST_IDS) + 4))
             elif ordinary_front_cap is not None and ordinary_front_cap < 1:
                 closed = self._lead_outcome_failure_result(
@@ -11978,7 +10420,7 @@ class StoryRuntime:
                         continue
                     try:
                         self._completed_authoring_source(item, local_task_events)
-                    except (_LeadOutcomeValidationError, BackendProtocolError):
+                    except (reply_contract_values.LeadOutcomeValidationError, BackendProtocolError):
                         continue
                     offered_tasks[(item.task_id, item.task_revision + 1)] = item
                 if not successor_only:
@@ -12186,7 +10628,7 @@ class StoryRuntime:
                 premise_question_id=premise_question_id,
                 adoption_intent=adoption_capture.selection.intent if adoption_capture is not None else None,
                 adoption_targets=adoption_capture.selection.target_paths if adoption_capture is not None else (),
-             preliminary_targets=_provided_review_targets(inputs), document_node_digest=(document_value_digest(document_node_selection_to_dict(document_selection)) if document_selection is not None else None if document_node is None else document_value_digest(document_node_binding_to_dict(document_node))), document_target_paths=(None if selected_path is None else (selected_path,)))
+             preliminary_targets=call_rule_factory.provided_review_targets(inputs), document_node_digest=(document_value_digest(document_node_selection_to_dict(document_selection)) if document_selection is not None else None if document_node is None else document_value_digest(document_node_binding_to_dict(document_node))), document_target_paths=(None if selected_path is None else (selected_path,)))
             if interaction_mode is LeadInteractionMode.EXPLORATION:
                 constraints = LeadExplorationConstraints(tuple(item.input_id for item in inputs))
             definition = self._build_guarded_contextual_definition(
@@ -12223,7 +10665,7 @@ class StoryRuntime:
                     phase=ContextInvocationKind.LEAD.value,
                     round_number=None,
                 )
-                provider_factory = self._validated_context_provider_factory(bound_agent)
+                provider_factory = call_rule_factory.validated_context_provider_factory(bound_agent)
                 delegate = provider_factory(reference_read)
                 if inspect.isawaitable(delegate):
                     raise BackendProtocolError(
@@ -12281,7 +10723,7 @@ class StoryRuntime:
                 candidate_aliases = {f"plan_candidate_{index}" for index, _ in enumerate(document_input_intents, 1)}
                 candidate_inputs = tuple(item for item in inputs if item.input_id in candidate_aliases)
                 candidate_events = self._session_authoring_events(session_id) if candidate_inputs else ()
-                candidate_material = [self._collaboration_input_value(item, candidate_events) for item in candidate_inputs]
+                candidate_material = [reply_contract_values.collaboration_input_value(item, candidate_events) for item in candidate_inputs]
                 candidate_material_by_input = dict(zip(candidate_inputs, candidate_material))
                 current_value: dict[str, object] = {
                     **({"document_selection": document_node_selection_to_dict(document_selection)} if document_selection is not None else {}),
@@ -12358,7 +10800,7 @@ class StoryRuntime:
                         "decision": asdict(preparation.decision_event.payload),
                         "start": asdict(preparation.start_event.payload),
                         "selected_inputs": [candidate_material_by_input[item] if item in candidate_material_by_input
-                                            else self._collaboration_input_value(item, objective_events,
+                                            else reply_contract_values.collaboration_input_value(item, objective_events,
                                                 evidence=preparation.request_event.payload.basis.evidence)
                                             for item in inputs],
                         "instruction": (
@@ -12392,8 +10834,8 @@ class StoryRuntime:
                     conversation_id,
                 )
                 if discussion_only:
-                    remaining = _CONTEXT_INVOCATION_CALL_LIMIT
-                    provider.limit_task_front_calls(_CONTEXT_INVOCATION_CALL_LIMIT + 1)
+                    remaining = reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT
+                    provider.limit_task_front_calls(reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT + 1)
                 elif task_receipt is not None:
                     spent = sum(type(event.payload) is CollaborationProviderCallPayload
                                 and event.step_id == step_id
@@ -12411,11 +10853,11 @@ class StoryRuntime:
                     raise BackendProtocolError(
                         "lead invocation cannot fit its answer inside the physical-call lineage"
                     )
-                physical_call_limit = min(_CONTEXT_INVOCATION_CALL_LIMIT, remaining)
+                physical_call_limit = min(reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT, remaining)
                 if ordinary_front_cap is not None:
                     physical_call_limit = min(physical_call_limit, ordinary_front_cap)
                 def prepare_lead_rule_seed() -> LeadResultRuleSeed:
-                    return _lead_discussion_result_contract(discussion_constraints) if discussion_only else _lead_revision_result_contract(
+                    return reply_contract_values.lead_discussion_result_contract(discussion_constraints) if discussion_only else response_rules.lead_revision_result_contract(
                         expected_relation,
                         tuple((item.input_id for item in inputs)),
                         tuple(offered_tasks),
@@ -12425,7 +10867,7 @@ class StoryRuntime:
                         source_scope=revision_source_scope,
                         artifact_revision_only=source_artifact_revision,
                         selected_document_review_path=selected_document_review_path,
-                    ) if discussion_constraints is not None else _lead_result_rule_seed("lead-exploration-response-v1", constraints.schema()) if interaction_mode is LeadInteractionMode.EXPLORATION else _lead_front_result_contract(
+                    ) if discussion_constraints is not None else reply_contract_values.lead_result_rule_seed("lead-exploration-response-v1", constraints.schema()) if interaction_mode is LeadInteractionMode.EXPLORATION else response_rules.lead_front_result_contract(
                             expected_relation,
                             tuple(item.input_id for item in inputs),
                             tuple(offered_tasks),
@@ -12463,7 +10905,7 @@ class StoryRuntime:
                             value = None
                         if discussion_only or (type(value) is dict and "writing_task_scope" not in value):
                             return bounded_chunks(diagnose_json_text(
-                                answer, _lead_discussion_result_contract(discussion_constraints).schema_value(),
+                                answer, reply_contract_values.lead_discussion_result_contract(discussion_constraints).schema_value(),
                             ))
                     return constraints.diagnose(answer, read_ids=read_ids, read_reviewers=read_reviewers) or (() if interaction_mode is LeadInteractionMode.EXPLORATION else self._lead_outcome_validation_details(answer))
 
@@ -12478,12 +10920,12 @@ class StoryRuntime:
                         value = normalize_result(json.loads(answer), "lead-discussion-response-v1")
                         if "authoring_scope" not in value and "used_evidence_ids" in value:
                             if value.get("kind", "answer") not in {"answer", "question"}:
-                                raise _LeadOutcomeValidationError("discussion permits only answer/question")
+                                raise reply_contract_values.LeadOutcomeValidationError("discussion permits only answer/question")
                             actual = {item.evidence_id: item for item in authorization.used_evidence
                                       if item.source_kind is ContextSourceKind.WRITING_ARTIFACT}
                             ids = value["used_evidence_ids"]
                             if type(ids) is not list or len(ids) != len(set(ids)) or not set(ids) <= actual.keys():
-                                raise _LeadOutcomeValidationError("discussion artifact facts require exact qualified READ receipts")
+                                raise reply_contract_values.LeadOutcomeValidationError("discussion artifact facts require exact qualified READ receipts")
                             facts = tuple({
                                 "evidence_id": actual[identity].evidence_id,
                                 "source_id": actual[identity].source_id,
@@ -12501,14 +10943,14 @@ class StoryRuntime:
                             )
                             return
                         if discussion_only:
-                            raise _LeadOutcomeValidationError("discussion cannot carry workflow execution fields")
+                            raise reply_contract_values.LeadOutcomeValidationError("discussion cannot carry workflow execution fields")
                     nonlocal decoded, decoded_artifact_candidate, decoded_evidence, decoded_exploration
                     nonlocal read_ids, read_reviewers
                     if interaction_mode is LeadInteractionMode.EXPLORATION:
                         artifact_reads = {item.evidence_id: item for item in authorization.used_evidence if item.source_kind is ContextSourceKind.WRITING_ARTIFACT}
                         read_ids = tuple(artifact_reads)
                         if constraints.diagnose(answer, read_ids=read_ids):
-                            raise _LeadOutcomeValidationError("exploration result violates its offered provisional constraints")
+                            raise reply_contract_values.LeadOutcomeValidationError("exploration result violates its offered provisional constraints")
                         value = self._strict_json_object(answer, (frozenset({"kind", "message", "status", "ideas", "grounded_observations"}), frozenset({"kind", "message", "status"})))
                         ideas = tuple(ExplorationIdea(
                             idea_id=f"{exploration_request_event_id}:idea:{index + 1}",
@@ -12546,7 +10988,7 @@ class StoryRuntime:
                     rules = constraints.diagnose(answer, read_ids=read_ids, read_reviewers=read_reviewers)
                     if rules:
                         raise carry_validation(
-                            _LeadOutcomeValidationError(
+                            reply_contract_values.LeadOutcomeValidationError(
                                 'lead result violates its offered constraints'),
                             LeadContractError(rules),
                         )
@@ -12609,7 +11051,7 @@ class StoryRuntime:
                         offered_tasks.setdefault((host_binding_plan.task_id,
                             host_binding_plan.task_revision), binding_prior)
                         proposed_value = bind_task_outcome(proposed_value, host_binding_plan,
-                            preliminary_targets=_authorized_preliminary_targets(inputs, authorization))
+                            preliminary_targets=call_rule_factory.authorized_preliminary_targets(inputs, authorization))
                         answer = json.dumps(proposed_value, ensure_ascii=False, separators=(",", ":"))
                     decoded = self._decode_lead_outcome(
                         answer,
@@ -12617,7 +11059,7 @@ class StoryRuntime:
                     )
                     if decoded.proposal is not None and decoded.proposal.premise_decision is not None:
                         if premise_question_id is None or decoded.proposal.premise_decision.question_id != premise_question_id:
-                            raise _LeadOutcomeValidationError("premise question is not currently offered")
+                            raise reply_contract_values.LeadOutcomeValidationError("premise question is not currently offered")
                         decoded_evidence = self._durable_lead_evidence(decoded, authorization, inputs)
                         decoded = replace(decoded, scope=decoded_evidence.scope,
                             evidence_status=decoded_evidence.status,
@@ -12628,7 +11070,7 @@ class StoryRuntime:
                             if item.kind in {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT, CollaborationInputKind.WRITING_ARTIFACT}}
                         mandatory.discard(None)
                         if not mandatory <= {item.agent_id for item in decoded.proposal.assignments}:
-                            raise _LeadOutcomeValidationError("premise analysis omits an affected source owner")
+                            raise reply_contract_values.LeadOutcomeValidationError("premise analysis omits an affected source owner")
                         return
                     if preparation is not None:
                         if host_binding_plan is not None and host_binding_plan.transition == "supersede":
@@ -12654,7 +11096,7 @@ class StoryRuntime:
                         or decoded.objective_intent.next_step is not ArtifactObjectiveNextStep.PREPARE
                     ):
                         raise validation_failure(
-                            _LeadOutcomeValidationError(
+                            reply_contract_values.LeadOutcomeValidationError(
                                 'selected objective preparation cannot be downgraded',
                             ),
                             '$.objective_intent.next_step',
@@ -12685,7 +11127,7 @@ class StoryRuntime:
                                 history_metadata=tuple((row.metadata.conversation_id, row.metadata.subject, row.metadata.status.value)
                                                        for row in snapshot.conversations))
                         except (TypeError, ValueError) as exc:
-                            raise validation_failure(_LeadOutcomeValidationError("readiness is not source-qualified"),
+                            raise validation_failure(reply_contract_values.LeadOutcomeValidationError("readiness is not source-qualified"),
                                 "$.core_document_assessment", "bind current actual USER/material/whole READ facts") from exc
                         decoded = replace(decoded, core_document_readiness=basis)
                         return
@@ -12704,10 +11146,10 @@ class StoryRuntime:
                             != admission.selected_authoring_task
                         )
                     ):
-                        raise _LeadOutcomeValidationError("fresh-work proposal changed prospectively admitted task")
+                        raise reply_contract_values.LeadOutcomeValidationError("fresh-work proposal changed prospectively admitted task")
                     if authoring_scope is None:
                         raise validation_failure(
-                            _LeadOutcomeValidationError(
+                            reply_contract_values.LeadOutcomeValidationError(
                                 'provider Lead outcomes require explicit authoring scope',
                             ),
                             '$.authoring_scope',
@@ -12715,14 +11157,14 @@ class StoryRuntime:
                         )
                     if (authoring_scope.task_id, authoring_scope.task_revision) not in offered_tasks:
                         raise validation_failure(
-                            _LeadOutcomeValidationError('authoring scope uses an unoffered task revision'),
+                            reply_contract_values.LeadOutcomeValidationError('authoring scope uses an unoffered task revision'),
                             '$.authoring_scope.task',
                             'authoring scope uses an unoffered task revision',
                         )
                     selected_prior = offered_tasks[(authoring_scope.task_id, authoring_scope.task_revision)]
                     if selected_prior is not None and selected_prior.schema_version == 3 and selected_prior.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} and authoring_scope.task_revision == selected_prior.task_revision + 1:
                         if authoring_scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} or authoring_scope.intent is not AuthoringIntent.AUTHORING:
-                            raise _LeadOutcomeValidationError("a fresh successor requires AUTHORING DRAFT/REVISE and new owner drafts before candidate review")
+                            raise reply_contract_values.LeadOutcomeValidationError("a fresh successor requires AUTHORING DRAFT/REVISE and new owner drafts before candidate review")
                     current_task_events = self._session_authoring_events(session_id)
                     selected_current = (
                         None if selected_prior is None else
@@ -12763,13 +11205,13 @@ class StoryRuntime:
                     if (selected_prior is not None and selected_current != selected_prior
                             and not retained_transition_source):
                         raise validation_failure(
-                            _LeadOutcomeValidationError(
+                            reply_contract_values.LeadOutcomeValidationError(
                                 'selected authoring task changed while the Lead was interpreting the request',
                             ),
                             '$.authoring_scope',
                             'selected authoring task changed while the Lead was interpreting the request',
                         )
-                    target_prior = _target_authoring_scope_prior(
+                    target_prior = response_rules.target_authoring_scope_prior(
                         authoring_scope, selected_prior, task_receipt,
                     )
                     provisional_brief_refinement = (
@@ -12799,7 +11241,7 @@ class StoryRuntime:
                         if authoring_scope.schema_version == 3:
                             if any(artifact_domain(path) not in required_authoring_domains(authoring_scope)
                                    for path in objective_paths):
-                                raise _LeadOutcomeValidationError("new objective destination domains require a fresh task revision")
+                                raise reply_contract_values.LeadOutcomeValidationError("new objective destination domains require a fresh task revision")
                         else:
                             authoring_scope = replace(authoring_scope, target_paths=tuple(dict.fromkeys(
                                 (*authoring_scope.target_paths, *objective_paths),
@@ -12808,15 +11250,15 @@ class StoryRuntime:
                         allow_provisional=not binding_pinned,
                         allow_view=(host_binding_plan is not None and authority_free))
                     if decoded.preliminary_review is not None:
-                        current_targets = _authorized_preliminary_targets(inputs, authorization)
+                        current_targets = call_rule_factory.authorized_preliminary_targets(inputs, authorization)
                         expected = {item.input_id: item for item in current_targets}
                         expected = {item.input_id: item for item in scoped_preliminary_targets(
                             tuple(expected.values()), resolved_scope.target_paths)}
                         for target in decoded.preliminary_review.targets:
                             if expected.get(target.input_id) != target:
-                                raise _LeadOutcomeValidationError("preliminary target is not this invocation's captured material")
+                                raise reply_contract_values.LeadOutcomeValidationError("preliminary target is not this invocation's captured material")
                         if set(expected) != {item.input_id for item in decoded.preliminary_review.targets}:
-                            raise _LeadOutcomeValidationError("preliminary inspection must disclose all current targets")
+                            raise reply_contract_values.LeadOutcomeValidationError("preliminary inspection must disclose all current targets")
                     if resolved_scope.activity is not AuthoringActivity.WORKFLOW:
                         ordinary_answer = (
                             decoded.kind is LeadOutcomeKind.ANSWER
@@ -12837,7 +11279,7 @@ class StoryRuntime:
                         ))
                         if scope_paths is None:
                             raise validation_failure(
-                                _LeadOutcomeValidationError(
+                                reply_contract_values.LeadOutcomeValidationError(
                                     'substantive story work requires specialist involvement',
                                 ),
                                 '$.kind',
@@ -12846,7 +11288,7 @@ class StoryRuntime:
                     if decoded.proposal is not None:
                         if decoded.proposal.authoring_scope != decoded.authoring_scope:
                             raise validation_failure(
-                                _LeadOutcomeValidationError(
+                                reply_contract_values.LeadOutcomeValidationError(
                                     'proposal must disclose the same authoring scope',
                                 ),
                                 '$.authoring_scope',
@@ -12858,13 +11300,13 @@ class StoryRuntime:
                     if document_selection is not None:
                         _, current_node = self._prepare_document_selection(session_id, document_selection)
                         if resolved_scope.target_paths != (current_node.target_path,):
-                            raise _LeadOutcomeValidationError("document selection requires its exact disclosed target")
+                            raise reply_contract_values.LeadOutcomeValidationError("document selection requires its exact disclosed target")
                     successor_selection = None
                     if document_node is not None and decoded.kind is LeadOutcomeKind.PROPOSAL:
                         if document_selection is None:
                             source_event = next((event for event in task_events
                                 if event.event_id == document_node.task_ref.scope_event_id), None)
-                            successor_selection = _document_successor_selection(document_node, source_event,
+                            successor_selection = response_rules.document_successor_selection(document_node, source_event,
                                 binding_prior, resolved_scope, host_binding_plan)
                         self._validate_document_node(session_id, document_node,
                             scope=binding_prior if successor_selection is not None else resolved_scope)
@@ -12887,12 +11329,12 @@ class StoryRuntime:
                             )
                         )
                         ):
-                            raise _LeadOutcomeValidationError("task planning permits only fresh consultation preparation")
+                            raise reply_contract_values.LeadOutcomeValidationError("task planning permits only fresh consultation preparation")
                         scope = decoded.authoring_scope
                         if scope is None or (scope.task_id, scope.task_revision) != (
                             task_receipt.target_task_id, task_receipt.target_task_revision,
                         ):
-                            raise _LeadOutcomeValidationError("task planning changed the exact USER-selected task pair")
+                            raise reply_contract_values.LeadOutcomeValidationError("task planning changed the exact USER-selected task pair")
 
                         selected_review = bool(selected_document_review_path is not None
                             and scope.activity is AuthoringActivity.REVIEW
@@ -12904,7 +11346,7 @@ class StoryRuntime:
                             scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
                             and not (scope.activity is AuthoringActivity.REVIEW and (source_review_revision or source_artifact_revision))
                         )):
-                            raise _LeadOutcomeValidationError("task selection requires fresh owner drafting before candidate review")
+                            raise reply_contract_values.LeadOutcomeValidationError("task selection requires fresh owner drafting before candidate review")
                         if source_artifact_revision and not (
                             (decoded.kind is LeadOutcomeKind.PROPOSAL and decoded.artifact_intent is not None)
                             or (
@@ -12913,12 +11355,12 @@ class StoryRuntime:
                                 and decoded.recommended_action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT
                             )
                         ):
-                            raise _LeadOutcomeValidationError("artifact Revise requires fresh candidate preparation or discussion")
+                            raise reply_contract_values.LeadOutcomeValidationError("artifact Revise requires fresh candidate preparation or discussion")
                         aliases = tuple(f"selected_material_{ordinal}" for ordinal in range(1, len(task_material_events) + 1))
                         if decoded.proposal is not None and any(
                             alias not in assignment.input_ids for assignment in decoded.proposal.assignments for alias in aliases
                         ):
-                            raise _LeadOutcomeValidationError("every assignment must receive the exact selected materials")
+                            raise reply_contract_values.LeadOutcomeValidationError("every assignment must receive the exact selected materials")
                     if adoption_capture is not None:
                         self._validate_adoption_source(session_id, adoption_capture)
                         activities = ({AuthoringActivity.REVIEW} if adoption_capture.selection.intent is AuthoringIntent.REVIEW_ONLY
@@ -12929,12 +11371,12 @@ class StoryRuntime:
                                 or authoring_scope.target_paths != adoption_capture.selection.target_paths or decoded.artifact_intent is not None
                                 or decoded.objective_intent is not None or decoded.recommended_action is not None or decoded.proposal is None
                                 or any("adopted_idea" not in assignment.input_ids for assignment in decoded.proposal.assignments)):
-                            raise _LeadOutcomeValidationError("adoption requires fresh TASK@1 work with exact selected intent, targets and input")
+                            raise reply_contract_values.LeadOutcomeValidationError("adoption requires fresh TASK@1 work with exact selected intent, targets and input")
                         if adoption_capture.selection.intent is AuthoringIntent.REVIEW_ONLY:
                             instruction_inputs = tuple(item for item in inputs if item.input_id == "user_input")
                             if (len(instruction_inputs) != 1 or instruction_inputs[0].kind is not CollaborationInputKind.USER_INPUT
                                     or instruction_inputs[0].state is not CollaborationInputState.PRESENT):
-                                raise _LeadOutcomeValidationError("review-only adoption requires its actual offered USER instruction")
+                                raise reply_contract_values.LeadOutcomeValidationError("review-only adoption requires its actual offered USER instruction")
                             assignments = tuple(replace(assignment,
                                 input_ids=tuple(dict.fromkeys((*assignment.input_ids, "user_input"))),
                                 review_basis=replace(assignment.review_basis,
@@ -12944,10 +11386,10 @@ class StoryRuntime:
                             decoded = replace(decoded, proposal=replace(decoded.proposal, assignments=assignments))
                     if premise_capture is not None:
                         if (authoring_scope.task_id, authoring_scope.task_revision, authoring_scope.target_paths) != (premise_capture.authoring_task_id, premise_capture.authoring_task_revision, premise_capture.selection.target_paths) or authoring_scope.intent is not AuthoringIntent.AUTHORING or authoring_scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} or decoded.kind is not LeadOutcomeKind.PROPOSAL or decoded.proposal is None or any((decoded.artifact_intent, decoded.objective_intent, decoded.recommended_action)) or any("selected_premise" not in item.input_ids for item in decoded.proposal.assignments) or not set(premise_capture.dependent_domains) <= set(required_authoring_domains(authoring_scope)):
-                            raise _LeadOutcomeValidationError("selected premise requires fresh authoring drafts, exact targets and complete affected domains")
+                            raise reply_contract_values.LeadOutcomeValidationError("selected premise requires fresh authoring drafts, exact targets and complete affected domains")
                         selected = tuple(item for item in decoded.proposal.shared_premises if item.slot_id == premise_capture.slot_id)
                         if len(selected) != 1 or selected[0].selected_premise != premise_capture.selected_text or "selected_premise" not in selected[0].basis_input_ids:
-                            raise _LeadOutcomeValidationError("selected premise requires the exact disclosed dependency capture")
+                            raise reply_contract_values.LeadOutcomeValidationError("selected premise requires the exact disclosed dependency capture")
                     requires_admission, target_required = LeadProviderConstraints.authoring_requirements(
                         intent=None if decoded.authoring_scope is None else decoded.authoring_scope.intent,
                         activity=None if decoded.authoring_scope is None else decoded.authoring_scope.activity,
@@ -12959,7 +11401,7 @@ class StoryRuntime:
                         if (decoded.authoring_scope is None
                                 or decoded.authoring_scope.intent is not AuthoringIntent.AUTHORING
                                 or decoded.authoring_scope.activity is AuthoringActivity.WORKFLOW):
-                            raise _LeadOutcomeValidationError("official candidate preparation requires an explicit authoring scope")
+                            raise reply_contract_values.LeadOutcomeValidationError("official candidate preparation requires an explicit authoring scope")
                         if decoded.authoring_assessment is not None:
                             assessed = decoded.authoring_assessment
                             citations = {identity for item in (*assessed.foundations, assessed.direction,
@@ -12968,7 +11410,7 @@ class StoryRuntime:
                             if citations.intersection(historical_ids) and (source_scope is None or
                                     (source_scope.task_id, source_scope.task_revision) !=
                                     (decoded.authoring_scope.task_id, decoded.authoring_scope.task_revision)):
-                                raise _LeadOutcomeValidationError("historical USER source belongs to a different captured task")
+                                raise reply_contract_values.LeadOutcomeValidationError("historical USER source belongs to a different captured task")
                         try:
                             qualified = self._qualify_authoring_inputs(
                                 decoded.authoring_assessment,
@@ -12977,7 +11419,7 @@ class StoryRuntime:
                         except SessionContextCapacityError:
                             raise
                         except (TypeError, ValueError) as exc:
-                            raise validation_failure(_LeadOutcomeValidationError("authoring assessment is not source-qualified"),
+                            raise validation_failure(reply_contract_values.LeadOutcomeValidationError("authoring assessment is not source-qualified"),
                                 "$.authoring_assessment", "assessment must bind actual supplied USER/material/READ sources") from exc
                         if type(qualified) is AuthoringAdmissionNeeded:
                             decoded = replace(decoded, kind=LeadOutcomeKind.QUESTION,
@@ -13001,7 +11443,7 @@ class StoryRuntime:
                         if decoded.proposal is not None:
                             if decoded.proposal.relation is not expected_relation:
                                 raise validation_failure(
-                                    _LeadOutcomeValidationError(
+                                    reply_contract_values.LeadOutcomeValidationError(
                                         'lead proposal relation does not match the runtime request',
                                     ),
                                     '$.proposal',
@@ -13027,20 +11469,20 @@ class StoryRuntime:
                             LeadProposalRelation.REVISE_PENDING,
                         }:
                             raise validation_failure(
-                                _LeadOutcomeValidationError('artifact proposals require a fresh lead turn'),
+                                reply_contract_values.LeadOutcomeValidationError('artifact proposals require a fresh lead turn'),
                                 '$.artifact_intent.operations',
                                 'artifact proposals require a fresh lead turn',
                             )
                         else:
                             if type(decoded.artifact_intent) is not ArtifactProposalIntent:
                                 raise validation_failure(
-                                    _LeadOutcomeValidationError('artifact proposal intent is missing'),
+                                    reply_contract_values.LeadOutcomeValidationError('artifact proposal intent is missing'),
                                     '$.artifact_intent.operations',
                                     'artifact proposal intent is missing',
                                 )
                             if resolved_scope.activity is AuthoringActivity.WORKFLOW:
                                 raise validation_failure(
-                                    _LeadOutcomeValidationError('artifact work requires substantive scope'),
+                                    reply_contract_values.LeadOutcomeValidationError('artifact work requires substantive scope'),
                                     '$.authoring_scope.activity',
                                     'artifact work requires substantive scope',
                                 )
@@ -13066,7 +11508,7 @@ class StoryRuntime:
                             except (ArtifactProposalError, ValueError) as validation_cause:
                                 raise carry_validation(
                                     validation_failure(
-                                        _LeadOutcomeValidationError(
+                                        reply_contract_values.LeadOutcomeValidationError(
                                             'artifact intent could not form an exact review candidate',
                                         ),
                                         '$.artifact_intent.operations',
@@ -13124,7 +11566,7 @@ class StoryRuntime:
                         if scope is not None:
                             provider.record_validated_task(call_id, scope.task_id, scope.task_revision)
 
-                lead_factory = _lead_call_contract_factory(
+                lead_factory = call_rule_factory.lead_call_contract_factory(
                     constraints=(constraints if type(constraints) is LeadProviderConstraints else
                                  LeadProviderConstraints(input_ids=tuple(item.input_id for item in inputs),
                                                          task_revisions=tuple(offered_tasks),
@@ -13137,7 +11579,7 @@ class StoryRuntime:
                     ordinary_front_cap = self._ordinary_front_call_cap(
                         session_id, conversation_id, minimum_completion_calls=2)
                     if ordinary_front_cap is not None:
-                        physical_call_limit = min(_CONTEXT_INVOCATION_CALL_LIMIT, remaining, ordinary_front_cap)
+                        physical_call_limit = min(reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT, remaining, ordinary_front_cap)
                 contextual_request = ContextInvocationRequest(
                     session_id=session_id,
                     subject_kind=ContextSubjectKind.CONVERSATION,
@@ -13161,7 +11603,7 @@ class StoryRuntime:
                     ),
                     execution_workspace=execution_workspace,
                 )
-                contextual_request = replace(contextual_request, group_state=self._lead_group_invocation_state(
+                contextual_request = replace(contextual_request, group_state=call_rule_factory.lead_group_invocation_state(
                     contextual_request, original_text=text, constraints=lead_factory.constraints))
                 result = None
                 correction_call_limit = 1
@@ -13210,7 +11652,7 @@ class StoryRuntime:
                             raise
                     rejection_code = facts.response_rejection_code
                     if group_front_envelope is not None:
-                        correction_call_limit = min(_CONTEXT_INVOCATION_CALL_LIMIT, max(
+                        correction_call_limit = min(reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT, max(
                             0, group_front_envelope - provider.submitted_physical_calls))
                     correction_available = (
                         rejection_code in _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES
@@ -13228,7 +11670,7 @@ class StoryRuntime:
                         raise
                     if not correction_available:
                         raise
-                    if _lead_is_source_owner_rejection(first_failure):
+                    if reply_contract_values.lead_is_source_owner_rejection(first_failure):
                         artifact_failure = prepare_selected or declared_artifact_intent or (
                             decoded is not None and decoded.artifact_intent is not None
                         )
@@ -13437,7 +11879,7 @@ class StoryRuntime:
                     )
                     outcome = replace(
                         outcome,
-                        trace=self._collaboration_reply_trace(
+                        trace=reply_contract_values.collaboration_reply_trace(
                             role=LEAD_ORCHESTRATOR,
                             action=outcome.kind.value,
                             request=contextual_request,
@@ -13450,7 +11892,7 @@ class StoryRuntime:
                         ),
                     )
                 reference_registry.finish_reference_operation(self.workspace, reference_operation)
-            except _LeadOutcomeValidationError as failure:
+            except reply_contract_values.LeadOutcomeValidationError as failure:
                 reference_registry.fail_reference_operation(self.workspace, reference_operation, failure)
                 if corrective_rejection_code is not None:
                     if provider is not None:
@@ -13501,7 +11943,7 @@ class StoryRuntime:
                                 and decoded.artifact_intent is not None
                             )
                         )
-                        else CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED if _lead_is_source_owner_rejection(failure) else CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED)
+                        else CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED if reply_contract_values.lead_is_source_owner_rejection(failure) else CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED)
                     ),
                     accounting_provider=provider,
                 )
@@ -13717,7 +12159,7 @@ class StoryRuntime:
                             session_history=session_history,
                             public_response_provider=provider,
                     ), validation_details=provider.validation_details)
-                    except _LeadOutcomeValidationError:
+                    except reply_contract_values.LeadOutcomeValidationError:
                         assert provider is not None
                         assert provider.last_submitted_call_id is not None
                         failed = self._lead_outcome_failure_result(
@@ -14000,13 +12442,13 @@ class StoryRuntime:
         intent = outcome.artifact_intent
         if type(intent) is not ArtifactProposalIntent:
             raise validation_failure(
-                _LeadOutcomeValidationError('artifact proposal intent is missing'),
+                reply_contract_values.LeadOutcomeValidationError('artifact proposal intent is missing'),
                 '$.artifact_intent.operations',
                 'artifact proposal intent is missing',
             )
         if type(candidate) is not ArtifactReviewCandidate:
             raise validation_failure(
-                _LeadOutcomeValidationError('artifact review candidate is missing'),
+                reply_contract_values.LeadOutcomeValidationError('artifact review candidate is missing'),
                 '$.artifact_intent.operations',
                 'artifact review candidate is missing',
             )
@@ -14018,7 +12460,7 @@ class StoryRuntime:
         except ArtifactChangeSetError as validation_cause:
             raise carry_validation(
                 validation_failure(
-                    _LeadOutcomeValidationError('artifact review candidate base is no longer current'),
+                    reply_contract_values.LeadOutcomeValidationError('artifact review candidate base is no longer current'),
                     '$.artifact_intent.operations',
                     'artifact review candidate base is no longer current',
                 ),
@@ -14049,29 +12491,29 @@ class StoryRuntime:
                             }]
             if draft_sources:
                 if preparation is None or type(preparation.request_event.payload) is not LeadRecommendationRequestPayload:
-                    raise _LeadOutcomeValidationError("draft-derived final review requires separately confirmed preparation")
+                    raise reply_contract_values.LeadOutcomeValidationError("draft-derived final review requires separately confirmed preparation")
                 request = preparation.request_event.payload
                 if request.authoring_scope is None or request.authoring_scope.schema_version != 3:
-                    raise _LeadOutcomeValidationError("final review preparation must retain scope-v3 source")
+                    raise reply_contract_values.LeadOutcomeValidationError("final review preparation must retain scope-v3 source")
                 source = next((item for item in draft_sources if (
                     item.proposal_id, item.proposal_revision, item.proposal_digest
                 ) == (request.source_proposal_id, request.source_proposal_revision, request.source_proposal_digest)), None)
                 if source is None or request.source_execution_attempt_id is None:
-                    raise _LeadOutcomeValidationError("final review preparation source is detached")
+                    raise reply_contract_values.LeadOutcomeValidationError("final review preparation source is detached")
                 review_scope = replace(request.authoring_scope, activity=AuthoringActivity.REVIEW)
                 if set(candidate.disclosed_review_domains) != set(required_authoring_domains(review_scope)):
-                    raise _LeadOutcomeValidationError("changed final candidate domains require a fresh task revision")
+                    raise reply_contract_values.LeadOutcomeValidationError("changed final candidate domains require a fresh task revision")
                 inherited_premises = self._captured_premise_intents(
                     replace(request.basis, inputs=tuple(materialized),
                             shared_premises=self._remap_shared_premises(request.basis, tuple(materialized)))
                 )
                 self._validate_draft_provenance(review_scope, authoring_events)
         if type(outcome.authoring_admission) is not AuthoringAdmissionBasis:
-            raise _LeadOutcomeValidationError("official candidate preparation lacks qualified admission")
+            raise reply_contract_values.LeadOutcomeValidationError("official candidate preparation lacks qualified admission")
         review_admission = self._qualify_authoring_inputs(outcome.authoring_admission.assessment,
             inputs=tuple(materialized), evidence=evidence, scope=review_scope, events=objective_events, admission=outcome.authoring_admission)
         if type(review_admission) is not AuthoringAdmissionBasis:
-            raise _LeadOutcomeValidationError("candidate review lost its current authoring admission")
+            raise reply_contract_values.LeadOutcomeValidationError("candidate review lost its current authoring admission")
         proposal_intent = LeadProposalIntent(
             core_document_readiness=outcome.core_document_readiness,
             authoring_admission=review_admission,
@@ -14155,7 +12597,7 @@ class StoryRuntime:
             projection = self.conversation_storage_services.event_store.read_context(session_id, conversation_id)
         event_journal.append_drafts(
             projection.last_sequence,
-            _with_group_trace(public_response_provider, (
+            reply_contract_values.with_group_trace(public_response_provider, (
                 judgment,
                 candidate_event,
                 *self._objective_drafts(
@@ -14273,7 +12715,7 @@ class StoryRuntime:
         if any(item.activity is not AuthoringActivity.WORKFLOW and item.task_id != scope.task_id
                for item in related_scopes):
             raise validation_failure(
-                _LeadOutcomeValidationError(
+                reply_contract_values.LeadOutcomeValidationError(
                     'objective continuation and selected drafts require their existing authoring task',
                 ),
                 '$.objective_intent',
@@ -14336,7 +12778,7 @@ class StoryRuntime:
             or not set(expected_scope.domains).issubset(scope.domains)
             or not set(expected_scope.target_paths).issubset(scope.target_paths)):
             raise validation_failure(
-                _LeadOutcomeValidationError(
+                reply_contract_values.LeadOutcomeValidationError(
                     'preparation must retain its disclosed authoring task and scope',
                 ),
                 '$.authoring_scope',
@@ -14347,7 +12789,7 @@ class StoryRuntime:
             or scope.domains != expected_scope.domains
         ):
             raise validation_failure(
-                _LeadOutcomeValidationError(
+                reply_contract_values.LeadOutcomeValidationError(
                     'preparation must preserve its exact confirmed authoring scope',
                 ),
                 '$.authoring_scope',
@@ -14358,7 +12800,7 @@ class StoryRuntime:
                 or outcome.recommended_action is None or outcome.objective_intent is not None
                 or outcome.proposal is not None or outcome.artifact_intent is not None):
                 raise validation_failure(
-                    _LeadOutcomeValidationError('Revise permits only fresh recommendation planning'),
+                    reply_contract_values.LeadOutcomeValidationError('Revise permits only fresh recommendation planning'),
                     '$.recommended_action',
                     'Revise permits only fresh recommendation planning',
                 )
@@ -14366,7 +12808,7 @@ class StoryRuntime:
         if outcome.kind is LeadOutcomeKind.QUESTION:
             if outcome.objective_intent is not None:
                 raise validation_failure(
-                    _LeadOutcomeValidationError(
+                    reply_contract_values.LeadOutcomeValidationError(
                         'blocked preparation cannot change its frozen objective',
                     ),
                     '$.objective_intent',
@@ -14375,7 +12817,7 @@ class StoryRuntime:
             return
         if outcome.kind is not LeadOutcomeKind.PROPOSAL or outcome.recommended_action is not None:
             raise validation_failure(
-                _LeadOutcomeValidationError(
+                reply_contract_values.LeadOutcomeValidationError(
                     'confirmed preparation requires its exact proposal or a material question',
                 ),
                 '$.proposal.assignments',
@@ -14385,7 +12827,7 @@ class StoryRuntime:
         if request.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT:
             if outcome.artifact_intent is None or outcome.proposal is not None or intent is None:
                 raise validation_failure(
-                    _LeadOutcomeValidationError(
+                    reply_contract_values.LeadOutcomeValidationError(
                         'confirmed artifact preparation requires an exact candidate objective',
                     ),
                     '$.objective_intent',
@@ -14398,7 +12840,7 @@ class StoryRuntime:
                 or (request.objective_id is not None and (
                     intent.action is not LeadObjectiveAction.CONTINUE or intent.objective_id != request.objective_id))):
                 raise validation_failure(
-                    _LeadOutcomeValidationError('confirmed artifact objective or sources changed'),
+                    reply_contract_values.LeadOutcomeValidationError('confirmed artifact objective or sources changed'),
                     '$.objective_intent',
                     'confirmed artifact objective or sources changed',
                 )
@@ -14408,7 +12850,7 @@ class StoryRuntime:
                 or proposal.purpose != request.purpose
                 or tuple(item.agent_id for item in proposal.assignments) != request.specialist_ids):
                 raise validation_failure(
-                    _LeadOutcomeValidationError(
+                    reply_contract_values.LeadOutcomeValidationError(
                         'confirmed consultation purpose or specialist set changed',
                     ),
                     '$.proposal.assignments',
@@ -14419,14 +12861,14 @@ class StoryRuntime:
             }
             if {item for assignment in proposal.assignments for item in assignment.input_ids} != expected_ids:
                 raise validation_failure(
-                    _LeadOutcomeValidationError('confirmed consultation sources changed'),
+                    reply_contract_values.LeadOutcomeValidationError('confirmed consultation sources changed'),
                     '$.proposal.assignments',
                     'confirmed consultation sources changed',
                 )
             if request.objective_id is None:
                 if intent is not None:
                     raise validation_failure(
-                        _LeadOutcomeValidationError('consultation cannot start an unrelated objective'),
+                        reply_contract_values.LeadOutcomeValidationError('consultation cannot start an unrelated objective'),
                         '$.objective_intent',
                         'consultation cannot start an unrelated objective',
                     )
@@ -14434,7 +12876,7 @@ class StoryRuntime:
                   or intent.objective_id != request.objective_id
                   or intent.next_step is not ArtifactObjectiveNextStep.CONSULT):
                 raise validation_failure(
-                    _LeadOutcomeValidationError('confirmed consultation objective changed'),
+                    reply_contract_values.LeadOutcomeValidationError('confirmed consultation objective changed'),
                     '$.objective_intent',
                     'confirmed consultation objective changed',
                 )
@@ -14495,14 +12937,14 @@ class StoryRuntime:
             or objective.facts.origin_conversation_id != projection.conversation_id
         ):
             raise validation_failure(
-                _LeadOutcomeValidationError('objective ID is not an offered OPEN owner objective'),
+                reply_contract_values.LeadOutcomeValidationError('objective ID is not an offered OPEN owner objective'),
                 '$.objective_intent.objective_id',
                 'objective ID is not an offered OPEN owner objective',
             )
         offered = {item.event_id: item for item in projection.offered_draft_sources}
         if any(event_id not in offered for event_id in intent.draft_source_event_ids):
             raise validation_failure(
-                _LeadOutcomeValidationError(
+                reply_contract_values.LeadOutcomeValidationError(
                     'objective draft source is not offered by this conversation',
                 ),
                 '$.objective_intent',
@@ -14511,7 +12953,7 @@ class StoryRuntime:
         if intent.next_step is ArtifactObjectiveNextStep.PREPARE:
             if candidate is None:
                 raise validation_failure(
-                    _LeadOutcomeValidationError('objective preparation requires an exact candidate'),
+                    reply_contract_values.LeadOutcomeValidationError('objective preparation requires an exact candidate'),
                     '$.artifact_intent.operations',
                     'objective preparation requires an exact candidate',
                 )
@@ -14525,7 +12967,7 @@ class StoryRuntime:
             }
             if paths != set(target_paths):
                 raise validation_failure(
-                    _LeadOutcomeValidationError(
+                    reply_contract_values.LeadOutcomeValidationError(
                         'objective candidate must match its complete frozen target scope',
                     ),
                     '$.artifact_intent.operations',
@@ -14617,7 +13059,7 @@ class StoryRuntime:
                 )
             elif origin is None:
                 raise validation_failure(
-                    _LeadOutcomeValidationError('new objective lacks its exact origin user event'),
+                    reply_contract_values.LeadOutcomeValidationError('new objective lacks its exact origin user event'),
                     '$.objective_intent',
                     'new objective lacks its exact origin user event',
                 )
@@ -14707,7 +13149,7 @@ class StoryRuntime:
         )
         with artifact_binding.open_ready_resources() as access:
             if access.repository.capture_complete_state() != snapshots:
-                raise _LeadOutcomeValidationError(
+                raise reply_contract_values.LeadOutcomeValidationError(
                     "artifact sources changed during candidate construction"
                 )
         attached_core_paths = tuple(
@@ -14788,7 +13230,7 @@ class StoryRuntime:
                     }
                 if current_statuses.get(receipt.evidence_id) != receipt:
                     raise validation_failure(
-                        _LeadOutcomeValidationError(
+                        reply_contract_values.LeadOutcomeValidationError(
                             'artifact empty-core status evidence is no longer current',
                         ),
                         '$.artifact_intent.operations',
@@ -14818,7 +13260,7 @@ class StoryRuntime:
                 or receipt.content_digest is None
             ):
                 raise validation_failure(
-                    _LeadOutcomeValidationError('artifact evidence is missing runtime identity'),
+                    reply_contract_values.LeadOutcomeValidationError('artifact evidence is missing runtime identity'),
                     '$.artifact_intent.operations',
                     'artifact evidence is missing runtime identity',
                 )
@@ -14831,7 +13273,7 @@ class StoryRuntime:
                 batch = parse_artifact_references(locator)
                 if len(batch.references) != 1:
                     raise validation_failure(
-                        _LeadOutcomeValidationError('artifact reference evidence is ambiguous'),
+                        reply_contract_values.LeadOutcomeValidationError('artifact reference evidence is ambiguous'),
                         '$.artifact_intent.operations',
                         'artifact reference evidence is ambiguous',
                     )
@@ -15155,7 +13597,7 @@ class StoryRuntime:
             failure_code
             is CollaborationLeadOutcomeFailureCode.ARTIFACT_INTENT_REJECTED
         )
-        message = _lead_terminal_notice(
+        message = reply_contract_values.lead_terminal_notice(
             accounting_provider.effective_language if accounting_provider is not None else None,
             accounting_provider.task_revisions if accounting_provider is not None else (),
             "rejected", accounting_provider.validation_details if accounting_provider is not None else (),
@@ -15203,7 +13645,7 @@ class StoryRuntime:
                 )
             event_journal.append_drafts(
                 projection.last_sequence,
-                _with_group_trace(collector, failure_drafts, failure_code.value),
+                reply_contract_values.with_group_trace(collector, failure_drafts, failure_code.value),
                 append_batch=self.append_collaboration_event_batch,
             )
         except Exception:
@@ -15265,7 +13707,7 @@ class StoryRuntime:
         """Persist one visible no-action answer after exhausted schema repair."""
 
         if message == _SAFE_STRUCTURED_FALLBACK_MESSAGE:
-            message = _lead_terminal_notice(language, task_revisions, state, validation_details)
+            message = reply_contract_values.lead_terminal_notice(language, task_revisions, state, validation_details)
         trace = ReplyTrace(
             role=LEAD_ORCHESTRATOR,
             action="none",
@@ -15674,7 +14116,7 @@ class StoryRuntime:
                         review_basis=(
                             validation_call(
                                 f'$.proposal.assignments[{assignment_index}].review_basis',
-                                _provider_review_basis,
+                                reply_contract_values.provider_review_basis,
                                 item["review_basis"],
                             )
                             if item["mode"] == SpecialistAssignmentMode.REVIEW.value else None
@@ -15712,7 +14154,7 @@ class StoryRuntime:
             ValueError,
         ) as exc:
             raise carry_validation(
-                _LeadOutcomeValidationError('lead returned a noncanonical evidence outcome'),
+                reply_contract_values.LeadOutcomeValidationError('lead returned a noncanonical evidence outcome'),
                 remap_validation(
                     exc,
                     {
@@ -16051,14 +14493,14 @@ class StoryRuntime:
             if type(event.payload) is CollaborationPremiseSelectionPayload
             and any(item.input_id == "selected_premise" and item.locator == f"conversation/{event.event_id}" for item in inputs)), None)
         if spec is None and chosen is None:
-            return _LEAD_PROPOSAL_USER_IMPACT
+            return reply_contract_values.LEAD_PROPOSAL_USER_IMPACT
         submitted = {event.payload.call_id for event in events
             if type(event.payload) is CollaborationProviderCallPayload
             and event.payload.state is CollaborationProviderCallState.SUBMITTED}
         admission = next((event.payload.admission for event in reversed(events)
             if type(event.payload) is CollaborationPremiseFreshWorkAdmissionPayload and event.step_id == step_id), None)
         impact = ("Receive whole provisional premise options in one terminal analysis round; a distinct USER choice and fresh authoring Confirm remain required. No drafting or artifact authority."
-                  if spec is not None else _LEAD_PROPOSAL_USER_IMPACT)
+                  if spec is not None else reply_contract_values.LEAD_PROPOSAL_USER_IMPACT)
         facts = {"recorded_conversation_submissions": len(submitted), "cost_lineages_remain_separate": True}
         if chosen is not None:
             facts.update(analysis_report_event_id=chosen.selection.report_event_id,
@@ -16115,7 +14557,7 @@ class StoryRuntime:
     def _basis_budget_fingerprint(scope: AuthoringScope | None) -> str:
         if scope is not None and scope.schema_version == 3:
             return "sha256:" + hashlib.sha256(b"scope-v3:read-aware-full-union-final-review:two-rounds:twelve-calls").hexdigest()
-        return _BUDGET_POLICY_FINGERPRINT
+        return reply_contract_values.BUDGET_POLICY_FINGERPRINT
 
     @classmethod
     def _resolve_authoring_scope(
@@ -16131,7 +14573,7 @@ class StoryRuntime:
             return scope
         if previous is not None and scope.intent is not previous.intent:
             raise validation_failure(
-                _LeadOutcomeValidationError('existing task intent cannot change'),
+                reply_contract_values.LeadOutcomeValidationError('existing task intent cannot change'),
                 '$.authoring_scope.intent',
                 'preserve intent; requested authoring needs a fresh task',
             )
@@ -16146,7 +14588,7 @@ class StoryRuntime:
         if scope.activity is AuthoringActivity.WORKFLOW:
             if previous is not None and previous.activity is not AuthoringActivity.WORKFLOW:
                 raise validation_failure(
-                    _LeadOutcomeValidationError(
+                    reply_contract_values.LeadOutcomeValidationError(
                         (
                             'selected story task cannot become workflow-only; use a fresh '
                             'status/clarification task'
@@ -16482,49 +14924,6 @@ class StoryRuntime:
         )
         return admission
 
-    @staticmethod
-    def _lead_group_invocation_state(
-        request: ContextInvocationRequest, *, original_text: str,
-        constraints: LeadProviderConstraints,
-    ) -> ContextGroupInvocationState | None:
-        """현재 요청·작업·범위에서 선택 근거를 발급하며 READ와 호출 예산은 제외한다."""
-        factory = request.result_contract
-        if type(factory) is not OrchestrationLeadCallFactory:
-            return None
-        if not factory.schema_group_protocol:
-            if request.group_state is not None:
-                raise BackendProtocolError("비활성 그룹 프로필에 선택 상태를 전달할 수 없습니다")
-            return None
-        if factory.constraints is not constraints or type(original_text) is not str:
-            raise BackendProtocolError("현재 Lead 소유자가 발급한 요청·범위가 필요합니다")
-        basis_value = {
-            "request_sha256": hashlib.sha256(original_text.encode("utf-8")).hexdigest(),
-            "task_revisions": constraints.task_revisions,
-            "scope": None if constraints.scope is None else authoring_scope_to_dict(constraints.scope),
-            "objective_ids": constraints.objective_ids,
-            "review_candidate_ids": constraints.review_candidate_ids,
-            "preparation_kind": constraints.preparation_kind,
-            "preparation_objective_id": constraints.preparation_objective_id,
-            "preparation_targets": constraints.preparation_targets,
-            "preparation_specialists": constraints.preparation_specialists,
-            "premise_question_id": constraints.premise_question_id,
-            "adoption_intent": None if constraints.adoption_intent is None else constraints.adoption_intent.value,
-            "adoption_targets": constraints.adoption_targets,
-            "readiness_source_basis_ref": constraints.readiness_source_basis_ref,
-        }
-        scope_ref = "lead-group-request-" + hashlib.sha256(json.dumps(
-            basis_value, sort_keys=True, ensure_ascii=False, allow_nan=False,
-            separators=(",", ":"),
-        ).encode("utf-8")).hexdigest()
-        basis = LeadGroupRequestBasis(request.operation_id, request.result_correlation_id, scope_ref)
-        previous = request.group_state
-        return ContextGroupInvocationState(
-            basis, None if previous is None else previous.workflow,
-            None if previous is None else previous.prepared_compilation,
-            transport_delivery=None if previous is None else previous.transport_delivery,
-            accepted_delivery=None if previous is None else previous.accepted_delivery,
-        )
-
     def _ordinary_front_call_cap(self, session_id: str, conversation_id: str, *, minimum_completion_calls: int = 1) -> int | None:
         """Keep every offered completed v3 task's preparation/review floor intact."""
         events = self.conversation_storage_services.event_store.read(session_id, conversation_id)
@@ -16648,7 +15047,7 @@ class StoryRuntime:
                                 current_state=CollaborationStepState.COMPLETED,
                                 rounds_spent=rounds, physical_calls_spent=spent)
             return source, event, projected
-        raise _LeadOutcomeValidationError("completed draft source is unavailable here; focus its source conversation to prepare final review, or clarify and freshly propose")
+        raise reply_contract_values.LeadOutcomeValidationError("completed draft source is unavailable here; focus its source conversation to prepare final review, or clarify and freshly propose")
 
     @staticmethod
     def _validate_final_review_handoff(
@@ -16751,7 +15150,7 @@ class StoryRuntime:
                 drafted.add(dispatch.assignment.specialist_id)
         if not set(required_drafting_specialists(scope)).issubset(drafted):
             raise validation_failure(
-                _LeadOutcomeValidationError(
+                reply_contract_values.LeadOutcomeValidationError(
                     'artifact authoring requires current-task drafts from every declared draft owner',
                 ),
                 '$.artifact_intent.operations',
@@ -16817,7 +15216,7 @@ class StoryRuntime:
         if current_task.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
             try:
                 self._validate_draft_provenance(current_task, task_events)
-            except _LeadOutcomeValidationError as exc:
+            except reply_contract_values.LeadOutcomeValidationError as exc:
                 raise ValueError("reviewed authoring task lacks current specialist drafts") from exc
         if not set(required_authoring_domains(scope)).issubset(candidate.disclosed_review_domains):
             raise ValueError("candidate omits required semantic review domains")
@@ -16872,14 +15271,14 @@ class StoryRuntime:
             return
         by_id = {item.input_id: item for item in inputs}
         if any(event.session_id != session_id for event in events):
-            raise _LeadOutcomeValidationError(
+            raise reply_contract_values.LeadOutcomeValidationError(
                 "review material has cross-session events"
             )
         artifacts = artifact_access.repository
         for assignment in assignments:
             if assignment.mode is None:
                 raise validation_failure(
-                    _LeadOutcomeValidationError('live assignment requires an explicit mode'),
+                    reply_contract_values.LeadOutcomeValidationError('live assignment requires an explicit mode'),
                     '$.proposal.assignments',
                     'live assignment requires an explicit mode',
                 )
@@ -16892,7 +15291,7 @@ class StoryRuntime:
             basis = assignment.review_basis
             if basis is None:
                 raise validation_failure(
-                    _LeadOutcomeValidationError('review requires concrete candidate inputs'),
+                    reply_contract_values.LeadOutcomeValidationError('review requires concrete candidate inputs'),
                     '$.proposal.assignments',
                     'review requires concrete candidate inputs',
                 )
@@ -16900,7 +15299,7 @@ class StoryRuntime:
                 item = by_id.get(input_id)
                 if item is None or item.state is not CollaborationInputState.PRESENT:
                     raise validation_failure(
-                        _LeadOutcomeValidationError('review candidate input is unavailable'),
+                        reply_contract_values.LeadOutcomeValidationError('review candidate input is unavailable'),
                         '$.proposal.assignments',
                         'review candidate input is unavailable',
                     )
@@ -16912,7 +15311,7 @@ class StoryRuntime:
                     path = self._routing_path(item.locator)
                     if path is None:
                         raise validation_failure(
-                            _LeadOutcomeValidationError('review artifact alias is invalid'),
+                            reply_contract_values.LeadOutcomeValidationError('review artifact alias is invalid'),
                             '$.proposal.assignments',
                             'review input_ids must resolve to a disclosed artifact candidate',
                         )
@@ -16929,7 +15328,7 @@ class StoryRuntime:
                                    CollaborationInputKind.ARTIFACT_CANDIDATE,
                                    CollaborationInputKind.CONVERSATION_EVENT}:
                     try:
-                        value = self._collaboration_input_value(item, events)
+                        value = reply_contract_values.collaboration_input_value(item, events)
                     except BackendProtocolError:
                         if item.kind is not CollaborationInputKind.USER_INPUT or user_text is None:
                             raise
@@ -16972,7 +15371,7 @@ class StoryRuntime:
                     concrete = False
                 if not concrete:
                     raise validation_failure(
-                        _LeadOutcomeValidationError(
+                        reply_contract_values.LeadOutcomeValidationError(
                             (
                                 'review needs concrete nonempty draft material; brief/status/advice '
                                 'is insufficient'
@@ -17115,7 +15514,7 @@ class StoryRuntime:
                 or item.input_id != identity or item.kind is not CollaborationInputKind.CONVERSATION_EVENT
                 or item.state is not CollaborationInputState.PRESENT
                 or item.start_line is not None or item.end_line is not None
-                or item.revision_digest != self._specialist_reply_digest(reply)):
+                or item.revision_digest != reply_contract_values.specialist_reply_digest(reply)):
                 raise ValueError("authoring admission pending reply is not exact host input")
             running = tuple(event for event in events
                             if type(event.payload) is CollaborationStepStatePayload
@@ -17164,7 +15563,7 @@ class StoryRuntime:
                     or item.kind is not CollaborationInputKind.CONVERSATION_EVENT
                     or item.state is not CollaborationInputState.PRESENT
                     or item.start_line is not None or item.end_line is not None
-                    or item.revision_digest != self._recommendation_event_digest(source)):
+                    or item.revision_digest != reply_contract_values.recommendation_event_digest(source)):
                 raise ValueError("authoring admission pending material is not exact host input")
             stored = tuple(event for event in events if event.event_id == source.event_id)
             if len(stored) > 1:
@@ -17186,7 +15585,7 @@ class StoryRuntime:
                 if "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest() != item.revision_digest:
                     raise ValueError("pending USER admission bytes changed")
             elif item.kind is CollaborationInputKind.USER_INPUT:
-                value = self._collaboration_input_value(item, events, evidence=evidence)
+                value = reply_contract_values.collaboration_input_value(item, events, evidence=evidence)
                 text = value.get("text")
             elif item.kind is CollaborationInputKind.CONVERSATION_EVENT:
                 matches = tuple(v for v in events if v.event_id == item.locator.removeprefix("conversation/"))
@@ -17528,7 +15927,7 @@ class StoryRuntime:
             core_document_readiness=intent.core_document_readiness,
             authoring_admission=intent.authoring_admission,
             route="lead_specialist_consultation",
-            route_fingerprint=self._canonical_digest(route_value),
+            route_fingerprint=reply_contract_values.canonical_digest(route_value),
             agent_profiles=profiles,
             context_policy_fingerprint=(self._agent_context_service.policy_fingerprint),
             budget_policy_fingerprint=self._basis_budget_fingerprint(intent.authoring_scope),
@@ -17753,7 +16152,7 @@ class StoryRuntime:
                 core_document_readiness=proposal.basis.core_document_readiness,
                 authoring_admission=proposal.basis.authoring_admission,
                 route=route_name,
-                route_fingerprint=self._canonical_digest(route_value),
+                route_fingerprint=reply_contract_values.canonical_digest(route_value),
                 agent_profiles=profiles,
                 context_policy_fingerprint=(
                     self._agent_context_service.policy_fingerprint
@@ -17993,7 +16392,7 @@ class StoryRuntime:
     ) -> str:
         """Rebuild stable identity and non-self-appending revision facts."""
 
-        return cls._canonical_digest(
+        return reply_contract_values.canonical_digest(
             [
                 "context-zero-hit-authorized-sources-v1",
                 [
@@ -18381,7 +16780,7 @@ class StoryRuntime:
                         kind=expected.kind,
                         locator=expected.locator,
                         state=CollaborationInputState.PRESENT,
-                        revision_digest=self._recommendation_event_digest(reply_events[0]),
+                        revision_digest=reply_contract_values.recommendation_event_digest(reply_events[0]),
                     )
                 )
                 continue
@@ -18587,18 +16986,18 @@ class StoryRuntime:
         allocated_limits = list(assignment_call_limits)
         unallocated = remaining - minimum_required_calls
         while unallocated and any(
-            limit < _CONTEXT_INVOCATION_CALL_LIMIT for limit in allocated_limits
+            limit < reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT for limit in allocated_limits
         ):
             for index, limit in enumerate(allocated_limits):
                 if not unallocated:
                     break
-                if limit < _CONTEXT_INVOCATION_CALL_LIMIT:
+                if limit < reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT:
                     allocated_limits[index] += 1
                     unallocated -= 1
         synthesis_calls = (
             synthesis_minimum
             + min(
-                _CONTEXT_INVOCATION_CALL_LIMIT - synthesis_minimum,
+                reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT - synthesis_minimum,
                 unallocated,
             )
             if synthesis_required
@@ -18651,7 +17050,7 @@ class StoryRuntime:
                 inputs.append(CollaborationInputRevision(
                     input_id=alias, kind=CollaborationInputKind.CONVERSATION_EVENT,
                     locator=f"conversation/{event.event_id}", state=CollaborationInputState.PRESENT,
-                    revision_digest=StoryRuntime._recommendation_event_digest(event),
+                    revision_digest=reply_contract_values.recommendation_event_digest(event),
                 ))
             return tuple(inputs)
         for proof in operation.reference_proofs:
@@ -18808,7 +17207,7 @@ class StoryRuntime:
         )
         if premise_analysis != (outcome.scope is LeadOutcomeScope.PREMISE_ANALYSIS):
             raise validation_failure(
-                _LeadOutcomeValidationError("premise analysis evidence scope is unbound"),
+                reply_contract_values.LeadOutcomeValidationError("premise analysis evidence scope is unbound"),
                 "$.authoring_scope",
                 "premise analysis evidence scope requires its exact typed question intent",
             )
@@ -18827,7 +17226,7 @@ class StoryRuntime:
             input_revision = inputs_by_id.get(reference.reference_id)
             if input_revision is None:
                 raise validation_failure(
-                    _lead_source_owner_rejection(_LeadOutcomeValidationError('lead reference evidence is not an authoritative input')),
+                    reply_contract_values.lead_source_owner_rejection(reply_contract_values.LeadOutcomeValidationError('lead reference evidence is not an authoritative input')),
                     '$.authoring_scope',
                     'lead reference evidence is not an authoritative input',
                 )
@@ -18911,7 +17310,7 @@ class StoryRuntime:
         available_by_id = {item.evidence_id: item for item in available}
         if len(available_by_id) != len(available):
             raise validation_failure(
-                _lead_source_owner_rejection(_LeadOutcomeValidationError('runtime evidence IDs are duplicate')),
+                reply_contract_values.lead_source_owner_rejection(reply_contract_values.LeadOutcomeValidationError('runtime evidence IDs are duplicate')),
                 '$.authoring_scope',
                 'runtime evidence IDs are duplicate',
             )
@@ -18964,7 +17363,7 @@ class StoryRuntime:
                 status = LeadEvidenceStatus.NOT_APPLICABLE
             else:
                 raise validation_failure(
-                    _lead_source_owner_rejection(_LeadOutcomeValidationError('story-specific Lead outcome has no runtime evidence')),
+                    reply_contract_values.lead_source_owner_rejection(reply_contract_values.LeadOutcomeValidationError('story-specific Lead outcome has no runtime evidence')),
                     '$.authoring_scope',
                     'story-specific Lead outcome has no runtime evidence',
                 )
@@ -18981,7 +17380,7 @@ class StoryRuntime:
         except (TypeError, ValueError) as exc:
             raise carry_validation(
                 validation_failure(
-                    _LeadOutcomeValidationError('lead outcome violates the closed evidence matrix'),
+                    reply_contract_values.LeadOutcomeValidationError('lead outcome violates the closed evidence matrix'),
                     '$.authoring_scope',
                     'lead outcome violates the closed evidence matrix',
                 ),
@@ -19106,7 +17505,7 @@ class StoryRuntime:
                 reason = (f"lead READ evidence {receipt.evidence_id!r} is incomplete: "
                           + ', '.join(missing))
                 raise validation_failure(
-                    _LeadOutcomeValidationError(reason), validation_path, reason,
+                    reply_contract_values.LeadOutcomeValidationError(reason), validation_path, reason,
                 )
             candidate = CollaborationInputRevision(
                 input_id=receipt.evidence_id,
@@ -19135,7 +17534,7 @@ class StoryRuntime:
                     reason = (f"lead READ evidence {receipt.evidence_id!r} conflicts with existing input: "
                               + ', '.join(differences))
                     raise validation_failure(
-                        _LeadOutcomeValidationError(reason), validation_path, reason,
+                        reply_contract_values.LeadOutcomeValidationError(reason), validation_path, reason,
                     )
                 continue
             materialized.append(candidate)
@@ -19160,7 +17559,7 @@ class StoryRuntime:
     ) -> None:
         if intent.authoring_scope is None and intent.premise_decision is None:
             raise validation_failure(
-                _LeadOutcomeValidationError('live intent requires authoring scope'),
+                reply_contract_values.LeadOutcomeValidationError('live intent requires authoring scope'),
                 '$.authoring_scope',
                 'live intent requires authoring scope',
             )
@@ -19186,7 +17585,7 @@ class StoryRuntime:
             item.input_id for item in inputs
         }:
             raise validation_failure(
-                _LeadOutcomeValidationError(
+                reply_contract_values.LeadOutcomeValidationError(
                     (
                         'lead proposal routing is not canonical or input-complete'
                     ),
@@ -19204,7 +17603,7 @@ class StoryRuntime:
                 and intent.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
                 and any(not selected_aliases.issubset(assignment.input_ids)
                         for assignment in intent.assignments)):
-            raise _LeadOutcomeValidationError("every writer must retain every exact USER-selected whole input")
+            raise reply_contract_values.LeadOutcomeValidationError("every writer must retain every exact USER-selected whole input")
         assignment_inputs = {
             item.agent_id: frozenset(item.input_ids) for item in intent.assignments
         }
@@ -19220,7 +17619,7 @@ class StoryRuntime:
                 or item.input_id not in assignment_inputs[reviewer]
             ):
                 raise validation_failure(
-                    _LeadOutcomeValidationError(
+                    reply_contract_values.LeadOutcomeValidationError(
                         'lead proposal omits a mandatory core-document reviewer',
                     ),
                     '$.proposal.assignments',
@@ -19239,7 +17638,7 @@ class StoryRuntime:
                 )
             ):
                 raise validation_failure(
-                    _LeadOutcomeValidationError("premise analysis analyst routing is unbound"),
+                    reply_contract_values.LeadOutcomeValidationError("premise analysis analyst routing is unbound"),
                     "$.proposal.assignments",
                     "candidate-free analysis requires the exact question-domain analyst roster "
                     "and premise_analysis modes",
@@ -19286,51 +17685,6 @@ class StoryRuntime:
 
 
 
-    @staticmethod
-    def _canonical_digest(value: object) -> str:
-        body = json.dumps(
-            value,
-            allow_nan=False,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8", errors="strict")
-        return "sha256:" + hashlib.sha256(body).hexdigest()
-
-    @classmethod
-    def _proposal_basis_digest(cls, proposal: CollaborationProposal) -> str:
-        return cls._canonical_digest(
-            {
-                "budget": {
-                    "calls": proposal.budget.physical_calls_spent,
-                    "rounds": proposal.budget.rounds_spent,
-                },
-                "context": proposal.basis.context_policy_fingerprint,
-                **({"editorial_refs": [editorial_ref_to_dict(ref) for ref in proposal.basis.editorial_refs]} if proposal.basis.editorial_refs else {}),
-                "inputs": [
-                    [
-                        item.input_id,
-                        item.kind.value,
-                        item.locator,
-                        item.state.value,
-                        item.revision_digest,
-                        item.start_line,
-                        item.end_line,
-                    ]
-                    for item in proposal.basis.inputs
-                ],
-                "profiles": [
-                    [
-                        item.agent_id,
-                        item.definition_fingerprint,
-                        item.execution_fingerprint,
-                    ]
-                    for item in proposal.basis.agent_profiles
-                ],
-                "route": proposal.basis.route_fingerprint,
-            }
-        )
-
     def _collaboration_agent_profile(
         self,
         agent_id: str,
@@ -19361,7 +17715,7 @@ class StoryRuntime:
             and capability.proposal_id == proposal.proposal_id
             and capability.proposal_revision == proposal.proposal_revision
             and capability.proposal_digest == proposal.proposal_digest
-            and capability.basis_digest == cls._proposal_basis_digest(proposal)
+            and capability.basis_digest == reply_contract_values.proposal_basis_digest(proposal)
             and capability.tail_event_id == tail.event_id
             and capability.tail_sequence == tail.sequence
         )
@@ -19687,26 +18041,6 @@ class StoryRuntime:
             "publication_validator": published,
         }
 
-
-    @staticmethod
-    def _validated_context_provider_factory(
-        bound_agent: BoundAgent,
-    ) -> Callable[[object], object]:
-        factory = getattr(bound_agent, "context_provider", None)
-        factory_call = getattr(factory, "__call__", None)
-        if not callable(factory):
-            raise BackendProtocolError(
-                f"{bound_agent.definition.agent_id} binding does not provide "
-                "context_provider()"
-            )
-        if (
-            inspect.iscoroutinefunction(factory)
-            or inspect.isasyncgenfunction(factory)
-            or inspect.iscoroutinefunction(factory_call)
-            or inspect.isasyncgenfunction(factory_call)
-        ):
-            raise BackendProtocolError("bound context_provider() must be synchronous")
-        return factory
 
 
 

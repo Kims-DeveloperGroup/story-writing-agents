@@ -7,7 +7,8 @@ import unittest
 import json
 from dataclasses import asdict, replace
 from unittest import mock
-from story_writing_agents import StoryRuntime, orchestrator as orchestration, editorial_scope as scopes
+from story_writing_agents import StoryRuntime, editorial_scope as scopes
+from story_writing_agents.lead_preparation import call_rule_factory
 from story_writing_agents import conversations as c
 from story_writing_agents.agents import PLOT_ARCHITECT
 from story_writing_agents.core_document_readiness import AuthoringTarget
@@ -124,7 +125,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
 
     async def _source_setup_start(self, *arguments, **keywords):
         """Downstream Apply fixture only; default grouped budget refusal is checked separately."""
-        factory = orchestration._lead_call_contract_factory
+        factory = call_rule_factory.lead_call_contract_factory
         enqueue = self.backend.enqueue
         source_front_flags = []
         source_enqueues = []
@@ -139,7 +140,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             source_enqueues.append(1)
             self.assertEqual(len(source_enqueues), 1)
             return enqueue(*responses, **{**values, "control_plan": ()})
-        with mock.patch.object(orchestration, "_lead_call_contract_factory", new=source_factory), \
+        with mock.patch.object(call_rule_factory, "lead_call_contract_factory", new=source_factory), \
                 mock.patch.object(self.backend, "enqueue", new=source_enqueue):
             result = await self.start(*arguments, **keywords)
         self.assertEqual(source_front_flags, [True])
