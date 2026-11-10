@@ -505,53 +505,23 @@ from .writing_artifacts.runtime_references import (
     reference_operation_session_id,
 )
 
+from .runtime_resources import collaboration_event_journal as event_journal
+from .runtime_resources import session_worktree_access
+from .runtime_resources import reference_operation_registry as reference_registry
+from .runtime_resources.provider_binding_leases import ProviderBindingLeases
+from .runtime_resources.session_execution_scopes import SessionExecutionScopes
+from .runtime_resources.provider_call_accounting import AccountingContextProvider, LeadCallBudgetExceeded
 
-@contextmanager
-def _open_session_artifact_repository(
-    binding: SessionArtifactBinding,
-) -> Iterator[WritingArtifactRepository]:
-    """Yield one repository only for a short synchronous guarded operation."""
-
-    with binding.open_ready_resources() as access:
-        yield access.repository
-
-
-def _provider_execution_workspace_manager(
-    bound_agent: BoundAgent,
-    binding: SessionArtifactBinding,
-) -> AbstractContextManager[ProviderExecutionWorkspace] | None:
-    """Return capability acquisition for a workspace-backed story provider."""
-
-    if bound_agent.vendor not in {"codex", "antigravity"}:
-        return None
-    return provider_execution_workspace_manager(bound_agent, binding)
+from .conversations import CollaborationAppendReceipt
+from .conversations import CollaborationEvent as CollaborationEventV2
 
 
-def _duplicate_session_worktree_descriptor(
-    binding: SessionArtifactBinding,
-) -> int:
-    """Duplicate only the exact guarded session-root descriptor."""
-
-    descriptor: int | None = None
-    try:
-        with binding.open_ready_resources() as access:
-            descriptor = access.duplicate_worktree_descriptor()
-        return descriptor
-    except BaseException:
-        if descriptor is not None:
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
-        raise
 
 
-_USER_ACTOR = CollaborationActor(CollaborationActorKind.USER)
-_LEAD_ACTOR = CollaborationActor(
-    CollaborationActorKind.LEAD,
-    LEAD_ORCHESTRATOR,
-)
-_RUNTIME_ACTOR = CollaborationActor(CollaborationActorKind.RUNTIME)
+
+
+
+
 _BUDGET_POLICY_FINGERPRINT = (
     "sha256:"
     + hashlib.sha256(
@@ -1728,12 +1698,8 @@ class _LeadOutcomeValidationError(BackendProtocolError):
     """Reject one submitted lead result without treating prose as evidence."""
 
 
-class _LeadCallBudgetExceeded(BackendProtocolError):
-    """Reject a proposal whose minimum calls exceed its lineage budget."""
 
 
-class _SupersededBindingSelection(Exception):
-    """Retry a selection-only request whose bind completed out of order."""
 
 
 class _ConfirmedStepCapability:
@@ -1821,585 +1787,6 @@ def _with_group_trace(provider, drafts, terminal_code):
     return tuple(drafts) if provider is None else provider.with_group_trace(drafts, terminal_code)
 
 
-class _AccountingContextProvider:
-    """Persist content-free call lifecycle facts around one backend context seam."""
-
-    def __init__(
-        self,
-        runtime: StoryRuntime,
-        delegate: object,
-        *,
-        session_id: str,
-        conversation_id: str,
-        turn_id: str,
-        step_id: str,
-        invocation_id: str,
-        role: str,
-        invocation_kind: CollaborationInvocationKind,
-        admission: PremiseFreshWorkAdmission | None = None,
-        effective_language: str | None = None,
-        task_revisions: tuple[tuple[str, int], ...] = (),
-        document_node: DocumentNodeBinding | None = None,
-        document_goal=None, document_budget_task_id=None,
-    ) -> None:
-        self.effective_language = effective_language
-        self.task_revisions = task_revisions
-        self._runtime = runtime
-        self._delegate = delegate
-        self._session_id = session_id
-        self._conversation_id = conversation_id
-        self._turn_id = turn_id
-        self._step_id = step_id
-        self._invocation_id = invocation_id
-        self._role = role
-        self._invocation_kind = invocation_kind
-        self._admission = admission
-        if admission is not None and (admission.provider_invocation_id != invocation_id or admission.provider_step_id != step_id or role != LEAD_ORCHESTRATOR):
-            raise BackendProtocolError("provider wrapper does not match its fresh-work admission")
-        self._ordinals: dict[str, int] = {}
-        self._submitted_call_ids: set[str] = set()
-        self._validation_details: dict[str, tuple[str, ...]] = {}
-        self._validation_messages_published = False
-        self.provider_id = cast(str, getattr(delegate, "provider_id"))
-        self.definition_fingerprint = cast(
-            str,
-            getattr(delegate, "definition_fingerprint"),
-        )
-        self.reference_operation_id = cast(
-            str | None,
-            getattr(delegate, "reference_operation_id"),
-        )
-        self._public_response_contract_id: str | None = None
-        self._public_observations: dict[str, tuple[str, int, CollaborationProviderCallKind, str | None]] = {}
-        self._public_accepted_call_id: str | None = None
-        self._diagnostic_finalizers: dict[str, object] = {}
-        self._public_responses_published = False
-        self._group_observations: list[LeadGroupObservation] = []
-        self._group_started_ns: int | None = None
-        self._task_front_budget: int | None = None
-        self._document_node = document_node
-        self._document_goal = document_goal
-        self._document_budget_task_id = document_budget_task_id
-
-
-    def renew_delegate(self, delegate: object) -> None:
-        """Rebind one fresh compatible seam without resetting call accounting."""
-
-        provider_id = getattr(delegate, "provider_id", None)
-        definition_fingerprint = getattr(delegate, "definition_fingerprint", None)
-        reference_operation_id = getattr(delegate, "reference_operation_id", None)
-        if (
-            delegate is self._delegate
-            or type(provider_id) is not str
-            or provider_id != self.provider_id
-            or type(definition_fingerprint) is not str
-            or definition_fingerprint != self.definition_fingerprint
-            or (
-                reference_operation_id is not None
-                and type(reference_operation_id) is not str
-            )
-            or reference_operation_id != self.reference_operation_id
-        ):
-            raise BackendProtocolError(
-                "corrective context provider does not match the original binding"
-            )
-        self._delegate = delegate
-
-    def invocation(
-        self,
-        scope: ContextScope,
-        policy_fingerprint: str,
-        *,
-        continuation_identity: ContextContinuationIdentity | None = None,
-        execution_workspace: ProviderExecutionWorkspace | None = None,
-    ) -> AsyncContextManager[None]:
-        if continuation_identity is not None:
-            return getattr(self._delegate, "invocation")(
-                scope, policy_fingerprint,
-                continuation_identity=continuation_identity,
-                execution_workspace=execution_workspace,
-            )
-        return getattr(self._delegate, "invocation")(
-            scope,
-            policy_fingerprint,
-            execution_workspace=execution_workspace,
-        )
-
-    def inspect_context_thread(
-        self,
-        scope: ContextScope,
-        policy_fingerprint: str,
-        *,
-        execution_workspace: ProviderExecutionWorkspace | None = None,
-    ) -> str | None:
-        return getattr(self._delegate, "inspect_context_thread")(
-            scope,
-            policy_fingerprint,
-            execution_workspace=execution_workspace,
-        )
-
-    def require_current_execution_workspace(
-        self,
-        scope: ContextScope,
-        policy_fingerprint: str,
-    ) -> None:
-        callback = getattr(
-            self._delegate,
-            "require_current_execution_workspace",
-            None,
-        )
-        if callback is not None:
-            callback(scope, policy_fingerprint)
-
-    async def prepare_references(
-        self,
-        request: ContextReferencePreludeRequest,
-    ) -> ContextReferencePreludeResult:
-        """Load authorized references locally without provider-call accounting."""
-
-        return await getattr(self._delegate, "prepare_references")(request)
-
-    async def invoke_context(
-        self,
-        request: ContextProviderCallRequest | BoundContextProviderCallRequest,
-    ) -> ContextProviderCallResult:
-        kind = (
-            CollaborationProviderCallKind.INITIAL
-            if request.call_kind
-            in {
-                ProviderCallKind.CONVERSATION,
-                ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
-                ProviderCallKind.COLLABORATION_INITIAL,
-                ProviderCallKind.DEBATE,
-            }
-            else CollaborationProviderCallKind.CONTINUATION
-        )
-        ordinal = self._prepare(request.call_id, kind)
-        try:
-            result = await getattr(self._delegate, "invoke_context")(request)
-        except BaseException as failure:
-            if (
-                isinstance(failure, ProviderAuthenticationRequiredError)
-                and failure.replay_aborted
-            ):
-                raise
-            self._record_failure_submission(
-                failure,
-                request.call_id,
-                ordinal,
-                kind,
-            )
-            raise
-        details = (
-            bounded_chunks(
-                request.contract.structural_findings(result.response_text)
-                if type(request) is BoundContextProviderCallRequest
-                else diagnose_json_text(result.response_text, request.schema)
-            )
-            if type(result) is ContextProviderCallResult else ()
-        )
-        self._record_result_submission(result, request.call_id, ordinal, kind, details)
-        try:
-            if type(result) is ContextProviderCallResult:
-                self._diagnostic_finalizers[request.call_id] = result.finalizer
-        except BaseException:
-            pass
-        if type(result) is ContextProviderCallResult and self._public_response_contract_id is not None:
-            public_text = recover_lead_public_response(
-                result.response_text, self._public_response_contract_id,
-                maximum_utf8_bytes=COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
-            )
-            if public_text is not None and request.call_id in self._submitted_call_ids:
-                self._public_observations[request.call_id] = (public_text, ordinal, kind,
-                    recover_lead_public_response_kind(result.response_text,
-                        self._public_response_contract_id,
-                        maximum_utf8_bytes=COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES))
-        return result
-
-    def record_validated_task(self, call_id: str, task_id: str, task_revision: int) -> None:
-        """Attach only a validated host task to its exact physical response."""
-        try:
-            finalizer = self._diagnostic_finalizers.get(call_id)
-            callback = getattr(finalizer, "set_host_task_diagnostic", None)
-            if callable(callback):
-                callback(task_id, task_revision)
-        except BaseException:
-            pass
-
-    def record_validation_details(
-        self, call_id: str, details: tuple[str, ...],
-    ) -> None:
-        """Retain safe rejection details until the invocation closes."""
-
-        if call_id in self._submitted_call_ids and details:
-            labelled = self._label_validation_details(call_id, details)
-            self._validation_details[call_id] = labelled
-
-    def record_group_observation(self, observation: LeadGroupObservation) -> None:
-        """Keep observations invocation-local until existing terminal publication."""
-        if type(observation) is not LeadGroupObservation:
-            raise TypeError("group observer requires a typed observation")
-        if self._group_started_ns is None and observation.kind is LeadGroupObservationKind.BOUND:
-            self._group_started_ns = time.monotonic_ns()
-        self._group_observations.append(observation)
-
-    def group_trace_drafts(self, terminal_code: str, terminal_drafts=()) -> tuple[CollaborationEventDraft, ...]:
-        if not self._group_observations:
-            return ()
-        events = self._runtime.conversation_storage_services.event_store.read(self._session_id, self._conversation_id)
-        if any(type(event.payload) is CollaborationLeadGroupTracePayload
-               and event.payload.trace.invocation_id == self._invocation_id for event in events):
-            return ()
-        terminal = next((item for item in terminal_drafts
-            if type(item.payload) in {CollaborationLeadJudgmentPayload, CollaborationLeadOutcomeFailurePayload}), None)
-        if (terminal is not None and type(terminal.payload) is CollaborationLeadOutcomeFailurePayload
-                and terminal.payload.code is CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED
-                and all(item.kind is LeadGroupObservationKind.TERMINAL for item in self._group_observations)):
-            return ()
-        terminal_snapshot = None
-        if terminal is not None:
-            payload = terminal.payload
-            scope = getattr(payload, "authoring_scope", None)
-            terminal_snapshot = json.dumps({
-                "source_event_id": terminal.event_id, "source_kind": terminal.kind.value,
-                "outcome_kind": payload.kind.value if type(payload) is CollaborationLeadJudgmentPayload else None,
-                "failure_code": payload.code.value if type(payload) is CollaborationLeadOutcomeFailurePayload else None,
-                "task_ref": None if scope is None else {"task_id": scope.task_id, "revision": scope.task_revision},
-                "task_completion": None, "objective_completion": None,
-            }, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
-        return (self._runtime._draft(
-            session_id=self._session_id, conversation_id=self._conversation_id,
-            turn_id=self._turn_id, step_id=self._step_id,
-            kind=CollaborationEventKind.LEAD_GROUP_TRACE,
-            sender=_RUNTIME_ACTOR, recipient=_LEAD_ACTOR,
-            payload=CollaborationLeadGroupTracePayload(LeadGroupTrace(
-                self._invocation_id, tuple(self._group_observations), terminal_code,
-                elapsed_ns=None if self._group_started_ns is None else time.monotonic_ns() - self._group_started_ns,
-                terminal_snapshot=terminal_snapshot)),
-        ),)
-
-    def with_group_trace(self, drafts, terminal_code: str):
-        traces = self.group_trace_drafts(terminal_code, terminal_drafts=drafts)
-        if not traces:
-            return tuple(drafts)
-        source_ids = {draft.payload.source_recommendation_event_id for draft in drafts
-                      if type(draft.payload) is LeadRecommendationRequestPayload}
-        tail_index = next((index for index, draft in enumerate(drafts)
-            if type(draft.payload) in {CollaborationStepStatePayload, LeadRecommendationRequestPayload}
-            or (type(draft.payload) is CollaborationLeadJudgmentPayload and draft.event_id in source_ids)), len(drafts))
-        drafts = tuple(replace(draft, payload=replace(
-            draft.payload, tail_sequence=draft.payload.tail_sequence + len(traces),
-        )) if type(draft.payload) is LeadRecommendationRequestPayload else draft for draft in drafts)
-        return (*drafts[:tail_index], *traces, *drafts[tail_index:])
-
-    def publish_public_responses(self) -> None:
-        if self._public_responses_published or self._public_response_contract_id is None:
-            return
-        if not self._validation_messages_published:
-            self.publish_validation_messages()
-        events = self._runtime.conversation_storage_services.event_store.read(
-            self._session_id, self._conversation_id,
-        )
-        submitted = {
-            event.payload.call_id: event.payload for event in events
-            if type(event.payload) is CollaborationProviderCallPayload
-            and event.payload.state is CollaborationProviderCallState.SUBMITTED
-            and event.payload.invocation_id == self._invocation_id
-            and event.payload.invocation_kind is self._invocation_kind
-            and (event.session_id, event.conversation_id, event.turn_id, event.step_id) == (
-                self._session_id, self._conversation_id, self._turn_id, self._step_id,
-            )
-        }
-        drafts = []
-        previous_rejected = None
-        for call_id in self._ordinals:
-            if call_id not in self._submitted_call_ids:
-                continue
-            call = submitted.get(call_id)
-            if call is None or call.ordinal != self._ordinals[call_id]:
-                raise BackendProtocolError("public response lacks exact submitted-call facts")
-            details = self._validation_details.get(call_id, ())
-            accepted = call_id == self._public_accepted_call_id
-            observation = self._public_observations.get(call_id)
-            if observation is not None:
-                text, ordinal, kind, response_kind = observation
-                if ordinal != call.ordinal or kind is not call.call_kind:
-                    raise BackendProtocolError("public response changed its actual call identity")
-                acceptance = (
-                    LeadPublicResponseAcceptance.ACCEPTED if accepted
-                    else LeadPublicResponseAcceptance.REJECTED if details
-                    else LeadPublicResponseAcceptance.UNESTABLISHED
-                )
-                response = LeadPublicResponse(
-                    invocation_id=self._invocation_id, call_id=call_id, ordinal=ordinal,
-                    call_kind=kind.value, acceptance=acceptance, response_text=text,
-                    material_digest=task_material_sha256(text),
-                    repair_of_call_id=previous_rejected, validation_details=details,
-                    response_kind=response_kind,
-                )
-                drafts.append(self._runtime._draft(
-                    session_id=self._session_id, conversation_id=self._conversation_id,
-                    turn_id=self._turn_id, step_id=self._step_id,
-                    kind=CollaborationEventKind.LEAD_PUBLIC_RESPONSE,
-                    sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
-                    payload=CollaborationLeadPublicResponsePayload(response),
-                ))
-            elif details or accepted:
-                disposition = "accepted" if accepted else "rejected"
-                message = (
-                    f"Public response unavailable for {disposition} call {call_id}: "
-                    "no bounded literal final response_text was recoverable."
-                )
-                drafts.append(self._runtime._draft(
-                    session_id=self._session_id, conversation_id=self._conversation_id,
-                    turn_id=self._turn_id, step_id=self._step_id,
-                    kind=CollaborationEventKind.MESSAGE,
-                    sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
-                    payload=CollaborationMessagePayload(message),
-                ))
-            if details and not accepted:
-                previous_rejected = call_id
-        if not drafts:
-            return
-        self._runtime._append_drafts(
-            events[-1].sequence if events else 0, tuple(drafts),
-        )
-        self._public_responses_published = True
-
-    def publish_validation_messages(self) -> None:
-        """Publish diagnostics only after contextual provider work has closed."""
-
-        if self._validation_messages_published:
-            return
-        details_by_call = self.validation_details_by_call
-        if details_by_call:
-            self._runtime._append_validation_messages(
-                session_id=self._session_id,
-                conversation_id=self._conversation_id,
-                turn_id=self._turn_id,
-                step_id=self._step_id,
-                invocation_id=self._invocation_id,
-                details_by_call=details_by_call,
-            )
-        self._validation_messages_published = True
-
-    def publish_or_defer_validation_messages(
-        self,
-    ) -> tuple[str, tuple[tuple[str, tuple[str, ...]], ...]] | None:
-        """Retain an exact retry batch when diagnostic persistence fails."""
-
-        try:
-            self.publish_validation_messages()
-        except Exception:
-            details_by_call = self.validation_details_by_call
-            if details_by_call:
-                return self._invocation_id, details_by_call
-        return None
-
-    @property
-    def validation_details_by_call(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
-        """Return ordered safe chunks with their submitted call identities."""
-
-        return tuple(
-            (call_id, self._validation_details[call_id])
-            for call_id in self._ordinals
-            if call_id in self._validation_details
-        )
-
-    def _label_validation_details(
-        self, call_id: str, details: tuple[str, ...],
-    ) -> tuple[str, ...]:
-        first_diagnostic_call_id = next(iter(self._validation_details), call_id)
-        label = (
-            "Original response"
-            if call_id == first_diagnostic_call_id else "Repair response"
-        )
-        chunks = (
-            details
-            if all(item.startswith("Structured reply validation") for item in details)
-            else bounded_chunks(details)
-        )
-        return tuple(
-            item.replace("Structured reply validation", label, 1)
-            if item.startswith("Structured reply validation")
-            else f"{label}: {item}"
-            for item in chunks
-        )
-
-    @property
-    def validation_details(self) -> tuple[str, ...]:
-        """Return ordered provider diagnostics without display metadata."""
-        chunks: list[str] = []
-        for call_id in self._ordinals:
-            chunks.extend(self._validation_details.get(call_id, ()))
-        return tuple(chunks)
-
-    def complete_references(
-        self,
-        scope: ContextScope,
-        policy_fingerprint: str,
-    ) -> None:
-        getattr(self._delegate, "complete_references")(scope, policy_fingerprint)
-
-    def abort_references(
-        self,
-        scope: ContextScope,
-        policy_fingerprint: str,
-        *,
-        cancelled: bool,
-        provider_failure: bool,
-    ) -> None:
-        getattr(self._delegate, "abort_references")(
-            scope,
-            policy_fingerprint,
-            cancelled=cancelled,
-            provider_failure=provider_failure,
-        )
-
-    def taint_context_thread(
-        self,
-        scope: ContextScope,
-        policy_fingerprint: str,
-        *,
-        execution_workspace: ProviderExecutionWorkspace | None = None,
-    ) -> None:
-        getattr(self._delegate, "taint_context_thread")(
-            scope,
-            policy_fingerprint,
-            execution_workspace=execution_workspace,
-        )
-
-    def _prepare(self, call_id: str, kind: CollaborationProviderCallKind) -> int:
-        if self._task_front_budget is not None:
-            history = self._runtime.conversation_storage_services.event_store.read(self._session_id, self._conversation_id)
-            if self._invocation_kind is CollaborationInvocationKind.LEAD_DISCUSSION:
-                spent = sum(type(event.payload) is CollaborationProviderCallPayload
-                            and event.payload.invocation_id == self._invocation_id
-                            and event.payload.state is CollaborationProviderCallState.SUBMITTED
-                            for event in history)
-            else:
-                spent = sum(type(event.payload) is CollaborationProviderCallPayload
-                            and event.step_id == self._step_id
-                            and event.payload.invocation_kind is not CollaborationInvocationKind.LEAD_DISCUSSION
-                            and event.payload.state is CollaborationProviderCallState.SUBMITTED
-                            for event in history)
-            if spent >= self._task_front_budget:
-                raise _LeadCallBudgetExceeded("the exact USER task/discussion lineage has no physical call remaining")
-        if self._admission is not None:
-            history = self._runtime.conversation_storage_services.event_store.read(self._session_id, self._conversation_id)
-            spent = sum(type(event.payload) is CollaborationProviderCallPayload
-                and event.payload.invocation_id == self._invocation_id
-                and event.payload.state is CollaborationProviderCallState.SUBMITTED for event in history)
-            if max(spent, self.submitted_physical_calls) >= self._admission.front_physical_call_limit:
-                raise _LeadCallBudgetExceeded("fresh-work front admission cannot fund another physical call")
-        if call_id in self._ordinals:
-            raise BackendProtocolError("provider call ID was prepared more than once")
-        ordinal = len(self._ordinals) + 1
-        self._ordinals[call_id] = ordinal
-        self._runtime._append_provider_call_fact(
-            document_node=self._document_node, document_goal=self._document_goal, document_budget_task_id=self._document_budget_task_id,
-            session_id=self._session_id,
-            conversation_id=self._conversation_id,
-            turn_id=self._turn_id,
-            step_id=self._step_id,
-            invocation_id=self._invocation_id,
-            call_id=call_id,
-            ordinal=ordinal,
-            call_kind=kind,
-            state=CollaborationProviderCallState.PREPARED,
-            role=self._role,
-            invocation_kind=self._invocation_kind,
-        )
-        return ordinal
-
-    def _record_failure_submission(
-        self,
-        failure: BaseException,
-        call_id: str,
-        ordinal: int,
-        kind: CollaborationProviderCallKind,
-    ) -> None:
-        facts = context_provider_failure_facts(failure)
-        if (
-            facts.accounting is not None
-            and facts.accounting.state is ProviderCallState.SUBMITTED
-        ):
-            self._submitted(call_id, ordinal, kind, facts.accounting)
-
-    def _record_result_submission(
-        self,
-        result: object,
-        call_id: str,
-        ordinal: int,
-        kind: CollaborationProviderCallKind,
-        details: tuple[str, ...] = (),
-    ) -> None:
-        accounting = getattr(result, "accounting", None)
-        if (
-            type(accounting) is not ProviderCallAccounting
-            or accounting.state is not ProviderCallState.SUBMITTED
-        ):
-            return
-        self._submitted(call_id, ordinal, kind, accounting, details)
-
-    def _submitted(
-        self,
-        call_id: str,
-        ordinal: int,
-        kind: CollaborationProviderCallKind,
-        accounting: ProviderCallAccounting,
-        details: tuple[str, ...] = (),
-    ) -> None:
-        if call_id in self._submitted_call_ids:
-            raise BackendProtocolError("provider call was submitted more than once")
-        if accounting.payload.call_kind is ProviderCallKind.UNCLASSIFIED:
-            raise BackendProtocolError("submitted provider call is unclassified")
-        self._submitted_call_ids.add(call_id)
-        if details:
-            details = self._label_validation_details(call_id, details)
-            self._validation_details[call_id] = details
-        self._runtime._append_provider_call_fact(
-            document_node=self._document_node, document_goal=self._document_goal, document_budget_task_id=self._document_budget_task_id,
-            session_id=self._session_id,
-            conversation_id=self._conversation_id,
-            turn_id=self._turn_id,
-            step_id=self._step_id,
-            invocation_id=self._invocation_id,
-            call_id=call_id,
-            ordinal=ordinal,
-            call_kind=kind,
-            state=CollaborationProviderCallState.SUBMITTED,
-            role=self._role,
-            invocation_kind=self._invocation_kind,
-            validation_details=details,
-            usage=accounting.usage,
-            accounting=accounting,
-        )
-
-    @property
-    def submitted_physical_calls(self) -> int:
-        """Return exact submitted calls observed by this no-await wrapper."""
-
-        return len(self._submitted_call_ids)
-
-    @property
-    def invocation_id(self) -> str:
-        """Return the durable invocation identity used by call facts."""
-
-        return self._invocation_id
-
-    @property
-    def last_submitted_call_id(self) -> str | None:
-        """Return the exact most recently prepared call that was submitted."""
-
-        return next(
-            (
-                call_id
-                for call_id in reversed(tuple(self._ordinals))
-                if call_id in self._submitted_call_ids
-            ),
-            None,
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2894,11 +2281,6 @@ def _lead_call_contract_factory(*, constraints: LeadProviderConstraints, contrac
 class StoryRuntime:
     """Public management and lead front-channel/confirmation APIs."""
 
-    _reference_operation_registry_lock = threading.RLock()
-    _reference_operation_registry_pid = os.getpid()
-    _reference_operation_registry: dict[
-        tuple[str, str, tuple[int, int], str], RuntimeReferenceOperation
-    ] = {}
 
     def __init__(
         self,
@@ -2964,16 +2346,9 @@ class StoryRuntime:
             ),
         )
         self.config = ConfigManager(self.workspace)
-        self._bound_agents: dict[tuple[str, str], BoundAgent] = {}
-        self._desired_binding_fingerprints: dict[str, str] = {}
-        self._retiring_bound_agents: dict[tuple[str, str], BoundAgent] = {}
-        self._bound_agent_uses: dict[int, tuple[BoundAgent, int]] = {}
-        self._binding_tasks: dict[tuple[str, str], asyncio.Task[BoundAgent]] = {}
-        self._binding_waiters: dict[tuple[str, str], int] = {}
-        self._binding_lock = asyncio.Lock()
-        self._conversation_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._provider_binding_leases = ProviderBindingLeases()
+        self._session_execution_scopes = SessionExecutionScopes()
         self._agent_context_service = AgentContextService(self.workspace)
-        self._lead_continuations: dict[str, ContextContinuationTransaction] = {}
         self._confirmed_capabilities: dict[
             tuple[str, str, str], _ConfirmedStepCapability
         ] = {}
@@ -2986,9 +2361,6 @@ class StoryRuntime:
         self._live_execution_markers: set[tuple[str, str, str, str]] = set()
         self._consensus_event_store = ConsensusEventStore(self.workspace)
         self._consensus_material_store = ConsensusMaterialStore(self.workspace.root)
-        self._consensus_provider_tasks: dict[
-            tuple[str, str, str, str], set[asyncio.Task[object]]
-        ] = {}
         self.consensus = ConsensusRuntimeAdapter(self)
 
     def _trace_debug(
@@ -3280,7 +2652,7 @@ class StoryRuntime:
     def new_id(self, prefix: str, /) -> str:
         """Allocate one runtime-owned consensus identifier."""
 
-        return self._new_id(prefix)
+        return event_journal.new_id(prefix)
 
     async def invoke_provider(
         self,
@@ -3349,30 +2721,26 @@ class StoryRuntime:
             invocation.workflow_id,
             invocation.phase_request_id,
         )
-        current_task = asyncio.current_task()
-        if current_task is None:
-            raise BackendProtocolError("consensus provider invocation has no task")
-        active_tasks = self._consensus_provider_tasks.setdefault(key, set())
-        if current_task in active_tasks:
-            raise BackendProtocolError("consensus provider invocation is already active")
-        active_tasks.add(current_task)
+        current_task = self._session_execution_scopes.register_provider_task(key)
         reference_operation: RuntimeReferenceOperation | None = None
         bound_agent: BoundAgent | None = None
         try:
             artifact_input = invocation.input_material.locator.startswith("artifact:")
             artifact_binding: SessionArtifactBinding | None = None
             reference_boundary_reconciled = False
-            if artifact_input or self._has_cleanup_pending_reference_operation(
+            if artifact_input or reference_registry.has_cleanup_pending_reference_operation(
+                self.workspace,
                 invocation.execution_identity.session_id
             ):
                 artifact_binding = self._session_artifact_binding(
                     invocation.execution_identity.session_id
                 )
                 repository_access = partial(
-                    _open_session_artifact_repository,
+                    session_worktree_access.open_session_artifact_repository,
                     artifact_binding,
                 )
-                self._reconcile_reference_operations_at_boundary(
+                reference_registry.reconcile_reference_operations_at_boundary(
+                    self.workspace,
                     session_id=invocation.execution_identity.session_id,
                     physical_workspace_identity=(
                         artifact_binding.worktree_identity
@@ -3467,7 +2835,9 @@ class StoryRuntime:
                 session_id=invocation.execution_identity.session_id,
                 agent_id=invocation.agent_id,
             )
-            bound_agent = await self._acquire_bound_agent(definition)
+            bound_agent = await self._provider_binding_leases.acquire(definition,
+                bind_definition=self.bind_definition,
+            )
             reference_read = (
                 None
                 if reference_operation is None
@@ -3518,7 +2888,7 @@ class StoryRuntime:
                         invocation.execution_identity.session_id
                     )
                 )
-                workspace_manager = _provider_execution_workspace_manager(
+                workspace_manager = session_worktree_access.session_provider_execution_workspace_manager(
                     bound_agent,
                     execution_binding,
                 )
@@ -3536,7 +2906,7 @@ class StoryRuntime:
                     reference_read=reference_read,
                 )
             if reference_operation is not None:
-                self._finish_reference_operation(reference_operation)
+                reference_registry.finish_reference_operation(self.workspace, reference_operation)
             authored_material = None
             if (
                 invocation.phase in {ConsensusPhase.DRAFT, ConsensusPhase.REPAIR}
@@ -3566,34 +2936,18 @@ class StoryRuntime:
             )
         except BaseException as exc:
             if reference_operation is not None:
-                self._fail_reference_operation(reference_operation, exc)
+                reference_registry.fail_reference_operation(self.workspace, reference_operation, exc)
             raise
         finally:
-            active_tasks.discard(current_task)
-            if not active_tasks:
-                self._consensus_provider_tasks.pop(key, None)
+            self._session_execution_scopes.unregister_provider_task(key, current_task)
             if bound_agent is not None:
-                await self._release_bound_agent_use(bound_agent)
+                await self._provider_binding_leases.release_use(bound_agent,
+                    finish_use=self.finish_bound_agent_use,
+                )
 
-    def interrupt_provider(
-        self,
-        session_id: str,
-        conversation_id: str,
-        workflow_id: str,
-        phase_request_id: str,
-        /,
-    ) -> bool:
+    def interrupt_provider(self, session_id: str, conversation_id: str, workflow_id: str, phase_request_id: str, /) -> bool:
         """Cancel only the exact active consensus provider task."""
-
-        tasks = self._consensus_provider_tasks.get(
-            (session_id, conversation_id, workflow_id, phase_request_id)
-        )
-        active = () if tasks is None else tuple(task for task in tasks if not task.done())
-        if not active:
-            return False
-        for task in active:
-            task.cancel()
-        return True
+        return self._session_execution_scopes.cancel_provider_tasks(session_id, conversation_id, workflow_id, phase_request_id)
 
     def verify_consensus_material(
         self,
@@ -3623,10 +2977,11 @@ class StoryRuntime:
             )
         path = handle.locator.removeprefix("artifact:")
         repository_access = partial(
-            _open_session_artifact_repository,
+            session_worktree_access.open_session_artifact_repository,
             artifact_binding,
         )
-        operation = self._prepare_session_reference_operation(
+        operation = reference_registry.prepare_session_reference_operation(
+            self.workspace,
             repository_access,
             artifact_binding=artifact_binding,
             session_id=invocation.execution_identity.session_id,
@@ -3640,7 +2995,8 @@ class StoryRuntime:
             or proofs[0].reference.line_range is not None
             or proofs[0].selected_sha256 != handle.digest
         ):
-            self._fail_reference_operation(
+            reference_registry.fail_reference_operation(
+                self.workspace,
                 operation,
                 ValueError("artifact material digest changed"),
             )
@@ -3712,7 +3068,7 @@ class StoryRuntime:
                 try:
                     binding = self._session_artifact_binding(identity.session_id)
                     path = handle.locator.removeprefix("artifact:")
-                    with _open_session_artifact_repository(binding) as repository:
+                    with session_worktree_access.open_session_artifact_repository(binding) as repository:
                         snapshots = repository.read_current((path,))
                 except (OSError, ValueError, WorkspaceFormatError, SessionArtifactBindingError):
                     return AuthoringAdmissionNeeded(AdmissionStatus.NEEDS_INFORMATION,
@@ -4032,18 +3388,7 @@ class StoryRuntime:
             configuration_snapshot=configuration,
             provider_route_generations=provider_route_generations,
         )
-        releases: list[BoundAgent] = []
-        async with self._binding_lock:
-            if self._bound_agent_uses or self._binding_tasks or self._binding_waiters:
-                raise BackendProtocolError(
-                    "runtime configuration requires a quiescent provider boundary"
-                )
-            releases.extend(self._bound_agents.values())
-            releases.extend(self._retiring_bound_agents.values())
-            self._bound_agents.clear()
-            self._retiring_bound_agents.clear()
-            self._desired_binding_fingerprints.clear()
-        self._release_provider_bindings(releases)
+        await self._provider_binding_leases.prepare_configuration()
         return RuntimeConfigurationCandidate(self, configuration, prompts)
 
     async def commit_runtime_configuration(
@@ -4058,21 +3403,7 @@ class StoryRuntime:
             or candidate.owner is not self
         ):
             raise TypeError("runtime candidate does not belong to this runtime")
-        async with self._binding_lock:
-            if (
-                self._bound_agents
-                or self._retiring_bound_agents
-                or self._bound_agent_uses
-                or self._binding_tasks
-                or self._binding_waiters
-            ):
-                raise BackendProtocolError(
-                    "runtime configuration activation lost quiescence"
-                )
-            assert self.backend is not None
-            self.backend.commit_runtime_configuration(backend_candidate)
-            self._configuration_snapshot = candidate.configuration
-            self.prompts = candidate.prompts
+        await self._provider_binding_leases.commit_configuration(activate=partial(self.activate_configuration_snapshots, candidate, backend_candidate))
 
     @staticmethod
     def discard_runtime_configuration(
@@ -4185,225 +3516,15 @@ class StoryRuntime:
         with artifact_binding.open_ready_resources() as access:
             return access.repository.inspect_reference_operation(operation_id)
 
-    def _register_reference_operation(
-        self,
-        operation: RuntimeReferenceOperation,
-    ) -> None:
-        """Retain exact cleanup authority before guarded handle publication."""
 
-        self._require_current_reference_registry()
-        operation_id = operation.operation_id
-        if operation_id is None:
-            return
-        if not reference_operation_belongs_to_session(
-            operation_id,
-            operation.session_id,
-        ):
-            raise BackendProtocolError("reference operation identity is invalid")
-        physical_identity = operation.physical_workspace_identity
-        if physical_identity is None:
-            raise BackendProtocolError(
-                "registered reference operation lacks physical workspace identity"
-            )
-        key = (
-            str(self.workspace.root),
-            operation.session_id,
-            physical_identity,
-            operation_id,
-        )
-        with StoryRuntime._reference_operation_registry_lock:
-            current = StoryRuntime._reference_operation_registry.get(key)
-            if current is not None and current is not operation:
-                raise BackendProtocolError("reference operation is already registered")
-            StoryRuntime._reference_operation_registry[key] = operation
 
-    def _unregister_terminal_reference_operation(
-        self,
-        operation: RuntimeReferenceOperation,
-    ) -> None:
-        self._require_current_reference_registry()
-        operation_id = operation.operation_id
-        if operation_id is None or not operation.finished:
-            return
-        physical_identity = operation.physical_workspace_identity
-        if physical_identity is None:
-            return
-        key = (
-            str(self.workspace.root),
-            operation.session_id,
-            physical_identity,
-            operation_id,
-        )
-        with StoryRuntime._reference_operation_registry_lock:
-            if StoryRuntime._reference_operation_registry.get(key) is operation:
-                StoryRuntime._reference_operation_registry.pop(key)
 
-    def _registered_reference_operation_ids(
-        self,
-        session_id: str,
-        physical_workspace_identity: tuple[int, int],
-    ) -> frozenset[str]:
-        """Snapshot exact live IDs while the caller owns repository access."""
 
-        self._require_current_reference_registry()
-        workspace_root = str(self.workspace.root)
-        with StoryRuntime._reference_operation_registry_lock:
-            return frozenset(
-                operation_id
-                for (
-                    owned_root,
-                    owned_session,
-                    owned_identity,
-                    operation_id,
-                ) in (
-                    StoryRuntime._reference_operation_registry
-                )
-                if (
-                    owned_root == workspace_root
-                    and owned_session == session_id
-                    and owned_identity == physical_workspace_identity
-                )
-            )
 
-    def _has_cleanup_pending_reference_operation(self, session_id: str) -> bool:
-        """Check a workspace/session snapshot without holding its registry lock."""
 
-        self._require_current_reference_registry()
-        workspace_root = str(self.workspace.root)
-        with StoryRuntime._reference_operation_registry_lock:
-            registered = tuple(
-                operation
-                for (
-                    owned_root,
-                    owned_session,
-                    _,
-                    _,
-                ), operation in StoryRuntime._reference_operation_registry.items()
-                if owned_root == workspace_root and owned_session == session_id
-            )
-        return any(operation.cleanup_is_pending() for operation in registered)
 
-    def _reconcile_reference_operations_at_boundary(
-        self,
-        *,
-        session_id: str,
-        physical_workspace_identity: tuple[int, int],
-        repository_access: Callable[
-            [], AbstractContextManager[WritingArtifactRepository]
-        ],
-    ) -> None:
-        """Retry retained and restarted cleanup before new provider work."""
 
-        self._require_current_reference_registry()
-        workspace_root = str(self.workspace.root)
-        reconciled_retained: list[RuntimeReferenceOperation] = []
-        with repository_access() as repository:
-            with StoryRuntime._reference_operation_registry_lock:
-                registered = tuple(
-                    (key, operation)
-                    for key, operation in (
-                        StoryRuntime._reference_operation_registry.items()
-                    )
-                    if key[0] == workspace_root and key[1] == session_id
-                )
-            for key, operation in registered:
-                if operation.defer_if_workspace_replaced(
-                    physical_workspace_identity
-                ):
-                    with StoryRuntime._reference_operation_registry_lock:
-                        if (
-                            StoryRuntime._reference_operation_registry.get(key)
-                            is operation
-                        ):
-                            StoryRuntime._reference_operation_registry.pop(key)
-                    continue
-                if not operation.cleanup_is_pending():
-                    continue
-                operation.reconcile_cleanup(
-                    repository,
-                    physical_workspace_identity=physical_workspace_identity,
-                )
-                reconciled_retained.append(operation)
-            repository.reconcile_incomplete_reference_operations(
-                session_id,
-                excluded_ids_supplier=partial(
-                    self._registered_reference_operation_ids,
-                    session_id,
-                    physical_workspace_identity,
-                ),
-            )
-        for operation in reconciled_retained:
-            operation.complete_reconciled_cleanup()
-            self._unregister_terminal_reference_operation(operation)
 
-    @staticmethod
-    def _require_current_reference_registry() -> None:
-        """Discard inherited process-local handles before registry locking."""
-
-        pid = os.getpid()
-        if StoryRuntime._reference_operation_registry_pid == pid:
-            return
-        StoryRuntime._reset_reference_registry_after_fork()
-
-    @staticmethod
-    def _reset_reference_registry_after_fork() -> None:
-        """Install empty child-owned registry state without inherited locking."""
-
-        StoryRuntime._reference_operation_registry_lock = threading.RLock()
-        StoryRuntime._reference_operation_registry = {}
-        StoryRuntime._reference_operation_registry_pid = os.getpid()
-
-    def _prepare_session_reference_operation(
-        self,
-        repository_access: Callable[
-            [], AbstractContextManager[WritingArtifactRepository]
-        ],
-        *,
-        artifact_binding: SessionArtifactBinding,
-        session_id: str,
-        text: str,
-        reconcile_existing: bool = True,
-    ) -> RuntimeReferenceOperation:
-        if reconcile_existing:
-            self._reconcile_reference_operations_at_boundary(
-                session_id=session_id,
-                physical_workspace_identity=artifact_binding.worktree_identity,
-                repository_access=repository_access,
-            )
-        return prepare_registered_guarded_runtime_reference_operation(
-            repository_access,
-            session_id=session_id,
-            text=text,
-            physical_workspace_identity=artifact_binding.worktree_identity,
-            physical_workspace_pin_factory=partial(
-                _duplicate_session_worktree_descriptor,
-                artifact_binding,
-            ),
-            register=self._register_reference_operation,
-        )
-
-    def _finish_reference_operation(
-        self,
-        operation: RuntimeReferenceOperation,
-    ) -> None:
-        try:
-            operation.finish()
-        finally:
-            self._unregister_terminal_reference_operation(operation)
-
-    def _fail_reference_operation(
-        self,
-        operation: RuntimeReferenceOperation,
-        failure: BaseException,
-        *,
-        default: ReferenceAuthorizationErrorCode = (
-            ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
-        ),
-    ) -> ReferenceOperationFailure | None:
-        try:
-            return operation.failure(failure, default=default)
-        finally:
-            self._unregister_terminal_reference_operation(operation)
 
     def _session_artifact_binding(self, session_id: str) -> SessionArtifactBinding:
         """Freshly require and bind one exact session worktree for artifact I/O."""
@@ -4760,10 +3881,10 @@ class StoryRuntime:
                 origin = capture_events.get(receipt.origin_event_id)
                 if (
                     receipt.origin_kind != "task_decision"
-                    or control.sender != _RUNTIME_ACTOR
+                    or control.sender != event_journal.RUNTIME_ACTOR
                     or origin is None
                     or type(origin.payload) is not CollaborationLeadTaskDecisionPayload
-                    or origin.sender != _USER_ACTOR
+                    or origin.sender != event_journal.USER_ACTOR
                     or origin.batch_id != control.batch_id
                     or (origin.session_id, origin.conversation_id, origin.turn_id, origin.step_id)
                     != (control.session_id, control.conversation_id, control.turn_id, control.step_id)
@@ -4781,7 +3902,7 @@ class StoryRuntime:
                         raise _LeadOutcomeValidationError("selected task input capture is unavailable")
                     captured = capture_event.payload.capture
                     if (
-                        capture_event.sender != _RUNTIME_ACTOR
+                        capture_event.sender != event_journal.RUNTIME_ACTOR
                         or capture_event.batch_id != control.batch_id
                         or (
                             capture_event.session_id, capture_event.conversation_id,
@@ -4909,7 +4030,7 @@ class StoryRuntime:
                 '$.recommended_action.source_ids',
                 'recommended preparation cannot fit its source-lineage budget',
             )
-        request_event_id = self._new_id("e")
+        request_event_id = event_journal.new_id("e")
         source_proposal = None
         source_attempt = None
         if type(source.payload) is CollaborationLeadSynthesisPayload:
@@ -5020,8 +4141,8 @@ class StoryRuntime:
             if type(qualified_readiness) is CoreDocumentReadinessNeeded:
                 raise _LeadOutcomeValidationError(qualified_readiness.message)
         request = LeadRecommendationRequestPayload(
-            request_event_id=request_event_id, request_id=self._new_id("rc"),
-            action_id=self._new_id("ra") if previous is None else previous.action_id,
+            request_event_id=request_event_id, request_id=event_journal.new_id("rc"),
+            action_id=event_journal.new_id("ra") if previous is None else previous.action_id,
             action_revision=1 if previous is None else previous.action_revision + 1,
             kind=action.kind, purpose=action.purpose, instruction=action.instruction,
             expected_result=action.expected_result, target_paths=action.target_paths,
@@ -5058,12 +4179,12 @@ class StoryRuntime:
             source_execution_attempt_id=source_attempt,
             document_node=(selected_node if selected_node is not None else source_proposal.document_node if source_proposal is not None and source_proposal.document_node is not None else self._automatic_document_node(source.session_id, scope, projection, session_history=session_history)), authoring_scope=scope,
         )
-        return self._draft_with_id(
+        return event_journal.draft_with_id(
             event_id=request_event_id, session_id=source.session_id,
             conversation_id=source.conversation_id, turn_id=source.turn_id,
             step_id=source.step_id if step_id is None else step_id,
             kind=CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST,
-            sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR, payload=request,
+            sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR, payload=request,
         )
 
     def _recommendation_turn_result(self, event: CollaborationEvent | CollaborationEventDraft) -> LeadTurnResult:
@@ -5108,11 +4229,11 @@ class StoryRuntime:
                  LeadRecommendationState.FAILED if failed else
                  LeadRecommendationState.SUPERSEDED if decision.kind is CollaborationConfirmationDecision.REVISE or superseded_scope
                  else LeadRecommendationState.COMPLETED)
-        return self._draft(
+        return event_journal.draft(
             session_id=lead_result.session_id, conversation_id=lead_result.conversation_id,
             turn_id=lead_result.turn_id, step_id=lead_result.step_id,
             kind=CollaborationEventKind.LEAD_RECOMMENDATION_RESULT,
-            sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+            sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
             payload=LeadRecommendationResultPayload(
                 request_event_id=request.request_event_id, request_id=request.request_id,
                 action_id=request.action_id, action_revision=request.action_revision,
@@ -5138,7 +4259,9 @@ class StoryRuntime:
         self._validate_context_event_sink(context_event_sink)
         self._validate_context_event_sink(action_progress_sink)
         session_id, conversation_id = decision.session_id, decision.conversation_id
-        async with self._lead_session_lifecycle(session_id), self._conversation_lock(session_id, conversation_id):
+        async with self._session_execution_scopes.lead_session_lifecycle(session_id,
+            continuation_factory=self._agent_context_service.session_continuation,
+        ), self._session_execution_scopes.conversation_lock(session_id, conversation_id):
             events, projection, failure = (await run_blocking(self._read_lead_history, session_id, conversation_id))
             if failure is not None or events is None or projection is None:
                 return self._blocking_lead_result(session_id, conversation_id,
@@ -5157,11 +4280,11 @@ class StoryRuntime:
             if decision != expected or events[-1].event_id != request.request_event_id:
                 raise BackendProtocolError("recommendation decision does not match its exact current tail")
             request_event = events[-1]
-            turn_id = self._new_id("t")
-            decision_draft = self._draft(
+            turn_id = event_journal.new_id("t")
+            decision_draft = event_journal.draft(
                 session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
                 step_id=request_event.step_id, kind=CollaborationEventKind.LEAD_RECOMMENDATION_DECISION,
-                sender=_USER_ACTOR, recipient=_RUNTIME_ACTOR,
+                sender=event_journal.USER_ACTOR, recipient=event_journal.RUNTIME_ACTOR,
                 payload=LeadRecommendationDecisionPayload(decision),
             )
             if decision.kind is CollaborationConfirmationDecision.REVISE:
@@ -5171,11 +4294,11 @@ class StoryRuntime:
                                == (request.authoring_scope.task_id, request.authoring_scope.task_revision)), None)
                 if request.authoring_scope is not None and source is None:
                     raise ValueError("recommendation revision requires exact current source task")
-                planning_step = request_event.step_id if source is None else self._new_id("s")
-                user_message = self._draft(
+                planning_step = request_event.step_id if source is None else event_journal.new_id("s")
+                user_message = event_journal.draft(
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
                     step_id=planning_step, kind=CollaborationEventKind.MESSAGE,
-                    sender=_USER_ACTOR, recipient=_LEAD_ACTOR,
+                    sender=event_journal.USER_ACTOR, recipient=event_journal.LEAD_ACTOR,
                     payload=CollaborationMessagePayload(decision.revision_request),
                 )
                 receipt = LeadTaskTransitionReceipt(
@@ -5186,16 +4309,16 @@ class StoryRuntime:
                     target_task_revision=None if source is None else source.task_revision + 1,
                     planning_step_id=None if source is None else planning_step,
                 )
-                transition = self._draft(
+                transition = event_journal.draft(
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
                     step_id=planning_step, kind=CollaborationEventKind.LEAD_TASK_TRANSITION,
-                    sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
                     payload=CollaborationLeadTaskTransitionPayload(receipt),
                 )
-                closure = self._draft(
+                closure = event_journal.draft(
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
                     step_id=request_event.step_id, kind=CollaborationEventKind.LEAD_RECOMMENDATION_RESULT,
-                    sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
                     payload=LeadRecommendationResultPayload(
                         request.request_event_id, request.request_id, request.action_id,
                         request.action_revision, request.action_digest, LeadRecommendationState.STALE,
@@ -5203,8 +4326,10 @@ class StoryRuntime:
                         decision_event_id=decision_draft.event_id,
                     ),
                 )
-                self._append_drafts(projection.last_sequence,
-                                    (decision_draft, closure, user_message, transition))
+                event_journal.append_drafts(projection.last_sequence,
+                                    (decision_draft, closure, user_message, transition),
+                    append_batch=self.append_collaboration_event_batch,
+                )
                 return await self._run_lead_provider_locked(
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
                     step_id=planning_step, text=decision.revision_request,
@@ -5304,32 +4429,36 @@ class StoryRuntime:
                 state = LeadRecommendationState.STALE if stale else LeadRecommendationState.REJECTED
                 message = ("The recommendation changed and needs fresh planning and confirmation."
                            if stale else "The recommendation was rejected; the authoring objective remains open.")
-                closure = self._draft(
+                closure = event_journal.draft(
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
                     step_id=request_event.step_id, kind=CollaborationEventKind.LEAD_RECOMMENDATION_RESULT,
-                    sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
                     payload=LeadRecommendationResultPayload(
                         request.request_event_id, request.request_id, request.action_id,
                         request.action_revision, request.action_digest, state, message,
                         decision_event_id=decision_draft.event_id,
                     ),
                 )
-                self._append_drafts(projection.last_sequence, (decision_draft, closure))
+                event_journal.append_drafts(projection.last_sequence, (decision_draft, closure),
+                    append_batch=self.append_collaboration_event_batch,
+                )
                 return LeadTurnResult(session_id, conversation_id, turn_id, request_event.step_id,
                     LeadOutcomeKind.ANSWER, message, None, None, None, CollaborationNextAction.CONTINUE_WITH_LEAD,
                     CollaborationLeadEvidence(LeadOutcomeScope.WORKFLOW_META, LeadEvidenceStatus.NOT_APPLICABLE, ()))
-            start_id = self._new_id("e")
-            start = self._draft_with_id(
+            start_id = event_journal.new_id("e")
+            start = event_journal.draft_with_id(
                 event_id=start_id, session_id=session_id, conversation_id=conversation_id,
                 turn_id=turn_id, step_id=request_event.step_id,
                 kind=CollaborationEventKind.LEAD_RECOMMENDATION_STARTED,
-                sender=_RUNTIME_ACTOR, recipient=_LEAD_ACTOR,
+                sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.LEAD_ACTOR,
                 payload=LeadRecommendationStartedPayload(
                     start_id, request.request_event_id, decision_draft.event_id, request.request_id,
-                    request.action_id, request.action_revision, request.action_digest, self._new_id("raexec"),
+                    request.action_id, request.action_revision, request.action_digest, event_journal.new_id("raexec"),
                 ),
             )
-            self._append_drafts(projection.last_sequence, (decision_draft, start))
+            event_journal.append_drafts(projection.last_sequence, (decision_draft, start),
+                append_batch=self.append_collaboration_event_batch,
+            )
             published = self.conversation_storage_services.event_store.read(session_id, conversation_id)
             capability = _RecommendationCapability(request_event, published[-2], published[-1])
             return await self._run_confirmed_lead_preparation_locked(
@@ -5394,22 +4523,23 @@ class StoryRuntime:
                 origin.session_id,
                 origin.conversation_id,
             )
-            self._append_drafts(
+            event_journal.append_drafts(
                 projection.last_sequence,
                 (
-                    self._draft(
+                    event_journal.draft(
                         session_id=origin.session_id,
                         conversation_id=origin.conversation_id,
                         turn_id=origin.turn_id,
                         step_id=origin.step_id,
                         kind=CollaborationEventKind.MESSAGE,
-                        sender=_LEAD_ACTOR,
-                        recipient=_USER_ACTOR,
+                        sender=event_journal.LEAD_ACTOR,
+                        recipient=event_journal.USER_ACTOR,
                         payload=CollaborationMessagePayload(
                             _SAFE_STRUCTURED_FALLBACK_MESSAGE
                         ),
                     ),
                 ),
+                append_batch=self.append_collaboration_event_batch,
             )
             return result
         return result
@@ -5505,11 +4635,13 @@ class StoryRuntime:
             if event.turn_id == start_event.turn_id
             and event.step_id == start_event.step_id
             and type(event.payload) is CollaborationMessagePayload
-            and event.sender == _RUNTIME_ACTOR
-            and event.recipient == _USER_ACTOR
+            and event.sender == event_journal.RUNTIME_ACTOR
+            and event.recipient == event_journal.USER_ACTOR
             for detail in event.payload.validation_details
         )
-        self._append_drafts(projection.last_sequence, (closure,))
+        event_journal.append_drafts(projection.last_sequence, (closure,),
+            append_batch=self.append_collaboration_event_batch,
+        )
         return LeadTurnResult(session_id, conversation_id, lead_result.turn_id, lead_result.step_id,
             LeadOutcomeKind.ANSWER, closure.payload.message, None, None, None,
             CollaborationNextAction.CONTINUE_WITH_LEAD,
@@ -5562,7 +4694,7 @@ class StoryRuntime:
             and r.source_kind in {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.WRITING_ARTIFACT}))
         if paths:
             binding = self._session_artifact_binding(session_id)
-            with _open_session_artifact_repository(binding) as repository:
+            with session_worktree_access.open_session_artifact_repository(binding) as repository:
                 actual = {row.path: row for row in repository.read_current(paths)}
             stale_ids = set()
             for receipt in receipts:
@@ -5644,7 +4776,9 @@ class StoryRuntime:
         self._validate_lead_identity(session_id, conversation_id)
         if request.expected_ref is not None and request.expected_ref.session_id != session_id:
             raise ValueError("editorial receipt belongs to a different session")
-        async with self._lead_session_lifecycle(session_id), self._conversation_lock(session_id, conversation_id):
+        async with self._session_execution_scopes.lead_session_lifecycle(session_id,
+            continuation_factory=self._agent_context_service.session_continuation,
+        ), self._session_execution_scopes.conversation_lock(session_id, conversation_id):
             snapshot = self._editorial_snapshot(session_id)
             state = snapshot.editorial_state()
             repeated = tuple(item for item in state.revisions if item.request.request_id == request.request_id)
@@ -5714,14 +4848,16 @@ class StoryRuntime:
                     context_refs = state.context_refs(refs)
             except (ValueError, TypeError) as exc:
                 return EditorialRecordResult(EditorialRecordStatus.INVALID_SCOPE, str(exc))
-            event_id = self._new_id("e")
+            event_id = event_journal.new_id("e")
             record = build_editorial_revision(request, session_id=session_id, conversation_id=conversation_id,
-                event_id=event_id, record_id=self._new_id("ed") if previous is None else previous.record_id, previous=previous, context_refs=context_refs)
+                event_id=event_id, record_id=event_journal.new_id("ed") if previous is None else previous.record_id, previous=previous, context_refs=context_refs)
             EditorialStateProjection(session_id, state.revisions + (record,))
-            draft = self._draft_with_id(event_id=event_id, session_id=session_id, conversation_id=conversation_id,
-                turn_id=self._new_id("t"), step_id=self._new_id("s"), kind=CollaborationEventKind.EDITORIAL_RECORD,
-                sender=_USER_ACTOR, recipient=_LEAD_ACTOR, payload=CollaborationEditorialRecordPayload(record))
-            self._append_drafts(projection.last_sequence, (draft,))
+            draft = event_journal.draft_with_id(event_id=event_id, session_id=session_id, conversation_id=conversation_id,
+                turn_id=event_journal.new_id("t"), step_id=event_journal.new_id("s"), kind=CollaborationEventKind.EDITORIAL_RECORD,
+                sender=event_journal.USER_ACTOR, recipient=event_journal.LEAD_ACTOR, payload=CollaborationEditorialRecordPayload(record))
+            event_journal.append_drafts(projection.last_sequence, (draft,),
+                append_batch=self.append_collaboration_event_batch,
+            )
             return EditorialRecordResult(EditorialRecordStatus.RECORDED, "Exact USER editorial decision recorded.", record)
 
     def _editorial_refs_for_scope(self, session_id: str, scope: AuthoringScope | None,
@@ -5759,7 +4895,7 @@ class StoryRuntime:
         if not ranges:
             return
         binding = self._session_artifact_binding(session_id)
-        with _open_session_artifact_repository(binding) as artifacts:
+        with session_worktree_access.open_session_artifact_repository(binding) as artifacts:
             snapshots = {item.path: item for item in artifacts.read_current(tuple(dict.fromkeys(
                 target.path for target in ranges)))}
             for target in ranges:
@@ -5926,7 +5062,9 @@ class StoryRuntime:
         session_id, conversation_id = decision.session_id, decision.conversation_id
         await run_blocking(self._validate_lead_identity, session_id, conversation_id)
         self._validate_context_event_sink(action_progress_sink)
-        async with self._lead_session_lifecycle(session_id), self._conversation_lock(
+        async with self._session_execution_scopes.lead_session_lifecycle(session_id,
+            continuation_factory=self._agent_context_service.session_continuation,
+        ), self._session_execution_scopes.conversation_lock(
             session_id, conversation_id,
         ):
             events, projection, failure = (await run_blocking(self._read_lead_history, session_id, conversation_id))
@@ -6008,8 +5146,8 @@ class StoryRuntime:
                 await run_blocking(self._prepare_document_selection, session_id, document_selection)
             snapshot = (await run_blocking(self._editorial_snapshot, session_id))
             materials = tuple(self._selected_task_material(snapshot, ref) for ref in decision.material_refs)
-            turn_id = self._new_id("t")
-            step_id = self._new_id("s")
+            turn_id = event_journal.new_id("t")
+            step_id = event_journal.new_id("s")
             target_id = target_revision = None
             if decision.action is LeadTaskAction.RESUME:
                 target_id = decision.task_ref.task_id
@@ -6021,23 +5159,23 @@ class StoryRuntime:
                 if previous_planning is not None:
                     step_id = previous_planning.planning_step_id
             elif decision.action is LeadTaskAction.NEW_TASK:
-                target_id, target_revision = self._new_id("s"), 1
-            origin = replace(self._draft(
+                target_id, target_revision = event_journal.new_id("s"), 1
+            origin = replace(event_journal.draft(
                 session_id=session_id, conversation_id=conversation_id,
                 turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.LEAD_TASK_DECISION,
-                sender=_USER_ACTOR, recipient=_RUNTIME_ACTOR,
+                sender=event_journal.USER_ACTOR, recipient=event_journal.RUNTIME_ACTOR,
                 payload=CollaborationLeadTaskDecisionPayload(decision, document_selection=document_selection),
             ), event_id=decision.request_id)
-            message = None if decision.text is None else self._draft(
+            message = None if decision.text is None else event_journal.draft(
                 session_id=session_id, conversation_id=conversation_id,
                 turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.MESSAGE,
-                sender=_USER_ACTOR, recipient=_LEAD_ACTOR,
+                sender=event_journal.USER_ACTOR, recipient=event_journal.LEAD_ACTOR,
                 payload=CollaborationMessagePayload(decision.text),
             )
-            captures = tuple(self._draft(
+            captures = tuple(event_journal.draft(
                 session_id=session_id, conversation_id=conversation_id,
                 turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.LEAD_MATERIAL_CAPTURE,
-                sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+                sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
                 payload=CollaborationLeadMaterialCapturePayload(LeadMaterialCapture(
                     origin_event_id=origin.event_id, source=ref, selected_text=text,
                     material_digest=ref.material_digest, target_task_id=target_id,
@@ -6052,21 +5190,21 @@ class StoryRuntime:
                 planning_step_id=step_id if target_id is not None else None,
                 material_capture_event_ids=tuple(event.event_id for event in captures),
             )
-            transition = self._draft(
+            transition = event_journal.draft(
                 session_id=session_id, conversation_id=conversation_id,
                 turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.LEAD_TASK_TRANSITION,
-                sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+                sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
                 payload=CollaborationLeadTaskTransitionPayload(receipt),
             )
             superseding = ()
             if decision.action is not LeadTaskAction.DISCUSS and projection.current_state in {CollaborationStepState.AWAITING_CONFIRMATION, CollaborationStepState.RECONFIRMATION_REQUIRED}:
                 proposal = projection.current_proposal
                 if proposal is not None:
-                    superseding = (self._draft(
+                    superseding = (event_journal.draft(
                         session_id=session_id, conversation_id=conversation_id,
                         turn_id=turn_id, step_id=proposal.step_id,
                         kind=CollaborationEventKind.STEP_STATE,
-                        sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+                        sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
                         payload=CollaborationStepStatePayload(
                             state=CollaborationStepState.SUPERSEDED, proposal_id=proposal.proposal_id,
                             proposal_revision=proposal.proposal_revision, proposal_digest=proposal.proposal_digest,
@@ -6075,11 +5213,11 @@ class StoryRuntime:
             if (decision.action is not LeadTaskAction.DISCUSS
                     and projection.current_recommendation_state is LeadRecommendationState.PENDING):
                 pending = projection.current_recommendation_request
-                superseded += (self._draft(
+                superseded += (event_journal.draft(
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
                     step_id=next(event.step_id for event in events if event.event_id == pending.request_event_id),
                     kind=CollaborationEventKind.LEAD_RECOMMENDATION_RESULT,
-                    sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
                     payload=LeadRecommendationResultPayload(
                         pending.request_event_id, pending.request_id, pending.action_id,
                         pending.action_revision, pending.action_digest, LeadRecommendationState.SUPERSEDED,
@@ -6087,9 +5225,11 @@ class StoryRuntime:
                         superseding_user_event_id=origin.event_id,
                     ),
                 ),)
-            self._append_drafts(projection.last_sequence,
+            event_journal.append_drafts(projection.last_sequence,
                                 (origin, *((message,) if message is not None else ()),
-                                 *captures, transition, *superseding))
+                                 *captures, transition, *superseding),
+                append_batch=self.append_collaboration_event_batch,
+            )
             turn = None
             if decision.action in {LeadTaskAction.DISCUSS, LeadTaskAction.RESUME, LeadTaskAction.NEW_TASK}:
                 turn = await self._run_lead_provider_locked(
@@ -6436,7 +5576,7 @@ class StoryRuntime:
         projected = project_collaboration_history(events)
         if preparation is not None:
             request = preparation.request_event.payload
-            return ArtifactObjectiveFactsV2(objective_id or self._new_id("obj"), scope_event.conversation_id,
+            return ArtifactObjectiveFactsV2(objective_id or event_journal.new_id("obj"), scope_event.conversation_id,
                 request.request_event_id, preparation.decision_event.event_id, request.instruction,
                 request.objective_target_paths, projected.offered_draft_sources)
         origins = tuple(event for event in events if event.turn_id == scope_event.turn_id
@@ -6444,7 +5584,7 @@ class StoryRuntime:
             and event.recipient.kind is CollaborationActorKind.LEAD)
         if len(origins) != 1:
             raise ValueError("document goal requires one exact literal USER origin")
-        return ArtifactObjectiveFacts(objective_id or self._new_id("obj"), scope_event.conversation_id,
+        return ArtifactObjectiveFacts(objective_id or event_journal.new_id("obj"), scope_event.conversation_id,
             origins[0].event_id, origins[0].payload.content, target_paths, projected.offered_draft_sources)
 
     def _validate_document_node(self, session_id: str, binding: DocumentNodeBinding, *, scope=None, proposed_plan=None) -> DocumentPlanView:
@@ -6764,8 +5904,10 @@ class StoryRuntime:
         text = self._validate_visible_text(text, label="lead input")
         self._validate_context_event_sink(context_event_sink)
         self._validate_context_event_sink(action_progress_sink)
-        lock = self._conversation_lock(session_id, conversation_id)
-        async with self._lead_session_lifecycle(session_id), lock:
+        lock = self._session_execution_scopes.conversation_lock(session_id, conversation_id)
+        async with self._session_execution_scopes.lead_session_lifecycle(session_id,
+            continuation_factory=self._agent_context_service.session_continuation,
+        ), lock:
             events, projection, failure = (await run_blocking(self._read_lead_history,
                 session_id,
                 conversation_id,
@@ -6815,14 +5957,16 @@ class StoryRuntime:
                 control = next(event for event in events
                                if type(event.payload) is CollaborationLeadTaskTransitionPayload
                                and event.payload.receipt == task_context)
-                turn_id = self._new_id("t")
-                message = self._draft(
+                turn_id = event_journal.new_id("t")
+                message = event_journal.draft(
                     session_id=session_id, conversation_id=conversation_id,
                     turn_id=turn_id, step_id=task_context.planning_step_id,
-                    kind=CollaborationEventKind.MESSAGE, sender=_USER_ACTOR, recipient=_LEAD_ACTOR,
+                    kind=CollaborationEventKind.MESSAGE, sender=event_journal.USER_ACTOR, recipient=event_journal.LEAD_ACTOR,
                     payload=CollaborationMessagePayload(text),
                 )
-                self._append_drafts(projection.last_sequence, (message,))
+                event_journal.append_drafts(projection.last_sequence, (message,),
+                    append_batch=self.append_collaboration_event_batch,
+                )
                 return await self._run_lead_provider_locked(
                     document_node=document_node, document_selection=document_selection, planning_projection=projection,
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
@@ -6868,8 +6012,8 @@ class StoryRuntime:
                     adoption_source = snapshot.exploration_source(adoption)
                     idea = next(item for item in adoption_source.payload.report.ideas if item.idea_id == adoption.idea_id)
                     selected_text = adoption.select_text(idea.material_text)
-            turn_id = self._new_id("t")
-            provider_step_id = self._new_id("s")
+            turn_id = event_journal.new_id("t")
+            provider_step_id = event_journal.new_id("s")
             pending_proposal = (
                 projection.current_proposal
                 if projection.current_state
@@ -6884,26 +6028,28 @@ class StoryRuntime:
                 if pending_proposal is None
                 else pending_proposal.step_id
             )
-            user_event = self._draft(
+            user_event = event_journal.draft(
                 session_id=session_id,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 step_id=message_step_id,
                 kind=CollaborationEventKind.MESSAGE,
-                sender=_USER_ACTOR,
-                recipient=_LEAD_ACTOR,
+                sender=event_journal.USER_ACTOR,
+                recipient=event_journal.LEAD_ACTOR,
                 payload=CollaborationMessagePayload(text),
             )
             exploration_request_event_id = None
             adoption_event_id = None
             adoption_capture = None
             if premise_selection is not None:
-                control = self._draft(session_id=session_id, conversation_id=conversation_id,
+                control = event_journal.draft(session_id=session_id, conversation_id=conversation_id,
                     turn_id=turn_id, step_id=provider_step_id, kind=CollaborationEventKind.PREMISE_DECISION,
-                    sender=_USER_ACTOR, recipient=_LEAD_ACTOR,
+                    sender=event_journal.USER_ACTOR, recipient=event_journal.LEAD_ACTOR,
                     payload=CollaborationPremiseDecisionPayload(premise_selection))
                 if premise_selection.action is not PremiseDecisionAction.CHOOSE:
-                    self._append_drafts(projection.last_sequence, (user_event, control))
+                    event_journal.append_drafts(projection.last_sequence, (user_event, control),
+                        append_batch=self.append_collaboration_event_batch,
+                    )
                     return self._premise_report_turn(session_id, conversation_id,
                         self.conversation_storage_services.event_store.read(session_id, conversation_id),
                         self.conversation_storage_services.event_store.read_context(session_id, conversation_id),
@@ -6913,52 +6059,60 @@ class StoryRuntime:
                 try:
                     option = resolve_premise_choice(premise_selection, report)
                 except ValueError as failure:
-                    self._append_drafts(projection.last_sequence, (user_event, control))
+                    event_journal.append_drafts(projection.last_sequence, (user_event, control),
+                        append_batch=self.append_collaboration_event_batch,
+                    )
                     return self._premise_report_turn(session_id, conversation_id,
                         self.conversation_storage_services.event_store.read(session_id, conversation_id),
                         self.conversation_storage_services.event_store.read_context(session_id, conversation_id), str(failure))
-                task_id = premise_selection.authoring_task_id or self._new_id("s")
+                task_id = premise_selection.authoring_task_id or event_journal.new_id("s")
                 task_revision = 1 if premise_selection.expected_authoring_task_revision is None else premise_selection.expected_authoring_task_revision + 1
                 premise_capture = PremiseSelectionCapture(control.event_id, premise_selection,
                     option.premise_text, option.material_digest, option.option_id, task_id,
                     task_revision, report.spec.slot_id, report.spec.dependent_domains,
                     PremiseCostLink(report.cost, report.prior_authoring_cost, report.prior_admission_ref))
-                selected = self._draft(session_id=session_id, conversation_id=conversation_id,
+                selected = event_journal.draft(session_id=session_id, conversation_id=conversation_id,
                     turn_id=turn_id, step_id=provider_step_id, kind=CollaborationEventKind.PREMISE_SELECTION,
-                    sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
                     payload=CollaborationPremiseSelectionPayload(premise_capture))
                 premise_event_id = selected.event_id
-                self._append_drafts(projection.last_sequence, (user_event, control, selected))
+                event_journal.append_drafts(projection.last_sequence, (user_event, control, selected),
+                    append_batch=self.append_collaboration_event_batch,
+                )
             elif interaction_mode is LeadInteractionMode.EXPLORATION:
-                request = self._draft(session_id=session_id, conversation_id=conversation_id,
+                request = event_journal.draft(session_id=session_id, conversation_id=conversation_id,
                     turn_id=turn_id, step_id=provider_step_id,
                     kind=CollaborationEventKind.LEAD_EXPLORATION_REQUEST,
-                    sender=_USER_ACTOR, recipient=_LEAD_ACTOR,
+                    sender=event_journal.USER_ACTOR, recipient=event_journal.LEAD_ACTOR,
                     payload=CollaborationLeadExplorationRequestPayload(user_event.event_id))
                 exploration_request_event_id = request.event_id
-                self._append_drafts(projection.last_sequence, (user_event, request))
+                event_journal.append_drafts(projection.last_sequence, (user_event, request),
+                    append_batch=self.append_collaboration_event_batch,
+                )
             elif adoption is not None:
                 assert selected_text is not None and adoption_source is not None
                 adoption_capture = ExplorationAdoptionCapture(
-                    user_event.event_id, adoption, selected_text, self._new_id("task"),
+                    user_event.event_id, adoption, selected_text, event_journal.new_id("task"),
                     source_event_digest=hashlib.sha256(encode_collaboration_event(adoption_source)).hexdigest(),
                     selected_material_digest=hashlib.sha256(selected_text.encode("utf-8")).hexdigest())
-                capture_event = self._draft(session_id=session_id, conversation_id=conversation_id,
+                capture_event = event_journal.draft(session_id=session_id, conversation_id=conversation_id,
                     turn_id=turn_id, step_id=provider_step_id,
                     kind=CollaborationEventKind.EXPLORATION_ADOPTION,
-                    sender=_USER_ACTOR, recipient=_LEAD_ACTOR,
+                    sender=event_journal.USER_ACTOR, recipient=event_journal.LEAD_ACTOR,
                     payload=CollaborationExplorationAdoptionPayload(adoption_capture))
                 adoption_event_id = capture_event.event_id
-                self._append_drafts(projection.last_sequence, (user_event, capture_event))
+                event_journal.append_drafts(projection.last_sequence, (user_event, capture_event),
+                    append_batch=self.append_collaboration_event_batch,
+                )
             elif pending_proposal is not None:
-                superseded = self._draft(
+                superseded = event_journal.draft(
                     session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
                     step_id=pending_proposal.step_id,
                     kind=CollaborationEventKind.STEP_STATE,
-                    sender=_RUNTIME_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=CollaborationStepStatePayload(
                         state=CollaborationStepState.SUPERSEDED,
                         proposal_id=pending_proposal.proposal_id,
@@ -6966,17 +6120,18 @@ class StoryRuntime:
                         proposal_digest=pending_proposal.proposal_digest,
                     ),
                 )
-                self._append_drafts(
+                event_journal.append_drafts(
                     projection.last_sequence,
                     (user_event, superseded),
+                    append_batch=self.append_collaboration_event_batch,
                 )
             elif projection.current_recommendation_state is LeadRecommendationState.PENDING:
                 request = projection.current_recommendation_request
                 assert request is not None
-                superseded = self._draft(
+                superseded = event_journal.draft(
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
                     step_id=provider_step_id, kind=CollaborationEventKind.LEAD_RECOMMENDATION_RESULT,
-                    sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
                     payload=LeadRecommendationResultPayload(
                         request.request_event_id, request.request_id, request.action_id,
                         request.action_revision, request.action_digest, LeadRecommendationState.SUPERSEDED,
@@ -6984,9 +6139,13 @@ class StoryRuntime:
                         superseding_user_event_id=user_event.event_id,
                     ),
                 )
-                self._append_drafts(projection.last_sequence, (user_event, superseded))
+                event_journal.append_drafts(projection.last_sequence, (user_event, superseded),
+                    append_batch=self.append_collaboration_event_batch,
+                )
             else:
-                self._append_drafts(projection.last_sequence, (user_event,))
+                event_journal.append_drafts(projection.last_sequence, (user_event,),
+                    append_batch=self.append_collaboration_event_batch,
+                )
 
             try:
                 result = await self._run_lead_provider_locked(
@@ -7042,7 +6201,7 @@ class StoryRuntime:
         self._validate_context_event_sink(action_progress_sink)
         if self.backend is None:
             raise BackendProtocolError("specialist advisory requires an AgentBackend")
-        async with self._conversation_lock(session_id, conversation_id):
+        async with self._session_execution_scopes.conversation_lock(session_id, conversation_id):
             events, projection, failure = (await run_blocking(self._read_lead_history,
                 session_id,
                 conversation_id,
@@ -7063,8 +6222,8 @@ class StoryRuntime:
             )
             if normalized is not None:
                 return normalized
-            turn_id = self._new_id("t")
-            step_id = self._new_id("s")
+            turn_id = event_journal.new_id("t")
+            step_id = event_journal.new_id("s")
             inputs = self._provider_free_lead_inputs(session_id, turn_id, text)
             task_events = (await run_blocking(self._session_authoring_events, session_id))
             prior_scope = (await run_blocking(self._authoring_tasks, task_events)).get(authoring_scope.task_id)
@@ -7146,14 +6305,14 @@ class StoryRuntime:
             }
             proposal = CollaborationProposal.create(
                 step_id=step_id,
-                proposal_id=self._new_id("p"),
+                proposal_id=event_journal.new_id("p"),
                 proposal_revision=1,
                 step_kind=CollaborationStepKind.SPECIALIST_ADVISORY,
                 purpose=text,
                 authoring_scope=authoring_scope,
                 assignments=(
                     CollaborationAssignment(
-                        assignment_id=self._new_id("a"),
+                        assignment_id=event_journal.new_id("a"),
                         specialist_id=specialist_id,
                         round=projection.rounds_spent + 1,
                         instruction=text,
@@ -7188,54 +6347,54 @@ class StoryRuntime:
                     evidence=None,
                 ),
             )
-            request_id = self._new_id("c")
-            user_event = self._draft(
+            request_id = event_journal.new_id("c")
+            user_event = event_journal.draft(
                 session_id=session_id,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 step_id=step_id,
                 kind=CollaborationEventKind.MESSAGE,
-                sender=_USER_ACTOR,
-                recipient=_LEAD_ACTOR,
+                sender=event_journal.USER_ACTOR,
+                recipient=event_journal.LEAD_ACTOR,
                 payload=CollaborationMessagePayload(text),
             )
             message = (
                 f"I propose a direct advisory from {specialist_id}. Confirm, reject, "
                 "or revise this exact bounded request."
             )
-            proposal_event = self._draft(
+            proposal_event = event_journal.draft(
                 session_id=session_id,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 step_id=step_id,
                 kind=CollaborationEventKind.MESSAGE,
-                sender=_LEAD_ACTOR,
-                recipient=_USER_ACTOR,
+                sender=event_journal.LEAD_ACTOR,
+                recipient=event_journal.USER_ACTOR,
                 payload=proposal,
             )
-            self._append_drafts(
+            event_journal.append_drafts(
                 projection.last_sequence,
                 (
                     user_event,
-                    self._draft(
+                    event_journal.draft(
                         session_id=session_id,
                         conversation_id=conversation_id,
                         turn_id=turn_id,
                         step_id=step_id,
                         kind=CollaborationEventKind.MESSAGE,
-                        sender=_LEAD_ACTOR,
-                        recipient=_USER_ACTOR,
+                        sender=event_journal.LEAD_ACTOR,
+                        recipient=event_journal.USER_ACTOR,
                         payload=CollaborationMessagePayload(message),
                     ),
                     proposal_event,
-                    self._draft(
+                    event_journal.draft(
                         session_id=session_id,
                         conversation_id=conversation_id,
                         turn_id=turn_id,
                         step_id=step_id,
                         kind=CollaborationEventKind.STEP_STATE,
-                        sender=_RUNTIME_ACTOR,
-                        recipient=_USER_ACTOR,
+                        sender=event_journal.RUNTIME_ACTOR,
+                        recipient=event_journal.USER_ACTOR,
                         payload=CollaborationStepStatePayload(
                             state=CollaborationStepState.AWAITING_CONFIRMATION,
                             proposal_id=proposal.proposal_id,
@@ -7245,6 +6404,7 @@ class StoryRuntime:
                         ),
                     ),
                 ),
+                append_batch=self.append_collaboration_event_batch,
             )
             return LeadTurnResult(
                 session_id,
@@ -7271,11 +6431,13 @@ class StoryRuntime:
             raise TypeError("decision must be a LeadStepDecision")
         self._validate_context_event_sink(action_progress_sink)
         await run_blocking(self._validate_lead_identity, decision.session_id, decision.conversation_id)
-        lock = self._conversation_lock(
+        lock = self._session_execution_scopes.conversation_lock(
             decision.session_id,
             decision.conversation_id,
         )
-        async with self._lead_session_lifecycle(decision.session_id), lock:
+        async with self._session_execution_scopes.lead_session_lifecycle(decision.session_id,
+            continuation_factory=self._agent_context_service.session_continuation,
+        ), lock:
             events = self.conversation_storage_services.event_store.read(
                 decision.session_id,
                 decision.conversation_id,
@@ -7376,15 +6538,15 @@ class StoryRuntime:
                 except BackendProtocolError:
                     if artifact_candidate is None:
                         raise
-                    turn_id = self._new_id("t")
-                    confirmation = self._draft(
+                    turn_id = event_journal.new_id("t")
+                    confirmation = event_journal.draft(
                         session_id=decision.session_id,
                         conversation_id=decision.conversation_id,
                         turn_id=turn_id,
                         step_id=decision.step_id,
                         kind=CollaborationEventKind.CONFIRMATION,
-                        sender=_USER_ACTOR,
-                        recipient=_RUNTIME_ACTOR,
+                        sender=event_journal.USER_ACTOR,
+                        recipient=event_journal.RUNTIME_ACTOR,
                         payload=CollaborationConfirmationPayload(
                             confirmation_request_id=(decision.confirmation_request_id),
                             confirmation_request_event_id=request_event.event_id,
@@ -7394,31 +6556,31 @@ class StoryRuntime:
                             decision=decision.kind,
                         ),
                     )
-                    self._append_drafts(
+                    event_journal.append_drafts(
                         projection.last_sequence,
                         (
                             confirmation,
-                            self._draft(
+                            event_journal.draft(
                                 session_id=decision.session_id,
                                 conversation_id=decision.conversation_id,
                                 turn_id=turn_id,
                                 step_id=decision.step_id,
                                 kind=(CollaborationEventKind.ARTIFACT_PROPOSAL_STATE),
-                                sender=_RUNTIME_ACTOR,
-                                recipient=_USER_ACTOR,
+                                sender=event_journal.RUNTIME_ACTOR,
+                                recipient=event_journal.USER_ACTOR,
                                 payload=self._artifact_state_payload(
                                     artifact_candidate,
                                     ArtifactProposalState.STALE,
                                 ),
                             ),
-                            self._draft(
+                            event_journal.draft(
                                 session_id=decision.session_id,
                                 conversation_id=decision.conversation_id,
                                 turn_id=turn_id,
                                 step_id=decision.step_id,
                                 kind=CollaborationEventKind.STEP_STATE,
-                                sender=_RUNTIME_ACTOR,
-                                recipient=_USER_ACTOR,
+                                sender=event_journal.RUNTIME_ACTOR,
+                                recipient=event_journal.USER_ACTOR,
                                 payload=CollaborationStepStatePayload(
                                     state=CollaborationStepState.SUPERSEDED,
                                     proposal_id=proposal.proposal_id,
@@ -7427,6 +6589,7 @@ class StoryRuntime:
                                 ),
                             ),
                         ),
+                        append_batch=self.append_collaboration_event_batch,
                     )
                     stale_turn = LeadTurnResult(
                         decision.session_id,
@@ -7455,15 +6618,15 @@ class StoryRuntime:
                         stale_turn,
                     )
 
-            turn_id = self._new_id("t")
-            confirmation = self._draft(
+            turn_id = event_journal.new_id("t")
+            confirmation = event_journal.draft(
                 session_id=decision.session_id,
                 conversation_id=decision.conversation_id,
                 turn_id=turn_id,
                 step_id=decision.step_id,
                 kind=CollaborationEventKind.CONFIRMATION,
-                sender=_USER_ACTOR,
-                recipient=_RUNTIME_ACTOR,
+                sender=event_journal.USER_ACTOR,
+                recipient=event_journal.RUNTIME_ACTOR,
                 payload=CollaborationConfirmationPayload(
                     confirmation_request_id=decision.confirmation_request_id,
                     confirmation_request_event_id=request_event.event_id,
@@ -7484,14 +6647,14 @@ class StoryRuntime:
                     CollaborationStepState.SUPERSEDED
                 ),
             }[decision.kind]
-            state_event = self._draft(
+            state_event = event_journal.draft(
                 session_id=decision.session_id,
                 conversation_id=decision.conversation_id,
                 turn_id=turn_id,
                 step_id=decision.step_id,
                 kind=CollaborationEventKind.STEP_STATE,
-                sender=_RUNTIME_ACTOR,
-                recipient=_USER_ACTOR,
+                sender=event_journal.RUNTIME_ACTOR,
+                recipient=event_journal.USER_ACTOR,
                 payload=CollaborationStepStatePayload(
                     state=resulting_state,
                     proposal_id=proposal.proposal_id,
@@ -7504,14 +6667,14 @@ class StoryRuntime:
             if artifact_candidate is not None and decision.kind is not (
                 CollaborationConfirmationDecision.CONFIRM
             ):
-                artifact_decision = self._draft(
+                artifact_decision = event_journal.draft(
                     session_id=decision.session_id,
                     conversation_id=decision.conversation_id,
                     turn_id=turn_id,
                     step_id=decision.step_id,
                     kind=CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
-                    sender=_RUNTIME_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=self._artifact_state_payload(
                         artifact_candidate,
                         (
@@ -7525,14 +6688,14 @@ class StoryRuntime:
                 assert decision.revision_request is not None
                 drafts = (
                     confirmation,
-                    self._draft(
+                    event_journal.draft(
                         session_id=decision.session_id,
                         conversation_id=decision.conversation_id,
                         turn_id=turn_id,
                         step_id=decision.step_id,
                         kind=CollaborationEventKind.MESSAGE,
-                        sender=_USER_ACTOR,
-                        recipient=_LEAD_ACTOR,
+                        sender=event_journal.USER_ACTOR,
+                        recipient=event_journal.LEAD_ACTOR,
                         payload=CollaborationMessagePayload(decision.revision_request),
                     ),
                     *((artifact_decision,) if artifact_decision is not None else ()),
@@ -7555,11 +6718,11 @@ class StoryRuntime:
                 revision_message = next(item for item in drafts
                                         if type(item.payload) is CollaborationMessagePayload
                                         and item.sender.kind is CollaborationActorKind.USER)
-                transition = self._draft(
+                transition = event_journal.draft(
                     session_id=decision.session_id, conversation_id=decision.conversation_id,
                     turn_id=turn_id, step_id=decision.step_id,
                     kind=CollaborationEventKind.LEAD_TASK_TRANSITION,
-                    sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
                     payload=CollaborationLeadTaskTransitionPayload(LeadTaskTransitionReceipt(
                         origin_event_id=confirmation.event_id, origin_kind="revise_decision",
                         origin_message_event_id=revision_message.event_id,
@@ -7570,7 +6733,9 @@ class StoryRuntime:
                 )
                 task_transition_event_id = transition.event_id
                 drafts += (transition,)
-            self._append_drafts(projection.last_sequence, drafts)
+            event_journal.append_drafts(projection.last_sequence, drafts,
+                append_batch=self.append_collaboration_event_batch,
+            )
 
             if decision.kind is CollaborationConfirmationDecision.CONFIRM:
                 persisted = self.conversation_storage_services.event_store.read(
@@ -7715,7 +6880,7 @@ class StoryRuntime:
         if type(decision) is not ArtifactApplicationDecision:
             raise TypeError("decision must be an ArtifactApplicationDecision")
         self._validate_lead_identity(decision.session_id, decision.conversation_id)
-        lock = self._conversation_lock(decision.session_id, decision.conversation_id)
+        lock = self._session_execution_scopes.conversation_lock(decision.session_id, decision.conversation_id)
         async with lock:
             events = self.conversation_storage_services.event_store.read(
                 decision.session_id, decision.conversation_id
@@ -7760,7 +6925,7 @@ class StoryRuntime:
             if not exact:
                 raise ValueError("artifact application decision does not match tail")
 
-            decision_event_id = self._new_id("e")
+            decision_event_id = event_journal.new_id("e")
             decision_payload = ArtifactApplicationDecisionPayload(
                 confirmation_request_id=request.confirmation_request_id,
                 confirmation_request_event_id=control_events[-1].event_id,
@@ -7775,19 +6940,20 @@ class StoryRuntime:
                 decision=decision.kind,
                 revision_request=decision.revision_request,
             )
-            self._append_drafts(
+            event_journal.append_drafts(
                 projection.last_sequence,
-                (self._draft_with_id(
+                (event_journal.draft_with_id(
                     event_id=decision_event_id,
                     session_id=decision.session_id,
                     conversation_id=decision.conversation_id,
-                    turn_id=self._new_id("t"),
+                    turn_id=event_journal.new_id("t"),
                     step_id=decision.step_id,
                     kind=CollaborationEventKind.ARTIFACT_APPLICATION_DECISION,
-                    sender=_USER_ACTOR,
-                    recipient=_RUNTIME_ACTOR,
+                    sender=event_journal.USER_ACTOR,
+                    recipient=event_journal.RUNTIME_ACTOR,
                     payload=decision_payload,
                 ),),
+                append_batch=self.append_collaboration_event_batch,
             )
 
             outcome: ArtifactApplicationOutcomeKind
@@ -8019,7 +7185,7 @@ class StoryRuntime:
                     or post_decision[-1].payload != decision_payload
                 ):
                     raise ValueError("artifact application decision tail changed")
-                result_event_id = self._new_id("e")
+                result_event_id = event_journal.new_id("e")
                 if application_result is not None:
                     assert artifact_binding is not None
                     assert generation_pin is not None
@@ -8048,7 +7214,7 @@ class StoryRuntime:
                         )
                         with artifact_binding.open_ready_resources():
                             commit_request = build_story_commit_request_payload(
-                                confirmation_request_id=self._new_id("g"),
+                                confirmation_request_id=event_journal.new_id("g"),
                                 application_result_event_id=result_event_id,
                                 candidate=candidate,
                             )
@@ -8076,7 +7242,7 @@ class StoryRuntime:
                     next_action=next_action,
                     result=application_result,
                 )
-                result_draft = self._draft_with_id(
+                result_draft = event_journal.draft_with_id(
                     event_id=result_event_id,
                     session_id=decision.session_id,
                     conversation_id=decision.conversation_id,
@@ -8084,16 +7250,17 @@ class StoryRuntime:
                     step_id=decision.step_id,
                     kind=CollaborationEventKind.ARTIFACT_APPLICATION_RESULT,
                     sender=CollaborationActor(CollaborationActorKind.ARTIFACT),
-                    recipient=_USER_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=result_payload,
                 )
 
                 def append_verified(drafts: tuple[CollaborationEventDraft, ...]) -> bool | None:
                     """Resolve one CAS append by exact batch readback on error."""
-                    batch_id = self._new_id("b")
+                    batch_id = event_journal.new_id("b")
                     try:
-                        self._append_drafts(
-                            post_decision[-1].sequence, drafts, batch_id=batch_id
+                        event_journal.append_drafts(
+                            post_decision[-1].sequence, drafts, batch_id=batch_id,
+                                                                append_batch=self.append_collaboration_event_batch,
                         )
                         return True
                     except Exception:
@@ -8128,14 +7295,14 @@ class StoryRuntime:
                 drafts = (result_draft,)
                 if commit_request is not None:
                     drafts += (
-                        self._draft(
+                        event_journal.draft(
                             session_id=decision.session_id,
                             conversation_id=decision.conversation_id,
                             turn_id=post_decision[-1].turn_id,
                             step_id=decision.step_id,
                             kind=CollaborationEventKind.STORY_COMMIT_REQUEST,
-                            sender=_LEAD_ACTOR,
-                            recipient=_USER_ACTOR,
+                            sender=event_journal.LEAD_ACTOR,
+                            recipient=event_journal.USER_ACTOR,
                             payload=commit_request,
                         ),
                     )
@@ -8221,7 +7388,7 @@ class StoryRuntime:
         if type(request) is not StoryCommitPreparationRequest:
             raise TypeError("request must be a StoryCommitPreparationRequest")
         self._validate_lead_identity(request.session_id, request.conversation_id)
-        lock = self._conversation_lock(request.session_id, request.conversation_id)
+        lock = self._session_execution_scopes.conversation_lock(request.session_id, request.conversation_id)
         async with lock:
             events = self.conversation_storage_services.event_store.read(
                 request.session_id, request.conversation_id
@@ -8305,26 +7472,27 @@ class StoryRuntime:
                 )
                 with artifact_binding.open_ready_resources():
                     commit_request = build_story_commit_request_payload(
-                        confirmation_request_id=self._new_id("g"),
+                        confirmation_request_id=event_journal.new_id("g"),
                         application_result_event_id=request.application_result_event_id,
                         candidate=candidate,
                     )
-                request_event_id = self._new_id("e")
-                batch_id = self._new_id("b")
-                draft = self._draft_with_id(
+                request_event_id = event_journal.new_id("e")
+                batch_id = event_journal.new_id("b")
+                draft = event_journal.draft_with_id(
                     event_id=request_event_id,
                     session_id=request.session_id,
                     conversation_id=request.conversation_id,
                     turn_id=control_events[-1].turn_id,
                     step_id=request.step_id,
                     kind=CollaborationEventKind.STORY_COMMIT_REQUEST,
-                    sender=_LEAD_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.LEAD_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=commit_request,
                 )
                 try:
-                    self._append_drafts(
-                        events[-1].sequence, (draft,), batch_id=batch_id
+                    event_journal.append_drafts(
+                        events[-1].sequence, (draft,), batch_id=batch_id,
+                                                       append_batch=self.append_collaboration_event_batch,
                     )
                 except Exception:
                     observed = self.conversation_storage_services.event_store.read(
@@ -8363,7 +7531,7 @@ class StoryRuntime:
         if type(decision) is not StoryCommitDecisionRequest:
             raise TypeError("decision must be a StoryCommitDecisionRequest")
         self._validate_lead_identity(decision.session_id, decision.conversation_id)
-        lock = self._conversation_lock(decision.session_id, decision.conversation_id)
+        lock = self._session_execution_scopes.conversation_lock(decision.session_id, decision.conversation_id)
         async with lock:
             events = self.conversation_storage_services.event_store.read(
                 decision.session_id, decision.conversation_id
@@ -8402,7 +7570,7 @@ class StoryRuntime:
             decision_consumed = False
             escaping_failure: BaseException | None = None
             try:
-                decision_event_id = self._new_id("e")
+                decision_event_id = event_journal.new_id("e")
                 decision_payload = StoryCommitDecisionPayload(
                     confirmation_request_id=request.confirmation_request_id,
                     confirmation_request_event_id=control_events[-1].event_id,
@@ -8413,19 +7581,20 @@ class StoryRuntime:
                     decision=decision.kind,
                     revision_request=decision.revision_request,
                 )
-                self._append_drafts(
+                event_journal.append_drafts(
                     projection.last_sequence,
-                    (self._draft_with_id(
+                    (event_journal.draft_with_id(
                         event_id=decision_event_id,
                         session_id=decision.session_id,
                         conversation_id=decision.conversation_id,
-                        turn_id=self._new_id("t"),
+                        turn_id=event_journal.new_id("t"),
                         step_id=decision.step_id,
                         kind=CollaborationEventKind.STORY_COMMIT_DECISION,
-                        sender=_USER_ACTOR,
-                        recipient=_RUNTIME_ACTOR,
+                        sender=event_journal.USER_ACTOR,
+                        recipient=event_journal.RUNTIME_ACTOR,
                         payload=decision_payload,
                     ),),
+                    append_batch=self.append_collaboration_event_batch,
                 )
                 decision_consumed = True
                 result = None
@@ -8513,18 +7682,19 @@ class StoryRuntime:
                     decision.session_id, decision.conversation_id
                 )
                 try:
-                    self._append_drafts(
+                    event_journal.append_drafts(
                         post_decision[-1].sequence,
-                        (self._draft(
+                        (event_journal.draft(
                             session_id=decision.session_id,
                             conversation_id=decision.conversation_id,
                             turn_id=post_decision[-1].turn_id,
                             step_id=decision.step_id,
                             kind=CollaborationEventKind.STORY_COMMIT_RESULT,
                             sender=CollaborationActor(CollaborationActorKind.GIT),
-                            recipient=_USER_ACTOR,
+                            recipient=event_journal.USER_ACTOR,
                             payload=result_payload,
                         ),),
+                        append_batch=self.append_collaboration_event_batch,
                     )
                 except Exception:
                     result_payload = StoryCommitResultPayload(
@@ -8600,7 +7770,7 @@ class StoryRuntime:
                 )
             capability.consume()
             self._confirmed_capabilities.pop(key, None)
-            turn_id = self._new_id("t")
+            turn_id = event_journal.new_id("t")
             artifact_candidate = self._artifact_candidate_for_proposal(
                 events,
                 proposal,
@@ -8609,14 +7779,14 @@ class StoryRuntime:
                 ()
                 if artifact_candidate is None
                 else (
-                    self._draft(
+                    event_journal.draft(
                         session_id=session_id,
                         conversation_id=conversation_id,
                         turn_id=turn_id,
                         step_id=proposal.step_id,
                         kind=CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
-                        sender=_RUNTIME_ACTOR,
-                        recipient=_USER_ACTOR,
+                        sender=event_journal.RUNTIME_ACTOR,
+                        recipient=event_journal.USER_ACTOR,
                         payload=self._artifact_state_payload(
                             artifact_candidate,
                             ArtifactProposalState.RECOVERY_REQUIRED,
@@ -8624,18 +7794,18 @@ class StoryRuntime:
                     ),
                 )
             )
-            self._append_drafts(
+            event_journal.append_drafts(
                 projection.last_sequence,
                 (
                     *artifact_recovery,
-                    self._draft(
+                    event_journal.draft(
                         session_id=session_id,
                         conversation_id=conversation_id,
                         turn_id=turn_id,
                         step_id=proposal.step_id,
                         kind=CollaborationEventKind.STEP_STATE,
-                        sender=_RUNTIME_ACTOR,
-                        recipient=_USER_ACTOR,
+                        sender=event_journal.RUNTIME_ACTOR,
+                        recipient=event_journal.USER_ACTOR,
                         payload=CollaborationStepStatePayload(
                             state=CollaborationStepState.RECOVERY_REQUIRED,
                             proposal_id=proposal.proposal_id,
@@ -8644,6 +7814,7 @@ class StoryRuntime:
                         ),
                     ),
                 ),
+                append_batch=self.append_collaboration_event_batch,
             )
             return self._blocking_lead_result(
                 session_id,
@@ -8660,16 +7831,16 @@ class StoryRuntime:
         capability.consume()
         self._confirmed_capabilities.pop(key, None)
 
-        attempt_id = self._deterministic_id(
+        attempt_id = event_journal.deterministic_id(
             "x",
             proposal.proposal_id,
             str(proposal.proposal_revision),
             proposal.proposal_digest,
         )
-        turn_id = self._deterministic_id("t", attempt_id, "execution")
+        turn_id = event_journal.deterministic_id("t", attempt_id, "execution")
         dispatches = tuple(
-            self._draft_with_id(
-                event_id=self._deterministic_id(
+            event_journal.draft_with_id(
+                event_id=event_journal.deterministic_id(
                     "e", attempt_id, assignment.assignment_id, "dispatch"
                 ),
                 session_id=session_id,
@@ -8677,7 +7848,7 @@ class StoryRuntime:
                 turn_id=turn_id,
                 step_id=proposal.step_id,
                 kind=CollaborationEventKind.ASSIGNMENT_DISPATCH,
-                sender=_RUNTIME_ACTOR,
+                sender=event_journal.RUNTIME_ACTOR,
                 recipient=CollaborationActor(
                     CollaborationActorKind.SPECIALIST,
                     assignment.specialist_id,
@@ -8692,15 +7863,15 @@ class StoryRuntime:
             )
             for assignment in proposal.assignments
         )
-        running = self._draft_with_id(
-            event_id=self._deterministic_id("e", attempt_id, "running"),
+        running = event_journal.draft_with_id(
+            event_id=event_journal.deterministic_id("e", attempt_id, "running"),
             session_id=session_id,
             conversation_id=conversation_id,
             turn_id=turn_id,
             step_id=proposal.step_id,
             kind=CollaborationEventKind.STEP_STATE,
-            sender=_RUNTIME_ACTOR,
-            recipient=_USER_ACTOR,
+            sender=event_journal.RUNTIME_ACTOR,
+            recipient=event_journal.USER_ACTOR,
             payload=CollaborationStepStatePayload(
                 state=CollaborationStepState.RUNNING,
                 proposal_id=proposal.proposal_id,
@@ -8714,8 +7885,8 @@ class StoryRuntime:
             ()
             if artifact_candidate is None
             else (
-                self._draft_with_id(
-                    event_id=self._deterministic_id(
+                event_journal.draft_with_id(
+                    event_id=event_journal.deterministic_id(
                         "e", attempt_id, "artifact_reviewing"
                     ),
                     session_id=session_id,
@@ -8723,8 +7894,8 @@ class StoryRuntime:
                     turn_id=turn_id,
                     step_id=proposal.step_id,
                     kind=CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
-                    sender=_RUNTIME_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=self._artifact_state_payload(
                         artifact_candidate,
                         ArtifactProposalState.REVIEWING,
@@ -8733,10 +7904,11 @@ class StoryRuntime:
                 ),
             )
         )
-        self._append_drafts(
+        event_journal.append_drafts(
             projection.last_sequence,
             (*artifact_running, running, *dispatches),
-            batch_id=self._deterministic_id("b", attempt_id, "start"),
+            batch_id=event_journal.deterministic_id("b", attempt_id, "start"),
+            append_batch=self.append_collaboration_event_batch,
         )
         marker = (session_id, conversation_id, proposal.step_id, attempt_id)
         self._live_execution_markers.add(marker)
@@ -9146,7 +8318,7 @@ class StoryRuntime:
             )
         artifact_candidate = self._artifact_candidate_for_proposal(events, proposal)
         reply_event_ids = tuple(
-            self._deterministic_id("e", attempt_id, reply.assignment_id, "reply")
+            event_journal.deterministic_id("e", attempt_id, reply.assignment_id, "reply")
             for reply in replies
         )
         current_projection = self.conversation_storage_services.event_store.read_context(session_id, conversation_id)
@@ -9226,11 +8398,11 @@ class StoryRuntime:
             if decoded.recommended_action is not None:
                 current_events = self.conversation_storage_services.event_store.read(session_id, conversation_id)
                 current_projection = project_collaboration_history(current_events)
-                source = self._draft_with_id(
-                    event_id=self._deterministic_id("e", attempt_id, "synthesis"),
+                source = event_journal.draft_with_id(
+                    event_id=event_journal.deterministic_id("e", attempt_id, "synthesis"),
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
                     step_id=proposal.step_id, kind=CollaborationEventKind.LEAD_SYNTHESIS,
-                    sender=_LEAD_ACTOR, recipient=_USER_ACTOR, payload=decoded.collaboration,
+                    sender=event_journal.LEAD_ACTOR, recipient=event_journal.USER_ACTOR, payload=decoded.collaboration,
                 )
                 reply_inputs = tuple(CollaborationInputRevision(
                     input_id=event_id, kind=CollaborationInputKind.CONVERSATION_EVENT,
@@ -9336,7 +8508,7 @@ class StoryRuntime:
         self, *, session_id, conversation_id, turn_id, proposal, attempt_id,
         replies, events, action_progress_sink,
     ):
-        ids = tuple(self._deterministic_id("e", attempt_id, reply.assignment_id, "reply") for reply in replies)
+        ids = tuple(event_journal.deterministic_id("e", attempt_id, reply.assignment_id, "reply") for reply in replies)
         facts = PremiseDecisionConstraints(proposal.premise_decision.question_id,
             tuple(item.input_id for item in proposal.basis.inputs),
             tuple((event_id, tuple(item.alternative_key for item in reply.premise_analysis.alternatives))
@@ -9377,7 +8549,7 @@ class StoryRuntime:
                 proposal.proposal_revision, proposal.proposal_digest, proposal.step_id, attempt_id,
                 tuple(PremiseReplyRef(event_id, assignment.specialist_id, self._specialist_reply_digest(reply))
                     for event_id, reply, assignment in zip(ids, replies, proposal.assignments, strict=True)),
-                summary, tuple(PremiseOption(self._new_id("opt"), material_digest(option.premise_text),
+                summary, tuple(PremiseOption(event_journal.new_id("opt"), material_digest(option.premise_text),
                     option.option_key, option.premise_text, option.rationale, option.reply_dispositions)
                     for option in summary.options), cost,
                 None if admission is None or admission.prior_authoring_source_ref is None else admission.prior_authoring_source_ref.cost,
@@ -9611,7 +8783,7 @@ class StoryRuntime:
                 material_value = {**material_value, "authoring_user_sources": self._authoring_user_materials(historical)}
         reference_operation: RuntimeReferenceOperation | None = None
         bound_agent: BoundAgent | None = None
-        provider: _AccountingContextProvider | None = None
+        provider: AccountingContextProvider | None = None
         generation_pin: SessionArtifactGenerationPin | None = None
         execution_workspace_manager: AbstractContextManager[
             ProviderExecutionWorkspace
@@ -9624,13 +8796,14 @@ class StoryRuntime:
             if agent_id == LEAD_ORCHESTRATOR:
                 generation_pin = artifact_binding.acquire_generation_pin()
             repository_access = partial(
-                _open_session_artifact_repository,
+                session_worktree_access.open_session_artifact_repository,
                 artifact_binding,
             )
             session_sources = SessionSourceWorkspace.from_artifact_binding(
                 artifact_binding
             )
-            reference_operation = self._prepare_session_reference_operation(
+            reference_operation = reference_registry.prepare_session_reference_operation(
+                self.workspace,
                 repository_access,
                 artifact_binding=artifact_binding,
                 session_id=session_id,
@@ -9647,15 +8820,17 @@ class StoryRuntime:
                 session_id=session_id,
                 agent_id=agent_id,
             )
-            bound_agent = await self._acquire_bound_agent(definition)
-            execution_workspace_manager = _provider_execution_workspace_manager(
+            bound_agent = await self._provider_binding_leases.acquire(definition,
+                bind_definition=self.bind_definition,
+            )
+            execution_workspace_manager = session_worktree_access.session_provider_execution_workspace_manager(
                 bound_agent,
                 artifact_binding,
             )
             if execution_workspace_manager is not None:
                 execution_workspace = execution_workspace_manager.__enter__()
                 if agent_id == LEAD_ORCHESTRATOR:
-                    continuation = self._lead_continuations.get(session_id)
+                    continuation = self._session_execution_scopes.optional_lead_continuation(session_id)
                     if continuation is not None:
                         continuation.retain_context_manager(
                             execution_workspace_manager,
@@ -9673,14 +8848,13 @@ class StoryRuntime:
                 raise BackendProtocolError(
                     "bound context_provider() must be synchronous"
                 )
-            provider = _AccountingContextProvider(
-                self,
+            provider = AccountingContextProvider(
                 delegate,
                 session_id=session_id,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 step_id=step_id,
-                invocation_id=self._deterministic_id(
+                invocation_id=event_journal.deterministic_id(
                     "inv", step_id, operation_id, str(round_number)
                 ),
                 role=agent_id,
@@ -9688,6 +8862,9 @@ class StoryRuntime:
                 task_revisions=(constraints.task_revisions or (() if constraints.scope is None else
                     ((constraints.scope.task_id, constraints.scope.task_revision),))) if constraints is not None else (),
                 invocation_kind=invocation_kind,
+                read_events=self.read_collaboration_events,
+                read_context=self.read_collaboration_context,
+                append_batch=self.append_collaboration_event_batch,
             )
             scope = self._agent_context_service.scope(
                 session_id,
@@ -9765,16 +8942,19 @@ class StoryRuntime:
             ) -> _CollaborationInvocationResult:
                 nonlocal bound_agent, generation_pin
                 if reference_failure is None:
-                    self._finish_reference_operation(reference_operation)
+                    reference_registry.finish_reference_operation(self.workspace, reference_operation)
                 else:
-                    self._fail_reference_operation(
+                    reference_registry.fail_reference_operation(
+                        self.workspace,
                         reference_operation, reference_failure,
                     )
                 pending_validation = provider.publish_or_defer_validation_messages()
                 if bound_agent is not None:
                     releasing_agent = bound_agent
                     bound_agent = None
-                    await self._release_bound_agent_use(releasing_agent)
+                    await self._provider_binding_leases.release_use(releasing_agent,
+                        finish_use=self.finish_bound_agent_use,
+                    )
                 transferred_pin = generation_pin
                 generation_pin = None
                 return _CollaborationInvocationResult(
@@ -10022,7 +9202,7 @@ class StoryRuntime:
             cleanup_binding_failure: SessionArtifactBindingError | None = None
             if reference_operation is not None:
                 try:
-                    self._fail_reference_operation(reference_operation, failure)
+                    reference_registry.fail_reference_operation(self.workspace, reference_operation, failure)
                 except SessionArtifactBindingError as cleanup_failure:
                     cleanup_binding_failure = cleanup_failure
             pending_validation = (
@@ -10041,7 +9221,9 @@ class StoryRuntime:
                         releasing_agent = bound_agent
                         bound_agent = None
                         try:
-                            await self._release_bound_agent_use(releasing_agent)
+                            await self._provider_binding_leases.release_use(releasing_agent,
+                                finish_use=self.finish_bound_agent_use,
+                            )
                         except BaseException as release_failure:
                             cleanup_binding_failure.add_note(
                                 "bound-agent release failed: "
@@ -10053,7 +9235,9 @@ class StoryRuntime:
                 releasing_agent = bound_agent
                 bound_agent = None
                 try:
-                    await self._release_bound_agent_use(releasing_agent)
+                    await self._provider_binding_leases.release_use(releasing_agent,
+                        finish_use=self.finish_bound_agent_use,
+                    )
                 except BaseException as release_failure:
                     failure.add_note(
                         "bound-agent release failed: "
@@ -10083,7 +9267,9 @@ class StoryRuntime:
                     cleanup_failure = failure
             if bound_agent is not None:
                 try:
-                    await self._release_bound_agent_use(bound_agent)
+                    await self._provider_binding_leases.release_use(bound_agent,
+                        finish_use=self.finish_bound_agent_use,
+                    )
                 except BaseException as failure:
                     cleanup_primary = (
                         primary if primary is not None else cleanup_failure
@@ -10160,7 +9346,7 @@ class StoryRuntime:
                 event
                 for event in events
                 if event.turn_id == turn_id
-                and event.sender == _USER_ACTOR
+                and event.sender == event_journal.USER_ACTOR
                 and type(event.payload) is CollaborationMessagePayload
             )
             if len(matches) != 1:
@@ -10282,13 +9468,15 @@ class StoryRuntime:
         ):
             if invocation_result.pending_validation is not None:
                 invocation_id, details_by_call = invocation_result.pending_validation
-                self._append_validation_messages(
+                event_journal.append_validation_messages(
                     session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
                     step_id=proposal.step_id,
                     invocation_id=invocation_id,
                     details_by_call=details_by_call,
+                    read_events=self.read_collaboration_events,
+                    append_batch=self.append_collaboration_event_batch,
                 )
         assignments_succeeded = all(item.failure is None for item in assignment_results)
         if (
@@ -10315,11 +9503,11 @@ class StoryRuntime:
                     is not CollaborationSpecialistReplyPayload
                 ):
                     raise BackendProtocolError("specialist success lacks a typed reply")
-                reply_event_id = self._deterministic_id(
+                reply_event_id = event_journal.deterministic_id(
                     "e", attempt_id, assignment.assignment_id, "reply"
                 )
                 replies.append(
-                    self._draft_with_id(
+                    event_journal.draft_with_id(
                         event_id=reply_event_id,
                         session_id=session_id,
                         conversation_id=conversation_id,
@@ -10331,10 +9519,10 @@ class StoryRuntime:
                             assignment.specialist_id,
                         ),
                         recipient=(
-                            _USER_ACTOR
+                            event_journal.USER_ACTOR
                             if proposal.step_kind
                             is CollaborationStepKind.SPECIALIST_ADVISORY
-                            else _LEAD_ACTOR
+                            else event_journal.LEAD_ACTOR
                         ),
                         payload=replace(
                             invocation_result.value,
@@ -10384,30 +9572,30 @@ class StoryRuntime:
             current_events, proposal
         )
         if uncertain:
-            interruption = self._draft_with_id(
-                event_id=self._deterministic_id("e", attempt_id, "uncertain"),
+            interruption = event_journal.draft_with_id(
+                event_id=event_journal.deterministic_id("e", attempt_id, "uncertain"),
                 session_id=session_id,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 step_id=proposal.step_id,
                 kind=CollaborationEventKind.INTERRUPTION,
-                sender=_RUNTIME_ACTOR,
-                recipient=_USER_ACTOR,
+                sender=event_journal.RUNTIME_ACTOR,
+                recipient=event_journal.USER_ACTOR,
                 payload=CollaborationInterruptionPayload(
                     attempt_id,
                     "A submitted provider outcome is uncertain; known sibling facts "
                     "were preserved and this attempt will not be replayed.",
                 ),
             )
-            unknown = self._draft_with_id(
-                event_id=self._deterministic_id("e", attempt_id, "outcome_unknown"),
+            unknown = event_journal.draft_with_id(
+                event_id=event_journal.deterministic_id("e", attempt_id, "outcome_unknown"),
                 session_id=session_id,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 step_id=proposal.step_id,
                 kind=CollaborationEventKind.STEP_STATE,
-                sender=_RUNTIME_ACTOR,
-                recipient=_USER_ACTOR,
+                sender=event_journal.RUNTIME_ACTOR,
+                recipient=event_journal.USER_ACTOR,
                 payload=CollaborationStepStatePayload(
                     state=CollaborationStepState.OUTCOME_UNKNOWN,
                     proposal_id=proposal.proposal_id,
@@ -10420,8 +9608,8 @@ class StoryRuntime:
                 ()
                 if artifact_candidate is None
                 else (
-                    self._draft_with_id(
-                        event_id=self._deterministic_id(
+                    event_journal.draft_with_id(
+                        event_id=event_journal.deterministic_id(
                             "e", attempt_id, "artifact_recovery"
                         ),
                         session_id=session_id,
@@ -10429,8 +9617,8 @@ class StoryRuntime:
                         turn_id=turn_id,
                         step_id=proposal.step_id,
                         kind=CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
-                        sender=_RUNTIME_ACTOR,
-                        recipient=_USER_ACTOR,
+                        sender=event_journal.RUNTIME_ACTOR,
+                        recipient=event_journal.USER_ACTOR,
                         payload=self._artifact_state_payload(
                             artifact_candidate,
                             ArtifactProposalState.RECOVERY_REQUIRED,
@@ -10439,10 +9627,11 @@ class StoryRuntime:
                     ),
                 )
             )
-            self._append_drafts(
+            event_journal.append_drafts(
                 projection.last_sequence,
                 (*replies, *terminals, interruption, *artifact_unknown, unknown),
-                batch_id=self._deterministic_id("b", attempt_id, "unknown"),
+                batch_id=event_journal.deterministic_id("b", attempt_id, "unknown"),
+                append_batch=self.append_collaboration_event_batch,
             )
             return
 
@@ -10478,23 +9667,23 @@ class StoryRuntime:
                 else:
                     raise BackendProtocolError("lead synthesis success is not typed")
                 synthesis_outcome = CollaborationSynthesisOutcomeKind.SUCCEEDED
-                synthesis_event_id = self._deterministic_id(
+                synthesis_event_id = event_journal.deterministic_id(
                     "e", attempt_id, "synthesis"
                 )
-                synthesis_draft = self._draft_with_id(
+                synthesis_draft = event_journal.draft_with_id(
                     event_id=synthesis_event_id,
                     session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
                     step_id=proposal.step_id,
                     kind=CollaborationEventKind.LEAD_SYNTHESIS,
-                    sender=_LEAD_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.LEAD_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=collaboration_value,
                 )
                 if artifact_value is not None:
-                    artifact_synthesis_draft = self._draft_with_id(
-                        event_id=self._deterministic_id(
+                    artifact_synthesis_draft = event_journal.draft_with_id(
+                        event_id=event_journal.deterministic_id(
                             "e", attempt_id, "artifact_synthesis"
                         ),
                         session_id=session_id,
@@ -10502,8 +9691,8 @@ class StoryRuntime:
                         turn_id=turn_id,
                         step_id=proposal.step_id,
                         kind=CollaborationEventKind.ARTIFACT_REVIEW_SYNTHESIS,
-                        sender=_LEAD_ACTOR,
-                        recipient=_USER_ACTOR,
+                        sender=event_journal.LEAD_ACTOR,
+                        recipient=event_journal.USER_ACTOR,
                         payload=artifact_value,
                     )
             elif isinstance(synthesis_result.failure, asyncio.CancelledError):
@@ -10560,16 +9749,16 @@ class StoryRuntime:
                 *terminals,
             )
         )
-        result_event_id = self._deterministic_id("e", attempt_id, "result")
-        result = self._draft_with_id(
+        result_event_id = event_journal.deterministic_id("e", attempt_id, "result")
+        result = event_journal.draft_with_id(
             event_id=result_event_id,
             session_id=session_id,
             conversation_id=conversation_id,
             turn_id=turn_id,
             step_id=proposal.step_id,
             kind=CollaborationEventKind.EXECUTION_RESULT,
-            sender=_RUNTIME_ACTOR,
-            recipient=_USER_ACTOR,
+            sender=event_journal.RUNTIME_ACTOR,
+            recipient=event_journal.USER_ACTOR,
             payload=CollaborationExecutionResult(
                 proposal_id=proposal.proposal_id,
                 proposal_revision=proposal.proposal_revision,
@@ -10614,7 +9803,7 @@ class StoryRuntime:
                 events=current_events, projection=projection,
                 artifact_binding=synthesis_result.artifact_binding,
                 tail_sequence=projection.last_sequence + len(result_drafts) + 2,
-                step_id=self._deterministic_id("s", result_event_id, "recommendation"),
+                step_id=event_journal.deterministic_id("s", result_event_id, "recommendation"),
             )
             result_drafts = (*result_drafts, terminal, recommendation)
         if proposal.premise_decision is not None:
@@ -10623,8 +9812,10 @@ class StoryRuntime:
                 CollaborationExecutionOutcomeKind.CANCELLED: CollaborationStepState.INTERRUPTED}[overall]
             result_drafts = (*result_drafts, self._terminal_state_draft(events=current_events,
                 turn_id=turn_id, proposal=proposal, result_event_id=result_event_id, state=terminal_state))
-        self._append_drafts(projection.last_sequence, result_drafts,
-            batch_id=self._deterministic_id("b", attempt_id, "result"))
+        event_journal.append_drafts(projection.last_sequence, result_drafts,
+            batch_id=event_journal.deterministic_id("b", attempt_id, "result"),
+            append_batch=self.append_collaboration_event_batch,
+        )
 
     def _terminal_outcome_draft(
         self,
@@ -10639,8 +9830,8 @@ class StoryRuntime:
         submitted_physical_calls: int,
         assignment_id: str | None,
     ) -> CollaborationEventDraft:
-        return self._draft_with_id(
-            event_id=self._deterministic_id(
+        return event_journal.draft_with_id(
+            event_id=event_journal.deterministic_id(
                 "e", attempt_id, scope.value, assignment_id or "lead", "terminal"
             ),
             session_id=session_id,
@@ -10648,8 +9839,8 @@ class StoryRuntime:
             turn_id=turn_id,
             step_id=step_id,
             kind=CollaborationEventKind.TERMINAL_OUTCOME,
-            sender=_RUNTIME_ACTOR,
-            recipient=_USER_ACTOR,
+            sender=event_journal.RUNTIME_ACTOR,
+            recipient=event_journal.USER_ACTOR,
             payload=CollaborationTerminalOutcomePayload(
                 execution_attempt_id=attempt_id,
                 scope=scope,
@@ -10675,7 +9866,7 @@ class StoryRuntime:
         result_event_id = projection.execution_result_event_id
         if proposal is None or result is None or result_event_id is None:
             raise BackendProtocolError("known result finalization lacks authority")
-        turn_id = self._deterministic_id("t", result_event_id, "finalize")
+        turn_id = event_journal.deterministic_id("t", result_event_id, "finalize")
         validation_details = self._execution_validation_details(
             events, result.execution_attempt_id, proposal.step_id,
         )
@@ -10736,11 +9927,11 @@ class StoryRuntime:
                     events=events,
                     projection=projection,
                 )
-            except _LeadCallBudgetExceeded:
+            except LeadCallBudgetExceeded:
                 continuation_exceeds_budget = True
         if next_proposal is not None:
             assert synthesis_event is not None
-            request_id = self._deterministic_id(
+            request_id = event_journal.deterministic_id(
                 "c", next_proposal.proposal_id, next_proposal.proposal_digest
             )
             synthesis_message = cast(
@@ -10752,15 +9943,15 @@ class StoryRuntime:
                 "the unresolved points. Confirm, reject, or revise it."
             )
             drafts = (
-                self._draft_with_id(
-                    event_id=self._deterministic_id("e", result_event_id, "notice"),
+                event_journal.draft_with_id(
+                    event_id=event_journal.deterministic_id("e", result_event_id, "notice"),
                     session_id=events[-1].session_id,
                     conversation_id=events[-1].conversation_id,
                     turn_id=turn_id,
                     step_id=proposal.step_id,
                     kind=CollaborationEventKind.MESSAGE,
-                    sender=_LEAD_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.LEAD_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=CollaborationMessagePayload(notice, provider_invocation_id=None if synthesis_payload is None else synthesis_payload.provider_invocation_id),
                 ),
                 self._terminal_state_draft(
@@ -10770,26 +9961,26 @@ class StoryRuntime:
                     result_event_id=result_event_id,
                     state=CollaborationStepState.COMPLETED,
                 ),
-                self._draft_with_id(
-                    event_id=self._deterministic_id("e", result_event_id, "proposal"),
+                event_journal.draft_with_id(
+                    event_id=event_journal.deterministic_id("e", result_event_id, "proposal"),
                     session_id=events[-1].session_id,
                     conversation_id=events[-1].conversation_id,
                     turn_id=turn_id,
                     step_id=proposal.step_id,
                     kind=CollaborationEventKind.MESSAGE,
-                    sender=_LEAD_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.LEAD_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=next_proposal,
                 ),
-                self._draft_with_id(
-                    event_id=self._deterministic_id("e", result_event_id, "awaiting"),
+                event_journal.draft_with_id(
+                    event_id=event_journal.deterministic_id("e", result_event_id, "awaiting"),
                     session_id=events[-1].session_id,
                     conversation_id=events[-1].conversation_id,
                     turn_id=turn_id,
                     step_id=proposal.step_id,
                     kind=CollaborationEventKind.STEP_STATE,
-                    sender=_RUNTIME_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=CollaborationStepStatePayload(
                         state=CollaborationStepState.AWAITING_CONFIRMATION,
                         proposal_id=next_proposal.proposal_id,
@@ -10799,10 +9990,11 @@ class StoryRuntime:
                     ),
                 ),
             )
-            self._append_drafts(
+            event_journal.append_drafts(
                 projection.last_sequence,
                 drafts,
-                batch_id=self._deterministic_id("b", result_event_id, "continue"),
+                batch_id=event_journal.deterministic_id("b", result_event_id, "continue"),
+                append_batch=self.append_collaboration_event_batch,
             )
             return LeadTurnResult(
                 events[-1].session_id,
@@ -10871,22 +10063,22 @@ class StoryRuntime:
                 else budget_notice
             )
         final_drafts: list[CollaborationEventDraft] = [
-            self._draft_with_id(
-                event_id=self._deterministic_id("e", result_event_id, "notice"),
+            event_journal.draft_with_id(
+                event_id=event_journal.deterministic_id("e", result_event_id, "notice"),
                 session_id=events[-1].session_id,
                 conversation_id=events[-1].conversation_id,
                 turn_id=turn_id,
                 step_id=proposal.step_id,
                 kind=CollaborationEventKind.MESSAGE,
-                sender=_LEAD_ACTOR,
-                recipient=_USER_ACTOR,
+                sender=event_journal.LEAD_ACTOR,
+                recipient=event_journal.USER_ACTOR,
                 payload=CollaborationMessagePayload(message, provider_invocation_id=None if synthesis_payload is None else synthesis_payload.provider_invocation_id),
             )
         ]
         if state is CollaborationStepState.INTERRUPTED:
             final_drafts.append(
-                self._draft_with_id(
-                    event_id=self._deterministic_id(
+                event_journal.draft_with_id(
+                    event_id=event_journal.deterministic_id(
                         "e", result_event_id, "interruption"
                     ),
                     session_id=events[-1].session_id,
@@ -10894,8 +10086,8 @@ class StoryRuntime:
                     turn_id=turn_id,
                     step_id=proposal.step_id,
                     kind=CollaborationEventKind.INTERRUPTION,
-                    sender=_RUNTIME_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=CollaborationInterruptionPayload(
                         result.execution_attempt_id,
                         message,
@@ -10911,10 +10103,11 @@ class StoryRuntime:
                 state=state,
             )
         )
-        self._append_drafts(
+        event_journal.append_drafts(
             projection.last_sequence,
             tuple(final_drafts),
-            batch_id=self._deterministic_id("b", result_event_id, "finalize"),
+            batch_id=event_journal.deterministic_id("b", result_event_id, "finalize"),
+            append_batch=self.append_collaboration_event_batch,
         )
         return LeadTurnResult(
             events[-1].session_id,
@@ -10940,13 +10133,13 @@ class StoryRuntime:
     ) -> tuple[str, ...]:
         """Recover safe call diagnostics from this execution's durable facts."""
 
-        execution_turn_id = self._deterministic_id(
+        execution_turn_id = event_journal.deterministic_id(
             "t", execution_attempt_id, "execution",
         )
-        running_event_id = self._deterministic_id(
+        running_event_id = event_journal.deterministic_id(
             "e", execution_attempt_id, "running",
         )
-        result_event_id = self._deterministic_id(
+        result_event_id = event_journal.deterministic_id(
             "e", execution_attempt_id, "result",
         )
         boundaries = {
@@ -10972,8 +10165,8 @@ class StoryRuntime:
                 and payload.state is CollaborationProviderCallState.SUBMITTED):
                 submitted_calls.add((payload.invocation_id, payload.call_id))
             elif (type(payload) is CollaborationMessagePayload
-                and event.sender == _RUNTIME_ACTOR
-                and event.recipient == _USER_ACTOR
+                and event.sender == event_journal.RUNTIME_ACTOR
+                and event.recipient == event_journal.USER_ACTOR
                 and payload.validation_invocation_id is not None
                 and payload.validation_call_id is not None
                 and len(payload.validation_details) == 1
@@ -11117,7 +10310,7 @@ class StoryRuntime:
                     )
                     assert artifact_synthesis_event is not None
                     reviewed_proposal = ArtifactReviewedProposal.create(
-                        proposal_id=self._deterministic_id(
+                        proposal_id=event_journal.deterministic_id(
                             "ap", candidate.candidate.candidate_id, "reviewed"
                         ),
                         proposal_revision=1,
@@ -11165,7 +10358,7 @@ class StoryRuntime:
                             )
                         )
                         application_request = build_artifact_application_request(
-                            application_id=self._deterministic_id(
+                            application_id=event_journal.deterministic_id(
                                 "aa", reviewed_proposal.proposal_id,
                                 reviewed_proposal.proposal_digest,
                             ),
@@ -11179,7 +10372,7 @@ class StoryRuntime:
                             attached_core_paths=attached_core_paths,
                         )
                         application_payload = ArtifactApplicationRequestPayload(
-                            confirmation_request_id=self._deterministic_id(
+                            confirmation_request_id=event_journal.deterministic_id(
                                 "ar", reviewed_proposal.proposal_id,
                                 reviewed_proposal.proposal_digest,
                             ),
@@ -11209,22 +10402,22 @@ class StoryRuntime:
                         )
 
         final_drafts: list[CollaborationEventDraft] = [
-            self._draft_with_id(
-                event_id=self._deterministic_id("e", result_event_id, "notice"),
+            event_journal.draft_with_id(
+                event_id=event_journal.deterministic_id("e", result_event_id, "notice"),
                 session_id=events[-1].session_id,
                 conversation_id=events[-1].conversation_id,
                 turn_id=turn_id,
                 step_id=proposal.step_id,
                 kind=CollaborationEventKind.MESSAGE,
-                sender=_LEAD_ACTOR,
-                recipient=_USER_ACTOR,
+                sender=event_journal.LEAD_ACTOR,
+                recipient=event_journal.USER_ACTOR,
                 payload=CollaborationMessagePayload(message, provider_invocation_id=None if artifact_synthesis is None else artifact_synthesis.provider_invocation_id),
             )
         ]
         if reviewed_proposal is not None:
             final_drafts.append(
-                self._draft_with_id(
-                    event_id=self._deterministic_id(
+                event_journal.draft_with_id(
+                    event_id=event_journal.deterministic_id(
                         "e", result_event_id, "reviewed_artifact"
                     ),
                     session_id=events[-1].session_id,
@@ -11232,15 +10425,15 @@ class StoryRuntime:
                     turn_id=turn_id,
                     step_id=proposal.step_id,
                     kind=CollaborationEventKind.ARTIFACT_REVIEWED_PROPOSAL,
-                    sender=_RUNTIME_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=reviewed_proposal,
                 )
             )
         elif state is ArtifactProposalState.FAILED:
             final_drafts.append(
-                self._draft_with_id(
-                    event_id=self._deterministic_id(
+                event_journal.draft_with_id(
+                    event_id=event_journal.deterministic_id(
                         "e", result_event_id, "artifact_failure"
                     ),
                     session_id=events[-1].session_id,
@@ -11248,8 +10441,8 @@ class StoryRuntime:
                     turn_id=turn_id,
                     step_id=proposal.step_id,
                     kind=CollaborationEventKind.ARTIFACT_REVIEW_FAILURE,
-                    sender=_RUNTIME_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=ArtifactReviewFailurePayload(
                         code=ArtifactReviewFailureCode.REVIEW_INCOMPLETE,
                         candidate_id=candidate.candidate.candidate_id,
@@ -11258,8 +10451,8 @@ class StoryRuntime:
                 )
             )
         final_drafts.append(
-            self._draft_with_id(
-                event_id=self._deterministic_id(
+            event_journal.draft_with_id(
+                event_id=event_journal.deterministic_id(
                     "e", result_event_id, "artifact_state", state.value
                 ),
                 session_id=events[-1].session_id,
@@ -11267,8 +10460,8 @@ class StoryRuntime:
                 turn_id=turn_id,
                 step_id=proposal.step_id,
                 kind=CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
-                sender=_RUNTIME_ACTOR,
-                recipient=_USER_ACTOR,
+                sender=event_journal.RUNTIME_ACTOR,
+                recipient=event_journal.USER_ACTOR,
                 payload=self._artifact_state_payload(
                     candidate,
                     state,
@@ -11297,8 +10490,8 @@ class StoryRuntime:
         )
         if application_payload is not None:
             final_drafts.append(
-                self._draft_with_id(
-                    event_id=self._deterministic_id(
+                event_journal.draft_with_id(
+                    event_id=event_journal.deterministic_id(
                         "e", result_event_id, "artifact_application_request"
                     ),
                     session_id=events[-1].session_id,
@@ -11306,15 +10499,16 @@ class StoryRuntime:
                     turn_id=turn_id,
                     step_id=proposal.step_id,
                     kind=CollaborationEventKind.ARTIFACT_APPLICATION_REQUEST,
-                    sender=_LEAD_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.LEAD_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=application_payload,
                 )
             )
-        append_receipt = self._append_drafts(
+        append_receipt = event_journal.append_drafts(
             projection.last_sequence,
             tuple(final_drafts),
-            batch_id=self._deterministic_id("b", result_event_id, "finalize"),
+            batch_id=event_journal.deterministic_id("b", result_event_id, "finalize"),
+            append_batch=self.append_collaboration_event_batch,
         )
         if (
             application_payload is not None
@@ -11375,15 +10569,15 @@ class StoryRuntime:
         result_event_id: str,
         state: CollaborationStepState,
     ) -> CollaborationEventDraft:
-        return self._draft_with_id(
-            event_id=self._deterministic_id("e", result_event_id, state.value),
+        return event_journal.draft_with_id(
+            event_id=event_journal.deterministic_id("e", result_event_id, state.value),
             session_id=events[-1].session_id,
             conversation_id=events[-1].conversation_id,
             turn_id=turn_id,
             step_id=proposal.step_id,
             kind=CollaborationEventKind.STEP_STATE,
-            sender=_RUNTIME_ACTOR,
-            recipient=_USER_ACTOR,
+            sender=event_journal.RUNTIME_ACTOR,
+            recipient=event_journal.USER_ACTOR,
             payload=CollaborationStepStatePayload(
                 state=state,
                 proposal_id=proposal.proposal_id,
@@ -11408,7 +10602,7 @@ class StoryRuntime:
         projection: CollaborationHistoryProjection,
     ) -> CollaborationProposal:
         if proposal.authoring_scope is not None and proposal.authoring_scope.schema_version == 3 and proposal.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
-            raise _LeadCallBudgetExceeded("round two is reserved for exact final review; clarify or freshly propose")
+            raise LeadCallBudgetExceeded("round two is reserved for exact final review; clarify or freshly propose")
         if proposal.budget.rounds_spent != 0 or next_intent.relation is not (
             LeadProposalRelation.CONTINUE_LINEAGE
         ):
@@ -11475,7 +10669,7 @@ class StoryRuntime:
             tuple(inputs),
             tuple(
                 CollaborationAssignment(
-                    assignment_id=self._deterministic_id(
+                    assignment_id=event_journal.deterministic_id(
                         "a",
                         result.execution_attempt_id,
                         assignment.agent_id,
@@ -11500,12 +10694,12 @@ class StoryRuntime:
             physical_calls_spent=projection.physical_calls_spent,
             authoring_scope=next_intent.authoring_scope,
         )
-        proposal_id = self._deterministic_id(
+        proposal_id = event_journal.deterministic_id(
             "p", result.execution_attempt_id, "continuation"
         )
         runtime_assignments = tuple(
             CollaborationAssignment(
-                assignment_id=self._deterministic_id(
+                assignment_id=event_journal.deterministic_id(
                     "a", proposal_id, assignment.agent_id, str(index)
                 ),
                 specialist_id=assignment.agent_id,
@@ -11994,7 +11188,7 @@ class StoryRuntime:
                 continue
             for event in current:
                 if (type(event.payload) is CollaborationMessagePayload
-                        and event.sender == _USER_ACTOR
+                        and event.sender == event_journal.USER_ACTOR
                         and event.event_id != receipt.origin_message_event_id):
                     continue
                 excluded.add(event.event_id)
@@ -12123,16 +11317,16 @@ class StoryRuntime:
                     evidence=proposal.basis.evidence,
                 )
             self._confirmed_capabilities.pop(key, None)
-            request_id = self._new_id("c")
-            turn_id = self._new_id("t")
-            reconfirmation = self._draft(
+            request_id = event_journal.new_id("c")
+            turn_id = event_journal.new_id("t")
+            reconfirmation = event_journal.draft(
                 session_id=session_id,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 step_id=proposal.step_id,
                 kind=CollaborationEventKind.STEP_STATE,
-                sender=_RUNTIME_ACTOR,
-                recipient=_USER_ACTOR,
+                sender=event_journal.RUNTIME_ACTOR,
+                recipient=event_journal.USER_ACTOR,
                 payload=CollaborationStepStatePayload(
                     state=CollaborationStepState.RECONFIRMATION_REQUIRED,
                     proposal_id=proposal.proposal_id,
@@ -12141,7 +11335,9 @@ class StoryRuntime:
                     confirmation_request_id=request_id,
                 ),
             )
-            self._append_drafts(projection.last_sequence, (reconfirmation,))
+            event_journal.append_drafts(projection.last_sequence, (reconfirmation,),
+                append_batch=self.append_collaboration_event_batch,
+            )
             return LeadTurnResult(
                 session_id,
                 conversation_id,
@@ -12184,7 +11380,7 @@ class StoryRuntime:
                 return LeadTurnResult(
                     session_id,
                     conversation_id,
-                    projection.current_turn_id or self._new_id("t"),
+                    projection.current_turn_id or event_journal.new_id("t"),
                     proposal.step_id,
                     LeadOutcomeKind.RECOMMENDATION,
                     "The collaboration step is still owned by a live runtime "
@@ -12194,29 +11390,29 @@ class StoryRuntime:
                     None,
                     CollaborationNextAction.NONE,
                 )
-            turn_id = self._new_id("t")
-            interruption = self._draft(
+            turn_id = event_journal.new_id("t")
+            interruption = event_journal.draft(
                 session_id=session_id,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 step_id=proposal.step_id,
                 kind=CollaborationEventKind.INTERRUPTION,
-                sender=_RUNTIME_ACTOR,
-                recipient=_USER_ACTOR,
+                sender=event_journal.RUNTIME_ACTOR,
+                recipient=event_journal.USER_ACTOR,
                 payload=CollaborationInterruptionPayload(
                     projection.execution_attempt_id,
                     "Runtime authority was lost after work may have started; the "
                     "attempt will not be replayed.",
                 ),
             )
-            unknown = self._draft(
+            unknown = event_journal.draft(
                 session_id=session_id,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 step_id=proposal.step_id,
                 kind=CollaborationEventKind.STEP_STATE,
-                sender=_RUNTIME_ACTOR,
-                recipient=_USER_ACTOR,
+                sender=event_journal.RUNTIME_ACTOR,
+                recipient=event_journal.USER_ACTOR,
                 payload=CollaborationStepStatePayload(
                     state=CollaborationStepState.OUTCOME_UNKNOWN,
                     proposal_id=proposal.proposal_id,
@@ -12225,7 +11421,9 @@ class StoryRuntime:
                     execution_attempt_id=projection.execution_attempt_id,
                 ),
             )
-            self._append_drafts(projection.last_sequence, (interruption, unknown))
+            event_journal.append_drafts(projection.last_sequence, (interruption, unknown),
+                append_batch=self.append_collaboration_event_batch,
+            )
             return LeadTurnResult(
                 session_id,
                 conversation_id,
@@ -12383,8 +11581,8 @@ class StoryRuntime:
         return LeadTurnResult(
             session_id,
             conversation_id,
-            turn_id or self._new_id("t"),
-            step_id or self._new_id("s"),
+            turn_id or event_journal.new_id("t"),
+            step_id or event_journal.new_id("s"),
             LeadOutcomeKind.RECOMMENDATION,
             message,
             None,
@@ -12627,7 +11825,7 @@ class StoryRuntime:
                 and state.confirmation_request_id == origin.payload.confirmation_request_id
             )
 
-        provider: _AccountingContextProvider | None = None
+        provider: AccountingContextProvider | None = None
         try:
             session_history = (await run_blocking(self._editorial_snapshot, session_id))
             task_transition = None
@@ -12715,7 +11913,7 @@ class StoryRuntime:
                     validation_details=("existing scope3 task retains preparation and full-review physical floor",),
                     provider_invocation_id=None if provider is None else provider.invocation_id,
                 )
-            premise_question_id = self._new_id("q") if (
+            premise_question_id = event_journal.new_id("q") if (
                 preparation is None and previous_proposal is None
                 and expected_relation is LeadProposalRelation.NEW_STEP
                 and interaction_mode is LeadInteractionMode.ORCHESTRATION
@@ -12723,13 +11921,14 @@ class StoryRuntime:
             ) else None
             admission = None
             repository_access = partial(
-                _open_session_artifact_repository,
+                session_worktree_access.open_session_artifact_repository,
                 artifact_binding,
             )
             session_sources = SessionSourceWorkspace.from_artifact_binding(
                 artifact_binding
             )
-            reference_operation = self._prepare_session_reference_operation(
+            reference_operation = reference_registry.prepare_session_reference_operation(
+                self.workspace,
                 repository_access,
                 artifact_binding=artifact_binding,
                 session_id=session_id,
@@ -12843,7 +12042,7 @@ class StoryRuntime:
                 origin = next((event for event in task_events
                                if event.event_id == task_receipt.origin_event_id), None)
                 if (origin is None or type(origin.payload) is not CollaborationLeadTaskDecisionPayload
-                        or origin.sender != _USER_ACTOR
+                        or origin.sender != event_journal.USER_ACTOR
                         or (origin.session_id, origin.conversation_id, origin.step_id)
                         != (session_id, conversation_id, step_id)
                         or origin.payload.document_selection != document_selection
@@ -12930,7 +12129,7 @@ class StoryRuntime:
                 local_scopes = [available_tasks[identity] for identity in local_ids
                     if available_tasks[identity].activity is not AuthoringActivity.WORKFLOW]
                 if len(local_scopes) > 1:
-                    self._fail_reference_operation(reference_operation,
+                    reference_registry.fail_reference_operation(self.workspace, reference_operation,
                         BackendProtocolError("explicit host task selection required"))
                     return self._structured_fallback_lead_result(
                         session_id=session_id, conversation_id=conversation_id,
@@ -12995,22 +12194,24 @@ class StoryRuntime:
                 session_id=session_id,
                 agent_id=LEAD_ORCHESTRATOR,
             )
-            bound_agent = await self._acquire_bound_agent(definition)
+            bound_agent = await self._provider_binding_leases.acquire(definition,
+                bind_definition=self.bind_definition,
+            )
             reference_read: object | None = None
-            provider: _AccountingContextProvider | None = None
+            provider: AccountingContextProvider | None = None
             execution_workspace_manager: AbstractContextManager[
                 ProviderExecutionWorkspace
             ] | None = None
             execution_workspace: ProviderExecutionWorkspace | None = None
             try:
-                candidate_workspace_manager = _provider_execution_workspace_manager(
+                candidate_workspace_manager = session_worktree_access.session_provider_execution_workspace_manager(
                     bound_agent,
                     artifact_binding,
                 )
                 if candidate_workspace_manager is not None:
                     execution_workspace = candidate_workspace_manager.__enter__()
                     execution_workspace_manager = candidate_workspace_manager
-                    continuation = self._lead_continuations.get(session_id)
+                    continuation = self._session_execution_scopes.optional_lead_continuation(session_id)
                     if continuation is not None:
                         continuation.retain_context_manager(
                             execution_workspace_manager,
@@ -13028,13 +12229,12 @@ class StoryRuntime:
                     raise BackendProtocolError(
                         "bound context_provider() must be synchronous"
                     )
-                invocation_id = self._new_id("inv")
+                invocation_id = event_journal.new_id("inv")
                 if successor_only or premise_capture is not None:
                     admission = self._publish_premise_admission(session_id, conversation_id,
                         turn_id, step_id, invocation_id, premise_question_id, offered_tasks,
                         premise_capture=premise_capture)
-                provider = _AccountingContextProvider(
-                    self,
+                provider = AccountingContextProvider(
                     delegate,
                     session_id=session_id,
                     conversation_id=conversation_id,
@@ -13046,6 +12246,9 @@ class StoryRuntime:
                     admission=admission,
                 effective_language=definition.language,
                 task_revisions=offered_tasks,
+                    read_events=self.read_collaboration_events,
+                    read_context=self.read_collaboration_context,
+                    append_batch=self.append_collaboration_event_batch,
                 )
                 scope = self._agent_context_service.scope(
                     session_id,
@@ -13190,7 +12393,7 @@ class StoryRuntime:
                 )
                 if discussion_only:
                     remaining = _CONTEXT_INVOCATION_CALL_LIMIT
-                    provider._task_front_budget = _CONTEXT_INVOCATION_CALL_LIMIT + 1
+                    provider.limit_task_front_calls(_CONTEXT_INVOCATION_CALL_LIMIT + 1)
                 elif task_receipt is not None:
                     spent = sum(type(event.payload) is CollaborationProviderCallPayload
                                 and event.step_id == step_id
@@ -13198,7 +12401,7 @@ class StoryRuntime:
                                 and event.payload.state is CollaborationProviderCallState.SUBMITTED
                                 for event in services.event_store.read(session_id, conversation_id))
                     remaining = COLLABORATION_PHYSICAL_CALL_LIMIT - spent
-                    provider._task_front_budget = COLLABORATION_PHYSICAL_CALL_LIMIT
+                    provider.limit_task_front_calls(COLLABORATION_PHYSICAL_CALL_LIMIT)
                 else:
                     remaining = COLLABORATION_PHYSICAL_CALL_LIMIT - projection.physical_calls_spent
                 if preparation is not None:
@@ -13233,13 +12436,12 @@ class StoryRuntime:
                 group_protocol = (preparation is None and not discussion_only
                     and interaction_mode is LeadInteractionMode.ORCHESTRATION
                     and lead_rule_seed.contract_id in {"lead-response-v6", "lead-response-v7", "lead-response-v8"})
-                provider._public_response_contract_id = (
-                    lead_rule_seed.contract_id
-                    if lead_rule_seed.contract_id in {
-                        "lead-response-v6", "lead-response-v7", "lead-response-v8",
-                        "lead-response-v9", "lead-discussion-response-v1",
-                    } else None
-                )
+                provider.configure_public_response_contract(lead_rule_seed.contract_id if lead_rule_seed.contract_id in {'lead-response-v6',
+                        'lead-response-v7',
+                        'lead-response-v8',
+                        'lead-response-v9',
+                        'lead-discussion-response-v1'
+                    } else None)
                 decoded_discussion: LeadDiscussionReport | None = None
                 decoded_exploration: LeadExplorationReport | None = None
                 decoded: LeadProviderOutcome | None = None
@@ -13896,10 +13098,10 @@ class StoryRuntime:
                         recommendation_projection = project_collaboration_history(
                             recommendation_events,
                         )
-                        source = self._draft(
+                        source = event_journal.draft(
                             session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
                             step_id=step_id, kind=CollaborationEventKind.MESSAGE,
-                            sender=_LEAD_ACTOR, recipient=_USER_ACTOR,
+                            sender=event_journal.LEAD_ACTOR, recipient=event_journal.USER_ACTOR,
                             payload=CollaborationLeadJudgmentPayload(
                                 decoded.kind, decoded.message, decoded_evidence, decoded.authoring_scope,
                                 core_document_readiness=decoded.core_document_readiness if decoded.core_document_assessment is not None else None,
@@ -14085,7 +13287,8 @@ class StoryRuntime:
                     except asyncio.CancelledError:
                         raise
                     except Exception as correction_setup_failure:
-                        self._fail_reference_operation(
+                        reference_registry.fail_reference_operation(
+                            self.workspace,
                             reference_operation,
                             correction_setup_failure,
                         )
@@ -14144,7 +13347,8 @@ class StoryRuntime:
                             in _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES
                             and not correction_facts.submission_uncertain
                         ):
-                            self._fail_reference_operation(
+                            reference_registry.fail_reference_operation(
+                                self.workspace,
                                 reference_operation, correction_failure,
                             )
                             if provider is not None:
@@ -14186,7 +13390,8 @@ class StoryRuntime:
                             if (correction_facts.group_state.workflow is not None
                                     and correction_facts.group_state.workflow.phase is LeadGroupPhase.STOP):
                                 raise first_failure
-                        self._fail_reference_operation(
+                        reference_registry.fail_reference_operation(
+                            self.workspace,
                             reference_operation,
                             correction_failure,
                         )
@@ -14244,9 +13449,9 @@ class StoryRuntime:
                                 else ReplyTraceOrigin.PROVIDER),
                         ),
                     )
-                self._finish_reference_operation(reference_operation)
+                reference_registry.finish_reference_operation(self.workspace, reference_operation)
             except _LeadOutcomeValidationError as failure:
-                self._fail_reference_operation(reference_operation, failure)
+                reference_registry.fail_reference_operation(self.workspace, reference_operation, failure)
                 if corrective_rejection_code is not None:
                     if provider is not None:
                         provider.publish_validation_messages()
@@ -14303,7 +13508,8 @@ class StoryRuntime:
                 provider.publish_validation_messages()
                 return replace(failed, validation_details=provider.validation_details)
             except BaseException as failure:
-                reference_failure = self._fail_reference_operation(
+                reference_failure = reference_registry.fail_reference_operation(
+                    self.workspace,
                     reference_operation,
                     failure,
                 )
@@ -14392,7 +13598,9 @@ class StoryRuntime:
                 primary = sys.exception()
                 cleanup_failure: BaseException | None = None
                 try:
-                    await self._release_bound_agent_use(bound_agent)
+                    await self._provider_binding_leases.release_use(bound_agent,
+                        finish_use=self.finish_bound_agent_use,
+                    )
                 except BaseException as failure:
                     if primary is None:
                         cleanup_failure = failure
@@ -14425,17 +13633,19 @@ class StoryRuntime:
             if decoded_discussion is not None:
                 events = self.conversation_storage_services.event_store.read(session_id, conversation_id)
                 projection = project_collaboration_history(events)
-                provider._public_accepted_call_id = provider.last_submitted_call_id
+                provider.accept_last_public_response()
                 provider.publish_public_responses()
                 projection = services.event_store.read_context(session_id, conversation_id)
-                self._append_drafts(projection.last_sequence, provider.with_group_trace((self._draft(
+                event_journal.append_drafts(projection.last_sequence, provider.with_group_trace((event_journal.draft(
                     session_id=session_id, conversation_id=conversation_id,
                     turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.LEAD_DISCUSSION,
-                    sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
                     payload=CollaborationLeadDiscussionPayload(decoded_discussion, provider_invocation_id=provider.invocation_id),
-                ),), "accepted"))
+                ),), "accepted"),
+                    append_batch=self.append_collaboration_event_batch,
+                )
                 projection = self.conversation_storage_services.event_store.read_context(session_id, conversation_id)
-                provider._public_accepted_call_id = provider.last_submitted_call_id
+                provider.accept_last_public_response()
                 return self._discussion_turn(
                     session_id, conversation_id, turn_id, step_id, decoded_discussion,
                     projection, validation_details=provider.validation_details,
@@ -14446,15 +13656,17 @@ class StoryRuntime:
                 assert decoded_exploration is not None
                 events = services.event_store.read(session_id, conversation_id)
                 projection = project_collaboration_history(events)
-                provider._public_accepted_call_id = provider.last_submitted_call_id
+                provider.accept_last_public_response()
                 provider.publish_public_responses()
                 projection = services.event_store.read_context(session_id, conversation_id)
-                self._append_drafts(projection.last_sequence, provider.with_group_trace((self._draft(
+                event_journal.append_drafts(projection.last_sequence, provider.with_group_trace((event_journal.draft(
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
                     kind=CollaborationEventKind.LEAD_EXPLORATION_RESULT,
-                    sender=_LEAD_ACTOR, recipient=_USER_ACTOR,
+                    sender=event_journal.LEAD_ACTOR, recipient=event_journal.USER_ACTOR,
                     payload=CollaborationLeadExplorationResultPayload(decoded_exploration),
-                ),), "accepted"))
+                ),), "accepted"),
+                    append_batch=self.append_collaboration_event_batch,
+                )
                 return LeadTurnResult(
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
                     kind=LeadOutcomeKind.EXPLORATION, message=decoded_exploration.message,
@@ -14521,7 +13733,7 @@ class StoryRuntime:
                             accounting_provider=provider,
                         )
                         return replace(failed, validation_details=provider.validation_details)
-                    except _LeadCallBudgetExceeded:
+                    except LeadCallBudgetExceeded:
                         return self._structured_fallback_lead_result(
                             session_id=session_id,
                             conversation_id=conversation_id,
@@ -14540,14 +13752,14 @@ class StoryRuntime:
                         )
                 intent = outcome.proposal
                 assert intent is not None
-                judgment = self._draft(
+                judgment = event_journal.draft(
                     session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
                     step_id=step_id,
                     kind=CollaborationEventKind.MESSAGE,
-                    sender=_LEAD_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.LEAD_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=CollaborationLeadJudgmentPayload(
                         outcome.kind,
                         outcome.message,
@@ -14577,7 +13789,7 @@ class StoryRuntime:
                         session_history=session_history,
                     )
                     outcome = replace(outcome, document_node=proposal.document_node)
-                except _LeadCallBudgetExceeded:
+                except LeadCallBudgetExceeded:
                     return self._structured_fallback_lead_result(
                         session_id=session_id,
                         conversation_id=conversation_id,
@@ -14594,28 +13806,28 @@ class StoryRuntime:
                         ),
                         provider_invocation_id=None if provider is None else provider.invocation_id,
                     )
-                request_id = self._new_id("c")
+                request_id = event_journal.new_id("c")
                 message_event = replace(judgment, payload=replace(judgment.payload,
                     message=self._proposal_disclosure(proposal, outcome.message),
                     authoring_scope=proposal.authoring_scope, document_node=proposal.document_node))
-                proposal_event = self._draft(
+                proposal_event = event_journal.draft(
                     session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
                     step_id=step_id,
                     kind=CollaborationEventKind.MESSAGE,
-                    sender=_LEAD_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.LEAD_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=proposal,
                 )
-                state_event = self._draft(
+                state_event = event_journal.draft(
                     session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
                     step_id=step_id,
                     kind=CollaborationEventKind.STEP_STATE,
-                    sender=_RUNTIME_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=CollaborationStepStatePayload(
                         state=CollaborationStepState.AWAITING_CONFIRMATION,
                         proposal_id=proposal.proposal_id,
@@ -14624,10 +13836,10 @@ class StoryRuntime:
                         confirmation_request_id=request_id,
                     ),
                 )
-                provider._public_accepted_call_id = provider.last_submitted_call_id
+                provider.accept_last_public_response()
                 provider.publish_public_responses()
                 refreshed = services.event_store.read_context(session_id, conversation_id)
-                self._append_drafts(
+                event_journal.append_drafts(
                     refreshed.last_sequence,
                     provider.with_group_trace((
                         message_event, proposal_event,
@@ -14641,6 +13853,7 @@ class StoryRuntime:
                           if preparation is not None else ()),
                         state_event,
                     ), "accepted"),
+                    append_batch=self.append_collaboration_event_batch,
                 )
                 return LeadTurnResult(
                     session_id,
@@ -14663,10 +13876,10 @@ class StoryRuntime:
                 session_id,
                 conversation_id,
             )
-            judgment = self._draft(
+            judgment = event_journal.draft(
                 session_id=session_id, conversation_id=conversation_id,
                 turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.MESSAGE,
-                sender=_LEAD_ACTOR, recipient=_USER_ACTOR,
+                sender=event_journal.LEAD_ACTOR, recipient=event_journal.USER_ACTOR,
                 payload=CollaborationLeadJudgmentPayload(
                     outcome.kind,
                     outcome.message,
@@ -14697,7 +13910,7 @@ class StoryRuntime:
                     evidence=evidence, events=recommendation_events, projection=refreshed,
                     artifact_binding=artifact_binding,
                     tail_sequence=refreshed.last_sequence + len(final_drafts) + 1,
-                    step_id=self._new_id("s") if refreshed.current_proposal is not None else None,
+                    step_id=event_journal.new_id("s") if refreshed.current_proposal is not None else None,
                     previous=None if preparation is None or (host_binding_plan is not None
                             and host_binding_plan.transition == "supersede") else preparation.request_event.payload,
                     session_history=session_history,
@@ -14706,7 +13919,7 @@ class StoryRuntime:
                     judgment = replace(judgment, payload=replace(judgment.payload,
                         document_node=request_draft.payload.document_node))
                     final_drafts = tuple(judgment if item.event_id == judgment.event_id else item for item in final_drafts)
-                provider._public_accepted_call_id = provider.last_submitted_call_id
+                provider.accept_last_public_response()
                 provider.publish_public_responses()
                 refreshed = services.event_store.read_context(session_id, conversation_id)
                 request_draft = replace(request_draft, payload=replace(
@@ -14714,15 +13927,19 @@ class StoryRuntime:
                 ))
                 publication_drafts = provider.with_group_trace((*final_drafts, request_draft), "accepted")
                 request_draft = publication_drafts[-1]
-                self._append_drafts(refreshed.last_sequence, publication_drafts)
+                event_journal.append_drafts(refreshed.last_sequence, publication_drafts,
+                    append_batch=self.append_collaboration_event_batch,
+                )
                 return replace(
                     self._recommendation_turn_result(request_draft),
                     validation_details=provider.validation_details,
                 )
-            provider._public_accepted_call_id = provider.last_submitted_call_id
+            provider.accept_last_public_response()
             provider.publish_public_responses()
             refreshed = services.event_store.read_context(session_id, conversation_id)
-            self._append_drafts(refreshed.last_sequence, provider.with_group_trace(final_drafts, "accepted"))
+            event_journal.append_drafts(refreshed.last_sequence, provider.with_group_trace(final_drafts, "accepted"),
+                append_batch=self.append_collaboration_event_batch,
+            )
             return LeadTurnResult(
                 session_id,
                 conversation_id,
@@ -14776,7 +13993,7 @@ class StoryRuntime:
         preparation: _RecommendationCapability | None = None,
         session_history: SessionHistorySnapshot | None = None,
         document_selection: DocumentNodeSelection | None = None,
-        public_response_provider: _AccountingContextProvider | None = None,
+        public_response_provider: AccountingContextProvider | None = None,
     ) -> LeadTurnResult:
         """Construct and disclose one exact candidate without mutating artifacts."""
 
@@ -14877,14 +14094,14 @@ class StoryRuntime:
                 for reviewer in reviewers
             ),
         )
-        judgment = self._draft(
+        judgment = event_journal.draft(
             session_id=session_id,
             conversation_id=conversation_id,
             turn_id=turn_id,
             step_id=step_id,
             kind=CollaborationEventKind.MESSAGE,
-            sender=_LEAD_ACTOR,
-            recipient=_USER_ACTOR,
+            sender=event_journal.LEAD_ACTOR,
+            recipient=event_journal.USER_ACTOR,
             payload=CollaborationLeadJudgmentPayload(
                 outcome.kind,
                 outcome.message,
@@ -14910,7 +14127,7 @@ class StoryRuntime:
             session_history=session_history,
         )
         outcome = replace(outcome, document_node=proposal.document_node)
-        request_id = self._new_id("c")
+        request_id = event_journal.new_id("c")
         judgment = replace(judgment, payload=replace(judgment.payload,
             message=self._proposal_disclosure(proposal, outcome.message), authoring_scope=proposal.authoring_scope,
             document_node=proposal.document_node))
@@ -14925,20 +14142,20 @@ class StoryRuntime:
             ),
             disclosed_specialist_ids=reviewers,
         )
-        candidate_event = self._draft(
+        candidate_event = event_journal.draft(
             session_id=session_id, conversation_id=conversation_id,
             turn_id=turn_id, step_id=step_id,
             kind=CollaborationEventKind.ARTIFACT_REVIEW_CANDIDATE,
-            sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+            sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
             payload=candidate_payload,
         )
         if public_response_provider is not None:
-            public_response_provider._public_accepted_call_id = public_response_provider.last_submitted_call_id
+            public_response_provider.accept_last_public_response()
             public_response_provider.publish_public_responses()
             projection = self.conversation_storage_services.event_store.read_context(session_id, conversation_id)
-        self._append_drafts(
+        event_journal.append_drafts(
             projection.last_sequence,
-            (_with_group_trace(public_response_provider, (
+            _with_group_trace(public_response_provider, (
                 judgment,
                 candidate_event,
                 *self._objective_drafts(
@@ -14947,24 +14164,24 @@ class StoryRuntime:
                     preparation=preparation,
                     session_events=None if session_history is None else session_history.events(),
                 ),
-                self._draft(
+                event_journal.draft(
                     session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
                     step_id=step_id,
                     kind=CollaborationEventKind.MESSAGE,
-                    sender=_LEAD_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.LEAD_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=proposal,
                 ),
-                self._draft(
+                event_journal.draft(
                     session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
                     step_id=step_id,
                     kind=CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
-                    sender=_RUNTIME_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=self._artifact_state_payload(
                         candidate_payload,
                         ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION,
@@ -14974,14 +14191,14 @@ class StoryRuntime:
                 *((self._recommendation_closure_draft(judgment, request_event=preparation.request_event,
                        decision_event=preparation.decision_event, start_event=preparation.start_event),)
                   if preparation is not None else ()),
-                self._draft(
+                event_journal.draft(
                     session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
                     step_id=step_id,
                     kind=CollaborationEventKind.STEP_STATE,
-                    sender=_RUNTIME_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=CollaborationStepStatePayload(
                         state=CollaborationStepState.AWAITING_CONFIRMATION,
                         proposal_id=proposal.proposal_id,
@@ -14990,7 +14207,8 @@ class StoryRuntime:
                         confirmation_request_id=request_id,
                     ),
                 ),
-            ), "accepted")),
+            ), "accepted"),
+            append_batch=self.append_collaboration_event_batch,
         )
         return LeadTurnResult(
             session_id,
@@ -15352,9 +14570,9 @@ class StoryRuntime:
             next_step = (ArtifactObjectiveNextStep.PREPARE if binding is not None else
                 ArtifactObjectiveNextStep.CONSULT if outcome.kind is LeadOutcomeKind.PROPOSAL else ArtifactObjectiveNextStep.CLARIFY)
             selected_sources = () if preparation is None else preparation.request_event.payload.draft_sources
-            return (self._draft(session_id=judgment.session_id, conversation_id=judgment.conversation_id,
+            return (event_journal.draft(session_id=judgment.session_id, conversation_id=judgment.conversation_id,
                 turn_id=judgment.turn_id, step_id=judgment.step_id, kind=CollaborationEventKind.ARTIFACT_OBJECTIVE,
-                sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+                sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
                 payload=(ArtifactObjectivePayloadV2 if type(facts) is ArtifactObjectiveFactsV2 else ArtifactObjectivePayload)(
                     facts, LeadObjectiveAction.START, None, judgment.event_id, next_step, selected_sources, binding,
                     document_plan=plan_override, document_node=outcome.document_node)),)
@@ -15391,7 +14609,7 @@ class StoryRuntime:
             if preparation is not None:
                 request = cast(LeadRecommendationRequestPayload, preparation.request_event.payload)
                 facts = ArtifactObjectiveFactsV2(
-                    objective_id=self._new_id("obj"), origin_conversation_id=judgment.conversation_id,
+                    objective_id=event_journal.new_id("obj"), origin_conversation_id=judgment.conversation_id,
                     origin_recommendation_request_event_id=request.request_event_id,
                     origin_recommendation_decision_event_id=preparation.decision_event.event_id,
                     request=request.instruction, target_paths=request.objective_target_paths,
@@ -15405,7 +14623,7 @@ class StoryRuntime:
                 )
             else:
                 facts = ArtifactObjectiveFacts(
-                    objective_id=self._new_id("obj"),
+                    objective_id=event_journal.new_id("obj"),
                     origin_conversation_id=judgment.conversation_id,
                     origin_user_event_id=origin.event_id,
                     request=origin.payload.content, target_paths=intent.target_paths,
@@ -15446,11 +14664,11 @@ class StoryRuntime:
                 and outcome.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}):
             plan = self._build_document_plan(facts, outcome.authoring_scope,
                 tuple(item.evidence_id for item in judgment.payload.evidence.receipts), outcome.core_document_readiness)
-        return (self._draft(
+        return (event_journal.draft(
             session_id=judgment.session_id, conversation_id=judgment.conversation_id,
             turn_id=judgment.turn_id, step_id=judgment.step_id,
             kind=CollaborationEventKind.ARTIFACT_OBJECTIVE,
-            sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+            sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
             payload=(ArtifactObjectivePayloadV2 if type(facts) is ArtifactObjectiveFactsV2
                      else ArtifactObjectivePayload)(
                 facts=facts, action=intent.action,
@@ -15506,7 +14724,7 @@ class StoryRuntime:
         return validation_call(
             '$.artifact_intent',
             build_artifact_review_candidate,
-            candidate_id=self._deterministic_id('ac', turn_id, step_id),
+            candidate_id=event_journal.deterministic_id('ac', turn_id, step_id),
             candidate_revision=1,
             intent=intent,
             evidence=artifact_evidence,
@@ -15532,7 +14750,7 @@ class StoryRuntime:
             LEAD_ORCHESTRATOR,
         )
         repository_access = partial(
-            _open_session_artifact_repository,
+            session_worktree_access.open_session_artifact_repository,
             artifact_binding,
         )
         writing_adapter = create_guarded_writing_artifact_source_adapter(
@@ -15683,7 +14901,7 @@ class StoryRuntime:
         failure: Exception,
         reference_failure: ReferenceOperationFailure,
         reference_operation: RuntimeReferenceOperation,
-        provider: _AccountingContextProvider | None,
+        provider: AccountingContextProvider | None,
         recovered: LeadTurnResult | None,
     ) -> LeadTurnResult | None:
         """Prefer a proven Lead result only over its derivative reference failure."""
@@ -15852,7 +15070,7 @@ class StoryRuntime:
         self, session_id: str, conversation_id: str, *,
         failure: BaseException | None = None,
         turn_id: str | None = None, step_id: str | None = None,
-        accounting_provider: _AccountingContextProvider | None = None,
+        accounting_provider: AccountingContextProvider | None = None,
     ) -> LeadTurnResult | None:
         """Close only the projection-authorized read-only attempt under its lease."""
 
@@ -15928,8 +15146,8 @@ class StoryRuntime:
         call_id: str | None,
         failure_code: CollaborationLeadOutcomeFailureCode,
         failure: BaseException | None = None,
-        accounting_provider: _AccountingContextProvider | None = None,
-        trace_provider: _AccountingContextProvider | None = None,
+        accounting_provider: AccountingContextProvider | None = None,
+        trace_provider: AccountingContextProvider | None = None,
     ) -> LeadTurnResult:
         """Durably close a failed read-only Lead attempt without replaying it."""
 
@@ -15951,14 +15169,14 @@ class StoryRuntime:
                 conversation_id,
             )
             failure_drafts: tuple[CollaborationEventDraft, ...] = (
-                self._draft(
+                event_journal.draft(
                     session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
                     step_id=step_id,
                     kind=CollaborationEventKind.LEAD_OUTCOME_FAILURE,
-                    sender=_RUNTIME_ACTOR,
-                    recipient=_USER_ACTOR,
+                    sender=event_journal.RUNTIME_ACTOR,
+                    recipient=event_journal.USER_ACTOR,
                     payload=CollaborationLeadOutcomeFailurePayload(
                         code=failure_code,
                         invocation_id=invocation_id,
@@ -15968,14 +15186,14 @@ class StoryRuntime:
             )
             if artifact_intent and projection.current_recommendation_state is not LeadRecommendationState.RUNNING:
                 failure_drafts += (
-                    self._draft(
+                    event_journal.draft(
                         session_id=session_id,
                         conversation_id=conversation_id,
                         turn_id=turn_id,
                         step_id=step_id,
                         kind=CollaborationEventKind.ARTIFACT_REVIEW_FAILURE,
-                        sender=_RUNTIME_ACTOR,
-                        recipient=_USER_ACTOR,
+                        sender=event_journal.RUNTIME_ACTOR,
+                        recipient=event_journal.USER_ACTOR,
                         payload=ArtifactReviewFailurePayload(
                             code=ArtifactReviewFailureCode.INTENT_REJECTED,
                             invocation_id=invocation_id,
@@ -15983,9 +15201,10 @@ class StoryRuntime:
                         ),
                     ),
                 )
-            self._append_drafts(
+            event_journal.append_drafts(
                 projection.last_sequence,
                 _with_group_trace(collector, failure_drafts, failure_code.value),
+                append_batch=self.append_collaboration_event_batch,
             )
         except Exception:
             return self._blocking_lead_result(
@@ -16059,17 +15278,17 @@ class StoryRuntime:
                 session_id,
                 conversation_id,
             )
-            self._append_drafts(
+            event_journal.append_drafts(
                 projection.last_sequence,
                 (
-                    self._draft(
+                    event_journal.draft(
                         session_id=session_id,
                         conversation_id=conversation_id,
                         turn_id=turn_id,
                         step_id=step_id,
                         kind=CollaborationEventKind.MESSAGE,
-                        sender=_LEAD_ACTOR,
-                        recipient=_USER_ACTOR,
+                        sender=event_journal.LEAD_ACTOR,
+                        recipient=event_journal.USER_ACTOR,
                         payload=CollaborationMessagePayload(
                             message,
                             trace,
@@ -16077,6 +15296,7 @@ class StoryRuntime:
                         ),
                     ),
                 ),
+                append_batch=self.append_collaboration_event_batch,
             )
         events = self.conversation_storage_services.event_store.read(session_id, conversation_id)
         control = next((event for event in events
@@ -17071,7 +16291,7 @@ class StoryRuntime:
             raise ValueError("premise request ID cannot change its exact USER control")
         origin = matches[0]
         messages = tuple(event for event in events if event.turn_id == origin.turn_id
-            and event.step_id == origin.step_id and event.sender == _USER_ACTOR
+            and event.step_id == origin.step_id and event.sender == event_journal.USER_ACTOR
             and type(event.payload) is CollaborationMessagePayload)
         if len(messages) != 1 or messages[0].payload.content != text:
             raise ValueError("premise request ID cannot change its exact USER text")
@@ -17104,8 +16324,8 @@ class StoryRuntime:
         if (
             control is not None
             and type(control.payload) is CollaborationPremiseDecisionPayload
-            and control.sender == _USER_ACTOR
-            and control.recipient == _LEAD_ACTOR
+            and control.sender == event_journal.USER_ACTOR
+            and control.recipient == event_journal.LEAD_ACTOR
             and (control.session_id, control.conversation_id, control.turn_id, control.step_id)
             == (session_id, conversation_id, projection.current_turn_id, projection.current_step_id)
             and control.payload.selection == projection.premise_decision
@@ -17214,7 +16434,7 @@ class StoryRuntime:
         events = self.conversation_storage_services.event_store.read(session_id, conversation_id)
         projection = project_collaboration_history(events)
         origins = tuple(event for event in events if event.turn_id == turn_id
-                        and event.sender == _USER_ACTOR and type(event.payload) is CollaborationMessagePayload)
+                        and event.sender == event_journal.USER_ACTOR and type(event.payload) is CollaborationMessagePayload)
         if len(origins) != 1:
             raise BackendProtocolError("fresh work needs one exact durable USER input")
         origin = origins[0]
@@ -17253,11 +16473,13 @@ class StoryRuntime:
             "sha256:" + hashlib.sha256(encode_collaboration_event(origin)).hexdigest(),
             step_id, invocation_id, 2, question_id, offered_authoring_tasks, selected_authoring_task,
             parent, report_ref, source_ref)
-        draft = self._draft(session_id=session_id, conversation_id=conversation_id,
+        draft = event_journal.draft(session_id=session_id, conversation_id=conversation_id,
             turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.PREMISE_FRESH_WORK_ADMISSION,
-            sender=_RUNTIME_ACTOR, recipient=_LEAD_ACTOR,
+            sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.LEAD_ACTOR,
             payload=CollaborationPremiseFreshWorkAdmissionPayload(admission))
-        self._append_drafts(projection.last_sequence, (draft,))
+        event_journal.append_drafts(projection.last_sequence, (draft,),
+            append_batch=self.append_collaboration_event_batch,
+        )
         return admission
 
     @staticmethod
@@ -17736,9 +16958,9 @@ class StoryRuntime:
                                                     and type(event.payload) is CollaborationMessagePayload
                                                     and (event.session_id, event.conversation_id, event.turn_id, event.step_id)
                                                     == (adopted.session_id, adopted.conversation_id, adopted.turn_id, adopted.step_id))
-                                    if (adopted.session_id == session_id and adopted.sender == _USER_ACTOR and adopted.recipient == _LEAD_ACTOR
+                                    if (adopted.session_id == session_id and adopted.sender == event_journal.USER_ACTOR and adopted.recipient == event_journal.LEAD_ACTOR
                                             and capture.selection.intent is AuthoringIntent.REVIEW_ONLY and capture.task_revision == 1
-                                            and len(origins) == 1 and origins[0].sender == _USER_ACTOR and origins[0].recipient == _LEAD_ACTOR
+                                            and len(origins) == 1 and origins[0].sender == event_journal.USER_ACTOR and origins[0].recipient == event_journal.LEAD_ACTOR
                                             and bool(capture.selected_text.strip())
                                             and material_sha256(capture.selected_text) == capture.selected_material_digest
                                             and item.revision_digest == f"sha256:{capture.selected_material_digest}"):
@@ -17797,8 +17019,8 @@ class StoryRuntime:
                         and view.status in {"active", "held", "protected"})
                     if len(views) == 1:
                         transition_users.update(item.event_id for item in records
-                            if type(item.payload) is CollaborationMessagePayload and item.sender == _USER_ACTOR
-                            and item.recipient == _LEAD_ACTOR and item.turn_id == event.turn_id
+                            if type(item.payload) is CollaborationMessagePayload and item.sender == event_journal.USER_ACTOR
+                            and item.recipient == event_journal.LEAD_ACTOR and item.turn_id == event.turn_id
                             and item.step_id == receipt.planning_step_id)
         ids = set(views[0].source_event_ids) if len(views) == 1 else set()
         ids.update(transition_users)
@@ -17812,8 +17034,8 @@ class StoryRuntime:
         for event in records:
             if event.event_id not in ids or (requested is not None and event.event_id not in requested):
                 continue
-            if (type(event.payload) is not CollaborationMessagePayload or event.sender != _USER_ACTOR
-                    or event.recipient != _LEAD_ACTOR):
+            if (type(event.payload) is not CollaborationMessagePayload or event.sender != event_journal.USER_ACTOR
+                    or event.recipient != event_journal.LEAD_ACTOR):
                 raise ValueError("historical authoring source is not a literal USER origin")
             locator = f"conversation/{event.turn_id}/user_input"
             if locator in excluded:
@@ -17856,13 +17078,13 @@ class StoryRuntime:
             if source is None or type(source.payload) is not CollaborationLeadSynthesisPayload:
                 return None
             matches = tuple(reply for reply in pending_replies
-                            if item.locator == f"conversation/{self._deterministic_id('e', reply.execution_attempt_id, reply.assignment_id, 'reply')}")
+                            if item.locator == f"conversation/{event_journal.deterministic_id('e', reply.execution_attempt_id, reply.assignment_id, 'reply')}")
             if not matches:
                 return None
             if len(matches) != 1:
                 raise ValueError("authoring admission pending reply is ambiguous")
             reply = matches[0]
-            identity = self._deterministic_id("e", reply.execution_attempt_id, reply.assignment_id, "reply")
+            identity = event_journal.deterministic_id("e", reply.execution_attempt_id, reply.assignment_id, "reply")
             header = (source.session_id, source.conversation_id, source.turn_id, source.step_id)
             dispatches = tuple(event for event in events if event.event_id == reply.dispatch_event_id)
             if len(dispatches) != 1 or type(dispatches[0].payload) is not CollaborationAssignmentDispatchPayload:
@@ -17876,10 +17098,10 @@ class StoryRuntime:
             if (len(proposals) != 1 or scope is None or proposals[0] not in confirmed_authoring_proposals(scope, events)
                 or proposals[0].authoring_scope != source.payload.authoring_scope
                 or source.kind is not CollaborationEventKind.LEAD_SYNTHESIS
-                or source.sender != _LEAD_ACTOR or source.recipient != _USER_ACTOR
+                or source.sender != event_journal.LEAD_ACTOR or source.recipient != event_journal.USER_ACTOR
                 or dispatch_event.kind is not CollaborationEventKind.ASSIGNMENT_DISPATCH
                 or (dispatch_event.session_id, dispatch_event.conversation_id, dispatch_event.turn_id, dispatch_event.step_id) != header
-                or dispatch_event.sender != _RUNTIME_ACTOR
+                or dispatch_event.sender != event_journal.RUNTIME_ACTOR
                 or dispatch_event.recipient != CollaborationActor(CollaborationActorKind.SPECIALIST, dispatch.assignment.specialist_id)
                 or key != (dispatch.proposal_id, dispatch.proposal_revision, dispatch.proposal_digest)
                 or key != (source.payload.proposal_id, source.payload.proposal_revision, source.payload.proposal_digest)
@@ -17903,11 +17125,11 @@ class StoryRuntime:
                             and (event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest) == key)
             if len(running) != 1:
                 raise ValueError("authoring admission pending reply lacks exact running attempt")
-            pending = self._draft_with_id(
+            pending = event_journal.draft_with_id(
                 event_id=identity, session_id=source.session_id, conversation_id=source.conversation_id,
                 turn_id=source.turn_id, step_id=source.step_id, kind=CollaborationEventKind.SPECIALIST_REPLY,
                 sender=CollaborationActor(CollaborationActorKind.SPECIALIST, dispatch.assignment.specialist_id),
-                recipient=_USER_ACTOR if proposals[0].step_kind is CollaborationStepKind.SPECIALIST_ADVISORY else _LEAD_ACTOR,
+                recipient=event_journal.USER_ACTOR if proposals[0].step_kind is CollaborationStepKind.SPECIALIST_ADVISORY else event_journal.LEAD_ACTOR,
                 payload=reply,
             )
             stored = tuple(event for event in events if event.event_id == identity)
@@ -17935,8 +17157,8 @@ class StoryRuntime:
                              if type(source.payload) is CollaborationLeadJudgmentPayload
                              else CollaborationEventKind.LEAD_SYNTHESIS)
             if (type(source.payload) not in {CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload}
-                    or source.kind is not expected_kind or source.sender != _LEAD_ACTOR
-                    or source.recipient != _USER_ACTOR
+                    or source.kind is not expected_kind or source.sender != event_journal.LEAD_ACTOR
+                    or source.recipient != event_journal.USER_ACTOR
                     or not any((event.session_id, event.conversation_id, event.turn_id, event.step_id)
                                == header for event in events)
                     or item.kind is not CollaborationInputKind.CONVERSATION_EVENT
@@ -18028,7 +17250,7 @@ class StoryRuntime:
         user = next(v for v in inputs if v.kind is CollaborationInputKind.USER_INPUT and v.state is CollaborationInputState.PRESENT)
         turn = user.locator.removeprefix("conversation/").removesuffix("/user_input")
         origins = tuple(event for event in events if event.turn_id == turn
-            and type(event.payload) is CollaborationMessagePayload and event.sender == _USER_ACTOR)
+            and type(event.payload) is CollaborationMessagePayload and event.sender == event_journal.USER_ACTOR)
         local = ({(origins[0].session_id, origins[0].conversation_id)} if len(origins) == 1
             else {(event.session_id, event.conversation_id) for event in events})
         if len(local) == 1:
@@ -18238,7 +17460,7 @@ class StoryRuntime:
         if intent.authoring_scope is not None and intent.authoring_scope.schema_version == 3 and intent.authoring_scope.activity in {
             AuthoringActivity.DRAFT, AuthoringActivity.REVISE,
         } and projection.rounds_spent:
-            raise _LeadCallBudgetExceeded("v3 authoring reserves round two for final review; clarify or freshly propose")
+            raise LeadCallBudgetExceeded("v3 authoring reserves round two for final review; clarify or freshly propose")
         captured = () if intent.premise_decision is not None else self._capture_shared_premises(session_id, intent, inputs)
         allocated_limits, synthesis_calls, required_calls = (
             self._proposal_call_reservations(
@@ -18251,10 +17473,10 @@ class StoryRuntime:
         proposal_revision = (
             1 if previous_proposal is None else previous_proposal.proposal_revision + 1
         )
-        proposal_id = self._new_id("p")
+        proposal_id = event_journal.new_id("p")
         runtime_assignments = tuple(
             CollaborationAssignment(
-                assignment_id=self._new_id("a"),
+                assignment_id=event_journal.new_id("a"),
                 specialist_id=item.agent_id,
                 round=projection.rounds_spent + 1,
                 instruction=item.instruction,
@@ -18328,11 +17550,11 @@ class StoryRuntime:
         spec = None
         if intent.premise_decision is not None:
             if projection.rounds_spent:
-                raise _LeadCallBudgetExceeded("premise analysis cannot restart its terminal round")
+                raise LeadCallBudgetExceeded("premise analysis cannot restart its terminal round")
             question = intent.premise_decision
             current_events = self.conversation_storage_services.event_store.read(session_id, projection.conversation_id)
             origin = next((event for event in reversed(current_events)
-                if event.turn_id == projection.current_turn_id and event.sender == _USER_ACTOR
+                if event.turn_id == projection.current_turn_id and event.sender == event_journal.USER_ACTOR
                 and type(event.payload) is CollaborationMessagePayload), None)
             if origin is None:
                 raise BackendProtocolError("premise question has no exact current USER origin")
@@ -18363,7 +17585,7 @@ class StoryRuntime:
         if intent.authoring_scope is not None and intent.authoring_scope.schema_version == 3 and intent.authoring_scope.activity in {
             AuthoringActivity.DRAFT, AuthoringActivity.REVISE,
         } and any(item.step_id != step_id for item in confirmed_authoring_proposals(intent.authoring_scope, events)):
-            raise _LeadCallBudgetExceeded("confirmed authoring revision cannot restart its lineage; advance the task revision and freshly confirm")
+            raise LeadCallBudgetExceeded("confirmed authoring revision cannot restart its lineage; advance the task revision and freshly confirm")
         self._validate_final_review_handoff(proposal, events, projection)
         return proposal
 
@@ -18653,7 +17875,7 @@ class StoryRuntime:
             LEAD_ORCHESTRATOR,
         )
         repository_access = partial(
-            _open_session_artifact_repository,
+            session_worktree_access.open_session_artifact_repository,
             artifact_binding,
         )
         writing_adapter = create_guarded_writing_artifact_source_adapter(
@@ -19035,8 +18257,8 @@ class StoryRuntime:
                     for event in events
                     if event.turn_id == turn_id
                     and type(event.payload) is CollaborationMessagePayload
-                    and event.sender == _USER_ACTOR
-                    and event.recipient == _LEAD_ACTOR
+                    and event.sender == event_journal.USER_ACTOR
+                    and event.recipient == event_journal.LEAD_ACTOR
                 )
                 if len(user_events) != 1:
                     raise ValueError("proposal user input identity is not unique")
@@ -19075,7 +18297,7 @@ class StoryRuntime:
                     origin = next((event for event in events if event.event_id == capture.selection_event_id), None)
                     if (origin is None or type(origin.payload) is not CollaborationPremiseDecisionPayload
                             or origin.payload.selection != capture.selection or origin.batch_id != chosen.batch_id
-                            or origin.sender != _USER_ACTOR or chosen.sender != _RUNTIME_ACTOR
+                            or origin.sender != event_journal.USER_ACTOR or chosen.sender != event_journal.RUNTIME_ACTOR
                             or chosen.session_id != proposal_events[0].session_id
                             or chosen.conversation_id != proposal_events[0].conversation_id
                             or chosen.sequence >= proposal_events[0].sequence
@@ -19098,7 +18320,7 @@ class StoryRuntime:
                     scope = proposal.authoring_scope
                     if scope is None or (scope.task_id, scope.task_revision) != (
                         capture.target_task_id, capture.target_task_revision,
-                    ) or captured.sender != _RUNTIME_ACTOR or captured.recipient != _USER_ACTOR or (
+                    ) or captured.sender != event_journal.RUNTIME_ACTOR or captured.recipient != event_journal.USER_ACTOR or (
                         captured.session_id, captured.conversation_id,
                     ) != (proposal_events[0].session_id, proposal_events[0].conversation_id):
                         raise ValueError("selected material is not bound to the current task and USER control")
@@ -19129,7 +18351,7 @@ class StoryRuntime:
                             or scope.task_revision < capture.task_revision
                             or captured.session_id != proposal_events[0].session_id
                             or captured.conversation_id != proposal_events[0].conversation_id
-                            or captured.sender != _USER_ACTOR or captured.recipient != _LEAD_ACTOR
+                            or captured.sender != event_journal.USER_ACTOR or captured.recipient != event_journal.LEAD_ACTOR
                             or captured.sequence >= proposal_events[0].sequence
                             or expected.state is not CollaborationInputState.PRESENT
                             or expected.start_line is not None or expected.end_line is not None
@@ -19359,7 +18581,7 @@ class StoryRuntime:
         )
         minimum_required_calls = sum(assignment_call_limits) + synthesis_minimum
         if minimum_required_calls > remaining:
-            raise _LeadCallBudgetExceeded(
+            raise LeadCallBudgetExceeded(
                 "declared preparation and full final review cannot fit the remaining physical-call budget; clarify or freshly propose"
             )
         allocated_limits = list(assignment_call_limits)
@@ -20056,195 +19278,13 @@ class StoryRuntime:
             body,
         )
 
-    def _append_provider_call_fact(
-        self,
-        *,
-        session_id: str,
-        conversation_id: str,
-        turn_id: str,
-        step_id: str,
-        invocation_id: str,
-        call_id: str,
-        ordinal: int,
-        call_kind: CollaborationProviderCallKind,
-        state: CollaborationProviderCallState,
-        role: str,
-        invocation_kind: CollaborationInvocationKind,
-        validation_details: tuple[str, ...] = (),
-        usage: ProviderUsage | None = None,
-        accounting: ProviderCallAccounting | None = None,
-        document_node: DocumentNodeBinding | None = None,
-        document_goal=None, document_budget_task_id=None,
-    ) -> None:
-        projection = self.conversation_storage_services.event_store.read_context(
-            session_id,
-            conversation_id,
-        )
-        self._append_drafts(
-            projection.last_sequence,
-            (
-                self._draft(
-                    session_id=session_id,
-                    conversation_id=conversation_id,
-                    turn_id=turn_id,
-                    step_id=step_id,
-                    kind=CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
-                    sender=_RUNTIME_ACTOR,
-                    recipient=self._actor_for_agent(role),
-                    payload=CollaborationProviderCallPayload(
-                        document_node=document_node, document_goal=document_goal, document_budget_task_id=document_budget_task_id,
-                        invocation_id=invocation_id,
-                        call_id=call_id,
-                        ordinal=ordinal,
-                        role=role,
-                        invocation_kind=invocation_kind,
-                        call_kind=call_kind,
-                        state=state,
-                        validation_details=validation_details,
-                        usage=usage,
-                        accounting=accounting,
-                    ),
-                ),
-            ),
-        )
 
-    def _append_validation_messages(
-        self, *, session_id: str, conversation_id: str, turn_id: str,
-        step_id: str, invocation_id: str,
-        details_by_call: tuple[tuple[str, tuple[str, ...]], ...],
-    ) -> None:
-        """Append ordered bounded chunks before the established fallback message."""
 
-        drafts = tuple(
-            self._draft_with_id(
-                event_id=self._deterministic_id(
-                    "e", invocation_id, call_id, "validation", str(index),
-                ),
-                session_id=session_id,
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                step_id=step_id,
-                kind=CollaborationEventKind.MESSAGE,
-                sender=_RUNTIME_ACTOR,
-                recipient=_USER_ACTOR,
-                payload=CollaborationMessagePayload(
-                    part,
-                    validation_details=(part,),
-                    validation_invocation_id=invocation_id,
-                    validation_call_id=call_id,
-                ),
-            )
-            for call_id, details in details_by_call
-            for index, part in enumerate(details)
-        )
-        events = self.conversation_storage_services.event_store.read(
-            session_id, conversation_id,
-        )
-        by_id = {event.event_id: event for event in events}
-        existing = tuple(by_id.get(draft.event_id) for draft in drafts)
-        if any(event is not None for event in existing):
-            if all(
-                event is not None
-                and event.session_id == draft.session_id
-                and event.conversation_id == draft.conversation_id
-                and event.turn_id == draft.turn_id
-                and event.step_id == draft.step_id
-                and event.kind is draft.kind
-                and event.sender == draft.sender
-                and event.recipient == draft.recipient
-                and event.payload == draft.payload
-                for event, draft in zip(existing, drafts, strict=True)
-            ):
-                return
-            raise BackendProtocolError("diagnostic message append is incomplete")
-        projection = project_collaboration_history(events)
-        self._append_drafts(
-            projection.last_sequence,
-            drafts,
-            batch_id=self._deterministic_id("b", invocation_id, "validation"),
-        )
 
-    @staticmethod
-    def _actor_for_agent(agent_id: str) -> CollaborationActor:
-        if agent_id == LEAD_ORCHESTRATOR:
-            return _LEAD_ACTOR
-        if agent_id in SPECIALIST_IDS:
-            return CollaborationActor(CollaborationActorKind.SPECIALIST, agent_id)
-        raise ValueError("provider call role must be canonical")
 
-    def _append_drafts(
-        self,
-        expected_last_sequence: int,
-        drafts: tuple[CollaborationEventDraft, ...],
-        *,
-        batch_id: str | None = None,
-    ) -> object:
-        batch = CollaborationEventBatch(
-            batch_id=self._new_id("b") if batch_id is None else batch_id,
-            expected_last_sequence=expected_last_sequence,
-            events=drafts,
-        )
-        return self.conversation_storage_services.event_store.append_batch(batch)
 
-    @classmethod
-    def _draft(
-        cls,
-        *,
-        session_id: str,
-        conversation_id: str,
-        turn_id: str,
-        step_id: str,
-        kind: CollaborationEventKind,
-        sender: CollaborationActor,
-        recipient: CollaborationActor,
-        payload: CollaborationPayload,
-    ) -> CollaborationEventDraft:
-        return cls._draft_with_id(
-            event_id=cls._new_id("e"),
-            session_id=session_id,
-            conversation_id=conversation_id,
-            turn_id=turn_id,
-            step_id=step_id,
-            kind=kind,
-            sender=sender,
-            recipient=recipient,
-            payload=payload,
-        )
 
-    @staticmethod
-    def _draft_with_id(
-        *,
-        event_id: str,
-        session_id: str,
-        conversation_id: str,
-        turn_id: str,
-        step_id: str,
-        kind: CollaborationEventKind,
-        sender: CollaborationActor,
-        recipient: CollaborationActor,
-        payload: CollaborationPayload,
-    ) -> CollaborationEventDraft:
-        return CollaborationEventDraft(
-            schema_version=COLLABORATION_EVENT_SCHEMA_VERSION,
-            event_id=event_id,
-            session_id=session_id,
-            conversation_id=conversation_id,
-            turn_id=turn_id,
-            step_id=step_id,
-            kind=kind,
-            sender=sender,
-            recipient=recipient,
-            payload=payload,
-        )
 
-    @staticmethod
-    def _new_id(prefix: str) -> str:
-        return f"{prefix}_{uuid.uuid4().hex}"
-
-    @staticmethod
-    def _deterministic_id(prefix: str, *parts: str) -> str:
-        value = "\x1f".join(parts).encode("utf-8", errors="strict")
-        return f"{prefix}_{hashlib.sha256(value).hexdigest()[:32]}"
 
     @staticmethod
     def _canonical_digest(value: object) -> str:
@@ -20355,7 +19395,7 @@ class StoryRuntime:
             event.event_id for event in events
             if type(event.payload) is CollaborationPremiseDecisionPayload
             and event.payload.selection.action in {PremiseDecisionAction.REJECT, PremiseDecisionAction.DEFER}
-            and event.sender == _USER_ACTOR and event.recipient == _LEAD_ACTOR
+            and event.sender == event_journal.USER_ACTOR and event.recipient == event_journal.LEAD_ACTOR
         }
         if settled_controls:
             current_report_event = None
@@ -20368,7 +19408,7 @@ class StoryRuntime:
                     current_report_event = event
                 elif (
                     type(event.payload) is CollaborationMessagePayload
-                    and event.sender == _USER_ACTOR and event.recipient == _LEAD_ACTOR
+                    and event.sender == event_journal.USER_ACTOR and event.recipient == event_journal.LEAD_ACTOR
                 ):
                     key = (
                         event.session_id, event.conversation_id, event.turn_id, event.step_id, event.batch_id,
@@ -20422,8 +19462,8 @@ class StoryRuntime:
                 )
                 or (
                     event.kind is CollaborationEventKind.MESSAGE
-                    and event.sender == _LEAD_ACTOR
-                    and event.recipient == _USER_ACTOR
+                    and event.sender == event_journal.LEAD_ACTOR
+                    and event.recipient == event_journal.USER_ACTOR
                     and type(event.payload) is CollaborationLeadJudgmentPayload
                 )
                 or type(event.payload) in {CollaborationLeadOutcomeFailurePayload, CollaborationLeadExplorationResultPayload, CollaborationLeadDiscussionPayload}
@@ -20432,7 +19472,7 @@ class StoryRuntime:
                 continue
             if (
                 ((type(event.payload) is CollaborationMessagePayload
-                  and event.sender == _USER_ACTOR and event.recipient == _LEAD_ACTOR)
+                  and event.sender == event_journal.USER_ACTOR and event.recipient == event_journal.LEAD_ACTOR)
                  or type(event.payload) is LeadRecommendationStartedPayload)
                 and event.turn_id not in marked_turns
             ):
@@ -20451,8 +19491,8 @@ class StoryRuntime:
             correlation = (event.step_id, event.turn_id)
             if (
                 event.kind is CollaborationEventKind.MESSAGE
-                and event.sender == _LEAD_ACTOR
-                and event.recipient == _USER_ACTOR
+                and event.sender == event_journal.LEAD_ACTOR
+                and event.recipient == event_journal.USER_ACTOR
                 and type(event.payload) is CollaborationLeadJudgmentPayload
             ) or type(event.payload) in {CollaborationLeadOutcomeFailurePayload, CollaborationLeadExplorationResultPayload, CollaborationLeadDiscussionPayload}:
                 completed_invocations.add(correlation)
@@ -20510,7 +19550,7 @@ class StoryRuntime:
             raise TypeError("context_event_sink must be a synchronous callable")
 
     async def _invoke_context_with_recovery(
-        self, request: ContextInvocationRequest, provider: _AccountingContextProvider,
+        self, request: ContextInvocationRequest, provider: AccountingContextProvider,
         *, reference_operation: RuntimeReferenceOperation,
         provider_factory: Callable[[object], object], round_number: int | None,
         **arguments: Any,
@@ -20522,7 +19562,7 @@ class StoryRuntime:
         def observe_context_event(event):
             nonlocal last_native_event
             if event.kind is ContextExecutionEventKind.NATIVE_CONTEXT:
-                event = replace(event, invocation_id=provider._invocation_id)
+                event = provider.correlate_native_context_event(event)
                 last_native_event = event
                 if original_event_sink is not None:
                     try:
@@ -20537,16 +19577,7 @@ class StoryRuntime:
                 return
             try:
                 event = replace(last_native_event, native_disposition=disposition)
-                if provider._group_observations:
-                    prior = provider._group_observations[-1]
-                    snapshot = json.dumps({"check": event.native_context_check.as_object(),
-                        "disposition": disposition.value, "attempt_id": event.attempt_id,
-                        "call_phase": None if event.group_phase is None else event.group_phase.value,
-                        "native_process_completed": None if event.native_context_check.normal_exit_code is None else event.native_context_check.normal_exit_code == 0},
-                        ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
-                    provider.record_group_observation(LeadGroupObservation(
-                        LeadGroupObservationKind.NATIVE_CONTEXT, prior.request_basis, prior.phase,
-                        event.native_context_check.call_id, native_context_snapshot=snapshot))
+                provider.record_native_context_recovery(event, disposition)
                 observe_context_event(event)
             except BaseException:
                 pass
@@ -20609,17 +19640,6 @@ class StoryRuntime:
                 record_context_provider_failure(failure, rejected_facts)
             raise
 
-    @asynccontextmanager
-    async def _lead_session_lifecycle(self, session_id: str) -> AsyncIterator[None]:
-        transaction = self._agent_context_service.session_continuation(
-            session_id, LEAD_ORCHESTRATOR,
-        )
-        async with transaction:
-            self._lead_continuations[session_id] = transaction
-            try:
-                yield
-            finally:
-                del self._lead_continuations[session_id]
 
     def _session_context_state(
         self,
@@ -20662,22 +19682,11 @@ class StoryRuntime:
                 for event in services.event_store.read(session_id, conversation_id)
                 if type(event.payload) is CollaborationLeadOutcomeFailurePayload
             )),
-            "continuation": self._lead_continuations[session_id],
+            "continuation": self._session_execution_scopes.lead_continuation(session_id),
             "session_history": self._editorial_snapshot(session_id) if session_history is None else session_history,
             "publication_validator": published,
         }
 
-    def _conversation_lock(
-        self,
-        session_id: str,
-        conversation_id: str,
-    ) -> asyncio.Lock:
-        key = (session_id, conversation_id)
-        lock = self._conversation_locks.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._conversation_locks[key] = lock
-        return lock
 
     @staticmethod
     def _validated_context_provider_factory(
@@ -20699,242 +19708,15 @@ class StoryRuntime:
             raise BackendProtocolError("bound context_provider() must be synchronous")
         return factory
 
-    async def _acquire_bound_agent(
-        self,
-        definition: object,
-    ) -> BoundAgent:
-        """Select one binding and retain it for the exact lead operation."""
 
-        return await self._select_bound_agent(definition, retain_use=True)
 
-    async def _select_bound_agent(
-        self,
-        definition: object,
-        *,
-        retain_use: bool,
-    ) -> BoundAgent:
-        agent_id = getattr(definition, "agent_id", None)
-        fingerprint = getattr(definition, "fingerprint", None)
-        if type(agent_id) is not str or type(fingerprint) is not str:
-            raise BackendProtocolError("agent definition identity is invalid")
-        key = (agent_id, fingerprint)
-        releases: list[BoundAgent] = []
-        selected: BoundAgent | None = None
-        async with self._binding_lock:
-            self._desired_binding_fingerprints[key[0]] = key[1]
-            selected = self._bound_agents.get(key)
-            if selected is None:
-                selected = self._retiring_bound_agents.pop(key, None)
-                if selected is not None:
-                    releases.extend(self._install_current_binding_locked(key, selected))
-            if selected is not None:
-                if retain_use:
-                    self._retain_bound_agent_use_locked(selected)
-                task = None
-            else:
-                task = self._binding_tasks.get(key)
-                if task is None:
-                    task = asyncio.create_task(
-                        self._bind_definition(definition),
-                        name=f"bind:{agent_id}:{fingerprint[:12]}",
-                    )
-                    self._binding_tasks[key] = task
-                self._binding_waiters[key] = self._binding_waiters.get(key, 0) + 1
 
-        self._release_provider_bindings(releases)
-        if selected is not None:
-            return selected
-        assert task is not None
-        task_result_handled = False
-        superseded_selection = False
-        try:
-            bound_agent = await asyncio.shield(task)
-            releases = []
-            async with self._binding_lock:
-                if (
-                    self._binding_tasks.get(key) is task
-                    and self._binding_waiters.get(key, 0) > 0
-                ):
-                    is_desired = (
-                        self._desired_binding_fingerprints.get(key[0]) == key[1]
-                    )
-                    if retain_use:
-                        self._retain_bound_agent_use_locked(bound_agent)
-                    if is_desired:
-                        releases.extend(
-                            self._install_current_binding_locked(key, bound_agent)
-                        )
-                    elif not retain_use:
-                        releases.append(bound_agent)
-                        superseded_selection = True
-                    else:
-                        releases.extend(
-                            self._mark_binding_retiring_locked(key, bound_agent)
-                        )
-                    if not superseded_selection:
-                        selected = bound_agent
-                    task_result_handled = True
-            self._release_provider_bindings(releases)
-            if superseded_selection:
-                raise _SupersededBindingSelection
-            if selected is None:
-                raise BackendProtocolError(
-                    "completed binding lost its runtime ownership"
-                )
-            return selected
-        finally:
-            task_to_join: asyncio.Task[BoundAgent] | None = None
-            async with self._binding_lock:
-                remaining = self._binding_waiters.get(key, 0) - 1
-                if remaining > 0:
-                    self._binding_waiters[key] = remaining
-                else:
-                    self._binding_waiters.pop(key, None)
-                    if self._binding_tasks.get(key) is task:
-                        self._binding_tasks.pop(key, None)
-                        if not task.done():
-                            task.cancel()
-                        task_to_join = task
-            if task_to_join is not None:
-                outcome = (await asyncio.gather(task_to_join, return_exceptions=True))[
-                    0
-                ]
-                if not task_result_handled and not isinstance(
-                    outcome,
-                    BaseException,
-                ):
-                    async with self._binding_lock:
-                        tracked = self._binding_is_tracked_locked(outcome)
-                    if not tracked:
-                        release_bound_agent(outcome)
 
-    def _install_current_binding_locked(
-        self,
-        key: tuple[str, str],
-        bound_agent: BoundAgent,
-    ) -> list[BoundAgent]:
-        releases: list[BoundAgent] = []
-        for current_key, current in tuple(self._bound_agents.items()):
-            if current_key[0] != key[0] or current_key == key:
-                continue
-            self._bound_agents.pop(current_key)
-            if current is not bound_agent:
-                releases.extend(
-                    self._mark_binding_retiring_locked(current_key, current)
-                )
-        self._retiring_bound_agents.pop(key, None)
-        self._bound_agents[key] = bound_agent
-        return releases
 
-    def _mark_binding_retiring_locked(
-        self,
-        key: tuple[str, str],
-        bound_agent: BoundAgent,
-    ) -> list[BoundAgent]:
-        existing = self._retiring_bound_agents.get(key)
-        if existing is bound_agent:
-            return []
-        use = self._bound_agent_uses.get(id(bound_agent))
-        if use is not None and use[0] is bound_agent and use[1] > 0:
-            self._retiring_bound_agents[key] = bound_agent
-            return []
-        return [bound_agent]
 
-    def _retain_bound_agent_use_locked(self, bound_agent: BoundAgent) -> None:
-        identity = id(bound_agent)
-        current = self._bound_agent_uses.get(identity)
-        if current is None:
-            self._bound_agent_uses[identity] = (bound_agent, 1)
-            return
-        if current[0] is not bound_agent:
-            raise BackendProtocolError("bound agent identity was reused")
-        self._bound_agent_uses[identity] = (bound_agent, current[1] + 1)
 
-    async def _release_bound_agent_use(self, bound_agent: BoundAgent) -> None:
-        """Finish one release before propagating caller cancellation."""
 
-        task = asyncio.create_task(
-            self._release_bound_agent_use_once(bound_agent),
-            name="release-bound-agent-use",
-        )
-        cancellation: asyncio.CancelledError | None = None
-        interruption: BaseException | None = None
-        while not task.done():
-            try:
-                await asyncio.shield(task)
-            except asyncio.CancelledError as failure:
-                if cancellation is None:
-                    cancellation = failure
-            except BaseException as failure:
-                if task.done():
-                    break
-                if interruption is None:
-                    interruption = failure
-
-        cleanup_failure: BaseException | None = None
-        if task.cancelled():
-            cleanup_failure = asyncio.CancelledError()
-        else:
-            try:
-                task.result()
-            except BaseException as failure:
-                cleanup_failure = failure
-        if cancellation is not None:
-            if cleanup_failure is not None:
-                cancellation.add_note(
-                    "bound-agent release failed: "
-                    f"{type(cleanup_failure).__name__}"
-                )
-            raise cancellation
-        if interruption is not None:
-            if cleanup_failure is not None:
-                interruption.add_note(
-                    "bound-agent release failed: "
-                    f"{type(cleanup_failure).__name__}"
-                )
-            raise interruption
-        if cleanup_failure is not None:
-            raise cleanup_failure
-
-    async def _release_bound_agent_use_once(
-        self,
-        bound_agent: BoundAgent,
-    ) -> None:
-        """Decrement one retained use exactly once."""
-
-        release: BoundAgent | None = None
-        async with self._binding_lock:
-            identity = id(bound_agent)
-            current = self._bound_agent_uses.get(identity)
-            if current is None or current[0] is not bound_agent:
-                raise BackendProtocolError("bound agent operation use is absent")
-            remaining = current[1] - 1
-            if remaining > 0:
-                self._bound_agent_uses[identity] = (bound_agent, remaining)
-            else:
-                self._bound_agent_uses.pop(identity)
-                for key, retiring in tuple(self._retiring_bound_agents.items()):
-                    if retiring is bound_agent:
-                        self._retiring_bound_agents.pop(key)
-                        release = bound_agent
-                        break
-        if release is not None:
-            release_bound_agent(release)
-
-    def _binding_is_tracked_locked(self, bound_agent: object) -> bool:
-        return (
-            any(current is bound_agent for current in self._bound_agents.values())
-            or any(
-                retiring is bound_agent
-                for retiring in self._retiring_bound_agents.values()
-            )
-            or (
-                id(bound_agent) in self._bound_agent_uses
-                and self._bound_agent_uses[id(bound_agent)][0] is bound_agent
-            )
-        )
-
-    async def _bind_definition(self, definition: object) -> BoundAgent:
+    async def bind_definition(self, definition: object) -> BoundAgent:
         if self.backend is None:
             raise BackendProtocolError("lead collaboration requires a backend")
         bind = getattr(self.backend, "bind", None)
@@ -20961,25 +19743,45 @@ class StoryRuntime:
         for reference in file_references():
             reference.read_text()
 
-    @staticmethod
-    def _release_provider_bindings(bindings: list[BoundAgent]) -> None:
-        """Release each identity once outside the runtime binding lock."""
-
-        released: set[int] = set()
-        for bound_agent in bindings:
-            identity = id(bound_agent)
-            if identity in released:
-                continue
-            released.add(identity)
-            release_bound_agent(bound_agent)
 
 
-_register_at_fork = getattr(os, "register_at_fork", None)
-if _register_at_fork is not None:
-    _register_at_fork(
-        after_in_child=StoryRuntime._reset_reference_registry_after_fork,
-    )
-del _register_at_fork
+    async def finish_bound_agent_use(self, bound_agent: BoundAgent) -> None:
+        release = await self._provider_binding_leases.decrement_retained_use(bound_agent)
+        if release is not None:
+            release_bound_agent(release)
+
+    def activate_configuration_snapshots(self,
+        candidate: RuntimeConfigurationCandidate,
+        backend_candidate: BackendRuntimeConfigurationCandidate
+    ) -> None:
+        assert self.backend is not None
+        self.backend.commit_runtime_configuration(backend_candidate)
+        self._configuration_snapshot = candidate.configuration
+        self.prompts = candidate.prompts
+
+    def read_collaboration_events(self,
+        session_id: str,
+        conversation_id: str
+    ) -> tuple[CollaborationEventV2,
+        ...
+    ]:
+        return self.conversation_storage_services.event_store.read(session_id, conversation_id)
+
+    def read_collaboration_context(self, session_id: str, conversation_id: str) -> CollaborationHistoryProjection:
+        return self.conversation_storage_services.event_store.read_context(session_id, conversation_id)
+
+    def append_collaboration_event_batch(self, batch: CollaborationEventBatch) -> CollaborationAppendReceipt:
+        return self.conversation_storage_services.event_store.append_batch(batch)
+
+    @asynccontextmanager
+    async def lead_conversation_scope(self, session_id: str, conversation_id: str) -> AsyncIterator[None]:
+        lock = self._session_execution_scopes.conversation_lock(session_id, conversation_id)
+        async with self._session_execution_scopes.lead_session_lifecycle(session_id,
+            continuation_factory=self._agent_context_service.session_continuation
+        ), lock:
+            yield
+
+
 
 
 class RuntimeSession:

@@ -54,6 +54,7 @@ from story_writing_agents.writing_artifacts.read_actions import (
 
 from tests.test_consensus_runtime_adapter import _runtime_decision
 from tests.helpers import initialized_workspace, pristine_initialized_workspace
+from story_writing_agents.runtime_resources import reference_operation_registry as reference_registry
 
 
 _TARGET_SUFFIX = "\n\nExplicit authoring target (no artifact-write authority): " + AuthoringTarget.GLOBAL_OUTLINE.value
@@ -293,9 +294,9 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
             await self.runtime.invoke_provider(invocation)
 
         with mock.patch.object(
-            self.runtime,
-            "_reconcile_reference_operations_at_boundary",
-            wraps=self.runtime._reconcile_reference_operations_at_boundary,
+            reference_registry,
+            "reconcile_reference_operations_at_boundary",
+            wraps=reference_registry.reconcile_reference_operations_at_boundary,
         ) as reconciled:
             confirmed = await self.session.confirm_consensus(_decision(self.runtime, inspection))
             result = confirmed.execution.provider_results[0]
@@ -441,7 +442,7 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
                 side_effect=invoke_with_workspace,
             ),
             mock.patch(
-                "story_writing_agents.orchestrator._provider_execution_workspace_manager",
+                "story_writing_agents.runtime_resources.session_worktree_access.session_provider_execution_workspace_manager",
                 side_effect=lambda _agent, binding: binding.open_provider_execution_workspace(),
             ),
         ):

@@ -1,0 +1,2303 @@
+{
+  "schema_version": 1,
+  "issue": 966,
+  "parent_issue": 962,
+  "stage": "S04",
+  "status": "생산·테스트 코드 동결 완료; 변경 후 hosted 검증 대기",
+  "accepted_base": "020a9b18d1dbb1e08c803d5dbe0bae1fc672cbd3",
+  "detailed_plan_url": "https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/966",
+  "detailed_plan_body_sha256": "634665d31d86da9ee90d708978d84e2fd6e4f0596b7b8a288ccc15a9f6029a0a",
+  "production_method_move_map": {
+    "runtime_resources/reference_operation_registry.py": [
+      {
+        "method": "_register_reference_operation",
+        "line": 4188,
+        "end_line": 4218
+      },
+      {
+        "method": "_unregister_terminal_reference_operation",
+        "line": 4220,
+        "end_line": 4239
+      },
+      {
+        "method": "_registered_reference_operation_ids",
+        "line": 4241,
+        "end_line": 4266
+      },
+      {
+        "method": "_has_cleanup_pending_reference_operation",
+        "line": 4268,
+        "end_line": 4284
+      },
+      {
+        "method": "_reconcile_reference_operations_at_boundary",
+        "line": 4286,
+        "end_line": 4337
+      },
+      {
+        "method": "_require_current_reference_registry",
+        "line": 4340,
+        "end_line": 4346
+      },
+      {
+        "method": "_reset_reference_registry_after_fork",
+        "line": 4349,
+        "end_line": 4354
+      },
+      {
+        "method": "_prepare_session_reference_operation",
+        "line": 4356,
+        "end_line": 4383
+      },
+      {
+        "method": "_finish_reference_operation",
+        "line": 4385,
+        "end_line": 4392
+      },
+      {
+        "method": "_fail_reference_operation",
+        "line": 4394,
+        "end_line": 4406
+      }
+    ],
+    "runtime_resources/provider_binding_leases.py": [
+      {
+        "method": "_acquire_bound_agent",
+        "line": 20702,
+        "end_line": 20708
+      },
+      {
+        "method": "_select_bound_agent",
+        "line": 20710,
+        "end_line": 20809
+      },
+      {
+        "method": "_install_current_binding_locked",
+        "line": 20811,
+        "end_line": 20827
+      },
+      {
+        "method": "_mark_binding_retiring_locked",
+        "line": 20829,
+        "end_line": 20841
+      },
+      {
+        "method": "_retain_bound_agent_use_locked",
+        "line": 20843,
+        "end_line": 20851
+      },
+      {
+        "method": "_release_bound_agent_use",
+        "line": 20853,
+        "end_line": 20897
+      },
+      {
+        "method": "_release_bound_agent_use_once",
+        "line": 20899,
+        "end_line": 20922
+      },
+      {
+        "method": "_binding_is_tracked_locked",
+        "line": 20924,
+        "end_line": 20935
+      },
+      {
+        "method": "_release_provider_bindings",
+        "line": 20965,
+        "end_line": 20974
+      }
+    ],
+    "runtime_resources/session_execution_scopes.py": [
+      {
+        "method": "_lead_session_lifecycle",
+        "line": 20613,
+        "end_line": 20622
+      },
+      {
+        "method": "_conversation_lock",
+        "line": 20670,
+        "end_line": 20680
+      },
+      {
+        "method": "interrupt_provider",
+        "line": 3578,
+        "end_line": 3596
+      }
+    ],
+    "runtime_resources/collaboration_event_journal.py": [
+      {
+        "method": "_append_provider_call_fact",
+        "line": 20059,
+        "end_line": 20109
+      },
+      {
+        "method": "_append_validation_messages",
+        "line": 20111,
+        "end_line": 20165
+      },
+      {
+        "method": "_append_drafts",
+        "line": 20175,
+        "end_line": 20187
+      },
+      {
+        "method": "_draft",
+        "line": 20190,
+        "end_line": 20212
+      },
+      {
+        "method": "_draft_with_id",
+        "line": 20215,
+        "end_line": 20238
+      },
+      {
+        "method": "_new_id",
+        "line": 20241,
+        "end_line": 20242
+      },
+      {
+        "method": "_deterministic_id",
+        "line": 20245,
+        "end_line": 20247
+      },
+      {
+        "method": "_actor_for_agent",
+        "line": 20168,
+        "end_line": 20173
+      }
+    ]
+  },
+  "callback_boundary_plan": {
+    "outcome": "analysis_complete; proposed boundaries only; implementation not authorised",
+    "mode": "analysis",
+    "modularity_gate": "required",
+    "github_planning_gate": "pending (#965 OPEN)",
+    "identity": {
+      "worktree": "/Users/anonymousanonym/Documents/story-writing-agents-issue-965",
+      "branch": "issue-965-context-state-owners",
+      "head": "de84b47caa24f52b487086ca4e0161e700164c06 (root certificate; no Git command)",
+      "accepted_base": "a18dfc6b3faa8dc326668c77d0da12441be388f8",
+      "source_manifest_digest": "sha256:aa588e76e2e64c2522682f76e8a27ab5095247d2c0d11855984187e31c1b46f6",
+      "orchestrator_sha256": "04d95ae7e30485b94eaf1570e3f2e482ab18cb486828deb64a571e86fec1a26c",
+      "orchestrator_matches_frozen_manifest": true
+    },
+    "original_locations": {
+      "prepare_runtime_configuration": [
+        4015,
+        4047
+      ],
+      "commit_runtime_configuration": [
+        4049,
+        4075
+      ],
+      "_acquire_bound_agent": [
+        20702,
+        20708
+      ],
+      "_select_bound_agent": [
+        20710,
+        20809
+      ],
+      "_release_bound_agent_use": [
+        20853,
+        20897
+      ],
+      "_release_bound_agent_use_once": [
+        20899,
+        20922
+      ],
+      "_bind_definition": [
+        20937,
+        20954
+      ],
+      "_append_provider_call_fact": [
+        20059,
+        20109
+      ],
+      "_append_validation_messages": [
+        20111,
+        20165
+      ],
+      "_append_drafts": [
+        20175,
+        20187
+      ],
+      "_draft": [
+        20190,
+        20212
+      ],
+      "_draft_with_id": [
+        20215,
+        20238
+      ],
+      "_actor_for_agent": [
+        20168,
+        20173
+      ],
+      "_new_id": [
+        20241,
+        20242
+      ],
+      "_deterministic_id": [
+        20245,
+        20247
+      ]
+    },
+    "binding": {
+      "owner": "runtime_resources/provider_binding_leases.py:ProviderBindingLeases; exactly the six existing maps and one asyncio.Lock; no stored Runtime/callback/activation candidate",
+      "public_api_proposal": [
+        "async acquire(definition, *, bind_definition: Callable[[object], Coroutine[Any, Any, BoundAgent]]) -> BoundAgent",
+        "async select(definition, *, retain_use: bool, bind_definition: Callable[[object], Coroutine[Any, Any, BoundAgent]]) -> BoundAgent",
+        "async release_use(bound_agent, *, finish_use: Callable[[BoundAgent], Coroutine[Any, Any, None]]) -> None",
+        "async decrement_retained_use(bound_agent) -> BoundAgent | None",
+        "async prepare_configuration() -> None",
+        "async commit_configuration(*, activate: Callable[[], None]) -> None"
+      ],
+      "acquire_flow": "Runtime workflows -> leases.acquire(definition, bind_definition=self.bind_definition) -> moved select -> create_task(bind_definition(definition), original task name). Runtime.bind_definition is the existing _bind_definition body, public rename only; _verify_definition_files remains local to that body owner.",
+      "release_flow": "Runtime workflows -> leases.release_use(bound, finish_use=self.finish_bound_agent_use) -> existing shield/cancellation loop creates task from finish_use(bound). Runtime.finish_bound_agent_use is the existing _release_bound_agent_use_once operation boundary: release = await leases.decrement_retained_use(bound); if release is not None: release_bound_agent(release). The original initial release=None plus locked mutation block moves to decrement_retained_use, which returns that existing value; the actual physical release stays at the original Runtime coroutine boundary.",
+      "prepare_flow": "Existing public Runtime.prepare_runtime_configuration backend/type guards and PromptAssembler construction stay before await. await leases.prepare_configuration() moves original lock guard/map extraction/clear and outside-lock release unchanged. Existing RuntimeConfigurationCandidate(self, configuration, prompts) construction stays after that await.",
+      "commit_flow": "Existing public Runtime.commit_runtime_configuration candidate type/owner guard stays before await. Pass only an ephemeral partial(self.activate_configuration_snapshots, candidate, backend_candidate) to leases.commit_configuration(activate=...). The owner takes the same lock, performs the exact original five-map guard, then calls activate() synchronously once under that lock. Runtime.activate_configuration_snapshots contains exactly the original commit-tail statements: backend assert, backend commit, snapshot assignment, prompts assignment. No lower-owner Runtime/candidate import or inspection; no callback stored.",
+      "guards": {
+        "prepare_exact": "self._bound_agent_uses or self._binding_tasks or self._binding_waiters",
+        "commit_exact": "self._bound_agents or self._retiring_bound_agents or self._bound_agent_uses or self._binding_tasks or self._binding_waiters",
+        "prepare_error_literals": [
+          "runtime configuration requires a quiescent provider boundary"
+        ],
+        "commit_error_literals": [
+          "runtime configuration activation lost quiescence"
+        ]
+      },
+      "activation_source": "assert self.backend is not None\nself.backend.commit_runtime_configuration(backend_candidate)\nself._configuration_snapshot = candidate.configuration\nself.prompts = candidate.prompts",
+      "decrement_source": "async with self._binding_lock:\n            identity = id(bound_agent)\n            current = self._bound_agent_uses.get(identity)\n            if current is None or current[0] is not bound_agent:\n                raise BackendProtocolError(\"bound agent operation use is absent\")\n            remaining = current[1] - 1\n            if remaining > 0:\n                self._bound_agent_uses[identity] = (bound_agent, remaining)\n            else:\n                self._bound_agent_uses.pop(identity)\n                for key, retiring in tuple(self._retiring_bound_agents.items()):\n                    if retiring is bound_agent:\n                        self._retiring_bound_agents.pop(key)\n                        release = bound_agent\n                        break",
+      "retention": [
+        "Bind Task still executes the same Runtime coroutine; its frame self retains Runtime until that coroutine finishes, including cleanup on failed validation. The transient callback local also retains Runtime through each acquisition, replacing the former Runtime select frame self. A cached selection still drops this local when acquisition returns.",
+        "Release Task still executes the Runtime finish-use coroutine, retaining Runtime through locked decrement and the physical release. The moved shield loop holds its transient finish_use callback through the same task/result/cancellation handling interval previously held by its Runtime self. Nothing is stored in the long-lived lease owner.",
+        "Configuration partial retains Runtime/candidates only while the existing Runtime commit call is active; owner does not persist it. No permanent Runtime -> leases -> stored callback -> Runtime cycle is introduced. The original Task-mediated transient Runtime retention now passes through the lease owner Task map and ends at the same task/waiter cleanup boundary."
+      ],
+      "unacceptable_shortcuts": [
+        "Move bind/release Task coroutine receiver to leases and claim lifetime unchanged.",
+        "Store Runtime/bound callbacks in the lease owner.",
+        "Expose a raw lock/map or implement a private mixin/property.",
+        "Create a second configuration lock or strengthen commit guard with the desired-fingerprint map."
+      ]
+    },
+    "accounting": {
+      "owner": "runtime_resources/provider_call_accounting.py; cohesive provider class, no upward Runtime import/annotation",
+      "journal_owner": "runtime_resources/collaboration_event_journal.py; cohesive ordinary functions, no new journal state/instance required",
+      "private_calls": [
+        {
+          "method": "_draft",
+          "line": 2070
+        },
+        {
+          "method": "_draft",
+          "line": 2140
+        },
+        {
+          "method": "_draft",
+          "line": 2153
+        },
+        {
+          "method": "_append_drafts",
+          "line": 2164
+        },
+        {
+          "method": "_append_validation_messages",
+          "line": 2176
+        },
+        {
+          "method": "_append_provider_call_fact",
+          "line": 2299
+        },
+        {
+          "method": "_append_provider_call_fact",
+          "line": 2361
+        }
+      ],
+      "additional_late_storage_read_sites": [
+        2049,
+        2100,
+        2274,
+        2289
+      ],
+      "public_runtime_io_callbacks": [
+        "read_collaboration_events(session_id: str, conversation_id: str) -> tuple[CollaborationEventV2, ...]: return self.conversation_storage_services.event_store.read(session_id, conversation_id)",
+        "read_collaboration_context(session_id: str, conversation_id: str) -> CollaborationHistoryProjection: return self.conversation_storage_services.event_store.read_context(session_id, conversation_id)",
+        "append_collaboration_event_batch(batch: CollaborationEventBatch) -> CollaborationAppendReceipt: return self.conversation_storage_services.event_store.append_batch(batch)"
+      ],
+      "provider_constructor_proposal": "Replace the raw runtime argument with three required read_events/read_context/append_batch callable inputs, assigned to provider fields. Runtime passes its three public bound I/O methods at the two existing provider-construction sites (9676,13036). Keep delegate/admission/metadata validation and all provider fields/order unchanged; do not add callback validation or I/O.",
+      "helper_mapping": {
+        "draft (three sites)": "move original _draft/_draft_with_id/_new_id to owning journal functions; no additional forwarding frame",
+        "append_drafts (one site)": "journal.append_drafts(existing args, append_batch=self._append_batch); batch creation remains once at the same point",
+        "append_validation_messages (one site)": "journal.append_validation_messages(existing args, read_events=self._read_events, append_batch=self._append_batch); original deterministic/idempotence/validation and failure order preserved",
+        "append_provider_call_fact (two sites)": "journal.append_provider_call_fact(existing args, read_context=self._read_context, append_batch=self._append_batch); original read projection -> draft/payload -> append order preserved",
+        "four direct event reads": "call self._read_events(session_id,conversation_id) at the original source positions, including separate budget/admission reads; do not combine/collapse reads"
+      },
+      "retention": "Each provider now holds three needed bound Runtime I/O methods instead of the _runtime field. Their __self__ is the same Runtime. They are assigned and retained for the provider lifetime; renew_delegate does not replace/clear them. This preserves the provider -> Runtime strong edge until provider retirement. Runtime does not store these callbacks or a journal object containing them, so no new permanent cycle is formed. The callbacks are used for actual existing I/O, not inert keepalive state.",
+      "late_lookup": "Each callback resolves self.conversation_storage_services.event_store and its concrete method at the original I/O execution point. Capturing an EventStore or its bound read/append method at provider construction would freeze the former late lookup and would not itself retain Runtime; reject that shortcut.",
+      "patch_boundary": "Existing Runtime private helper patches must move mechanically to the true journal public function owner, using qualified journal module calls so the provider and Runtime workflow share that patch boundary. Tests/test_specialist_orchestration.py:667,677,740,750,777 patch validation publication and are concrete witnesses for preserving the retry/publication boundary. This proposal intentionally changes helper owner paths; it does not promise old Runtime/private/subclass dispatch after the allowed owner migration.",
+      "no_new_behavior": "Read/append counts, batch/UUID/deterministic digest creation, exception text/priority, event ordering, await positions and existing receipt/tuple/projection identities stay unchanged. No new lock, Task, DTO, store, storage scope, flush, queue or I/O."
+    },
+    "added_source_level_costs_not_measurements": {
+      "setup": "One ProviderBindingLeases instance; original six dictionaries and lock move without duplication. No accounting journal instance is required.",
+      "acquire": "One additional transient Runtime bind-definition bound-method callback per acquisition (including cache hits); no additional Task/coroutine layer on the bind Task itself.",
+      "release": "One transient Runtime finish-use bound-method callback per release; one added awaited owner coroutine frame for the locked decrement. Existing outer release loop and Task counts are unchanged; the returned value is the existing BoundAgent or None.",
+      "prepare": "One added owner async call/frame; original release helper calls remain.",
+      "commit": "One added owner async frame and one extracted synchronous activation frame, once per commit. One transient bound-method plus one functools.partial (holding the two existing positional candidate references in its argument tuple); no new candidate/DTO/task/lock.",
+      "accounting_provider": "Three bound-method objects per provider, replacing one raw Runtime reference field with three callback fields. One added Runtime I/O callback frame for each original storage read/read_context/append_batch; no extra journal forwarding class/frame and no lambda/partial per provider journal call.",
+      "other_runtime_journal_consumers": "Direct Runtime workflow calls migrated to the same journal functions must pass the corresponding bound I/O callbacks at the real callsites; those callback creations and added I/O frames also count. Absolute dynamic counts/heap bytes/timing are not established by this read-only plan."
+    },
+    "dependency_and_index": "Runtime composition -> provider accounting/journal/lease owner -> existing backend and conversation contracts. No owner imports Runtime or reaches private Runtime state. Future compact runtime-resources index entry must distinguish lease lock/map ownership from retained Runtime bind/release/activation and I/O composition callbacks; no tracked index edit now.",
+    "verification": "Static AST, targeted source/consumer/test declaration reads only. Orchestrator hash matches S03 frozen manifest. Case/Suite/production import/measurement/tracked edit/Git/GitHub mutation0. Root-reported current HEAD accepted without Git command.",
+    "limitations": "Proposal not implemented/benchmarked. Source-level retention proof and cost accounting are provided; exact VM allocation bytes/GC phase and timing require the later authorised CI evidence. Root must accept the new narrow APIs/partial and guard/block mapping before S04 implementation.",
+    "next_action": "Use only to complete #966 detailed plan; #965 integration and #966 Draft/planning gate remain prerequisites.",
+    "historical_snapshot_notice": "S03 진행 중 수집한 읽기 전용 제안의 원문이다. 당시 identity·pending 상태는 현재 상태가 아니다. 현재 승인 경계는 상세 이슈 계획과 아래 동결 manifest를 따른다."
+  },
+  "preserve_S06": {
+    "definitions": [
+      "RuntimeSession public delegation facade",
+      "_PendingStoryCommit2442-2478",
+      "_add_story_commit_cleanup_note",
+      "_install_pending_story_commit4413-4423",
+      "_retire_pending_story_commit4425-4441",
+      "retire_archived_conversation4443-4465",
+      "_close_story_commit_generation_pin4468-4479"
+    ],
+    "reason": "Pending map exact owner replacement/close/primary-failure notes/destructor and durable publication/archive form one transaction; leave capability/live-execution maps with workflow. RuntimeConfigurationCandidate/prompt composition also stays Runtime."
+  },
+  "minimum_existing_ids": [
+    "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
+    "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
+    "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_management_construction_and_inspection_do_not_bind_or_call_provider",
+    "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_runtime_methods_aliases_and_forwarding_are_absent"
+  ],
+  "expanded_existing_ids": [
+    "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
+    "tests.test_codex_backend.CodexBackendDefaultsTests.test_backend_runtime_and_prompts_share_one_snapshot_until_next_lifecycle",
+    "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
+    "tests.test_codex_backend.CodexBackendTestCase.test_completed_rejections_report_each_attempt_and_repaired_success",
+    "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
+    "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
+    "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+    "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
+    "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
+    "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+    "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
+    "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_republishing_domain_notice_is_idempotent",
+    "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility",
+    "tests.test_lead_story_commit.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+    "tests.test_lead_story_commit.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+    "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_attached_reference_cancellation_closes_and_releases_for_explicit_retry",
+    "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
+    "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_legacy_bare_prepared_and_submitted_tails_close_only_on_new_input",
+    "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_matching_unfinished_legacy_operation_retires_native_context",
+    "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_management_construction_and_inspection_do_not_bind_or_call_provider",
+    "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_management_directive_configuration_and_inspection_remain",
+    "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_runtime_methods_aliases_and_forwarding_are_absent",
+    "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
+    "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+    "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
+    "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned"
+  ],
+  "witness_plan": {
+    "mode": "analysis",
+    "github_planning_gate": "pending",
+    "source_commit": "020a9b18d1dbb1e08c803d5dbe0bae1fc672cbd3",
+    "role": "test_engineer",
+    "outcome": "정적 witness/미실행 controller 예산 preview. 실제 RED와 assertion 위치는 hosted CI 확인 전이다.",
+    "canonical_id": "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
+    "test_path": "tests/test_provider_timeout_recovery.py",
+    "test_source_sha256": "ef0f2dfbc3d65263946ee3d12ad84f36ea9a71e92d86b110ed33f65ef3bb7dc4",
+    "before": {
+      "source_path": "src/story_writing_agents/orchestrator.py",
+      "source_sha256": "04d95ae7e30485b94eaf1570e3f2e482ab18cb486828deb64a571e86fec1a26c",
+      "class": "_AccountingContextProvider",
+      "method": "_prepare",
+      "statement": "ordinal = len(self._ordinals) + 1",
+      "line": 2297,
+      "column_byte_offset": 40,
+      "token": "1"
+    },
+    "after": {
+      "source_path": "src/story_writing_agents/runtime_resources/provider_call_accounting.py",
+      "class": "AccountingContextProvider",
+      "method": "_prepare",
+      "statement": "ordinal = len(self._ordinals) + 1",
+      "must_revalidate_exact_moved_body": true
+    },
+    "mutation": {
+      "kind": "positive call-fact ordinal base 1→0",
+      "ast_target": "Assign(Name ordinal).value BinOp(Add, Call len(self._ordinals), Constant(int1)).right",
+      "expected_before": 1,
+      "fault": 0,
+      "one_token_in_memory_only": true,
+      "mutated_sha256": "ef619e15e0d3e433faf66b72781f969e29f61529e4efd4e6198ebeb681c5d704",
+      "restored_sha256": "04d95ae7e30485b94eaf1570e3f2e482ab18cb486828deb64a571e86fec1a26c",
+      "bytewise_restored": true,
+      "syntax_parse_valid": true
+    },
+    "expected_fingerprint": {
+      "family": "S04-PROVIDER-CALL-ORDINAL-ZERO-GATED-HISTORY",
+      "status": "정적 예상이며 실제 실행 증거 아님",
+      "report": "동일 canonical_id 1개, failed/AssertionError, failures1/errors0/skip0",
+      "expected_assertion": "self.assertEqual(len(self.backend.calls), 1): 0 != 1",
+      "boundary_trace": "_prepare의 PREPARED fact가 positive ordinal 검증에서 거부되어 provider 제출 전에 실패. failure closure는 기존 append_batch OSError gate를 거쳐 RECOVERY_REQUIRED로 막힘.",
+      "not_accepted": [
+        "ImportError",
+        "NameError",
+        "missing selector/source hash pin failure",
+        "mutation/restore error",
+        "case reported ERROR rather than existing assertion FAILURE"
+      ],
+      "must_confirm_hosted": "초기 result/blocked state와 실제 실패 assertion 위치·0!=1은 docs-only Draft 후 수정전 hosted RED에서 확인. 다르면 예상과 실제를 구분하고 controller에서 성공으로 받아들이지 않음."
+    },
+    "restoration": {
+      "head_blob_pin": "exact production source + existing Case file must equal own HEAD:path bytes in each layout",
+      "finally_original_bytes": true,
+      "restore_sha256_equal_original": true,
+      "green": "동일 Case/input/fixture/expected와 원본 source 복원 뒤 passed1/errors0/source_valid",
+      "controller_same_bytes_before_after": true
+    },
+    "controller_budget_preview": {
+      "path": "/tmp/story-refactor-delivery-20261109/S04-feedback-controller.preview.py",
+      "charged_before": 105,
+      "charged_preview": 139,
+      "delta": 34,
+      "source_current": 151425,
+      "cap": 151431,
+      "headroom": 6,
+      "before_recovery_total": 151459,
+      "recovery_required": 28,
+      "known_static_unused_import_candidate_rows": 45,
+      "candidate_only": "tests/test_runtime_reference_integration.py의 기존 불필요 import 후보. 실제 제거 전 consumer/side-effect 검토 및 전체 source 재계상 필요. 지원 소스 미계상이나1550 축소로 맞추지 않음.",
+      "unresolved": "예산은 preview로 상한 초과 상태다. 최소 recovery_required 행을 실제 안전 회수하기 전 Ready/구현완료로 주장하지 않음.",
+      "default_codec_and_source_snapshot_preserved_by_design": true,
+      "executed": false
+    },
+    "coverage_gaps_unchanged": [
+      {
+        "invariant": "real reference-registry fork/PID reset",
+        "status": "직접관측 canonical witness 미발견",
+        "evidence": "현재 runtime_reference_integration은RuntimeExecutionRetirementTests4개뿐. fork/registry/mutex/PID 상태assertion 없음.",
+        "related": "AgentBackendLifecycleTests.test_concurrent_dead_reclaim_has_exactly_one_owner의POSIX fork2개는backend access claim만관측"
+      },
+      {
+        "invariant": "two live StoryRuntime instances share one registry/RLock",
+        "status": "동시공유/entry visibility/동일operation 중복거절을직접assert하는기존witness 미발견",
+        "related": "reference cancel/restartCase는후속Runtime retry만관측"
+      },
+      {
+        "invariant": "reference registry workspace replacement uses physical inode identity",
+        "status": "직접registry reconcile/key 불변·교체를관측하는witness 미발견",
+        "related": "ledger/debug-log/workspace recovery의다른owner replacementCase는대체아님"
+      },
+      {
+        "invariant": "last bind waiter cancellation joins one shared bind task",
+        "status": "StoryRuntime._binding_waiters/_binding_tasks의직접관측witness 미발견",
+        "related": "provider-auth waiter와Codex close는각각다른owner"
+      },
+      {
+        "invariant": "old retained-use drains once before provider binding release",
+        "status": "StoryRuntime._bound_agent_uses/_retiring_bound_agents의direct use/release/priority witness 미발견",
+        "related": "CodexBackend resource releaseOnceCase는backend수명만검증"
+      }
+    ],
+    "Case_Suite_runs": 0,
+    "tracked_edits": 0,
+    "Git_GitHub_mutations": 0,
+    "root_workspace": "HEAD/user dirty sources were not read as the production oracle or modified; all repository contents came from git show 020a9b18:path."
+  },
+  "coverage_gaps": [
+    {
+      "invariant": "real reference-registry fork/PID reset",
+      "status": "직접관측 canonical witness 미발견",
+      "evidence": "현재 runtime_reference_integration은RuntimeExecutionRetirementTests4개뿐. fork/registry/mutex/PID 상태assertion 없음.",
+      "related": "AgentBackendLifecycleTests.test_concurrent_dead_reclaim_has_exactly_one_owner의POSIX fork2개는backend access claim만관측"
+    },
+    {
+      "invariant": "two live StoryRuntime instances share one registry/RLock",
+      "status": "동시공유/entry visibility/동일operation 중복거절을직접assert하는기존witness 미발견",
+      "related": "reference cancel/restartCase는후속Runtime retry만관측"
+    },
+    {
+      "invariant": "reference registry workspace replacement uses physical inode identity",
+      "status": "직접registry reconcile/key 불변·교체를관측하는witness 미발견",
+      "related": "ledger/debug-log/workspace recovery의다른owner replacementCase는대체아님"
+    },
+    {
+      "invariant": "last bind waiter cancellation joins one shared bind task",
+      "status": "StoryRuntime._binding_waiters/_binding_tasks의직접관측witness 미발견",
+      "related": "provider-auth waiter와Codex close는각각다른owner"
+    },
+    {
+      "invariant": "old retained-use drains once before provider binding release",
+      "status": "StoryRuntime._bound_agent_uses/_retiring_bound_agents의direct use/release/priority witness 미발견",
+      "related": "CodexBackend resource releaseOnceCase는backend수명만검증"
+    }
+  ],
+  "budget_recovery": {
+    "mode": "planning",
+    "source": "020a9b18d1dbb1e08c803d5dbe0bae1fc672cbd3",
+    "file": "tests/test_runtime_reference_integration.py",
+    "approved_scope": "whole unused import statements only;15 statements45 charged rows; keep StoryRuntime/RuntimeSession/orchestrator and all methods/assertions",
+    "evidence": [
+      "whole module AST unused-name census",
+      "root full source read",
+      "no direct consumer import/alias references found",
+      "fresh full collection after actual import change required"
+    ],
+    "current": 151425,
+    "controller_preview_delta": 34,
+    "recover_rows": 45,
+    "projected_total_before_API_imports": 151414,
+    "cap": 151431,
+    "projected_headroom": 17,
+    "tracked_edits": 0
+  },
+  "constraints": {
+    "new_cases": false,
+    "new_scenarios": false,
+    "feature_algorithm_storage_changes": false,
+    "old_path_shims": false,
+    "runtime_whole_injection": false,
+    "source_cap": 151431,
+    "legacy_reserved": 1550,
+    "whole_seconds": 18000,
+    "shard_seconds": 3600
+  },
+  "runtime_test_workflow_edits_before_draft": false,
+  "case_suite_execution_before_draft": 0,
+  "witness_actual_before_attempt1": {
+    "run_id": 42817019918,
+    "source": "858cb25251ac91b678d4892415710779ca7d775b",
+    "normal_pass": 1,
+    "red_failures": 2,
+    "red_errors": 0,
+    "green_executed": false,
+    "restored": true,
+    "primary": "AssertionError: 0 != 1",
+    "secondary": "FixturePhasePlanError: fixture-phase-plan:extra_plan",
+    "decision": "기존Case/fixture/cleanup을보존하고ordinal모드의정확한두failure를검사;기타모드는변경없음",
+    "root_verified": true
+  },
+  "witness_expected_after_actual": {
+    "red_completed": 1,
+    "red_failures": 2,
+    "red_errors": 0,
+    "primary": "AssertionError: 0 != 1 at existing backend call count assertion",
+    "secondary": "FixturePhasePlanError: fixture-phase-plan:extra_plan from existing cleanup",
+    "canonical_ids": "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
+    "green_passed": 1,
+    "other_witness_modes_unchanged": true
+  },
+  "plan_revision_history": [
+    {
+      "previous_sha256": "008dc42dbd9115c18aca859a8be89f99ba7864a462a47106d089de9a90ab2405",
+      "new_sha256": "04b913fd141e981208b47a2600f05ad89e4819fb3bd5645d394e190f0a51abc9",
+      "reason": "Runtime→AccountingProvider 12접근/5필드의 승인된 semantic API 경계와scope set 불변식 추가"
+    },
+    {
+      "previous_sha256": "04b913fd141e981208b47a2600f05ad89e4819fb3bd5645d394e190f0a51abc9",
+      "new_sha256": "1f03ef8fc37ac176e6df64d08b624c7befd18c9be6f13d76ec1816202f1662ae",
+      "reason": "공유 fixture의 동일 Runtime lead lifecycle·conversation lock 공개 capability와 실제 추가 비용 확정"
+    },
+    {
+      "previous_sha256": "1f03ef8fc37ac176e6df64d08b624c7befd18c9be6f13d76ec1816202f1662ae",
+      "new_sha256": "8b6a65a57547d5b5d59aadf8b670262f1c2da51a9899c855249c8a9caee91f34",
+      "reason": "실제 전역/private symbol 직접 소비자6개 추가; 기존25+6=31 영향 범위 보완"
+    },
+    {
+      "previous_sha256": "8b6a65a57547d5b5d59aadf8b670262f1c2da51a9899c855249c8a9caee91f34",
+      "new_sha256": "71409e11df651ced56eee9df4278d375189b90c3734649e40f8d2e2ed919328d",
+      "reason": "기존 전역 graph9의 실제 inventory/owner 경계 검증을 별도 선택으로 명시"
+    },
+    {
+      "previous_sha256": "71409e11df651ced56eee9df4278d375189b90c3734649e40f8d2e2ed919328d",
+      "new_sha256": "dd2111d09f6caf74d5f747a5b29ffb7e088b113b67ade1bf0dd1d38e98787851",
+      "reason": "새7경로 focused의 전체 fallback을 기존실제 witness data등록으로 해소; affected_full 보수 유지"
+    },
+    {
+      "previous_sha256": "dd2111d09f6caf74d5f747a5b29ffb7e088b113b67ade1bf0dd1d38e98787851",
+      "new_sha256": "634665d31d86da9ee90d708978d84e2fd6e4f0596b7b8a288ccc15a9f6029a0a",
+      "reason": "확정P1 caller tuple형태·receiver 별칭 교정 및 기존positive1 추가로affected41 근거 명시"
+    }
+  ],
+  "accepted_provider_semantic_apis": [
+    "limit_task_front_calls",
+    "configure_public_response_contract",
+    "accept_last_public_response",
+    "correlate_native_context_event",
+    "record_native_context_recovery"
+  ],
+  "before_witness_valid": {
+    "run_id": 42819070071,
+    "support_head": "de723727b5f0ffce99842217e385a7fb8664dafe",
+    "normal_passed": 1,
+    "red_failures": 2,
+    "red_errors": 0,
+    "green_passed": 1,
+    "restored": true,
+    "controller_sha256": "f3043a1cb691ba866e34a022a7c29946793fc41b54839d2d163f1632879110da"
+  },
+  "frozen_implementation_manifest": {
+    "sha256": "sha256:012021b674cf988e1d64e73f7fefd350196efdd1129e57f065e1755835d96bed",
+    "plan_body_sha256": "04b913fd141e981208b47a2600f05ad89e4819fb3bd5645d394e190f0a51abc9",
+    "production_before_sha256": "04d95ae7e30485b94eaf1570e3f2e482ab18cb486828deb64a571e86fec1a26c",
+    "modules": [
+      "runtime_resources/reference_operation_registry.py",
+      "runtime_resources/provider_binding_leases.py",
+      "runtime_resources/session_execution_scopes.py",
+      "runtime_resources/collaboration_event_journal.py",
+      "runtime_resources/session_worktree_access.py",
+      "runtime_resources/provider_call_accounting.py",
+      "runtime_resources/__init__.py"
+    ],
+    "state_owner_moves": 13,
+    "remaining_runtime": {
+      "bind_definition": {
+        "source": {
+          "line": 20937,
+          "decorator_line": 20937,
+          "end_line": 20954,
+          "ast_sha256": "0521fac5668890dbcfabf46e506003ca847b8414ff15aa902ffa49854d253f47",
+          "old_args": "self, definition: object",
+          "old_return": "BoundAgent"
+        },
+        "api": "async bind_definition(self, definition: object) -> BoundAgent",
+        "rule": "existing body unchanged; keep _verify_definition_files private Runtime; callback local only"
+      },
+      "finish_bound_agent_use": {
+        "source": {
+          "line": 20899,
+          "decorator_line": 20899,
+          "end_line": 20922,
+          "ast_sha256": "116bb464fccba3046b3739728723edd3ff83829b57bd2056ea641b49136492b5",
+          "old_args": "self, bound_agent: BoundAgent",
+          "old_return": "None"
+        },
+        "api": "async finish_bound_agent_use(self, bound_agent: BoundAgent) -> None",
+        "moved_locked_state": {
+          "line": 20906,
+          "decorator_line": 20906,
+          "end_line": 20920,
+          "ast_sha256": "e2c3ca021223f3a233802a0280ae7ac9670a7432652b0e925be5e921c7dd94d4",
+          "old_args": null,
+          "old_return": null
+        },
+        "rule": "Await owner decrement returning existing BoundAgent|None; original conditional physical release stays Runtime; same Runtime coroutine Task strongly holds self"
+      },
+      "activate_configuration_snapshots": {
+        "source": [
+          {
+            "line": 4072,
+            "decorator_line": 4072,
+            "end_line": 4072,
+            "ast_sha256": "25e59e0a91117b15fa678442f6c2507ac6f07aa163ce32bb14e0f69c5474ff15",
+            "old_args": null,
+            "old_return": null
+          },
+          {
+            "line": 4073,
+            "decorator_line": 4073,
+            "end_line": 4073,
+            "ast_sha256": "868810e5281fdd4cb17619ecb4c1a9c1c76cbd646428ed93b575441b27adb7ad",
+            "old_args": null,
+            "old_return": null
+          },
+          {
+            "line": 4074,
+            "decorator_line": 4074,
+            "end_line": 4074,
+            "ast_sha256": "145e59f997b3c1284a0f9af0c74376e5e7cf4bd6a838f897b07eb9d58564bfa4",
+            "old_args": null,
+            "old_return": null
+          },
+          {
+            "line": 4075,
+            "decorator_line": 4075,
+            "end_line": 4075,
+            "ast_sha256": "48516cc570185a57f5c099018550bc28cd020229b9c98bb623f7a8adc2573118",
+            "old_args": null,
+            "old_return": null
+          }
+        ],
+        "api": "activate_configuration_snapshots(self, candidate: RuntimeConfigurationCandidate, backend_candidate: BackendRuntimeConfigurationCandidate) -> None",
+        "rule": "original4activation statements only; ephemeral partial passed to owner held under original lock; no stored callback or candidate import in lower owner"
+      },
+      "configuration": {
+        "prepare": {
+          "line": 4015,
+          "decorator_line": 4015,
+          "end_line": 4047,
+          "ast_sha256": "ad57b11fae5b185cebf727c9543b07813872bca3d0cee23bb75477563261c084",
+          "old_args": "self, configuration: ConfigurationSnapshot, provider_route_generations: Mapping[str, int]",
+          "old_return": "RuntimeConfigurationCandidate"
+        },
+        "commit": {
+          "line": 4049,
+          "decorator_line": 4049,
+          "end_line": 4075,
+          "ast_sha256": "aea05f1d91e65d2a82c8ada8f1ddc2e2e4036b4359a87a0d0b7bdcc2827dba1c",
+          "old_args": "self, candidate: RuntimeConfigurationCandidate, backend_candidate: BackendRuntimeConfigurationCandidate",
+          "old_return": "None"
+        },
+        "prepare_guard": "self._bound_agent_uses or self._binding_tasks or self._binding_waiters",
+        "commit_guard": "self._bound_agents or self._retiring_bound_agents or self._bound_agent_uses or self._binding_tasks or self._binding_waiters",
+        "rule": "PromptAssembler before owner prepare, candidate validation before commit; same3/5map guards and errors; no desired-fingerprint addition"
+      },
+      "late_io_callbacks": [
+        {
+          "api": "read_collaboration_events(self, session_id: str, conversation_id: str) -> tuple[CollaborationEventV2, ...]",
+          "body": "return existing self.conversation_storage_services.event_store.read(...)"
+        },
+        {
+          "api": "read_collaboration_context(self, session_id: str, conversation_id: str) -> CollaborationHistoryProjection",
+          "body": "return existing self.conversation_storage_services.event_store.read_context(...)"
+        },
+        {
+          "api": "append_collaboration_event_batch(self, batch: CollaborationEventBatch) -> CollaborationAppendReceipt",
+          "body": "return existing self.conversation_storage_services.event_store.append_batch(batch)"
+        }
+      ]
+    },
+    "additional_costs_to_verify": "Runtime당 상태 소유자 객체 2개, 실행 시 binding/release callback, retained-use 감소 async frame, configuration guard/activation/partial, scope 호출과 unregister 조회 1회, accounting provider당 I/O bound callback 3개와 기존 I/O당 frame 1개, 실행된 의미 단위 명령당 frame 1개. 기존 Task·DTO·lock·descriptor·I/O 수를 보존하며 성능 통과를 선결론내리지 않는다.",
+    "canonical_tests": 2544,
+    "controller_sha256": "f3043a1cb691ba866e34a022a7c29946793fc41b54839d2d163f1632879110da"
+  },
+  "accepted_scope_api": {
+    "name": "StoryRuntime.lead_conversation_scope",
+    "consumers": "기존 seed_reviewed_artifact 소비자8개",
+    "order": "cached lock 조회 → 동일 scope lifecycle enter → 동일 lock enter / 역순 exit",
+    "extra_cost": "outer async context manager 객체1 + generator frame1 + enter/exit 호출층",
+    "new_task_or_lock": false
+  },
+  "expanded_consumer_census_amendment": {
+    "original_selection": 25,
+    "additional_existing_cases": 6,
+    "union": 31,
+    "baseline_and_candidate_groups": [
+      25,
+      6
+    ],
+    "minimum_selection": 4,
+    "new_cases": false,
+    "single31_command_measured": false,
+    "union_ids_sha256": "b9839f6be459f9bae5533d8ad0e1683c7acf871ed2244cce9ef102f6ec20b9bc"
+  },
+  "expanded_measurement_groups": [
+    {
+      "name": "기존25",
+      "ids": [
+        "tests.test_codex_backend.CodexBackendDefaultsTests.test_backend_runtime_and_prompts_share_one_snapshot_until_next_lifecycle",
+        "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
+        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
+        "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility",
+        "tests.test_lead_story_commit.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+        "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_attached_reference_cancellation_closes_and_releases_for_explicit_retry",
+        "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
+        "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_legacy_bare_prepared_and_submitted_tails_close_only_on_new_input",
+        "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_matching_unfinished_legacy_operation_retires_native_context",
+        "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_management_construction_and_inspection_do_not_bind_or_call_provider",
+        "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_management_directive_configuration_and_inspection_remain",
+        "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_runtime_methods_aliases_and_forwarding_are_absent",
+        "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
+        "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+        "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned"
+      ]
+    },
+    {
+      "name": "추가6",
+      "ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_completed_rejections_report_each_attempt_and_repaired_success",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
+        "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_republishing_domain_notice_is_idempotent"
+      ]
+    }
+  ],
+  "before_expanded25_valid": {
+    "run_id": 42819948768,
+    "source": "de723727b5f0ffce99842217e385a7fb8664dafe",
+    "selected": 25,
+    "passed": 25,
+    "failures": 0,
+    "errors": 0,
+    "source_valid": true,
+    "environment_valid": true,
+    "normal_wall_seconds": 1546.988104354,
+    "red_command_seconds": 58.24983171300005,
+    "green_command_seconds": 115.85442166300004,
+    "red_failures": 2,
+    "green_passed": 1,
+    "restored": true,
+    "artifact": "S04-before-expanded25-ci/runtime-affected"
+  },
+  "before_additional6_valid": {
+    "run_id": 42824466254,
+    "source": "de723727b5f0ffce99842217e385a7fb8664dafe",
+    "selected": 6,
+    "passed": 6,
+    "failures": 0,
+    "errors": 0,
+    "source_valid": true,
+    "environment_valid": true,
+    "normal_wall_seconds": 408.47626985700003,
+    "witness": "추가6 선택에는 고정 ordinal witness가 없어 probe 파일 없음; 기존25의 유효 RED/GREEN을 별도 보존",
+    "red_green_run_id": 42819948768,
+    "artifact": "S04-before-additional6-ci/runtime-affected"
+  },
+  "before_minimum4_valid": {
+    "run_id": 42826064099,
+    "source": "de723727b5f0ffce99842217e385a7fb8664dafe",
+    "selected": 4,
+    "passed": 4,
+    "failures": 0,
+    "errors": 0,
+    "source_valid": true,
+    "environment_valid": true,
+    "normal_wall_seconds": 117.02597812400006,
+    "red_command_seconds": 59.14882115199998,
+    "green_command_seconds": 118.86663357700002,
+    "red_failures": 2,
+    "green_passed": 1,
+    "restored": true,
+    "artifact": "S04-before-minimum4-ci/runtime-affected"
+  },
+  "graph_existing_ids": [
+    "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
+    "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
+    "tests.test_artifact_relationship_policy.ArtifactRelationshipBoundaryTests.test_ast_graph_counts_and_cycles_match_accepted_brief",
+    "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
+    "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
+    "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
+    "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
+    "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
+    "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot"
+  ],
+  "affected_existing_ids": [
+    "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
+    "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
+    "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
+    "tests.test_artifact_relationship_policy.ArtifactRelationshipBoundaryTests.test_ast_graph_counts_and_cycles_match_accepted_brief",
+    "tests.test_codex_backend.CodexBackendDefaultsTests.test_backend_runtime_and_prompts_share_one_snapshot_until_next_lifecycle",
+    "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
+    "tests.test_codex_backend.CodexBackendTestCase.test_completed_rejections_report_each_attempt_and_repaired_success",
+    "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
+    "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
+    "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+    "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
+    "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
+    "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
+    "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
+    "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+    "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+    "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
+    "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_republishing_domain_notice_is_idempotent",
+    "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility",
+    "tests.test_lead_story_commit.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+    "tests.test_lead_story_commit.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+    "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_attached_reference_cancellation_closes_and_releases_for_explicit_retry",
+    "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
+    "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_legacy_bare_prepared_and_submitted_tails_close_only_on_new_input",
+    "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_matching_unfinished_legacy_operation_retires_native_context",
+    "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
+    "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_management_construction_and_inspection_do_not_bind_or_call_provider",
+    "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_management_directive_configuration_and_inspection_remain",
+    "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_runtime_methods_aliases_and_forwarding_are_absent",
+    "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
+    "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
+    "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
+    "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+    "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
+    "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot",
+    "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned"
+  ],
+  "affected_selection_groups": {
+    "integration": [
+      25,
+      6,
+      1
+    ],
+    "graph": 9,
+    "union": 41,
+    "minimum": 4
+  },
+  "before_graph9_valid": {
+    "run_id": 42827828076,
+    "source": "de723727b5f0ffce99842217e385a7fb8664dafe",
+    "selected": 9,
+    "passed": 9,
+    "failures": 0,
+    "errors": 0,
+    "source_valid": true,
+    "environment_valid": true,
+    "normal_wall_seconds": 27.63228363600001,
+    "witness": "선택9에 ordinal witness 없음; RED/GREEN은 최소4/통합25로 별도검증",
+    "artifact": "S04-before-graph9-ci/runtime-affected"
+  },
+  "focused_owner_mapping": {
+    "fixture": "tests/fixtures/test_owners_v1.json",
+    "new_source_paths": 7,
+    "focused": "각 owner 실제기존witness 소수선택; init은minimum4",
+    "affected_ids": "기존41 보수연결",
+    "affected_full": true,
+    "algorithm_changed": false,
+    "new_cases": false,
+    "baseline_gap_count": 5
+  },
+  "final_source_freeze": {
+    "source_file_count": 225,
+    "new_module_count": 7,
+    "owned_path_count": 9,
+    "owned_sha256": {
+      "src/story_writing_agents/runtime_resources/session_worktree_access.py": "58477315f5c6f08137733b66f1aebc017096c18332407ccba703a8a6817ead9f",
+      "src/story_writing_agents/runtime_resources/reference_operation_registry.py": "5a545a2837a8ed529f1fdbec560410398ad2f48ea2175e53aee9441bc7d096c5",
+      "src/story_writing_agents/runtime_resources/provider_binding_leases.py": "ec76758bd35d8b67c0f52891800748de1932fb27d9bf1661b0b3866ed847711c",
+      "src/story_writing_agents/runtime_resources/session_execution_scopes.py": "10aec5b568dcc7741fdd3c652f0794f19ccfe619ce8b23685c9bbddedcf3f213",
+      "src/story_writing_agents/runtime_resources/collaboration_event_journal.py": "693f3b7e169e18e504af2fff1850ea89092bc190bf87f14d680d3947d780c595",
+      "src/story_writing_agents/runtime_resources/provider_call_accounting.py": "4a679a535983532750c55ea12896d61fadd76c87a98d7fabef9c72d8a05df87a",
+      "src/story_writing_agents/runtime_resources/__init__.py": "64f0b425a460bae0fa2cdde7198a64a3655746ce9c63838b1d303ccaec3c2a2e",
+      "src/story_writing_agents/orchestrator.py": "5f404bd481c2e12ea03e75d3c5311fe2537809efac2a33a435f286c6f9567fca",
+      "PYTHON_MODULE_INDEX.md": "9e7401c0fcadea6c4551fe8096d1b1c7ae36c3fb1637fadf66a117ea7028004e"
+    },
+    "source_tree_digest_sha256": "b3a7618bcaa7cc67fcf237794b78aae4ff78668b298a3374ac74a5ae9485d1d5",
+    "owned_digest_sha256": "390fbfb2931716f0a1aeb5f75ad142b942300941c365e89bd2191400454dcaeb",
+    "digest_encoding": "SHA256(JSON mapping, sort_keys=True, separators=(comma, colon), ensure_ascii=True, ASCII bytes; no trailing newline)",
+    "latest_plan_body_sha256": "dd2111d09f6caf74d5f747a5b29ffb7e088b113b67ade1bf0dd1d38e98787851",
+    "source_manifest_sha256": "c3b4330fd1c3a6d264d7a776feab78c2431f3e181cb0d5879ccb336355cf1259"
+  },
+  "production_static_verification": {
+    "source_slice_matches_mechanical_ast": true,
+    "source_compile": 225,
+    "orchestrator_import": true,
+    "new_module_scc": 0,
+    "private_imports": 0,
+    "upward_runtime_imports": 0,
+    "old_runtime_state_field_references": 0,
+    "provider_private_references_from_runtime": 0,
+    "ordinal_statement_preserved": true,
+    "ordinal_byte_column": 40,
+    "recursive_lexical_roots": 366,
+    "recursive_code_objects": 1141,
+    "lexical_drift": 0,
+    "common_global_binding_pairs": 2101,
+    "global_binding_differences": 0,
+    "actual_global_owner_checks": 74,
+    "imported_identity_checks": 106,
+    "identity_failures": 0,
+    "semantic_blocks_passed": 15,
+    "semantic_blocks_total": 15,
+    "before_function_metadata": 414,
+    "after_function_metadata": 434,
+    "before_typehint_success": 411,
+    "after_typehint_success": 431,
+    "baseline_typehint_errors": 3,
+    "new_typehint_errors": 0,
+    "atfork_registrations_before": 4,
+    "atfork_registrations_after": 4,
+    "atfork_order_preserved": true,
+    "resource_fork_registration_count": 1,
+    "local_case_suite_execution": 0,
+    "noncanonical_literal_dynamic_binding_comparisons_skipped": 19
+  },
+  "final_test_freeze": {
+    "manifest_file_sha256": "2a7371a33f7d1902442e964425b1eaab136dc2df406ce37c864989d1553aa8e6",
+    "changed_inputs": {
+      "tests/collaboration_contract_fixture.py": "cd68a889262634a5e7ddf420bab15d3f211e33974ab9d1a7ad58ef5709a37425",
+      "tests/fixtures/test_owners_v1.json": "db4bbd943bd7f85918690451ee939c6ecc1977fb4013c86d488dff1ef90e0bf6",
+      "tests/test_artifact_application_contracts.py": "d8709d82414692a1608239e50f977e0dd45f915cb6730a192f8519031d990efe",
+      "tests/test_artifact_application_store_recovery.py": "43fe9404de6c7f4448d833ab876fd70c89f7b421baccd64f661a83bc883a056d",
+      "tests/test_artifact_relationship_policy.py": "d18c228e5154da0c7030af15a16762595f7729340bb71d861d96ac86e89603af",
+      "tests/test_codex_backend.py": "edde777fb11f6919f1db43cdede14e778357fd609248e4612e451d7be4f154dc",
+      "tests/test_collaboration_context.py": "bb7df61d5f9c1b7483d53bc27c931e1f7c2024b536a5fcdd1203a5874764f7a3",
+      "tests/test_consensus_story_runtime_bridge.py": "e9f6bc3fe823efa5ea40765fb17374afbcefed6d33f47c0a57a6656b08d02f49",
+      "tests/test_git_external_operation_inspection.py": "5f1e73665145ac109ec6d8209cbe0eb902414c6e8a550dd116877408aaec9b50",
+      "tests/test_interactive_controller.py": "7236b199b83867bf6910f941015fbb6a73b44daad09dd18965b570b46e6b8c1a",
+      "tests/test_lead_orchestration.py": "f631e8cff36abd51f9efaafccb1b7cca3a0ab44fc9f28ecd7042677fe828f80b",
+      "tests/test_provider_timeout_recovery.py": "00a437e88ad03c610788cc7470590a7757f405a7b6b1152408013931902eb877",
+      "tests/test_rag_module_and_packaging_boundary.py": "28e8ecbe29d42030dbd50b7681799fc4bf74fc97987398c0f99cea0b504c6e21",
+      "tests/test_session_lifecycle.py": "8a4db5951a0ad359af0555854360d00f9252d09b942c2284c632f778219b60b6",
+      "tests/test_session_recovery_contracts.py": "dee90fcce4012602300d82999ad8f933956b7a5a186b24cb9b760e9b9986a1da",
+      "tests/test_specialist_orchestration.py": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+      "tests/test_workspace_session_history.py": "ca8bebccb6aa83897d5ec2fecf6dfab7d92f4f5331fce0e7a59bd2f09c6f120c"
+    },
+    "test_file_count": 301,
+    "test_python_compile_count": 235,
+    "production_python_compile_count": 225,
+    "canonical_cases": 2544,
+    "classes": 389,
+    "caps_exact": true,
+    "source_charge": {
+      "test_lines": 148486,
+      "support_lines": 1395,
+      "legacy_lines": 1550,
+      "effective_lines": 151431
+    },
+    "controller_sha256": "f3043a1cb691ba866e34a022a7c29946793fc41b54839d2d163f1632879110da",
+    "caps_weights_receipt_sourceledger_bytes_unchanged": true,
+    "api_declarations_preserved": 742,
+    "api_assertions_preserved": 3461,
+    "graph_assertions_preserved": 1776,
+    "unexpected_ast_changes_after_owner_normalization": 0,
+    "owner_map_imported_modules": 184,
+    "owner_map_check_passed": true,
+    "new_owner_count": 7,
+    "focused_file_counts": [
+      2,
+      2,
+      2,
+      2,
+      3,
+      2,
+      4
+    ],
+    "focused_package_count": 12,
+    "focused_fallbacks": 0,
+    "affected_selection_count": 2544,
+    "affected_full_expected": true,
+    "local_case_suite_execution": 0,
+    "prior_manifest_file_sha256": "d43e37e6003330641fc355ba1c2f13d4814d96a6fe76e78544b1a0db689f93a9",
+    "prior_affected40_manifest_sha256": "8928c9dc2e8ef32c72cdd8498de3266236b4df02b0a4fb462bff2d2597645030",
+    "root_rebound_source_digest_sha256": "b3a7618bcaa7cc67fcf237794b78aae4ff78668b298a3374ac74a5ae9485d1d5"
+  },
+  "after_validation_tracking": {
+    "pr_url": "https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/981",
+    "issue_url": "https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/966",
+    "selectors": {
+      "minimum": 4,
+      "integration_groups": [
+        25,
+        6,
+        1
+      ],
+      "global_graph": 9,
+      "affected_union": 41
+    },
+    "status": "P1·alias 교정 후보 동결; 과거 검토 SHA와 새 후보 검증을 구분"
+  },
+  "actual_definition_moves": {
+    "runtime_resources/reference_operation_registry.py": {
+      "members": [
+        {
+          "old": "StoryRuntime._register_reference_operation",
+          "line": 4188,
+          "decorator_line": 4188,
+          "end_line": 4218,
+          "ast_sha256": "e924a90ab16d05f5a8b8fa00771327a551d051122e8201e1a94a9eaf7cd28dcd",
+          "old_args": "self, operation: RuntimeReferenceOperation",
+          "old_return": "None",
+          "api": "register_reference_operation(workspace: Workspace, operation: RuntimeReferenceOperation) -> None",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._unregister_terminal_reference_operation",
+          "line": 4220,
+          "decorator_line": 4220,
+          "end_line": 4239,
+          "ast_sha256": "913f1d98625bad3d05f2188bd42e872fd86bd44fde7ae4307e38233667d0475b",
+          "old_args": "self, operation: RuntimeReferenceOperation",
+          "old_return": "None",
+          "api": "unregister_terminal_reference_operation(workspace: Workspace, operation: RuntimeReferenceOperation) -> None",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._registered_reference_operation_ids",
+          "line": 4241,
+          "decorator_line": 4241,
+          "end_line": 4266,
+          "ast_sha256": "bd45eb609fc3644a92958c582491162933d09098ed5d890dffb9c39a15d00c30",
+          "old_args": "self, session_id: str, physical_workspace_identity: tuple[int, int]",
+          "old_return": "frozenset[str]",
+          "api": "registered_reference_operation_ids(workspace: Workspace, session_id: str, physical_workspace_identity: tuple[int, int]) -> frozenset[str]",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._has_cleanup_pending_reference_operation",
+          "line": 4268,
+          "decorator_line": 4268,
+          "end_line": 4284,
+          "ast_sha256": "bc37dba7ce8e42b045cf3b086679cb49c281216ca023072afccf40fb2112962a",
+          "old_args": "self, session_id: str",
+          "old_return": "bool",
+          "api": "has_cleanup_pending_reference_operation(workspace: Workspace, session_id: str) -> bool",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._reconcile_reference_operations_at_boundary",
+          "line": 4286,
+          "decorator_line": 4286,
+          "end_line": 4337,
+          "ast_sha256": "79122a8dda9df9f9efac82e1ebf3c58eeb28968e339aa07ce58e20521087c09b",
+          "old_args": "self, *, session_id: str, physical_workspace_identity: tuple[int, int], repository_access: Callable[[], AbstractContextManager[WritingArtifactRepository]]",
+          "old_return": "None",
+          "api": "reconcile_reference_operations_at_boundary(workspace: Workspace, *, session_id: str, physical_workspace_identity: tuple[int, int], repository_access: Callable[[], AbstractContextManager[WritingArtifactRepository]]) -> None",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._require_current_reference_registry",
+          "line": 4340,
+          "decorator_line": 4339,
+          "end_line": 4346,
+          "ast_sha256": "19c2b5938721879d846a5891e892b9456238d2fe3fffe8994d4c4ce9f41c61b3",
+          "old_args": "",
+          "old_return": "None",
+          "api": "_require_current_reference_registry() -> None",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._reset_reference_registry_after_fork",
+          "line": 4349,
+          "decorator_line": 4348,
+          "end_line": 4354,
+          "ast_sha256": "6cf7de4816b1d8e06c666f80a9876b350ab2a0e90e6915a2f53b0882f92536e1",
+          "old_args": "",
+          "old_return": "None",
+          "api": "reset_reference_registry_after_fork() -> None",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._prepare_session_reference_operation",
+          "line": 4356,
+          "decorator_line": 4356,
+          "end_line": 4383,
+          "ast_sha256": "1cb7de75bf0326db92db80b936b87a7d82e1003319594017310bee7f7a7184ca",
+          "old_args": "self, repository_access: Callable[[], AbstractContextManager[WritingArtifactRepository]], *, artifact_binding: SessionArtifactBinding, session_id: str, text: str, reconcile_existing: bool=True",
+          "old_return": "RuntimeReferenceOperation",
+          "api": "prepare_session_reference_operation(workspace: Workspace, repository_access: Callable[[], AbstractContextManager[WritingArtifactRepository]], *, artifact_binding: SessionArtifactBinding, session_id: str, text: str, reconcile_existing: bool=True) -> RuntimeReferenceOperation",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._finish_reference_operation",
+          "line": 4385,
+          "decorator_line": 4385,
+          "end_line": 4392,
+          "ast_sha256": "0b27343ddc1dc32a6393323f45a4d249629320fb2d0b2749015604a9c6386dcb",
+          "old_args": "self, operation: RuntimeReferenceOperation",
+          "old_return": "None",
+          "api": "finish_reference_operation(workspace: Workspace, operation: RuntimeReferenceOperation) -> None",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._fail_reference_operation",
+          "line": 4394,
+          "decorator_line": 4394,
+          "end_line": 4406,
+          "ast_sha256": "48a74aab2340516429d248e12360522136ee74c17cada898250c70aa6161bf5c",
+          "old_args": "self, operation: RuntimeReferenceOperation, failure: BaseException, *, default: ReferenceAuthorizationErrorCode=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE",
+          "old_return": "ReferenceOperationFailure | None",
+          "api": "fail_reference_operation(workspace: Workspace, operation: RuntimeReferenceOperation, failure: BaseException, *, default: ReferenceAuthorizationErrorCode=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE) -> ReferenceOperationFailure | None",
+          "move": "whole existing method"
+        }
+      ]
+    },
+    "runtime_resources/provider_binding_leases.py": {
+      "members": [
+        {
+          "old": "StoryRuntime._acquire_bound_agent",
+          "line": 20702,
+          "decorator_line": 20702,
+          "end_line": 20708,
+          "ast_sha256": "3cfcc1c5f316581b01fe9686ad411b3462ddadef53d0c9ae8899b08b747e3964",
+          "old_args": "self, definition: object",
+          "old_return": "BoundAgent",
+          "api": "async acquire(self, definition: object, *, bind_definition: Callable[[object], Coroutine[Any, Any, BoundAgent]]) -> BoundAgent",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._select_bound_agent",
+          "line": 20710,
+          "decorator_line": 20710,
+          "end_line": 20809,
+          "ast_sha256": "eded799a3c665da8c4be2256a289bb960ffbddf951320294efbca2e3adeaf006",
+          "old_args": "self, definition: object, *, retain_use: bool",
+          "old_return": "BoundAgent",
+          "api": "async select(self, definition: object, *, retain_use: bool, bind_definition: Callable[[object], Coroutine[Any, Any, BoundAgent]]) -> BoundAgent",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._install_current_binding_locked",
+          "line": 20811,
+          "decorator_line": 20811,
+          "end_line": 20827,
+          "ast_sha256": "ba5e53b52bf51aee309ca201d6e741a3f75c1ea4b2ce03ee4a93f63c3cb525b1",
+          "old_args": "self, key: tuple[str, str], bound_agent: BoundAgent",
+          "old_return": "list[BoundAgent]",
+          "api": "_install_current_binding_locked(self, key: tuple[str, str], bound_agent: BoundAgent) -> list[BoundAgent]",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._mark_binding_retiring_locked",
+          "line": 20829,
+          "decorator_line": 20829,
+          "end_line": 20841,
+          "ast_sha256": "548060ef7b3a831b6254fb2a093926d89b91c6ba8feb508b72cbad269ab371fa",
+          "old_args": "self, key: tuple[str, str], bound_agent: BoundAgent",
+          "old_return": "list[BoundAgent]",
+          "api": "_mark_binding_retiring_locked(self, key: tuple[str, str], bound_agent: BoundAgent) -> list[BoundAgent]",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._retain_bound_agent_use_locked",
+          "line": 20843,
+          "decorator_line": 20843,
+          "end_line": 20851,
+          "ast_sha256": "8d6034d885252105798b8524465cfbf0f52e8742e20b4535062c7bb150288f8d",
+          "old_args": "self, bound_agent: BoundAgent",
+          "old_return": "None",
+          "api": "_retain_bound_agent_use_locked(self, bound_agent: BoundAgent) -> None",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._release_bound_agent_use",
+          "line": 20853,
+          "decorator_line": 20853,
+          "end_line": 20897,
+          "ast_sha256": "5da29bd2d24c0bab834639521ddf123722d61a00098953cac30a7a116b67f321",
+          "old_args": "self, bound_agent: BoundAgent",
+          "old_return": "None",
+          "api": "async release_use(self, bound_agent: BoundAgent, *, finish_use: Callable[[BoundAgent], Coroutine[Any, Any, None]]) -> None",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._release_bound_agent_use_once",
+          "line": 20899,
+          "decorator_line": 20899,
+          "end_line": 20922,
+          "ast_sha256": "116bb464fccba3046b3739728723edd3ff83829b57bd2056ea641b49136492b5",
+          "old_args": "self, bound_agent: BoundAgent",
+          "old_return": "None",
+          "api": "async decrement_retained_use(self, bound_agent: BoundAgent) -> BoundAgent | None",
+          "move": "release=None + original locked decrement only; return existing release value"
+        },
+        {
+          "old": "StoryRuntime._binding_is_tracked_locked",
+          "line": 20924,
+          "decorator_line": 20924,
+          "end_line": 20935,
+          "ast_sha256": "bed2453b2e7c1e98ba43359935c04e05496ceeb4205b3a8ab0784e1806b318f9",
+          "old_args": "self, bound_agent: object",
+          "old_return": "bool",
+          "api": "_binding_is_tracked_locked(self, bound_agent: object) -> bool",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._release_provider_bindings",
+          "line": 20965,
+          "decorator_line": 20964,
+          "end_line": 20974,
+          "ast_sha256": "e9372bf8178c75750f79a858510989b56ff5da4445925a0f15459a7cf26b24d3",
+          "old_args": "bindings: list[BoundAgent]",
+          "old_return": "None",
+          "api": "_release_provider_bindings(bindings: list[BoundAgent]) -> None",
+          "move": "whole existing method"
+        }
+      ],
+      "exception": {
+        "old": "_SupersededBindingSelection",
+        "line": 1735,
+        "decorator_line": 1735,
+        "end_line": 1736,
+        "ast_sha256": "e9fa3543ff0955bd42b962cbc2d0a6d81176687df9095ccee5b6ccdd3c3622f2",
+        "old_args": null,
+        "old_return": null,
+        "public_class": "SupersededBindingSelection"
+      },
+      "additional_apis": [
+        "ProviderBindingLeases()",
+        "async prepare_configuration(self) -> None",
+        "async commit_configuration(self, *, activate: Callable[[], None]) -> None"
+      ]
+    },
+    "runtime_resources/session_execution_scopes.py": {
+      "members": [
+        {
+          "old": "StoryRuntime._lead_session_lifecycle",
+          "line": 20613,
+          "decorator_line": 20612,
+          "end_line": 20622,
+          "ast_sha256": "395b65f2fffce94296f356eedf095bcb74c75eca019476ef6fb34249804e1168",
+          "old_args": "self, session_id: str",
+          "old_return": "AsyncIterator[None]",
+          "api": "async lead_session_lifecycle(self, session_id: str, *, continuation_factory: Callable[[str, str], ContextContinuationTransaction]) -> AsyncIterator[None]",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._conversation_lock",
+          "line": 20670,
+          "decorator_line": 20670,
+          "end_line": 20680,
+          "ast_sha256": "e5018197cf2beac16c927f0079e2fd186823c00be5a2f76bb26ee5e8e94918a0",
+          "old_args": "self, session_id: str, conversation_id: str",
+          "old_return": "asyncio.Lock",
+          "api": "conversation_lock(self, session_id: str, conversation_id: str) -> asyncio.Lock",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime.interrupt_provider",
+          "line": 3578,
+          "decorator_line": 3578,
+          "end_line": 3596,
+          "ast_sha256": "2bcae7c828ff6cf818e5754969cac5c11f2d11e77fdff26572839e4e3e82f2d3",
+          "old_args": "self, session_id: str, conversation_id: str, workflow_id: str, phase_request_id: str, /",
+          "old_return": "bool",
+          "api": "cancel_provider_tasks(self, session_id: str, conversation_id: str, workflow_id: str, phase_request_id: str, /) -> bool",
+          "move": "existing exact4-key task cancellation body; Runtime public signature remains"
+        }
+      ],
+      "additional_apis": [
+        "SessionExecutionScopes()",
+        "lead_continuation(self, session_id: str) -> ContextContinuationTransaction [exact []]",
+        "optional_lead_continuation(self, session_id: str) -> ContextContinuationTransaction | None [exact get]",
+        "register_provider_task(self, key: tuple[str,str,str,str]) -> asyncio.Task[object] [existing current_task,guard,setdefault,duplicate,add; return existing Task]",
+        "unregister_provider_task(self, key: tuple[str,str,str,str], current_task: asyncio.Task[object]) -> None [one added lookup then original discard/empty-pop]"
+      ]
+    },
+    "runtime_resources/collaboration_event_journal.py": {
+      "members": [
+        {
+          "old": "StoryRuntime._append_provider_call_fact",
+          "line": 20059,
+          "decorator_line": 20059,
+          "end_line": 20109,
+          "ast_sha256": "60acc4c8a41b703ae303e947c7d90e6a9b5071a39c50f6763e6a2a759e6714ae",
+          "old_args": "self, *, session_id: str, conversation_id: str, turn_id: str, step_id: str, invocation_id: str, call_id: str, ordinal: int, call_kind: CollaborationProviderCallKind, state: CollaborationProviderCallState, role: str, invocation_kind: CollaborationInvocationKind, validation_details: tuple[str, ...]=(), usage: ProviderUsage | None=None, accounting: ProviderCallAccounting | None=None, document_node: DocumentNodeBinding | None=None, document_goal=None, document_budget_task_id=None",
+          "old_return": "None",
+          "api": "append_provider_call_fact(*, session_id: str, conversation_id: str, turn_id: str, step_id: str, invocation_id: str, call_id: str, ordinal: int, call_kind: CollaborationProviderCallKind, state: CollaborationProviderCallState, role: str, invocation_kind: CollaborationInvocationKind, validation_details: tuple[str, ...]=(), usage: ProviderUsage | None=None, accounting: ProviderCallAccounting | None=None, document_node: DocumentNodeBinding | None=None, document_goal=None, document_budget_task_id=None, read_context: Callable[[str, str], CollaborationHistoryProjection], append_batch: Callable[[CollaborationEventBatch], CollaborationAppendReceipt]) -> None",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._append_validation_messages",
+          "line": 20111,
+          "decorator_line": 20111,
+          "end_line": 20165,
+          "ast_sha256": "fe7c36f0f0e8e53f30ba2fa1de8f67cf2172d3599e00b7a948405f911eceb05f",
+          "old_args": "self, *, session_id: str, conversation_id: str, turn_id: str, step_id: str, invocation_id: str, details_by_call: tuple[tuple[str, tuple[str, ...]], ...]",
+          "old_return": "None",
+          "api": "append_validation_messages(*, session_id: str, conversation_id: str, turn_id: str, step_id: str, invocation_id: str, details_by_call: tuple[tuple[str, tuple[str, ...]], ...], read_events: Callable[[str, str], tuple[CollaborationEventV2, ...]], append_batch: Callable[[CollaborationEventBatch], CollaborationAppendReceipt]) -> None",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._append_drafts",
+          "line": 20175,
+          "decorator_line": 20175,
+          "end_line": 20187,
+          "ast_sha256": "f14c7fa4c6fc1629644e4807e8a14f9052ef5398ae49a5652698c44b22898044",
+          "old_args": "self, expected_last_sequence: int, drafts: tuple[CollaborationEventDraft, ...], *, batch_id: str | None=None",
+          "old_return": "object",
+          "api": "append_drafts(expected_last_sequence: int, drafts: tuple[CollaborationEventDraft, ...], *, batch_id: str | None=None, append_batch: Callable[[CollaborationEventBatch], CollaborationAppendReceipt]) -> object",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._draft",
+          "line": 20190,
+          "decorator_line": 20189,
+          "end_line": 20212,
+          "ast_sha256": "d75d741cd7ff26d3c0dc7001555aae5c662824ef3559fe073441fb80b01e3d9f",
+          "old_args": "cls, *, session_id: str, conversation_id: str, turn_id: str, step_id: str, kind: CollaborationEventKind, sender: CollaborationActor, recipient: CollaborationActor, payload: CollaborationPayload",
+          "old_return": "CollaborationEventDraft",
+          "api": "draft(*, session_id: str, conversation_id: str, turn_id: str, step_id: str, kind: CollaborationEventKind, sender: CollaborationActor, recipient: CollaborationActor, payload: CollaborationPayload) -> CollaborationEventDraft",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._draft_with_id",
+          "line": 20215,
+          "decorator_line": 20214,
+          "end_line": 20238,
+          "ast_sha256": "c4ca0dee333fb779018f0b7220f1fc71365ab89465307500cdd67765dd8a824c",
+          "old_args": "*, event_id: str, session_id: str, conversation_id: str, turn_id: str, step_id: str, kind: CollaborationEventKind, sender: CollaborationActor, recipient: CollaborationActor, payload: CollaborationPayload",
+          "old_return": "CollaborationEventDraft",
+          "api": "draft_with_id(*, event_id: str, session_id: str, conversation_id: str, turn_id: str, step_id: str, kind: CollaborationEventKind, sender: CollaborationActor, recipient: CollaborationActor, payload: CollaborationPayload) -> CollaborationEventDraft",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._new_id",
+          "line": 20241,
+          "decorator_line": 20240,
+          "end_line": 20242,
+          "ast_sha256": "0db137c9d52f32386850790b849a5ac5e95d5ff4c7bbb02c578ec91a2e484eb5",
+          "old_args": "prefix: str",
+          "old_return": "str",
+          "api": "new_id(prefix: str) -> str",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._deterministic_id",
+          "line": 20245,
+          "decorator_line": 20244,
+          "end_line": 20247,
+          "ast_sha256": "15bb0ee0cb420f09b8af512e20b1435b1a9fa9bc01f0ccf6359fde289351a26c",
+          "old_args": "prefix: str, *parts: str",
+          "old_return": "str",
+          "api": "deterministic_id(prefix: str, *parts: str) -> str",
+          "move": "whole existing method"
+        },
+        {
+          "old": "StoryRuntime._actor_for_agent",
+          "line": 20168,
+          "decorator_line": 20167,
+          "end_line": 20173,
+          "ast_sha256": "f7d1968d04c2f0c711968a9ffea4a317a2c08c15389b59d8b8884d5e2c28de06",
+          "old_args": "agent_id: str",
+          "old_return": "CollaborationActor",
+          "api": "actor_for_agent(agent_id: str) -> CollaborationActor",
+          "move": "whole existing method"
+        }
+      ]
+    },
+    "runtime_resources/session_worktree_access.py": {
+      "members": [
+        {
+          "old": "_open_session_artifact_repository",
+          "line": 510,
+          "decorator_line": 509,
+          "end_line": 516,
+          "ast_sha256": "6ecbad633419a3db72add487d603bed192343038b438a9fa766d365caf81424c",
+          "old_args": "binding: SessionArtifactBinding",
+          "old_return": "Iterator[WritingArtifactRepository]",
+          "api": "open_session_artifact_repository(binding: SessionArtifactBinding) -> Iterator[WritingArtifactRepository]",
+          "move": "whole body/decorator unchanged"
+        },
+        {
+          "old": "_provider_execution_workspace_manager",
+          "line": 519,
+          "decorator_line": 519,
+          "end_line": 527,
+          "ast_sha256": "7a97d983fc4188823a4c225eb463eecaade41bd56dae3c5710d2abd1e6131e90",
+          "old_args": "bound_agent: BoundAgent, binding: SessionArtifactBinding",
+          "old_return": "AbstractContextManager[ProviderExecutionWorkspace] | None",
+          "api": "session_provider_execution_workspace_manager(bound_agent: BoundAgent, binding: SessionArtifactBinding) -> AbstractContextManager[ProviderExecutionWorkspace] | None",
+          "move": "whole body/decorator unchanged"
+        },
+        {
+          "old": "_duplicate_session_worktree_descriptor",
+          "line": 530,
+          "decorator_line": 530,
+          "end_line": 546,
+          "ast_sha256": "da6d6919cd07f2d93b4dc3e8b94ae47c40f08a15b507482b4369d1c4bb6cdae6",
+          "old_args": "binding: SessionArtifactBinding",
+          "old_return": "int",
+          "api": "duplicate_session_worktree_descriptor(binding: SessionArtifactBinding) -> int",
+          "move": "whole body/decorator unchanged"
+        }
+      ],
+      "global_binding_note": "Distinct public session_provider_execution_workspace_manager name avoids shadowing its existing imported provider_execution_workspace_manager delegate."
+    },
+    "runtime_resources/provider_call_accounting.py": {
+      "members": [
+        {
+          "old": "_AccountingContextProvider",
+          "line": 1824,
+          "decorator_line": 1824,
+          "end_line": 2402,
+          "ast_sha256": "b177437d0104e10f93ecc3afe163bdd4df42d47cdd871e9f3f52bac212c3a2e7",
+          "old_args": null,
+          "old_return": null,
+          "public_class": "AccountingContextProvider",
+          "constructor": "AccountingContextProvider(delegate: object, *, session_id: str, conversation_id: str, turn_id: str, step_id: str, invocation_id: str, role: str, invocation_kind: CollaborationInvocationKind, admission: PremiseFreshWorkAdmission | None=None, effective_language: str | None=None, task_revisions: tuple[tuple[str, int], ...]=(), document_node: DocumentNodeBinding | None=None, document_goal=None, document_budget_task_id=None, read_events: Callable[[str, str], tuple[CollaborationEventV2, ...]], read_context: Callable[[str, str], CollaborationHistoryProjection], append_batch: Callable[[CollaborationEventBatch], CollaborationAppendReceipt]) -> None"
+        },
+        {
+          "old": "_LeadCallBudgetExceeded",
+          "line": 1731,
+          "decorator_line": 1731,
+          "end_line": 1732,
+          "ast_sha256": "4ce6ef9e61d2c1d7d3ec7334ed3d89e1c051d3cab3e2038a8fdb3bc8bdd909b3",
+          "old_args": null,
+          "old_return": null,
+          "public_class": "LeadCallBudgetExceeded"
+        }
+      ],
+      "class_rule": "Only _runtime replaced with3required I/O callback fields; all other existing state/defaults/methods preserve; append5accepted semantic methods."
+    },
+    "runtime_resources/__init__.py": {
+      "members": [],
+      "rule": "docstring-only minimal initializer, no reexport, registration or Runtime import"
+    }
+  },
+  "actual_public_apis": {
+    "src/story_writing_agents/runtime_resources/__init__.py": [],
+    "src/story_writing_agents/runtime_resources/collaboration_event_journal.py": [
+      {
+        "symbol": "append_provider_call_fact",
+        "line": 39,
+        "signature": "def append_provider_call_fact(*, session_id: str, conversation_id: str, turn_id: str, step_id: str, invocation_id: str, call_id: str, ordinal: int, call_kind: CollaborationProviderCallKind, state: CollaborationProviderCallState, role: str, invocation_kind: CollaborationInvocationKind, validation_details: tuple[str, ...]=(), usage: ProviderUsage | None=None, accounting: ProviderCallAccounting | None=None, document_node: DocumentNodeBinding | None=None, document_goal=None, document_budget_task_id=None, read_context: Callable[[str, str], CollaborationHistoryProjection], append_batch: Callable[[CollaborationEventBatch], CollaborationAppendReceipt]) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "append_validation_messages",
+        "line": 101,
+        "signature": "def append_validation_messages(*, session_id: str, conversation_id: str, turn_id: str, step_id: str, invocation_id: str, details_by_call: tuple[tuple[str, tuple[str, ...]], ...], read_events: Callable[[str, str], tuple[CollaborationEventV2, ...]], append_batch: Callable[[CollaborationEventBatch], CollaborationAppendReceipt]) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "append_drafts",
+        "line": 177,
+        "signature": "def append_drafts(expected_last_sequence: int, drafts: tuple[CollaborationEventDraft, ...], *, batch_id: str | None=None, append_batch: Callable[[CollaborationEventBatch], CollaborationAppendReceipt]) -> object",
+        "decorators": []
+      },
+      {
+        "symbol": "draft",
+        "line": 194,
+        "signature": "def draft(*, session_id: str, conversation_id: str, turn_id: str, step_id: str, kind: CollaborationEventKind, sender: CollaborationActor, recipient: CollaborationActor, payload: CollaborationPayload) -> CollaborationEventDraft",
+        "decorators": []
+      },
+      {
+        "symbol": "draft_with_id",
+        "line": 216,
+        "signature": "def draft_with_id(*, event_id: str, session_id: str, conversation_id: str, turn_id: str, step_id: str, kind: CollaborationEventKind, sender: CollaborationActor, recipient: CollaborationActor, payload: CollaborationPayload) -> CollaborationEventDraft",
+        "decorators": []
+      },
+      {
+        "symbol": "new_id",
+        "line": 240,
+        "signature": "def new_id(prefix: str) -> str",
+        "decorators": []
+      },
+      {
+        "symbol": "deterministic_id",
+        "line": 243,
+        "signature": "def deterministic_id(prefix: str, *parts: str) -> str",
+        "decorators": []
+      },
+      {
+        "symbol": "actor_for_agent",
+        "line": 247,
+        "signature": "def actor_for_agent(agent_id: str) -> CollaborationActor",
+        "decorators": []
+      }
+    ],
+    "src/story_writing_agents/runtime_resources/provider_binding_leases.py": [
+      {
+        "symbol": "SupersededBindingSelection",
+        "line": 9,
+        "bases": [
+          "Exception"
+        ]
+      },
+      {
+        "symbol": "ProviderBindingLeases",
+        "line": 12,
+        "bases": []
+      },
+      {
+        "symbol": "ProviderBindingLeases.__init__",
+        "line": 14,
+        "signature": "def __init__(self) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "ProviderBindingLeases.acquire",
+        "line": 23,
+        "signature": "async def acquire(self, definition: object, *, bind_definition: Callable[[object], Coroutine[Any, Any, BoundAgent]]) -> BoundAgent",
+        "decorators": []
+      },
+      {
+        "symbol": "ProviderBindingLeases.select",
+        "line": 39,
+        "signature": "async def select(self, definition: object, *, retain_use: bool, bind_definition: Callable[[object], Coroutine[Any, Any, BoundAgent]]) -> BoundAgent",
+        "decorators": []
+      },
+      {
+        "symbol": "ProviderBindingLeases.release_use",
+        "line": 187,
+        "signature": "async def release_use(self, bound_agent: BoundAgent, *, finish_use: Callable[[BoundAgent], Coroutine[Any, Any, None]]) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "ProviderBindingLeases.decrement_retained_use",
+        "line": 242,
+        "signature": "async def decrement_retained_use(self, bound_agent: BoundAgent) -> BoundAgent | None",
+        "decorators": []
+      },
+      {
+        "symbol": "ProviderBindingLeases.prepare_configuration",
+        "line": 288,
+        "signature": "async def prepare_configuration(self) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "ProviderBindingLeases.commit_configuration",
+        "line": 302,
+        "signature": "async def commit_configuration(self, *, activate: Callable[[], None]) -> None",
+        "decorators": []
+      }
+    ],
+    "src/story_writing_agents/runtime_resources/provider_call_accounting.py": [
+      {
+        "symbol": "LeadCallBudgetExceeded",
+        "line": 51,
+        "bases": [
+          "BackendProtocolError"
+        ]
+      },
+      {
+        "symbol": "AccountingContextProvider",
+        "line": 54,
+        "bases": []
+      },
+      {
+        "symbol": "AccountingContextProvider.__init__",
+        "line": 57,
+        "signature": "def __init__(self, delegate: object, *, session_id: str, conversation_id: str, turn_id: str, step_id: str, invocation_id: str, role: str, invocation_kind: CollaborationInvocationKind, admission: PremiseFreshWorkAdmission | None=None, effective_language: str | None=None, task_revisions: tuple[tuple[str, int], ...]=(), document_node: DocumentNodeBinding | None=None, document_goal=None, document_budget_task_id=None, read_events: Callable[[str, str], tuple[CollaborationEventV2, ...]], read_context: Callable[[str, str], CollaborationHistoryProjection], append_batch: Callable[[CollaborationEventBatch], CollaborationAppendReceipt]) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.renew_delegate",
+        "line": 135,
+        "signature": "def renew_delegate(self, delegate: object) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.invocation",
+        "line": 158,
+        "signature": "def invocation(self, scope: ContextScope, policy_fingerprint: str, *, continuation_identity: ContextContinuationIdentity | None=None, execution_workspace: ProviderExecutionWorkspace | None=None) -> AsyncContextManager[None]",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.inspect_context_thread",
+        "line": 178,
+        "signature": "def inspect_context_thread(self, scope: ContextScope, policy_fingerprint: str, *, execution_workspace: ProviderExecutionWorkspace | None=None) -> str | None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.require_current_execution_workspace",
+        "line": 191,
+        "signature": "def require_current_execution_workspace(self, scope: ContextScope, policy_fingerprint: str) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.prepare_references",
+        "line": 204,
+        "signature": "async def prepare_references(self, request: ContextReferencePreludeRequest) -> ContextReferencePreludeResult",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.invoke_context",
+        "line": 212,
+        "signature": "async def invoke_context(self, request: ContextProviderCallRequest | BoundContextProviderCallRequest) -> ContextProviderCallResult",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.record_validated_task",
+        "line": 269,
+        "signature": "def record_validated_task(self, call_id: str, task_id: str, task_revision: int) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.record_validation_details",
+        "line": 279,
+        "signature": "def record_validation_details(self, call_id: str, details: tuple[str, ...]) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.record_group_observation",
+        "line": 288,
+        "signature": "def record_group_observation(self, observation: LeadGroupObservation) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.group_trace_drafts",
+        "line": 296,
+        "signature": "def group_trace_drafts(self, terminal_code: str, terminal_drafts=()) -> tuple[CollaborationEventDraft, ...]",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.with_group_trace",
+        "line": 331,
+        "signature": "def with_group_trace(self, drafts, terminal_code: str)",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.publish_public_responses",
+        "line": 345,
+        "signature": "def publish_public_responses(self) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.publish_validation_messages",
+        "line": 420,
+        "signature": "def publish_validation_messages(self) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.publish_or_defer_validation_messages",
+        "line": 439,
+        "signature": "def publish_or_defer_validation_messages(self) -> tuple[str, tuple[tuple[str, tuple[str, ...]], ...]] | None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.validation_details_by_call",
+        "line": 453,
+        "signature": "def validation_details_by_call(self) -> tuple[tuple[str, tuple[str, ...]], ...]",
+        "decorators": [
+          "property"
+        ]
+      },
+      {
+        "symbol": "AccountingContextProvider.validation_details",
+        "line": 483,
+        "signature": "def validation_details(self) -> tuple[str, ...]",
+        "decorators": [
+          "property"
+        ]
+      },
+      {
+        "symbol": "AccountingContextProvider.complete_references",
+        "line": 490,
+        "signature": "def complete_references(self, scope: ContextScope, policy_fingerprint: str) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.abort_references",
+        "line": 497,
+        "signature": "def abort_references(self, scope: ContextScope, policy_fingerprint: str, *, cancelled: bool, provider_failure: bool) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.taint_context_thread",
+        "line": 512,
+        "signature": "def taint_context_thread(self, scope: ContextScope, policy_fingerprint: str, *, execution_workspace: ProviderExecutionWorkspace | None=None) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.submitted_physical_calls",
+        "line": 637,
+        "signature": "def submitted_physical_calls(self) -> int",
+        "decorators": [
+          "property"
+        ]
+      },
+      {
+        "symbol": "AccountingContextProvider.invocation_id",
+        "line": 643,
+        "signature": "def invocation_id(self) -> str",
+        "decorators": [
+          "property"
+        ]
+      },
+      {
+        "symbol": "AccountingContextProvider.last_submitted_call_id",
+        "line": 649,
+        "signature": "def last_submitted_call_id(self) -> str | None",
+        "decorators": [
+          "property"
+        ]
+      },
+      {
+        "symbol": "AccountingContextProvider.limit_task_front_calls",
+        "line": 662,
+        "signature": "def limit_task_front_calls(self, limit: int | None) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.configure_public_response_contract",
+        "line": 665,
+        "signature": "def configure_public_response_contract(self, contract_id: str | None) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.accept_last_public_response",
+        "line": 668,
+        "signature": "def accept_last_public_response(self) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.correlate_native_context_event",
+        "line": 671,
+        "signature": "def correlate_native_context_event(self, event: ContextExecutionEvent) -> ContextExecutionEvent",
+        "decorators": []
+      },
+      {
+        "symbol": "AccountingContextProvider.record_native_context_recovery",
+        "line": 674,
+        "signature": "def record_native_context_recovery(self, event: ContextExecutionEvent, disposition: ContextNativeDisposition) -> None",
+        "decorators": []
+      }
+    ],
+    "src/story_writing_agents/runtime_resources/reference_operation_registry.py": [
+      {
+        "symbol": "register_reference_operation",
+        "line": 29,
+        "signature": "def register_reference_operation(workspace: Workspace, operation: RuntimeReferenceOperation) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "unregister_terminal_reference_operation",
+        "line": 58,
+        "signature": "def unregister_terminal_reference_operation(workspace: Workspace, operation: RuntimeReferenceOperation) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "registered_reference_operation_ids",
+        "line": 78,
+        "signature": "def registered_reference_operation_ids(workspace: Workspace, session_id: str, physical_workspace_identity: tuple[int, int]) -> frozenset[str]",
+        "decorators": []
+      },
+      {
+        "symbol": "has_cleanup_pending_reference_operation",
+        "line": 106,
+        "signature": "def has_cleanup_pending_reference_operation(workspace: Workspace, session_id: str) -> bool",
+        "decorators": []
+      },
+      {
+        "symbol": "reconcile_reference_operations_at_boundary",
+        "line": 124,
+        "signature": "def reconcile_reference_operations_at_boundary(workspace: Workspace, *, session_id: str, physical_workspace_identity: tuple[int, int], repository_access: Callable[[], AbstractContextManager[WritingArtifactRepository]]) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "reset_reference_registry_after_fork",
+        "line": 187,
+        "signature": "def reset_reference_registry_after_fork() -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "prepare_session_reference_operation",
+        "line": 195,
+        "signature": "def prepare_session_reference_operation(workspace: Workspace, repository_access: Callable[[], AbstractContextManager[WritingArtifactRepository]], *, artifact_binding: SessionArtifactBinding, session_id: str, text: str, reconcile_existing: bool=True) -> RuntimeReferenceOperation",
+        "decorators": []
+      },
+      {
+        "symbol": "finish_reference_operation",
+        "line": 224,
+        "signature": "def finish_reference_operation(workspace: Workspace, operation: RuntimeReferenceOperation) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "fail_reference_operation",
+        "line": 230,
+        "signature": "def fail_reference_operation(workspace: Workspace, operation: RuntimeReferenceOperation, failure: BaseException, *, default: ReferenceAuthorizationErrorCode=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE) -> ReferenceOperationFailure | None",
+        "decorators": []
+      }
+    ],
+    "src/story_writing_agents/runtime_resources/session_execution_scopes.py": [
+      {
+        "symbol": "SessionExecutionScopes",
+        "line": 11,
+        "bases": []
+      },
+      {
+        "symbol": "SessionExecutionScopes.__init__",
+        "line": 13,
+        "signature": "def __init__(self) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "SessionExecutionScopes.lead_session_lifecycle",
+        "line": 21,
+        "signature": "async def lead_session_lifecycle(self, session_id: str, *, continuation_factory: Callable[[str, str], ContextContinuationTransaction]) -> AsyncIterator[None]",
+        "decorators": [
+          "asynccontextmanager"
+        ]
+      },
+      {
+        "symbol": "SessionExecutionScopes.conversation_lock",
+        "line": 40,
+        "signature": "def conversation_lock(self, session_id: str, conversation_id: str) -> asyncio.Lock",
+        "decorators": []
+      },
+      {
+        "symbol": "SessionExecutionScopes.cancel_provider_tasks",
+        "line": 48,
+        "signature": "def cancel_provider_tasks(self, session_id: str, conversation_id: str, workflow_id: str, phase_request_id: str, /) -> bool",
+        "decorators": []
+      },
+      {
+        "symbol": "SessionExecutionScopes.register_provider_task",
+        "line": 67,
+        "signature": "def register_provider_task(self, key: tuple[str, str, str, str]) -> asyncio.Task[object]",
+        "decorators": []
+      },
+      {
+        "symbol": "SessionExecutionScopes.unregister_provider_task",
+        "line": 77,
+        "signature": "def unregister_provider_task(self, key: tuple[str, str, str, str], current_task: asyncio.Task[object]) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "SessionExecutionScopes.lead_continuation",
+        "line": 90,
+        "signature": "def lead_continuation(self, session_id: str) -> ContextContinuationTransaction",
+        "decorators": []
+      },
+      {
+        "symbol": "SessionExecutionScopes.optional_lead_continuation",
+        "line": 93,
+        "signature": "def optional_lead_continuation(self, session_id: str) -> ContextContinuationTransaction | None",
+        "decorators": []
+      }
+    ],
+    "src/story_writing_agents/runtime_resources/session_worktree_access.py": [
+      {
+        "symbol": "open_session_artifact_repository",
+        "line": 13,
+        "signature": "def open_session_artifact_repository(binding: SessionArtifactBinding) -> Iterator[WritingArtifactRepository]",
+        "decorators": [
+          "contextmanager"
+        ]
+      },
+      {
+        "symbol": "session_provider_execution_workspace_manager",
+        "line": 19,
+        "signature": "def session_provider_execution_workspace_manager(bound_agent: BoundAgent, binding: SessionArtifactBinding) -> AbstractContextManager[ProviderExecutionWorkspace] | None",
+        "decorators": []
+      },
+      {
+        "symbol": "duplicate_session_worktree_descriptor",
+        "line": 28,
+        "signature": "def duplicate_session_worktree_descriptor(binding: SessionArtifactBinding) -> int",
+        "decorators": []
+      }
+    ],
+    "src/story_writing_agents/orchestrator.py": [
+      {
+        "symbol": "StoryRuntime.interrupt_provider",
+        "line": 2948,
+        "signature": "def interrupt_provider(self, session_id: str, conversation_id: str, workflow_id: str, phase_request_id: str, /) -> bool",
+        "decorators": []
+      },
+      {
+        "symbol": "StoryRuntime.bind_definition",
+        "line": 19719,
+        "signature": "async def bind_definition(self, definition: object) -> BoundAgent",
+        "decorators": []
+      },
+      {
+        "symbol": "StoryRuntime.finish_bound_agent_use",
+        "line": 19748,
+        "signature": "async def finish_bound_agent_use(self, bound_agent: BoundAgent) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "StoryRuntime.activate_configuration_snapshots",
+        "line": 19753,
+        "signature": "def activate_configuration_snapshots(self, candidate: RuntimeConfigurationCandidate, backend_candidate: BackendRuntimeConfigurationCandidate) -> None",
+        "decorators": []
+      },
+      {
+        "symbol": "StoryRuntime.read_collaboration_events",
+        "line": 19762,
+        "signature": "def read_collaboration_events(self, session_id: str, conversation_id: str) -> tuple[CollaborationEventV2, ...]",
+        "decorators": []
+      },
+      {
+        "symbol": "StoryRuntime.read_collaboration_context",
+        "line": 19770,
+        "signature": "def read_collaboration_context(self, session_id: str, conversation_id: str) -> CollaborationHistoryProjection",
+        "decorators": []
+      },
+      {
+        "symbol": "StoryRuntime.append_collaboration_event_batch",
+        "line": 19773,
+        "signature": "def append_collaboration_event_batch(self, batch: CollaborationEventBatch) -> CollaborationAppendReceipt",
+        "decorators": []
+      },
+      {
+        "symbol": "StoryRuntime.lead_conversation_scope",
+        "line": 19777,
+        "signature": "async def lead_conversation_scope(self, session_id: str, conversation_id: str) -> AsyncIterator[None]",
+        "decorators": [
+          "asynccontextmanager"
+        ]
+      }
+    ]
+  },
+  "actual_state_transfers": [
+    {
+      "old": "_reference_operation_registry_lock",
+      "owner": "registry",
+      "line": 2897,
+      "decorator_line": 2897,
+      "end_line": 2897,
+      "ast_sha256": "513cae550c84e0f8be9ff58074664d151cc0680bd4d35d36d4f0c96e683d3fa7",
+      "old_args": null,
+      "old_return": null,
+      "type": null,
+      "initial_value": "threading.RLock()"
+    },
+    {
+      "old": "_reference_operation_registry_pid",
+      "owner": "registry",
+      "line": 2898,
+      "decorator_line": 2898,
+      "end_line": 2898,
+      "ast_sha256": "fdb3d20cb546f72aabd58955489d6394d56d1c5d53166eeecfe08f57fc97f7f8",
+      "old_args": null,
+      "old_return": null,
+      "type": null,
+      "initial_value": "os.getpid()"
+    },
+    {
+      "old": "_reference_operation_registry",
+      "owner": "registry",
+      "line": 2899,
+      "decorator_line": 2899,
+      "end_line": 2901,
+      "ast_sha256": "ee1d6b2185f56e6f5ee6d9bab1cdb859aa16d4579350ed7a9c780a85cc76c13f",
+      "old_args": null,
+      "old_return": null,
+      "type": "dict[tuple[str, str, tuple[int, int], str], RuntimeReferenceOperation]",
+      "initial_value": "{}"
+    },
+    {
+      "old": "_bound_agents",
+      "owner": "leases",
+      "line": 2967,
+      "decorator_line": 2967,
+      "end_line": 2967,
+      "ast_sha256": "75650faeb1e91196f811184421505254c997279dc598b0116988884e7b636dc1",
+      "old_args": null,
+      "old_return": null,
+      "type": "dict[tuple[str, str], BoundAgent]",
+      "initial_value": "{}"
+    },
+    {
+      "old": "_desired_binding_fingerprints",
+      "owner": "leases",
+      "line": 2968,
+      "decorator_line": 2968,
+      "end_line": 2968,
+      "ast_sha256": "a36babf7f7e3b68f82299251eea95aa7262d7d108082cd6cf83eb5c5ce94dad5",
+      "old_args": null,
+      "old_return": null,
+      "type": "dict[str, str]",
+      "initial_value": "{}"
+    },
+    {
+      "old": "_retiring_bound_agents",
+      "owner": "leases",
+      "line": 2969,
+      "decorator_line": 2969,
+      "end_line": 2969,
+      "ast_sha256": "ddec8ba855281daf9f8bbc469cae617aa80d7435725caca66bfc6f7b4825fa54",
+      "old_args": null,
+      "old_return": null,
+      "type": "dict[tuple[str, str], BoundAgent]",
+      "initial_value": "{}"
+    },
+    {
+      "old": "_bound_agent_uses",
+      "owner": "leases",
+      "line": 2970,
+      "decorator_line": 2970,
+      "end_line": 2970,
+      "ast_sha256": "01db608bc487c328c18b9a0bc01debb3d1a96e5829b6fb5c2080a383b6c9d1b4",
+      "old_args": null,
+      "old_return": null,
+      "type": "dict[int, tuple[BoundAgent, int]]",
+      "initial_value": "{}"
+    },
+    {
+      "old": "_binding_tasks",
+      "owner": "leases",
+      "line": 2971,
+      "decorator_line": 2971,
+      "end_line": 2971,
+      "ast_sha256": "22d22f0ee97f58b2cb975d91d35baca49cc1612f685d24feb1ab75a919c4abc1",
+      "old_args": null,
+      "old_return": null,
+      "type": "dict[tuple[str, str], asyncio.Task[BoundAgent]]",
+      "initial_value": "{}"
+    },
+    {
+      "old": "_binding_waiters",
+      "owner": "leases",
+      "line": 2972,
+      "decorator_line": 2972,
+      "end_line": 2972,
+      "ast_sha256": "627ac5ee770617029e5aa30a1c6b0e898b7d28c5875d2cbb76df43b640022ca0",
+      "old_args": null,
+      "old_return": null,
+      "type": "dict[tuple[str, str], int]",
+      "initial_value": "{}"
+    },
+    {
+      "old": "_binding_lock",
+      "owner": "leases",
+      "line": 2973,
+      "decorator_line": 2973,
+      "end_line": 2973,
+      "ast_sha256": "35adcab28fcaae8dcb09ed53f1813db96224b0085e8ab9c67657c75c01513da8",
+      "old_args": null,
+      "old_return": null,
+      "type": null,
+      "initial_value": "asyncio.Lock()"
+    },
+    {
+      "old": "_conversation_locks",
+      "owner": "scopes",
+      "line": 2974,
+      "decorator_line": 2974,
+      "end_line": 2974,
+      "ast_sha256": "115dadabea1ef748e418abb289bce6eae6edaf01d4a16a8f9f23866d71a6537b",
+      "old_args": null,
+      "old_return": null,
+      "type": "dict[tuple[str, str], asyncio.Lock]",
+      "initial_value": "{}"
+    },
+    {
+      "old": "_lead_continuations",
+      "owner": "scopes",
+      "line": 2976,
+      "decorator_line": 2976,
+      "end_line": 2976,
+      "ast_sha256": "d3af5b1b4f5e6a0be5c4a61806b36b1bba0ebd6bb4983a8184154667ff60e218",
+      "old_args": null,
+      "old_return": null,
+      "type": "dict[str, ContextContinuationTransaction]",
+      "initial_value": "{}"
+    },
+    {
+      "old": "_consensus_provider_tasks",
+      "owner": "scopes",
+      "line": 2989,
+      "decorator_line": 2989,
+      "end_line": 2991,
+      "ast_sha256": "c2ee3b61a3793f1cabf1469a0422131c0edcf73e7d26e6928821e244f986b8d1",
+      "old_args": null,
+      "old_return": null,
+      "type": "dict[tuple[str, str, str, str], set[asyncio.Task[object]]]",
+      "initial_value": "{}"
+    }
+  ],
+  "actual_occurrence_dispositions": {
+    "fixed": 670,
+    "intentionally_valid": 16,
+    "out_of_scope": 0
+  },
+  "production_verification_limits": [
+    "로컬 Case/Suite 0회(#848 quarantine 유지). root가 실제 hosted 최소4/graph9/확장25/추가6/전체CI와 시간 기준을 판정.",
+    "원본에도 있던 typehint NameError3건은 동일하게 남음: ConsensusExecutionIdentity 2곳, ArtifactObjective 1곳. 신규 오류0.",
+    "프로세스 간 전역 객체 주소 직접 비교는 하지 않음. canonical binding 2,101쌍 비교와 현재 프로세스 globals owner74/import object is106 별도 확인. literal/dynamic19항목의 canonical is 비교는 생략·명시.",
+    "실제 fork/Task 실행/FD 또는 provider I/O/할당 byte/성능 측정은 하지 않음. 호출·자원 횟수 보존은 정적 대응 근거이며 시간 통과 의미 아님."
+  ],
+  "final_receipt_sha256": "6565cbf614f21f44ee58a533b23f991e496867f02323af02d38b05b7502f6f73",
+  "controller_graph_correction": {
+    "failed_run_id": 42836279557,
+    "failed_candidate": "d1f208c0fa2a2a32c7f3e9dc7e2ebf99e589b8f3",
+    "failure": "1106 != 1111",
+    "change": "Controller 기대 상수1111→1106 한 곳",
+    "before_nodes": 218,
+    "before_both_collectors_edges": 1065,
+    "after_nodes": 225,
+    "existing_controller_edges": 1106,
+    "complete_module_graph_edges": 1111,
+    "complete_graph_visited": 225,
+    "complete_graph_cyclic_scc": 0,
+    "cause": "기존 helper와 complete 수집기의 module-alias 해석 차이",
+    "algorithm_changed": false,
+    "source225_changed": false,
+    "controller_collection_scope_limit": "기존 Controller helper는 하위 module-alias5간선을 표현하지 못한다; 전체1111간선 인증은 별도 정적 그래프 증거다",
+    "failure_evidence_retained": true
+  },
+  "prior_source_freeze_before_correction": {
+    "source_file_count": 225,
+    "new_module_count": 7,
+    "owned_path_count": 9,
+    "owned_sha256": {
+      "src/story_writing_agents/runtime_resources/session_worktree_access.py": "58477315f5c6f08137733b66f1aebc017096c18332407ccba703a8a6817ead9f",
+      "src/story_writing_agents/runtime_resources/reference_operation_registry.py": "5a545a2837a8ed529f1fdbec560410398ad2f48ea2175e53aee9441bc7d096c5",
+      "src/story_writing_agents/runtime_resources/provider_binding_leases.py": "ec76758bd35d8b67c0f52891800748de1932fb27d9bf1661b0b3866ed847711c",
+      "src/story_writing_agents/runtime_resources/session_execution_scopes.py": "10aec5b568dcc7741fdd3c652f0794f19ccfe619ce8b23685c9bbddedcf3f213",
+      "src/story_writing_agents/runtime_resources/collaboration_event_journal.py": "693f3b7e169e18e504af2fff1850ea89092bc190bf87f14d680d3947d780c595",
+      "src/story_writing_agents/runtime_resources/provider_call_accounting.py": "4a679a535983532750c55ea12896d61fadd76c87a98d7fabef9c72d8a05df87a",
+      "src/story_writing_agents/runtime_resources/__init__.py": "64f0b425a460bae0fa2cdde7198a64a3655746ce9c63838b1d303ccaec3c2a2e",
+      "src/story_writing_agents/orchestrator.py": "e378053afa252ebd7517d273d05cfecad2165ebb777e3c85412046bf43ad1c21",
+      "PYTHON_MODULE_INDEX.md": "9e7401c0fcadea6c4551fe8096d1b1c7ae36c3fb1637fadf66a117ea7028004e"
+    },
+    "source_tree_digest_sha256": "d71fde6abf84022d3b53a5cdcd0a1b3e6c2bda3b23dd4527cd97599a3d05d18b",
+    "owned_digest_sha256": "d24e668a21ef47fcfa1eb250b9fafa3a49f80aa2398d0c4e5682dc0c7e67ff9e",
+    "digest_encoding": "SHA256(JSON mapping, sort_keys=True, separators=(comma, colon), ensure_ascii=True, ASCII bytes; no trailing newline)",
+    "latest_plan_body_sha256": "dd2111d09f6caf74d5f747a5b29ffb7e088b113b67ade1bf0dd1d38e98787851"
+  },
+  "correction_checks": {
+    "compile": 225,
+    "expected_two_changes_AST": true,
+    "target_recursive_scopes": 6,
+    "target_lexical_drift": 0,
+    "target_global_opcode_drift": 0,
+    "target_metadata_global_signature_lexical_equal": true,
+    "all_metadata_exact_pairs": 433,
+    "all_metadata_pairs_excluding_fresh_process_PID": 434,
+    "expected_metadata_process_difference": "Only registry PID integer differs across fresh processes; no source difference in registry.",
+    "typehint_successes": 431,
+    "new_typehint_errors": 0,
+    "baseline_typehint_errors": {
+      "story_writing_agents.orchestrator:StoryRuntime.qualify_consensus_authoring": "NameError:name 'ConsensusExecutionIdentity' is not defined",
+      "story_writing_agents.orchestrator:StoryRuntime.qualify_consensus_readiness": "NameError:name 'ConsensusExecutionIdentity' is not defined",
+      "story_writing_agents.orchestrator:StoryRuntime._resolved_objective_source_ids": "NameError:name 'ArtifactObjective' is not defined"
+    },
+    "atfork_count": 4,
+    "atfork_order_equal": true,
+    "controller_ordinal_literal_column": 40,
+    "private_all_resource_attributes": 353,
+    "accounting_private_field_count": 27,
+    "accounting_private_method_count": 5,
+    "accounting_all_receiver_attribute_records": 261,
+    "accounting_reflection_records": 1,
+    "accounting_literal_and_dotted_string_records": 9,
+    "private_nonowner": 0,
+    "journal_callee_counts": {
+      "draft": 62,
+      "append_drafts": 45,
+      "append_validation_messages": 2,
+      "append_provider_call_fact": 2,
+      "new_id": 58,
+      "draft_with_id": 33,
+      "deterministic_id": 51,
+      "actor_for_agent": 1
+    },
+    "journal_original_caller_pairs": 254,
+    "journal_argument_AST_mismatches": 0,
+    "diff_check": "passed",
+    "case_suite_runs": 0,
+    "producer_runtime_instances": 0
+  },
+  "proof_scope_corrections": [
+    "Earlier S04 provider-private0 claim was receiver-name-specific and omitted alias public_response_provider. Replaced by actual Accounting27fields+5methods all-receiver AST/reflection/string census.",
+    "Earlier new-module-body/mechanical-transform equality did not establish original caller argument tuple shape. Independent original254 journal caller argument pairs now establish it, preserving all tuple/star/keyword shape and order after only owner-name and required dependency normalization."
+  ],
+  "correction_costs": [
+    "Existing public accounting command call/frame +1 when that branch executes; original getter/assignment/publish order identical.",
+    "Remove erroneous extra tuple allocation; restores original tuple argument shape/identity. No new API/feature/condition/DTO/Task/FD/I/O/owner."
+  ],
+  "correction_limits": [
+    "No local Case/Suite, business/provider runtime instance, actual fork, Git or GitHub mutation. Static checks do not prove time or behavioral pass.",
+    "Computed dynamic reflection strings are not exhaustively provable by static AST; all known actual private names, exact literals and dotted-string references in225source were inventoried."
+  ],
+  "actual_correction_batch": [
+    "Same None guard and same position: public_response_provider private assignment → existing accept_last_public_response().",
+    "Original _with_group_trace event tuple supplied directly to event_journal.append_drafts; remove only erroneous outer one-element tuple."
+  ],
+  "additional_public_response_positive_id": "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
+  "failed_validation_preserved": {
+    "graph9_C140_parent_run": 42836279557,
+    "expanded25_C140_run": 42838309940,
+    "expanded25_results": "23통과/기존 exact tuple guard 오류2개",
+    "review_id": 5844329447,
+    "reviewed_head": "c140b2892679617d671f1c4c8192289345121306",
+    "P1_finding_url": "https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/981#discussion_r4526713657"
+  }
+}

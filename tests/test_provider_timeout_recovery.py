@@ -15,6 +15,7 @@ from tests import test_lead_orchestration as lead
 from tests.collaboration_contract_fixture import LEAD, USER, make_draft, provider_call_drafts
 from story_writing_agents.agent_context.contracts import planning_inputs as ctx_planning_inputs
 from story_writing_agents.agent_context.invocation import provider as ctx_provider
+from story_writing_agents.runtime_resources import collaboration_event_journal as event_journal
 
 
 
@@ -51,8 +52,8 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
                                      role=LEAD_ORCHESTRATOR, recipient=LEAD,
                                      invocation_kind=CollaborationInvocationKind.LEAD)
         drafts.extend(calls[:{"bare": 0, "prepared": 1, "submitted": 2}[state]])
-        self.runtime._append_drafts(0, tuple(replace(item, session_id=self.session_id,
-                                                    conversation_id=conversation) for item in drafts))
+        event_journal.append_drafts(0, tuple(replace(item, session_id=self.session_id,
+                                                    conversation_id=conversation) for item in drafts), append_batch=self.runtime.append_collaboration_event_batch)
 
     async def test_forced_timeout_restart_and_explicit_retry_preserve_both_attempts(self):
         for resumed in (False, True):

@@ -19,7 +19,6 @@ import story_writing_agents.lead_task_transitions as task
 from story_writing_agents import provider_wire as wire
 from story_writing_agents.conversations.events import COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
 import pickle
-import shutil
 import subprocess
 import tempfile
 import unittest
@@ -51,6 +50,7 @@ from tests.test_agent_context_accounting import _expanded_context_payload
 from story_writing_agents.specialist_routing import ArtifactReviewDomain, AuthoringActivity, AuthoringScope, ReviewBasis, artifact_domain
 from story_writing_agents.agent_context.contracts import call_offers as ctx_call_offers
 from story_writing_agents.agent_context.invocation import provider as ctx_provider
+from story_writing_agents.runtime_resources import provider_call_accounting
 
 
 
@@ -1008,7 +1008,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
 
     def _set_up_fake_provider_boundary(self) -> None:
         # The orchestration fake has no native provider process or role file.
-        boundary_patch = mock.patch('story_writing_agents.orchestrator._provider_execution_workspace_manager',
+        boundary_patch = mock.patch('story_writing_agents.runtime_resources.session_worktree_access.session_provider_execution_workspace_manager',
             return_value=None)
         boundary_patch.start()
         self.addCleanup(boundary_patch.stop)
@@ -5949,7 +5949,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("Idempotent domain notice")
         self.backend.enqueue(_visible_outcome("answer", ""), control_plan=selection_plan("answer.workflow"))
         self.backend.enqueue(_visible_outcome("answer", "Accepted after repair."), control_plan=())
-        original_publish = orchestrator_module._AccountingContextProvider.publish_validation_messages
+        original_publish = provider_call_accounting.AccountingContextProvider.publish_validation_messages
         publish_attempts = 0
 
         def publish_twice(provider: object) -> None:
@@ -5958,7 +5958,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             original_publish(provider)
             original_publish(provider)
 
-        with (_object_positional_patch(orchestrator_module._AccountingContextProvider,
+        with (_object_positional_patch(provider_call_accounting.AccountingContextProvider,
             'publish_validation_messages', publish_twice)):
             result = await self.runtime.lead_turn(self.session_id, conversation_id, "Repair an empty answer.",)
         self.assertEqual(publish_attempts, 1)
@@ -7287,7 +7287,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
                 with self.assertRaises(BackendProtocolError) as raised:
                     self.runtime._proposal_call_reservations(inputs=(), assignment_input_ids=((
                         'user_input',),), physical_calls_spent=spent)
-                self.assertIs(type(raised.exception), orchestrator_module._LeadCallBudgetExceeded)
+                self.assertIs(type(raised.exception), provider_call_accounting.LeadCallBudgetExceeded)
         limits, synthesis, minimum = self.runtime._proposal_call_reservations(
             inputs=(), assignment_input_ids=(("user_input",),), physical_calls_spent=10)
         self.assertEqual((limits, synthesis, minimum), ((1,), 1, 2))
@@ -7298,7 +7298,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
         self.assertEqual(self.runtime._final_review_floor(scope, (), preparation=True), 4)
         self.assertEqual(self.runtime._final_review_floor(scope, (reference,), preparation=True), 8)
         self.assertEqual(self.runtime._proposal_call_reservations(inputs=(reference,), assignment_input_ids=(("reference",),), physical_calls_spent=0, authoring_scope=scope), ((2,), 2, 4))
-        with self.assertRaises(orchestrator_module._LeadCallBudgetExceeded):
+        with self.assertRaises(provider_call_accounting.LeadCallBudgetExceeded):
             self.runtime._proposal_call_reservations(inputs=(reference,), assignment_input_ids=(("reference",),), physical_calls_spent=1, authoring_scope=scope)
 
 

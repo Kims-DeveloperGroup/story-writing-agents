@@ -346,8 +346,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 218)
-        self.assertEqual(len(edges), 1065)
+        self.assertEqual(len(modules), 225)
+        self.assertEqual(len(edges), 1111)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -891,7 +891,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
              if target == "story_writing_agents.agent_context.group_observation"},
             {"story_writing_agents.agent_context.group_reporting", 'story_writing_agents.agent_context.invocation.context_execution',
              "story_writing_agents.conversations.context", "story_writing_agents.conversations.events",
-             "story_writing_agents.orchestrator"},
+             "story_writing_agents.orchestrator",
+             "story_writing_agents.runtime_resources.provider_call_accounting"},
         )
         self.assertEqual(
             {source for source, target in edges
@@ -912,7 +913,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.document_plan"}, {
             "story_writing_agents.conversations", "story_writing_agents.conversations.context",
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_controller._lead_policy",
-            "story_writing_agents.interactive_terminal._collaboration_view", "story_writing_agents.orchestrator"})
+            "story_writing_agents.interactive_terminal._collaboration_view", "story_writing_agents.orchestrator",
+             "story_writing_agents.runtime_resources.collaboration_event_journal",
+             "story_writing_agents.runtime_resources.provider_call_accounting"})
         self.assertIn("story_writing_agents.blocking_work", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.blocking_work"}, set())
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.blocking_work"},

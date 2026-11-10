@@ -28,11 +28,11 @@ on:
         type: boolean
         default: false
       feedback_witness:
-        description: 같은 오류의 RED/GREEN을 확인할 기존 순수 계약 사례
+        description: 같은 오류의 RED/GREEN을 확인할 기존 production 경계 사례
         required: false
         type: choice
         default: codec
-        options: [codec, source-snapshot]
+        options: [codec, source-snapshot, provider-call-ordinal]
       profile_selection:
         description: 선택한 기존 사례를 cProfile로 진단하며 성능 통과 증거로 사용하지 않음
         required: false
@@ -701,7 +701,7 @@ jobs:
           if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
           printf '%s\n' "$test_status" > "$RUNNER_TEMP/fast-exit-code.txt"
           exit "$test_status"
-      - name: 기존 순수 계약의 RED와 GREEN 피드백 확인
+      - name: 기존 생산 경계의 RED와 GREEN 피드백 확인
         if: needs.classify.outputs.affected_only == 'true' && inputs.observe_gc != true && inputs.profile_selection != true
         run: |
           case "$FEEDBACK_WITNESS" in
@@ -713,6 +713,9 @@ jobs:
                 'tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden'
                 'tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden'
               )
+              ;;
+            provider-call-ordinal)
+              witness_ids=('tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated')
               ;;
             *) exit 2 ;;
           esac

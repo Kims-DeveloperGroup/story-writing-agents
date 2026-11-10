@@ -1264,6 +1264,7 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
     from dataclasses import fields, is_dataclass
 
     from story_writing_agents import artifact_proposals as artifacts
+    from story_writing_agents.runtime_resources import collaboration_event_journal as event_journal
     from tests.recommendation_fixture import task_assessment
     from story_writing_agents.conversations import events as payloads
     from story_writing_agents.conversations.context import project_collaboration_history
@@ -1273,12 +1274,11 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
     )
 
     runtime, session_id = case.runtime, case.session_id
-    prefix = runtime._new_id("fixture")
+    prefix = event_journal.new_id("fixture")
     input_id = prefix + "_candidate_input"
     turn_id = prefix + "_turn"
     digest = lambda content: "sha256:" + hashlib.sha256(content).hexdigest()
-    lock = runtime._conversation_lock(session_id, conversation_id)
-    async with runtime._lead_session_lifecycle(session_id), lock:
+    async with runtime.lead_conversation_scope(session_id, conversation_id):
         binding = runtime._session_artifact_binding(session_id)
         with binding.open_ready_resources() as access:
             captured = access.repository.capture_complete_state()
@@ -1374,7 +1374,7 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                         "event_id", "invocation_id", "call_id", "confirmation_request_id",
                         "execution_attempt_id", "step_id", "turn_id",
                     } or field.name.endswith("_event_id")):
-                        identities.setdefault(item, runtime._new_id("e"))
+                        identities.setdefault(item, event_journal.new_id("e"))
                     collect(item)
             elif isinstance(value, tuple):
                 for item in value:
@@ -1421,7 +1421,7 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
         batches.append((result.batch_id, list(result.events)))
         sequence = 0
         for _, batch in batches:
-            drafts = [runtime._draft(session_id=session_id, conversation_id=conversation_id,
+            drafts = [event_journal.draft(session_id=session_id, conversation_id=conversation_id,
                 turn_id=turn_id, step_id=proposal.step_id, kind=CollaborationEventKind.MESSAGE,
                 sender=USER, recipient=LEAD, payload=CollaborationMessagePayload(user_text))] if sequence == 0 else []
             for record in batch:
@@ -1434,7 +1434,7 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                     identities[TURN_ID], proposal.step_id, kind, record.sender, record.recipient, payload,
                 ))
                 if type(payload) is CollaborationLeadSynthesisPayload:
-                    drafts.append(runtime._draft(
+                    drafts.append(event_journal.draft(
                         session_id=session_id, conversation_id=conversation_id,
                         turn_id=turn_id, step_id=proposal.step_id,
                         kind=payloads.CollaborationEventKind.ARTIFACT_REVIEW_SYNTHESIS,
@@ -1449,7 +1449,7 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                         ),
                     ))
                 if type(payload) is CollaborationLeadJudgmentPayload:
-                    drafts.append(runtime._draft(
+                    drafts.append(event_journal.draft(
                         session_id=session_id, conversation_id=conversation_id,
                         turn_id=identities[TURN_ID], step_id=proposal.step_id,
                         kind=payloads.CollaborationEventKind.ARTIFACT_REVIEW_CANDIDATE,
@@ -1461,7 +1461,7 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                     state = (payloads.ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION
                         if payload.state is CollaborationStepState.AWAITING_CONFIRMATION
                         else payloads.ArtifactProposalState.REVIEWING)
-                    state_draft = runtime._draft(
+                    state_draft = event_journal.draft(
                         session_id=session_id, conversation_id=conversation_id,
                         turn_id=identities[TURN_ID], step_id=proposal.step_id,
                         kind=payloads.CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
@@ -1477,7 +1477,7 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                         drafts.insert(len(drafts) - 1, state_draft)
                     else:
                         drafts.append(state_draft)
-            receipt = runtime._append_drafts(sequence, tuple(drafts))
+            receipt = event_journal.append_drafts(sequence, tuple(drafts), append_batch=runtime.append_collaboration_event_batch)
             if receipt.status is not payloads.CollaborationAppendStatus.APPENDED:
                 raise RuntimeError("typed review fixture append did not succeed")
             events = runtime.conversation_storage_services.event_store.read(session_id, conversation_id)
