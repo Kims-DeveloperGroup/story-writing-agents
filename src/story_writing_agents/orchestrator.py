@@ -14150,12 +14150,12 @@ class StoryRuntime:
             payload=candidate_payload,
         )
         if public_response_provider is not None:
-            public_response_provider._public_accepted_call_id = public_response_provider.last_submitted_call_id
+            public_response_provider.accept_last_public_response()
             public_response_provider.publish_public_responses()
             projection = self.conversation_storage_services.event_store.read_context(session_id, conversation_id)
         event_journal.append_drafts(
             projection.last_sequence,
-            (_with_group_trace(public_response_provider, (
+            _with_group_trace(public_response_provider, (
                 judgment,
                 candidate_event,
                 *self._objective_drafts(
@@ -14207,7 +14207,7 @@ class StoryRuntime:
                         confirmation_request_id=request_id,
                     ),
                 ),
-            ), "accepted"),),
+            ), "accepted"),
             append_batch=self.append_collaboration_event_batch,
         )
         return LeadTurnResult(

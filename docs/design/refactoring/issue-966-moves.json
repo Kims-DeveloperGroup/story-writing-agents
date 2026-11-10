@@ -6,7 +6,7 @@
   "status": "생산·테스트 코드 동결 완료; 변경 후 hosted 검증 대기",
   "accepted_base": "020a9b18d1dbb1e08c803d5dbe0bae1fc672cbd3",
   "detailed_plan_url": "https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/966",
-  "detailed_plan_body_sha256": "dd2111d09f6caf74d5f747a5b29ffb7e088b113b67ade1bf0dd1d38e98787851",
+  "detailed_plan_body_sha256": "634665d31d86da9ee90d708978d84e2fd6e4f0596b7b8a288ccc15a9f6029a0a",
   "production_method_move_map": {
     "runtime_resources/reference_operation_registry.py": [
       {
@@ -372,6 +372,7 @@
     "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests.test_runtime_methods_aliases_and_forwarding_are_absent"
   ],
   "expanded_existing_ids": [
+    "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
     "tests.test_codex_backend.CodexBackendDefaultsTests.test_backend_runtime_and_prompts_share_one_snapshot_until_next_lifecycle",
     "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
     "tests.test_codex_backend.CodexBackendTestCase.test_completed_rejections_report_each_attempt_and_repaired_success",
@@ -620,6 +621,11 @@
       "previous_sha256": "71409e11df651ced56eee9df4278d375189b90c3734649e40f8d2e2ed919328d",
       "new_sha256": "dd2111d09f6caf74d5f747a5b29ffb7e088b113b67ade1bf0dd1d38e98787851",
       "reason": "새7경로 focused의 전체 fallback을 기존실제 witness data등록으로 해소; affected_full 보수 유지"
+    },
+    {
+      "previous_sha256": "dd2111d09f6caf74d5f747a5b29ffb7e088b113b67ade1bf0dd1d38e98787851",
+      "new_sha256": "634665d31d86da9ee90d708978d84e2fd6e4f0596b7b8a288ccc15a9f6029a0a",
+      "reason": "확정P1 caller tuple형태·receiver 별칭 교정 및 기존positive1 추가로affected41 근거 명시"
     }
   ],
   "accepted_provider_semantic_apis": [
@@ -889,6 +895,7 @@
   "affected_existing_ids": [
     "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
     "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
+    "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
     "tests.test_artifact_relationship_policy.ArtifactRelationshipBoundaryTests.test_ast_graph_counts_and_cycles_match_accepted_brief",
     "tests.test_codex_backend.CodexBackendDefaultsTests.test_backend_runtime_and_prompts_share_one_snapshot_until_next_lifecycle",
     "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
@@ -931,10 +938,11 @@
   "affected_selection_groups": {
     "integration": [
       25,
-      6
+      6,
+      1
     ],
     "graph": 9,
-    "union": 40,
+    "union": 41,
     "minimum": 4
   },
   "before_graph9_valid": {
@@ -954,7 +962,7 @@
     "fixture": "tests/fixtures/test_owners_v1.json",
     "new_source_paths": 7,
     "focused": "각 owner 실제기존witness 소수선택; init은minimum4",
-    "affected_ids": "기존40 보수연결",
+    "affected_ids": "기존41 보수연결",
     "affected_full": true,
     "algorithm_changed": false,
     "new_cases": false,
@@ -972,13 +980,14 @@
       "src/story_writing_agents/runtime_resources/collaboration_event_journal.py": "693f3b7e169e18e504af2fff1850ea89092bc190bf87f14d680d3947d780c595",
       "src/story_writing_agents/runtime_resources/provider_call_accounting.py": "4a679a535983532750c55ea12896d61fadd76c87a98d7fabef9c72d8a05df87a",
       "src/story_writing_agents/runtime_resources/__init__.py": "64f0b425a460bae0fa2cdde7198a64a3655746ce9c63838b1d303ccaec3c2a2e",
-      "src/story_writing_agents/orchestrator.py": "e378053afa252ebd7517d273d05cfecad2165ebb777e3c85412046bf43ad1c21",
+      "src/story_writing_agents/orchestrator.py": "5f404bd481c2e12ea03e75d3c5311fe2537809efac2a33a435f286c6f9567fca",
       "PYTHON_MODULE_INDEX.md": "9e7401c0fcadea6c4551fe8096d1b1c7ae36c3fb1637fadf66a117ea7028004e"
     },
-    "source_tree_digest_sha256": "d71fde6abf84022d3b53a5cdcd0a1b3e6c2bda3b23dd4527cd97599a3d05d18b",
-    "owned_digest_sha256": "d24e668a21ef47fcfa1eb250b9fafa3a49f80aa2398d0c4e5682dc0c7e67ff9e",
+    "source_tree_digest_sha256": "b3a7618bcaa7cc67fcf237794b78aae4ff78668b298a3374ac74a5ae9485d1d5",
+    "owned_digest_sha256": "390fbfb2931716f0a1aeb5f75ad142b942300941c365e89bd2191400454dcaeb",
     "digest_encoding": "SHA256(JSON mapping, sort_keys=True, separators=(comma, colon), ensure_ascii=True, ASCII bytes; no trailing newline)",
-    "latest_plan_body_sha256": "dd2111d09f6caf74d5f747a5b29ffb7e088b113b67ade1bf0dd1d38e98787851"
+    "latest_plan_body_sha256": "dd2111d09f6caf74d5f747a5b29ffb7e088b113b67ade1bf0dd1d38e98787851",
+    "source_manifest_sha256": "c3b4330fd1c3a6d264d7a776feab78c2431f3e181cb0d5879ccb336355cf1259"
   },
   "production_static_verification": {
     "source_slice_matches_mechanical_ast": true,
@@ -1015,10 +1024,10 @@
     "noncanonical_literal_dynamic_binding_comparisons_skipped": 19
   },
   "final_test_freeze": {
-    "manifest_file_sha256": "8928c9dc2e8ef32c72cdd8498de3266236b4df02b0a4fb462bff2d2597645030",
+    "manifest_file_sha256": "2a7371a33f7d1902442e964425b1eaab136dc2df406ce37c864989d1553aa8e6",
     "changed_inputs": {
       "tests/collaboration_contract_fixture.py": "cd68a889262634a5e7ddf420bab15d3f211e33974ab9d1a7ad58ef5709a37425",
-      "tests/fixtures/test_owners_v1.json": "8509511a38765be727343291b2ca1ed1a7a1bde57a1e4cc8b3176523707a1cf3",
+      "tests/fixtures/test_owners_v1.json": "db4bbd943bd7f85918690451ee939c6ecc1977fb4013c86d488dff1ef90e0bf6",
       "tests/test_artifact_application_contracts.py": "d8709d82414692a1608239e50f977e0dd45f915cb6730a192f8519031d990efe",
       "tests/test_artifact_application_store_recovery.py": "43fe9404de6c7f4448d833ab876fd70c89f7b421baccd64f661a83bc883a056d",
       "tests/test_artifact_relationship_policy.py": "d18c228e5154da0c7030af15a16762595f7729340bb71d861d96ac86e89603af",
@@ -1070,7 +1079,9 @@
     "affected_selection_count": 2544,
     "affected_full_expected": true,
     "local_case_suite_execution": 0,
-    "prior_manifest_file_sha256": "d43e37e6003330641fc355ba1c2f13d4814d96a6fe76e78544b1a0db689f93a9"
+    "prior_manifest_file_sha256": "d43e37e6003330641fc355ba1c2f13d4814d96a6fe76e78544b1a0db689f93a9",
+    "prior_affected40_manifest_sha256": "8928c9dc2e8ef32c72cdd8498de3266236b4df02b0a4fb462bff2d2597645030",
+    "root_rebound_source_digest_sha256": "b3a7618bcaa7cc67fcf237794b78aae4ff78668b298a3374ac74a5ae9485d1d5"
   },
   "after_validation_tracking": {
     "pr_url": "https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/981",
@@ -1079,12 +1090,13 @@
       "minimum": 4,
       "integration_groups": [
         25,
-        6
+        6,
+        1
       ],
       "global_graph": 9,
-      "affected_union": 40
+      "affected_union": 41
     },
-    "status": "초기 후보 최소4 통과·graph9의 상수 기대값 교정 완료; 새 후보의 현재 HEAD 검증 대기"
+    "status": "P1·alias 교정 후보 동결; 과거 검토 SHA와 새 후보 검증을 구분"
   },
   "actual_definition_moves": {
     "runtime_resources/reference_operation_registry.py": {
@@ -2199,5 +2211,93 @@
     "source225_changed": false,
     "controller_collection_scope_limit": "기존 Controller helper는 하위 module-alias5간선을 표현하지 못한다; 전체1111간선 인증은 별도 정적 그래프 증거다",
     "failure_evidence_retained": true
+  },
+  "prior_source_freeze_before_correction": {
+    "source_file_count": 225,
+    "new_module_count": 7,
+    "owned_path_count": 9,
+    "owned_sha256": {
+      "src/story_writing_agents/runtime_resources/session_worktree_access.py": "58477315f5c6f08137733b66f1aebc017096c18332407ccba703a8a6817ead9f",
+      "src/story_writing_agents/runtime_resources/reference_operation_registry.py": "5a545a2837a8ed529f1fdbec560410398ad2f48ea2175e53aee9441bc7d096c5",
+      "src/story_writing_agents/runtime_resources/provider_binding_leases.py": "ec76758bd35d8b67c0f52891800748de1932fb27d9bf1661b0b3866ed847711c",
+      "src/story_writing_agents/runtime_resources/session_execution_scopes.py": "10aec5b568dcc7741fdd3c652f0794f19ccfe619ce8b23685c9bbddedcf3f213",
+      "src/story_writing_agents/runtime_resources/collaboration_event_journal.py": "693f3b7e169e18e504af2fff1850ea89092bc190bf87f14d680d3947d780c595",
+      "src/story_writing_agents/runtime_resources/provider_call_accounting.py": "4a679a535983532750c55ea12896d61fadd76c87a98d7fabef9c72d8a05df87a",
+      "src/story_writing_agents/runtime_resources/__init__.py": "64f0b425a460bae0fa2cdde7198a64a3655746ce9c63838b1d303ccaec3c2a2e",
+      "src/story_writing_agents/orchestrator.py": "e378053afa252ebd7517d273d05cfecad2165ebb777e3c85412046bf43ad1c21",
+      "PYTHON_MODULE_INDEX.md": "9e7401c0fcadea6c4551fe8096d1b1c7ae36c3fb1637fadf66a117ea7028004e"
+    },
+    "source_tree_digest_sha256": "d71fde6abf84022d3b53a5cdcd0a1b3e6c2bda3b23dd4527cd97599a3d05d18b",
+    "owned_digest_sha256": "d24e668a21ef47fcfa1eb250b9fafa3a49f80aa2398d0c4e5682dc0c7e67ff9e",
+    "digest_encoding": "SHA256(JSON mapping, sort_keys=True, separators=(comma, colon), ensure_ascii=True, ASCII bytes; no trailing newline)",
+    "latest_plan_body_sha256": "dd2111d09f6caf74d5f747a5b29ffb7e088b113b67ade1bf0dd1d38e98787851"
+  },
+  "correction_checks": {
+    "compile": 225,
+    "expected_two_changes_AST": true,
+    "target_recursive_scopes": 6,
+    "target_lexical_drift": 0,
+    "target_global_opcode_drift": 0,
+    "target_metadata_global_signature_lexical_equal": true,
+    "all_metadata_exact_pairs": 433,
+    "all_metadata_pairs_excluding_fresh_process_PID": 434,
+    "expected_metadata_process_difference": "Only registry PID integer differs across fresh processes; no source difference in registry.",
+    "typehint_successes": 431,
+    "new_typehint_errors": 0,
+    "baseline_typehint_errors": {
+      "story_writing_agents.orchestrator:StoryRuntime.qualify_consensus_authoring": "NameError:name 'ConsensusExecutionIdentity' is not defined",
+      "story_writing_agents.orchestrator:StoryRuntime.qualify_consensus_readiness": "NameError:name 'ConsensusExecutionIdentity' is not defined",
+      "story_writing_agents.orchestrator:StoryRuntime._resolved_objective_source_ids": "NameError:name 'ArtifactObjective' is not defined"
+    },
+    "atfork_count": 4,
+    "atfork_order_equal": true,
+    "controller_ordinal_literal_column": 40,
+    "private_all_resource_attributes": 353,
+    "accounting_private_field_count": 27,
+    "accounting_private_method_count": 5,
+    "accounting_all_receiver_attribute_records": 261,
+    "accounting_reflection_records": 1,
+    "accounting_literal_and_dotted_string_records": 9,
+    "private_nonowner": 0,
+    "journal_callee_counts": {
+      "draft": 62,
+      "append_drafts": 45,
+      "append_validation_messages": 2,
+      "append_provider_call_fact": 2,
+      "new_id": 58,
+      "draft_with_id": 33,
+      "deterministic_id": 51,
+      "actor_for_agent": 1
+    },
+    "journal_original_caller_pairs": 254,
+    "journal_argument_AST_mismatches": 0,
+    "diff_check": "passed",
+    "case_suite_runs": 0,
+    "producer_runtime_instances": 0
+  },
+  "proof_scope_corrections": [
+    "Earlier S04 provider-private0 claim was receiver-name-specific and omitted alias public_response_provider. Replaced by actual Accounting27fields+5methods all-receiver AST/reflection/string census.",
+    "Earlier new-module-body/mechanical-transform equality did not establish original caller argument tuple shape. Independent original254 journal caller argument pairs now establish it, preserving all tuple/star/keyword shape and order after only owner-name and required dependency normalization."
+  ],
+  "correction_costs": [
+    "Existing public accounting command call/frame +1 when that branch executes; original getter/assignment/publish order identical.",
+    "Remove erroneous extra tuple allocation; restores original tuple argument shape/identity. No new API/feature/condition/DTO/Task/FD/I/O/owner."
+  ],
+  "correction_limits": [
+    "No local Case/Suite, business/provider runtime instance, actual fork, Git or GitHub mutation. Static checks do not prove time or behavioral pass.",
+    "Computed dynamic reflection strings are not exhaustively provable by static AST; all known actual private names, exact literals and dotted-string references in225source were inventoried."
+  ],
+  "actual_correction_batch": [
+    "Same None guard and same position: public_response_provider private assignment → existing accept_last_public_response().",
+    "Original _with_group_trace event tuple supplied directly to event_journal.append_drafts; remove only erroneous outer one-element tuple."
+  ],
+  "additional_public_response_positive_id": "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
+  "failed_validation_preserved": {
+    "graph9_C140_parent_run": 42836279557,
+    "expanded25_C140_run": 42838309940,
+    "expanded25_results": "23통과/기존 exact tuple guard 오류2개",
+    "review_id": 5844329447,
+    "reviewed_head": "c140b2892679617d671f1c4c8192289345121306",
+    "P1_finding_url": "https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/981#discussion_r4526713657"
   }
 }
