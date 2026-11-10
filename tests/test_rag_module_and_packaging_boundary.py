@@ -905,7 +905,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.review_contracts"}, {
             "story_writing_agents.authoring_task_lifecycle", "story_writing_agents.conversations", "story_writing_agents.conversations.context",
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_terminal._collaboration_view",
-            "story_writing_agents.lead_provider_contracts", "story_writing_agents.orchestrator"})
+            "story_writing_agents.lead_preparation.call_rule_factory", "story_writing_agents.lead_provider_contracts", "story_writing_agents.orchestrator"})
         self.assertIn("story_writing_agents.document_plan", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.document_plan"}, {
             "story_writing_agents.core_document_readiness", "story_writing_agents.editorial_scope",
@@ -915,11 +915,12 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_controller._lead_policy",
             "story_writing_agents.interactive_terminal._collaboration_view", "story_writing_agents.orchestrator",
              "story_writing_agents.runtime_resources.collaboration_event_journal",
-             "story_writing_agents.runtime_resources.provider_call_accounting"})
+             "story_writing_agents.runtime_resources.provider_call_accounting", "story_writing_agents.lead_preparation.response_rules"})
         self.assertIn("story_writing_agents.blocking_work", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.blocking_work"}, set())
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.blocking_work"},
-                         {"story_writing_agents.codex_adapter", "story_writing_agents.orchestrator"})
+                         {"story_writing_agents.codex_adapter", "story_writing_agents.orchestrator",
+                          "story_writing_agents.lead_preparation.call_rule_factory"})
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
         self.assertEqual(len(story_writing_agents.__all__), 106)

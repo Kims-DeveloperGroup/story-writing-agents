@@ -3135,7 +3135,7 @@
     }
   },
   "test_budget_evidence_sha256": "abdd59fe3ba78bb7cf5efda0a37c9a031e4374322b38595b14218e5c4a3441ae",
-  "implementation_state": "생산·테스트·인덱스 동결 및 정적 gate 완료. hosted after 실행 전 후보.",
+  "implementation_state": "그래프 importer 기대집합의 누락 3개를 보완한 후보. 현재 source cap151431. hosted 재검증 대기.",
   "source_implementation_evidence": {
     "source_count": 229,
     "source_digest": "1132fd6cea6bb73460de61b392789b1fdc7991f6b9362be82a418e538d54447d",
@@ -3229,9 +3229,9 @@
     "new_scenarios": 0,
     "moved_cases": 10,
     "moved_assertion_calls": 260,
-    "source_charge": 151430,
+    "source_charge": 151431,
     "source_cap": 151431,
-    "headroom": 1,
+    "headroom": 0,
     "legacy_charge_retained": 1550,
     "caps_rekeyed": 10,
     "timing_class_group_rekeyed": 1,
@@ -3257,5 +3257,20 @@
     "local_Case_runs": 0,
     "local_Suite_runs": 0,
     "actual_after_performance_certified": false
-  }
+  },
+  "failed_validation_history": [
+    {
+      "run": 42891094741,
+      "head": "906564b76bab13689395001d714db84cdf7cc65a",
+      "cohort": "graph9",
+      "passed": 8,
+      "failures": 1,
+      "errors": 0,
+      "case": "RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
+      "cause": "새owner3개의정당한공개importer가exact기대set에빠짐",
+      "correction": "기존member/제약/알고리즘을보존하고actualedge3literal추가",
+      "artifact_retained": true,
+      "test_source_line_delta": 1
+    }
+  ]
 }
