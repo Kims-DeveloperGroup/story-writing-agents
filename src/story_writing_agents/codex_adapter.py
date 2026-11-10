@@ -720,7 +720,7 @@ async def _inspect_codex_native_observation_async(
         except BaseException as revalidation_failure:
             failure.add_note("native inspection revalidation failed: "
                 f"{type(revalidation_failure).__name__}")
-            raise failure from revalidation_failure
+            raise failure from None
         raise
     return _finish_codex_native_inspection(invocation, previous, before, observed)
 
