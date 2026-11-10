@@ -795,9 +795,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 if target in invocation_owner_modules and source not in invocation_owner_modules
                 and source.startswith("story_writing_agents.interactive_controller.")
             },
-            {
-                'story_writing_agents.orchestrator',
-            },
+            set(),
         )
         self.assertEqual(
             {
