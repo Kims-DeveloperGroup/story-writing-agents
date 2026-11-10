@@ -6,7 +6,7 @@
   "status": "구현 전 문서 전용 Draft 체크포인트",
   "accepted_base": "020a9b18d1dbb1e08c803d5dbe0bae1fc672cbd3",
   "detailed_plan_url": "https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/966",
-  "detailed_plan_body_sha256": "9ca159c426c13221243bddb729ee4c384dea554c8c5e72040e0fe8102e0140cc",
+  "detailed_plan_body_sha256": "008dc42dbd9115c18aca859a8be89f99ba7864a462a47106d089de9a90ab2405",
   "production_method_move_map": {
     "runtime_resources/reference_operation_registry.py": [
       {
@@ -564,5 +564,28 @@
     "shard_seconds": 3600
   },
   "runtime_test_workflow_edits_before_draft": false,
-  "case_suite_execution_before_draft": 0
+  "case_suite_execution_before_draft": 0,
+  "witness_actual_before_attempt1": {
+    "run_id": 42817019918,
+    "source": "858cb25251ac91b678d4892415710779ca7d775b",
+    "normal_pass": 1,
+    "red_failures": 2,
+    "red_errors": 0,
+    "green_executed": false,
+    "restored": true,
+    "primary": "AssertionError: 0 != 1",
+    "secondary": "FixturePhasePlanError: fixture-phase-plan:extra_plan",
+    "decision": "기존Case/fixture/cleanup을보존하고ordinal모드의정확한두failure를검사;기타모드는변경없음",
+    "root_verified": true
+  },
+  "witness_expected_after_actual": {
+    "red_completed": 1,
+    "red_failures": 2,
+    "red_errors": 0,
+    "primary": "AssertionError: 0 != 1 at existing backend call count assertion",
+    "secondary": "FixturePhasePlanError: fixture-phase-plan:extra_plan from existing cleanup",
+    "canonical_ids": "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
+    "green_passed": 1,
+    "other_witness_modes_unchanged": true
+  }
 }

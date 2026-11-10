@@ -117,17 +117,24 @@ def main():
             summary["runs"].append(row)
             payload = json.loads(report.read_text(encoding="utf-8"))
             row["status"] = payload["tests"][0]["status"] if payload.get("tests") else "missing"
+            expected_failures = int(phase == "red") * (2 if args.witness == "provider-call-ordinal" else 1)
             if (result.returncode != code or row["status"] != status
                     or payload["selection_manifest"]["ordered_ids"] != [case]
                     or payload["totals"]["completed"] != 1 or payload["totals"]["errors"] != 0
-                    or payload["totals"]["failures"] != int(phase == "red")
+                    or payload["totals"]["failures"] != expected_failures
                     or payload["source_binding"]["source_valid"] is not True
                     or row["source_sha256"] != digest(content)):
                 raise RuntimeError("feedback replay did not observe the exact expected case result")
             if args.witness == "provider-call-ordinal" and phase == "red":
-                failures = [detail for detail in payload["details"] if detail["kind"] == "failure"]
-                if len(failures) != 1 or "AssertionError: 0 != 1" not in failures[0]["traceback"]:
-                    raise RuntimeError("provider-call ordinal fault did not reach the existing assertion")
+                failures = payload["details"]
+                if (len(failures) != 2 or payload["totals"]["skipped"] != 0
+                        or any(detail["kind"] != "failure" or detail["canonical_id"] != case for detail in failures)
+                        or "test_failure_closure_write_error_keeps_history_gated" not in failures[0]["traceback"]
+                        or "self.assertEqual(len(self.backend.calls), 1)" not in failures[0]["traceback"]
+                        or "AssertionError: 0 != 1" not in failures[0]["traceback"]
+                        or "require_fixture_valid" not in failures[1]["traceback"]
+                        or "tests.provider_wire_fixture.FixturePhasePlanError: fixture-phase-plan:extra_plan" not in failures[1]["traceback"]):
+                    raise RuntimeError("provider-call ordinal fault did not reach the two existing failures")
         summary["outcome"] = "success"
     finally:
         source.write_bytes(original)
