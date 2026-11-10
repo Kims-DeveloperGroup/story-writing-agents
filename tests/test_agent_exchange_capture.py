@@ -1,3 +1,4 @@
+"""Fail-open provider exchange capture lifecycle tests."""
 from __future__ import annotations
 import json
 import re
@@ -23,7 +24,6 @@ from story_writing_agents.structured_output_validation import diagnose_json_text
 from story_writing_agents.agent_context.invocation import provider as ctx_provider
 
 
-"""Fail-open provider exchange capture lifecycle tests."""
 
 
 _EXCHANGE_ID = re.compile(r"exchange_[0-9a-f]{32}")

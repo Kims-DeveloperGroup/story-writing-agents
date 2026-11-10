@@ -1,4 +1,7 @@
+"""Issue 631 authentication evidence; all providers and login processes are synthetic."""
 from __future__ import annotations
+from story_writing_agents.agent_context.contracts import call_offers as owner_call_offers
+from story_writing_agents.agent_context.invocation import session_execution as owner_session_execution
 from tests.provider_wire_fixture import selection_plan
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
 import asyncio
@@ -41,7 +44,6 @@ from tests.test_provider_auth import ScriptedProcess, ScriptedProcessFactory
 from story_writing_agents.agent_context.invocation import provider as ctx_provider
 
 
-"""Issue 631 authentication evidence; all providers and login processes are synthetic."""
 
 
 def incident_bytes(**changes):
@@ -399,7 +401,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
             label = f"group-auth-select-{cap}"
             plain_request = self.request(
                 operation_id=label, result_correlation_id=label + "-result",
-                invocation_kind=context.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
+                invocation_kind=owner_call_offers.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
                 agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=cap)
             grouped_request = context._group_request(plain_request)
             pending = () if succeeds else (context._group_control("answer.workflow"),)
@@ -462,7 +464,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
             phases = (LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE) if succeeds else (LeadGroupPhase.SELECT,)
             for call, phase in zip(grouped_provider.calls, phases, strict=True):
                 context.assert_phase_guide(self, call, phase)
-        no_context_service = context.AgentContextService(
+        no_context_service = owner_session_execution.AgentContextService(
             self.workspace, action_policy=replace(context.CONTEXT_ACTION_POLICY, max_search_actions=1))
         def zero_hit_search(call, provider):
             packet = json.loads(context._search(call, provider))
@@ -476,7 +478,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
             label = f"group-auth-generate-{cap}"
             grouped_request = context._group_request(self.request(
                 operation_id=label, result_correlation_id=label + "-result",
-                invocation_kind=context.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
+                invocation_kind=owner_call_offers.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
                 agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=cap))
             grouped_provider = AuthContextProvider((zero_hit_search, auth_failure(), context._group_answer),
                 control_plan=(*selection_plan("answer.workflow", before_script_response=1)[:-1],
@@ -622,7 +624,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
 
         grouped_request = context._group_request(self.request(
             operation_id="group-auth-source", result_correlation_id="group-auth-source-result",
-            invocation_kind=context.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
+            invocation_kind=owner_call_offers.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
             agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=4))
         grouped_provider = AuthContextProvider((context._group_control("answer.workflow"), context._group_answer),
             control_plan=((0, LeadGroupPhase.SELECT, auth_failure()),))
@@ -730,7 +732,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertIs(caught.exception, failure)
         self.assertFalse(failure.validate_replay())
         self.assertEqual(len(provider.calls), 1)
-        context.AgentContextService(self.workspace)
+        owner_session_execution.AgentContextService(self.workspace)
         self.assertEqual(len(provider.calls), 1)
 
     async def test_auth_cancel_cleans_validator_and_retains_prior_call_facts(self):

@@ -1,3 +1,4 @@
+"""End-to-end Antigravity parity tests with a deterministic fake CLI."""
 from __future__ import annotations
 from tests.test_provider_schema_spec import check_schema
 from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome, _premise_native_contract
@@ -32,7 +33,6 @@ from tests.helpers import SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE, pristin
 from story_writing_agents.agent_context.invocation import provider as ctx_provider
 
 
-"""End-to-end Antigravity parity tests with a deterministic fake CLI."""
 
 
 _PROCESS_EXIT_HANDSHAKE_SECONDS = 2.0

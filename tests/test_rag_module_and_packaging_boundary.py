@@ -1,3 +1,4 @@
+"""Optional RAG import-direction, pin, and artifact boundary verification."""
 from __future__ import annotations
 from tests.module_graph_fixture import module_inventory, internal_edges
 import ast
@@ -21,7 +22,6 @@ import story_writing_agents
 from story_writing_agents import conversation_rag, conversation_rag_cli, conversation_rag_composition, conversation_rag_local, conversation_rag_runtime, conversation_rag_store
 
 
-"""Optional RAG import-direction, pin, and artifact boundary verification."""
 
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]

@@ -1,3 +1,4 @@
+"""Unit and integration tests for advisory progress live stream rendering."""
 from __future__ import annotations
 import asyncio
 import inspect
@@ -31,7 +32,6 @@ from story_writing_agents.agent_context import actions as ctx_actions
 from story_writing_agents.agent_context import manifest as ctx_manifest
 
 
-"""Unit and integration tests for advisory progress live stream rendering."""
 
 
 def _without_sgr(text):

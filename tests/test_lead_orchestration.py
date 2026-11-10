@@ -1,3 +1,4 @@
+"""End-to-end acceptance tests for the lead-front-channel runtime."""
 from __future__ import annotations
 from tests.provider_wire_fixture import lead_fixture_scope_record, lead_fixture_response
 from tests.provider_wire_fixture import CallbackContextViews, ExplicitPhaseScript, FixturePhasePlanError, assert_phase_guide, selection_plan
@@ -52,7 +53,6 @@ from story_writing_agents.agent_context.contracts import call_offers as ctx_call
 from story_writing_agents.agent_context.invocation import provider as ctx_provider
 
 
-"""End-to-end acceptance tests for the lead-front-channel runtime."""
 
 
 _Response = str | BaseException | Callable[[ctx_provider.ContextProviderCallRequest, '_LeadContextProvider'],
@@ -255,6 +255,7 @@ class _Finalizer:
         self.calls.append(("post_response_runtime_failure", code))
 
 
+@dataclass(frozen=True, slots=True)
 class _SubmittedFailure:
     failure: BaseException
     timed_out: bool = False

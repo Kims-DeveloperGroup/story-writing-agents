@@ -1,3 +1,4 @@
+"""Durable content-free agent-context ledger verification."""
 from __future__ import annotations
 import ast
 import hashlib
@@ -29,7 +30,6 @@ from story_writing_agents.agent_context.contracts import projection as ctx_proje
 from story_writing_agents.agent_context import planning as planning_module
 
 
-"""Durable content-free agent-context ledger verification."""
 
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]

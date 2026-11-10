@@ -97,3 +97,5 @@ ID 이동은 사례 수나 검증 범위를 늘리거나 줄이는 허가가 아
 helper를 외부 공개 이름으로 옮길 때는 원본 global 참조의 심볼 해석도 비교한다. 같은 이름의 인자·지역 변수·comprehension·closure가 새 이름을 포획하는지 `symtable` 또는 bytecode로 확인한다. 생성 함수에는 `make_scope`, `make_entry`처럼 실제 역할이 드러나고 기존 지역 이름과 겹치지 않는 이름을 쓴다. 함수 내부의 지연 import와 mock patch도 각 실제 소유자에 대응시킨다.
 
 검증 순서는 실제 메서드 수집·원본 대응과 정적 import 점검 뒤, 기존 최소 사례·영향 사례·최종 전체 실행으로 이어진다. 확대 실행에서 발견한 이동 오류는 같은 시나리오·assertion·부정 입력을 유지하며 한 묶음으로 교정한다. 실패로 작업량이 줄어든 실행 시간은 성능 비교에서 제외한다.
+
+선언 이동은 decorator와 module docstring까지 원본 의미를 보존한다. 원본 소스 범위는 decorator의 시작 행을 포함하며, 클래스의 기반 타입·필드·기본값·생성자·frozen/slots와 static/class method·property 형태를 함께 대조한다. 모듈 docstring은 첫 문장으로 유지하고 그 뒤 future import를 둔다.

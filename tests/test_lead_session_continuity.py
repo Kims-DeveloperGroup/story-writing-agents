@@ -1,3 +1,4 @@
+"""Exact session memory, recovery, and publication safety using synthetic providers."""
 from __future__ import annotations
 from tests.provider_wire_fixture import selection_plan
 from story_writing_agents.provider_wire import project_context_payload
@@ -37,7 +38,6 @@ from story_writing_agents.agent_context.contracts import planning_inputs as ctx_
 from story_writing_agents.agent_context.invocation import session_execution as service_module
 
 
-"""Exact session memory, recovery, and publication safety using synthetic providers."""
 
 
 def _json(value):

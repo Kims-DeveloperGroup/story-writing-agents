@@ -1,3 +1,4 @@
+"""Independent replay of provider-visible candidate references and text splices."""
 from __future__ import annotations
 import hashlib
 import unittest
@@ -18,7 +19,6 @@ from story_writing_agents.agent_context.payload import context as ctx_context
 from story_writing_agents.conversations import session_context as ctx_session_context
 
 
-"""Independent replay of provider-visible candidate references and text splices."""
 
 
 class _CandidateWireInterpreter:

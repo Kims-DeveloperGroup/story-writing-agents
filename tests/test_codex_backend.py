@@ -1,3 +1,4 @@
+"""Concrete Codex CLI backend tests with no credentials or network access."""
 from __future__ import annotations
 from tests.test_provider_schema_spec import check_schema
 from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome, _premise_native_contract
@@ -58,7 +59,6 @@ from tests.helpers import SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE, all_man
 from story_writing_agents.agent_context.invocation import provider as ctx_provider
 
 
-"""Concrete Codex CLI backend tests with no credentials or network access."""
 
 
 _FAKE_CODEX = ("""#!/usr/bin/env python3

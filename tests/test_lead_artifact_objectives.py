@@ -1,3 +1,4 @@
+"""Contextual draft follow-through and exact operation authority at public APIs."""
 from __future__ import annotations
 from tests.provider_wire_fixture import selection_plan
 import hashlib
@@ -21,7 +22,6 @@ from tests.recommendation_fixture import RecommendationCase, action, recommendat
 from tests.test_specialist_routing_runtime import ROSTER
 
 
-"""Contextual draft follow-through and exact operation authority at public APIs."""
 
 
 def _document_plan_native_response(call, value):

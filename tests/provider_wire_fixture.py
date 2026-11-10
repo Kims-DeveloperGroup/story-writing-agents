@@ -1,3 +1,4 @@
+"""Independent wire-v11 writers for existing typed-domain provider scenarios."""
 from __future__ import annotations
 import copy
 from collections.abc import Mapping
@@ -8,9 +9,9 @@ from story_writing_agents.lead_schema_groups import LeadGroupRequestBasis, Schem
 from story_writing_agents.agent_context.contracts import bound_call as ctx_bound_call
 
 
-"""Independent wire-v11 writers for existing typed-domain provider scenarios."""
 
 
+@dataclass(frozen=True)
 class FixedBusinessFactory(ctx_bound_call.BoundCallFactory):
     """Fixed current business-owner unit fixture; no SELECT state is claimed."""
     original: ctx_bound_call.BoundCallFactory

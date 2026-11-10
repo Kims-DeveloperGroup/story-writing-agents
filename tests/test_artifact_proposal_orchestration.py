@@ -1,3 +1,4 @@
+"""Live lead-review workflows for exact artifact proposals."""
 from __future__ import annotations
 from tests.provider_wire_fixture import selection_plan
 from tests.provider_wire_fixture import lead_fixture_bound_scope, lead_fixture_response
@@ -22,7 +23,6 @@ from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurity
 from tests.test_lead_orchestration import LeadOrchestrationTestCase, _LeadBackend, _READINESS_DOCUMENTS, _decision, _live_material, _live_scope, _provider_envelope, _read_history_hit, _search_history, _specialist_outcome, _visible_outcome, _workflow_material
 
 
-"""Live lead-review workflows for exact artifact proposals."""
 
 
 _OUTLINE = "core_documents/global_outline.md"

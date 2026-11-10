@@ -9,7 +9,7 @@ from pathlib import Path
 RECEIPT_PATH = Path(__file__).parent / "fixtures" / "test_id_moves_v1.json"
 ORIGINAL_CAPS_SHA256 = "fc586b3eaa147b4ad4bc06e42e98378c50bd56a9fb09954219c20c45e882b99b"
 EXPECTED_CAPS_SHA256 = "b554b945803dd496796fd0bf7cad3201c7f729c37821a90231fc734074576c52"
-RECEIPT_SHA256 = "9e89927f9ced9e158c6a3ff0e639b83ef43da85e6e5de141ac42b47c846a9748"
+RECEIPT_SHA256 = "1712755b79983c58a7210d60e8c8788fcd12faa3d0503c67f1ff764d7a6e182a"
 ORIGIN_COMMIT = "d198abaf60edb1956acbd1f410ad3b1b9fbbedd8"
 ORIGINAL_ID = "tests.test_agent_context_planning.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability"
 

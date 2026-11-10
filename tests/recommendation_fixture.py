@@ -1,3 +1,4 @@
+"""Synthetic recommendation producers and real-runtime setup; no automatic wire repair."""
 from __future__ import annotations
 from tests.provider_wire_fixture import lead_fixture_bound_scope, selection_plan
 from dataclasses import asdict, replace
@@ -10,7 +11,6 @@ from tests import test_artifact_proposal_orchestration as artifact
 from tests.test_artifact_objectives import DRAFT, OUTLINE, ObjectiveCase, digest, rewrite_history
 
 
-"""Synthetic recommendation producers and real-runtime setup; no automatic wire repair."""
 
 
 def _selection_failure_note(failure, hits, targets, *, point):

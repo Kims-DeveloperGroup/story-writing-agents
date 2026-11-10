@@ -1,3 +1,4 @@
+"""Workspace-scoped provider contextual execution verification."""
 from __future__ import annotations
 from story_writing_agents.agent_context.group_observation import LeadGroupObservationKind
 from tests.test_provider_schema_spec import check_schema
@@ -45,7 +46,6 @@ from story_writing_agents.agent_context.invocation import provider as ctx_provid
 from story_writing_agents.agent_context.invocation import requests as ctx_requests
 
 
-"""Workspace-scoped provider contextual execution verification."""
 
 
 _PRIVATE_INPUT = "PRIVATE_CURRENT_INPUT_한🙂"

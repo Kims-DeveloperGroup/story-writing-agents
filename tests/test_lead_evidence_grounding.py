@@ -1,3 +1,4 @@
+"""Exhaustive acceptance coverage for runtime-grounded lead judgments."""
 from __future__ import annotations
 from tests.provider_wire_fixture import selection_plan
 from story_writing_agents import authoring_admission as admission
@@ -20,7 +21,6 @@ from tests.collaboration_contract_fixture import LEAD, RUNTIME, USER, make_batch
 from story_writing_agents.agent_context.invocation import provider as ctx_provider
 
 
-"""Exhaustive acceptance coverage for runtime-grounded lead judgments."""
 
 
 _DIGEST_A = "sha256:" + "1" * 64

@@ -1,3 +1,4 @@
+"""Pure contracts for bounded provider-neutral agent context actions."""
 from __future__ import annotations
 import hashlib
 import inspect
@@ -10,7 +11,6 @@ from story_writing_agents.agent_context.manifest import ContextAuthorityKind, Co
 from story_writing_agents.agent_context.contracts import planning_inputs as ctx_planning_inputs
 
 
-"""Pure contracts for bounded provider-neutral agent context actions."""
 
 
 _PRIVATE_ANSWER = "PRIVATE_ANSWER_한🙂"

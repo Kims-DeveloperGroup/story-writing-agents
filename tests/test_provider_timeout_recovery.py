@@ -1,3 +1,4 @@
+"""Read-only Lead failures preserve history and admit explicit same-chat retry."""
 from __future__ import annotations
 from tests.provider_wire_fixture import selection_plan, offered_fixture_bindings, indexed_response, lead_fixture_result, finite_fixture_selection
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
@@ -16,7 +17,6 @@ from story_writing_agents.agent_context.contracts import planning_inputs as ctx_
 from story_writing_agents.agent_context.invocation import provider as ctx_provider
 
 
-"""Read-only Lead failures preserve history and admit explicit same-chat retry."""
 
 
 class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):

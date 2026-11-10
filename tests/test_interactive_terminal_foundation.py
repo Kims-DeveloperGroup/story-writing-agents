@@ -1,3 +1,4 @@
+"""Deterministic contract tests for the interactive-terminal foundation."""
 from __future__ import annotations
 import ast
 import asyncio
@@ -32,7 +33,6 @@ from story_writing_agents.interactive_terminal._model import CapabilityProfile, 
 from story_writing_agents.interactive_terminal._render import render_advisory_progress_frame, render_component, render_input_prompt, render_plain, render_startup_welcome_frame, strip_decorative_sgr
 
 
-"""Deterministic contract tests for the interactive-terminal foundation."""
 
 
 TERMINAL_EXPORTS = (

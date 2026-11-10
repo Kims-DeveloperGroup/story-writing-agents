@@ -1,3 +1,4 @@
+"""Invocation-local state machine for bounded agent-directed context."""
 from __future__ import annotations
 import hashlib
 import json
@@ -25,7 +26,6 @@ from story_writing_agents.agent_context.payload import actions as ctx_actions
 from tests.agent_context.contracts import fixtures as contract_fixtures
 
 
-"""Invocation-local state machine for bounded agent-directed context."""
 
 
 class StructuredOutputValidationTests(unittest.TestCase):

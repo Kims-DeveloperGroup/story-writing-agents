@@ -3928,6 +3928,310 @@
       "kind": "exact_extracted_pure_owner_import_expectation",
       "old": "self.assertEqual(relative_dependencies,\n            {(1, \"accounting\"),\n                (1, \"manifest\"), (1, \"planning\"),\n                (2, \"runtime_state_paths\"),\n                (2, \"workspace\"),},\n        )",
       "new": "self.assertEqual(relative_dependencies,\n            {(1, \"accounting\"),\n                (1, \"manifest\"),\n                (1, \"contracts.checkpoints\"), (1, \"contracts.planning_inputs\"),\n                (1, \"contracts.projection\"), (1, \"contracts.projection_accounting\"),\n                (2, \"runtime_state_paths\"),\n                (2, \"workspace\"),},\n        )"
+    },
+    {
+      "source": "tests/provider_wire_fixture.py",
+      "destination": "tests/provider_wire_fixture.py",
+      "kind": "restore_original_declaration_decorators",
+      "declaration": "FixedBusinessFactory",
+      "old": "",
+      "new": "@dataclass(frozen=True)"
+    },
+    {
+      "source": "tests/provider_wire_fixture.py",
+      "destination": "tests/provider_wire_fixture.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Independent wire-v11 writers for existing typed-domain provider scenarios."
+    },
+    {
+      "source": "tests/recommendation_fixture.py",
+      "destination": "tests/recommendation_fixture.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Synthetic recommendation producers and real-runtime setup; no automatic wire repair."
+    },
+    {
+      "source": "tests/test_advisory_progress_streaming.py",
+      "destination": "tests/test_advisory_progress_streaming.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Unit and integration tests for advisory progress live stream rendering."
+    },
+    {
+      "source": "tests/test_agent_context_actions.py",
+      "destination": "tests/test_agent_context_actions.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Pure contracts for bounded provider-neutral agent context actions."
+    },
+    {
+      "source": "tests/test_agent_context_execution.py",
+      "destination": "tests/test_agent_context_execution.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Workspace-scoped provider contextual execution verification."
+    },
+    {
+      "source": "tests/test_agent_context_ledger.py",
+      "destination": "tests/test_agent_context_ledger.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Durable content-free agent-context ledger verification."
+    },
+    {
+      "source": "tests/test_agent_context_runtime_adoption.py",
+      "destination": "tests/test_agent_context_runtime_adoption.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Independent replay of provider-visible candidate references and text splices."
+    },
+    {
+      "source": "tests/test_agent_context_service.py",
+      "destination": "tests/test_agent_context_service.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Invocation-local state machine for bounded agent-directed context."
+    },
+    {
+      "source": "tests/test_agent_exchange_capture.py",
+      "destination": "tests/test_agent_exchange_capture.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Fail-open provider exchange capture lifecycle tests."
+    },
+    {
+      "source": "tests/test_antigravity_parity.py",
+      "destination": "tests/test_antigravity_parity.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "End-to-end Antigravity parity tests with a deterministic fake CLI."
+    },
+    {
+      "source": "tests/test_artifact_proposal_orchestration.py",
+      "destination": "tests/test_artifact_proposal_orchestration.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Live lead-review workflows for exact artifact proposals."
+    },
+    {
+      "source": "tests/test_codex_backend.py",
+      "destination": "tests/test_codex_backend.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Concrete Codex CLI backend tests with no credentials or network access."
+    },
+    {
+      "source": "tests/test_interactive_terminal_foundation.py",
+      "destination": "tests/test_interactive_terminal_foundation.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Deterministic contract tests for the interactive-terminal foundation."
+    },
+    {
+      "source": "tests/test_lead_artifact_objectives.py",
+      "destination": "tests/test_lead_artifact_objectives.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Contextual draft follow-through and exact operation authority at public APIs."
+    },
+    {
+      "source": "tests/test_lead_evidence_grounding.py",
+      "destination": "tests/test_lead_evidence_grounding.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Exhaustive acceptance coverage for runtime-grounded lead judgments."
+    },
+    {
+      "source": "tests/test_lead_orchestration.py",
+      "destination": "tests/test_lead_orchestration.py",
+      "kind": "restore_original_declaration_decorators",
+      "declaration": "_SubmittedFailure",
+      "old": "",
+      "new": "@dataclass(frozen=True, slots=True)"
+    },
+    {
+      "source": "tests/test_lead_orchestration.py",
+      "destination": "tests/test_lead_orchestration.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "End-to-end acceptance tests for the lead-front-channel runtime."
+    },
+    {
+      "source": "tests/test_lead_session_continuity.py",
+      "destination": "tests/test_lead_session_continuity.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Exact session memory, recovery, and publication safety using synthetic providers."
+    },
+    {
+      "source": "tests/test_provider_auth_recovery.py",
+      "destination": "tests/test_provider_auth_recovery.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Issue 631 authentication evidence; all providers and login processes are synthetic."
+    },
+    {
+      "source": "tests/test_provider_timeout_recovery.py",
+      "destination": "tests/test_provider_timeout_recovery.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Read-only Lead failures preserve history and admit explicit same-chat retry."
+    },
+    {
+      "source": "tests/test_rag_module_and_packaging_boundary.py",
+      "destination": "tests/test_rag_module_and_packaging_boundary.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Optional RAG import-direction, pin, and artifact boundary verification."
+    },
+    {
+      "source": "tests/test_specialist_routing.py",
+      "destination": "tests/test_specialist_routing.py",
+      "kind": "restore_original_module_docstring_position",
+      "old": "module docstring after imports",
+      "new": "original module docstring as first statement, before future imports",
+      "docstring": "Pure routing, versioned wire compatibility, and draft/review acceptance."
+    },
+    {
+      "source": "tests/test_specialist_routing.py",
+      "destination": "tests/test_specialist_routing.py",
+      "kind": "direct_actual_owner_consumer_attribute",
+      "old": "context_service._correlation_token",
+      "new": "owner_session.correlation_token",
+      "actual_owner": "story_writing_agents.agent_context.contracts.session"
+    },
+    {
+      "source": "tests/test_specialist_routing.py",
+      "destination": "tests/test_specialist_routing.py",
+      "kind": "direct_actual_owner_consumer_attribute",
+      "old": "context_service._action_correlation",
+      "new": "owner_session.action_correlation",
+      "actual_owner": "story_writing_agents.agent_context.contracts.session"
+    },
+    {
+      "source": "tests/test_specialist_routing.py",
+      "destination": "tests/test_specialist_routing.py",
+      "kind": "direct_actual_owner_consumer_attribute",
+      "old": "context_service._action_query",
+      "new": "owner_context._action_query",
+      "actual_owner": "story_writing_agents.agent_context.payload.context"
+    },
+    {
+      "source": "tests/test_specialist_routing.py",
+      "destination": "tests/test_specialist_routing.py",
+      "kind": "direct_actual_owner_consumer_attribute",
+      "old": "context_service._continuation_payload",
+      "new": "owner_context.continuation_payload",
+      "actual_owner": "story_writing_agents.agent_context.payload.context"
+    },
+    {
+      "source": "tests/test_specialist_routing.py",
+      "destination": "tests/test_specialist_routing.py",
+      "kind": "direct_actual_owner_consumer_attribute",
+      "old": "context_service._continuation_payload",
+      "new": "owner_context.continuation_payload",
+      "actual_owner": "story_writing_agents.agent_context.payload.context"
+    },
+    {
+      "source": "tests/test_provider_auth_recovery.py",
+      "destination": "tests/test_provider_auth_recovery.py",
+      "kind": "direct_actual_owner_consumer_attribute",
+      "old": "context.ContextInvocationKind",
+      "new": "owner_call_offers.ContextInvocationKind",
+      "actual_owner": "story_writing_agents.agent_context.contracts.call_offers"
+    },
+    {
+      "source": "tests/test_provider_auth_recovery.py",
+      "destination": "tests/test_provider_auth_recovery.py",
+      "kind": "direct_actual_owner_consumer_attribute",
+      "old": "context.AgentContextService",
+      "new": "owner_session_execution.AgentContextService",
+      "actual_owner": "story_writing_agents.agent_context.invocation.session_execution"
+    },
+    {
+      "source": "tests/test_provider_auth_recovery.py",
+      "destination": "tests/test_provider_auth_recovery.py",
+      "kind": "direct_actual_owner_consumer_attribute",
+      "old": "context.ContextInvocationKind",
+      "new": "owner_call_offers.ContextInvocationKind",
+      "actual_owner": "story_writing_agents.agent_context.contracts.call_offers"
+    },
+    {
+      "source": "tests/test_provider_auth_recovery.py",
+      "destination": "tests/test_provider_auth_recovery.py",
+      "kind": "direct_actual_owner_consumer_attribute",
+      "old": "context.ContextInvocationKind",
+      "new": "owner_call_offers.ContextInvocationKind",
+      "actual_owner": "story_writing_agents.agent_context.contracts.call_offers"
+    },
+    {
+      "source": "tests/test_provider_auth_recovery.py",
+      "destination": "tests/test_provider_auth_recovery.py",
+      "kind": "direct_actual_owner_consumer_attribute",
+      "old": "context.AgentContextService",
+      "new": "owner_session_execution.AgentContextService",
+      "actual_owner": "story_writing_agents.agent_context.invocation.session_execution"
+    },
+    {
+      "source": "tests/test_interactive_controller.py",
+      "destination": "tests/test_interactive_controller.py",
+      "kind": "exact_complete_module_graph_inventory",
+      "selector": "len(modules)",
+      "old": "178",
+      "new": "203"
+    },
+    {
+      "source": "tests/test_interactive_controller.py",
+      "destination": "tests/test_interactive_controller.py",
+      "kind": "exact_complete_module_graph_inventory",
+      "selector": "sum((len(dependencies) for dependencies in graph.values()))",
+      "old": "800",
+      "new": "970"
+    },
+    {
+      "source": "tests/test_session_lifecycle.py",
+      "destination": "tests/test_session_lifecycle.py",
+      "kind": "exact_complete_module_graph_inventory",
+      "selector": "len(source_files)",
+      "old": "178",
+      "new": "203"
+    },
+    {
+      "source": "tests/test_workspace_session_history.py",
+      "destination": "tests/test_workspace_session_history.py",
+      "kind": "exact_complete_module_graph_inventory",
+      "selector": "(len(modules), len(edges))",
+      "old": "(178, 800)",
+      "new": "(203, 970)"
+    },
+    {
+      "source": "tests/test_session_recovery_contracts.py",
+      "destination": "tests/test_session_recovery_contracts.py",
+      "kind": "exact_complete_module_graph_inventory",
+      "selector": "(len(modules), len(edges))",
+      "old": "(178, 800)",
+      "new": "(203, 970)"
     }
   ]
 }
