@@ -1015,7 +1015,7 @@
     "noncanonical_literal_dynamic_binding_comparisons_skipped": 19
   },
   "final_test_freeze": {
-    "manifest_file_sha256": "d43e37e6003330641fc355ba1c2f13d4814d96a6fe76e78544b1a0db689f93a9",
+    "manifest_file_sha256": "8928c9dc2e8ef32c72cdd8498de3266236b4df02b0a4fb462bff2d2597645030",
     "changed_inputs": {
       "tests/collaboration_contract_fixture.py": "cd68a889262634a5e7ddf420bab15d3f211e33974ab9d1a7ad58ef5709a37425",
       "tests/fixtures/test_owners_v1.json": "8509511a38765be727343291b2ca1ed1a7a1bde57a1e4cc8b3176523707a1cf3",
@@ -1026,7 +1026,7 @@
       "tests/test_collaboration_context.py": "bb7df61d5f9c1b7483d53bc27c931e1f7c2024b536a5fcdd1203a5874764f7a3",
       "tests/test_consensus_story_runtime_bridge.py": "e9f6bc3fe823efa5ea40765fb17374afbcefed6d33f47c0a57a6656b08d02f49",
       "tests/test_git_external_operation_inspection.py": "5f1e73665145ac109ec6d8209cbe0eb902414c6e8a550dd116877408aaec9b50",
-      "tests/test_interactive_controller.py": "359c1f2e91ddce6e35f92c59663957b5b5e414bb9b28d7a863da00cc62afef22",
+      "tests/test_interactive_controller.py": "7236b199b83867bf6910f941015fbb6a73b44daad09dd18965b570b46e6b8c1a",
       "tests/test_lead_orchestration.py": "f631e8cff36abd51f9efaafccb1b7cca3a0ab44fc9f28ecd7042677fe828f80b",
       "tests/test_provider_timeout_recovery.py": "00a437e88ad03c610788cc7470590a7757f405a7b6b1152408013931902eb877",
       "tests/test_rag_module_and_packaging_boundary.py": "28e8ecbe29d42030dbd50b7681799fc4bf74fc97987398c0f99cea0b504c6e21",
@@ -1069,7 +1069,8 @@
     "focused_fallbacks": 0,
     "affected_selection_count": 2544,
     "affected_full_expected": true,
-    "local_case_suite_execution": 0
+    "local_case_suite_execution": 0,
+    "prior_manifest_file_sha256": "d43e37e6003330641fc355ba1c2f13d4814d96a6fe76e78544b1a0db689f93a9"
   },
   "after_validation_tracking": {
     "pr_url": "https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/981",
@@ -1083,7 +1084,7 @@
       "global_graph": 9,
       "affected_union": 40
     },
-    "status": "후보 commit 전; 변경 후 통과를 아직 주장하지 않음"
+    "status": "초기 후보 최소4 통과·graph9의 상수 기대값 교정 완료; 새 후보의 현재 HEAD 검증 대기"
   },
   "actual_definition_moves": {
     "runtime_resources/reference_operation_registry.py": {
@@ -2180,5 +2181,23 @@
     "프로세스 간 전역 객체 주소 직접 비교는 하지 않음. canonical binding 2,101쌍 비교와 현재 프로세스 globals owner74/import object is106 별도 확인. literal/dynamic19항목의 canonical is 비교는 생략·명시.",
     "실제 fork/Task 실행/FD 또는 provider I/O/할당 byte/성능 측정은 하지 않음. 호출·자원 횟수 보존은 정적 대응 근거이며 시간 통과 의미 아님."
   ],
-  "final_receipt_sha256": "6565cbf614f21f44ee58a533b23f991e496867f02323af02d38b05b7502f6f73"
+  "final_receipt_sha256": "6565cbf614f21f44ee58a533b23f991e496867f02323af02d38b05b7502f6f73",
+  "controller_graph_correction": {
+    "failed_run_id": 42836279557,
+    "failed_candidate": "d1f208c0fa2a2a32c7f3e9dc7e2ebf99e589b8f3",
+    "failure": "1106 != 1111",
+    "change": "Controller 기대 상수1111→1106 한 곳",
+    "before_nodes": 218,
+    "before_both_collectors_edges": 1065,
+    "after_nodes": 225,
+    "existing_controller_edges": 1106,
+    "complete_module_graph_edges": 1111,
+    "complete_graph_visited": 225,
+    "complete_graph_cyclic_scc": 0,
+    "cause": "기존 helper와 complete 수집기의 module-alias 해석 차이",
+    "algorithm_changed": false,
+    "source225_changed": false,
+    "controller_collection_scope_limit": "기존 Controller helper는 하위 module-alias5간선을 표현하지 못한다; 전체1111간선 인증은 별도 정적 그래프 증거다",
+    "failure_evidence_retained": true
+  }
 }
