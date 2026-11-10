@@ -3135,7 +3135,7 @@
     }
   },
   "test_budget_evidence_sha256": "abdd59fe3ba78bb7cf5efda0a37c9a031e4374322b38595b14218e5c4a3441ae",
-  "implementation_state": "그래프 importer 기대집합의 누락 3개를 보완한 후보. 현재 source cap151431. hosted 재검증 대기.",
+  "implementation_state": "현재 HOSTED profile의 ID 대응 marker 3개 보완. source229 동일, source cap151431, 새 동일HEAD full CI 재실행 대기.",
   "source_implementation_evidence": {
     "source_count": 229,
     "source_digest": "1132fd6cea6bb73460de61b392789b1fdc7991f6b9362be82a418e538d54447d",
@@ -3271,6 +3271,21 @@
       "correction": "기존member/제약/알고리즘을보존하고actualedge3literal추가",
       "artifact_retained": true,
       "test_source_line_delta": 1
+    },
+    {
+      "run": 42894837703,
+      "head": "f5a7a6ecfb3d06c6f695435d4eab6935e8fd6891",
+      "job": "whole-front shard5 policy precheck",
+      "selected_policy_cases": 4,
+      "passed": 3,
+      "failures": 1,
+      "errors": 0,
+      "actual_wholefront_started": false,
+      "case": "SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected",
+      "cause": "HOSTED162/21class current marker literal expectations omitted two moved IDs; current launch digest and serial ID also required exact rekey",
+      "correction": "three current literals only, same rows; reverse bijection reproduces old digests; historical938/negative/time/subtest/algorithms unchanged",
+      "artifact_retained": true,
+      "source_charge": 151431
     }
   ]
 }
