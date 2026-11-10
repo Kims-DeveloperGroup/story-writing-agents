@@ -7480,8 +7480,5 @@
   ],
   "ignored_names": [
     ".DS_Store"
-  ],
-  "fresh_census_ids": [
-    "tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected"
   ]
 }

@@ -9,6 +9,10 @@ from .contracts import CanonicalCollection, RunnerError
 import tests.runner.contracts as contracts
 from .contracts import CanonicalInventory
 
+FRESH_CENSUS_IDS = frozenset({
+    "tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected",
+})
+
 
 def flatten(suite: unittest.TestSuite) -> Iterable[unittest.TestCase]:
     for item in suite:
@@ -68,6 +72,8 @@ def load_inventory() -> CanonicalInventory:
             or any(type(identifier) is not str or not identifier.startswith("tests.")
                    or type(cap) is not int or cap < 0 for identifier, cap in caps.items())):
         raise RunnerError("invalid frozen canonical inventory")
+    if any(identifier not in caps for identifier in FRESH_CENSUS_IDS):
+        raise RunnerError("invalid fresh-census prerequisites")
     return CanonicalInventory(tuple(caps))
 
 

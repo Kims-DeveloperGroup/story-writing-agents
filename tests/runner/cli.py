@@ -17,9 +17,8 @@ from .hosted import hosted_execute, hosted_options
 
 def prepare_selection(args, *, owner_catalogue=None):
     """Keep fresh census authority separate from manifest-first development runs."""
-    from .collection import load_inventory, load_selected
+    from .collection import FRESH_CENSUS_IDS, load_inventory, load_selected
     from .contracts import CanonicalInventory, PolicySelection
-    from .impact import prepare_owners, select_impact
     from .selection import selected_ids, suite_policy_metadata, validated_values
 
     changed = args.changed_from is not None or bool(args.path)
@@ -30,6 +29,8 @@ def prepare_selection(args, *, owner_catalogue=None):
     tiers = validated_values(args.tier, "--tier")
     if set(tiers) - {"fast", "full"}:
         raise RunnerError("unknown test tiers: " + ", ".join(sorted(set(tiers) - {"fast", "full"})))
+    if changed:
+        from .impact import prepare_owners, select_impact
     targeted = changed or args.id or args.module or "fast" in tiers
     if not targeted or args.shard or "full" in tiers:
         canonical = discover_canonical()
@@ -44,8 +45,10 @@ def prepare_selection(args, *, owner_catalogue=None):
             "kind": "fresh_discovery", "canonical_basis": "fresh_discovery", "fresh_full_discovery": True}
         return canonical, selected
     inventory = load_inventory()
-    catalogue = owner_catalogue if owner_catalogue is not None else prepare_owners(inventory)
-    if catalogue.inventory_ids != inventory.ids:
+    catalogue = owner_catalogue
+    if changed and catalogue is None:
+        catalogue = prepare_owners(inventory)
+    if catalogue is not None and catalogue.inventory_ids != inventory.ids:
         raise RunnerError("owner catalogue differs from the selected frozen inventory")
     chosen = set(selected_ids(inventory, ids=args.id, modules=args.module)) if args.id or args.module else set()
     if "fast" in tiers:
@@ -58,7 +61,7 @@ def prepare_selection(args, *, owner_catalogue=None):
         chosen.update(impact["selected_manifest"]["ordered_ids"])
         metadata["impact_selection"] = impact
     ordered = tuple(identifier for identifier in inventory.ids if identifier in chosen)
-    prerequisites = set(catalogue.payload.get("fresh_census_ids", ())) & chosen
+    prerequisites = FRESH_CENSUS_IDS & chosen
     fresh = (impact is not None and impact["fallback_reason"] is not None
              or args.command == "run" and bool(prerequisites))
     metadata["collection_provenance"] = {

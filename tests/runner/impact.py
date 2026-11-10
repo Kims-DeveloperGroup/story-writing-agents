@@ -75,9 +75,6 @@ def load_owners(inventory: CanonicalInventory, path: Path = OWNER_MANIFEST_PATH)
             or any(type(owner) is not dict for owner in payload["owners"])):
         raise RunnerError("invalid test owner manifest")
     known_ids = set(inventory.ids)
-    if (type(payload.get("fresh_census_ids", [])) is not list
-            or set(payload.get("fresh_census_ids", ())) - known_ids):
-        raise RunnerError("invalid fresh-census prerequisites")
     names = [owner.get("name") for owner in payload["owners"]]
     if any(type(name) is not str or not name for name in names) or len(set(names)) != len(names):
         raise RunnerError("test owner names must be unique")
