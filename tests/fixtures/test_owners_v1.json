@@ -5557,9 +5557,7 @@
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_collaboration_events",
-        "tests.test_lead_artifact_application",
-        "tests.test_lead_orchestration",
-        "tests.test_lead_story_commit"
+        "tests.test_lead_orchestration"
       ]
     },
     {

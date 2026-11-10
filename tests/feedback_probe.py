@@ -22,8 +22,20 @@ SOURCE_WITNESSES = (
      "tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden"),
 )
 
+SUCCESSOR_WITNESSES = (
+    ("tests/test_specialist_routing.py",
+     "src/story_writing_agents/orchestrator.py",
+     "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip"),
+    ("tests/lead_preparation/test_response_rules.py",
+     "src/story_writing_agents/lead_preparation/response_rules.py",
+     "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip"),
+)
+
+
 def production_fault(root, digest, witness):
     witnesses = SOURCE_WITNESSES if witness == "source-snapshot" else ACCOUNTING_WITNESSES
+    if witness == "successor-selection":
+        witnesses = SUCCESSOR_WITNESSES
     layouts = [row for row in witnesses if (root / row[0]).is_file() and (root / row[1]).is_file()]
     if witness == "provider-call-ordinal":
         layouts = [row for row in layouts if any(isinstance(node, ast.ClassDef)
@@ -50,6 +62,17 @@ def production_fault(root, digest, witness):
             raise RuntimeError("source witness repr guard differs approved field")
         target = arguments[0]
         expected, replacement = b"False", b"True"
+    elif witness == "successor-selection":
+        functions = [node for node in ast.parse(original).body
+                     if isinstance(node, ast.FunctionDef)
+                     and node.name in {"_document_successor_selection", "document_successor_selection"}]
+        comparison = ast.dump(ast.parse('task_binding.transition not in {"revise", "reserved"}', mode="eval").body)
+        targets = [node for owner in functions for node in ast.walk(owner)
+                   if isinstance(node, ast.Compare) and ast.dump(node) == comparison]
+        if len(functions) != 1 or len(targets) != 1:
+            raise RuntimeError("successor-selection expression not unique")
+        target = targets[0].comparators[0].elts[0]
+        expected, replacement = b'"revise"', b'"s05-revise-fault"'
     else:
         classes = [node for node in ast.parse(original).body
                    if isinstance(node, ast.ClassDef)
@@ -80,7 +103,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", required=True)
     parser.add_argument("--repository-root")
-    parser.add_argument("--witness", choices=("codec", "source-snapshot", "provider-call-ordinal"), default="codec")
+    parser.add_argument("--witness", choices=("codec", "source-snapshot", "provider-call-ordinal",
+                                            "successor-selection"), default="codec")
     args = parser.parse_args()
     output = Path(args.json).resolve()
     root = Path(args.repository_root).resolve() if args.repository_root else Path(__file__).resolve().parents[1]
@@ -135,6 +159,14 @@ def main():
                         or "require_fixture_valid" not in failures[1]["traceback"]
                         or "tests.provider_wire_fixture.FixturePhasePlanError: fixture-phase-plan:extra_plan" not in failures[1]["traceback"]):
                     raise RuntimeError("provider-call ordinal fault did not reach the two existing failures")
+            if args.witness == "successor-selection" and phase == "red":
+                failures = payload["details"]
+                if (len(failures) != 1 or payload["totals"]["skipped"] != 0
+                    or any(detail["kind"] != "failure" or detail["canonical_id"] != case for detail in failures)
+                    or "self.assertIs(type(selected), documents.DocumentNodeSelection)" not in failures[0]["traceback"]
+                    or ("AssertionError: <class 'NoneType'> is not "
+                        "<class 'story_writing_agents.document_plan.DocumentNodeSelection'>") not in failures[0]["traceback"]):
+                    raise RuntimeError("successor-selection assertion differs")
         summary["outcome"] = "success"
     finally:
         source.write_bytes(original)

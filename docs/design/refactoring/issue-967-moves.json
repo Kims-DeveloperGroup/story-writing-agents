@@ -3043,5 +3043,79 @@
   "native_plan_sha256": "c03cb3fe2676c08ca321bfee38aa1eae32ec4d6acc6876ab6038d7fc703f7b14",
   "native_project_status_at_preparation": "Ready",
   "prepared_at_utc": "2026-11-10T18:49:07.028228+00:00",
-  "checkpoint_state": "문서 전용: 구현 전 Draft PR 생성 준비. runtime/test/workflow는 accepted base와 동일."
+  "checkpoint_state": "문서 전용: 구현 전 Draft PR 생성 준비. runtime/test/workflow는 accepted base와 동일.",
+  "test_ID_bijection": {
+    "issue": 967,
+    "before_path": "tests/test_specialist_routing.py",
+    "after_path": "tests/lead_preparation/test_response_rules.py",
+    "before_file_sha256": "e6b388ebddd886032f862e6b2e622129a990b0cc26f4e01d4262c788ea9b386e",
+    "class_name": "SpecialistRoutingTests",
+    "bijection": [
+      {
+        "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_published_recommended_action_position_and_keyword_only_scope_are_preserved",
+        "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_published_recommended_action_position_and_keyword_only_scope_are_preserved",
+        "before_case_AST_sha256": "44e1a6d4dfa22b6860440c3471603c78c04208b5e8824850831ea7fc3acef1f5",
+        "assertion_call_count": 8
+      },
+      {
+        "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
+        "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
+        "before_case_AST_sha256": "883e4486ee541d3494c5c687724113f85335a4133cd48742ccc84fe93c9b020e",
+        "assertion_call_count": 24
+      },
+      {
+        "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_mixed_paths_and_semantics_union_without_inventory_inference",
+        "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_mixed_paths_and_semantics_union_without_inventory_inference",
+        "before_case_AST_sha256": "e81251b6f535636ef43914830f808d36020c3dd9b3319be8b2a19fac397ad0d0",
+        "assertion_call_count": 38
+      },
+      {
+        "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
+        "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
+        "before_case_AST_sha256": "079b1c79ad97ea9293c7647520503b6a7997aa4b67564ed73286475679d89fb7",
+        "assertion_call_count": 16
+      },
+      {
+        "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_review_requires_disclosed_concrete_basis_while_draft_forbids_it",
+        "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_review_requires_disclosed_concrete_basis_while_draft_forbids_it",
+        "before_case_AST_sha256": "243a431b8a42a41dc7206880fb6b22569ba4329c2e1c3122fe71d802da7bc4c2",
+        "assertion_call_count": 3
+      },
+      {
+        "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
+        "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
+        "before_case_AST_sha256": "2de220e3d5515f3141aac648677d163d03199ca58e55b9ec1f8daeb38d7cbd7f",
+        "assertion_call_count": 100
+      },
+      {
+        "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
+        "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
+        "before_case_AST_sha256": "94544511c0191c35208e17ca33cd4298b0d4593f095571b3f5412d3c3073f637",
+        "assertion_call_count": 6
+      },
+      {
+        "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current",
+        "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current",
+        "before_case_AST_sha256": "390e103a351b6917b35abe36974f06346a303b026918f1761e8a32cca043bb35",
+        "assertion_call_count": 27
+      },
+      {
+        "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest",
+        "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest",
+        "before_case_AST_sha256": "ec283952666f9747b1f41cb771de91d5bad1a61fb5c953e52585fb2ada95c60b",
+        "assertion_call_count": 29
+      },
+      {
+        "old_id": "tests.test_specialist_routing.SpecialistRoutingTests.test_drafted_is_neither_supports_nor_legacy_review_assessment",
+        "new_id": "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_drafted_is_neither_supports_nor_legacy_review_assessment",
+        "before_case_AST_sha256": "a1ed7336e35834d42c9198461338527839df5a03f4360639d070b57e4ebe7478",
+        "assertion_call_count": 9
+      }
+    ],
+    "old_count": 10,
+    "new_count": 10,
+    "new_scenarios": 0,
+    "status": "테스트 이동 전 정확한 대응표; 실제 after 동등성은 구현 후 검증"
+  },
+  "test_budget_evidence_sha256": "abdd59fe3ba78bb7cf5efda0a37c9a031e4374322b38595b14218e5c4a3441ae"
 }

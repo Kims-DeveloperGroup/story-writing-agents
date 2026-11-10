@@ -4,7 +4,6 @@ from tests.test_provider_schema_spec import check_schema
 from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome, _premise_native_contract
 import asyncio
 import contextlib
-import gc
 import hashlib
 import inspect
 import io
@@ -15,8 +14,6 @@ import sys
 import tempfile
 import threading
 import unittest
-import warnings
-import weakref
 from dataclasses import MISSING, FrozenInstanceError, fields, replace
 from pathlib import Path
 from types import SimpleNamespace

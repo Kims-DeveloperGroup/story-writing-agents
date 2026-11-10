@@ -32,7 +32,7 @@ on:
         required: false
         type: choice
         default: codec
-        options: [codec, source-snapshot, provider-call-ordinal]
+        options: [codec, source-snapshot, provider-call-ordinal, successor-selection]
       profile_selection:
         description: 선택한 기존 사례를 cProfile로 진단하며 성능 통과 증거로 사용하지 않음
         required: false
@@ -716,6 +716,12 @@ jobs:
               ;;
             provider-call-ordinal)
               witness_ids=('tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated')
+              ;;
+            successor-selection)
+              witness_ids=(
+                'tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip'
+                'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip'
+              )
               ;;
             *) exit 2 ;;
           esac

@@ -19,7 +19,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import asdict, FrozenInstanceError, fields, replace
 from pathlib import Path
@@ -157,25 +156,10 @@ from story_writing_agents.session_lifecycle import (
     SessionDurableState,
     SessionLifecycleState,
 )
-from story_writing_agents.session_recovery import (
-    SessionRecoveryFailureCode,
-    SessionRecoveryOwner,
-)
-from story_writing_agents.session_recovery.transition_assessment import (
-    SessionTransitionAssessment,
-    SessionTransitionAssessmentState,
-    SessionTransitionNextAction,
-    SessionTransitionOperation,
-    SessionTransitionScope,
-)
 from story_writing_agents.editorial_state import EditorialStateProjection
 from story_writing_agents.orchestrator import RuntimeSession
 from story_writing_agents.workspace import (
     Workspace,
-)
-from story_writing_agents.workspace.initialization import (
-    SessionArtifactBindingError,
-    require_ready_session_resources,
 )
 
 from tests.collaboration_contract_fixture import STEP_ID, contract_batches, make_proposal, measured_batch, make_batch, make_draft, store_batch, RUNTIME, USER, LEAD
