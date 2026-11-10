@@ -1,0 +1,3047 @@
+{
+  "schema": "lead-preparation-refactor-plan-v1",
+  "issue": 967,
+  "parent": 962,
+  "github_planning_gate": "passed",
+  "accepted_base": "ef8093f49dbab2b2fea619acef40a1c7572bc439",
+  "accepted_tree": "c0c0a2dbf4b7d12b369ddde290be7aee0b3b9e7b",
+  "parent_report_sha256": "c1c4d3b758eac5a5aa2858494d431bbc92629ccd637c5fb79c5f8029e99cb578",
+  "selected_owners": {
+    "call_rule_factory": {
+      "definitions": 8,
+      "body_lines": 339,
+      "path": "src/story_writing_agents/lead_preparation/call_rule_factory.py"
+    },
+    "reply_contract_values": {
+      "definitions": 24,
+      "body_lines": 483,
+      "path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+    },
+    "response_rules": {
+      "definitions": 4,
+      "body_lines": 767,
+      "path": "src/story_writing_agents/lead_preparation/response_rules.py"
+    }
+  },
+  "exact_definition_map": {
+    "call_rule_factory": [
+      {
+        "old": "_provided_review_targets",
+        "line": 1988,
+        "end_line": 2013,
+        "lines": 26,
+        "proposed_public_name": "provided_review_targets",
+        "args": "inputs: tuple[CollaborationInputRevision, ...]",
+        "return": "tuple[ReviewTarget, ...]",
+        "decorators": [],
+        "ast_sha256": "cb45cffe5874d4bbf87e24bfa3fa4a52b63e47164f5c28f9c511dde5ebce00f1",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "_authorized_preliminary_targets",
+            "line": 2052,
+            "expression": "_provided_review_targets"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12189,
+            "expression": "_provided_review_targets"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12189,
+            "expression": "_provided_review_targets"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "call_rule_factory",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/call_rule_factory.py"
+      },
+      {
+        "old": "_read_review_targets",
+        "line": 2016,
+        "end_line": 2025,
+        "lines": 10,
+        "proposed_public_name": "read_review_targets",
+        "args": "facts: tuple[ContextCallReadFact, ...]",
+        "return": "tuple[ReviewTarget, ...]",
+        "decorators": [],
+        "ast_sha256": "76422802e7f55947462fff4ce57d72e4ecf6aa0ffeed89d4cc6cb381fef6e831",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "_coverage_review_targets",
+            "line": 2035,
+            "expression": "_read_review_targets"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "call_rule_factory",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/call_rule_factory.py"
+      },
+      {
+        "old": "_coverage_review_targets",
+        "line": 2028,
+        "end_line": 2047,
+        "lines": 20,
+        "proposed_public_name": "coverage_review_targets",
+        "args": "provided: tuple[ReviewTarget, ...], facts: tuple[ContextCallReadFact, ...], statuses: tuple[ContextSourceStatusReceipt, ...]",
+        "return": "tuple[ReviewTarget, ...]",
+        "decorators": [],
+        "ast_sha256": "94ef9ed74c0c35d4cefd0a2a36632e0e302a977e5d0b17e164a188728264c2ad",
+        "referenced_definitions": [
+          "_read_review_targets"
+        ],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "_authorized_preliminary_targets",
+            "line": 2051,
+            "expression": "_coverage_review_targets"
+          },
+          {
+            "caller": "OrchestrationLeadCallFactory",
+            "line": 2173,
+            "expression": "_coverage_review_targets"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "call_rule_factory",
+        "closed_dependencies": [
+          "_read_review_targets"
+        ],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/call_rule_factory.py"
+      },
+      {
+        "old": "_authorized_preliminary_targets",
+        "line": 2050,
+        "end_line": 2064,
+        "lines": 15,
+        "proposed_public_name": "authorized_preliminary_targets",
+        "args": "inputs, authorization",
+        "return": "tuple[ReviewTarget, ...]",
+        "decorators": [],
+        "ast_sha256": "8cc9a0f41067112e9b2154f0287ae8f4a8c7e3e0e239a155ff303accfc7de566",
+        "referenced_definitions": [
+          "_coverage_review_targets",
+          "_provided_review_targets"
+        ],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 12811,
+            "expression": "_authorized_preliminary_targets"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12612,
+            "expression": "_authorized_preliminary_targets"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12811,
+            "expression": "_authorized_preliminary_targets"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12612,
+            "expression": "_authorized_preliminary_targets"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "call_rule_factory",
+        "closed_dependencies": [
+          "_coverage_review_targets",
+          "_provided_review_targets"
+        ],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/call_rule_factory.py"
+      },
+      {
+        "old": "OrchestrationLeadCallFactory",
+        "line": 2068,
+        "end_line": 2267,
+        "lines": 200,
+        "proposed_public_name": "OrchestrationLeadCallFactory",
+        "args": null,
+        "return": null,
+        "decorators": [
+          "dataclass(frozen=True, slots=True)"
+        ],
+        "ast_sha256": "d28105c51e9860ba6c206e837d66a3c15b29bef025e4501b89f1a57e77abb9e1",
+        "referenced_definitions": [
+          "_coverage_review_targets"
+        ],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "_lead_call_contract_factory",
+            "line": 2273,
+            "expression": "OrchestrationLeadCallFactory"
+          },
+          {
+            "caller": "_lead_call_contract_factory",
+            "line": 2276,
+            "expression": "OrchestrationLeadCallFactory"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 16492,
+            "expression": "OrchestrationLeadCallFactory"
+          },
+          {
+            "caller": "StoryRuntime._lead_group_invocation_state",
+            "line": 16492,
+            "expression": "OrchestrationLeadCallFactory"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "call_rule_factory",
+        "closed_dependencies": [
+          "_coverage_review_targets"
+        ],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/call_rule_factory.py"
+      },
+      {
+        "old": "_lead_call_contract_factory",
+        "line": 2270,
+        "end_line": 2278,
+        "lines": 9,
+        "proposed_public_name": "lead_call_contract_factory",
+        "args": "*, constraints: LeadProviderConstraints, contract: LeadResultRuleSeed, stage: str, language: str, authorized_validator: Callable[[str, object], object], reviewer_for_locator: Callable[[str], str], schema_group_protocol: bool=False",
+        "return": "OrchestrationLeadCallFactory",
+        "decorators": [],
+        "ast_sha256": "4945111c0a66da1432277d681ce4059f28974de81bd3e1a69beb2a5bb40d7ab7",
+        "referenced_definitions": [
+          "OrchestrationLeadCallFactory"
+        ],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 9040,
+            "expression": "_lead_call_contract_factory"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 13127,
+            "expression": "_lead_call_contract_factory"
+          },
+          {
+            "caller": "StoryRuntime._run_collaboration_invocation_guarded",
+            "line": 9040,
+            "expression": "_lead_call_contract_factory"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 13127,
+            "expression": "_lead_call_contract_factory"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "call_rule_factory",
+        "closed_dependencies": [
+          "OrchestrationLeadCallFactory"
+        ],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/call_rule_factory.py"
+      },
+      {
+        "old": "StoryRuntime._validated_context_provider_factory",
+        "line": 19692,
+        "end_line": 19709,
+        "lines": 18,
+        "proposed_public_name": "validated_context_provider_factory",
+        "args": "bound_agent: BoundAgent",
+        "return": "Callable[[object], object]",
+        "decorators": [
+          "staticmethod"
+        ],
+        "ast_sha256": "ce3fcc4f0ef3d144ac8d206302684468101cc154a5e0bfdba2973109570f4fff",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 8845,
+            "expression": "self._validated_context_provider_factory"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12226,
+            "expression": "self._validated_context_provider_factory"
+          },
+          {
+            "caller": "StoryRuntime._run_collaboration_invocation_guarded",
+            "line": 8845,
+            "expression": "self._validated_context_provider_factory"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12226,
+            "expression": "self._validated_context_provider_factory"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "context_invocation",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/call_rule_factory.py"
+      },
+      {
+        "old": "StoryRuntime._lead_group_invocation_state",
+        "line": 16486,
+        "end_line": 16526,
+        "lines": 41,
+        "proposed_public_name": "lead_group_invocation_state",
+        "args": "request: ContextInvocationRequest, *, original_text: str, constraints: LeadProviderConstraints",
+        "return": "ContextGroupInvocationState | None",
+        "decorators": [
+          "staticmethod"
+        ],
+        "ast_sha256": "8e1670d68ceb86b44fd04f8ab154db6fb5a877cf6b7065ed052a0e5114f39d30",
+        "referenced_definitions": [
+          "OrchestrationLeadCallFactory"
+        ],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 13164,
+            "expression": "self._lead_group_invocation_state"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 13164,
+            "expression": "self._lead_group_invocation_state"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "front_call_budget",
+        "closed_dependencies": [
+          "OrchestrationLeadCallFactory"
+        ],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/call_rule_factory.py"
+      }
+    ],
+    "reply_contract_values": [
+      {
+        "old": "StoryRuntime._canonical_digest",
+        "line": 19290,
+        "end_line": 19298,
+        "lines": 9,
+        "proposed_public_name": "canonical_digest",
+        "args": "value: object",
+        "return": "str",
+        "decorators": [
+          "staticmethod"
+        ],
+        "ast_sha256": "a56be92020f885089f6d423ab52d7e0094befc3ef32103a1d6ee333af233a1f6",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 3686,
+            "expression": "self._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 10804,
+            "expression": "cls._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 17996,
+            "expression": "cls._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 19302,
+            "expression": "cls._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3642,
+            "expression": "cls._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3720,
+            "expression": "self._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 17531,
+            "expression": "self._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 17756,
+            "expression": "self._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 10785,
+            "expression": "self._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 6340,
+            "expression": "self._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_event_digest",
+            "line": 3642,
+            "expression": "cls._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_source_fingerprint",
+            "line": 3686,
+            "expression": "self._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_basis",
+            "line": 3720,
+            "expression": "self._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime.propose_specialist_advisory",
+            "line": 6340,
+            "expression": "self._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime._build_continuation_proposal",
+            "line": 10785,
+            "expression": "self._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime._specialist_reply_digest",
+            "line": 10804,
+            "expression": "cls._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime._build_lead_proposal",
+            "line": 17531,
+            "expression": "self._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime._validate_current_proposal_authority",
+            "line": 17756,
+            "expression": "self._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime._lead_authorized_source_fingerprint",
+            "line": 17996,
+            "expression": "cls._canonical_digest"
+          },
+          {
+            "caller": "StoryRuntime._proposal_basis_digest",
+            "line": 19302,
+            "expression": "cls._canonical_digest"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "StoryRuntime._proposal_basis_digest",
+        "line": 19301,
+        "end_line": 19332,
+        "lines": 32,
+        "proposed_public_name": "proposal_basis_digest",
+        "args": "cls, proposal: CollaborationProposal",
+        "return": "str",
+        "decorators": [
+          "classmethod"
+        ],
+        "ast_sha256": "4666f18cbf35dd966dbf9c3a04776e2dc88639fc4d8d72a2daf85727e9c2252e",
+        "referenced_definitions": [
+          "StoryRuntime._canonical_digest"
+        ],
+        "runtime_attributes": [
+          "_canonical_digest"
+        ],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 19364,
+            "expression": "cls._proposal_basis_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 6753,
+            "expression": "self._proposal_basis_digest"
+          },
+          {
+            "caller": "StoryRuntime.decide_lead_step",
+            "line": 6753,
+            "expression": "self._proposal_basis_digest"
+          },
+          {
+            "caller": "StoryRuntime._capability_matches",
+            "line": 19364,
+            "expression": "cls._proposal_basis_digest"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [
+          "StoryRuntime._canonical_digest"
+        ],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "StoryRuntime._recommendation_event_digest",
+        "line": 3627,
+        "end_line": 3643,
+        "lines": 17,
+        "proposed_public_name": "recommendation_event_digest",
+        "args": "cls, event: CollaborationEvent | CollaborationEventDraft",
+        "return": "str",
+        "decorators": [
+          "classmethod"
+        ],
+        "ast_sha256": "a5063d7e768ec76f0f5a3451b904964cdba3a22a16974f3763178feb7ac03822",
+        "referenced_definitions": [
+          "StoryRuntime._canonical_digest",
+          "StoryRuntime._specialist_reply_digest"
+        ],
+        "runtime_attributes": [
+          "_canonical_digest",
+          "_specialist_reply_digest"
+        ],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 3768,
+            "expression": "self._recommendation_event_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 4195,
+            "expression": "self._recommendation_event_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 17167,
+            "expression": "self._recommendation_event_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 9372,
+            "expression": "self._recommendation_event_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 18384,
+            "expression": "self._recommendation_event_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 18654,
+            "expression": "StoryRuntime._recommendation_event_digest"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 3768,
+            "expression": "self._recommendation_event_digest"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_turn_result",
+            "line": 4195,
+            "expression": "self._recommendation_event_digest"
+          },
+          {
+            "caller": "StoryRuntime._collaboration_input_value",
+            "line": 9372,
+            "expression": "self._recommendation_event_digest"
+          },
+          {
+            "caller": "StoryRuntime._qualified_input_sources",
+            "line": 17167,
+            "expression": "self._recommendation_event_digest"
+          },
+          {
+            "caller": "StoryRuntime._current_lead_inputs",
+            "line": 18384,
+            "expression": "self._recommendation_event_digest"
+          },
+          {
+            "caller": "StoryRuntime._lead_inputs",
+            "line": 18654,
+            "expression": "StoryRuntime._recommendation_event_digest"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [
+          "StoryRuntime._canonical_digest",
+          "StoryRuntime._specialist_reply_digest"
+        ],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "StoryRuntime._collaboration_reply_trace",
+        "line": 8666,
+        "end_line": 8699,
+        "lines": 34,
+        "proposed_public_name": "collaboration_reply_trace",
+        "args": "*, role: str, action: str, request: ContextInvocationRequest, result: ContextInvocationResult | None, origin: ReplyTraceOrigin",
+        "return": "ReplyTrace",
+        "decorators": [
+          "staticmethod"
+        ],
+        "ast_sha256": "0ce24b6cc51dde5d95c52772ec86557a48c6ff2951393a646ad5348697df9f60",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 8981,
+            "expression": "self._collaboration_reply_trace"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 13440,
+            "expression": "self._collaboration_reply_trace"
+          },
+          {
+            "caller": "StoryRuntime._run_collaboration_invocation_guarded",
+            "line": 8981,
+            "expression": "self._collaboration_reply_trace"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 13440,
+            "expression": "self._collaboration_reply_trace"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "StoryRuntime._collaboration_input_value",
+        "line": 9326,
+        "end_line": 9414,
+        "lines": 89,
+        "proposed_public_name": "collaboration_input_value",
+        "args": "self, item: CollaborationInputRevision, events: tuple[CollaborationEvent, ...], *, evidence: CollaborationLeadEvidence | None=None",
+        "return": "dict[str, object]",
+        "decorators": [],
+        "ast_sha256": "d09155b48e9656226643f5f25604e4587807e8fa5d58f657d9906cf386342aa4",
+        "referenced_definitions": [
+          "StoryRuntime._recommendation_event_digest"
+        ],
+        "runtime_attributes": [
+          "_recommendation_event_digest"
+        ],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 8221,
+            "expression": "self._collaboration_input_value"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 8356,
+            "expression": "self._collaboration_input_value"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 8485,
+            "expression": "self._collaboration_input_value"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 8522,
+            "expression": "self._collaboration_input_value"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12284,
+            "expression": "self._collaboration_input_value"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 17189,
+            "expression": "self._collaboration_input_value"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12361,
+            "expression": "self._collaboration_input_value"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 16932,
+            "expression": "self._collaboration_input_value"
+          },
+          {
+            "caller": "StoryRuntime._run_specialist_assignment",
+            "line": 8221,
+            "expression": "self._collaboration_input_value"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_synthesis",
+            "line": 8356,
+            "expression": "self._collaboration_input_value"
+          },
+          {
+            "caller": "StoryRuntime._run_premise_assignment",
+            "line": 8485,
+            "expression": "self._collaboration_input_value"
+          },
+          {
+            "caller": "StoryRuntime._run_premise_synthesis",
+            "line": 8522,
+            "expression": "self._collaboration_input_value"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12284,
+            "expression": "self._collaboration_input_value"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12361,
+            "expression": "self._collaboration_input_value"
+          },
+          {
+            "caller": "StoryRuntime._validate_review_material",
+            "line": 16932,
+            "expression": "self._collaboration_input_value"
+          },
+          {
+            "caller": "StoryRuntime._qualified_input_sources",
+            "line": 17189,
+            "expression": "self._collaboration_input_value"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [
+          "StoryRuntime._recommendation_event_digest"
+        ],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "StoryRuntime._specialist_reply_digest",
+        "line": 10800,
+        "end_line": 10814,
+        "lines": 15,
+        "proposed_public_name": "specialist_reply_digest",
+        "args": "cls, payload: CollaborationSpecialistReplyPayload",
+        "return": "str",
+        "decorators": [
+          "classmethod"
+        ],
+        "ast_sha256": "4c753b69b46be40e51205cf9d4c33b2eaf396ebe27e836f6cbf99834258c1e34",
+        "referenced_definitions": [
+          "StoryRuntime._canonical_digest"
+        ],
+        "runtime_attributes": [
+          "_canonical_digest"
+        ],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 3638,
+            "expression": "cls._specialist_reply_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 17118,
+            "expression": "self._specialist_reply_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 10635,
+            "expression": "self._specialist_reply_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 8550,
+            "expression": "self._specialist_reply_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 9797,
+            "expression": "self._specialist_reply_digest"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 8410,
+            "expression": "self._specialist_reply_digest"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_event_digest",
+            "line": 3638,
+            "expression": "cls._specialist_reply_digest"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_synthesis",
+            "line": 8410,
+            "expression": "self._specialist_reply_digest"
+          },
+          {
+            "caller": "StoryRuntime._run_premise_synthesis",
+            "line": 8550,
+            "expression": "self._specialist_reply_digest"
+          },
+          {
+            "caller": "StoryRuntime._persist_collaboration_results_with_generation_pin",
+            "line": 9797,
+            "expression": "self._specialist_reply_digest"
+          },
+          {
+            "caller": "StoryRuntime._build_continuation_proposal",
+            "line": 10635,
+            "expression": "self._specialist_reply_digest"
+          },
+          {
+            "caller": "StoryRuntime._qualified_input_sources",
+            "line": 17118,
+            "expression": "self._specialist_reply_digest"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [
+          "StoryRuntime._canonical_digest"
+        ],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_provider_review_basis",
+        "line": 1681,
+        "end_line": 1694,
+        "lines": 14,
+        "proposed_public_name": "provider_review_basis",
+        "args": "value: object",
+        "return": "ReviewBasis",
+        "decorators": [],
+        "ast_sha256": "6a7170135964c7d831b9f0a51b1d228832d9a50a16a8e3d24c4d7501f4b4ceaa",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 11063,
+            "expression": "_provider_review_basis"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 15677,
+            "expression": "_provider_review_basis"
+          },
+          {
+            "caller": "StoryRuntime._decode_continuation_intent",
+            "line": 11063,
+            "expression": "_provider_review_basis"
+          },
+          {
+            "caller": "StoryRuntime._decode_lead_outcome",
+            "line": 15677,
+            "expression": "_provider_review_basis"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_LeadOutcomeValidationError",
+        "line": 1697,
+        "end_line": 1698,
+        "lines": 2,
+        "proposed_public_name": "LeadOutcomeValidationError",
+        "args": null,
+        "return": null,
+        "decorators": [],
+        "ast_sha256": "e5e15137460ce39ecaa847e5a52f9e8542ca34ad4d2e63cc7f76d9408eea30c1",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 16651,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 4136,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 13453,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14070,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14074,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 16820,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 16875,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 19207,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3750,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3761,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3835,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3937,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3944,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3953,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 4027,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 4072,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 4131,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 4142,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14003,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14009,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14276,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14339,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14350,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14378,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14498,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14505,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14710,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 16134,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 16754,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 18811,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 19163,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 19189,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3828,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3894,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 4000,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 4065,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 4101,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 13720,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14052,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14055,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14060,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14063,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14361,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14369,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14388,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14401,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14411,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14422,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14514,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14528,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14821,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 15715,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 16149,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 16882,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 16895,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 18914,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 19109,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 19223,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 19242,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3787,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3795,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3824,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3902,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3924,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 3929,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 4107,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 4109,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 4115,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 4119,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 11981,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12707,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14021,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14429,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14437,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14620,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14791,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 14834,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 16903,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 16975,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 18830,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 18984,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 19138,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 4017,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12504,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12511,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12549,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12620,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12631,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12657,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12710,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12718,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12725,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12766,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12819,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12861,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12890,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12895,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12907,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12916,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12921,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12932,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12947,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12950,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12962,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 16915,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12481,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12486,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12802,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12817,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12840,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12849,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12937,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12971,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12688,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12980,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 13004,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 13030,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 13037,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 13043,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 18967,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 13069,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 4136,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 3750,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 3761,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 3835,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 3937,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 3944,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 3953,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 4027,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 4072,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 4131,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 4142,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 3828,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 3894,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 4000,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 4065,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 4101,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 3787,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 3795,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 3824,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 3902,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 3924,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 3929,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 4107,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 4109,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 4115,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 4119,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_request_draft",
+            "line": 4017,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 13453,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 13720,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 11981,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12707,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12504,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12511,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12549,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12620,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12631,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12657,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12710,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12718,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12725,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12766,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12819,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12861,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12890,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12895,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12907,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12916,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12921,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12932,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12947,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12950,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12962,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12481,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12486,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12802,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12817,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12840,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12849,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12937,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12971,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12688,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12980,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 13004,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 13030,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 13037,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 13043,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 13069,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._build_artifact_proposal_result",
+            "line": 14070,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._build_artifact_proposal_result",
+            "line": 14074,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._build_artifact_proposal_result",
+            "line": 14003,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._build_artifact_proposal_result",
+            "line": 14009,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._build_artifact_proposal_result",
+            "line": 14052,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._build_artifact_proposal_result",
+            "line": 14055,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._build_artifact_proposal_result",
+            "line": 14060,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._build_artifact_proposal_result",
+            "line": 14063,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._build_artifact_proposal_result",
+            "line": 14021,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_objective_routing",
+            "line": 14276,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_recommendation_preparation",
+            "line": 14339,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_recommendation_preparation",
+            "line": 14350,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_recommendation_preparation",
+            "line": 14378,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_recommendation_preparation",
+            "line": 14361,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_recommendation_preparation",
+            "line": 14369,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_recommendation_preparation",
+            "line": 14388,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_recommendation_preparation",
+            "line": 14401,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_recommendation_preparation",
+            "line": 14411,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_recommendation_preparation",
+            "line": 14422,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_recommendation_preparation",
+            "line": 14429,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_recommendation_preparation",
+            "line": 14437,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_objective_selection",
+            "line": 14498,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_objective_selection",
+            "line": 14505,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_objective_selection",
+            "line": 14514,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_objective_selection",
+            "line": 14528,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._objective_drafts",
+            "line": 14620,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._construct_artifact_review_candidate",
+            "line": 14710,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._artifact_intent_evidence",
+            "line": 14821,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._artifact_intent_evidence",
+            "line": 14791,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._artifact_intent_evidence",
+            "line": 14834,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._decode_lead_outcome",
+            "line": 15715,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._resolve_authoring_scope",
+            "line": 16134,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._resolve_authoring_scope",
+            "line": 16149,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._completed_authoring_source",
+            "line": 16651,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_draft_provenance",
+            "line": 16754,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_exact_candidate_reviews",
+            "line": 16820,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_review_material",
+            "line": 16875,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_review_material",
+            "line": 16882,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_review_material",
+            "line": 16895,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_review_material",
+            "line": 16903,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_review_material",
+            "line": 16975,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_review_material",
+            "line": 16915,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._durable_lead_evidence",
+            "line": 18811,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._durable_lead_evidence",
+            "line": 18914,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._durable_lead_evidence",
+            "line": 18830,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._durable_lead_evidence",
+            "line": 18984,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._durable_lead_evidence",
+            "line": 18967,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._materialize_lead_evidence_inputs",
+            "line": 19109,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._materialize_lead_evidence_inputs",
+            "line": 19138,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_lead_intent_evidence_inputs",
+            "line": 19207,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_lead_intent_evidence_inputs",
+            "line": 19163,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_lead_intent_evidence_inputs",
+            "line": 19189,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_lead_intent_evidence_inputs",
+            "line": 19223,
+            "expression": "_LeadOutcomeValidationError"
+          },
+          {
+            "caller": "StoryRuntime._validate_lead_intent_evidence_inputs",
+            "line": 19242,
+            "expression": "_LeadOutcomeValidationError"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "StoryRuntime._execution_validation_details",
+        "line": 10128,
+        "end_line": 10186,
+        "lines": 59,
+        "proposed_public_name": "execution_validation_details",
+        "args": "self, events: tuple[CollaborationEvent, ...], execution_attempt_id: str, step_id: str",
+        "return": "tuple[str, ...]",
+        "decorators": [],
+        "ast_sha256": "8ef3bb993ad04902da245a0ef6c156e731cf1be32f233e0dc7fce3cda170ca6d",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 9870,
+            "expression": "self._execution_validation_details"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 4198,
+            "expression": "self._execution_validation_details"
+          },
+          {
+            "caller": "StoryRuntime._recommendation_turn_result",
+            "line": 4198,
+            "expression": "self._execution_validation_details"
+          },
+          {
+            "caller": "StoryRuntime._finalize_known_result_locked",
+            "line": 9870,
+            "expression": "self._execution_validation_details"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_with_group_trace",
+        "line": 1786,
+        "end_line": 1787,
+        "lines": 2,
+        "proposed_public_name": "with_group_trace",
+        "args": "provider, drafts, terminal_code",
+        "return": null,
+        "decorators": [],
+        "ast_sha256": "6c761c5f900d950637e5738b5c90d445f2824c28dbd4d9eeed33c091a2b71672",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 14158,
+            "expression": "_with_group_trace"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 15206,
+            "expression": "_with_group_trace"
+          },
+          {
+            "caller": "StoryRuntime._build_artifact_proposal_result",
+            "line": 14158,
+            "expression": "_with_group_trace"
+          },
+          {
+            "caller": "StoryRuntime._lead_outcome_failure_result",
+            "line": 15206,
+            "expression": "_with_group_trace"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_lead_terminal_notice",
+        "line": 1945,
+        "end_line": 1967,
+        "lines": 23,
+        "proposed_public_name": "lead_terminal_notice",
+        "args": "language: str | None, tasks: tuple[tuple[str, int], ...], state: object, requirements: tuple[str, ...]=(), code: str='LEAD_CONTRACT_REJECTED'",
+        "return": "str",
+        "decorators": [],
+        "ast_sha256": "3536ccb38177f9bb023c0f838a8f98fcc68bdb9c78a1cb136b1c12c2adda1c3b",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 15158,
+            "expression": "_lead_terminal_notice"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 15268,
+            "expression": "_lead_terminal_notice"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 8994,
+            "expression": "_lead_terminal_notice"
+          },
+          {
+            "caller": "StoryRuntime._run_collaboration_invocation_guarded",
+            "line": 8994,
+            "expression": "_lead_terminal_notice"
+          },
+          {
+            "caller": "StoryRuntime._lead_outcome_failure_result",
+            "line": 15158,
+            "expression": "_lead_terminal_notice"
+          },
+          {
+            "caller": "StoryRuntime._structured_fallback_lead_result",
+            "line": 15268,
+            "expression": "_lead_terminal_notice"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_lead_source_owner_rejection",
+        "line": 1970,
+        "end_line": 1972,
+        "lines": 3,
+        "proposed_public_name": "lead_source_owner_rejection",
+        "args": "failure: BaseException",
+        "return": "BaseException",
+        "decorators": [],
+        "ast_sha256": "4cad3607600ea3c13abbad1640aa4ff567aad28be9181117490c2427e3b940df",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 18914,
+            "expression": "_lead_source_owner_rejection"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 18830,
+            "expression": "_lead_source_owner_rejection"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 18967,
+            "expression": "_lead_source_owner_rejection"
+          },
+          {
+            "caller": "StoryRuntime._durable_lead_evidence",
+            "line": 18914,
+            "expression": "_lead_source_owner_rejection"
+          },
+          {
+            "caller": "StoryRuntime._durable_lead_evidence",
+            "line": 18830,
+            "expression": "_lead_source_owner_rejection"
+          },
+          {
+            "caller": "StoryRuntime._durable_lead_evidence",
+            "line": 18967,
+            "expression": "_lead_source_owner_rejection"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_lead_is_source_owner_rejection",
+        "line": 1975,
+        "end_line": 1985,
+        "lines": 11,
+        "proposed_public_name": "lead_is_source_owner_rejection",
+        "args": "failure: BaseException",
+        "return": "bool",
+        "decorators": [],
+        "ast_sha256": "79f41ec579a8ad95296f73fb41f6cd4707424c4a69c91c27b129abe80c150eff",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 13231,
+            "expression": "_lead_is_source_owner_rejection"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 13504,
+            "expression": "_lead_is_source_owner_rejection"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 13231,
+            "expression": "_lead_is_source_owner_rejection"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 13504,
+            "expression": "_lead_is_source_owner_rejection"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_closed_result_object",
+        "line": 559,
+        "end_line": 573,
+        "lines": 15,
+        "proposed_public_name": "closed_result_object",
+        "args": "properties: dict[str, object], *, description: str | None=None, required: tuple[str, ...] | None=None",
+        "return": "dict[str, object]",
+        "decorators": [],
+        "ast_sha256": "94cb836785bedc822888fdf5ba57dabed2b51961024249127d155bd3fb41048b",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "_proposal_result_schema",
+            "line": 635,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_proposal_result_schema",
+            "line": 627,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_proposal_result_schema",
+            "line": 630,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_proposal_result_schema",
+            "line": 618,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_artifact_intent_result_schema",
+            "line": 711,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_artifact_intent_result_schema",
+            "line": 648,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_artifact_intent_result_schema",
+            "line": 659,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_artifact_intent_result_schema",
+            "line": 670,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_artifact_intent_result_schema",
+            "line": 681,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_artifact_intent_result_schema",
+            "line": 692,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_lead_front_result_contract",
+            "line": 964,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_lead_front_result_contract",
+            "line": 1040,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_lead_front_result_contract",
+            "line": 979,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_lead_front_result_contract",
+            "line": 985,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_lead_front_result_contract",
+            "line": 1000,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_lead_front_result_contract",
+            "line": 1005,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_lead_front_result_contract",
+            "line": 1011,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_lead_front_result_contract",
+            "line": 996,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_lead_front_result_contract",
+            "line": 1020,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_specialist_result_contract",
+            "line": 1552,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_specialist_result_contract",
+            "line": 1534,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_specialist_result_contract",
+            "line": 1539,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_lead_synthesis_result_contract",
+            "line": 1659,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_lead_synthesis_result_contract",
+            "line": 1609,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_lead_synthesis_result_contract",
+            "line": 1639,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_lead_synthesis_result_contract",
+            "line": 1616,
+            "expression": "_closed_result_object"
+          },
+          {
+            "caller": "_lead_synthesis_result_contract",
+            "line": 1618,
+            "expression": "_closed_result_object"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_string_array_result_schema",
+        "line": 576,
+        "end_line": 590,
+        "lines": 15,
+        "proposed_public_name": "string_array_result_schema",
+        "args": "*, allowed_values: tuple[str, ...]=(), min_items: int=0, max_items: int | None=None",
+        "return": "dict[str, object]",
+        "decorators": [],
+        "ast_sha256": "bdd717ec8a799608c1f16da5ea231ea1bd24f5df024f8927627ab420e62ec176",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_authoring_scope_result_schema",
+        "line": 593,
+        "end_line": 596,
+        "lines": 4,
+        "proposed_public_name": "authoring_scope_result_schema",
+        "args": "task_revisions: tuple[tuple[str, int], ...]=()",
+        "return": "dict[str, object]",
+        "decorators": [],
+        "ast_sha256": "a0c29fc6b927b8cfe835ade4725577d4703f38ed9a03deb636cf9d5b6517dd42",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_assignment_result_schema",
+        "line": 599,
+        "end_line": 603,
+        "lines": 5,
+        "proposed_public_name": "assignment_result_schema",
+        "args": "input_ids: tuple[str, ...], constraints: LeadProviderConstraints | None=None",
+        "return": "dict[str, object]",
+        "decorators": [],
+        "ast_sha256": "e2273e7f31d3e53db4ace8429bfc632405f1f7f689f626d46b954b4204fa3f12",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_proposal_result_schema",
+        "line": 606,
+        "end_line": 641,
+        "lines": 36,
+        "proposed_public_name": "proposal_result_schema",
+        "args": "relation: LeadProposalRelation, input_ids: tuple[str, ...], constraints: LeadProviderConstraints | None=None",
+        "return": "dict[str, object]",
+        "decorators": [],
+        "ast_sha256": "b74e800fc638322fbebea61b31e255edf55b9f013262cdf03b3b582f438f0658",
+        "referenced_definitions": [
+          "_closed_result_object"
+        ],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "_lead_front_result_contract",
+            "line": 977,
+            "expression": "_proposal_result_schema"
+          },
+          {
+            "caller": "_lead_front_result_contract",
+            "line": 1018,
+            "expression": "_proposal_result_schema"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [
+          "_closed_result_object"
+        ],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_artifact_intent_result_schema",
+        "line": 644,
+        "end_line": 717,
+        "lines": 74,
+        "proposed_public_name": "artifact_intent_result_schema",
+        "args": "constraints: LeadProviderConstraints | None=None",
+        "return": "dict[str, object]",
+        "decorators": [],
+        "ast_sha256": "55bfa196f7e50fd29c646048234c678a775b560fabec23ad3c2c977fa9520466",
+        "referenced_definitions": [
+          "_closed_result_object"
+        ],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "_lead_front_result_contract",
+            "line": 976,
+            "expression": "_artifact_intent_result_schema"
+          },
+          {
+            "caller": "_lead_front_result_contract",
+            "line": 1019,
+            "expression": "_artifact_intent_result_schema"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [
+          "_closed_result_object"
+        ],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_recommended_action_result_schema",
+        "line": 720,
+        "end_line": 723,
+        "lines": 4,
+        "proposed_public_name": "recommended_action_result_schema",
+        "args": "constraints: LeadProviderConstraints | None=None",
+        "return": "dict[str, object]",
+        "decorators": [],
+        "ast_sha256": "0397b47a1129c434519c92f417789451140a49c522ac2e4ccbd145350d8853d2",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_objective_intent_result_schema",
+        "line": 726,
+        "end_line": 734,
+        "lines": 9,
+        "proposed_public_name": "objective_intent_result_schema",
+        "args": "",
+        "return": "dict[str, object]",
+        "decorators": [],
+        "ast_sha256": "dfb44dfff4d6cc9185e19eeb11408dae8b26ed8321e8f6b67d881de3ce95d4a8",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_provider_result_contract",
+        "line": 737,
+        "end_line": 738,
+        "lines": 2,
+        "proposed_public_name": "provider_result_contract",
+        "args": "contract_id: str, schema: dict[str, object]",
+        "return": "ContextJsonObjectResultContract",
+        "decorators": [],
+        "ast_sha256": "b64ce885db4d7406f18be0f40b29a33ffe7f909a16d835909e08ae195f1f064a",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "_specialist_result_contract",
+            "line": 1550,
+            "expression": "_provider_result_contract"
+          },
+          {
+            "caller": "_specialist_result_contract",
+            "line": 1539,
+            "expression": "_provider_result_contract"
+          },
+          {
+            "caller": "_specialist_result_contract",
+            "line": 1546,
+            "expression": "_provider_result_contract"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_lead_result_rule_seed",
+        "line": 740,
+        "end_line": 742,
+        "lines": 3,
+        "proposed_public_name": "lead_result_rule_seed",
+        "args": "contract_id: str, schema: dict[str, object]",
+        "return": "LeadResultRuleSeed",
+        "decorators": [],
+        "ast_sha256": "c71a06daee188ed707864027c56f4b2890e0eaddf43b0959a3cf6bb0675f4abd",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "_lead_discussion_result_contract",
+            "line": 748,
+            "expression": "_lead_result_rule_seed"
+          },
+          {
+            "caller": "_lead_front_result_contract",
+            "line": 1526,
+            "expression": "_lead_result_rule_seed"
+          },
+          {
+            "caller": "_lead_synthesis_result_contract",
+            "line": 1657,
+            "expression": "_lead_result_rule_seed"
+          },
+          {
+            "caller": "_lead_synthesis_result_contract",
+            "line": 1648,
+            "expression": "_lead_result_rule_seed"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 8574,
+            "expression": "_lead_result_rule_seed"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12428,
+            "expression": "_lead_result_rule_seed"
+          },
+          {
+            "caller": "StoryRuntime._run_premise_synthesis",
+            "line": 8574,
+            "expression": "_lead_result_rule_seed"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12428,
+            "expression": "_lead_result_rule_seed"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      },
+      {
+        "old": "_lead_discussion_result_contract",
+        "line": 745,
+        "end_line": 750,
+        "lines": 6,
+        "proposed_public_name": "lead_discussion_result_contract",
+        "args": "constraints: LeadDiscussionConstraints",
+        "return": "LeadResultRuleSeed",
+        "decorators": [],
+        "ast_sha256": "7f6522aead5e6e73e2e6a67505fd7a4cd8c0172e58361393ab7121b051653e7f",
+        "referenced_definitions": [
+          "_lead_result_rule_seed"
+        ],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "_lead_revision_result_contract",
+            "line": 831,
+            "expression": "_lead_discussion_result_contract"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12418,
+            "expression": "_lead_discussion_result_contract"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12466,
+            "expression": "_lead_discussion_result_contract"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12418,
+            "expression": "_lead_discussion_result_contract"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12466,
+            "expression": "_lead_discussion_result_contract"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "reply_contract_values",
+        "closed_dependencies": [
+          "_lead_result_rule_seed"
+        ],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/reply_contract_values.py"
+      }
+    ],
+    "response_rules": [
+      {
+        "old": "_lead_front_result_contract",
+        "line": 940,
+        "end_line": 1526,
+        "lines": 587,
+        "proposed_public_name": "lead_front_result_contract",
+        "args": "expected_relation: LeadProposalRelation, input_ids: tuple[str, ...], task_revisions: tuple[tuple[str, int], ...]=(), constraints: LeadProviderConstraints | None=None, *, fresh_revision_only: bool=False",
+        "return": "LeadResultRuleSeed",
+        "decorators": [],
+        "ast_sha256": "15d8aeb053c7d8736d6ad6327464cdd1178c907591147741e0a4309fa4f8897b",
+        "referenced_definitions": [
+          "_artifact_intent_result_schema",
+          "_closed_result_object",
+          "_lead_result_rule_seed",
+          "_proposal_result_schema"
+        ],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "_lead_revision_result_contract",
+            "line": 827,
+            "expression": "_lead_front_result_contract"
+          },
+          {
+            "caller": "StoryRuntime",
+            "line": 12428,
+            "expression": "_lead_front_result_contract"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12428,
+            "expression": "_lead_front_result_contract"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "response_rules",
+        "closed_dependencies": [
+          "_artifact_intent_result_schema",
+          "_closed_result_object",
+          "_lead_result_rule_seed",
+          "_proposal_result_schema"
+        ],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/response_rules.py"
+      },
+      {
+        "old": "_target_authoring_scope_prior",
+        "line": 753,
+        "end_line": 772,
+        "lines": 20,
+        "proposed_public_name": "target_authoring_scope_prior",
+        "args": "scope: AuthoringScope, source: AuthoringScope | None, receipt: LeadTaskTransitionReceipt | None",
+        "return": "AuthoringScope | None",
+        "decorators": [],
+        "ast_sha256": "b74b0d71b4667f9de31635b9248d511f8cc4b54fe63218070822011fc110e37d",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 12772,
+            "expression": "_target_authoring_scope_prior"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12772,
+            "expression": "_target_authoring_scope_prior"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "response_rules",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/response_rules.py"
+      },
+      {
+        "old": "_document_successor_selection",
+        "line": 776,
+        "end_line": 809,
+        "lines": 34,
+        "proposed_public_name": "document_successor_selection",
+        "args": "binding: DocumentNodeBinding | None, source_event: CollaborationEvent | None, current_scope: AuthoringScope | None, target_scope: AuthoringScope | None, task_binding: TaskBindingPlan | None",
+        "return": "DocumentNodeSelection | None",
+        "decorators": [],
+        "ast_sha256": "ba5f8d7adad3403ff863a94d26402879ed9589eef97442c87261a127977c6cc4",
+        "referenced_definitions": [],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 12867,
+            "expression": "_document_successor_selection"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12867,
+            "expression": "_document_successor_selection"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "response_rules",
+        "closed_dependencies": [],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/response_rules.py"
+      },
+      {
+        "old": "_lead_revision_result_contract",
+        "line": 812,
+        "end_line": 937,
+        "lines": 126,
+        "proposed_public_name": "lead_revision_result_contract",
+        "args": "expected_relation: LeadProposalRelation, input_ids: tuple[str, ...], task_revisions: tuple[tuple[str, int], ...], constraints: LeadProviderConstraints, discussion_constraints: LeadDiscussionConstraints, *, fresh_revision_only: bool=False, source_scope: AuthoringScope | None=None, artifact_revision_only: bool=False, selected_document_review_path: str | None=None",
+        "return": "LeadResultRuleSeed",
+        "decorators": [],
+        "ast_sha256": "488914010c1b410db43df87f59925f199eb258aac32c079dae3394dac1d06289",
+        "referenced_definitions": [
+          "_lead_discussion_result_contract",
+          "_lead_front_result_contract"
+        ],
+        "runtime_attributes": [],
+        "actual_production_callers_in_orchestrator": [
+          {
+            "caller": "StoryRuntime",
+            "line": 12418,
+            "expression": "_lead_revision_result_contract"
+          },
+          {
+            "caller": "StoryRuntime._run_lead_provider_guarded_pinned",
+            "line": 12418,
+            "expression": "_lead_revision_result_contract"
+          }
+        ],
+        "api_disposition": "미승인 제안: 실제 owner의 공개 함수/type를 직접 소비. Runtime/RuntimeSession의 의도된 public entry5만 유지; 옛 private forwarding shim 없음.",
+        "previous_group": "response_rules",
+        "closed_dependencies": [
+          "_lead_discussion_result_contract",
+          "_lead_front_result_contract"
+        ],
+        "runtime_field_reads": [],
+        "runtime_escape": [],
+        "proposed_path": "src/story_writing_agents/lead_preparation/response_rules.py"
+      }
+    ]
+  },
+  "selected_definitions": 36,
+  "definition_body_rows": 1589,
+  "selected_constants": [
+    {
+      "old": "_BUDGET_POLICY_FINGERPRINT",
+      "line": 525,
+      "end_line": 531,
+      "users": [
+        "StoryRuntime._basis_budget_fingerprint"
+      ],
+      "source": "_BUDGET_POLICY_FINGERPRINT = (\n    \"sha256:\"\n    + hashlib.sha256(\n        b\"lead-confirmed-collaboration-budget-v1;rounds=2;calls=12;\"\n        b\"context=5;references=runtime-local;allocation=specialist-round-robin\"\n    ).hexdigest()\n)",
+      "ownership": "Single lowest closed reply/rule value owner; original bytes/initialization count remain. Authority/rule/host consumers import that actual public constant; no forwarded private alias.",
+      "proposed_owner": "src/story_writing_agents/lead_preparation/reply_contract_values.py",
+      "proposed_public_name": "BUDGET_POLICY_FINGERPRINT"
+    },
+    {
+      "old": "_CONTEXT_INVOCATION_CALL_LIMIT",
+      "line": 532,
+      "end_line": 532,
+      "users": [
+        "StoryRuntime._proposal_call_reservations"
+      ],
+      "source": "_CONTEXT_INVOCATION_CALL_LIMIT = 5",
+      "ownership": "Single lowest closed reply/rule value owner; original bytes/initialization count remain. Authority/rule/host consumers import that actual public constant; no forwarded private alias.",
+      "proposed_owner": "src/story_writing_agents/lead_preparation/reply_contract_values.py",
+      "proposed_public_name": "CONTEXT_INVOCATION_CALL_LIMIT"
+    },
+    {
+      "old": "_LEAD_PROPOSAL_USER_IMPACT",
+      "line": 548,
+      "end_line": 552,
+      "users": [
+        "StoryRuntime._premise_user_impact"
+      ],
+      "source": "_LEAD_PROPOSAL_USER_IMPACT = (\n    \"Specialist advice and durable collaboration records only. \"\n    \"This step cannot change writing artifacts, the Git index, commits, \"\n    \"remotes, or merges.\"\n)",
+      "ownership": "Single lowest closed reply/rule value owner; original bytes/initialization count remain. Authority/rule/host consumers import that actual public constant; no forwarded private alias.",
+      "proposed_owner": "src/story_writing_agents/lead_preparation/reply_contract_values.py",
+      "proposed_public_name": "LEAD_PROPOSAL_USER_IMPACT"
+    }
+  ],
+  "projected_group_graph": {
+    "call_rule_factory": [],
+    "reply_contract_values": [],
+    "response_rules": [
+      "reply_contract_values"
+    ]
+  },
+  "projected_scc": 0,
+  "retained_live_host_definitions": 53,
+  "deferred_pure_definitions": 60,
+  "new_Runtime_capabilities": 0,
+  "new_host_entry_frames": 0,
+  "test_move": "기존 routing 계약 모듈 1class10Case wholefile; 입력·fixture·assertion·negative 보존; 신규Case0",
+  "source_charge_plan": {
+    "before": 151431,
+    "controller_allocation": 30,
+    "reader_allocation": 3,
+    "API_import_net": 10,
+    "unused_import_credit": 44,
+    "after_allocated": 151430,
+    "cap": 151431,
+    "headroom": 1,
+    "compiled_after_claim": false,
+    "overrun_action": "실제 계상이 상한을 넘으면 push/Ready 진행 없이 반환·범위 재계획"
+  },
+  "reference_audit_superset_sha256": "d045b63cd95d7c789cd57aafc42b612ff438e6174bf851b83874dee9f1b98a65",
+  "source_superset_sha256": "2f09a73ad98a179bc0e27bc3cfcde3e31e34292bcd5c2d2de1e424e9ea065bf2",
+  "limits": [
+    "현재 문서/정의/계산 계획만이며 실제 after 코드/성능/compile 성공 아님",
+    "함수 조회·인자 평가·await·기존 callback 저장 시점을 그대로 유지",
+    "from-import cache/default/closure hoist 새로 추가 금지",
+    "legacy1550·Case/scenario·weight·시간 예산 확대 금지",
+    "CLI/SQLite 관련 4개 import는 보존"
+  ],
+  "Draft_before_implementation_required": true,
+  "native_plan_sha256": "c03cb3fe2676c08ca321bfee38aa1eae32ec4d6acc6876ab6038d7fc703f7b14",
+  "native_project_status_at_preparation": "Ready",
+  "prepared_at_utc": "2026-11-10T18:49:07.028228+00:00",
+  "checkpoint_state": "문서 전용: 구현 전 Draft PR 생성 준비. runtime/test/workflow는 accepted base와 동일."
+}
