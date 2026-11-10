@@ -170,38 +170,51 @@ from .agent_context.manifest import (
     ContextSourceKind,
     ContextSubjectKind,
 )
-from .agent_context.planning import ContextMaterial, MandatoryReferenceReservation
+from .agent_context.contracts.planning_inputs import (
+    ContextMaterial,
+    MandatoryReferenceReservation,
+)
 from .agent_context.continuation import ContextContinuationTransaction
 from .structured_output_validation import (
     bounded_chunks,
     diagnose_json_text,
 )
 from .conversations.session_context import SessionContextCapacityError, SessionHistorySnapshot
-from .agent_context.service import (
-    AgentContextService,
-    ContextGroupInvocationState,
+from .agent_context.invocation.session_execution import AgentContextService
+from .agent_context.invocation.delivery import ContextGroupInvocationState
+from .agent_context.actions import (
     ContextAnswerAuthorization,
     ContextEvidenceReceipt,
+    ContextSourceBoundaryKind,
+    ContextSourceStatusReceipt,
+    ContextZeroHitSearchReceipt,
+)
+from .agent_context.contracts.events import (
     ContextExecutionEvent,
     ContextExecutionEventKind,
     ContextNativeDisposition,
+)
+from .agent_context.contracts.call_offers import (
     ContextInvocationKind,
-    ContextInvocationRequest,
-    ContextInvocationResult,
     ContextJsonObjectResultContract,
     ContextCallOffers,
+)
+from .agent_context.invocation.requests import (
+    ContextInvocationRequest,
+    ContextInvocationResult,
+)
+from .agent_context.invocation.provider import (
     ContextProviderCallRequest,
     ContextProviderCallResult,
     ContextProviderTerminalCode,
     ContextReferencePreludeRequest,
     ContextReferencePreludeResult,
-    ContextScope,
-    ContextSourceBoundaryKind,
-    ContextSourceStatusReceipt,
-    ContextZeroHitSearchReceipt,
     context_provider_failure_facts,
     record_context_provider_failure,
     BoundContextProviderCallRequest,
+)
+from .agent_context.manifest import ContextScope
+from .agent_context.contracts.bound_call import (
     BoundCallFactory,
     BoundCallLineage,
     AuthorizedAnswerHostContext,

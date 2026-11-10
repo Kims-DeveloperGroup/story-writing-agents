@@ -1,8 +1,5 @@
-"""Contextual draft follow-through and exact operation authority at public APIs."""
-
 from __future__ import annotations
 from tests.provider_wire_fixture import selection_plan
-
 import hashlib
 from tests.test_collaboration_events import editorial, editorial_request
 import asyncio
@@ -10,7 +7,6 @@ import unittest
 import json
 from dataclasses import asdict, replace
 from unittest import mock
-
 from story_writing_agents import StoryRuntime, orchestrator as orchestration, editorial_scope as scopes
 from story_writing_agents import conversations as c
 from story_writing_agents.agents import PLOT_ARCHITECT
@@ -23,6 +19,9 @@ from tests import test_lead_artifact_application as application
 from tests import test_lead_story_commit as commit
 from tests.recommendation_fixture import RecommendationCase, action, recommendation, task_assessment
 from tests.test_specialist_routing_runtime import ROSTER
+
+
+"""Contextual draft follow-through and exact operation authority at public APIs."""
 
 
 def _document_plan_native_response(call, value):
@@ -99,6 +98,7 @@ def _source_start_inputs(call):
             'anchors': dict.fromkeys(ROSTER, 'user_input'),
             'recipients': {'user_input': PLOT_ARCHITECT}, 'family': 0}
 
+
 def _preparation_close_observer(runtime, preparation_failures):
     from os.path import basename
     from traceback import extract_tb
@@ -154,7 +154,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
 
 
     def _observe_context_budget(self):
-        from story_writing_agents.agent_context import service as context_service
+        from story_writing_agents.agent_context.invocation import session_execution as context_service
         from story_writing_agents.agent_context.planning import ContextPlanningError
         planning_measurements = []
         original_plan = context_service.plan_context_projection

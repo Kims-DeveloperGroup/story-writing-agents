@@ -1,4 +1,4 @@
-"""Pure routing, versioned wire compatibility, and draft/review acceptance."""
+from __future__ import annotations
 from dataclasses import FrozenInstanceError, asdict, fields, replace
 import json
 import hashlib
@@ -11,17 +11,12 @@ from story_writing_agents import document_plan as documents
 from story_writing_agents import editorial_scope as editorial
 from story_writing_agents import review_contracts as review
 from story_writing_agents import authoring_task_lifecycle as lifecycle
-
 from story_writing_agents import conversations as c
-from story_writing_agents.specialist_routing import (
-    ArtifactReviewDomain as Domain, AuthoringActivity as Activity, AuthoringIntent as Intent, AuthoringScope,
-    ReviewBasis, SpecialistAssignmentMode as Mode, artifact_domain,
-    required_authoring_domains, required_authoring_specialists,
-    validate_specialist_assignment, validate_specialist_routing,
-    AuthoringContribution as Contribution, AuthoringContributionRole as Role,
-    AuthoringDependencySlot as Slot, assignment_mode_for_specialist, required_drafting_specialists,
-)
+from story_writing_agents.specialist_routing import ArtifactReviewDomain as Domain, AuthoringActivity as Activity, AuthoringIntent as Intent, AuthoringScope, ReviewBasis, SpecialistAssignmentMode as Mode, artifact_domain, required_authoring_domains, required_authoring_specialists, validate_specialist_assignment, validate_specialist_routing, AuthoringContribution as Contribution, AuthoringContributionRole as Role, AuthoringDependencySlot as Slot, assignment_mode_for_specialist, required_drafting_specialists
 from tests import collaboration_contract_fixture as fixture
+
+
+"""Pure routing, versioned wire compatibility, and draft/review acceptance."""
 
 
 class SpecialistRoutingTests(unittest.TestCase):
@@ -854,7 +849,7 @@ class SpecialistRoutingTests(unittest.TestCase):
     def test_formal_planning_question_selected_gen_is_closed_and_owned(self):
         task = self._document_task_ref_fixture()
         from types import SimpleNamespace
-        from story_writing_agents.agent_context.service import ContextCallOffers, BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.invocation.session_execution import ContextCallOffers, BoundContextProviderCallRequest
         from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
         from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
         from story_writing_agents.lead_schema_groups import LeadGroupRequestBasis
@@ -896,7 +891,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         task = self._document_task_ref_fixture()
         baseline = {node.target_path: b"Core baseline for constructed projection.\n" for node in plan.nodes[:-1]}
         from types import SimpleNamespace
-        from story_writing_agents.agent_context.service import ContextCallOffers, BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.invocation.session_execution import ContextCallOffers, BoundContextProviderCallRequest
         from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
         from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
         from story_writing_agents.orchestrator import OrchestrationLeadCallFactory
@@ -962,7 +957,7 @@ class SpecialistRoutingTests(unittest.TestCase):
                 payload=value)
         native_frames = []
         import asyncio
-        from story_writing_agents.agent_context import service as context_service
+        from story_writing_agents.agent_context.invocation import session_execution as context_service
         from story_writing_agents.agent_context.manifest import ContextManifest
         from story_writing_agents.provider_wire import project_context_payload
         binding = context_service.ContextInvocationBinding(offers.scope, "selected-v9-operation", "selected-v9-result",

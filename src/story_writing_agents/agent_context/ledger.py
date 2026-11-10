@@ -54,26 +54,30 @@ from .manifest import (
     validate_context_digest,
     validate_context_identity,
 )
-from .planning import (
+from .contracts.planning_inputs import (
     ContextBootstrapReason,
-    ContextBudgetAccounting,
-    ContextCatalogCursor,
-    ContextCheckpointProposal,
-    ContextCheckpointRecord,
-    ContextCheckpointSource,
     ContextCheckpointState,
-    ContextCheckpointView,
-    ContextDecisionAccounting,
     ContextDecisionKind,
     ContextDeliveryMode,
     ContextPlanningConditions,
     ContextPlanningError,
+    ContextRecordCursor,
+)
+from .contracts.projection_accounting import (
+    ContextBudgetAccounting,
+    ContextDecisionAccounting,
     ContextProjectionAccounting,
     ContextReferenceBudgetUsage,
-    ContextRecordCursor,
     ContextSearchableAccounting,
     ContextSourceBudgetUsage,
 )
+from .contracts.checkpoints import (
+    ContextCatalogCursor,
+    ContextCheckpointRecord,
+    ContextCheckpointSource,
+    ContextCheckpointView,
+)
+from .contracts.projection import ContextCheckpointProposal
 
 __all__ = [
     "CONTEXT_LEDGER_SCHEMA_VERSION",

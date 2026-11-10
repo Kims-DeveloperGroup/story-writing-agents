@@ -1,83 +1,42 @@
-"""Live lead-review workflows for exact artifact proposals."""
-
 from __future__ import annotations
 from tests.provider_wire_fixture import selection_plan
 from tests.provider_wire_fixture import lead_fixture_bound_scope, lead_fixture_response
-
 import json
 import unittest
 from dataclasses import asdict, replace
 from unittest import mock
-
 from story_writing_agents import ReplyTraceOrigin, StoryRuntime
 from story_writing_agents.agent_context.accounting import ProviderCallKind
 from story_writing_agents.lead_provider_contracts import LeadResultContractOwner
 from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
 from story_writing_agents.conversations import session_context as session_context_module
-from story_writing_agents.agents import (
-    EXECUTION_SPECIALIST,
-    LEAD_ORCHESTRATOR,
-    PLOT_ARCHITECT, )
-from story_writing_agents.artifact_proposals import ( serialize_artifact_review_candidate, )
+from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT
+from story_writing_agents.artifact_proposals import serialize_artifact_review_candidate
 from story_writing_agents.writing_artifacts import ArtifactReviewReason
-from story_writing_agents.conversations import (
-    ArtifactProposalState,
-    ArtifactProposalStatePayload,
-    ArtifactReviewCandidatePayload,
-    ArtifactReviewFailureCode,
-    ArtifactReviewFailurePayload,
-    ArtifactReviewedProposal,
-    CollaborationConfirmationDecision,
-    CollaborationInputKind,
-    CollaborationLeadOutcomeFailureCode,
-    CollaborationLeadOutcomeFailurePayload,
-    CollaborationNextAction,
-    CollaborationStepState,
-    CollaborationStepStatePayload,
-    CollaborationSpecialistAssessment,
-    LeadOutcomeKind,
-    artifact_reviewed_proposal_digest,
-    decode_artifact_reviewed_proposal,
-    decode_collaboration_event,
-    encode_artifact_reviewed_proposal,
-    encode_collaboration_event,
-    project_collaboration_history,
-    project_collaboration_readable_history,
-)
-from story_writing_agents.conversation_storage import (
-    ConversationStorageBackend,
-    ConversationStorageCapability,
-    WorkspaceConversationStorageMutationCoordinator, )
-from story_writing_agents.conversation_storage.migration import (
-    ConversationStorageTransferOutcome,
-    transfer_conversation_storage,
-    verify_conversation_storage, )
-from story_writing_agents.conversation_storage.sqlite import (
-    compose_sqlite_conversation_storage,
-    provision_sqlite_conversation_storage, )
+from story_writing_agents.conversations import ArtifactProposalState, ArtifactProposalStatePayload, ArtifactReviewCandidatePayload, ArtifactReviewFailureCode, ArtifactReviewFailurePayload, ArtifactReviewedProposal, CollaborationConfirmationDecision, CollaborationInputKind, CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload, CollaborationNextAction, CollaborationStepState, CollaborationStepStatePayload, CollaborationSpecialistAssessment, LeadOutcomeKind, artifact_reviewed_proposal_digest, decode_artifact_reviewed_proposal, decode_collaboration_event, encode_artifact_reviewed_proposal, encode_collaboration_event, project_collaboration_history, project_collaboration_readable_history
+from story_writing_agents.conversation_storage import ConversationStorageBackend, ConversationStorageCapability, WorkspaceConversationStorageMutationCoordinator
+from story_writing_agents.conversation_storage.migration import ConversationStorageTransferOutcome, transfer_conversation_storage, verify_conversation_storage
+from story_writing_agents.conversation_storage.sqlite import compose_sqlite_conversation_storage, provision_sqlite_conversation_storage
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
+from tests.test_lead_orchestration import LeadOrchestrationTestCase, _LeadBackend, _READINESS_DOCUMENTS, _decision, _live_material, _live_scope, _provider_envelope, _read_history_hit, _search_history, _specialist_outcome, _visible_outcome, _workflow_material
 
-from tests.test_lead_orchestration import (
-    LeadOrchestrationTestCase,
-    _LeadBackend,
-    _READINESS_DOCUMENTS,
-    _decision,
-    _live_material,
-    _live_scope,
-    _provider_envelope,
-    _read_history_hit,
-    _search_history,
-    _specialist_outcome,
-    _visible_outcome,
-    _workflow_material,
-)
+
+"""Live lead-review workflows for exact artifact proposals."""
 
 
 _OUTLINE = "core_documents/global_outline.md"
+
+
 _RULES = "core_documents/narrative_rules.md"
+
+
 _INDEX = "manuscript/part-01/index.md"
+
+
 _SECOND = "manuscript/part-01/second.md"
+
+
 _THIRD = "manuscript/part-01/third.md"
 
 
@@ -199,7 +158,7 @@ def _artifact_outcome(
             ) )
         scope = authoring_scope(call) if callable(authoring_scope) else authoring_scope
         from copy import deepcopy
-        from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest
         if isinstance(call, BoundContextProviderCallRequest):
             from tests.provider_wire_fixture import (
                 result, lead_fixture_scope, lead_fixture_result, lead_fixture_response, lead_fixture_assessment)

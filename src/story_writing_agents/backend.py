@@ -67,7 +67,24 @@ from .agent_context import (
     ProviderCallKind,
     ProviderCallState,
 )
-from .agent_context.service import ContextExecutionError, ContextExecutionErrorCode, ContextProvider, ContextProviderCallFinalizer, ContextProviderCallRequest, ContextProviderCallResult, ContextProviderFailureFacts, ContextProviderTerminalCode, ContextReferencePreludeRequest, ContextReferencePreludeResult, ContextScope, ContextContinuationRejection, record_context_provider_failure, BoundContextProviderCallRequest
+from .agent_context.contracts.errors import (
+    ContextExecutionError,
+    ContextExecutionErrorCode,
+)
+from .agent_context.invocation.provider import (
+    ContextProvider,
+    ContextProviderCallFinalizer,
+    ContextProviderCallRequest,
+    ContextProviderCallResult,
+    ContextProviderFailureFacts,
+    ContextProviderTerminalCode,
+    ContextReferencePreludeRequest,
+    ContextReferencePreludeResult,
+    ContextContinuationRejection,
+    record_context_provider_failure,
+    BoundContextProviderCallRequest,
+)
+from .agent_context.manifest import ContextScope
 from .agent_exchanges import AgentExchangeProvider, AgentExchangeScopeKind
 from .agent_context.manifest import ContextContinuationIdentity
 from .agent_exchanges.capture import (

@@ -1,129 +1,5 @@
 """Provider-neutral multi-agent story-writing runtime."""
 
-from .agents import (
-    AGENT_SPECS,
-    CHARACTER_CUSTODIAN,
-    EXECUTION_SPECIALIST,
-    LEAD_ORCHESTRATOR,
-    PLOT_ARCHITECT,
-    ROSTER,
-    SPECIALIST_IDS,
-)
-from .backend import AgentBackend, BoundAgent
-from .conversations import (
-    CONVERSATION_CONTEXT_POLICY,
-    CONVERSATION_EVENT_SCHEMA_VERSION,
-    CONVERSATION_METADATA_SCHEMA_VERSION,
-    CONVERSATION_SUBJECT_NORMALIZATION_VERSION,
-    MAX_CONVERSATION_SUBJECT_LENGTH,
-    ConversationCatalog,
-    ConversationContextPolicy,
-    ConversationContextWindow,
-    ConversationEvent,
-    ConversationEventKind,
-    ConversationMetadata,
-    ConversationStatus,
-    normalize_conversation_subject,
-)
-from .conversation_search import (
-    CONVERSATION_MEMORY_POLICY,
-    ConversationMemoryPolicy,
-)
-from .conversation_retrieval import (
-    CONVERSATION_RETRIEVAL_POLICY,
-    ConversationRetrievalAction,
-    ConversationRetrievalActionHandler,
-    ConversationRetrievalActionKind,
-    ConversationRetrievalAnswerAction,
-    ConversationRetrievalHistoryRecord,
-    ConversationRetrievalObservation,
-    ConversationRetrievalPolicy,
-    ConversationRetrievalProgressEvent,
-    ConversationRetrievalProgressPhase,
-    ConversationRetrievalProgressSink,
-    ConversationRetrievalReadAction,
-    ConversationRetrievalReadObservation,
-    ConversationRetrievalReply,
-    ConversationRetrievalRequest,
-    ConversationRetrievalResult,
-    ConversationRetrievalSearchAction,
-    ConversationRetrievalSearchItem,
-    ConversationRetrievalSearchObservation,
-    ConversationRetrievalSource,
-)
-from .directives import (
-    DirectiveKind,
-    RuntimeDirective,
-    apply_directive,
-    parse_directive,
-)
-from .errors import (
-    BackendProtocolError,
-    ConfigurationError,
-    ConversationExistsError,
-    ConversationNotFoundError,
-    ConversationRetrievalBudgetError,
-    ConversationRetrievalError,
-    ConversationRetrievalObserverError,
-    ConversationRetrievalSemanticError,
-    DebateExistsError,
-    DirectiveError,
-    ManuscriptExistsError,
-    ProgressObserverError,
-    SessionAccessBlockedError,
-    SessionExistsError,
-    SessionIdError,
-    SessionNotFoundError,
-    SessionOwnershipUnknownError,
-    SessionPausedError,
-    StoryWritingAgentsError,
-    WorkspaceFormatError,
-    WorkspaceSecurityError,
-    WorkspaceVersionUnsupportedError,
-)
-from .interactive_commands import (
-    COMMANDS,
-    ActionKind,
-    CommandSpec,
-    InteractiveAction,
-    parse_interactive_line,
-)
-from .models import (
-    AgentDefinition,
-    AgentReply,
-    AgentRequest,
-    AgentStateEntry,
-    ConversationReply,
-    ConversationRequest,
-    ConversationResult,
-    DebateContextMode,
-    DebateContextRequest,
-    DebateFailureKind,
-    DebateMessage,
-    DebateProgressEvent,
-    DebateProgressPhase,
-    DebateProgressSink,
-    DebateResult,
-    DebateStatus,
-    InputKind,
-    Phase,
-    PromptFileReference,
-    Verdict,
-)
-from .orchestrator import RuntimeSession, StoryRuntime
-from .reply_trace import ReplyTrace, ReplyTraceOrigin
-from .session_lifecycle import (
-    SessionAccessState,
-    SessionDurableState,
-    SessionLifecycleState,
-    provider_work_is_ready,
-)
-from .workspace import (
-    FilesystemConversationCatalog,
-    Workspace,
-    initialize_workspace,
-)
-
 __all__ = [
     "AGENT_SPECS",
     "COMMANDS",
@@ -232,3 +108,536 @@ __all__ = [
     "parse_interactive_line",
     "provider_work_is_ready",
 ]
+
+
+
+def __getattr__(name: str) -> object:
+    """Resolve one declared public owner without importing unrelated runtime state."""
+    if name in (
+        'AGENT_SPECS',
+        'CHARACTER_CUSTODIAN',
+        'EXECUTION_SPECIALIST',
+        'LEAD_ORCHESTRATOR',
+        'PLOT_ARCHITECT',
+        'ROSTER',
+        'SPECIALIST_IDS',
+    ):
+        from .agents import (
+            AGENT_SPECS,
+            CHARACTER_CUSTODIAN,
+            EXECUTION_SPECIALIST,
+            LEAD_ORCHESTRATOR,
+            PLOT_ARCHITECT,
+            ROSTER,
+            SPECIALIST_IDS,
+        )
+        names = (
+            'AGENT_SPECS',
+            'CHARACTER_CUSTODIAN',
+            'EXECUTION_SPECIALIST',
+            'LEAD_ORCHESTRATOR',
+            'PLOT_ARCHITECT',
+            'ROSTER',
+            'SPECIALIST_IDS',
+        )
+        values = (
+            AGENT_SPECS,
+            CHARACTER_CUSTODIAN,
+            EXECUTION_SPECIALIST,
+            LEAD_ORCHESTRATOR,
+            PLOT_ARCHITECT,
+            ROSTER,
+            SPECIALIST_IDS,
+        )
+    elif name in (
+        'AgentBackend',
+        'BoundAgent',
+    ):
+        from .backend import AgentBackend, BoundAgent
+        names = (
+            'AgentBackend',
+            'BoundAgent',
+        )
+        values = (
+            AgentBackend,
+            BoundAgent,
+        )
+    elif name in (
+        'CONVERSATION_CONTEXT_POLICY',
+        'CONVERSATION_EVENT_SCHEMA_VERSION',
+        'CONVERSATION_METADATA_SCHEMA_VERSION',
+        'CONVERSATION_SUBJECT_NORMALIZATION_VERSION',
+        'MAX_CONVERSATION_SUBJECT_LENGTH',
+        'ConversationCatalog',
+        'ConversationContextPolicy',
+        'ConversationContextWindow',
+        'ConversationEvent',
+        'ConversationEventKind',
+        'ConversationMetadata',
+        'ConversationStatus',
+        'normalize_conversation_subject',
+    ):
+        from .conversations import (
+            CONVERSATION_CONTEXT_POLICY,
+            CONVERSATION_EVENT_SCHEMA_VERSION,
+            CONVERSATION_METADATA_SCHEMA_VERSION,
+            CONVERSATION_SUBJECT_NORMALIZATION_VERSION,
+            MAX_CONVERSATION_SUBJECT_LENGTH,
+            ConversationCatalog,
+            ConversationContextPolicy,
+            ConversationContextWindow,
+            ConversationEvent,
+            ConversationEventKind,
+            ConversationMetadata,
+            ConversationStatus,
+            normalize_conversation_subject,
+        )
+        names = (
+            'CONVERSATION_CONTEXT_POLICY',
+            'CONVERSATION_EVENT_SCHEMA_VERSION',
+            'CONVERSATION_METADATA_SCHEMA_VERSION',
+            'CONVERSATION_SUBJECT_NORMALIZATION_VERSION',
+            'MAX_CONVERSATION_SUBJECT_LENGTH',
+            'ConversationCatalog',
+            'ConversationContextPolicy',
+            'ConversationContextWindow',
+            'ConversationEvent',
+            'ConversationEventKind',
+            'ConversationMetadata',
+            'ConversationStatus',
+            'normalize_conversation_subject',
+        )
+        values = (
+            CONVERSATION_CONTEXT_POLICY,
+            CONVERSATION_EVENT_SCHEMA_VERSION,
+            CONVERSATION_METADATA_SCHEMA_VERSION,
+            CONVERSATION_SUBJECT_NORMALIZATION_VERSION,
+            MAX_CONVERSATION_SUBJECT_LENGTH,
+            ConversationCatalog,
+            ConversationContextPolicy,
+            ConversationContextWindow,
+            ConversationEvent,
+            ConversationEventKind,
+            ConversationMetadata,
+            ConversationStatus,
+            normalize_conversation_subject,
+        )
+    elif name in (
+        'CONVERSATION_MEMORY_POLICY',
+        'ConversationMemoryPolicy',
+    ):
+        from .conversation_search import (
+            CONVERSATION_MEMORY_POLICY,
+            ConversationMemoryPolicy,
+        )
+        names = (
+            'CONVERSATION_MEMORY_POLICY',
+            'ConversationMemoryPolicy',
+        )
+        values = (
+            CONVERSATION_MEMORY_POLICY,
+            ConversationMemoryPolicy,
+        )
+    elif name in (
+        'CONVERSATION_RETRIEVAL_POLICY',
+        'ConversationRetrievalAction',
+        'ConversationRetrievalActionHandler',
+        'ConversationRetrievalActionKind',
+        'ConversationRetrievalAnswerAction',
+        'ConversationRetrievalHistoryRecord',
+        'ConversationRetrievalObservation',
+        'ConversationRetrievalPolicy',
+        'ConversationRetrievalProgressEvent',
+        'ConversationRetrievalProgressPhase',
+        'ConversationRetrievalProgressSink',
+        'ConversationRetrievalReadAction',
+        'ConversationRetrievalReadObservation',
+        'ConversationRetrievalReply',
+        'ConversationRetrievalRequest',
+        'ConversationRetrievalResult',
+        'ConversationRetrievalSearchAction',
+        'ConversationRetrievalSearchItem',
+        'ConversationRetrievalSearchObservation',
+        'ConversationRetrievalSource',
+    ):
+        from .conversation_retrieval import (
+            CONVERSATION_RETRIEVAL_POLICY,
+            ConversationRetrievalAction,
+            ConversationRetrievalActionHandler,
+            ConversationRetrievalActionKind,
+            ConversationRetrievalAnswerAction,
+            ConversationRetrievalHistoryRecord,
+            ConversationRetrievalObservation,
+            ConversationRetrievalPolicy,
+            ConversationRetrievalProgressEvent,
+            ConversationRetrievalProgressPhase,
+            ConversationRetrievalProgressSink,
+            ConversationRetrievalReadAction,
+            ConversationRetrievalReadObservation,
+            ConversationRetrievalReply,
+            ConversationRetrievalRequest,
+            ConversationRetrievalResult,
+            ConversationRetrievalSearchAction,
+            ConversationRetrievalSearchItem,
+            ConversationRetrievalSearchObservation,
+            ConversationRetrievalSource,
+        )
+        names = (
+            'CONVERSATION_RETRIEVAL_POLICY',
+            'ConversationRetrievalAction',
+            'ConversationRetrievalActionHandler',
+            'ConversationRetrievalActionKind',
+            'ConversationRetrievalAnswerAction',
+            'ConversationRetrievalHistoryRecord',
+            'ConversationRetrievalObservation',
+            'ConversationRetrievalPolicy',
+            'ConversationRetrievalProgressEvent',
+            'ConversationRetrievalProgressPhase',
+            'ConversationRetrievalProgressSink',
+            'ConversationRetrievalReadAction',
+            'ConversationRetrievalReadObservation',
+            'ConversationRetrievalReply',
+            'ConversationRetrievalRequest',
+            'ConversationRetrievalResult',
+            'ConversationRetrievalSearchAction',
+            'ConversationRetrievalSearchItem',
+            'ConversationRetrievalSearchObservation',
+            'ConversationRetrievalSource',
+        )
+        values = (
+            CONVERSATION_RETRIEVAL_POLICY,
+            ConversationRetrievalAction,
+            ConversationRetrievalActionHandler,
+            ConversationRetrievalActionKind,
+            ConversationRetrievalAnswerAction,
+            ConversationRetrievalHistoryRecord,
+            ConversationRetrievalObservation,
+            ConversationRetrievalPolicy,
+            ConversationRetrievalProgressEvent,
+            ConversationRetrievalProgressPhase,
+            ConversationRetrievalProgressSink,
+            ConversationRetrievalReadAction,
+            ConversationRetrievalReadObservation,
+            ConversationRetrievalReply,
+            ConversationRetrievalRequest,
+            ConversationRetrievalResult,
+            ConversationRetrievalSearchAction,
+            ConversationRetrievalSearchItem,
+            ConversationRetrievalSearchObservation,
+            ConversationRetrievalSource,
+        )
+    elif name in (
+        'DirectiveKind',
+        'RuntimeDirective',
+        'apply_directive',
+        'parse_directive',
+    ):
+        from .directives import (
+            DirectiveKind,
+            RuntimeDirective,
+            apply_directive,
+            parse_directive,
+        )
+        names = (
+            'DirectiveKind',
+            'RuntimeDirective',
+            'apply_directive',
+            'parse_directive',
+        )
+        values = (
+            DirectiveKind,
+            RuntimeDirective,
+            apply_directive,
+            parse_directive,
+        )
+    elif name in (
+        'BackendProtocolError',
+        'ConfigurationError',
+        'ConversationExistsError',
+        'ConversationNotFoundError',
+        'ConversationRetrievalBudgetError',
+        'ConversationRetrievalError',
+        'ConversationRetrievalObserverError',
+        'ConversationRetrievalSemanticError',
+        'DebateExistsError',
+        'DirectiveError',
+        'ManuscriptExistsError',
+        'ProgressObserverError',
+        'SessionAccessBlockedError',
+        'SessionExistsError',
+        'SessionIdError',
+        'SessionNotFoundError',
+        'SessionOwnershipUnknownError',
+        'SessionPausedError',
+        'StoryWritingAgentsError',
+        'WorkspaceFormatError',
+        'WorkspaceSecurityError',
+        'WorkspaceVersionUnsupportedError',
+    ):
+        from .errors import (
+            BackendProtocolError,
+            ConfigurationError,
+            ConversationExistsError,
+            ConversationNotFoundError,
+            ConversationRetrievalBudgetError,
+            ConversationRetrievalError,
+            ConversationRetrievalObserverError,
+            ConversationRetrievalSemanticError,
+            DebateExistsError,
+            DirectiveError,
+            ManuscriptExistsError,
+            ProgressObserverError,
+            SessionAccessBlockedError,
+            SessionExistsError,
+            SessionIdError,
+            SessionNotFoundError,
+            SessionOwnershipUnknownError,
+            SessionPausedError,
+            StoryWritingAgentsError,
+            WorkspaceFormatError,
+            WorkspaceSecurityError,
+            WorkspaceVersionUnsupportedError,
+        )
+        names = (
+            'BackendProtocolError',
+            'ConfigurationError',
+            'ConversationExistsError',
+            'ConversationNotFoundError',
+            'ConversationRetrievalBudgetError',
+            'ConversationRetrievalError',
+            'ConversationRetrievalObserverError',
+            'ConversationRetrievalSemanticError',
+            'DebateExistsError',
+            'DirectiveError',
+            'ManuscriptExistsError',
+            'ProgressObserverError',
+            'SessionAccessBlockedError',
+            'SessionExistsError',
+            'SessionIdError',
+            'SessionNotFoundError',
+            'SessionOwnershipUnknownError',
+            'SessionPausedError',
+            'StoryWritingAgentsError',
+            'WorkspaceFormatError',
+            'WorkspaceSecurityError',
+            'WorkspaceVersionUnsupportedError',
+        )
+        values = (
+            BackendProtocolError,
+            ConfigurationError,
+            ConversationExistsError,
+            ConversationNotFoundError,
+            ConversationRetrievalBudgetError,
+            ConversationRetrievalError,
+            ConversationRetrievalObserverError,
+            ConversationRetrievalSemanticError,
+            DebateExistsError,
+            DirectiveError,
+            ManuscriptExistsError,
+            ProgressObserverError,
+            SessionAccessBlockedError,
+            SessionExistsError,
+            SessionIdError,
+            SessionNotFoundError,
+            SessionOwnershipUnknownError,
+            SessionPausedError,
+            StoryWritingAgentsError,
+            WorkspaceFormatError,
+            WorkspaceSecurityError,
+            WorkspaceVersionUnsupportedError,
+        )
+    elif name in (
+        'COMMANDS',
+        'ActionKind',
+        'CommandSpec',
+        'InteractiveAction',
+        'parse_interactive_line',
+    ):
+        from .interactive_commands import (
+            COMMANDS,
+            ActionKind,
+            CommandSpec,
+            InteractiveAction,
+            parse_interactive_line,
+        )
+        names = (
+            'COMMANDS',
+            'ActionKind',
+            'CommandSpec',
+            'InteractiveAction',
+            'parse_interactive_line',
+        )
+        values = (
+            COMMANDS,
+            ActionKind,
+            CommandSpec,
+            InteractiveAction,
+            parse_interactive_line,
+        )
+    elif name in (
+        'AgentDefinition',
+        'AgentReply',
+        'AgentRequest',
+        'AgentStateEntry',
+        'ConversationReply',
+        'ConversationRequest',
+        'ConversationResult',
+        'DebateContextMode',
+        'DebateContextRequest',
+        'DebateFailureKind',
+        'DebateMessage',
+        'DebateProgressEvent',
+        'DebateProgressPhase',
+        'DebateProgressSink',
+        'DebateResult',
+        'DebateStatus',
+        'InputKind',
+        'Phase',
+        'PromptFileReference',
+        'Verdict',
+    ):
+        from .models import (
+            AgentDefinition,
+            AgentReply,
+            AgentRequest,
+            AgentStateEntry,
+            ConversationReply,
+            ConversationRequest,
+            ConversationResult,
+            DebateContextMode,
+            DebateContextRequest,
+            DebateFailureKind,
+            DebateMessage,
+            DebateProgressEvent,
+            DebateProgressPhase,
+            DebateProgressSink,
+            DebateResult,
+            DebateStatus,
+            InputKind,
+            Phase,
+            PromptFileReference,
+            Verdict,
+        )
+        names = (
+            'AgentDefinition',
+            'AgentReply',
+            'AgentRequest',
+            'AgentStateEntry',
+            'ConversationReply',
+            'ConversationRequest',
+            'ConversationResult',
+            'DebateContextMode',
+            'DebateContextRequest',
+            'DebateFailureKind',
+            'DebateMessage',
+            'DebateProgressEvent',
+            'DebateProgressPhase',
+            'DebateProgressSink',
+            'DebateResult',
+            'DebateStatus',
+            'InputKind',
+            'Phase',
+            'PromptFileReference',
+            'Verdict',
+        )
+        values = (
+            AgentDefinition,
+            AgentReply,
+            AgentRequest,
+            AgentStateEntry,
+            ConversationReply,
+            ConversationRequest,
+            ConversationResult,
+            DebateContextMode,
+            DebateContextRequest,
+            DebateFailureKind,
+            DebateMessage,
+            DebateProgressEvent,
+            DebateProgressPhase,
+            DebateProgressSink,
+            DebateResult,
+            DebateStatus,
+            InputKind,
+            Phase,
+            PromptFileReference,
+            Verdict,
+        )
+    elif name in (
+        'RuntimeSession',
+        'StoryRuntime',
+    ):
+        from .orchestrator import RuntimeSession, StoryRuntime
+        names = (
+            'RuntimeSession',
+            'StoryRuntime',
+        )
+        values = (
+            RuntimeSession,
+            StoryRuntime,
+        )
+    elif name in (
+        'ReplyTrace',
+        'ReplyTraceOrigin',
+    ):
+        from .reply_trace import ReplyTrace, ReplyTraceOrigin
+        names = (
+            'ReplyTrace',
+            'ReplyTraceOrigin',
+        )
+        values = (
+            ReplyTrace,
+            ReplyTraceOrigin,
+        )
+    elif name in (
+        'SessionAccessState',
+        'SessionDurableState',
+        'SessionLifecycleState',
+        'provider_work_is_ready',
+    ):
+        from .session_lifecycle import (
+            SessionAccessState,
+            SessionDurableState,
+            SessionLifecycleState,
+            provider_work_is_ready,
+        )
+        names = (
+            'SessionAccessState',
+            'SessionDurableState',
+            'SessionLifecycleState',
+            'provider_work_is_ready',
+        )
+        values = (
+            SessionAccessState,
+            SessionDurableState,
+            SessionLifecycleState,
+            provider_work_is_ready,
+        )
+    elif name in (
+        'FilesystemConversationCatalog',
+        'Workspace',
+        'initialize_workspace',
+    ):
+        from .workspace import (
+            FilesystemConversationCatalog,
+            Workspace,
+            initialize_workspace,
+        )
+        names = (
+            'FilesystemConversationCatalog',
+            'Workspace',
+            'initialize_workspace',
+        )
+        values = (
+            FilesystemConversationCatalog,
+            Workspace,
+            initialize_workspace,
+        )
+    else:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    globals().update(zip(names, values))
+    return globals()[name]
+
+
+def __dir__() -> list[str]:
+    """Include unresolved public names in ordinary module introspection."""
+    return sorted(set(globals()) | set(__all__))

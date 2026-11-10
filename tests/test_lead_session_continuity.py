@@ -1,69 +1,43 @@
-"""Exact session memory, recovery, and publication safety using synthetic providers."""
-
 from __future__ import annotations
 from tests.provider_wire_fixture import selection_plan
 from story_writing_agents.provider_wire import project_context_payload
 import hashlib
 from story_writing_agents.conversations import encode_collaboration_event
 from tests.test_collaboration_events import editorial, editorial_request
-from tests.test_lead_orchestration import ( _current_exploration_outcome,
-    _exploration_outcome, _visible_outcome,
-)
+from tests.test_lead_orchestration import _current_exploration_outcome, _exploration_outcome, _visible_outcome
 from story_writing_agents import lead_exploration as exploration
-
 import asyncio
 import json
 import unittest
 from dataclasses import asdict, replace
 from unittest import mock
-
 from story_writing_agents import ReplyTraceOrigin, StoryRuntime
-from story_writing_agents.agent_context import canonical_provider_json, service as service_module
+from story_writing_agents.agent_context import canonical_provider_json
+from story_writing_agents.agent_context.invocation import session_execution as service_module
 from story_writing_agents.agent_context.continuation import ContextContinuationTransaction
-from story_writing_agents.agent_context.planning import (
-    MAX_MANDATORY_REFERENCE_RESERVATION_UTF8_BYTES,
-)
 from story_writing_agents.agent_context.ledger import ContextLedgerKey, ContextLedgerRecordState
 from story_writing_agents.agent_context.manifest import ContextContinuationIdentity, ContextScope, ContextSubjectKind
-from story_writing_agents.agent_context.service import AgentContextService, ContextContinuationRejection
 from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
-from story_writing_agents.conversations import (
-    ArtifactApplicationDecisionKind,
-    ArtifactApplicationDecisionPayload,
-    CollaborationActor,
-    CollaborationActorKind,
-    CollaborationDirection,
-    CollaborationEventKind,
-    CollaborationConfirmationDecision,
-    CollaborationLeadJudgmentPayload,
-    CollaborationLeadSynthesisPayload,
-    CollaborationMessagePayload,
-    CollaborationProviderCallPayload,
-    CollaborationProviderCallState,
-    CollaborationStepStatePayload,
-    LeadOutcomeKind,
-    StoryCommitDecisionPayload,
-)
+from story_writing_agents.conversations import ArtifactApplicationDecisionKind, ArtifactApplicationDecisionPayload, CollaborationActor, CollaborationActorKind, CollaborationDirection, CollaborationEventKind, CollaborationConfirmationDecision, CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload, CollaborationMessagePayload, CollaborationProviderCallPayload, CollaborationProviderCallState, CollaborationStepStatePayload, LeadOutcomeKind, StoryCommitDecisionPayload
 from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
-from story_writing_agents.conversations.session_context import (
-    MAX_PROVIDER_PAYLOAD_UTF8_BYTES,
-    MAX_SESSION_CONTEXT_UTF8_BYTES,
-    SessionContextCapacityError,
-    SessionContextHistoryChangedError,
-    SessionHistorySnapshot, )
+from story_writing_agents.conversations.session_context import MAX_PROVIDER_PAYLOAD_UTF8_BYTES, MAX_SESSION_CONTEXT_UTF8_BYTES, SessionContextCapacityError, SessionContextHistoryChangedError, SessionHistorySnapshot
 from story_writing_agents.conversations import session_context as session_context_module
 from story_writing_agents.conversations.context import CollaborationReadableField, CollaborationReadableFieldKey
 from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
 from story_writing_agents.provider_execution_workspace import ProviderExecutionWorkspace
 from story_writing_agents.workspace.initialization import SessionArtifactBindingError
 from story_writing_agents.conversation_storage.sqlite import compose_sqlite_conversation_storage
-
 from tests import test_lead_orchestration as lead
 from tests import test_artifact_proposal_orchestration as artifact
 from tests.collaboration_contract_fixture import contract_batches
 from tests.sqlite_conversation_storage_fixture import provision, initialized_workspace
 from tests.test_agent_context_accounting import _property_count
+from story_writing_agents.agent_context.contracts import planning_inputs as ctx_planning_inputs
+from story_writing_agents.agent_context.invocation import session_execution as service_module
+
+
+"""Exact session memory, recovery, and publication safety using synthetic providers."""
 
 
 def _json(value):
@@ -72,6 +46,7 @@ def _json(value):
 
 def _records(delivery):
     return [record for conversation in delivery["conversations"] for record in conversation["records"]]
+
 
 def _fields(delivery):
     return [field["field_text"] for record in _records(delivery) for field in record.get("readable_fields", [])]
@@ -88,11 +63,11 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         call_start = len(backend.calls)
         backend.enqueue(lead._visible_outcome("answer", answer), control_plan=selection_plan('answer.workflow'))
         histories = []
-        invoke = AgentContextService.invoke
+        invoke = service_module.AgentContextService.invoke
         async def observe_history(service, request, provider, **keywords):
             histories.append(keywords.get("session_history"))
             return await invoke(service, request, provider, **keywords)
-        with mock.patch.object(AgentContextService, "invoke", new=observe_history):
+        with mock.patch.object(service_module.AgentContextService, "invoke", new=observe_history):
             result = await (runtime or self.runtime).lead_turn(self.session_id, conversation, text)
         self.assertEqual(tuple(call.contract.schema_group_phase.value for call in backend.calls[call_start:]), ("select", "generate"))
         first = backend.calls[call_start]
@@ -379,7 +354,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         second_source_path.write_text(second_source_text, encoding="utf-8")
         self.assertLessEqual(len(source_text.encode("utf-8")), 131_072)
         self.assertLessEqual(len(second_source_text.encode("utf-8")), 131_072)
-        self.assertLessEqual( len(source_text.encode("utf-8")) + len(second_source_text.encode("utf-8")), MAX_MANDATORY_REFERENCE_RESERVATION_UTF8_BYTES)
+        self.assertLessEqual( len(source_text.encode("utf-8")) + len(second_source_text.encode("utf-8")), ctx_planning_inputs.MAX_MANDATORY_REFERENCE_RESERVATION_UTF8_BYTES)
         capacity_observations = []
         capacity_check = service_module._require_context_capacity
         def observe_capacity(schema, payload, *, stage):

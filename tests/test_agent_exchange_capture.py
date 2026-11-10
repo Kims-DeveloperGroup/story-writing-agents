@@ -1,7 +1,4 @@
-"""Fail-open provider exchange capture lifecycle tests."""
-
 from __future__ import annotations
-
 import json
 import re
 import tempfile
@@ -11,30 +8,22 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
-
 import story_writing_agents
 from story_writing_agents.agent_context import ProviderCallKind, ProviderUsage
-from story_writing_agents.agent_exchanges import (
-    AgentExchangeOutcome,
-    AgentExchangeProvider,
-    AgentExchangeRecordInput,
-    AgentExchangeRequestType,
-    AgentExchangeScopeKind,
-)
+from story_writing_agents.agent_exchanges import AgentExchangeOutcome, AgentExchangeProvider, AgentExchangeRecordInput, AgentExchangeRequestType, AgentExchangeScopeKind
 from story_writing_agents.agent_exchanges import capture as capture_module
-from story_writing_agents.agent_exchanges.capture import (
-    AgentExchangeCaptureLifecycle,
-    AgentExchangeTerminalCode,
-    WorkspaceAgentExchangeCapture,
-)
+from story_writing_agents.agent_exchanges.capture import AgentExchangeCaptureLifecycle, AgentExchangeTerminalCode, WorkspaceAgentExchangeCapture
 from story_writing_agents.backend import _ContextExchangeFinalizer
-from story_writing_agents.agent_context.service import ContextProviderTerminalCode
 from story_writing_agents.agents import ROSTER
 from story_writing_agents.provider_adapter import ProviderInvocation, ProviderResult, ProviderResponseDiagnostic, ProviderInvocationError
 from story_writing_agents.workspace import Workspace
 from story_writing_agents.agent_context.request_compaction import compact_context_payload
 from tests.test_agent_context_accounting import _property_count, _shared_context_payload
 from story_writing_agents.structured_output_validation import diagnose_json_text
+from story_writing_agents.agent_context.invocation import provider as ctx_provider
+
+
+"""Fail-open provider exchange capture lifecycle tests."""
 
 
 _EXCHANGE_ID = re.compile(r"exchange_[0-9a-f]{32}")
@@ -121,6 +110,7 @@ def _decoded(records: list[AgentExchangeRecordInput]) -> list[object]:
 def _started_capture(**options):
     store = _RecordingStore()
     return store, _begin(store, **options)
+
 
 class AgentExchangeCaptureContractTests(unittest.TestCase):
     def test_exact_closed_surfaces_and_no_root_expansion(self) -> None:
@@ -346,7 +336,7 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
                     finalizer = _ContextExchangeFinalizer(lifecycle)
                     finalizer.set_validation_details((validation_detail,))
                     finalizer.set_host_task_diagnostic("TASK-must-not-publish", 1)
-                    finalizer.rejected(ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED)
+                    finalizer.rejected(ctx_provider.ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED)
                 else:
                     method() if code is None else method(code)
                 self.assertEqual(
@@ -634,6 +624,7 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
         lifecycle = mock.Mock()
         AgentBackend._capture_provider_failure_without_replacing(lifecycle, AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED)
         lifecycle.provider_failure.assert_called_once_with(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

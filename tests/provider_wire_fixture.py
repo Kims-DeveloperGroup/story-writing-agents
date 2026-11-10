@@ -1,23 +1,23 @@
-"""Independent wire-v11 writers for existing typed-domain provider scenarios."""
 from __future__ import annotations
-
 import copy
 from collections.abc import Mapping
 import json
 from dataclasses import dataclass, field, replace
-from story_writing_agents.agent_context.service import BoundCallFactory
 from story_writing_agents.lead_provider_contracts import LeadResultContractOwner
 from story_writing_agents.lead_schema_groups import LeadGroupRequestBasis, SchemaGroupControlOwner
+from story_writing_agents.agent_context.contracts import bound_call as ctx_bound_call
 
 
-@dataclass(frozen=True)
-class FixedBusinessFactory(BoundCallFactory):
+"""Independent wire-v11 writers for existing typed-domain provider scenarios."""
+
+
+class FixedBusinessFactory(ctx_bound_call.BoundCallFactory):
     """Fixed current business-owner unit fixture; no SELECT state is claimed."""
-    original: BoundCallFactory
+    original: ctx_bound_call.BoundCallFactory
     business_group: str
     _identity: tuple = field(init=False, repr=False, compare=False)
     def __post_init__(self):
-        if (not isinstance(self.original, BoundCallFactory) or self.original.schema_group_protocol is not True
+        if (not isinstance(self.original, ctx_bound_call.BoundCallFactory) or self.original.schema_group_protocol is not True
                 or self.business_group not in ('answer.workflow', 'consultation.authoring.content', 'prepare.artifact')):
             raise ValueError('fixed-business unit fixture requires the current declared business group')
         self.original.require_declaration()
@@ -50,7 +50,6 @@ class FixedBusinessFactory(BoundCallFactory):
         return replace(policy, owner_declarations=owners)
 
 
-
 _FIELDS = {'message': 'response_text', 'authoring_scope': 'writing_task_scope',
     'activity': 'activity_type', 'intent': 'writing_intent', 'domains': 'specialist_domains',
     'target_paths': 'target_artifact_paths', 'proposal': 'specialist_consultation_proposal',
@@ -64,6 +63,8 @@ _FIELDS = {'message': 'response_text', 'authoring_scope': 'writing_task_scope',
     'recommended_action': 'proposal_drafting_request',
     'objective_intent': 'document_change_request_update',
     'objective_id': 'document_change_request_id', 'next_step': 'requested_workflow_step'}
+
+
 _VALUES = {
     "activity": {"workflow": "workflow_guidance", "draft": "draft_writing", "revise": "revise_writing", "review": "review_writing"},
     "mode": {"draft": "draft_content", "review": "review_content", "constraint_assessment": "assess_constraints", "premise_analysis": "analyze_premise"},
@@ -71,10 +72,20 @@ _VALUES = {
     "decision": {"propose": "ready_for_apply_confirmation", "revise": "revision_required", "reject": "rejected"},
     "next_step": {"clarify": "ask_clarification", "consult": "consult_specialists", "prepare": "draft_document_change_proposal"},
 }
+
+
 _CHANGE = {"create": "create_artifact", "patch": "patch_artifact_text", "replace": "replace_artifact_text", "rename": "rename_artifact", "delete": "delete_artifact"}
+
+
 _DRAFTING = {"prepare_artifact": "draft_document_change_proposal", "prepare_consultation": "draft_specialist_consultation_proposal"}
+
+
 _UPDATES = {"start": "start_request", "continue": "continue_request", "cancel": "cancel_request"}
+
+
 _LEAD_TYPES = {"answer": "answer", "question": "clarification_question", "critique": "critique", "recommendation": "proposal_drafting_recommendation"}
+
+
 _FAMILIES = {'lead-response-v7': 'lead', 'lead-response-v6': 'lead',
     'specialist-assignment-response-v4': 'specialist_assignment_result',
     'specialist-assignment-response-v3': 'specialist_assignment_result',
@@ -329,6 +340,7 @@ def capture_sample(call, name=None):
     except FileExistsError:
         pass
 
+
 def direct_story_context(value):
     """Independent expected wire view of typed, public story-session context."""
     if isinstance(value, list):
@@ -338,6 +350,7 @@ def direct_story_context(value):
     names = {"scope": "context_scope", "mode": "context_mode", "kind": "outcome_type" if "debate_id" in value else "message_type", "content": "content_text", "sequence": "sequence_number", "phase": "consensus_phase", "round": "consensus_round_number", "revision": "candidate_revision_id"}
     phases = {"draft": "draft_candidate", "audit": "review_candidate", "synthesize": "synthesize_reviews", "propose_revision": "revise_candidate", "finalize": "confirm_reviewed_proposal"}
     return {names.get(key, key): phases.get(item, item) if key == "phase" else direct_story_context(item) for key, item in value.items()}
+
 
 def retrieval_observation(frame):
     """Encode known typed observation facts without reading runtime wire helpers."""
@@ -358,11 +371,13 @@ def retrieval_observation(frame):
         return result
     return begin + "\n" + json.dumps(visit(value), ensure_ascii=False, separators=(",", ":")) + "\n" + end
 
+
 def direct_reply(value, phase):
     if phase == "conversation":
         return direct_response(json.dumps(value), {"conversation_id": "fixture"})
     phases = {"draft": "draft_candidate", "audit": "review_candidate", "synthesize": "synthesize_reviews", "propose_revision": "revise_candidate", "finalize": "confirm_reviewed_proposal"}
     return direct_response(json.dumps(value, ensure_ascii=False), {"consensus_phase": phases[phase]})
+
 
 def artifact_candidate(value):
     """Independent named encoding for the immutable candidate fixture records."""
@@ -789,7 +804,6 @@ def field_neighbor_cases(packet, property_policies, required_fields):
     return tuple(cases)
 
 
-
 def field_neighbor_value(packet, case):
     """Materialize one independent value, shared by the three validation passes."""
     _coordinate, path, operation, replacement, _native_valid, _foreign_path = case
@@ -999,7 +1013,7 @@ class ExplicitPhaseScript:
         self.fail_fixture("callback_exception")
 
     def next_response(self, request, *, missing_message="unexpected provider call"):
-        from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest
         from story_writing_agents.lead_schema_groups import LeadGroupPhase, SchemaGroupControlOwner
         grouped = isinstance(request, BoundContextProviderCallRequest) and request.contract.schema_group_phase is not None
         if grouped and request.contract.schema_group_phase is LeadGroupPhase.SELECT:

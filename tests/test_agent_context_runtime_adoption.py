@@ -1,23 +1,24 @@
-"""Independent replay of provider-visible candidate references and text splices."""
 from __future__ import annotations
-
 import hashlib
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 from story_writing_agents.agent_context import canonical_provider_json
 from story_writing_agents.agent_context.accounting import account_provider_payload
-from story_writing_agents.conversations.session_context import (
-    MAX_PROVIDER_INPUT_UTF8_BYTES,
-    MAX_PROVIDER_PAYLOAD_UTF8_BYTES,
-    MAX_PROVIDER_SCHEMA_UTF8_BYTES,
-    MAX_SESSION_CONTEXT_UTF8_BYTES,
-)
-from story_writing_agents.agent_context import service as service_module
-from story_writing_agents.agent_context.planning import ContextCheckpointState, ContextDeliveryMode
+from story_writing_agents.conversations.session_context import MAX_PROVIDER_INPUT_UTF8_BYTES, MAX_PROVIDER_PAYLOAD_UTF8_BYTES, MAX_PROVIDER_SCHEMA_UTF8_BYTES, MAX_SESSION_CONTEXT_UTF8_BYTES
+from story_writing_agents.agent_context.invocation import session_execution as service_module
 from story_writing_agents.provider_wire import add_contract_guidance, project_context_payload
 from story_writing_agents.agent_context.manifest import ContextAuthorityKind, ContextProvenance
 from story_writing_agents.agent_context.request_compaction import compact_context_payload
+from story_writing_agents.agent_context import accounting as ctx_accounting
+from story_writing_agents.agent_context.contracts import planning_inputs as ctx_planning_inputs
+from story_writing_agents.agent_context import manifest as ctx_manifest
+from story_writing_agents.agent_context.payload import candidates as ctx_candidates
+from story_writing_agents.agent_context.payload import context as ctx_context
+from story_writing_agents.conversations import session_context as ctx_session_context
+
+
+"""Independent replay of provider-visible candidate references and text splices."""
 
 
 class _CandidateWireInterpreter:
@@ -197,9 +198,9 @@ class CandidateWireContractTests(unittest.TestCase):
             MAX_PROVIDER_PAYLOAD_UTF8_BYTES + MAX_PROVIDER_SCHEMA_UTF8_BYTES)
         def record(alias, content):
             encoded = content.encode("utf-8")
-            return service_module._WireCandidateRecord("s1", alias, content, "sha256:" + hashlib.sha256(encoded).hexdigest(), len(encoded))
-        projection = SimpleNamespace(mode=ContextDeliveryMode.DELTA, checkpoint_proposal=SimpleNamespace(sources=(), catalog_sources=()))
-        checkpoint = SimpleNamespace(state=ContextCheckpointState.READY, provider_thread_id="thread-v10", sources=(), catalog_sources=())
+            return ctx_candidates._WireCandidateRecord("s1", alias, content, "sha256:" + hashlib.sha256(encoded).hexdigest(), len(encoded))
+        projection = SimpleNamespace(mode=ctx_planning_inputs.ContextDeliveryMode.DELTA, checkpoint_proposal=SimpleNamespace(sources=(), catalog_sources=()))
+        checkpoint = SimpleNamespace(state=ctx_planning_inputs.ContextCheckpointState.READY, provider_thread_id="thread-v10", sources=(), catalog_sources=())
         schema = {"type": "object", "description": "Return exact candidate content or report that none is available.",
             "properties": {"content": {"anyOf": [{"type": "string", "description": "Return the exact reconstructed candidate when available."},
                 {"type": "null", "description": "Return null only when no candidate is available."}]}}, "required": ["content"], "additionalProperties": False}
@@ -211,25 +212,25 @@ class CandidateWireContractTests(unittest.TestCase):
         def size(rendered):
             return len(canonical_provider_json(rendered[0]))
         def projected(candidate, projection=projection, checkpoint=checkpoint, duplicate=None, padding=None, diagnostics=False):
-            raw = service_module._wire_candidate_value(candidate, projection, checkpoint, ())
+            raw = ctx_candidates.wire_candidate_value(candidate, projection, checkpoint, ())
             payload = {"q": ["draft", "a", "", [0, 0, 0, 4, 0, 8, 0, 200], ["draft", "text-v1"]], "n": raw}
-            paths = {("q",): service_module.ContextComponentKind.CONTROL, ("n",): service_module.ContextComponentKind.CANDIDATE}
+            paths = {("q",): ctx_accounting.ContextComponentKind.CONTROL, ("n",): ctx_accounting.ContextComponentKind.CANDIDATE}
             if duplicate is not None:
                 payload["p"] = [["d", 1, [[duplicate, "m", "plot_architect", "draft", 0, "r0", "candidate", ["=", "k"]]]]]
-                paths[("p",)] = service_module.ContextComponentKind.DEBATE_MESSAGES
+                paths[("p",)] = ctx_accounting.ContextComponentKind.DEBATE_MESSAGES
             if padding is not None:
-                payload["i"], paths[("i",)] = padding, service_module.ContextComponentKind.CURRENT_INPUT
+                payload["i"], paths[("i",)] = padding, ctx_accounting.ContextComponentKind.CURRENT_INPUT
             encoded = candidate.encode("utf-8")
-            entry = service_module.ContextManifestEntry("candidate", service_module.ContextSourceKind.RUNTIME_INPUT,
-                service_module.ContextSemanticChannel.CANDIDATE, service_module.ContextPriority.P0_REQUIRED, 0, "r0",
+            entry = ctx_manifest.ContextManifestEntry("candidate", ctx_manifest.ContextSourceKind.RUNTIME_INPUT,
+                ctx_manifest.ContextSemanticChannel.CANDIDATE, ctx_manifest.ContextPriority.P0_REQUIRED, 0, "r0",
                 "sha256:" + hashlib.sha256(encoded).hexdigest(), ContextProvenance(ContextAuthorityKind.REQUEST, "candidate"), len(encoded), searchable=False)
             planned = SimpleNamespace(**vars(projection), units=(SimpleNamespace(entries=(entry,), body_utf8=encoded),))
             snapshot = canonical_provider_json(payload), dict(paths)
-            selected = service_module._render_context_payload(payload, paths, (), schema=schema, projection=planned)
+            selected = ctx_context.render_context_payload(payload, paths, (), schema=schema, projection=planned)
             full, compact = render_alternative({**payload, "n": candidate}, paths), render_alternative(payload, paths)
             self.assertEqual(selected, full if size(full) <= size(compact) else compact)
             self.assertEqual((canonical_provider_json(payload), paths), snapshot)
-            self.assertEqual(selected[1][("current_draft",)], service_module.ContextComponentKind.CANDIDATE)
+            self.assertEqual(selected[1][("current_draft",)], ctx_accounting.ContextComponentKind.CANDIDATE)
             self.assertEqual(selected[2], ())
             encoded_payload, accounting = account_provider_payload(schema, selected[0], component_paths=selected[1])
             self.assertEqual(accounting.serialized_input_utf8_bytes, len(encoded_payload) + len(canonical_provider_json(schema)))
@@ -239,7 +240,7 @@ class CandidateWireContractTests(unittest.TestCase):
         targets = (base, base.replace("tail A", "tail B Δ"), "new lead\n" + base, base[:-30] + "arbitrary unsectioned splice")
         for index, target in enumerate(targets, start=2):
             with self.subTest(target=index):
-                with mock.patch.object(service_module, "_latest_debate_candidate_record", side_effect=(record(1, base), record(index, target))):
+                with mock.patch.object(ctx_candidates, "_latest_debate_candidate_record", side_effect=(record(1, base), record(index, target))):
                     combined = projected(target, duplicate=index)
                     actual = combined["current_draft"]
                 expected = ({"content_delivery": "reuse_previous_candidate", "base_candidate_reference": self.facts(1, 1, base), "target_candidate_reference": self.facts(1, index, target)} if target == base else self.operation(base, target, base_alias=1, target_alias=index))
@@ -252,7 +253,7 @@ class CandidateWireContractTests(unittest.TestCase):
                 self.assertEqual(interpreter.records[(1, index)], target)
                 short_base = "x" * 1024
                 short_target = (short_base, short_base[:-1] + "Δ", "new lead\n" + short_base, short_base[:-30] + "splice🙂")[index - 2]
-                with mock.patch.object(service_module, "_latest_debate_candidate_record", side_effect=(record(1, short_base), record(index, short_target))):
+                with mock.patch.object(ctx_candidates, "_latest_debate_candidate_record", side_effect=(record(1, short_base), record(index, short_target))):
                     selected, full, compact, raw = projected(short_target, duplicate=index, padding="", diagnostics=True)
                 self.assertLess(len(canonical_provider_json(project_context_payload({"n": raw}, {})[0])), len(canonical_provider_json(project_context_payload({"n": short_target}, {})[0])))
                 self.assertGreater(size(compact), size(full))
@@ -260,24 +261,24 @@ class CandidateWireContractTests(unittest.TestCase):
                 self.assertEqual(selected[0]["context_record_updates"][0]["records"][0]["content_text"], {"content_reference": "/current_draft/content_text"})
                 if index == 2:
                     padding = "p" * (MAX_PROVIDER_PAYLOAD_UTF8_BYTES - size(full))
-                    with mock.patch.object(service_module, "_latest_debate_candidate_record", side_effect=(record(1, short_base), record(index, short_target))):
+                    with mock.patch.object(ctx_candidates, "_latest_debate_candidate_record", side_effect=(record(1, short_base), record(index, short_target))):
                         selected, full, compact, _ = projected(short_target, duplicate=index, padding=padding, diagnostics=True)
                     self.assertEqual(size(selected), MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
                     self.assertGreater(size(compact), MAX_PROVIDER_PAYLOAD_UTF8_BYTES)
                     service_module._require_context_capacity(schema, selected[0], stage="provider_payload")
                     escaped = '한\n\\"'
-                    with mock.patch.object(service_module, "_latest_debate_candidate_record",
+                    with mock.patch.object(ctx_candidates, "_latest_debate_candidate_record",
                         side_effect=(record(1, short_base), record(index, short_target))):
                         below, _, _, _ = projected(short_target, duplicate=index,
                             padding=escaped + padding[10:], diagnostics=True)
                     self.assertEqual(size(below), MAX_PROVIDER_PAYLOAD_UTF8_BYTES - 1)
                     service_module._require_context_capacity(schema, below[0], stage="provider_payload")
-                    with mock.patch.object(service_module, "_latest_debate_candidate_record",
+                    with mock.patch.object(ctx_candidates, "_latest_debate_candidate_record",
                         side_effect=(record(1, short_base), record(index, short_target))):
                         over, _, _, _ = projected(short_target, duplicate=index,
                             padding=escaped + padding[8:], diagnostics=True)
                     self.assertEqual(size(over), MAX_PROVIDER_PAYLOAD_UTF8_BYTES + 1)
-                    with self.assertRaises(service_module.SessionContextCapacityError) as caught:
+                    with self.assertRaises(ctx_session_context.SessionContextCapacityError) as caught:
                         service_module._require_context_capacity(schema, over[0], stage="provider_payload")
                     self.assertEqual(caught.exception.stage, "provider_payload")
                     self.assertEqual(caught.exception.actual_utf8_bytes, size(over))
@@ -286,11 +287,11 @@ class CandidateWireContractTests(unittest.TestCase):
                     self.assertEqual(caught.exception.excess_utf8_bytes, 1)
                     self.assertNotIn(escaped, str(caught.exception))
                     self.assertNotIn(escaped, repr(caught.exception))
-        with mock.patch.object(service_module, "_latest_debate_candidate_record", side_effect=(record(1, "small"), record(2, "small"))):
+        with mock.patch.object(ctx_candidates, "_latest_debate_candidate_record", side_effect=(record(1, "small"), record(2, "small"))):
             self.assertEqual(projected("small"), {"content_delivery": "full_text", "content_text": "small"})
-        with mock.patch.object(service_module, "_latest_debate_candidate_record", side_effect=(record(1, base), record(2, base + "stale"))):
+        with mock.patch.object(ctx_candidates, "_latest_debate_candidate_record", side_effect=(record(1, base), record(2, base + "stale"))):
             self.assertEqual(projected(base), {"content_delivery": "full_text", "content_text": base})
-        for mode, state, thread in ((ContextDeliveryMode.BOOTSTRAP, ContextCheckpointState.READY, "thread"), (ContextDeliveryMode.DELTA, ContextCheckpointState.MISSING, None), (ContextDeliveryMode.DELTA, ContextCheckpointState.CORRUPT, None), (ContextDeliveryMode.DELTA, ContextCheckpointState.TAINTED, None), (ContextDeliveryMode.DELTA, ContextCheckpointState.STALE, None), (ContextDeliveryMode.DELTA, ContextCheckpointState.READY, None)):
+        for mode, state, thread in ((ctx_planning_inputs.ContextDeliveryMode.BOOTSTRAP, ctx_planning_inputs.ContextCheckpointState.READY, "thread"), (ctx_planning_inputs.ContextDeliveryMode.DELTA, ctx_planning_inputs.ContextCheckpointState.MISSING, None), (ctx_planning_inputs.ContextDeliveryMode.DELTA, ctx_planning_inputs.ContextCheckpointState.CORRUPT, None), (ctx_planning_inputs.ContextDeliveryMode.DELTA, ctx_planning_inputs.ContextCheckpointState.TAINTED, None), (ctx_planning_inputs.ContextDeliveryMode.DELTA, ctx_planning_inputs.ContextCheckpointState.STALE, None), (ctx_planning_inputs.ContextDeliveryMode.DELTA, ctx_planning_inputs.ContextCheckpointState.READY, None)):
             with self.subTest(mode=mode, state=state, thread=thread):
                 self.assertEqual(projected(base, SimpleNamespace(mode=mode), SimpleNamespace(state=state, provider_thread_id=thread)), {"content_delivery": "full_text", "content_text": base})
 

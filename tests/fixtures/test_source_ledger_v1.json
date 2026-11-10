@@ -5,7 +5,10 @@
   "counted_support_files": [
     "tests/feedback_probe.py",
     "tests/module_graph_fixture.py",
-    "tests/terminal_input_fixture.py"
+    "tests/terminal_input_fixture.py",
+    "tests/id_moves.py",
+    "tests/agent_context/planning/fixtures.py",
+    "tests/agent_context/contracts/fixtures.py"
   ],
   "origins": {
     "test_git_external_operation_inspection.py": {
@@ -118,6 +121,168 @@
           163
         ]
       ]
+    },
+    "test_agent_context_planning.py": {
+      "sha256": "633502741a72adc2dcf21d05facfdd9fc1379602b4c336cf8c7591c955b4aa85",
+      "origin_commit": "d198abaf60edb1956acbd1f410ad3b1b9fbbedd8",
+      "source_ranges": [
+        [
+          57,
+          57
+        ],
+        [
+          58,
+          66
+        ],
+        [
+          67,
+          81
+        ],
+        [
+          84,
+          85
+        ],
+        [
+          88,
+          100
+        ],
+        [
+          103,
+          125
+        ],
+        [
+          128,
+          132
+        ],
+        [
+          135,
+          144
+        ],
+        [
+          147,
+          155
+        ],
+        [
+          158,
+          165
+        ],
+        [
+          168,
+          177
+        ],
+        [
+          180,
+          196
+        ],
+        [
+          199,
+          215
+        ],
+        [
+          218,
+          229
+        ],
+        [
+          232,
+          233
+        ],
+        [
+          236,
+          260
+        ],
+        [
+          263,
+          274
+        ]
+      ],
+      "destination": "tests/agent_context/planning/fixtures.py"
+    },
+    "test_agent_context_service.py": {
+      "sha256": "9a7a033c7c36925c864e567d5849b14cf243551573519bf6d2070d3b2c079662",
+      "origin_commit": "d198abaf60edb1956acbd1f410ad3b1b9fbbedd8",
+      "source_ranges": [
+        [
+          27,
+          27
+        ],
+        [
+          28,
+          28
+        ],
+        [
+          29,
+          29
+        ],
+        [
+          1056,
+          1056
+        ],
+        [
+          1059,
+          1059
+        ],
+        [
+          1062,
+          1063
+        ],
+        [
+          1066,
+          1068
+        ],
+        [
+          1071,
+          1079
+        ],
+        [
+          1082,
+          1084
+        ],
+        [
+          1087,
+          1095
+        ],
+        [
+          1098,
+          1102
+        ],
+        [
+          1105,
+          1109
+        ],
+        [
+          1112,
+          1115
+        ],
+        [
+          1118,
+          1122
+        ],
+        [
+          1125,
+          1132
+        ],
+        [
+          1135,
+          1139
+        ],
+        [
+          1142,
+          1146
+        ],
+        [
+          1149,
+          1154
+        ],
+        [
+          1157,
+          1165
+        ],
+        [
+          2181,
+          2200
+        ]
+      ],
+      "destination": "tests/agent_context/contracts/fixtures.py"
     }
   }
 }

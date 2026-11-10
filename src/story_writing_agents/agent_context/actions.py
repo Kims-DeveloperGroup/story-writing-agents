@@ -30,7 +30,7 @@ from .manifest import (
     validate_context_digest,
     validate_context_identity,
 )
-from .planning import MandatoryReferenceReservation
+from .contracts.planning_inputs import MandatoryReferenceReservation
 
 __all__ = [
     "ContextCallReadFact",

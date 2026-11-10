@@ -1,7 +1,4 @@
-"""Deterministic contract tests for the interactive-terminal foundation."""
-
 from __future__ import annotations
-
 import ast
 import asyncio
 import io
@@ -18,94 +15,24 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import get_args
 from unittest import mock
-
 import story_writing_agents
 from story_writing_agents import interactive_line_editor as editor_facade
 from story_writing_agents import interactive_terminal as terminal_facade
 from story_writing_agents.interactive_terminal import _advisory_progress
 from story_writing_agents.agent_context.actions import ContextSourceBoundary, ContextSourceBoundaryKind
 from story_writing_agents.agent_context.manifest import ContextSourceKind
-from story_writing_agents.agent_context.progress import (
-    ContextActionProgressEvent, ContextActionProgressKind,
-    ContextActionProgressQuery, ContextActionProgressSource,
-)
-from story_writing_agents.interactive_line_editor import (
-    InteractiveMainLineEditor,
-    SlashCommandSuggestion,
-)
-from story_writing_agents.interactive_terminal import (
-    AttachmentKind,
-    ComposeMode,
-    ConfirmationResult,
-    InteractiveError,
-    InteractiveErrorCode,
-    InteractiveErrorSpec,
-    InteractiveMainInput,
-    InteractiveInputLifecycle,
-    InteractivePromptInput,
-    InteractiveStartupPresentation,
-    InteractiveTerminal,
-    TerminalAction,
-    TerminalActionKind,
-    TerminalMessageKind,
-)
+from story_writing_agents.agent_context.progress import ContextActionProgressEvent, ContextActionProgressKind, ContextActionProgressQuery, ContextActionProgressSource
+from story_writing_agents.interactive_line_editor import InteractiveMainLineEditor, SlashCommandSuggestion
+from story_writing_agents.interactive_terminal import AttachmentKind, ComposeMode, ConfirmationResult, InteractiveError, InteractiveErrorCode, InteractiveErrorSpec, InteractiveMainInput, InteractiveInputLifecycle, InteractivePromptInput, InteractiveStartupPresentation, InteractiveTerminal, TerminalAction, TerminalActionKind, TerminalMessageKind
 from story_writing_agents.interactive_terminal import _controls, _core, _driver, _model
-from story_writing_agents.interactive_terminal._controls import (
-    append_main_input_history,
-    project_slash_suggestions,
-    transition_line_input,
-    transition_main_command_input,
-    transition_main_input,
-    transition_prompt_input,
-)
-from story_writing_agents.interactive_terminal._core import (
-    _STARTUP_WELCOME_SEQUENCE,
-)
-from story_writing_agents.interactive_terminal._driver import (
-    AdvisoryProgressError,
-    RawTerminalDriver,
-    detect_terminal_capabilities,
-)
-from story_writing_agents.interactive_terminal._model import (
-    CapabilityProfile,
-    Choice,
-    ComposerState,
-    ControlOutcome,
-    ControlOutcomeKind,
-    Field,
-    KeyEvent,
-    KeyKind,
-    LineInputState,
-    ListView,
-    MainInputControlState,
-    MainInputHistoryState,
-    Message,
-    MessagePresentation,
-    Notice,
-    Panel,
-    Picker,
-    Prompt,
-    Record,
-    RenderedFrame,
-    RenderedInputFrame,
-    Section,
-    SemanticRole,
-    SpeakerAccent,
-    StartupWelcome,
-    StartupWelcomeStage,
-    SuggestionPalette,
-    TerminalCapabilities,
-    ViewState,
-    display_character_width,
-)
-from story_writing_agents.interactive_terminal._render import (
-    render_advisory_progress_frame,
-    render_component,
-    render_input_prompt,
-    render_plain,
-    render_startup_welcome_frame,
-    strip_decorative_sgr,
-)
+from story_writing_agents.interactive_terminal._controls import append_main_input_history, project_slash_suggestions, transition_line_input, transition_main_command_input, transition_main_input, transition_prompt_input
+from story_writing_agents.interactive_terminal._core import _STARTUP_WELCOME_SEQUENCE
+from story_writing_agents.interactive_terminal._driver import AdvisoryProgressError, RawTerminalDriver, detect_terminal_capabilities
+from story_writing_agents.interactive_terminal._model import CapabilityProfile, Choice, ComposerState, ControlOutcome, ControlOutcomeKind, Field, KeyEvent, KeyKind, LineInputState, ListView, MainInputControlState, MainInputHistoryState, Message, MessagePresentation, Notice, Panel, Picker, Prompt, Record, RenderedFrame, RenderedInputFrame, Section, SemanticRole, SpeakerAccent, StartupWelcome, StartupWelcomeStage, SuggestionPalette, TerminalCapabilities, ViewState, display_character_width
+from story_writing_agents.interactive_terminal._render import render_advisory_progress_frame, render_component, render_input_prompt, render_plain, render_startup_welcome_frame, strip_decorative_sgr
+
+
+"""Deterministic contract tests for the interactive-terminal foundation."""
 
 
 TERMINAL_EXPORTS = (
@@ -124,6 +51,7 @@ TERMINAL_EXPORTS = (
     "InteractiveTerminal",
     "InteractiveTranscriptViewer",
 )
+
 
 PROGRESS_FRAMES = (
     "[█▓▒░░░░░░░░░░░░░]",
@@ -157,6 +85,7 @@ PROGRESS_FRAMES = (
     "[▒▓█▓▒░░░░░░░░░░░]",
     "[▓█▓▒░░░░░░░░░░░░]",
 )
+
 
 MODEL_EXPORTS = (
     "SemanticRole",
@@ -194,14 +123,18 @@ MODEL_EXPORTS = (
 def _fresh_literal_object_return_value_autospec(target, attribute, value):
     return mock.patch.object(target, attribute, autospec=True, return_value=value)
 
+
 def _fresh_autospec_effect(target, attribute, effect):
     return mock.patch.object(target, attribute, autospec=True, side_effect=effect)
+
 
 def _object_effect_patch(target, attribute, value):
     return mock.patch.object(target, attribute, side_effect=value)
 
+
 def _object_options_patch(target, attribute, **options):
     return mock.patch.object(target, attribute, **options)
+
 
 def _fresh_notice(message, **options):
     return Notice(message, **options)
@@ -3373,7 +3306,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         terminal_root = package_root / "interactive_terminal"
         expected_dependencies = {
             '__init__.py': {'._advisory_progress', '._core'},
-            '_advisory_progress.py': {'..agent_context.actions', '..agent_context.progress', '..agent_context.service', '._progress_process'},
+            '_advisory_progress.py': {'..agent_context.actions', '..agent_context.progress', '..agent_context.contracts.events', '._progress_process'},
             '_collaboration_view.py': {"..document_plan",
                                        '._metadata_text', '..agents', '..conversations', '..core_document_readiness', '..editorial_state', '..lead_premise_decisions', '..lead_task_transitions', '..reply_trace', '..specialist_routing', '..writing_artifacts', '._model', '._response_usage', '..review_contracts'},
             '_external_view.py': set(), '_input_lifecycle.py': set(),
@@ -3395,7 +3328,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             '_transcript_view.py': {'..conversations', '._collaboration_view', '._external_view', '._model', '._render'},
             '_reference_activation.py': {'..writing_artifacts', '._model'},
             '_driver.py': {'._external_view', '._input_lifecycle', '._input_sources', '._input_sources_linux', '._input_sources_macos', '._input_text', '._live_composer', '._model', '._output_history', '._pointer', '._progress_process', '._reference_activation', '._render', '._viewer_model'},
-            '_core.py': {'._metadata_text', '..agent_context.progress', '..agent_context.service', '..agents', '..conversations', '..errors', '..interactive_commands', '._advisory_progress', '._collaboration_view', '._controls', '._driver', '._external_view', '._live_composer', '._model', '._reference_activation', '._render', '._transcript_view', '._viewer_controls', '._viewer_model', '._viewer_render'},
+            '_core.py': {'._metadata_text', '..agent_context.progress', '..agent_context.contracts.events', '..agents', '..conversations', '..errors', '..interactive_commands', '._advisory_progress', '._collaboration_view', '._controls', '._driver', '._external_view', '._live_composer', '._model', '._reference_activation', '._render', '._transcript_view', '._viewer_controls', '._viewer_model', '._viewer_render'},
             '_box.py': {'._model'},
             '_markdown.py': {'._model'},
             '_response_usage.py': {'..agent_context.accounting', '..conversations'},

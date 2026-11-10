@@ -1,9 +1,6 @@
-"""End-to-end Antigravity parity tests with a deterministic fake CLI."""
-
 from __future__ import annotations
 from tests.test_provider_schema_spec import check_schema
 from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome, _premise_native_contract
-
 import asyncio
 import hashlib
 import inspect
@@ -18,69 +15,45 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
-
-from story_writing_agents import ( AgentBackend,
-    AgentReply, AgentRequest,
-    BackendProtocolError, CHARACTER_CUSTODIAN,
-    ConversationContextWindow, ConversationReply,
-    ConversationRequest, ConversationRetrievalAction,
-    ConversationRetrievalAnswerAction, ConversationRetrievalObservation,
-    ConversationRetrievalReply, ConversationRetrievalRequest,
-    ConversationRetrievalSearchAction, ConversationRetrievalSearchObservation,
-    EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR,
-    PLOT_ARCHITECT, Phase,
-    ReplyTrace, ReplyTraceOrigin,
-    SessionAccessState, SessionDurableState,
-    SessionPausedError, Verdict,
-)
+from story_writing_agents import AgentBackend, AgentReply, AgentRequest, BackendProtocolError, CHARACTER_CUSTODIAN, ConversationContextWindow, ConversationReply, ConversationRequest, ConversationRetrievalAction, ConversationRetrievalAnswerAction, ConversationRetrievalObservation, ConversationRetrievalReply, ConversationRetrievalRequest, ConversationRetrievalSearchAction, ConversationRetrievalSearchObservation, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT, Phase, ReplyTrace, ReplyTraceOrigin, SessionAccessState, SessionDurableState, SessionPausedError, Verdict
 from story_writing_agents.config import ConfigManager
-from story_writing_agents.conversations.session_context import (
-    MAX_PROVIDER_INPUT_UTF8_BYTES,
-    MAX_PROVIDER_PAYLOAD_UTF8_BYTES,
-)
+from story_writing_agents.conversations.session_context import MAX_PROVIDER_INPUT_UTF8_BYTES, MAX_PROVIDER_PAYLOAD_UTF8_BYTES
 from story_writing_agents.workspace.initialization import provision_session_resources
 from story_writing_agents.conversations import select_bounded_collaboration_context
-from story_writing_agents.agent_context import (
-    ProviderCallKind,
-    ProviderCallState,
-    ProviderUsage,
-    canonical_provider_json, )
-from story_writing_agents.agent_context.manifest import (
-    ContextScope,
-    ContextSubjectKind, )
-from story_writing_agents.agent_context.service import ContextProviderCallRequest
+from story_writing_agents.agent_context import ProviderCallKind, ProviderCallState, ProviderUsage, canonical_provider_json
+from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.provider_adapter import ProviderResult
-from story_writing_agents.provider_error_artifacts import (
-    PROVIDER_ERROR_ARTIFACT_DIRECTORY,
-    WorkspaceProviderErrorArtifacts, )
-from story_writing_agents.writing_artifacts import (
-    ArtifactLineRange,
-    ArtifactReference,
-    ArtifactReferenceBatch,
-    ReferenceInvocationCorrelation,
-    ReferenceInvocationState,
-    ReferenceOperationState, )
-from story_writing_agents.writing_artifacts.repository import (
-    WritingArtifactRepository, )
-
+from story_writing_agents.provider_error_artifacts import PROVIDER_ERROR_ARTIFACT_DIRECTORY, WorkspaceProviderErrorArtifacts
+from story_writing_agents.writing_artifacts import ArtifactLineRange, ArtifactReference, ArtifactReferenceBatch, ReferenceInvocationCorrelation, ReferenceInvocationState, ReferenceOperationState
+from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from tests.provider_wire_fixture import direct_response, direct_reply, assert_schema_descriptions, selection_plan
-from tests.helpers import (
-    SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE,
-    pristine_initialized_workspace, )
+from tests.helpers import SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE, pristine_initialized_workspace
+from story_writing_agents.agent_context.invocation import provider as ctx_provider
+
+
+"""End-to-end Antigravity parity tests with a deterministic fake CLI."""
 
 
 _PROCESS_EXIT_HANDSHAKE_SECONDS = 2.0
+
+
 _PROCESS_TERMINATE_GRACE_SECONDS = 0.5
+
+
 _PROCESS_KILL_GRACE_SECONDS = 1.0
+
+
 _PROCESS_POLL_INTERVAL_SECONDS = 0.01
 
 
 def _seed_draft_request_fixture(case, session_id):
     return case.request(session_id=session_id, debate_id='seed', phase=Phase.DRAFT)
 
+
 def _wrapped_thread_taint_patch(backend, wrapped):
     return mock.patch.object(backend, '_taint_thread', wraps=wrapped)
+
 
 def _provider_error_records(workspace: object) -> list[dict[str, object]]:
     """Read complete rejected-response artifacts, excluding guard leaves."""
@@ -871,7 +844,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         scope = ContextScope("workspace-schema", session, ContextSubjectKind.CONVERSATION, "schema-conversation", PLOT_ARCHITECT)
                         policy = "sha256:" + "7" * 64
                         async with provider.invocation(scope, policy):
-                            result = await provider.invoke_context(ContextProviderCallRequest(
+                            result = await provider.invoke_context(ctx_provider.ContextProviderCallRequest(
                                 scope, policy, "schema-call", ProviderCallKind.COLLABORATION_INITIAL,
                                 schema, payload))
                         self.assertEqual(json.loads(result.response_text), output)
@@ -914,7 +887,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         from tests import test_lead_orchestration as lead
         from story_writing_agents.antigravity_adapter import AntigravityAdapter
         from story_writing_agents.provider_wire import WireShapeError
-        from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest
         case = lead._task_fixture(self)
         raw_frames, wire_responses = [], []
         invoke_context = lead._LeadContextProvider.invoke_context
@@ -1088,9 +1061,9 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch.object(backend._antigravity_adapter, "invoke", new=invoke):
             async with provider.invocation(scope, policy):
-                first = await provider.invoke_context(ContextProviderCallRequest(scope, policy,
+                first = await provider.invoke_context(ctx_provider.ContextProviderCallRequest(scope, policy,
                     'parity-call-1', ProviderCallKind.COLLABORATION_INITIAL, schema, payload))
-                second = await provider.invoke_context(ContextProviderCallRequest(scope, policy,
+                second = await provider.invoke_context(ctx_provider.ContextProviderCallRequest(scope, policy,
                     'parity-call-2', ProviderCallKind.COLLABORATION_CONTINUATION, schema, {
                     'c': 'B' * 43, 'q': ['conversation', 'sa', 'wco', [3, 1, 2, 4, 7, 8, 16, 200],
                     'text'], 'o': ['r', [[1, 'c', 'bounded']]]},
@@ -1122,7 +1095,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         from tests import test_lead_orchestration as lead
         from contextlib import ExitStack
         from story_writing_agents.antigravity_adapter import AntigravityAdapter as AG
-        from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.invocation.session_execution import BoundContextProviderCallRequest
         invocations, setup_calls, front_call_kinds = [], [], []
         front_provider_results = []
         original = lead._LeadContextProvider.invoke_context
@@ -1130,7 +1103,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             (BoundContextProviderCallRequest, LEAD_ORCHESTRATOR, "lead.front", "lead-response-v8"),
             (BoundContextProviderCallRequest, LEAD_ORCHESTRATOR, "lead.front",
              "lead-exploration-response-v1"),
-            (ContextProviderCallRequest, PLOT_ARCHITECT, None, "premise-analysis-response-v1"),
+            (ctx_provider.ContextProviderCallRequest, PLOT_ARCHITECT, None, "premise-analysis-response-v1"),
             (BoundContextProviderCallRequest, LEAD_ORCHESTRATOR, "lead_synthesis",
              "premise-decision-summary-v1"))
         for workflow in ("front", "premise"):

@@ -38,7 +38,9 @@
         "tests/fixtures/test_source_ledger_v1.json",
         "tests/fixtures/test_timing_weights_v1.json",
         "tests/fixtures/test_owners_v1.json",
-        "TEST_POLICY.md"
+        "TEST_POLICY.md",
+        "tests/id_moves.py",
+        "tests/fixtures/test_id_moves_v1.json"
       ],
       "focused_ids": [
         "tests.test_suite_budget.SuiteBudgetTests.test_exact_duration_boundary_passes_and_excess_fails",
@@ -796,100 +798,6 @@
       "depends_on": []
     },
     {
-      "name": "tests.test_agent_context_planning",
-      "boundary": "existing-cases",
-      "paths": [
-        "tests/test_agent_context_planning.py"
-      ],
-      "focused_ids": [
-        "tests.test_agent_context_planning.BootstrapPlanningTests.test_checkpoint_state_and_explicit_fresh_reasons",
-        "tests.test_agent_context_planning.BootstrapPlanningTests.test_compatibility_reason_precedence_is_pairwise_complete",
-        "tests.test_agent_context_planning.BootstrapPlanningTests.test_compatible_depth_15_delta_advances_to_16",
-        "tests.test_agent_context_planning.BootstrapPlanningTests.test_ready_mismatch_matrix_and_thread_none_semantics",
-        "tests.test_agent_context_planning.BootstrapPlanningTests.test_stable_change_reason_and_precedence_are_exact",
-        "tests.test_agent_context_planning.DeduplicationPlanningTests.test_cross_channel_bodies_never_deduplicate",
-        "tests.test_agent_context_planning.DeduplicationPlanningTests.test_forced_digest_collision_still_requires_exact_body_equality",
-        "tests.test_agent_context_planning.DeduplicationPlanningTests.test_same_channel_exact_bodies_serialize_once_with_all_pointers",
-        "tests.test_agent_context_planning.DeltaAndReferencePlanningTests.test_accepted_source_omission_retains_epoch_and_emits_delivery_removal",
-        "tests.test_agent_context_planning.DeltaAndReferencePlanningTests.test_catalog_alias_and_record_epochs_cover_add_change_remove_reappear",
-        "tests.test_agent_context_planning.DeltaAndReferencePlanningTests.test_reference_constructor_sequence_identity_and_budget_failures",
-        "tests.test_agent_context_planning.DeltaAndReferencePlanningTests.test_reference_whole_range_multiple_order_and_separate_accounting",
-        "tests.test_agent_context_planning.DeltaAndReferencePlanningTests.test_same_scope_revision_content_conflict_fails_even_when_thread_changes",
-        "tests.test_agent_context_planning.DeltaAndReferencePlanningTests.test_unchanged_sources_suppress_while_p2_p3_changes_select",
-        "tests.test_agent_context_planning.PlanningBoundaryAndPurityTests.test_facades_remain_exact_and_clean_direct_import_works",
-        "tests.test_agent_context_planning.PlanningBoundaryAndPurityTests.test_planning_imports_only_stdlib_and_supported_manifest_names",
-        "tests.test_agent_context_planning.PlanningBoundaryAndPurityTests.test_planning_performs_no_filesystem_network_process_clock_or_state_io",
-        "tests.test_agent_context_planning.PlanningPolicyTests.test_default_values_and_fingerprint_are_exact",
-        "tests.test_agent_context_planning.PlanningPolicyTests.test_every_field_rejects_non_exact_integer_and_negative",
-        "tests.test_agent_context_planning.PlanningPolicyTests.test_zero_class_aggregate_and_reference_boundaries",
-        "tests.test_agent_context_planning.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability",
-        "tests.test_agent_context_planning.PlanningSurfaceTests.test_exact_surface_enums_and_absent_total_budget_category",
-        "tests.test_agent_context_planning.PlanningSurfaceTests.test_fixed_error_codes_messages_and_privacy",
-        "tests.test_agent_context_planning.PlanningValueTests.test_budget_and_searchable_accounting_are_self_validating",
-        "tests.test_agent_context_planning.PlanningValueTests.test_catalog_aliases_are_unique_exact_integers_and_high_water_bounded",
-        "tests.test_agent_context_planning.PlanningValueTests.test_checkpoint_shapes_and_source_constraints_are_strict",
-        "tests.test_agent_context_planning.PlanningValueTests.test_decision_priority_channel_matrix_is_exhaustive",
-        "tests.test_agent_context_planning.PlanningValueTests.test_material_is_strict_utf8_exact_and_hidden_from_repr",
-        "tests.test_agent_context_planning.PlanningValueTests.test_projected_unit_validates_exact_body_channel_and_priority",
-        "tests.test_agent_context_planning.ProjectionAccountingTests.test_every_decision_searchable_and_budget_partition_is_exact",
-        "tests.test_agent_context_planning.ProjectionAccountingTests.test_replay_is_identical_and_all_retained_values_are_content_free",
-        "tests.test_agent_context_planning.ProjectionInvariantTests.test_accounting_depth_bucket_order_uniqueness_and_selected_relations",
-        "tests.test_agent_context_planning.ProjectionInvariantTests.test_proposal_removed_reference_and_budget_cross_checks",
-        "tests.test_agent_context_planning.ProjectionInvariantTests.test_unit_decision_mapping_and_same_id_metadata_substitutions_fail",
-        "tests.test_agent_context_planning.RequiredAndStableSelectionTests.test_compatible_delta_always_selects_p0_and_suppresses_p1",
-        "tests.test_agent_context_planning.RequiredAndStableSelectionTests.test_every_valid_p1_set_or_metadata_change_bootstraps",
-        "tests.test_agent_context_planning.RequiredAndStableSelectionTests.test_p0_exact_fit_plus_one_missing_and_no_deduplication",
-        "tests.test_agent_context_planning.RequiredAndStableSelectionTests.test_p1_exact_fit_plus_one_missing_and_no_deduplication",
-        "tests.test_agent_context_planning.WorkingAndOptionalSelectionTests.test_hard_constraints_exact_fit_plus_one_and_missing_fail_atomically",
-        "tests.test_agent_context_planning.WorkingAndOptionalSelectionTests.test_p2_and_p3_first_fit_skip_preserves_later_fitting_groups",
-        "tests.test_agent_context_planning.WorkingAndOptionalSelectionTests.test_unused_other_class_and_total_headroom_is_not_borrowed"
-      ],
-      "affected_ids": [
-        "tests.test_agent_context_planning.BootstrapPlanningTests.test_checkpoint_state_and_explicit_fresh_reasons",
-        "tests.test_agent_context_planning.BootstrapPlanningTests.test_compatibility_reason_precedence_is_pairwise_complete",
-        "tests.test_agent_context_planning.BootstrapPlanningTests.test_compatible_depth_15_delta_advances_to_16",
-        "tests.test_agent_context_planning.BootstrapPlanningTests.test_ready_mismatch_matrix_and_thread_none_semantics",
-        "tests.test_agent_context_planning.BootstrapPlanningTests.test_stable_change_reason_and_precedence_are_exact",
-        "tests.test_agent_context_planning.DeduplicationPlanningTests.test_cross_channel_bodies_never_deduplicate",
-        "tests.test_agent_context_planning.DeduplicationPlanningTests.test_forced_digest_collision_still_requires_exact_body_equality",
-        "tests.test_agent_context_planning.DeduplicationPlanningTests.test_same_channel_exact_bodies_serialize_once_with_all_pointers",
-        "tests.test_agent_context_planning.DeltaAndReferencePlanningTests.test_accepted_source_omission_retains_epoch_and_emits_delivery_removal",
-        "tests.test_agent_context_planning.DeltaAndReferencePlanningTests.test_catalog_alias_and_record_epochs_cover_add_change_remove_reappear",
-        "tests.test_agent_context_planning.DeltaAndReferencePlanningTests.test_reference_constructor_sequence_identity_and_budget_failures",
-        "tests.test_agent_context_planning.DeltaAndReferencePlanningTests.test_reference_whole_range_multiple_order_and_separate_accounting",
-        "tests.test_agent_context_planning.DeltaAndReferencePlanningTests.test_same_scope_revision_content_conflict_fails_even_when_thread_changes",
-        "tests.test_agent_context_planning.DeltaAndReferencePlanningTests.test_unchanged_sources_suppress_while_p2_p3_changes_select",
-        "tests.test_agent_context_planning.PlanningBoundaryAndPurityTests.test_facades_remain_exact_and_clean_direct_import_works",
-        "tests.test_agent_context_planning.PlanningBoundaryAndPurityTests.test_planning_imports_only_stdlib_and_supported_manifest_names",
-        "tests.test_agent_context_planning.PlanningBoundaryAndPurityTests.test_planning_performs_no_filesystem_network_process_clock_or_state_io",
-        "tests.test_agent_context_planning.PlanningPolicyTests.test_default_values_and_fingerprint_are_exact",
-        "tests.test_agent_context_planning.PlanningPolicyTests.test_every_field_rejects_non_exact_integer_and_negative",
-        "tests.test_agent_context_planning.PlanningPolicyTests.test_zero_class_aggregate_and_reference_boundaries",
-        "tests.test_agent_context_planning.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability",
-        "tests.test_agent_context_planning.PlanningSurfaceTests.test_exact_surface_enums_and_absent_total_budget_category",
-        "tests.test_agent_context_planning.PlanningSurfaceTests.test_fixed_error_codes_messages_and_privacy",
-        "tests.test_agent_context_planning.PlanningValueTests.test_budget_and_searchable_accounting_are_self_validating",
-        "tests.test_agent_context_planning.PlanningValueTests.test_catalog_aliases_are_unique_exact_integers_and_high_water_bounded",
-        "tests.test_agent_context_planning.PlanningValueTests.test_checkpoint_shapes_and_source_constraints_are_strict",
-        "tests.test_agent_context_planning.PlanningValueTests.test_decision_priority_channel_matrix_is_exhaustive",
-        "tests.test_agent_context_planning.PlanningValueTests.test_material_is_strict_utf8_exact_and_hidden_from_repr",
-        "tests.test_agent_context_planning.PlanningValueTests.test_projected_unit_validates_exact_body_channel_and_priority",
-        "tests.test_agent_context_planning.ProjectionAccountingTests.test_every_decision_searchable_and_budget_partition_is_exact",
-        "tests.test_agent_context_planning.ProjectionAccountingTests.test_replay_is_identical_and_all_retained_values_are_content_free",
-        "tests.test_agent_context_planning.ProjectionInvariantTests.test_accounting_depth_bucket_order_uniqueness_and_selected_relations",
-        "tests.test_agent_context_planning.ProjectionInvariantTests.test_proposal_removed_reference_and_budget_cross_checks",
-        "tests.test_agent_context_planning.ProjectionInvariantTests.test_unit_decision_mapping_and_same_id_metadata_substitutions_fail",
-        "tests.test_agent_context_planning.RequiredAndStableSelectionTests.test_compatible_delta_always_selects_p0_and_suppresses_p1",
-        "tests.test_agent_context_planning.RequiredAndStableSelectionTests.test_every_valid_p1_set_or_metadata_change_bootstraps",
-        "tests.test_agent_context_planning.RequiredAndStableSelectionTests.test_p0_exact_fit_plus_one_missing_and_no_deduplication",
-        "tests.test_agent_context_planning.RequiredAndStableSelectionTests.test_p1_exact_fit_plus_one_missing_and_no_deduplication",
-        "tests.test_agent_context_planning.WorkingAndOptionalSelectionTests.test_hard_constraints_exact_fit_plus_one_and_missing_fail_atomically",
-        "tests.test_agent_context_planning.WorkingAndOptionalSelectionTests.test_p2_and_p3_first_fit_skip_preserves_later_fitting_groups",
-        "tests.test_agent_context_planning.WorkingAndOptionalSelectionTests.test_unused_other_class_and_total_headroom_is_not_borrowed"
-      ],
-      "depends_on": []
-    },
-    {
       "name": "tests.test_agent_context_runtime_adoption",
       "boundary": "existing-cases",
       "paths": [
@@ -942,10 +850,6 @@
         "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_preserves_query_match_order_mints_handles_and_rejects_reuse",
         "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_trims_tail_to_frame_budget_and_empty_frame_failure_is_terminal",
         "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_unused_or_substituted_handle_cannot_authorize_and_baseexception_cleans",
-        "tests.test_agent_context_service.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts",
-        "tests.test_agent_context_service.ServiceSurfaceAndBindingTests.test_entropy_failure_and_registry_scope_mismatch_are_content_free",
-        "tests.test_agent_context_service.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
-        "tests.test_agent_context_service.ServiceSurfaceAndBindingTests.test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls",
         "tests.test_agent_context_service.StructuredOutputValidationTests.test_bounded_chunks_preserve_order_and_over_32k_content",
         "tests.test_agent_context_service.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues",
         "tests.test_agent_context_service.StructuredOutputValidationTests.test_malformed_and_duplicate_json_have_value_free_diagnostics",
@@ -981,10 +885,6 @@
         "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_preserves_query_match_order_mints_handles_and_rejects_reuse",
         "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_trims_tail_to_frame_budget_and_empty_frame_failure_is_terminal",
         "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_unused_or_substituted_handle_cannot_authorize_and_baseexception_cleans",
-        "tests.test_agent_context_service.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts",
-        "tests.test_agent_context_service.ServiceSurfaceAndBindingTests.test_entropy_failure_and_registry_scope_mismatch_are_content_free",
-        "tests.test_agent_context_service.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
-        "tests.test_agent_context_service.ServiceSurfaceAndBindingTests.test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls",
         "tests.test_agent_context_service.StructuredOutputValidationTests.test_bounded_chunks_preserve_order_and_over_32k_content",
         "tests.test_agent_context_service.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues",
         "tests.test_agent_context_service.StructuredOutputValidationTests.test_malformed_and_duplicate_json_have_value_free_diagnostics",
@@ -992,6 +892,7 @@
         "tests.test_agent_context_service.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise"
       ],
       "depends_on": [
+        "context-contract-fixtures",
         "tests.test_agent_context_accounting",
         "tests.test_agent_context_execution"
       ]
@@ -7476,6 +7377,1116 @@
         "tests.test_writing_artifacts.SecureStorageTests.test_workspace_lock_serializes_independent_repository_instances"
       ],
       "depends_on": []
+    },
+    {
+      "name": "tests.agent_context.planning.test_surface",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/agent_context/planning/test_surface.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_exact_surface_enums_and_absent_total_budget_category",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_fixed_error_codes_messages_and_privacy"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_exact_surface_enums_and_absent_total_budget_category",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_fixed_error_codes_messages_and_privacy"
+      ],
+      "depends_on": [
+        "planning-fixtures"
+      ]
+    },
+    {
+      "name": "tests.agent_context.planning.test_policy",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/agent_context/planning/test_policy.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_default_values_and_fingerprint_are_exact",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_every_field_rejects_non_exact_integer_and_negative",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_zero_class_aggregate_and_reference_boundaries"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_default_values_and_fingerprint_are_exact",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_every_field_rejects_non_exact_integer_and_negative",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_zero_class_aggregate_and_reference_boundaries"
+      ],
+      "depends_on": [
+        "planning-fixtures"
+      ]
+    },
+    {
+      "name": "tests.agent_context.planning.test_values",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/agent_context/planning/test_values.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_budget_and_searchable_accounting_are_self_validating",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_catalog_aliases_are_unique_exact_integers_and_high_water_bounded",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_checkpoint_shapes_and_source_constraints_are_strict",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_decision_priority_channel_matrix_is_exhaustive",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_material_is_strict_utf8_exact_and_hidden_from_repr",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_projected_unit_validates_exact_body_channel_and_priority"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_budget_and_searchable_accounting_are_self_validating",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_catalog_aliases_are_unique_exact_integers_and_high_water_bounded",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_checkpoint_shapes_and_source_constraints_are_strict",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_decision_priority_channel_matrix_is_exhaustive",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_material_is_strict_utf8_exact_and_hidden_from_repr",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_projected_unit_validates_exact_body_channel_and_priority"
+      ],
+      "depends_on": [
+        "planning-fixtures"
+      ]
+    },
+    {
+      "name": "tests.agent_context.planning.test_bootstrap",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/agent_context/planning/test_bootstrap.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_checkpoint_state_and_explicit_fresh_reasons",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatibility_reason_precedence_is_pairwise_complete",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatible_depth_15_delta_advances_to_16",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_ready_mismatch_matrix_and_thread_none_semantics",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_stable_change_reason_and_precedence_are_exact"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_checkpoint_state_and_explicit_fresh_reasons",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatibility_reason_precedence_is_pairwise_complete",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatible_depth_15_delta_advances_to_16",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_ready_mismatch_matrix_and_thread_none_semantics",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_stable_change_reason_and_precedence_are_exact"
+      ],
+      "depends_on": [
+        "planning-fixtures"
+      ]
+    },
+    {
+      "name": "tests.agent_context.planning.test_required_stable",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/agent_context/planning/test_required_stable.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_compatible_delta_always_selects_p0_and_suppresses_p1",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_every_valid_p1_set_or_metadata_change_bootstraps",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_p0_exact_fit_plus_one_missing_and_no_deduplication",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_p1_exact_fit_plus_one_missing_and_no_deduplication"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_compatible_delta_always_selects_p0_and_suppresses_p1",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_every_valid_p1_set_or_metadata_change_bootstraps",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_p0_exact_fit_plus_one_missing_and_no_deduplication",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_p1_exact_fit_plus_one_missing_and_no_deduplication"
+      ],
+      "depends_on": [
+        "planning-fixtures"
+      ]
+    },
+    {
+      "name": "tests.agent_context.planning.test_working_optional",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/agent_context/planning/test_working_optional.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_hard_constraints_exact_fit_plus_one_and_missing_fail_atomically",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_p2_and_p3_first_fit_skip_preserves_later_fitting_groups",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_unused_other_class_and_total_headroom_is_not_borrowed"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_hard_constraints_exact_fit_plus_one_and_missing_fail_atomically",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_p2_and_p3_first_fit_skip_preserves_later_fitting_groups",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_unused_other_class_and_total_headroom_is_not_borrowed"
+      ],
+      "depends_on": [
+        "planning-fixtures"
+      ]
+    },
+    {
+      "name": "tests.agent_context.planning.test_deduplication",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/agent_context/planning/test_deduplication.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_cross_channel_bodies_never_deduplicate",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_forced_digest_collision_still_requires_exact_body_equality",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_same_channel_exact_bodies_serialize_once_with_all_pointers"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_cross_channel_bodies_never_deduplicate",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_forced_digest_collision_still_requires_exact_body_equality",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_same_channel_exact_bodies_serialize_once_with_all_pointers"
+      ],
+      "depends_on": [
+        "planning-fixtures"
+      ]
+    },
+    {
+      "name": "tests.agent_context.planning.test_delta_references",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/agent_context/planning/test_delta_references.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_accepted_source_omission_retains_epoch_and_emits_delivery_removal",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_catalog_alias_and_record_epochs_cover_add_change_remove_reappear",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_constructor_sequence_identity_and_budget_failures",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_whole_range_multiple_order_and_separate_accounting",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_same_scope_revision_content_conflict_fails_even_when_thread_changes",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_unchanged_sources_suppress_while_p2_p3_changes_select"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_accepted_source_omission_retains_epoch_and_emits_delivery_removal",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_catalog_alias_and_record_epochs_cover_add_change_remove_reappear",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_constructor_sequence_identity_and_budget_failures",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_whole_range_multiple_order_and_separate_accounting",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_same_scope_revision_content_conflict_fails_even_when_thread_changes",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_unchanged_sources_suppress_while_p2_p3_changes_select"
+      ],
+      "depends_on": [
+        "planning-fixtures"
+      ]
+    },
+    {
+      "name": "tests.agent_context.planning.test_projection_accounting",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/agent_context/planning/test_projection_accounting.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_every_decision_searchable_and_budget_partition_is_exact",
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_replay_is_identical_and_all_retained_values_are_content_free"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_every_decision_searchable_and_budget_partition_is_exact",
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_replay_is_identical_and_all_retained_values_are_content_free"
+      ],
+      "depends_on": [
+        "planning-fixtures"
+      ]
+    },
+    {
+      "name": "tests.agent_context.planning.test_projection_invariants",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/agent_context/planning/test_projection_invariants.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_accounting_depth_bucket_order_uniqueness_and_selected_relations",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_proposal_removed_reference_and_budget_cross_checks",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_unit_decision_mapping_and_same_id_metadata_substitutions_fail"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_accounting_depth_bucket_order_uniqueness_and_selected_relations",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_proposal_removed_reference_and_budget_cross_checks",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_unit_decision_mapping_and_same_id_metadata_substitutions_fail"
+      ],
+      "depends_on": [
+        "planning-fixtures",
+        "tests.agent_context.planning.test_projection_accounting"
+      ]
+    },
+    {
+      "name": "tests.agent_context.planning.test_purity",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/agent_context/planning/test_purity.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_facades_remain_exact_and_clean_direct_import_works",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_planning_imports_only_stdlib_and_supported_manifest_names",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_planning_performs_no_filesystem_network_process_clock_or_state_io"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_facades_remain_exact_and_clean_direct_import_works",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_planning_imports_only_stdlib_and_supported_manifest_names",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_planning_performs_no_filesystem_network_process_clock_or_state_io"
+      ],
+      "depends_on": [
+        "planning-fixtures"
+      ]
+    },
+    {
+      "name": "tests.agent_context.contracts.test_binding",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/agent_context/contracts/test_binding.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_entropy_failure_and_registry_scope_mismatch_are_content_free",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls"
+      ],
+      "affected_ids": [
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_entropy_failure_and_registry_scope_mismatch_are_content_free",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls"
+      ],
+      "depends_on": [
+        "context-contract-fixtures"
+      ]
+    },
+    {
+      "name": "planning-fixtures",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/agent_context/planning/fixtures.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_checkpoint_state_and_explicit_fresh_reasons",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatibility_reason_precedence_is_pairwise_complete",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatible_depth_15_delta_advances_to_16",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_ready_mismatch_matrix_and_thread_none_semantics",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_stable_change_reason_and_precedence_are_exact",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_cross_channel_bodies_never_deduplicate",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_forced_digest_collision_still_requires_exact_body_equality",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_same_channel_exact_bodies_serialize_once_with_all_pointers",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_accepted_source_omission_retains_epoch_and_emits_delivery_removal",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_catalog_alias_and_record_epochs_cover_add_change_remove_reappear",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_constructor_sequence_identity_and_budget_failures",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_whole_range_multiple_order_and_separate_accounting",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_same_scope_revision_content_conflict_fails_even_when_thread_changes",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_unchanged_sources_suppress_while_p2_p3_changes_select",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_default_values_and_fingerprint_are_exact",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_every_field_rejects_non_exact_integer_and_negative",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_zero_class_aggregate_and_reference_boundaries",
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_every_decision_searchable_and_budget_partition_is_exact",
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_replay_is_identical_and_all_retained_values_are_content_free",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_accounting_depth_bucket_order_uniqueness_and_selected_relations",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_proposal_removed_reference_and_budget_cross_checks",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_unit_decision_mapping_and_same_id_metadata_substitutions_fail",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_facades_remain_exact_and_clean_direct_import_works",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_planning_imports_only_stdlib_and_supported_manifest_names",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_planning_performs_no_filesystem_network_process_clock_or_state_io",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_compatible_delta_always_selects_p0_and_suppresses_p1",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_every_valid_p1_set_or_metadata_change_bootstraps",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_p0_exact_fit_plus_one_missing_and_no_deduplication",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_p1_exact_fit_plus_one_missing_and_no_deduplication",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_exact_surface_enums_and_absent_total_budget_category",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_fixed_error_codes_messages_and_privacy",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_budget_and_searchable_accounting_are_self_validating",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_catalog_aliases_are_unique_exact_integers_and_high_water_bounded",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_checkpoint_shapes_and_source_constraints_are_strict",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_decision_priority_channel_matrix_is_exhaustive",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_material_is_strict_utf8_exact_and_hidden_from_repr",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_projected_unit_validates_exact_body_channel_and_priority",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_hard_constraints_exact_fit_plus_one_and_missing_fail_atomically",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_p2_and_p3_first_fit_skip_preserves_later_fitting_groups",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_unused_other_class_and_total_headroom_is_not_borrowed"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_checkpoint_state_and_explicit_fresh_reasons",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatibility_reason_precedence_is_pairwise_complete",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatible_depth_15_delta_advances_to_16",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_ready_mismatch_matrix_and_thread_none_semantics",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_stable_change_reason_and_precedence_are_exact",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_cross_channel_bodies_never_deduplicate",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_forced_digest_collision_still_requires_exact_body_equality",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_same_channel_exact_bodies_serialize_once_with_all_pointers",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_accepted_source_omission_retains_epoch_and_emits_delivery_removal",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_catalog_alias_and_record_epochs_cover_add_change_remove_reappear",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_constructor_sequence_identity_and_budget_failures",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_whole_range_multiple_order_and_separate_accounting",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_same_scope_revision_content_conflict_fails_even_when_thread_changes",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_unchanged_sources_suppress_while_p2_p3_changes_select",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_default_values_and_fingerprint_are_exact",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_every_field_rejects_non_exact_integer_and_negative",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_zero_class_aggregate_and_reference_boundaries",
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_every_decision_searchable_and_budget_partition_is_exact",
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_replay_is_identical_and_all_retained_values_are_content_free",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_accounting_depth_bucket_order_uniqueness_and_selected_relations",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_proposal_removed_reference_and_budget_cross_checks",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_unit_decision_mapping_and_same_id_metadata_substitutions_fail",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_facades_remain_exact_and_clean_direct_import_works",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_planning_imports_only_stdlib_and_supported_manifest_names",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_planning_performs_no_filesystem_network_process_clock_or_state_io",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_compatible_delta_always_selects_p0_and_suppresses_p1",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_every_valid_p1_set_or_metadata_change_bootstraps",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_p0_exact_fit_plus_one_missing_and_no_deduplication",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_p1_exact_fit_plus_one_missing_and_no_deduplication",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_exact_surface_enums_and_absent_total_budget_category",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_fixed_error_codes_messages_and_privacy",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_budget_and_searchable_accounting_are_self_validating",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_catalog_aliases_are_unique_exact_integers_and_high_water_bounded",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_checkpoint_shapes_and_source_constraints_are_strict",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_decision_priority_channel_matrix_is_exhaustive",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_material_is_strict_utf8_exact_and_hidden_from_repr",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_projected_unit_validates_exact_body_channel_and_priority",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_hard_constraints_exact_fit_plus_one_and_missing_fail_atomically",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_p2_and_p3_first_fit_skip_preserves_later_fitting_groups",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_unused_other_class_and_total_headroom_is_not_borrowed"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "context-contract-fixtures",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/agent_context/contracts/fixtures.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_entropy_failure_and_registry_scope_mismatch_are_content_free",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_artifact_prefix_validation_is_exact_and_one_scope_per_search",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_double_encoded_or_invalid_structured_results_reject",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_invalid_read_values_report_only_fixed_source_handle_guidance",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_malformed_exact_shape_types_routes_duplicates_and_limits_reject",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_provider_correlation_echo_is_rejected_as_an_extra_field",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_search_wire_supports_shared_artifact_prefix_and_kind_matrix",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_unrelated_malformed_actions_keep_generic_diagnostic",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_valid_search_read_and_natural_result_shapes_decode_exactly",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_handles_are_invocation_bound_unforgeable_and_terminal_on_reuse",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_initial_read_is_impossible_and_search_handles_are_canonical_opaque",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_outstanding_read_requires_exact_receipt_and_blocks_answer",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_post_selection_drift_and_reentrant_failure_cannot_resurrect_session",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_preflight_failure_is_not_charged_but_executed_byte_failure_is_charged",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_read_captures_canonical_sources_twice_but_returns_requested_order",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_release_handle_matrix_preserves_failure_order_and_privacy",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_second_source_failure_is_atomic_executed_and_clears_every_handle",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_compact_search_read_evidence_retains_all_authoritative_facts",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_every_correlation_dimension_is_exact_and_preflight_noncharging",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_immediate_answer_has_fresh_bound_content_free_authorization_and_cleans_session",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_nonterminal_and_provider_call_caps_leave_the_terminal_slot_exact",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_part_prefix_matrix_scans_nested_before_hit_limits_and_excludes_decoys",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_prefixed_search_filters_before_one_capture_revalidation_pair",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_read_backed_answer_binds_all_completed_used_subset_and_final_canonical_revalidation",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_preflight_and_executed_failures_charge_differently",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_preserves_query_match_order_mints_handles_and_rejects_reuse",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_trims_tail_to_frame_budget_and_empty_frame_failure_is_terminal",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_unused_or_substituted_handle_cannot_authorize_and_baseexception_cleans",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_bounded_chunks_preserve_order_and_over_32k_content",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_malformed_and_duplicate_json_have_value_free_diagnostics",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_properties_omitted_from_required_remain_optional",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise"
+      ],
+      "affected_ids": [
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_entropy_failure_and_registry_scope_mismatch_are_content_free",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_artifact_prefix_validation_is_exact_and_one_scope_per_search",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_double_encoded_or_invalid_structured_results_reject",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_invalid_read_values_report_only_fixed_source_handle_guidance",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_malformed_exact_shape_types_routes_duplicates_and_limits_reject",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_provider_correlation_echo_is_rejected_as_an_extra_field",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_search_wire_supports_shared_artifact_prefix_and_kind_matrix",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_unrelated_malformed_actions_keep_generic_diagnostic",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_valid_search_read_and_natural_result_shapes_decode_exactly",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_handles_are_invocation_bound_unforgeable_and_terminal_on_reuse",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_initial_read_is_impossible_and_search_handles_are_canonical_opaque",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_outstanding_read_requires_exact_receipt_and_blocks_answer",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_post_selection_drift_and_reentrant_failure_cannot_resurrect_session",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_preflight_failure_is_not_charged_but_executed_byte_failure_is_charged",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_read_captures_canonical_sources_twice_but_returns_requested_order",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_release_handle_matrix_preserves_failure_order_and_privacy",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_second_source_failure_is_atomic_executed_and_clears_every_handle",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_compact_search_read_evidence_retains_all_authoritative_facts",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_every_correlation_dimension_is_exact_and_preflight_noncharging",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_immediate_answer_has_fresh_bound_content_free_authorization_and_cleans_session",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_nonterminal_and_provider_call_caps_leave_the_terminal_slot_exact",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_part_prefix_matrix_scans_nested_before_hit_limits_and_excludes_decoys",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_prefixed_search_filters_before_one_capture_revalidation_pair",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_read_backed_answer_binds_all_completed_used_subset_and_final_canonical_revalidation",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_preflight_and_executed_failures_charge_differently",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_preserves_query_match_order_mints_handles_and_rejects_reuse",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_trims_tail_to_frame_budget_and_empty_frame_failure_is_terminal",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_unused_or_substituted_handle_cannot_authorize_and_baseexception_cleans",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_bounded_chunks_preserve_order_and_over_32k_content",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_malformed_and_duplicate_json_have_value_free_diagnostics",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_properties_omitted_from_required_remain_optional",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "agent-context.contracts.errors",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/agent_context/contracts/errors.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_context_actions.ActionSurfaceAndPolicyTests.test_errors_are_fixed_content_free_and_chainless",
+        "tests.test_agent_context_execution.ContextExecutionValueTests.test_workspace_identity_values_errors_and_reprs_are_content_free"
+      ],
+      "affected_ids": [
+        "tests.test_agent_context_actions.ActionSurfaceAndPolicyTests.test_errors_are_fixed_content_free_and_chainless",
+        "tests.test_agent_context_execution.ContextExecutionValueTests.test_workspace_identity_values_errors_and_reprs_are_content_free"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "agent-context.contracts.context_values",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/agent_context/contracts/context_values.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_context_execution.ContextExecutionValueTests.test_workspace_identity_values_errors_and_reprs_are_content_free",
+        "tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order"
+      ],
+      "affected_ids": [
+        "tests.test_agent_context_execution.ContextExecutionValueTests.test_workspace_identity_values_errors_and_reprs_are_content_free",
+        "tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order"
+      ],
+      "depends_on": [
+        "agent-context.contracts.planning_inputs"
+      ]
+    },
+    {
+      "name": "agent-context.contracts.result_schema",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/agent_context/contracts/result_schema.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_bounded_chunks_preserve_order_and_over_32k_content",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_malformed_and_duplicate_json_have_value_free_diagnostics",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_properties_omitted_from_required_remain_optional",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise"
+      ],
+      "affected_ids": [
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_bounded_chunks_preserve_order_and_over_32k_content",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_malformed_and_duplicate_json_have_value_free_diagnostics",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_properties_omitted_from_required_remain_optional",
+        "tests.test_agent_context_service.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise"
+      ],
+      "depends_on": [
+        "agent-context.contracts.errors"
+      ]
+    },
+    {
+      "name": "agent-context.contracts.call_offers",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/agent_context/contracts/call_offers.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
+        "tests.test_agent_context_execution.ContextExecutionValueTests.test_lead_contract_pair_and_physical_call_limit_are_strict"
+      ],
+      "affected_ids": [
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
+        "tests.test_agent_context_execution.ContextExecutionValueTests.test_lead_contract_pair_and_physical_call_limit_are_strict"
+      ],
+      "depends_on": [
+        "agent-context.contracts.context_values",
+        "agent-context.contracts.errors",
+        "agent-context.contracts.result_schema"
+      ]
+    },
+    {
+      "name": "agent-context.contracts.action_schema",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/agent_context/contracts/action_schema.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_context_actions.ActionSurfaceAndPolicyTests.test_exact_surface_enums_fields_and_signatures",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact"
+      ],
+      "affected_ids": [
+        "tests.test_agent_context_actions.ActionSurfaceAndPolicyTests.test_exact_surface_enums_fields_and_signatures",
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact"
+      ],
+      "depends_on": [
+        "agent-context.contracts.call_offers",
+        "agent-context.contracts.errors",
+        "agent-context.contracts.result_schema"
+      ]
+    },
+    {
+      "name": "agent-context.contracts.bound_call",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/agent_context/contracts/bound_call.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_handles_are_invocation_bound_unforgeable_and_terminal_on_reuse",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_initial_read_is_impossible_and_search_handles_are_canonical_opaque",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_outstanding_read_requires_exact_receipt_and_blocks_answer",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_post_selection_drift_and_reentrant_failure_cannot_resurrect_session",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_preflight_failure_is_not_charged_but_executed_byte_failure_is_charged",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_read_captures_canonical_sources_twice_but_returns_requested_order",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_release_handle_matrix_preserves_failure_order_and_privacy",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_second_source_failure_is_atomic_executed_and_clears_every_handle"
+      ],
+      "affected_ids": [
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_handles_are_invocation_bound_unforgeable_and_terminal_on_reuse",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_initial_read_is_impossible_and_search_handles_are_canonical_opaque",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_outstanding_read_requires_exact_receipt_and_blocks_answer",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_post_selection_drift_and_reentrant_failure_cannot_resurrect_session",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_preflight_failure_is_not_charged_but_executed_byte_failure_is_charged",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_read_captures_canonical_sources_twice_but_returns_requested_order",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_release_handle_matrix_preserves_failure_order_and_privacy",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_second_source_failure_is_atomic_executed_and_clears_every_handle"
+      ],
+      "depends_on": [
+        "agent-context.contracts.action_schema",
+        "agent-context.contracts.call_offers",
+        "agent-context.contracts.context_values"
+      ]
+    },
+    {
+      "name": "agent-context.contracts.events",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/agent_context/contracts/events.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_context_execution.ContextExecutionObserverTests.test_direct_event_surface_and_strict_content_free_fact_contract"
+      ],
+      "affected_ids": [
+        "tests.test_agent_context_execution.ContextExecutionObserverTests.test_direct_event_surface_and_strict_content_free_fact_contract"
+      ],
+      "depends_on": [
+        "agent-context.contracts.context_values",
+        "agent-context.contracts.errors"
+      ]
+    },
+    {
+      "name": "agent-context.contracts.session",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/agent_context/contracts/session.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_entropy_failure_and_registry_scope_mismatch_are_content_free",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls"
+      ],
+      "affected_ids": [
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_entropy_failure_and_registry_scope_mismatch_are_content_free",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls"
+      ],
+      "depends_on": [
+        "agent-context.contracts.context_values",
+        "agent-context.contracts.planning_inputs"
+      ]
+    },
+    {
+      "name": "agent-context.contracts.payload",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/agent_context/contracts/payload.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
+        "tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order"
+      ],
+      "affected_ids": [
+        "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
+        "tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order"
+      ],
+      "depends_on": [
+        "agent-context.contracts.call_offers",
+        "agent-context.contracts.planning_inputs"
+      ]
+    },
+    {
+      "name": "agent-context.contracts.planning_inputs",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/agent_context/contracts/planning_inputs.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability",
+        "tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability",
+        "tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "agent-context.contracts.checkpoints",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/agent_context/contracts/checkpoints.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_checkpoint_state_and_explicit_fresh_reasons",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatibility_reason_precedence_is_pairwise_complete",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatible_depth_15_delta_advances_to_16",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_ready_mismatch_matrix_and_thread_none_semantics",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_stable_change_reason_and_precedence_are_exact",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_accepted_source_omission_retains_epoch_and_emits_delivery_removal",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_catalog_alias_and_record_epochs_cover_add_change_remove_reappear",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_constructor_sequence_identity_and_budget_failures",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_whole_range_multiple_order_and_separate_accounting",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_same_scope_revision_content_conflict_fails_even_when_thread_changes",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_unchanged_sources_suppress_while_p2_p3_changes_select"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_checkpoint_state_and_explicit_fresh_reasons",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatibility_reason_precedence_is_pairwise_complete",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatible_depth_15_delta_advances_to_16",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_ready_mismatch_matrix_and_thread_none_semantics",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_stable_change_reason_and_precedence_are_exact",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_accepted_source_omission_retains_epoch_and_emits_delivery_removal",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_catalog_alias_and_record_epochs_cover_add_change_remove_reappear",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_constructor_sequence_identity_and_budget_failures",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_whole_range_multiple_order_and_separate_accounting",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_same_scope_revision_content_conflict_fails_even_when_thread_changes",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_unchanged_sources_suppress_while_p2_p3_changes_select"
+      ],
+      "depends_on": [
+        "agent-context.contracts.planning_inputs"
+      ]
+    },
+    {
+      "name": "agent-context.contracts.projection_accounting",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/agent_context/contracts/projection_accounting.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_every_decision_searchable_and_budget_partition_is_exact",
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_replay_is_identical_and_all_retained_values_are_content_free"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_every_decision_searchable_and_budget_partition_is_exact",
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_replay_is_identical_and_all_retained_values_are_content_free"
+      ],
+      "depends_on": [
+        "agent-context.contracts.planning_inputs"
+      ]
+    },
+    {
+      "name": "agent-context.contracts.projection",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/agent_context/contracts/projection.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_every_decision_searchable_and_budget_partition_is_exact",
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_replay_is_identical_and_all_retained_values_are_content_free",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_accounting_depth_bucket_order_uniqueness_and_selected_relations",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_proposal_removed_reference_and_budget_cross_checks",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_unit_decision_mapping_and_same_id_metadata_substitutions_fail"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_every_decision_searchable_and_budget_partition_is_exact",
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_replay_is_identical_and_all_retained_values_are_content_free",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_accounting_depth_bucket_order_uniqueness_and_selected_relations",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_proposal_removed_reference_and_budget_cross_checks",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_unit_decision_mapping_and_same_id_metadata_substitutions_fail"
+      ],
+      "depends_on": [
+        "agent-context.contracts.checkpoints",
+        "agent-context.contracts.planning_inputs",
+        "agent-context.contracts.projection_accounting"
+      ]
+    },
+    {
+      "name": "agent-context.payload.actions",
+      "boundary": "transport",
+      "paths": [
+        "src/story_writing_agents/agent_context/payload/actions.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_handles_are_invocation_bound_unforgeable_and_terminal_on_reuse",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_initial_read_is_impossible_and_search_handles_are_canonical_opaque",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_outstanding_read_requires_exact_receipt_and_blocks_answer",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_post_selection_drift_and_reentrant_failure_cannot_resurrect_session",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_preflight_failure_is_not_charged_but_executed_byte_failure_is_charged",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_read_captures_canonical_sources_twice_but_returns_requested_order",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_release_handle_matrix_preserves_failure_order_and_privacy",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_second_source_failure_is_atomic_executed_and_clears_every_handle"
+      ],
+      "affected_ids": [
+        "tests.test_agent_context_service.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_handles_are_invocation_bound_unforgeable_and_terminal_on_reuse",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_initial_read_is_impossible_and_search_handles_are_canonical_opaque",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_outstanding_read_requires_exact_receipt_and_blocks_answer",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_post_selection_drift_and_reentrant_failure_cannot_resurrect_session",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_preflight_failure_is_not_charged_but_executed_byte_failure_is_charged",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_read_captures_canonical_sources_twice_but_returns_requested_order",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_release_handle_matrix_preserves_failure_order_and_privacy",
+        "tests.test_agent_context_service.HandleAndReadLifecycleTests.test_second_source_failure_is_atomic_executed_and_clears_every_handle"
+      ],
+      "depends_on": [
+        "agent-context.contracts.bound_call",
+        "agent-context.contracts.call_offers",
+        "agent-context.contracts.context_values",
+        "agent-context.contracts.errors"
+      ]
+    },
+    {
+      "name": "agent-context.payload.candidates",
+      "boundary": "transport",
+      "paths": [
+        "src/story_writing_agents/agent_context/payload/candidates.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_context_runtime_adoption.CandidateWireContractTests.test_production_candidate_operation_bytes_and_full_fallbacks_are_exact"
+      ],
+      "affected_ids": [
+        "tests.test_agent_context_runtime_adoption.CandidateWireContractTests.test_production_candidate_operation_bytes_and_full_fallbacks_are_exact"
+      ],
+      "depends_on": [
+        "agent-context.contracts.checkpoints",
+        "agent-context.contracts.context_values",
+        "agent-context.contracts.errors",
+        "agent-context.contracts.planning_inputs",
+        "agent-context.contracts.projection",
+        "agent-context.payload.actions",
+        "agent-context.payload.records"
+      ]
+    },
+    {
+      "name": "agent-context.payload.context",
+      "boundary": "transport",
+      "paths": [
+        "src/story_writing_agents/agent_context/payload/context.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
+        "tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order"
+      ],
+      "affected_ids": [
+        "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
+        "tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order"
+      ],
+      "depends_on": [
+        "agent-context.contracts.call_offers",
+        "agent-context.contracts.checkpoints",
+        "agent-context.contracts.context_values",
+        "agent-context.contracts.errors",
+        "agent-context.contracts.payload",
+        "agent-context.contracts.planning_inputs",
+        "agent-context.contracts.projection",
+        "agent-context.contracts.session",
+        "agent-context.payload.actions",
+        "agent-context.payload.candidates",
+        "agent-context.payload.history",
+        "agent-context.payload.records"
+      ]
+    },
+    {
+      "name": "agent-context.payload.history",
+      "boundary": "transport",
+      "paths": [
+        "src/story_writing_agents/agent_context/payload/history.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps"
+      ],
+      "affected_ids": [
+        "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps"
+      ],
+      "depends_on": [
+        "agent-context.contracts.call_offers",
+        "agent-context.contracts.errors",
+        "agent-context.contracts.payload",
+        "agent-context.contracts.planning_inputs",
+        "agent-context.payload.actions",
+        "agent-context.payload.records"
+      ]
+    },
+    {
+      "name": "agent-context.payload.records",
+      "boundary": "transport",
+      "paths": [
+        "src/story_writing_agents/agent_context/payload/records.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_compact_search_read_evidence_retains_all_authoritative_facts",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_every_correlation_dimension_is_exact_and_preflight_noncharging",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_immediate_answer_has_fresh_bound_content_free_authorization_and_cleans_session",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_nonterminal_and_provider_call_caps_leave_the_terminal_slot_exact",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_part_prefix_matrix_scans_nested_before_hit_limits_and_excludes_decoys",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_prefixed_search_filters_before_one_capture_revalidation_pair",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_read_backed_answer_binds_all_completed_used_subset_and_final_canonical_revalidation",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_preflight_and_executed_failures_charge_differently",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_preserves_query_match_order_mints_handles_and_rejects_reuse",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_trims_tail_to_frame_budget_and_empty_frame_failure_is_terminal",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_unused_or_substituted_handle_cannot_authorize_and_baseexception_cleans"
+      ],
+      "affected_ids": [
+        "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_compact_search_read_evidence_retains_all_authoritative_facts",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_every_correlation_dimension_is_exact_and_preflight_noncharging",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_immediate_answer_has_fresh_bound_content_free_authorization_and_cleans_session",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_nonterminal_and_provider_call_caps_leave_the_terminal_slot_exact",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_part_prefix_matrix_scans_nested_before_hit_limits_and_excludes_decoys",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_prefixed_search_filters_before_one_capture_revalidation_pair",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_read_backed_answer_binds_all_completed_used_subset_and_final_canonical_revalidation",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_preflight_and_executed_failures_charge_differently",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_preserves_query_match_order_mints_handles_and_rejects_reuse",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_search_trims_tail_to_frame_budget_and_empty_frame_failure_is_terminal",
+        "tests.test_agent_context_service.SearchAndAnswerLifecycleTests.test_unused_or_substituted_handle_cannot_authorize_and_baseexception_cleans"
+      ],
+      "depends_on": [
+        "agent-context.contracts.checkpoints",
+        "agent-context.contracts.context_values",
+        "agent-context.contracts.errors",
+        "agent-context.payload.actions"
+      ]
+    },
+    {
+      "name": "agent-context.invocation.delivery",
+      "boundary": "transport",
+      "paths": [
+        "src/story_writing_agents/agent_context/invocation/delivery.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
+        "tests.test_agent_context_execution.ContextExecutionValueTests.test_conditional_source_classification_is_exact"
+      ],
+      "affected_ids": [
+        "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
+        "tests.test_agent_context_execution.ContextExecutionValueTests.test_conditional_source_classification_is_exact"
+      ],
+      "depends_on": [
+        "agent-context.contracts.context_values",
+        "agent-context.contracts.errors",
+        "agent-context.contracts.planning_inputs"
+      ]
+    },
+    {
+      "name": "agent-context.invocation.provider",
+      "boundary": "transport",
+      "paths": [
+        "src/story_writing_agents/agent_context/invocation/provider.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_context_execution.ContextExecutionValueTests.test_provider_failure_facts_are_exact_optional_and_chainless",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread"
+      ],
+      "affected_ids": [
+        "tests.test_agent_context_execution.ContextExecutionValueTests.test_provider_failure_facts_are_exact_optional_and_chainless",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread"
+      ],
+      "depends_on": [
+        "agent-context.contracts.bound_call",
+        "agent-context.contracts.context_values",
+        "agent-context.contracts.errors",
+        "agent-context.invocation.delivery"
+      ],
+      "affected_full": true
+    },
+    {
+      "name": "agent-context.invocation.requests",
+      "boundary": "transport",
+      "paths": [
+        "src/story_writing_agents/agent_context/invocation/requests.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_entropy_failure_and_registry_scope_mismatch_are_content_free",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls",
+        "tests.test_agent_context_execution.ContextExecutionValueTests.test_lead_contract_pair_and_physical_call_limit_are_strict"
+      ],
+      "affected_ids": [
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_entropy_failure_and_registry_scope_mismatch_are_content_free",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls",
+        "tests.test_agent_context_execution.ContextExecutionValueTests.test_lead_contract_pair_and_physical_call_limit_are_strict"
+      ],
+      "depends_on": [
+        "agent-context.contracts.bound_call",
+        "agent-context.contracts.call_offers",
+        "agent-context.contracts.context_values",
+        "agent-context.contracts.errors",
+        "agent-context.contracts.planning_inputs",
+        "agent-context.contracts.projection_accounting",
+        "agent-context.invocation.delivery"
+      ]
+    },
+    {
+      "name": "agent-context.invocation.group_payload",
+      "boundary": "transport",
+      "paths": [
+        "src/story_writing_agents/agent_context/invocation/group_payload.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_context_conformance.AgentContextConformanceTests.test_production_has_no_benchmark_fixture_import_or_switch",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread"
+      ],
+      "affected_ids": [
+        "tests.test_agent_context_conformance.AgentContextConformanceTests.test_production_has_no_benchmark_fixture_import_or_switch",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread"
+      ],
+      "depends_on": [
+        "agent-context.contracts.bound_call",
+        "agent-context.contracts.errors",
+        "agent-context.contracts.planning_inputs",
+        "agent-context.invocation.delivery"
+      ],
+      "affected_full": true
+    },
+    {
+      "name": "agent-context.invocation.session_execution",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/agent_context/invocation/session_execution.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_entropy_failure_and_registry_scope_mismatch_are_content_free",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls",
+        "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread"
+      ],
+      "affected_ids": [
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_entropy_failure_and_registry_scope_mismatch_are_content_free",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
+        "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls",
+        "tests.test_agent_context_execution.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread"
+      ],
+      "depends_on": [
+        "agent-context.contracts.action_schema",
+        "agent-context.contracts.bound_call",
+        "agent-context.contracts.call_offers",
+        "agent-context.contracts.checkpoints",
+        "agent-context.contracts.context_values",
+        "agent-context.contracts.errors",
+        "agent-context.contracts.events",
+        "agent-context.contracts.planning_inputs",
+        "agent-context.contracts.session",
+        "agent-context.invocation.delivery",
+        "agent-context.invocation.group_payload",
+        "agent-context.invocation.provider",
+        "agent-context.invocation.requests",
+        "agent-context.payload.actions",
+        "agent-context.payload.context",
+        "agent-context.payload.history",
+        "agent-context.planning"
+      ],
+      "affected_full": true
+    },
+    {
+      "name": "agent-context.planning",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/agent_context/planning.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_checkpoint_state_and_explicit_fresh_reasons",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatibility_reason_precedence_is_pairwise_complete",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatible_depth_15_delta_advances_to_16",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_ready_mismatch_matrix_and_thread_none_semantics",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_stable_change_reason_and_precedence_are_exact",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_cross_channel_bodies_never_deduplicate",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_forced_digest_collision_still_requires_exact_body_equality",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_same_channel_exact_bodies_serialize_once_with_all_pointers",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_accepted_source_omission_retains_epoch_and_emits_delivery_removal",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_catalog_alias_and_record_epochs_cover_add_change_remove_reappear",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_constructor_sequence_identity_and_budget_failures",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_whole_range_multiple_order_and_separate_accounting",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_same_scope_revision_content_conflict_fails_even_when_thread_changes",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_unchanged_sources_suppress_while_p2_p3_changes_select",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_default_values_and_fingerprint_are_exact",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_every_field_rejects_non_exact_integer_and_negative",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_zero_class_aggregate_and_reference_boundaries",
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_every_decision_searchable_and_budget_partition_is_exact",
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_replay_is_identical_and_all_retained_values_are_content_free",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_accounting_depth_bucket_order_uniqueness_and_selected_relations",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_proposal_removed_reference_and_budget_cross_checks",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_unit_decision_mapping_and_same_id_metadata_substitutions_fail",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_facades_remain_exact_and_clean_direct_import_works",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_planning_imports_only_stdlib_and_supported_manifest_names",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_planning_performs_no_filesystem_network_process_clock_or_state_io",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_compatible_delta_always_selects_p0_and_suppresses_p1",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_every_valid_p1_set_or_metadata_change_bootstraps",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_p0_exact_fit_plus_one_missing_and_no_deduplication",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_p1_exact_fit_plus_one_missing_and_no_deduplication",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_exact_surface_enums_and_absent_total_budget_category",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_fixed_error_codes_messages_and_privacy",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_budget_and_searchable_accounting_are_self_validating",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_catalog_aliases_are_unique_exact_integers_and_high_water_bounded",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_checkpoint_shapes_and_source_constraints_are_strict",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_decision_priority_channel_matrix_is_exhaustive",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_material_is_strict_utf8_exact_and_hidden_from_repr",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_projected_unit_validates_exact_body_channel_and_priority",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_hard_constraints_exact_fit_plus_one_and_missing_fail_atomically",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_p2_and_p3_first_fit_skip_preserves_later_fitting_groups",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_unused_other_class_and_total_headroom_is_not_borrowed"
+      ],
+      "affected_ids": [
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_checkpoint_state_and_explicit_fresh_reasons",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatibility_reason_precedence_is_pairwise_complete",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_compatible_depth_15_delta_advances_to_16",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_ready_mismatch_matrix_and_thread_none_semantics",
+        "tests.agent_context.planning.test_bootstrap.BootstrapPlanningTests.test_stable_change_reason_and_precedence_are_exact",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_cross_channel_bodies_never_deduplicate",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_forced_digest_collision_still_requires_exact_body_equality",
+        "tests.agent_context.planning.test_deduplication.DeduplicationPlanningTests.test_same_channel_exact_bodies_serialize_once_with_all_pointers",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_accepted_source_omission_retains_epoch_and_emits_delivery_removal",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_catalog_alias_and_record_epochs_cover_add_change_remove_reappear",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_constructor_sequence_identity_and_budget_failures",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_reference_whole_range_multiple_order_and_separate_accounting",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_same_scope_revision_content_conflict_fails_even_when_thread_changes",
+        "tests.agent_context.planning.test_delta_references.DeltaAndReferencePlanningTests.test_unchanged_sources_suppress_while_p2_p3_changes_select",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_default_values_and_fingerprint_are_exact",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_every_field_rejects_non_exact_integer_and_negative",
+        "tests.agent_context.planning.test_policy.PlanningPolicyTests.test_zero_class_aggregate_and_reference_boundaries",
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_every_decision_searchable_and_budget_partition_is_exact",
+        "tests.agent_context.planning.test_projection_accounting.ProjectionAccountingTests.test_replay_is_identical_and_all_retained_values_are_content_free",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_accounting_depth_bucket_order_uniqueness_and_selected_relations",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_proposal_removed_reference_and_budget_cross_checks",
+        "tests.agent_context.planning.test_projection_invariants.ProjectionInvariantTests.test_unit_decision_mapping_and_same_id_metadata_substitutions_fail",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_facades_remain_exact_and_clean_direct_import_works",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_planning_imports_only_stdlib_and_supported_manifest_names",
+        "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_planning_performs_no_filesystem_network_process_clock_or_state_io",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_compatible_delta_always_selects_p0_and_suppresses_p1",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_every_valid_p1_set_or_metadata_change_bootstraps",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_p0_exact_fit_plus_one_missing_and_no_deduplication",
+        "tests.agent_context.planning.test_required_stable.RequiredAndStableSelectionTests.test_p1_exact_fit_plus_one_missing_and_no_deduplication",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_exact_surface_enums_and_absent_total_budget_category",
+        "tests.agent_context.planning.test_surface.PlanningSurfaceTests.test_fixed_error_codes_messages_and_privacy",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_budget_and_searchable_accounting_are_self_validating",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_catalog_aliases_are_unique_exact_integers_and_high_water_bounded",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_checkpoint_shapes_and_source_constraints_are_strict",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_decision_priority_channel_matrix_is_exhaustive",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_material_is_strict_utf8_exact_and_hidden_from_repr",
+        "tests.agent_context.planning.test_values.PlanningValueTests.test_projected_unit_validates_exact_body_channel_and_priority",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_hard_constraints_exact_fit_plus_one_and_missing_fail_atomically",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_p2_and_p3_first_fit_skip_preserves_later_fitting_groups",
+        "tests.agent_context.planning.test_working_optional.WorkingAndOptionalSelectionTests.test_unused_other_class_and_total_headroom_is_not_borrowed"
+      ],
+      "depends_on": [
+        "agent-context.contracts.checkpoints",
+        "agent-context.contracts.planning_inputs",
+        "agent-context.contracts.projection",
+        "agent-context.contracts.projection_accounting"
+      ]
     }
   ],
   "ignored_names": [

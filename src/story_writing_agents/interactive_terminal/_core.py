@@ -79,7 +79,7 @@ from ..agent_context.progress import (
     bind_provider_stream_sink,
     reset_provider_stream_sink,
 )
-from ..agent_context.service import ContextExecutionEvent
+from ..agent_context.contracts.events import ContextExecutionEvent
 from ._driver import (
     AdvisoryProgressError as AdvisoryProgressError,
     RawTerminalDriver,

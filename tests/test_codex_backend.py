@@ -1,9 +1,6 @@
-"""Concrete Codex CLI backend tests with no credentials or network access."""
-
 from __future__ import annotations
 from tests.test_provider_schema_spec import check_schema
 from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome, _premise_native_contract
-
 import asyncio
 import contextlib
 import gc
@@ -24,113 +21,44 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, get_type_hints
 from unittest import mock
-
-from story_writing_agents import (CONVERSATION_CONTEXT_POLICY,
-    CONVERSATION_EVENT_SCHEMA_VERSION, AgentBackend,
-    AgentReply,
-    AgentRequest,
-    BoundAgent, CHARACTER_CUSTODIAN,
-    ConversationContextWindow, ConversationEvent,
-    ConversationEventKind, ConversationReply,
-    ConversationRequest,
-    ConversationRetrievalAction,
-    ConversationRetrievalActionHandler, ConversationRetrievalActionKind,
-    ConversationRetrievalAnswerAction,
-    ConversationRetrievalObservation,
-    ConversationRetrievalReadAction, ConversationRetrievalReadObservation,
-    ConversationRetrievalReply,
-    ConversationRetrievalRequest,
-    ConversationRetrievalSearchAction, ConversationRetrievalSearchItem,
-    ConversationRetrievalSearchObservation, ConversationRetrievalSource,
-    EXECUTION_SPECIALIST,
-    PLOT_ARCHITECT,
-    Phase,
-    PromptFileReference, ROSTER,
-    ReplyTrace,
-    ReplyTraceOrigin,
-    SessionAccessState,
-    SessionDurableState,
-    SessionLifecycleState, Workspace,
-)
+from story_writing_agents import CONVERSATION_CONTEXT_POLICY, CONVERSATION_EVENT_SCHEMA_VERSION, AgentBackend, AgentReply, AgentRequest, BoundAgent, CHARACTER_CUSTODIAN, ConversationContextWindow, ConversationEvent, ConversationEventKind, ConversationReply, ConversationRequest, ConversationRetrievalAction, ConversationRetrievalActionHandler, ConversationRetrievalActionKind, ConversationRetrievalAnswerAction, ConversationRetrievalObservation, ConversationRetrievalReadAction, ConversationRetrievalReadObservation, ConversationRetrievalReply, ConversationRetrievalRequest, ConversationRetrievalSearchAction, ConversationRetrievalSearchItem, ConversationRetrievalSearchObservation, ConversationRetrievalSource, EXECUTION_SPECIALIST, PLOT_ARCHITECT, Phase, PromptFileReference, ROSTER, ReplyTrace, ReplyTraceOrigin, SessionAccessState, SessionDurableState, SessionLifecycleState, Workspace
 from story_writing_agents import cli as cli_module
 from story_writing_agents import backend as backend_module
-from story_writing_agents.conversation_retrieval import (CONVERSATION_RETRIEVAL_POLICY,
-    ConversationRagAttemptOutcome, ConversationRagContext,
-    ConversationRagExcerpt, serialize_conversation_retrieval_observation,
-)
+from story_writing_agents.conversation_retrieval import CONVERSATION_RETRIEVAL_POLICY, ConversationRagAttemptOutcome, ConversationRagContext, ConversationRagExcerpt, serialize_conversation_retrieval_observation
 from story_writing_agents.models import AgentReplyKind, AgentReplyNextPhase
-from story_writing_agents.conversation_rag import (ConversationRagDocumentIdentity,
-    ConversationRagDocumentKey, ConversationRagOutcome,
-    ConversationRagReason, ConversationRagSourceReference,
-)
+from story_writing_agents.conversation_rag import ConversationRagDocumentIdentity, ConversationRagDocumentKey, ConversationRagOutcome, ConversationRagReason, ConversationRagSourceReference
 from story_writing_agents.conversation_search import CollaborationHistoryCitation
-from story_writing_agents.conversations import (CollaborationReadableFieldKey,
-    select_bounded_collaboration_context,)
+from story_writing_agents.conversations import CollaborationReadableFieldKey, select_bounded_collaboration_context
 from story_writing_agents.cli import _parse_backend_overrides, build_parser, main
 from story_writing_agents.backend import backend_configuration_snapshot
 from story_writing_agents.structured_output_validation import diagnose_json_text, failure_issues
-from story_writing_agents.agent_context import (
-    ContextComponentKind,
-    ProviderCallAccounting,
-    ProviderCallKind,
-    ProviderCallState,
-    ProviderUsage, account_provider_payload,
-    canonical_provider_json,)
-from story_writing_agents.agent_context.manifest import (ContextContinuationIdentity,
-    ContextScope, ContextSubjectKind,
-)
+from story_writing_agents.agent_context import ContextComponentKind, ProviderCallAccounting, ProviderCallKind, ProviderCallState, ProviderUsage, account_provider_payload, canonical_provider_json
+from story_writing_agents.agent_context.manifest import ContextContinuationIdentity, ContextScope, ContextSubjectKind
 from story_writing_agents.agents import CORE_DOCUMENTS, LEAD_ORCHESTRATOR
-from story_writing_agents.agent_context.service import (ContextProviderCallRequest,
-    ContextProviderTerminalCode, ContextReferencePreludeRequest,
-    context_provider_failure_facts,)
 from story_writing_agents.config import ConfigManager, ConfigurationSnapshot
-from story_writing_agents.errors import (BackendProtocolError,
-    ConfigurationError, ConversationRetrievalBudgetError,
-    ConversationRetrievalObserverError, ConversationRetrievalSemanticError,
-    SessionIdError, SessionNotFoundError,
-    WorkspaceFormatError,)
-from story_writing_agents.debug_log import (DEBUG_LOG_RELATIVE_PATH,
-    WorkspaceDebugLog,)
+from story_writing_agents.errors import BackendProtocolError, ConfigurationError, ConversationRetrievalBudgetError, ConversationRetrievalObserverError, ConversationRetrievalSemanticError, SessionIdError, SessionNotFoundError, WorkspaceFormatError
+from story_writing_agents.debug_log import DEBUG_LOG_RELATIVE_PATH, WorkspaceDebugLog
 from story_writing_agents.prompts import PromptAssembler
-from story_writing_agents.interactive_settings import (ProviderRouteEntry,
-    commit_prepared_settings_save, load_settings_state,
-    prepare_settings_save, update_agent_backend,
-)
+from story_writing_agents.interactive_settings import ProviderRouteEntry, commit_prepared_settings_save, load_settings_state, prepare_settings_save, update_agent_backend
 from story_writing_agents.git.session_resources import GitSessionGenerationPin
 from story_writing_agents.orchestrator import StoryRuntime
-from story_writing_agents.provider_execution_workspace import (ProviderExecutionWorkspace,
-    mint_provider_execution_workspace,)
+from story_writing_agents.provider_execution_workspace import ProviderExecutionWorkspace, mint_provider_execution_workspace
 from story_writing_agents.workspace.initialization import provision_session_resources
 from story_writing_agents.workspace.initialization import SessionArtifactBindingError
-from story_writing_agents.writing_artifacts.repository import (
-    WritingArtifactRepository,
-)
-from story_writing_agents.writing_artifacts import (ArtifactLineRange,
-    ArtifactReference, ArtifactReferenceBatch,
-    ReferenceAuthorizationError, ReferenceAuthorizationErrorCode,
-    ReferenceInvocationCorrelation, ReferenceInvocationState,
-    ReferenceOperationState, ReferenceReadAction,
-    ReferenceReadActionKind, ReferenceReadRequest,
-)
-from story_writing_agents.provider_adapter import (AgentExecutionProfile,
-    ExecutionValueSource, ProviderInvocationError,
-    ProviderResult, provider_failure_accounting,
-    record_provider_failure_accounting,)
-from story_writing_agents.provider_error_artifacts import (PROVIDER_ERROR_ARTIFACT_DIRECTORY,
-    PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY, WorkspaceProviderErrorArtifacts,
-)
-from story_writing_agents.provider_process import (ProcessRequest,
-    run_process, stop_process,
-)
+from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
+from story_writing_agents.writing_artifacts import ArtifactLineRange, ArtifactReference, ArtifactReferenceBatch, ReferenceAuthorizationError, ReferenceAuthorizationErrorCode, ReferenceInvocationCorrelation, ReferenceInvocationState, ReferenceOperationState, ReferenceReadAction, ReferenceReadActionKind, ReferenceReadRequest
+from story_writing_agents.provider_adapter import AgentExecutionProfile, ExecutionValueSource, ProviderInvocationError, ProviderResult, provider_failure_accounting, record_provider_failure_accounting
+from story_writing_agents.provider_error_artifacts import PROVIDER_ERROR_ARTIFACT_DIRECTORY, PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY, WorkspaceProviderErrorArtifacts
+from story_writing_agents.provider_process import ProcessRequest, run_process, stop_process
 from story_writing_agents.models import StoryFocusedContextMode
-
 from story_writing_agents.agent_context.request_compaction import compact_context_payload
 from tests.test_agent_context_accounting import _shared_context_payload
 from tests.provider_wire_fixture import assert_guidance, direct_reply, direct_response
-from tests.helpers import (SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE,
-    all_manuscripts, core_snapshot,
-    initialized_workspace, pristine_initialized_workspace,
-)
+from tests.helpers import SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE, all_manuscripts, core_snapshot, initialized_workspace, pristine_initialized_workspace
+from story_writing_agents.agent_context.invocation import provider as ctx_provider
+
+
+"""Concrete Codex CLI backend tests with no credentials or network access."""
 
 
 _FAKE_CODEX = ("""#!/usr/bin/env python3
@@ -313,9 +241,11 @@ _TIMESTAMP = "2026-08-15T01:02:03+00:00"
 def _fresh_literal_object_side_effect(target, attribute, value):
     return mock.patch.object(target, attribute, side_effect=value)
 
+
 def _rejected_response_artifact_patch():
     return mock.patch.object(WorkspaceProviderErrorArtifacts,
         "record_rejected_response",)
+
 
 def _wrapped_thread_taint_patch(backend, wrapped):
     return mock.patch.object(
@@ -323,11 +253,13 @@ def _wrapped_thread_taint_patch(backend, wrapped):
         wraps=wrapped,
     )
 
+
 def _wrapped_thread_store_patch(backend, wrapped):
     return mock.patch.object(
         backend, "_store_thread",
         wraps=wrapped,
     )
+
 
 def _conversation_pair(turn_id: str,
     sequence: int = 1, *,
@@ -1731,6 +1663,7 @@ def _configure_process_stop(process, events, first_wait, final_wait):
         return next(waits)
     process.wait.side_effect = wait
 
+
 class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     async def _invoke_empty_contract(self, backend, bound, *, session_id, decode, execution_workspace, **scope):
         return await backend._invoke_provider_structured(
@@ -1807,7 +1740,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_both_native_backends_preserve_session_continuation_and_legacy_namespaces(self):
-        from story_writing_agents.agent_context.service import (
+        from story_writing_agents.agent_context.invocation.session_execution import (
             AgentContextService, ContextInvocationKind, ContextInvocationRequest,)
         from story_writing_agents.agent_context.sources import (
             ActiveDebateSourceAdapter, FocusedConversationSourceAdapter, OwnAgentStateSourceAdapter,
@@ -2690,7 +2623,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(details, ["Structured response\n$: malformed JSON"])
 
     async def _assert_grouped_reader_transport(self, backend, session_id, execution_workspace) -> None:
-        from story_writing_agents.agent_context.service import (AgentContextService, BoundCallFactory,
+        from story_writing_agents.agent_context.invocation.session_execution import (AgentContextService, BoundCallFactory,
             ContextCallOffers, ContextInvocationKind, ContextInvocationRequest, ContextExecutionError,
             context_provider_failure_facts)
         from story_writing_agents.agent_context.ledger import (ContextLedger, ContextLedgerKey,
@@ -3068,7 +3001,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         host_facts = context_provider_failure_facts(denied.exception)
         self.assertEqual((len(invocations), len(native_commands), len(host_facts.submitted_accountings)), (2, 2, 2))
         self.assertEqual(requests[1].contract.structural_findings(raw_responses[1]), ())
-        self.assertIs(host_facts.response_rejection_code, ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED)
+        self.assertIs(host_facts.response_rejection_code, ctx_provider.ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED)
         self.assertIs(host_facts.group_state.workflow.phase, LeadGroupPhase.GENERATE)
         self.assertIs(invocations[1].context_witness, native_witnesses[0])
         self.assertIs(invocations[1].context_anchor, native_witnesses[0])
@@ -3974,11 +3907,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
             async with provider.invocation(scope, policy):
                 self.assertIsNone(provider.inspect_context_thread(scope, policy))
-                first = await provider.invoke_context(ContextProviderCallRequest(
+                first = await provider.invoke_context(ctx_provider.ContextProviderCallRequest(
                     scope, policy, "context-call-1", ProviderCallKind.COLLABORATION_INITIAL,
                     schema, payload, component_paths))
                 first.finalizer.accepted()
-                second = await provider.invoke_context(ContextProviderCallRequest(
+                second = await provider.invoke_context(ctx_provider.ContextProviderCallRequest(
                     scope, policy, "context-call-2", ProviderCallKind.COLLABORATION_CONTINUATION,
                     schema, payload, component_paths, expected_thread_id=first.thread_id))
                 second.finalizer.accepted()
@@ -4046,7 +3979,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(backend._codex_adapter, "invoke", new=adapter):
             async with provider.invocation(scope, policy):
                 first = await provider.invoke_context(
-                    ContextProviderCallRequest(
+                    ctx_provider.ContextProviderCallRequest(
                         scope,
                         policy,
                         "context-success",
@@ -4057,7 +3990,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 )
                 with self.assertRaises(BackendProtocolError) as caught:
                     await provider.invoke_context(
-                        ContextProviderCallRequest(
+                        ctx_provider.ContextProviderCallRequest(
                             scope,
                             policy,
                             "context-failure",
@@ -4067,7 +4000,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                             expected_thread_id=first.thread_id,
                         )
                     )
-                facts = context_provider_failure_facts(caught.exception)
+                facts = ctx_provider.context_provider_failure_facts(caught.exception)
                 self.assertIs(facts.accounting.state, ProviderCallState.SUBMITTED)
                 self.assertIs(facts.taint_existing_thread, True)
                 self.assertIsNone(provider.inspect_context_thread(scope, policy))
@@ -5392,7 +5325,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             (prior_user, prior_reply),
         )
         self.assertEqual(self.workspace.inspect_session(session_id)["debates"], [])
-        from story_writing_agents.agent_context.service import (
+        from story_writing_agents.agent_context.invocation.session_execution import (
             AgentContextService, ContextInvocationKind, ContextInvocationRequest)
         from story_writing_agents.agent_context.sources import (
             ActiveDebateSourceAdapter, FocusedConversationSourceAdapter,
@@ -9714,8 +9647,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             "PRIVATE_STORAGE",
         ):
             self.assertNotIn(private_value, runtime_log)
-
-
 
 
 if __name__ == "__main__":
